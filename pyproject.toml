@@ -3,7 +3,7 @@ name = "schedr"
 version = "0.1.0"
 description = "Python API for the schedr scheduler (Airflow-style DAGs)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Piotr Tutak", email = "piotr.tutak@amartus.com" }]
 dependencies = []
@@ -27,7 +27,7 @@ packages = ["python/schedr"]
 # --- ruff ---------------------------------------------------------------
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 src = ["python"]
 
 [tool.ruff.lint]
@@ -50,7 +50,7 @@ select = [
 
 # --- mypy ---------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 strict = true
 mypy_path = "python"
 packages = ["schedr"]

@@ -109,19 +109,82 @@ with DAG(
     start >> extract >> transform()
 ```
 
-### Scope: Tier 1 (DAG authoring)
+### Scope
 
-| Area               | Included                                                                                   |
-|--------------------|--------------------------------------------------------------------------------------------|
-| `schedr.airflow.sdk` | `DAG` (context manager), `@dag`, `@task`, `@task.bash`, `chain`, `TriggerRule`             |
-| `DAG` arguments    | `dag_id`, `schedule` (cron, `@daily`-style presets, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs` |
-| Operators          | `BashOperator`, `PythonOperator` (`python_callable`, `op_args`, `op_kwargs`), `EmptyOperator` |
-| Per-task arguments | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`                   |
-| Dependencies       | `>>`, `<<`, `set_upstream` / `set_downstream`, `chain()`, lists on either side             |
+**Tier 1 (DAG authoring):**
 
-Out of scope for now (Tier 2/3): Jinja templating, task context (`ds`, `ti`, …), Variables,
-Params, Connections/hooks, TaskGroups, dynamic task mapping, branching, sensors, Assets,
-callbacks, pools.
+| Area                 | Included                                                                     |
+|----------------------|------------------------------------------------------------------------------|
+| `schedr.airflow.sdk` | `DAG` (context manager), `@dag`, `@task`, `@task.bash`, `chain`, `TriggerRule` |
+| `DAG` arguments      | `dag_id`, `schedule` (cron, `@daily`-style presets, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs` |
+| Operators            | `BashOperator`, `PythonOperator` (`python_callable`, `op_args`, `op_kwargs`), `EmptyOperator` |
+| Per-task arguments   | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`     |
+| Dependencies         | `>>`, `<<`, `set_upstream` / `set_downstream`, `chain()`, lists on either side |
+
+**Also in scope (beyond Tier 1):**
+
+| Feature                  | Airflow API to mirror (exact subset still open)                         |
+|--------------------------|-------------------------------------------------------------------------|
+| Branching                | `@task.branch`, `BranchPythonOperator`; skipped-state propagation and trigger rules |
+| Task groups              | `TaskGroup` (context manager), `@task_group`                            |
+| Dynamic task mapping     | `.partial(...)`, `.expand(...)`                                         |
+| Connections              | `Connection` in **Airflow's JSON format**, stored in **HashiCorp Vault** |
+| Passing values between tasks | Required: mapping and branching depend on it. Details open.         |
+
+**Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
+schedr's shared model and native API call them **outputs**:
+
+- A task produces outputs: one default output, plus optional named outputs (replacing
+  Airflow's `multiple_outputs`).
+- A downstream task takes an **output reference** as an input (`extract.output`,
+  `output["rows"]`).
+- `.expand()` maps over an output; a branch task's output is the list of task IDs to follow.
+
+Airflow-specific names (`ti.xcom_pull`, `do_xcom_push`, …) appear only inside `schedr.airflow`,
+where they map onto outputs.
+
+**Templating: no Jinja, by design. Replaced by t-strings.** schedr will not include Jinja.
+Airflow templates are replaced by Python template strings (t-strings, PEP 750) combined
+with placeholder objects:
+
+```python
+from schedr.airflow.templates import ds, params, macros
+
+BashOperator(task_id="x", bash_command="echo {{ ds }} {{ params.region }}")   # Airflow
+BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # schedr
+```
+
+- Placeholders (`ds`, `params`, `macros`, task outputs, …) are lazy: an operation on them
+  (`params.region`, `macros.ds_add(ds, 7)`) builds a small expression, not a value. Only
+  operations schedr implements are allowed; anything else is an error when the DAG is parsed.
+- Templates are part of the **shared model**: stored in the DAG JSON as literal text plus typed
+  references, e.g. `["echo ", {"ref": "ds"}, " ", {"ref": "params.region"}]`. Rust validates
+  references at parse time and can render templates itself (e.g. Bash commands without
+  starting Python).
+- Values from other tasks are referenced directly (`t"{extract.output}"`) instead of
+  `ti.xcom_pull(...)`.
+- The native API uses the same placeholder mechanism.
+- Requires Python 3.14+ (the whole package's minimum version, see Python tooling).
+- **Any argument may contain a t-string.** Every operator and task argument is checked for
+  t-strings and filled in at run time; there is no per-operator list of templated arguments
+  (Airflow's `template_fields`).
+- **Nested values are filled in recursively**, all the way down: t-strings inside lists, tuples
+  and dicts (e.g. `env={"RUN": t"{run_id}"}`, `op_kwargs={"day": t"{ds}"}`) are found and
+  filled in at any depth.
+  - Traversed: lists, tuples, dict values. **Dict keys: possibly** (to be confirmed).
+  - **Not traversed:** sets, dataclasses and any other custom objects.
+  - A t-string found inside a container that isn't traversed is **an error when the DAG is
+    parsed**, so it can't silently reach a task unfilled. The error message tells the author
+    to convert the container explicitly, e.g. a set into a list, before passing it as an
+    argument.
+- **Not needed for now:** template files (`.sh` / `.sql` files rendered as templates).
+- **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is
+  designed and implemented later in the project.
+- Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
+- **Later in the project:** a migration tool (`schedr migrate`, built on `libcst`) that rewrites
+  imports and converts Jinja templates to t-strings, flagging what it can't convert.
+
+Out of scope for now: sensors, Assets, callbacks, pools, Variables, hooks.
 
 ## Repository and tooling
 
@@ -151,7 +214,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ### Python
 
-- Supported versions: Python 3.11+. CI tests 3.11–3.14. Local development uses 3.14.
+- Supported versions: **Python 3.14+** (required by t-strings, see Templating). CI tests 3.14.
 - Dependency management: **uv** (lockfile `uv.lock`, dev deps in `[dependency-groups]`).
 - Build backend: **hatchling** for now (to be revisited when the Rust/Python boundary is
   decided; maturin if Rust is compiled into the Python package).
@@ -170,7 +233,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 1. **Native Python API design**: shape of the top-level `schedr` API (how close to Airflow
    it is, and what it does differently).
-2. **Passing task return values (XCom).** Should be a feature of the shared model, with the
+2. **Outputs: details.** Required (see Scope). Should be a feature of the shared model, with the
    Airflow layer mapping onto it. Proposed mechanism: a task writes its return value as JSON to
    a result file (not stdout); it is stored per (DAG run, task, key); Rust passes stored values
    to downstream tasks as inputs. Sub-questions, each with the proposal:
@@ -182,9 +245,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
    - f. Size limit: about 1 MB per value; the task fails clearly if exceeded.
 3. **Unsupported Airflow arguments** (`pool`, `sla`, callbacks, …): proposed: accept and log a
    warning for real Airflow parameters; raise an error for unknown ones.
-4. **Templating strings** (`{{ ds }}`): proposed: raise an error when a templated field contains
-   `{{`, since Tier 1 has no Jinja.
-5. **Rust/Python integration.** Proposed:
+4. **Rust/Python integration.** Proposed:
    - Parse DAGs: a Python subprocess on a worker imports the DAG file and outputs JSON; the
      worker agent sends it to the master.
    - Run tasks: one Python subprocess per task inside the worker pod.
@@ -198,8 +259,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      the scheduler down and one Python environment would be forced on every DAG.
    - Single binary with roles `schedr master`, `schedr worker`, `schedr standalone` (local
      development, with SQLite).
-6. **Interface:** CLI only, REST API, web UI.
-7. **Kubernetes architecture details**:
+5. **Interface:** CLI only, REST API, web UI.
+6. **Kubernetes architecture details**:
    - Master–worker protocol. Proposed: workers connect out to the master over gRPC and claim
      tasks under time-limited leases; the master never pushes to workers.
    - Where DAGs are parsed. Proposed: on worker pods (they have the user's dependencies); the
@@ -210,3 +271,17 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      Tiny tasks would justify warm Python worker processes sooner.
    - Do different DAGs need conflicting Python dependencies? Proposed: separate worker pools
      (different images), with tasks routed to them via `queue=`.
+7. **Branching subset**: `@task.branch` and `BranchPythonOperator` only, or also
+   `ShortCircuitOperator` / `@task.short_circuit`?
+8. **Task groups subset**: plain grouping (`group_id.task_id` names, dependencies on a group,
+   per-group `default_args`), or also mapped task groups (`@task_group(...).expand(...)`)?
+9. **Dynamic task mapping subset**: `expand` over literals and over upstream output (proposed
+    minimum); also `expand_kwargs`, `.map()`, `.zip()`? Proposed: an upper limit on mapped
+    instances per task.
+10. **Connections: who reads Vault?** Options: the worker agent fetches on demand (proposed,
+    using Vault's Kubernetes auth method with the pod's service-account token), the master
+    fetches and passes secrets to tasks, the Python task fetches directly, or a Vault Agent
+    sidecar renders secrets into files. Also: Vault path layout (Airflow's Vault backend uses
+    `connections/<conn_id>` in KV v2), `conn_uri` support, which access API to mirror
+    (`Connection.get(conn_id)`, `BaseHook.get_connection(conn_id)`), and secret masking in logs.
+11. **Variables in Vault too?** Airflow's Vault backend also stores Variables.
