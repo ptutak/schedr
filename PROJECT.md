@@ -13,6 +13,10 @@ A job scheduler written primarily in **Rust** that runs three kinds of work:
    a compatibility API that copies another orchestrator's API (starting with Airflow) but runs
    on the schedr scheduler.
 
+**Plain scripts are first-class.** Plain Python scripts (no schedr API) and Bash scripts are
+supported on their own, not only as part of DAGs. The Python API also has **dedicated
+operators that run a plain Python script or a Bash script file** as a task.
+
 ## Deployment target
 
 - **Distributed system running on Kubernetes.** The production target is **OpenShift**, but
@@ -31,6 +35,133 @@ A job scheduler written primarily in **Rust** that runs three kinds of work:
 - **Images must run under an arbitrary UID** (OpenShift's default restricted security policy;
   also good practice on plain Kubernetes): no fixed user, writable paths group-owned by root
   (group 0).
+
+## Architecture
+
+### Components and roles
+
+One Rust binary, four roles:
+
+| Role                | Runs                                                                  | User code?  |
+|---------------------|-----------------------------------------------------------------------|-------------|
+| `schedr master`     | Scheduling loop, state in Postgres, internal API for workers          | **Never.** Its image contains no user packages. |
+| `schedr worker`     | Rust agent; starts Python and Bash subprocesses for tasks and parsing | Yes, in subprocesses |
+| `schedr webserver`  | Web UI and the API used by the UI and CLI                             | **Never.**  |
+| `schedr standalone` | All of the above in one process, with SQLite                          | Yes (local development only) |
+
+### Web UI and CLI
+
+- A **web dashboard** is required: live view of what is running, and access to task logs.
+- A **CLI** is required alongside the web UI.
+- The web UI is served by a **separate process from the master scheduler** (`schedr webserver`),
+  so the UI and the scheduler can restart, fail and scale independently.
+
+### Task logs
+
+- Task logs are **stored on the worker's local disk** and **served by the worker itself** over
+  HTTP (a small endpoint inside the worker agent, including live tail of running tasks).
+- What backs the log directory (volume type, StatefulSet, …) is a deployment concern, outside
+  schedr: the worker just serves local files.
+- Each task attempt records which worker ran it, so its logs can be found.
+- The **webserver proxies** log requests to the worker; the browser never talks to workers
+  directly.
+- The worker's log endpoint accepts only **short-lived tokens signed with a shared secret**.
+- The worker deletes logs **after N days or beyond a size limit** (configurable).
+- When a log can't be fetched (worker offline, file deleted, …), the UI states clearly that
+  **the log file is unavailable at this location** (e.g. it may have been deleted).
+
+### DAG code delivery
+
+- schedr reads DAG code from **directories on the worker's filesystem**. How the code gets
+  there is a deployment concern, outside schedr.
+- Currently: **git-sync** sidecar. **Shared volumes** must also work, and so must other ways of
+  filling the directories (e.g. code baked into the image).
+- The directories are listed in **`SCHEDR_DAG_PATH`**, using the usual `PATH` syntax
+  (colon-separated).
+- Each directory is scanned **recursively**, so git submodules inside a DAG repository work.
+- **Every `.py` file is parsed**, unless excluded by an ignore file.
+- Ignore files are named **`.schedrignore`**, use **gitignore syntax**, and may appear in any
+  subdirectory (like `.gitignore`). Airflow's `.airflowignore` files are **not** honoured.
+- Only DAGs defined with **schedr's own APIs** (the native API or a compatibility layer such
+  as `schedr.airflow`) are recognized.
+- A `.py` file that defines no DAG is **ignored silently** (helper modules are common).
+  Parsing imports the file, so its top-level code runs on every parse; helper modules with
+  heavy import-time work should be ignored or refactored. This will be documented.
+
+### Plain script delivery
+
+- Plain Python and Bash scripts live in directories listed in **`SCHEDR_SCRIPT_PATH`**, separate
+  from `SCHEDR_DAG_PATH`. Files there are **never imported or parsed** as Python.
+- `SCHEDR_SCRIPT_PATH` is a normal configuration key (`SCHEDR_CONFIG__SCRIPTS__PATH`) with
+  `SCHEDR_SCRIPT_PATH` as a **short alias**. Same `PATH` syntax as `SCHEDR_DAG_PATH`.
+- Scanned **recursively**; `.schedrignore` files apply, as in `SCHEDR_DAG_PATH`.
+- A script is recognized **only if a script configuration file declares it**. Script
+  configuration files are **TOML** files named **`schedr.toml`**, with predefined keys, and
+  must themselves be inside `SCHEDR_SCRIPT_PATH`.
+- There can be **many `schedr.toml` files**, **at most one per directory**.
+- One `schedr.toml` can declare **several scripts**, and can declare **the same script more
+  than once** (e.g. with different schedules).
+- Paths in a `schedr.toml` are **relative to that file**. **`..` is not supported**, so a
+  configuration file can only refer to scripts in its own directory or below. **Absolute paths
+  are rejected.**
+- Several `schedr.toml` files (e.g. a parent and a subdirectory's) **may declare the same script
+  file**. Each declaration is independent and creates its own job/task.
+- **Symlinks are allowed**, including ones pointing outside the directory. This is a deliberate
+  escape hatch.
+- Change detection and content hash work **the same as for DAG code** (polling, settle time,
+  content hash).
+- Internally every job is a DAG: a declared script becomes a **one-task DAG**.
+- Every declaration in a `schedr.toml` has a **name**, unique within that file (a TOML table
+  key, e.g. `[jobs.report_daily]`).
+- **DAG operators refer to a declared script** (via a dedicated operator, placeholder name
+  `ScriptOperator`, an ordinary class in schedr's Python API) by the location of the
+  `schedr.toml` that declares it and the declaration's **name**. The location is root-relative
+  (see Script roots) or absolute.
+- **Script roots** make references portable between environments (cluster, local
+  development, pods with different mount paths):
+  - **Every `SCHEDR_SCRIPT_PATH` entry is a root**, named by default after its last path
+    component (`/git/scripts/etl-repo` → `etl-repo`).
+  - The configuration file can **rename** an entry; the path must be one of the
+    `SCHEDR_SCRIPT_PATH` entries (renaming never adds directories to scan):
+
+    ```toml
+    [scripts.roots]
+    etl = "/git/scripts/etl-repo"
+    ```
+
+  - **Nested entries** in `SCHEDR_SCRIPT_PATH` (one inside another) are a **startup error**.
+  - **Duplicate root names** are a **startup error**, unless resolved by renaming in
+    `[scripts.roots]`.
+  - Every `schedr.toml` is therefore under exactly one root. Script references and standalone
+    jobs are stored as **(root name, path of `schedr.toml` relative to the root, job name)**,
+    e.g. `etl-repo:team_a/schedr.toml#report_weekly`, and **resolved by the worker that runs
+    the task**. This is also the job's stable ID in the UI, CLI and run history.
+  - Absolute paths to a `schedr.toml` remain accepted in `ScriptOperator` references.
+
+### Code versions and change detection
+
+- **Tasks run on the latest code** the worker has. schedr does not keep old code versions.
+- schedr computes a **content hash** of the DAG code and records it for each task attempt.
+  When tasks in the same DAG run used **different content hashes**, schedr shows a **warning**.
+- Changes are detected by **polling on a schedule** (interval set in configuration), not by filesystem notifications (which are
+  unreliable on network volumes and with git-sync's symlink switching).
+- After a change is seen, schedr waits for a **settle time** (configurable; no further changes) before
+  computing the new content hash, so half-written files are never parsed.
+
+## Configuration
+
+- schedr reads **one configuration file** and/or **environment variables**.
+- Environment variables mirror the configuration file's structure, under the prefix
+  **`SCHEDR_CONFIG__`** (e.g. a `key` in section `section` →
+  `SCHEDR_CONFIG__SECTION__KEY`).
+- File format: **TOML**.
+- The file is found via the **`--config <path>`** flag, then the **`SCHEDR_CONFIG_FILE`**
+  environment variable, then a default location.
+- Precedence: **command-line flags > environment variables > configuration file**.
+- `SCHEDR_DAG_PATH` is a normal configuration key (`SCHEDR_CONFIG__DAGS__PATH`);
+  `SCHEDR_DAG_PATH` is kept as a **short alias**.
+- **Secrets** (database password, signing keys, …) come only from **environment variables**
+  (filled from Kubernetes Secrets), never from the configuration file.
 
 ## State storage
 
@@ -257,16 +388,22 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      on pip for writing DAGs and local development.
    - Rejected: embedding Python in the scheduler (PyO3), because user-code crashes would take
      the scheduler down and one Python environment would be forced on every DAG.
-   - Single binary with roles `schedr master`, `schedr worker`, `schedr standalone` (local
-     development, with SQLite).
-5. **Interface:** CLI only, REST API, web UI.
+5. **Interface details:** web UI and CLI are required (see Architecture). Still open:
+   - Frontend technology.
+   - Live updates to the browser. Proposed: Server-Sent Events.
+   - UI authentication: OIDC, or trusting a reverse proxy (e.g. oauth-proxy) header.
+   - What the CLI talks to. Proposed: the webserver's API, the same one the UI uses; the
+     master's gRPC API stays internal to workers.
+   - How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, clear,
+     …) are written to Postgres for the master to pick up, or sent to the master.
 6. **Kubernetes architecture details**:
    - Master–worker protocol. Proposed: workers connect out to the master over gRPC and claim
      tasks under time-limited leases; the master never pushes to workers.
    - Where DAGs are parsed. Proposed: on worker pods (they have the user's dependencies); the
      master never runs user code.
-   - How DAG code reaches the pods: baked into the image, git-sync sidecar, shared volume, or
-     versioned bundles.
+   - DAG discovery details: default values for the poll interval and settle time.
+   - Who parses: proposed: workers report the content hash they see; on a new hash the master
+     creates a **parse job**, claimed by one worker like a task.
    - Workload shape: mostly long tasks (seconds to hours) or many tiny ones (milliseconds)?
      Tiny tasks would justify warm Python worker processes sooner.
    - Do different DAGs need conflicting Python dependencies? Proposed: separate worker pools
@@ -285,3 +422,15 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     `connections/<conn_id>` in KV v2), `conn_uri` support, which access API to mirror
     (`Connection.get(conn_id)`, `BaseHook.get_connection(conn_id)`), and secret masking in logs.
 11. **Variables in Vault too?** Airflow's Vault backend also stores Variables.
+12. **Plain scripts:**
+    - `schedr.toml` keys (schedule, script, arguments, environment, working directory,
+      interpreter, retries, timeout, …).
+    - Is `schedule` optional in a declaration? Proposed: yes; with a schedule it is a
+      standalone job and can also be used from DAGs, without one it is only used from DAGs
+      (or triggered manually).
+    - What `ScriptOperator` takes from the declaration. Proposed: everything except
+      `schedule`; the operator can override arguments, environment, retries, ….
+    - Exact syntax of a root-relative reference in the API (e.g. `"etl:team_a/schedr.toml"`
+      or a separate argument).
+    - **Later (API design):** operator names and arguments; whether these operators also
+      exist in `schedr.airflow`; script outputs (none, last line of stdout, or a result file).
