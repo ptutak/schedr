@@ -576,7 +576,7 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 
 What happens from the moment a DAG file written with the native Python API lands in
 `SCHEDR_DAG_PATH` (already on the worker) until its run finishes. Each step is tagged:
-**[D]** decided elsewhere in this file, **[open]** not decided yet (Open question 12).
+**[D]** decided elsewhere in this file.
 
 Running example: `/git/dags/etl-repo/team_a/sync.py` defines DAG `sync` with two Python tasks,
 `extract` → `load`, scheduled daily; `load` takes `extract`'s output as input.
@@ -736,7 +736,7 @@ list) and likewise has no Python.
 schedr's Python package has two kinds of API:
 
 - **Native API**: schedr's own DAG authoring API, at the top level of the `schedr`
-  package. Its design is still open (see Open questions).
+  package (see Native API).
 - **Compatibility APIs**: look-alikes of other orchestrators' APIs, each in its own
   subpackage named after the orchestrator. `schedr.airflow` is the first. Others may be added
   later (e.g. `schedr.<other>`).
@@ -782,6 +782,288 @@ renders and runs them.
 classes are thin: their type and arguments go into the model, and Rust implements what each
 type means. That is why the native API and every compatibility API can share one engine.
 User code can never change scheduling behaviour (skips, branching, retries) from inside a task.
+
+### Native API
+
+- **DAGs are defined only with `with Dag(...)`.** There is no `@dag` decorator: a decorated
+  function must be called to create the DAG, and a forgotten call would make the DAG vanish
+  silently (files without DAGs are ignored). The context manager also makes generating DAGs in
+  a loop straightforward.
+- **A `@task` must annotate its return type** (`-> None` for a task without output). A missing
+  annotation is a parse error. `-> Any` is the explicit opt-out from the parse-time type check
+  (the run-time check still applies).
+- **Task kinds:** Python tasks are **decorated functions** (`@task`); other kinds are **operator
+  classes**: `CommandOperator`, `ScriptOperator`, `EmptyOperator`.
+- **Data flow defines dependencies.** Calling a task inside a DAG returns an **output
+  reference**; passing it to another task (as an argument, or inside a t-string) creates the
+  dependency. `>>` remains for **order-only** dependencies (no data passed).
+- **Typing of calls.** A `@task` returning `T` gives an **`Output[T]`** when called. Arguments
+  receiving an `Output[T]` instead of `T` can't be expressed in Python's type system without a
+  plugin, so they are **checked at parse time** (see Output serialization); a mypy plugin may
+  come later.
+- **IDs.** The DAG ID is an **explicit, required string**. A task ID defaults to the **function
+  name** for `@task` and is **required** for operators. Duplicate IDs are a parse error.
+- **Schedules are typed objects:** `Cron("0 3 * * *")`, `Every(timedelta(hours=1))`, `None`
+  (manual runs only), plus preset constants (`DAILY`, …). The time zone is set per schedule,
+  **default UTC**.
+- **Run time semantics.** No Airflow-style "logical date" shifted one interval back. A run is
+  created **when its schedule fires** and knows **`run.scheduled_at`** (the fire time) and
+  **`run.interval`** (previous fire → this fire). The **first run** is the first fire time at
+  or after `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
+  schedules run at the fire time.)
+- **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
+  `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
+- **Branching: `@branch`.** The function returns **task handles** (one or a list), not task ID
+  strings, so typos are caught at parse time. In the model the branch's output is still the
+  list of task IDs; the master skips the branches not chosen.
+
+  ```python
+  @branch
+  def choose(count: int) -> Task | list[Task]:
+      return full_load if count > 10_000 else incremental
+
+  choose(count) >> [full_load(), incremental()]
+  ```
+
+- **Task groups: `with group("name"):`.** Task IDs become `name.task_id`; a dependency on the
+  group applies to every task in it; a group can have its own `TaskDefaults`.
+- **Mapping keeps Airflow's names**, `.partial(...)` / `.expand(...)`, so both APIs share one
+  mental model (e.g. `load_file.partial(bucket="raw").expand(path=files)`). Which mapping
+  features beyond that: Open question 8.
+- **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
+  imported (so an import error). The native API never "accepts and warns"; that applies only to
+  the Airflow layer (Open question 3).
+
+Example:
+
+```python
+from datetime import timedelta
+
+from schedr import Cron, Dag, CommandOperator, TaskDefaults, task
+from schedr.templates import run, secrets
+
+with Dag(
+    "sync_customers",
+    schedule=Cron("0 3 * * *", tz="Europe/Warsaw"),
+    start="2026-01-01",
+    defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
+):
+
+    @task
+    def extract() -> list[dict[str, str]]: ...
+
+    @task(queue="large")
+    def load(rows: list[dict[str, str]]) -> int: ...
+
+    rows = extract()            # Output[list[dict[str, str]]]
+    count = load(rows)          # load depends on extract (data flow)
+
+    CommandOperator(            # depends on load: its command uses `count`
+        "notify",
+        command=t"./notify.sh {run.scheduled_at} {count}",
+        env={"TOKEN": t"{secrets['slack/bot#token']}"},
+    )
+```
+
+### Outcomes, failures and joins
+
+- **Only success branches.** A user cannot create a failure branch in the native API (no
+  `on_failure` edges, no failure trigger rules, no callbacks). A failed task fails; its
+  downstream tasks become `upstream_failed`.
+- **Python tasks:** an exception caught inside the task is a normal return (route on the value
+  with `@branch`); an uncaught exception is a failure. No exception-to-outcome mapping, so no
+  ambiguous cases with `try`/`except`.
+- **Failures are still recognized and recorded** by schedr itself (UI, logs, run history,
+  notifications): the attempt status (`failed`, `timed_out`, `oom_killed`, …), the structured
+  error summary of a failed Python task, and the `ProcessResult` of a failed command/script
+  (stderr, exit code) are stored and shown. They are **not** available to other tasks as
+  inputs.
+- **Process outcomes for `command` / `script` tasks: an enum.** The user declares an `IntEnum`
+  subclass of `schedr.Outcome`; values are exit codes, names are outcome names (shown in the
+  UI). A declared exit code means **success** (no retry); any exit code not in the enum is a
+  **failure**.
+
+  ```python
+  class Check(Outcome):
+      CHANGED = 0
+      UNCHANGED = 1
+
+  check = CommandOperator("check", command="./has_changes.sh", outcomes=Check)
+  check.on(Check.CHANGED) >> load
+  check.on(Check.UNCHANGED) >> report_nothing
+  check >> cleanup                      # plain >>: after any success outcome
+  ```
+
+  - Typed: a typo is caught by the type checker and at parse time. One exit code per member;
+    several codes → several members, `check.on(Check.A, Check.B)`.
+  - **Default:** `schedr.DefaultOutcome` (single member `SUCCESS = 0`) when `outcomes` isn't
+    given: **0 is success, everything else is a failure**.
+  - A **custom enum replaces the default entirely**; `0` is not added implicitly (a user who
+    declares their own enum is expected to know what they're doing).
+  - A plain `>>` from a task with outcomes means **any success outcome**. Edges not taken are
+    skipped like branch skips.
+- **No trigger rules in the native API: one fixed rule.** A task runs when **every upstream task
+  that wasn't skipped succeeded**, and at least one upstream succeeded; it is **skipped** when
+  all its upstream tasks were skipped; it becomes **`upstream_failed`** if any upstream task
+  failed. Without skipped upstream tasks this is exactly `all_success`; after a branch, joins
+  work with nothing to configure. In the native API skips come only from `@branch` and
+  `.on(...)`, so this covers every case.
+  - A task taking **data** from a task that can be skipped (downstream of a branch or outcome)
+    must have a parameter type that **allows `None`**, or it's a parse error. Order-only
+    dependencies (`>>`) need nothing.
+  - The other Airflow trigger rules (`one_failed`, `all_done`, `none_failed`, …) exist only in
+    the Airflow layer.
+- **Failure notifications are configured, not programmed**, and live outside the task graph.
+  A DAG names notification channels (`Dag(..., notify=["team-a-slack"])`); channels are defined
+  in the **server configuration** by operators, with credentials from **environment variables**
+  (server secrets, like the database password), not from the user-facing secret storage, since
+  the master never fetches from it. The **master** sends them (formatting a message runs no user
+  code). Events: at least a failed run; the full list, channel types and message content are
+  designed later.
+
+### Output serialization
+
+Task outputs are JSON (with tagged extra types, below); there is no pickle. Three checks make
+sure an output can be serialized, from earliest to last:
+
+1. **Type checker (editing time).** `@task` only accepts functions whose return type is
+   JSON-compatible, via a recursive type alias bound on its type variable:
+
+   ```python
+   type Json = (
+       None | bool | int | float | str | datetime | date | timedelta
+       | Sequence[Json] | Mapping[str, Json]
+   )
+
+   def task[**P, R: Json](fn: Callable[P, R]) -> Callable[P, R]: ...
+   ```
+
+   `Sequence`/`Mapping` (not `list`/`dict`, which are invariant) so that e.g. `list[int]` is
+   accepted. Verified with `mypy --strict`: `set[int]`, `dict[int, str]` and custom classes are
+   rejected. Only as good as the user's tooling, and `Sequence` lets a few wrong types through
+   (e.g. `bytes`), so it is a help, not the guarantee.
+2. **Parse time (the guarantee).** The runner reads the return annotation
+   (`typing.get_type_hints()`) and walks it recursively against the supported types: `None`,
+   `bool`, `int`, `float`, `str`, `datetime`, `date`, `timedelta`, `list`, `tuple`,
+   `dict[str, …]`, `Literal`, unions/`Optional`, `TypedDict`, dataclasses and Pydantic models
+   (see Dataclasses and Pydantic models below). An unsupported type is an **import error for the file**, naming the task and the
+   offending part (e.g. "task `extract`: return type `dict[int, str]`: output keys must be
+   `str`"); the DAG is not registered. The same type model checks **inputs**: passing an
+   `Output[T]` to a parameter whose annotation doesn't accept `T` is a parse error.
+3. **Run time (the actual value).** The runner encodes the returned value **guided by the
+   annotation** and fails the attempt (`failed`) on: unsupported types (`Decimal`, `set`,
+   custom objects), non-`str` dict keys, `NaN`/`inf`, values not matching the annotation, or
+   values over the output size limit. The error summary names the exact location (e.g. "output
+   of `extract` not serializable at `[3].created`: `Decimal` is not supported").
+
+**Tagged extra types.** `datetime`, `date`, `timedelta` and `tuple` are stored tagged, e.g.
+`{"$datetime": "2026-10-19T03:00:00+00:00"}`, not as plain strings, so Rust can render them
+correctly in t-strings without Python, and a downstream task annotated `Any` still gets the
+real type back.
+
+**One output per task; references can point inside it.** There is no separate "multiple
+outputs" concept in the native API. A task has **one output value**, stored once per (DAG run,
+task, map index). A reference can address a part of it: `out["rows"]` (dict / `TypedDict`
+key), `out.email` (dataclass / Pydantic field), `out[0]` (list / tuple index). In the DAG JSON a
+reference is plain data (task + path, e.g. `{"ref": "output", "task": "extract", "path":
+["rows"]}`); the master extracts that part from the stored value when it builds the downstream
+task's inputs, so downstream tasks receive only what they use. The same reference works as a
+task argument, inside a t-string (rendered by Rust without Python) and in `.expand()`.
+
+- Paths are **checked at parse time** against the annotations (unknown field or `TypedDict` key
+  → parse error). Only free-form `dict[str, …]` keys can't be checked; a missing key fails at
+  run time with a clear error.
+- Indexing loses the **static** type (`Output[Any]`): Python's type system can't express it for
+  a generic wrapper. The parse-time check still uses the real annotations.
+- The size limit applies to the **whole** value.
+- The Airflow layer's `multiple_outputs=True` and `output["key"]` map onto this.
+
+**Outputs of `command` and `script` tasks: `ProcessResult`.** Following the one-output rule,
+their output is a `ProcessResult` (a dataclass in the `schedr` package): `stdout: str`,
+`stderr: str`, `exit_code: int`, `stdout_truncated: bool`, `stderr_truncated: bool`.
+
+- `listing.output` is an `Output[ProcessResult]`; `listing.stdout` / `listing.stderr` are
+  shortcuts for the paths `.output.stdout` / `.output.stderr` (`Output[str]`).
+- A downstream `@task` can take the whole result (`res: ProcessResult`) and gets the truncation
+  flags and exit code explicitly.
+- "Reading a truncated output is an error" applies to `.stdout` / `.stderr` references; a task
+  taking the whole `ProcessResult` has opted in and sees the flags instead.
+- No automatic parsing of stdout (JSON, CSV, …): a downstream `@task` parses it and gives it a
+  proper type.
+- In the Airflow layer, `.output` stays the last line of stdout (not a `ProcessResult`).
+
+**Output size limits.**
+
+- Each task has an **output size limit, default 1 MiB** (encoded JSON for Python return values;
+  per stream for stdout/stderr).
+  - A Python task's return value over the limit: the attempt **fails** (partial JSON is
+    useless).
+  - stdout/stderr over the limit: **truncated** to the last part and marked truncated; a
+    downstream `.stdout` / `.stderr` reference to it gets an error.
+- A DAG author can **raise the limit per task** (or in `TaskDefaults`) with **`max_output_size`**
+  (bytes; constants `KiB`, `MiB` in `schedr`, e.g. `@task(max_output_size=8 * MiB)`), but
+  **never above the server-wide maximum**. A task asking for more is rejected when the master
+  validates the DAG (shown as a DAG error in the UI).
+- Configuration:
+  - `[outputs] default_max_size`, default `"1MiB"`;
+  - `[outputs] max_size_limit`, default `"16MiB"` (env `SCHEDR_CONFIG__OUTPUTS__MAX_SIZE_LIMIT`).
+- `max_size_limit` above the **cap on total inputs per task** (default 64 MB) is a **startup
+  error**: an output that big could never be passed to a downstream task.
+- The **4 MB inline threshold** in `AssignTask` is unchanged (bigger inputs are downloaded in
+  chunks).
+
+**Outputs of mapped tasks.** Each mapped instance has its own output (stored per run, task,
+map index). A reference to the mapped task's output as a whole, e.g.
+`sizes = process.expand(path=files)`, is an `Output[list[T]]`:
+
+- A task that isn't mapped receives a **plain list** of the instances' outputs, in **map-index
+  order** (the order of the input list, not completion order), so the result is deterministic.
+  No lazy loading: the list counts against the receiving task's **total-inputs cap**; huge
+  fan-ins are not a goal.
+- If any instance fails (after retries), the receiving task becomes `upstream_failed`; it never
+  sees a partial list.
+- **Empty expansion:** zero instances means the mapped task **succeeds** and receivers get `[]`
+  (not skipped, unlike Airflow).
+- Mapping over a mapped output maps **element by element**: `check.expand(size=sizes)` gives
+  `check[i]` the output of `process[i]`.
+- **Paths on a mapped output only index the list:** `results[0]`, `results[0].rows`.
+  A field path applied to every element (`results.rows`) is **always an error**; to collect a
+  field from all instances, write a small task that gathers it.
+
+**Missing outputs.** In the native API a downstream task never runs after a failed upstream
+(`upstream_failed`), so an output can only be missing because its task was **skipped**. A
+parameter taking data from a task that can be skipped must allow `None` (parse-time check) and
+receives `None` (see Outcomes, failures and joins).
+
+**Retention.** Outputs are stored with their DAG run and **deleted together with it** (when a
+run-history retention policy is added).
+
+**Dataclasses and Pydantic models** are supported as output and input types.
+
+- **Pydantic models: only when Pydantic is installed** (detected from annotations; extra
+  `schedr[pydantic]`). Never a required dependency: the `schedr` package shares the user's
+  environment and stays **dependency-free**, and importing Pydantic would add start-up time to
+  every task. schedr hands validation to Pydantic (`model_dump(mode="json")` /
+  `model_validate`), so **Pydantic's own rules** apply (lax by default, strict if the model
+  says so).
+- **Dataclasses** (standard library):
+  - Encoded field by field (an `asdict()`-like walk guided by the annotations); decoded by
+    calling the constructor with keyword arguments, recursively, guided by the **downstream
+    annotation**. **No class name is stored**: the stored value is a plain JSON object, so
+    renaming or moving a class doesn't break lookups and no code is loaded by a name taken
+    from stored data; a downstream task annotated `Any` gets a plain `dict`.
+  - Supported: plain fields, defaults, `frozen`, `slots`, `kw_only`, inheritance.
+    `field(init=False)` and `InitVar` are a parse error for now.
+  - **Field types are checked recursively at parse time**: an unsupported field type is an
+    import error naming the field (e.g. "`Customer.tags`: `set[str]` is not supported"). `Any`
+    on a field is allowed as an explicit opt-out (run-time check only).
+  - **Field values are checked strictly** at run time, on output and again on input, with **no
+    coercion**: `"5"` for `int` and `True` for `int` are errors; `int` for `float` is allowed.
+    A mismatch on input means the class changed between runs (e.g. a retry after a code
+    change) and fails loudly.
+  - Type checker: a `DataclassInstance` protocol in the `Json` alias makes dataclass return
+    types accepted (verified with `mypy --strict`); unsupported field types are caught at parse
+    time, not by the type checker.
 
 ## Airflow compatibility
 
@@ -852,7 +1134,7 @@ with DAG(
 | Task groups              | `TaskGroup` (context manager), `@task_group`                            |
 | Dynamic task mapping     | `.partial(...)`, `.expand(...)`                                         |
 | Connections              | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) |
-| Passing values between tasks | Required: mapping and branching depend on it. Details open.         |
+| Passing values between tasks | Required. Decided: see Output serialization and `ti.xcom_pull` below. |
 
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
 schedr's shared model and native API call them **outputs**:
@@ -865,6 +1147,26 @@ schedr's shared model and native API call them **outputs**:
 
 Airflow-specific names (`ti.xcom_pull`, `do_xcom_push`, …) appear only inside `schedr.airflow`,
 where they map onto outputs.
+
+**`ti.xcom_pull(...)`: a run-time fetch, restricted.** Supported because the migration promise
+(change only the imports) would otherwise break for many DAGs: pulling inside a
+`PythonOperator` callable is very common. The native API never gets a run-time pull (data flow
+stays the only way to pass data there).
+
+- The runner asks the agent over the socket; the agent asks the master with a unary call; the
+  master returns the stored output (Airflow 3's Task SDK also fetches XComs at run time). The
+  core protocol message has a neutral name (e.g. `GetUpstreamOutput`); "XCom" appears only in
+  `schedr.airflow`.
+- **Only from upstream tasks** (ancestors in the graph) of the **same DAG run**: they are
+  guaranteed finished, so the result is deterministic. Pulling from any other task is an error
+  (Airflow returns `None` or a value depending on timing).
+- Only the default key (`return_value`, i.e. the task's output); other keys, `dag_id=` of
+  another DAG and `include_prior_dates=True` are errors; `map_indexes=` is supported.
+- Pulled data counts against the task's **total-inputs cap**.
+- Needs the master reachable while the task runs: retried with backoff, then the task fails.
+- Not chosen: scanning the callable's source at parse time for literal `xcom_pull` calls
+  (fails with computed task IDs, helpers or aliases, and only at run time).
+- **Priority:** after the core output mechanism (it is a compatibility layer on top of it).
 
 **Templating: no Jinja, by design. Replaced by t-strings.** schedr will not include Jinja.
 Airflow templates are replaced by Python template strings (t-strings, PEP 750) combined
@@ -907,7 +1209,10 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   designed and implemented later in the project.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
 - **Later in the project:** a migration tool (`schedr migrate`, built on `libcst`) that rewrites
-  imports and converts Jinja templates to t-strings, flagging what it can't convert.
+  imports and converts Jinja templates to t-strings, flagging what it can't convert. It also
+  **reports each `ti.xcom_pull` call** and suggests the data-flow rewrite (passing
+  `extract.output` as an argument) without forcing it, so migrated DAGs work at once and can be
+  modernized gradually.
 
 Out of scope for now: sensors, Assets, callbacks, pools, Variables, hooks.
 
@@ -976,18 +1281,9 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ## Open questions
 
-1. **Native Python API design**: shape of the top-level `schedr` API (how close to Airflow
-   it is, and what it does differently).
-2. **Outputs: details.** Required (see Scope). Should be a feature of the shared model, with the
-   Airflow layer mapping onto it. Proposed mechanism: a task writes its return value as JSON to
-   a result file (not stdout); it is stored per (DAG run, task, key); Rust passes stored values
-   to downstream tasks as inputs. Sub-questions, each with the proposal:
-   - a. Format: JSON plus `datetime`, `date`, `timedelta`, `tuple`; no pickle.
-   - b. `multiple_outputs=True` and `out["key"]`: support.
-   - c. `PythonOperator` return value and `.output`: support.
-   - d. `BashOperator` pushes the last line of stdout by default, like Airflow: support.
-   - e. `ti.xcom_pull(...)` and custom keys: leave out (Tier 2).
-   - f. Size limit: about 1 MB per value; the task fails clearly if exceeded.
+1. **Native Python API design.** *Decided:* see Native API and Output serialization.
+2. **Outputs: details.** *Decided:* see Output serialization, Outcomes, failures and joins, and
+   Airflow compatibility (`ti.xcom_pull`).
 3. **Unsupported Airflow arguments** (`pool`, `sla`, callbacks, …): proposed: accept and log a
    warning for real Airflow parameters; raise an error for unknown ones.
 4. **Rust/Python integration.** *Decided:* see Rust/Python integration, How Python tasks
@@ -1025,12 +1321,31 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     - **Later (API design):** names of the other script operators (`ScriptOperator` is
       decided) and operator arguments; whether these operators also
       exist in `schedr.airflow`; script outputs (none, last line of stdout, or a result file).
-12. **Gaps found in the end-to-end flow** (see End-to-end flow: running a native-API DAG):
-    - a. **First scheduled run:** how `start_date` and the first run behave in the native API
-      (depends on question 1).
+12. **Gaps found in the end-to-end flow.** *Decided:* the first scheduled run is covered by
+    Native API (run time semantics).
 13. **Custom operators** (users subclassing an operator base class, e.g. Airflow's
     `BaseOperator`, with their own `execute()`). Not in scope yet. Proposed if added: a
     custom operator runs as a `python` task: the runner rebuilds the operator from the DAG file
     and calls `execute()`; its return value is its output. It can't change scheduling behaviour
     (skips, branching stay with the master; see How the Python API works with the engine).
     Open: whether to support them at all, in the native API, in `schedr.airflow`, or both.
+14. **Safe substitution into shell commands.** A t-string in a `command` (e.g.
+    `t"./notify.sh {out.report_url}"`) inserts values into text run by a shell; a value
+    containing spaces, `;` or `$(…)` breaks the command or allows shell injection. Proposed,
+    combining three mechanisms:
+    - a. **Quote by default.** In a string `command`, every interpolated value is **shell-quoted**
+      (POSIX single-quote quoting, same result as Python's `shlex.quote`), implemented in the
+      agent (Rust) since the agent renders commands; tests check parity with `shlex.quote`.
+    - b. **Explicit opt-out with the t-string format spec:** `t"run.sh {flags:raw}"` inserts the
+      value unquoted (t-strings keep the format spec, so no extra API is needed). Unknown format
+      specs are a parse error.
+    - c. **Argument-list commands, no shell.** `command=["./notify.sh", out.report_url]` runs the
+      program directly (no shell), each element one argument, so injection is impossible and no
+      quoting is needed. Recommended in the docs whenever pipes, redirects or other shell
+      features aren't needed. Script arguments in `schedr.toml` / `ScriptOperator` are always
+      argument lists.
+    - d. **Secrets:** discourage putting `secrets[...]` into the command line (visible in the
+      process list to other processes on the worker); recommend passing them in `env` instead.
+      Possibly a parse-time warning.
+15. **Outcome-based routing.** *Decided:* see Native API (Outcomes, failures and joins). Later:
+    retry control per exit code (e.g. retry on 75 / `EX_TEMPFAIL`, never on 2).
