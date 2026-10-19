@@ -25,9 +25,61 @@ jobs:
         python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
+      # The package is built with maturin, so `uv sync` compiles the Rust binary.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --python ${{ matrix.python-version }}
       - run: uv run ruff format --check python
       - run: uv run ruff check python
       - run: uv run mypy
       - run: uv run pytest --cov --cov-report=term-missing
+
+  # Platform wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md,
+  # Packaging and releases).
+  wheels:
+    name: wheel (${{ matrix.os }}, ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, runner: ubuntu-latest, target: x86_64 }
+          - { os: linux, runner: ubuntu-24.04-arm, target: aarch64 }
+          - { os: macos, runner: macos-14, target: aarch64 }
+          - { os: macos, runner: macos-14, target: x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+      - name: Smoke test
+        # Cross-compiled wheels (macOS x86_64 on an arm64 runner) can't run here.
+        if: ${{ !(matrix.os == 'macos' && matrix.target == 'x86_64') }}
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/schedr
+          /tmp/smoke/bin/python -c "import schedr; print(schedr.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz

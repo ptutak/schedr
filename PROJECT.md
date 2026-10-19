@@ -751,6 +751,38 @@ All APIs describe DAGs in terms of the same underlying model, so the Rust schedu
 them identically. A compatibility API is a translation layer onto that model, not a separate
 engine.
 
+### How the Python API works with the engine
+
+The Python API is a **description layer, not an execution engine**. Python code of the API runs
+at two moments only; all scheduling behaviour lives in Rust, on the master.
+
+**Parse time: Python describes the DAG.** The runner (`parse` mode) imports the DAG file. API
+calls (creating a DAG, tasks, dependencies, groups, mapping) only **record** what was declared;
+the runner turns the record into DAG JSON in the shared model:
+
+| Feature                         | What Python records                                  | Who implements the behaviour |
+|---------------------------------|------------------------------------------------------|------------------------------|
+| Dependencies (`>>`, `chain()`)  | Edges between task IDs                               | Master: dependency resolution |
+| Trigger rules                   | A per-task field                                     | Master: when a task is ready, skipped or `upstream_failed` |
+| Branching                       | A `python` task flagged as a branch                  | Master: skips the branches not chosen and propagates the skip |
+| Task groups                     | Flattened to `group_id.task_id` names and edges, plus group metadata for the UI | Master sees ordinary tasks |
+| Dynamic task mapping            | The task, its fixed arguments, and what it maps over (a literal or an output reference) | Master: once the upstream output exists, creates N task instances (`map_index` 0…N−1) |
+| t-strings                       | Literal text plus typed references                   | Agent / runner: filled in at run time |
+| `EmptyOperator`                 | An `empty` task                                      | Master completes it, no worker |
+
+**Run time: Python runs one callable.** For a `python` task the runner (`task` mode) imports
+the DAG file again, finds the task by ID, fills in its arguments (inputs from upstream
+outputs, t-strings, secrets via the agent), calls the function and returns the result over the
+socket. A branch task is no different: its return value (the task IDs to follow) is just its
+output, and the master acts on it. `command` and `script` tasks need no Python: the agent
+renders and runs them.
+
+**Difference from Airflow:** in Airflow, operator classes carry behaviour in Python (e.g.
+`BranchPythonOperator.execute()` marks other tasks skipped itself). In schedr, operator
+classes are thin: their type and arguments go into the model, and Rust implements what each
+type means. That is why the native API and every compatibility API can share one engine.
+User code can never change scheduling behaviour (skips, branching, retries) from inside a task.
+
 ## Airflow compatibility
 
 ### Approach: look-alike API under the `schedr.airflow` namespace
@@ -996,3 +1028,9 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 12. **Gaps found in the end-to-end flow** (see End-to-end flow: running a native-API DAG):
     - a. **First scheduled run:** how `start_date` and the first run behave in the native API
       (depends on question 1).
+13. **Custom operators** (users subclassing an operator base class, e.g. Airflow's
+    `BaseOperator`, with their own `execute()`). Not in scope yet. Proposed if added: a
+    custom operator runs as a `python` task: the runner rebuilds the operator from the DAG file
+    and calls `execute()`; its return value is its output. It can't change scheduling behaviour
+    (skips, branching stay with the master; see How the Python API works with the engine).
+    Open: whether to support them at all, in the native API, in `schedr.airflow`, or both.
