@@ -1,11 +1,19 @@
 [project]
 name = "schedr"
-version = "0.1.0"
-description = "Python API for the schedr scheduler (Airflow-style DAGs)."
+# The version comes from the Cargo workspace: the binary and the Python package always share
+# one version number.
+dynamic = ["version"]
+description = "schedr scheduler: Python DAG API (native and Airflow look-alike) plus the schedr binary."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Piotr Tutak", email = "piotr.tutak@amartus.com" }]
+classifiers = [
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
 dependencies = []
 
 [dependency-groups]
@@ -18,11 +26,28 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling>=1.26"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
 
-[tool.hatch.build.targets.wheel]
-packages = ["python/schedr"]
+# --- maturin ------------------------------------------------------------
+# The wheel contains the `schedr` Rust binary plus the pure-Python package (as ruff and uv
+# ship), so `pip install schedr` gives both the API and `schedr standalone`.
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/schedr/Cargo.toml"
+python-source = "python"
+python-packages = ["schedr"]
+
+# --- uv -----------------------------------------------------------------
+# Rebuild the (editable) project install when Rust code changes, not only Python metadata.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/Cargo.toml" },
+    { file = "crates/**/*.rs" },
+]
 
 # --- ruff ---------------------------------------------------------------
 [tool.ruff]

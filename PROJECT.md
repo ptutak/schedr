@@ -87,6 +87,16 @@ One Rust binary, four roles:
 - A `.py` file that defines no DAG is **ignored silently** (helper modules are common).
   Parsing imports the file, so its top-level code runs on every parse; helper modules with
   heavy import-time work should be ignored or refactored. This will be documented.
+- **New DAGs are paused** when first found; a user unpauses them from the UI or CLI.
+- **Removed DAGs disappear.** When a DAG's file is deleted (or no longer defines that DAG), the
+  DAG is removed from the web UI and from all listings, and its schedule stops.
+  - **When a DAG counts as removed:** only when a parse of a **newer hash** of its root no
+    longer contains it. A worker that simply hasn't synced yet (rejection 6, DAG file missing)
+    never removes a DAG.
+  - **Runs in progress:** attempts already running finish; tasks not started yet are
+    cancelled.
+  - **History** stays in the database, hidden. If a DAG with the same ID appears again, its
+    history shows again. (A future retention policy may clean it up.)
 
 ### Plain script delivery
 
@@ -113,8 +123,8 @@ One Rust binary, four roles:
 - Internally every job is a DAG: a declared script becomes a **one-task DAG**.
 - Every declaration in a `schedr.toml` has a **name**, unique within that file (a TOML table
   key, e.g. `[jobs.report_daily]`).
-- **DAG operators refer to a declared script** (via a dedicated operator, placeholder name
-  `ScriptOperator`, an ordinary class in schedr's Python API) by the location of the
+- **DAG operators refer to a declared script** (via a dedicated operator,
+  **`ScriptOperator`**, an ordinary class in schedr's Python API) by the location of the
   `schedr.toml` that declares it and the declaration's **name**. The location is root-relative
   (see Script roots) or absolute.
 - **Script roots** make references portable between environments (cluster, local
@@ -240,7 +250,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   `Rejected` → `Finished` → `FinishedAck`.
 - **Queues** route tasks to groups of workers. A worker registers with the queues it serves; a
   task names one (`queue=`); the master assigns a task only to workers serving its queue.
-  - There is a **default queue** (name proposed: `default`). A worker with **no queues
+  - There is a **default queue** named **`default`**. A worker with **no queues
     configured serves the default queue**; a task with no queue goes to the default queue.
   - A worker with queues configured serves **exactly those queues**. `default` is never added
     implicitly: `queues = ["large"]` serves only `large`; `queues = ["default", "large"]`
@@ -399,6 +409,112 @@ fresh Python process per task is acceptable; warm Python worker processes are no
 Tasks run on **long-running workers** (not pod-per-task) because schedr can't count on
 permission to create pods.
 
+### Rust/Python integration
+
+- **Separate processes.** Rust and Python never share a process as a way of integrating
+  schedr: the Rust worker agent starts Python as a subprocess and they talk over a local
+  channel (details below).
+- **The master never runs Python** (and neither does the webserver).
+- **DAG parsing** runs in a Python subprocess on a worker (`AssignParse`, parse slot).
+- **Python tasks** run in their own Python processes (see How Python tasks are started).
+- **Python talks only to its local worker agent**; only the agent talks to the master.
+- **Rejected as the integration mechanism:**
+  - Embedding Python in the Rust binary (PyO3): user-code crashes would take the scheduler or
+    agent down, and one Python environment would be forced on every DAG.
+  - A Rust extension module that connects Python to the scheduler.
+- **The Python runner** is a module of the `schedr` package, started by the agent as
+  `<interpreter> -m schedr.runner parse` or `... task` (`-m`, so it works with any configured
+  interpreter executable, whatever virtualenv it belongs to). Only the mode and the socket path
+  are passed on the command line / environment; everything else comes from the agent over the
+  channel, so no secrets appear in the command line.
+  - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`,
+    imports the files one at a time (native API calls only record DAGs), and sends back the
+    DAG JSON and per-file import errors.
+  - `task`: gets the task specification from the agent, imports the DAG file (latest code on
+    disk), finds the task by ID, fills in t-strings (secrets fetched by the agent), calls the
+    function, and sends back the output or a structured error summary; exit code 0 or non-zero.
+  - The runner does **not** decide retries, enforce timeouts, watch memory or write log files.
+    The agent supervises it from outside (process group, stdout/stderr to the log file,
+    watchdog, SIGTERM/SIGKILL).
+- **Interpreter for parsing and Python tasks:** a configuration key naming an
+  `[interpreters]` entry, **default `python`**:
+
+  ```toml
+  [dags]
+  interpreter = "etl-venv"
+  ```
+
+  - The **same interpreter** is used for parsing and for tasks, so a DAG can't parse in one
+    environment and fail to import in another.
+  - That environment must have **`schedr` installed at the same version as the agent**, plus
+    everything the DAG files import.
+  - Plain script tasks don't use the runner: they run with the interpreter from their
+    `schedr.toml` declaration, which doesn't need `schedr` installed.
+  - Possible later: an interpreter per DAG root (in `[dags.roots]`).
+- **Agent ↔ runner channel: a Unix domain socket** per runner process, created by the agent in
+  a private directory; its path is passed in **`SCHEDR_AGENT_SOCKET`**. Files are not enough
+  because a running task can ask for things not known in advance (`Connection.get(conn_id)`,
+  secrets). Messages:
+  - task specification and inputs (agent → runner, on request);
+  - secret / connection requests and answers;
+  - outputs, or a structured error summary (runner → agent);
+  - for parsing: per-file progress and results (DAG JSON, import errors).
+- **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
+  dependencies; messages are small. (Protobuf would add a dependency to the Python package.)
+- **Parsing granularity:** **one parse process per parse job** (a root whose hash changed),
+  importing files one at a time and reporting progress per file. A **per-file timeout**
+  (configurable) is enforced by the agent: on timeout it kills the process, records an import
+  error ("timed out") for that file and starts a new process for the remaining files. A fresh
+  process per parse job avoids stale cached modules.
+- **Trust boundary: a worker is one trust domain.** All tasks on a worker run under the same
+  UID, so they are **not isolated from each other** (a task can read another task's
+  environment or files). Teams that must be isolated get separate queues and workers. This is
+  stated in the documentation.
+- **Shared model and schemas.** **Rust types are the reference.** Protobuf for gRPC. A **JSON
+  Schema generated from the Rust types** (`schemars`) describes the DAG JSON and the agent ↔
+  runner messages; it is committed to the repository and **CI fails if it is out of date**.
+  Python tests validate what Python produces against it. Python-side types are **written by
+  hand** (no code generation) for now.
+- **Compiled Rust extensions as ordinary libraries are fine.** A Python package (a user's
+  dependency, or possibly schedr's own Python package) may contain a compiled Rust extension
+  used as a library inside the Python process. That is not an integration channel with the
+  scheduler; it just runs inside the task's or parser's own process.
+
+### How Python tasks are started
+
+- **Now: a fresh process per task.** The agent starts a new Python process for every task
+  attempt; it imports the DAG file, runs one task and exits. A straight `1 >> 2 >> 3 >> 4 >> 5`
+  DAG starts five processes, possibly on five workers. Main cost: re-importing the DAG file
+  and its libraries for each task.
+- **Later: a fork server** as an optional start method. A parent process imports libraries
+  once and forks one child per task attempt, so each task is still its own process (the memory
+  watchdog, timeouts, signal-based cancellation and the journal work unchanged). The runner
+  and the agent ↔ runner protocol must not depend on how the process was started, so this can
+  be added without changing them.
+  - **One fork server per worker and interpreter** (each `[interpreters]` entry may be a
+    different virtualenv, and a child must come from a parent with the same environment).
+  - It preloads only a **configured list of libraries**, **never DAG code**; each task child
+    imports its DAG file itself. So the fork server never goes stale on a code push (libraries
+    change only with the image, which restarts the pod), its memory doesn't grow with the
+    number of DAGs, and no user top-level code runs before `fork()`.
+  - The memory watchdog must measure a forked task's **own** memory (PSS/USS from
+    `/proc/<pid>/smaps_rollup`), not RSS, so memory shared with the parent isn't counted
+    against every task.
+  - Not planned: a fork server per DAG (memory multiplied by the number of DAGs, restarts on
+    every push to its root, user code run before `fork()`).
+- **Rejected:**
+  - Warm worker pools (long-lived Python processes reused across tasks): globals, leaked
+    memory and old code carry over between tasks; the watchdog can't tell whose task used
+    the memory.
+  - One process per DAG run or per chain of tasks: breaks per-task retries, timeouts, memory
+    budgets and queues.
+  - Subinterpreters (`concurrent.interpreters`) and threads/asyncio in one process: one
+    address space, so no per-task memory limit or signal-based cancellation; a C-extension
+    crash kills every task.
+  - Python embedded in the worker agent: user code could crash the agent and every task on
+    the worker.
+  - Checkpoint/restore (CRIU): needs privileges OpenShift's restricted policy doesn't grant.
+
 ### Default deployment size
 
 - **2 workers** by default, **2 slots each** (4 concurrent tasks). To be tuned per deployment.
@@ -416,6 +532,35 @@ and environments:
 - A DAG file is referenced as **(root name, path relative to the root)** and resolved by the
   worker that runs the task.
 
+### DAG ID conflicts
+
+A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **conflict**:
+
+- **Same ID in two places on one worker** (two files in one folder, two folders, two roots):
+  **none of the definitions can run**. The UI shows the DAG as in conflict, with every place
+  that defines it.
+- **Different workers define the same ID in different places** (e.g. worker A has it in
+  `a.py`, worker B, not yet synced, still in `b.py`): also a **conflict**, and the DAG can't
+  run, **until every relevant worker** has parsed and reported its code and they all agree on
+  one place. Typical cause: git-sync on some pods hasn't pulled the latest commit yet, so the
+  conflict clears by itself once they catch up.
+- **"Different" means a different place** (root + file). The **same file at different code
+  versions** on different workers is **not** a conflict: tasks run on the latest code and the UI
+  warns about mixed hashes (see Code versions and change detection). Otherwise every code push
+  would block the DAG until all workers have synced.
+- **Relevant workers** are the **`ACTIVE`** workers serving any queue used by the DAG's tasks
+  (queues taken from all reported definitions). `DISCONNECTED`, `LOST` and `OFFLINE` workers
+  don't count, so a dead pod can't block a DAG forever.
+- **No duplicate parsing.** Workers report a content hash per root; each (root, hash) is
+  **parsed once**, by any `ACTIVE` worker that reported that hash. The master derives each
+  worker's DAGs from the parse of the hash it reported, so "parsed and reported by every
+  worker" doesn't mean parsing the same code on every pod.
+- While a DAG is in conflict, **no new runs are created and no tasks are assigned**. In runs
+  already in progress, **running attempts finish**; tasks not yet started **wait** until the
+  conflict is resolved.
+- When the conflict is resolved, the DAG becomes runnable again on its own (its paused or
+  unpaused setting is unchanged).
+
 ### Code versions and change detection
 
 - **Tasks run on the latest code** the worker has. schedr does not keep old code versions.
@@ -426,6 +571,115 @@ and environments:
 - Defaults: **poll every 30 s**, **settle time 5 s**.
 - After a change is seen, schedr waits for a **settle time** (configurable; no further changes) before
   computing the new content hash, so half-written files are never parsed.
+
+### End-to-end flow: running a native-API DAG
+
+What happens from the moment a DAG file written with the native Python API lands in
+`SCHEDR_DAG_PATH` (already on the worker) until its run finishes. Each step is tagged:
+**[D]** decided elsewhere in this file, **[open]** not decided yet (Open question 12).
+
+Running example: `/git/dags/etl-repo/team_a/sync.py` defines DAG `sync` with two Python tasks,
+`extract` → `load`, scheduled daily; `load` takes `extract`'s output as input.
+
+**Phase 1: Discovery (worker)**
+
+1. **Poll.** Every 30 s the worker agent scans each `SCHEDR_DAG_PATH` root recursively,
+   skipping whatever `.schedrignore` files exclude, and notices that root `etl-repo` changed.
+   [D]
+2. **Settle.** The agent waits 5 s with no further changes, so half-written files are never
+   read. [D]
+3. **Hash.** It computes a new content hash `H2` for root `etl-repo`. [D]
+4. **Report.** It sends `CodeVersionChanged(root=etl-repo, hash=H2)` over its stream to the
+   master. [D] Every worker sees the change on its own, so the master gets one report per
+   worker; it creates only one parse job per (root, hash) (see DAG ID conflicts). [D]
+
+**Phase 2: Parsing (master → worker → master)**
+
+Why the DAG structure travels to the master (steps 8–10): the master schedules (when runs are
+due, task order, retries, trigger rules) but **never runs user code and has no Python**, and the
+DAG code is only on the workers. A Python DAG file can't be read without running it, so a worker
+runs it once and sends the result as plain data. The webserver also needs it (graph view, task
+list) and likewise has no Python.
+
+5. **Parse job.** The master creates a parse job for `etl-repo@H2` and sends `AssignParse` to
+   any `ACTIVE` worker that reported `H2`. That worker uses its dedicated parse slot. [D]
+6. **Runner start.** The agent starts `<python> -m schedr.runner parse` [D] with a Unix socket
+   [D]. Every DAG root is on `sys.path`. [D]
+7. **Import.** The runner imports every `.py` file in the root, one at a time; `team_a/sync.py`
+   is one of them.
+   - Native API calls only **record** the DAG: tasks, edges, schedule, retries, t-strings as
+     literal text plus references. Nothing runs.
+   - Files that define no DAG are ignored silently. [D]
+   - Each file's progress is reported to the agent; a file that hangs gets a per-file timeout.
+     [D]
+8. **Serialize.** The runner turns each DAG into DAG JSON in the shared model, along with the
+   import errors for each file, and sends it all to the agent. [D]
+9. **Upload.** The agent sends the result to the master with a unary call. [D]
+10. **Store.** The master validates the JSON (template references, cycles, unknown task kinds)
+    and stores the DAG version for `sync` with hash `H2`. Import errors are stored and shown in
+    the UI. [D in outline] A newly found DAG is stored **paused** until a user unpauses it. [D]
+    A DAG that disappeared from the root is removed from the UI and listings. [D] A DAG ID
+    defined in more than one place, or defined differently by different workers, is marked as
+    in conflict and can't run (see DAG ID conflicts). [D]
+
+**Phase 3: Creating a run (master)**
+
+11. **Trigger.** The master's scheduling loop finds that `sync` is due by its schedule; missed
+    runs follow the `catchup` rules. [D] A run can also be started manually from the UI or CLI.
+    The master creates a **DAG run** in Postgres.
+12. **Task instances.** The master creates `extract` and `load` in state `scheduled`. `extract`
+    has no upstream tasks, so it is ready and moves to `queued`. [D, states to be refined]
+
+**Phase 4: Assignment (master → worker)**
+
+13. **Choose a worker.** Among `ACTIVE` workers serving the task's queue (here `default`) with a
+    free slot, the master picks the one with the most free slots. [D]
+14. **Save first.** The assignment is written to Postgres **before** anything is sent. [D]
+15. **`AssignTask`** goes over the worker's stream: attempt ID; DAG, run and task IDs, try
+    number; kind `python` with the DAG file reference `etl-repo:team_a/sync.py` and the task ID;
+    expected hash `H2`; inputs (none for `extract`) and run information; timeout and memory
+    budget. [D]
+16. **Checks.** The agent checks that it has a free slot, isn't draining, has the file and has
+    the interpreter.
+    - If a check fails, it sends `Rejected` with a reason, and the master reacts according to
+      the rejection table (see Task rejections). [D]
+    - If all checks pass, it writes the attempt to its journal on disk and sends `Started`,
+      which also means the task is accepted. [D]
+    - If no `Started` arrives within about 10 s, the master takes the assignment back. [D]
+
+**Phase 5: Execution (worker)**
+
+17. **Start.** The agent starts `<python> -m schedr.runner task` [D] in a new process group.
+    stdout and stderr go to the task's log file on the worker's disk. [D]
+18. **Fetch the spec.** The runner asks the agent over the socket for the task specification
+    and inputs. [D]
+19. **Prepare.** The runner imports `team_a/sync.py` again (the latest code on the worker:
+    `H2` or newer [D]) and finds task `extract`. It fills in t-strings; any `secrets[...]`
+    values are fetched from secret storage **by the agent** and passed over the socket. [D]
+20. **Run.** The runner calls the task's function. Meanwhile the agent's memory watchdog checks
+    the process tree's memory about once a second. [D]
+21. **Report.** The runner sends the return value (the output) or a structured error summary
+    over the socket, then exits. [D]
+22. **Finish.** The agent masks secret values in the log and outputs, records the attempt
+    status and exit code (`success`, `failed`, `timed_out`, `oom_killed`, …), and saves the
+    result in its journal. [D]
+
+**Phase 6: Result and what happens next (worker → master)**
+
+23. **`Finished`** goes to the master: status, outputs, duration, peak memory. Delivery is at
+    least once; the attempt ID makes repeats harmless. [D]
+24. **Store and acknowledge.** The master stores the attempt result and the output under
+    (run, `extract`), then sends `FinishedAck`; the agent removes the attempt from its journal.
+    [D]
+25. **Decide.**
+    - On success, `extract` → `success`. `load`'s upstream condition is now met, so it goes
+      through steps 13–24; its `AssignTask` carries `extract`'s output as input.
+    - On failure, the master either retries (`up_for_retry` after `retry_delay`) or marks the
+      task `failed`, and downstream tasks become `upstream_failed`. [D]
+26. **Run complete.** When every task instance is in a final state, the DAG run is marked
+    `success` or `failed`. The UI shows the run; logs come from the worker through the
+    webserver proxy. If tasks in the run used different code hashes, the UI shows a warning.
+    [D]
 
 ## Configuration
 
@@ -441,6 +695,30 @@ and environments:
   `SCHEDR_DAG_PATH` is kept as a **short alias**.
 - **Secrets** (database password, signing keys, …) come only from **environment variables**
   (filled from Kubernetes Secrets), never from the configuration file.
+
+## Secret storage
+
+- **Secret storage is built into schedr**, not an optional add-on or plugin.
+- The core defines a generic **secret storage** abstraction, so several kinds of secret storage
+  can be supported. **Only one implementation is built for now: HashiCorp Vault.**
+- Core code, the shared model and the native API use the generic name (secret storage), never
+  "Vault". Vault-specific names appear only in the Vault implementation.
+- **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a
+  Vault-specific one) that refers to a value in secret storage (see Templating), e.g.
+  `t"{secrets['etl/db#password']}"`.
+- **Several secret storages** can be configured at the same time, each with a name. For now
+  only one is set up, but the placeholder syntax **names the storage** a secret comes from, so
+  adding storages later doesn't change the syntax:
+  - `secrets['path#key']`: the **default** storage. The configuration marks one storage as
+    the default.
+  - `secrets.<storage>['path#key']`: the named storage.
+- Secrets are **fetched by the worker agent** that runs the task, never by the master
+  (consistent with Task assignment: secrets never pass through the master) and not by the
+  Python task itself. The agent fills in secret placeholders when it renders templates.
+- **Vault authentication:** Vault's **Kubernetes auth method** with the pod's service-account
+  token; a token from an environment variable for local development.
+- **Secret values are masked** in task logs and outputs by the worker agent.
+- Connections are stored in secret storage (see Scope).
 
 ## State storage
 
@@ -541,7 +819,7 @@ with DAG(
 | Branching                | `@task.branch`, `BranchPythonOperator`; skipped-state propagation and trigger rules |
 | Task groups              | `TaskGroup` (context manager), `@task_group`                            |
 | Dynamic task mapping     | `.partial(...)`, `.expand(...)`                                         |
-| Connections              | `Connection` in **Airflow's JSON format**, stored in **HashiCorp Vault** |
+| Connections              | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) |
 | Passing values between tasks | Required: mapping and branching depend on it. Details open.         |
 
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
@@ -577,6 +855,8 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - Values from other tasks are referenced directly (`t"{extract.output}"`) instead of
   `ti.xcom_pull(...)`.
 - The native API uses the same placeholder mechanism.
+- **Secrets** have their own placeholder, resolved from secret storage on the worker (see
+  Secret storage).
 - Requires Python 3.14+ (the whole package's minimum version, see Python tooling).
 - **Any argument may contain a t-string.** Every operator and task argument is checked for
   t-strings and filled in at run time; there is no per-operator list of templated arguments
@@ -629,12 +909,32 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 - Supported versions: **Python 3.14+** (required by t-strings, see Templating). CI tests 3.14.
 - Dependency management: **uv** (lockfile `uv.lock`, dev deps in `[dependency-groups]`).
-- Build backend: **hatchling** for now (to be revisited when the Rust/Python boundary is
-  decided; maturin if Rust is compiled into the Python package).
+- Build backend: **maturin** with `bindings = "bin"` (see Packaging and releases). The Python
+  package version is dynamic, taken from the Cargo workspace. `uv sync` rebuilds the project
+  when Rust sources change (`[tool.uv] cache-keys`).
 - `ruff` handles formatting and linting with a broad rule set; `mypy` runs in strict mode;
   `pytest` runs the tests with coverage. Tests that spawn processes are marked `integration`.
 - Local environment: pyenv-virtualenv selected by `.python-version` (git-ignored). The Makefile
   points uv at that env via `pyenv prefix`. Pre-commit hooks call `ruff`/`mypy` directly.
+
+### Packaging and releases
+
+- **Python package: built with maturin**, replacing hatchling. The wheel contains the **`schedr`
+  Rust binary** plus the Python package (as `ruff` and `uv` ship). `pip install schedr` gives a
+  DAG author the API **and** `schedr standalone` for local development. If schedr's Python
+  package later includes a compiled Rust extension (allowed, see Rust/Python integration), it
+  goes into the same wheel.
+- **Platform wheels:** Linux x86_64 and aarch64, and macOS (local development; Linux-only
+  features such as the memory watchdog are disabled there).
+- **Container images:**
+  - Master/webserver image: the Rust binary only, **no Python at all**.
+  - Worker base image: Rust binary + Python 3.14 + the `schedr` package. Users build their own
+    worker image on top of it, adding their libraries.
+  - Both run under an **arbitrary UID**.
+- **Helm chart** for deploying.
+- **Version pairing:** the binary and the Python package always share **one version number** and
+  are released together. The runner reports its version when it connects to the agent; the
+  agent **rejects a mismatched runner** with a clear error.
 
 ### Workflow
 
@@ -658,18 +958,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
    - f. Size limit: about 1 MB per value; the task fails clearly if exceeded.
 3. **Unsupported Airflow arguments** (`pool`, `sla`, callbacks, …): proposed: accept and log a
    warning for real Airflow parameters; raise an error for unknown ones.
-4. **Rust/Python integration.** Proposed:
-   - Parse DAGs: a Python subprocess on a worker imports the DAG file and outputs JSON; the
-     worker agent sends it to the master.
-   - Run tasks: one Python subprocess per task inside the worker pod.
-   - Runtime communication: Python talks only to its local Rust agent (files or Unix socket);
-     the agent talks to the master over gRPC.
-   - Shared model: Rust types are the reference; Protobuf for gRPC and a generated JSON Schema
-     for the DAG format, which Python tests validate against.
-   - Packaging: container images (master, worker base) and a Helm chart; the Python package is
-     on pip for writing DAGs and local development.
-   - Rejected: embedding Python in the scheduler (PyO3), because user-code crashes would take
-     the scheduler down and one Python environment would be forced on every DAG.
+4. **Rust/Python integration.** *Decided:* see Rust/Python integration, How Python tasks
+   are started, and Packaging and releases.
 5. **Interface details:** web UI and CLI are required (see Architecture). Still open:
    - Frontend technology.
    - Live updates to the browser. Proposed: Server-Sent Events.
@@ -685,13 +975,11 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 8. **Dynamic task mapping subset**: `expand` over literals and over upstream output (proposed
     minimum); also `expand_kwargs`, `.map()`, `.zip()`? Proposed: an upper limit on mapped
     instances per task.
-9. **Connections: who reads Vault?** Options: the worker agent fetches on demand (proposed,
-    using Vault's Kubernetes auth method with the pod's service-account token), the master
-    fetches and passes secrets to tasks, the Python task fetches directly, or a Vault Agent
-    sidecar renders secrets into files. Also: Vault path layout (Airflow's Vault backend uses
-    `connections/<conn_id>` in KV v2), `conn_uri` support, which access API to mirror
-    (`Connection.get(conn_id)`, `BaseHook.get_connection(conn_id)`), and secret masking in logs.
-10. **Variables in Vault too?** Airflow's Vault backend also stores Variables.
+9. **Connections in secret storage: details** (the rest is decided, see Secret storage).
+    Vault path layout (Airflow's Vault backend uses `connections/<conn_id>` in KV v2),
+    `conn_uri` support, which access API to mirror (`Connection.get(conn_id)`,
+    `BaseHook.get_connection(conn_id)`).
+10. **Variables in secret storage too?** Airflow's Vault backend also stores Variables.
 11. **Plain scripts:**
     - `schedr.toml` keys (schedule, script, arguments, environment, working directory,
       interpreter, retries, timeout, …).
@@ -702,5 +990,9 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
       `schedule`; the operator can override arguments, environment, retries, ….
     - Exact syntax of a root-relative reference in the API (e.g. `"etl:team_a/schedr.toml"`
       or a separate argument).
-    - **Later (API design):** operator names and arguments; whether these operators also
+    - **Later (API design):** names of the other script operators (`ScriptOperator` is
+      decided) and operator arguments; whether these operators also
       exist in `schedr.airflow`; script outputs (none, last line of stdout, or a result file).
+12. **Gaps found in the end-to-end flow** (see End-to-end flow: running a native-API DAG):
+    - a. **First scheduled run:** how `start_date` and the first run behave in the native API
+      (depends on question 1).
