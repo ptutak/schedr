@@ -148,6 +148,109 @@ One Rust binary, four roles:
     the task**. This is also the job's stable ID in the UI, CLI and run history.
   - Absolute paths to a `schedr.toml` remain accepted in `ScriptOperator` references.
 
+#### `schedr.toml` keys
+
+One table per job under `[jobs.<name>]`:
+
+```toml
+[jobs.report_daily]
+script = "reports/daily.py"        # required; relative to this file, no "..", no absolute
+interpreter = "etl-venv"           # required; an [interpreters] entry
+args = ["--region", "eu"]          # argument list, never a shell string
+env = { REPORT_MODE = "full" }
+secrets = { DB_PASSWORD = "etl/db#password" }   # env var <- secret storage (default storage)
+working_dir = "reports"            # relative to this file; default: this file's directory
+schedule = "0 3 * * *"             # optional; cron or preset ("@daily")
+every = "1h"                       # alternative to schedule; not both
+timezone = "Europe/Warsaw"         # default UTC
+start = 2026-01-01                 # TOML date/datetime
+catchup = false                    # default false
+queue = "default"
+retries = 2
+retry_delay = "5m"
+timeout = "30m"
+max_output_size = "4MiB"
+description = "Daily report"
+tags = ["reports"]
+
+[jobs.report_daily.outcomes]       # optional; same meaning as an Outcome enum
+SUCCESS = 0
+NO_DATA = 3
+```
+
+- Same semantics as the native API (schedules, run time semantics, defaults, outcomes, output
+  limits, `ProcessResult` output). **Unknown keys are an error.**
+- Durations as `"30s"`, `"5m"`, `"1h30m"`; sizes as `"4MiB"` (same format as the server
+  configuration).
+- **`schedule` is optional.** With a schedule (or `every`), the declaration is a **standalone
+  job**: a one-task DAG, paused when first found like any new DAG, whose ID is its reference
+  (e.g. `etl-repo:team_a/schedr.toml#report_daily`); it can also be used from DAGs. Without
+  one, it is only used from DAGs or triggered manually.
+- **To use a script in a DAG, it must be declared** in a `schedr.toml` inside
+  `SCHEDR_SCRIPT_PATH`, typically **without a schedule**. There is no way to run an undeclared
+  script file.
+- **Run information** (no t-strings or other templating in TOML) is passed as **environment
+  variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
+  `SCHEDR_RUN_ID`, `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, `SCHEDR_SCHEDULED_AT`,
+  `SCHEDR_INTERVAL_START`, `SCHEDR_INTERVAL_END` (ISO 8601).
+
+#### `ScriptOperator`
+
+```python
+ScriptOperator("report", job="etl:team_a/schedr.toml#report_daily",
+               args=["--day", t"{run.scheduled_at}"])
+```
+
+- Refers to a declaration by its **reference string**, the same format as the job ID (absolute
+  `"/path/schedr.toml#name"` also accepted). **Checked at parse time** (file exists, job
+  declared); otherwise an import error.
+- Takes **everything except the scheduling keys** (`schedule`, `every`, `timezone`, `start`,
+  `catchup`) and can **override** `args`, `env`, `secrets`, `queue`, `retries`, `retry_delay`,
+  `timeout`, `max_output_size`, `outcomes` (an `Outcome` enum).
+- In the operator, `args` and `env` values may be t-strings / output references (rendered by
+  the agent; argument lists, so no shell quoting needed).
+- It is the **only** script operator: there is no operator that runs a script file directly.
+- Also exposed in **`schedr.airflow`**, so migrated DAGs can call declared scripts without
+  mixing APIs, at **`schedr.airflow.providers.schedr.operators.script`** (schedr as one more
+  "provider", following Airflow's `providers.<provider>.operators.<module>` convention; it can
+  never collide with a real Airflow module).
+
+#### `SchedrScriptOperator` (Airflow layer)
+
+The native `ScriptOperator` stays as it is. A **separate** Airflow-like class,
+`SchedrScriptOperator` (provider-prefixed, like `SnowflakeOperator`), parametrizes a
+`ScriptOperator` and adapts its result so it behaves like a standard Airflow operator:
+
+```python
+from schedr.airflow.providers.schedr.operators.script import SchedrScriptOperator
+
+SchedrScriptOperator(
+    task_id="report",
+    job="etl:team_a/schedr.toml#report_daily",   # forwarded to ScriptOperator
+    args=["--day", t"{ds}"],                     # forwarded (overrides)
+    env={"MODE": "full"},                        # forwarded (overrides)
+    output=OutputMode.LAST_LINE,                 # how stdout becomes .output
+    skip_on_exit_code=99,
+    retries=2, execution_timeout=timedelta(minutes=30), default_args=..., trigger_rule=...,
+)
+```
+
+- **Name:** `SchedrScriptOperator` (provider-prefixed, like `SnowflakeOperator`), so it isn't
+  confused with the native `ScriptOperator`.
+- **Parameters:** the `ScriptOperator` overrides (`job`, `args`, `env`, `secrets`, `queue`,
+  `timeout`, `max_output_size`, `outcomes`) are forwarded; standard `BaseOperator` arguments
+  (`task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`, `default_args`,
+  `doc_md`, …) work as on every Airflow-layer operator.
+- **Output parsing, built in (no user code):** `.output` comes from the `ProcessResult` via
+  a fixed set of modes implemented in the agent (Rust), so no Python process is needed:
+  `LAST_LINE` (default, like `BashOperator`), `STDOUT` (all of it), `JSON` (stdout parsed as
+  JSON, checked like any output), `JSON_LAST_LINE`, `NONE`. A user-supplied Python callable
+  (like Airflow's `output_processor`) is not supported: it would need a Python process after
+  the script.
+- **Reporting like Airflow:** `skip_on_exit_code` (default 99) marks the task skipped; any
+  other failing exit code fails the task with an Airflow-style error summary ("script
+  returned non-zero exit code N" plus the tail of stderr) shown in the UI.
+
 ### Master–worker protocol
 
 - **gRPC over HTTP/2** (`tonic`), typed with Protobuf. Internal only (workers ↔ master).
@@ -398,6 +501,14 @@ OpenShift's restricted security policy doesn't grant.
 - Tasks and DAG files can use **only the Python libraries installed in the worker
   environment**. Any additional code must come through the DAG or script roots (e.g. a git
   submodule, or a symlink).
+- **Task processes get a clean environment by default.** They do **not** inherit the worker
+  agent's environment variables. A task process gets only: a small allow-list (`PATH`, `HOME`,
+  `LANG`, `LC_*`, `TZ`, `TMPDIR`), the `SCHEDR_*` run variables, and the task's own `env` /
+  `secrets`. The agent's own variables (configuration, certificate paths, Vault auth, anything
+  from the pod spec) are passed only if listed in the worker configuration
+  (`[worker] pass_env = ["HTTP_PROXY", ...]`). In the Airflow layer, `append_env=True`
+  (`BashOperator`) means "add the allow-listed worker variables", never the whole agent
+  environment.
 - **Each DAG root is added to `sys.path`** when parsing DAGs and running Python tasks, so helper
   modules and code from submodules inside a root can be imported.
 
@@ -918,8 +1029,9 @@ with Dag(
   in the **server configuration** by operators, with credentials from **environment variables**
   (server secrets, like the database password), not from the user-facing secret storage, since
   the master never fetches from it. The **master** sends them (formatting a message runs no user
-  code). Events: at least a failed run; the full list, channel types and message content are
-  designed later.
+  code). Events: at least a failed run and a task failed after its last retry (needed for the
+  Airflow layer's `email_on_failure`); an **email** channel type is needed for the same reason.
+  The full event list, other channel types and message content are designed later.
 
 ### Output serialization
 
@@ -1074,6 +1186,103 @@ run-history retention policy is added).
   code needs as few changes as possible. **Behaviour underneath is entirely ours.**
 - Migrating a DAG = **changing its imports only**. Everything below the imports stays the same.
 
+### Thin translating classes
+
+The Airflow layer consists of **thin classes that translate onto the native API**; they don't
+build the model themselves:
+
+- **Arguments with a native equivalent are translated**, including renamed ones and different
+  types. Examples:
+
+  | Airflow | Native |
+  |---|---|
+  | `DAG(dag_id=..., ...)` | `Dag("...", ...)` |
+  | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `None` | `Cron(...)` / `DAILY` / `Every(...)` / `None` |
+  | `start_date=` | `start=` |
+  | `default_args={...}` | `defaults=TaskDefaults(...)` (keys translated the same way) |
+  | `BashOperator(bash_command=...)` | `CommandOperator(command=...)` |
+  | `PythonOperator(python_callable=f, op_args=..., op_kwargs=...)` | a `@task` wrapping `f` |
+  | `execution_timeout=` | `timeout=` |
+
+- **Arguments without a native equivalent are filtered out**, with a **parse warning** listed
+  with the DAG in the UI (not silently), except:
+  - **Metadata** (`owner`, `doc`, `doc_md`, `doc_rst`, `doc_json`, `doc_yaml`, `owner_links`,
+    `access_control`): kept as DAG/task metadata and shown in the UI, no warning.
+  - **An error when set to a non-default value**, because dropping it would change what the
+    DAG does or hide failures: `depends_on_past=True`, `wait_for_downstream=True`,
+    `ignore_first_depends_on_past`, `sla`, `run_as_user`, `user_defined_macros`,
+    `user_defined_filters`, `template_searchpath`, and **all callbacks** (below). Default
+    values (`depends_on_past=False`, `on_failure_callback=None`, …) are accepted silently.
+- **Unknown arguments** (not Airflow arguments at all) are an error, as in Airflow.
+- **`email_on_failure=True` is translated** (it is data, not code): with `email=[...]` it becomes
+  a native notification, event "task failed after its last retry", to those addresses through
+  the server's **email channel**. If no email channel is configured, the master's DAG
+  validation shows a **warning** on the DAG ("email_on_failure ignored: no email channel
+  configured"). Possibly an allow-list of recipient domains in the server configuration.
+  `email_on_retry=True` is translated the same way only if notifications get a retry event;
+  until then it is a warning.
+- **Callbacks are a parse error** (`on_failure_callback`, `on_success_callback`,
+  `on_retry_callback`, `on_execute_callback`, `on_skipped_callback`, DAG-level `on_*_callback`,
+  `sla_miss_callback`): they are arbitrary code with nowhere sound to run (not on the master;
+  not as a failure branch; in the task's own process they would miss timeouts, OOM kills and
+  lost workers, and command/script tasks have no Python process). Message: "not supported:
+  configure notifications with `notify=`". The migration tool reports them as a manual step.
+  Possibly later: Airflow's ready-made notifier objects (`SlackNotifier`, `SmtpNotifier`)
+  recognized and translated to channels.
+- **Internal builder API.** Airflow behaviour with no public native equivalent (trigger rules
+  other than the fixed native rule, `skip_on_exit_code`, last-line `.output`, `ti.xcom_pull`,
+  the `@dag` decorator) is built through a **private builder API** of the `schedr` package
+  (e.g. `schedr._model`), not the public native API, which stays as strict as decided.
+- **Missing annotations** in Airflow-style callables are treated as `Any` (only the run-time
+  output check applies), through the same private builder API.
+- One translation path means the **same semantics** for both APIs: whatever the native API
+  checks (types, references, outputs) is checked for Airflow-style DAGs too.
+
+### Branching, task groups and mapping
+
+All translated onto the native API (`@branch`, `group`, `.partial()` / `.expand()`) through the
+private builder API where Airflow behaviour differs.
+
+**Branching:**
+
+- **`@task.branch` / `BranchPythonOperator`: supported.** They return task ID strings (one, a
+  list, or `None`), computed at run time, so they can't be checked at parse time; at run time
+  an ID that isn't a **direct downstream** task fails the branch task. `None` skips all direct
+  downstream tasks, as in Airflow.
+- **`ShortCircuitOperator` / `@task.short_circuit`: supported.** A falsy return value skips
+  downstream tasks; a truthy one continues. `ignore_downstream_trigger_rules=True` (default):
+  skip everything downstream; `False`: skip only direct downstream tasks and let trigger rules
+  decide the rest.
+- **Not supported:** `BranchExternalPythonOperator`, `BranchPythonVirtualenvOperator`,
+  `BranchDayOfWeekOperator`, `BranchDateTimeOperator`, `@task.branch_external_python`,
+  `@task.branch_virtualenv`. They don't exist in `schedr.airflow`; importing them is an import
+  error naming them as unsupported.
+- Trigger rules: Open question 6c (two rules in the model, `All` and `Any`; other Airflow rules
+  translated onto them or an error).
+
+**Task groups:**
+
+- **`TaskGroup` (context manager) and `@task_group`: supported.** `group_id.task_id` names,
+  `prefix_group_id=False`, dependencies on a group, nested groups, per-group `default_args`
+  (→ group `TaskDefaults`); `tooltip`, `ui_color`, `ui_fgcolor` kept as metadata.
+- **Mapped task groups** (`@task_group(...).expand(...)`): **not supported for now** (an
+  error). The native API has none either; if added later, in both APIs together.
+
+**Dynamic task mapping:**
+
+- **`.partial(...).expand(...)` over literals and upstream outputs: supported.** Several mapped
+  arguments give the **cartesian product**, as in Airflow (same in the native API).
+- **`expand_kwargs`** (a list of dicts, one per instance): **supported, in both APIs**; pure
+  data, evaluated by the master.
+- **`.zip()`: not now** (pure data; could be done by the master later).
+- **`.map(fn)`: not supported** (runs a Python function on the output; would need Python where
+  there is none).
+- **Limit on mapped instances per task:** `[mapping] max_instances`, default 1024 (like
+  Airflow's `max_map_length`); more instances fail the mapped task with a clear error. Applies
+  to both APIs.
+- **Empty expansion in the Airflow layer: skipped**, as in Airflow (the native API: succeeds
+  with `[]`), so migrated DAGs keep their behaviour.
+
 ### Reference version: Airflow 3
 
 Module paths mirror **Airflow 3** (the `airflow.sdk` Task SDK and the `standard` provider).
@@ -1208,6 +1417,27 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is
   designed and implemented later in the project.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
+- **Safe substitution into shell commands.** A t-string in a `command` inserts values into text
+  run by a shell; unquoted, a value with spaces, `;` or `$(…)` would break the command or allow
+  shell injection.
+  - **Quoted by default.** In a string `command`, every interpolated value is **shell-quoted**
+    (POSIX single-quote quoting, the same result as Python's `shlex.quote`), e.g.
+    `t"./notify.sh {out.report_url}"` with `https://x/a b;rm -rf ~` renders as
+    `./notify.sh 'https://x/a b;rm -rf ~'`. The agent (Rust) renders commands, so it does the
+    quoting; tests check parity with `shlex.quote`.
+  - **Explicit opt-out with the format spec:** `t"./run.sh {flags:raw}"` inserts the value
+    unquoted (t-strings keep the format spec, so no extra API). Unknown format specs are a
+    parse error.
+  - **Argument-list commands, no shell:** `command=["./notify.sh", out.report_url]` runs the
+    program directly, each element one argument: no injection possible, no quoting needed.
+    Recommended in the documentation whenever pipes, redirects or other shell features aren't
+    needed. Script arguments (`schedr.toml`, `ScriptOperator`) are always argument lists.
+  - **Secrets:** putting `secrets[...]` into a command line is discouraged (other processes on
+    the worker can see it in the process list); pass secrets through `env` instead. Possibly a
+    parse-time warning.
+  - Not the main mechanism: passing every value through environment variables (`"$URL"` in
+    the command); safe only if the user remembers the double quotes. Kept as the
+    recommendation for secrets.
 - **Later in the project:** a migration tool (`schedr migrate`, built on `libcst`) that rewrites
   imports and converts Jinja templates to t-strings, flagging what it can't convert. It also
   **reports each `ti.xcom_pull` call** and suggests the data-flow rewrite (passing
@@ -1284,8 +1514,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 1. **Native Python API design.** *Decided:* see Native API and Output serialization.
 2. **Outputs: details.** *Decided:* see Output serialization, Outcomes, failures and joins, and
    Airflow compatibility (`ti.xcom_pull`).
-3. **Unsupported Airflow arguments** (`pool`, `sla`, callbacks, …): proposed: accept and log a
-   warning for real Airflow parameters; raise an error for unknown ones.
+3. **Unsupported Airflow arguments.** *Decided:* see Airflow compatibility (thin translating
+   classes).
 4. **Rust/Python integration.** *Decided:* see Rust/Python integration, How Python tasks
    are started, and Packaging and releases.
 5. **Interface details:** web UI and CLI are required (see Architecture). Still open:
@@ -1296,31 +1526,49 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      master's gRPC API stays internal to workers.
    - How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, clear,
      …) are written to Postgres for the master to pick up, or sent to the master.
-6. **Branching subset**: `@task.branch` and `BranchPythonOperator` only, or also
-   `ShortCircuitOperator` / `@task.short_circuit`?
-7. **Task groups subset**: plain grouping (`group_id.task_id` names, dependencies on a group,
-   per-group `default_args`), or also mapped task groups (`@task_group(...).expand(...)`)?
-8. **Dynamic task mapping subset**: `expand` over literals and over upstream output (proposed
-    minimum); also `expand_kwargs`, `.map()`, `.zip()`? Proposed: an upper limit on mapped
-    instances per task.
+6. **Branching in the Airflow layer.** *Decided* (except 6c): see Airflow compatibility (Branching,
+   task groups and mapping). Still open:
+   - c. **Trigger rules: two rules in the model; Airflow rules translated onto them or an
+     error.** (Direction decided; the exact mapping proposed below.) The model (neutral names,
+     no Airflow terms) has only:
+     - **`All`** (the native fixed rule): runs when every upstream task that wasn't skipped
+       succeeded and at least one succeeded; all skipped → skipped; any failure →
+       `upstream_failed`.
+     - **`Any`**: runs as soon as **one** upstream task succeeded; when all are done and none
+       succeeded: any failure → `upstream_failed`, otherwise skipped. Data from upstream tasks
+       that didn't succeed must be optional (`None`), as for skippable tasks.
+
+     Proposed mapping of Airflow rules:
+
+     | Airflow rule | Translated to | Difference |
+     |---|---|---|
+     | `none_failed_min_one_success` | `All` | none |
+     | `all_success` | `All` | Airflow skips a join after a branch (the classic trap); `All` runs it. Parse warning when the task is a join after a branch. |
+     | `none_failed` | `All` | Airflow runs the task when **all** upstream were skipped; `All` skips it. Parse warning. |
+     | `one_success` | `Any` | none |
+     | `all_done`, `all_done_min_one_success`, `one_done`, `one_failed`, `all_failed`, `always`, `all_skipped`, `none_skipped` | **error** | run on failure or on skips; no equivalent |
+
+     Consequence: Airflow cleanup patterns (`all_done`) and alert/rollback tasks (`one_failed`)
+     must be reworked when migrating (the migration tool reports them; notifications replace
+     alert tasks). Possibly later: a dedicated cleanup/teardown concept.
+     **To decide:**
+     1. The mapping table above (in particular: `all_success` and `none_failed` translated with
+        a parse warning, or an error when the difference applies).
+     2. **A run fails if any task in it failed**, whatever its last tasks did (unlike Airflow,
+        which decides from the leaf tasks), in both APIs. Proposed: yes (needed with `Any`:
+        one upstream failed, another succeeded, the downstream ran, the run must still fail).
+     3. Whether the **native API exposes `Any`** (e.g. `@task(wait_for=ANY)`, for "use whichever
+        source succeeded first") or keeps only its fixed rule for now.
+7. **Task groups in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
+   groups and mapping).
+8. **Dynamic task mapping in the Airflow layer.** *Decided:* see Airflow compatibility
+   (Branching, task groups and mapping).
 9. **Connections in secret storage: details** (the rest is decided, see Secret storage).
     Vault path layout (Airflow's Vault backend uses `connections/<conn_id>` in KV v2),
     `conn_uri` support, which access API to mirror (`Connection.get(conn_id)`,
     `BaseHook.get_connection(conn_id)`).
 10. **Variables in secret storage too?** Airflow's Vault backend also stores Variables.
-11. **Plain scripts:**
-    - `schedr.toml` keys (schedule, script, arguments, environment, working directory,
-      interpreter, retries, timeout, …).
-    - Is `schedule` optional in a declaration? Proposed: yes; with a schedule it is a
-      standalone job and can also be used from DAGs, without one it is only used from DAGs
-      (or triggered manually).
-    - What `ScriptOperator` takes from the declaration. Proposed: everything except
-      `schedule`; the operator can override arguments, environment, retries, ….
-    - Exact syntax of a root-relative reference in the API (e.g. `"etl:team_a/schedr.toml"`
-      or a separate argument).
-    - **Later (API design):** names of the other script operators (`ScriptOperator` is
-      decided) and operator arguments; whether these operators also
-      exist in `schedr.airflow`; script outputs (none, last line of stdout, or a result file).
+11. **Plain scripts.** *Decided:* see Plain script delivery.
 12. **Gaps found in the end-to-end flow.** *Decided:* the first scheduled run is covered by
     Native API (run time semantics).
 13. **Custom operators** (users subclassing an operator base class, e.g. Airflow's
@@ -1329,23 +1577,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     and calls `execute()`; its return value is its output. It can't change scheduling behaviour
     (skips, branching stay with the master; see How the Python API works with the engine).
     Open: whether to support them at all, in the native API, in `schedr.airflow`, or both.
-14. **Safe substitution into shell commands.** A t-string in a `command` (e.g.
-    `t"./notify.sh {out.report_url}"`) inserts values into text run by a shell; a value
-    containing spaces, `;` or `$(…)` breaks the command or allows shell injection. Proposed,
-    combining three mechanisms:
-    - a. **Quote by default.** In a string `command`, every interpolated value is **shell-quoted**
-      (POSIX single-quote quoting, same result as Python's `shlex.quote`), implemented in the
-      agent (Rust) since the agent renders commands; tests check parity with `shlex.quote`.
-    - b. **Explicit opt-out with the t-string format spec:** `t"run.sh {flags:raw}"` inserts the
-      value unquoted (t-strings keep the format spec, so no extra API is needed). Unknown format
-      specs are a parse error.
-    - c. **Argument-list commands, no shell.** `command=["./notify.sh", out.report_url]` runs the
-      program directly (no shell), each element one argument, so injection is impossible and no
-      quoting is needed. Recommended in the docs whenever pipes, redirects or other shell
-      features aren't needed. Script arguments in `schedr.toml` / `ScriptOperator` are always
-      argument lists.
-    - d. **Secrets:** discourage putting `secrets[...]` into the command line (visible in the
-      process list to other processes on the worker); recommend passing them in `env` instead.
-      Possibly a parse-time warning.
+14. **Safe substitution into shell commands.** *Decided:* see Templating (Airflow
+    compatibility).
 15. **Outcome-based routing.** *Decided:* see Native API (Outcomes, failures and joins). Later:
     retry control per exit code (e.g. retry on 75 / `EX_TEMPFAIL`, never on 2).
+16. **Environment of task processes.** *Decided:* see Worker environment.
