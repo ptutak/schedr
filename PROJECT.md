@@ -1135,6 +1135,12 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   (the run-time check still applies).
 - **Task kinds:** Python tasks are **decorated functions** (`@task`); other kinds are **operator
   classes**: `CommandOperator`, `ScriptOperator`, `EmptyOperator`.
+- **No custom operators.** Users can't subclass an operator class to define their own task kind
+  with its own `execute()`; subclassing a schedr operator class is a parse error. Reuse is by
+  **composition**: a plain Python function that creates tasks with parameters (a task
+  factory), or a shared `@task` function in a helper module. Every task is therefore one of the
+  known kinds, which the master and the agent understand without user code. Consequence for
+  the Airflow layer: see Airflow compatibility (Scope).
 - **Data flow defines dependencies.** Calling a task inside a DAG returns an **output
   reference**; passing it to another task (as an argument, or inside a t-string) creates the
   dependency. `>>` remains for **order-only** dependencies (no data passed).
@@ -1346,15 +1352,53 @@ with Dag(
   - **No "clear" (re-running tasks of an existing run).** A run is never re-run partially; to
     run again, **trigger the DAG again** (a new run). So a run's results, outcomes and
     resources never change once it has finished.
-- **Failure notifications are configured, not programmed**, and live outside the task graph.
+- **Notifications are configured, not programmed**, and live outside the task graph.
   A DAG names notification channels (`Dag(..., notify=["team-a-slack"])`); channels are defined
   in the **server configuration** by operators, with credentials from **environment variables**
   (server secrets, like the database password), not from the user-facing secret storage, since
   the master never fetches from it. The **master** sends them (formatting a message runs no user
-  code). Events: at least a failed run and a task failed after its last retry (needed for the
-  Airflow layer's `email_on_failure`); an **email** channel type is needed for the same reason.
-  The full event list, other channel types and message content: Open questions
-  (Notifications).
+  code).
+  - **Events** (an `Event` enum):
+
+    | Event | When | Default |
+    |---|---|---|
+    | `RUN_FAILED` | a run ended `failed` (see Run result); includes cleanup failures, named in the message | **yes** |
+    | `TASK_FAILED` | a task failed after its last retry (earlier than `RUN_FAILED`; Airflow's `email_on_failure`) | opt-in |
+    | `TASK_RETRY` | an attempt failed and will be retried (Airflow's `email_on_retry`; noisy) | opt-in |
+    | `RUN_CANCELLED` | a run was cancelled by a user | opt-in |
+    | `RUN_SUCCEEDED` | a run ended `success` ("the report is ready") | opt-in |
+    | `RUN_RECOVERED` | a run succeeded after the DAG's previous run failed ("it's fixed") | opt-in |
+
+    Not now: a task running too long / SLAs (a separate, large feature; errors in the Airflow
+    layer). The default event set is a server setting (default: `RUN_FAILED`).
+  - **Choosing events per channel:** a plain list means the default events; a dict chooses
+    them per channel. Events are chosen where the DAG names the channel (not on
+    `EmailChannel`), so the same form works for server and DAG-defined channels; `Event` is an
+    enum, so a typo is an attribute error at import.
+
+    ```python
+    Dag(..., notify=[team_a, "ops-slack"])                 # default events: RUN_FAILED
+
+    Dag(
+        ...,
+        notify={
+            team_a: [Event.RUN_FAILED, Event.TASK_RETRY],
+            "ops-slack": [Event.RUN_FAILED, Event.RUN_RECOVERED],
+        },
+    )
+    ```
+
+  - **Channel types:** **email** (server transport; channels in the server configuration or
+    DAG-defined, see below) and a generic **webhook** (an HTTP POST with a JSON body), defined
+    only in the server configuration with credentials from environment variables; it covers
+    Slack, Microsoft Teams, PagerDuty and Opsgenie through their incoming webhooks. Dedicated
+    Slack / Teams channels with nicer formatting: possibly later.
+  - **Message content is fixed by schedr** (no user templates: formatting runs on the master
+    and must never run user code): the DAG, the run, the event, the failed tasks with their
+    error summaries (exception type and message, or exit code and the tail of stderr),
+    cleanup failures, links to the run and the logs in the UI. Webhooks get the same
+    information as **structured JSON**, so receiving systems can format it. Secret values never
+    appear (error summaries are already masked by the agent).
 
 ### Task results and outcomes
 
@@ -1413,7 +1457,7 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
     DAG-defined channels entirely.
   - **Email only, for now:** other channel types (e.g. a Slack webhook) need a credential, and
     the master never reads the user-facing secret storage; they stay server-defined.
-  - Which events each channel gets: Open questions (Notifications).
+  - Which events each channel gets: chosen in `notify=` (see above).
   - Not chosen: naming DAG channels by strings in `notify=` (mixes them with server channels in
     one namespace); an inline `Email("a@x.com")` in `notify=` (can't be reused).
 - Every finished attempt has a **status** (`success`, `failed`, `timed_out`, …) and, when it
@@ -2091,11 +2135,10 @@ primary one.
 - **Unknown arguments** (not Airflow arguments at all) are an error, as in Airflow.
 - **`email_on_failure=True` is translated** (it is data, not code): with `email=[...]` it becomes
   a hidden native **`EmailChannel`** named after the DAG, with those addresses, for the event
-  "task failed after its last retry" (see Outcomes, failures and joins: DAG-defined email
+  `TASK_FAILED` (see Outcomes, failures and joins: DAG-defined email
   channels). If no email transport is configured, the master's DAG validation shows a
   **warning** on the DAG ("email_on_failure ignored: no email transport configured").
-  `email_on_retry=True` is translated the same way only if notifications get a retry event
-  (Open questions: Notifications); until then it is a warning.
+  `email_on_retry=True` is translated the same way, with the event `TASK_RETRY`.
 - **Callbacks are a parse error** (`on_failure_callback`, `on_success_callback`,
   `on_retry_callback`, `on_execute_callback`, `on_skipped_callback`, DAG-level `on_*_callback`,
   `sla_miss_callback`): they are arbitrary code with nowhere sound to run (not on the master;
@@ -2264,8 +2307,8 @@ each case is described below.
 Translated onto the native per-task cleanup and resources (see Native API: Cleanup and
 resources).
 
-- **`on_kill()`** exists only in custom operators (Open questions: Custom operators): nothing to
-  translate.
+- **`on_kill()`** exists only in custom operators, which aren't supported (see Scope): nothing
+  to translate.
 - **Setup / teardown translate onto resources when possible**, the rest is a parse error:
   `@setup` → `@resource`; `@teardown` / `.as_teardown(setups=s)` → `@cleanup(s)`, receiving the
   setup's output; the tasks between them → users. `all_done_setup_success` is covered by this.
@@ -2473,7 +2516,14 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   `extract.output` as an argument) without forcing it, so migrated DAGs work at once and can be
   modernized gradually.
 
-Out of scope for now: sensors, Assets, callbacks, pools, Variables, hooks.
+Out of scope for now: sensors, Assets, callbacks, pools, hooks.
+
+**Custom operators are not supported** (as in the native API, by the principle in Thin
+translating classes). A user class subclassing `BaseOperator` (or any `schedr.airflow`
+operator) is an import error naming the class: "custom operators are not supported: move
+`execute()` into a `@task` function or a `PythonOperator` callable". The migration tool reports
+each one as a manual step. Provider operators other than the `standard` provider (and schedr's
+own `providers.schedr`) don't exist in `schedr.airflow` either.
 
 ## Repository and tooling
 
@@ -2561,24 +2611,3 @@ Required (see Architecture: Web UI and CLI). Still open:
 - Showing cleanups and resources (see Cleanup and resources): the per-task cleanup inside the
   task (e.g. a dropdown or submenu), the cleanup result next to the status; resources shown
   separately (e.g. a band over their users) with their own states.
-
-### Custom operators
-
-Users subclassing an operator base class (e.g. Airflow's `BaseOperator`) with their own
-`execute()`. Not in scope yet. Proposed if added: a custom operator runs as a `python` task:
-the runner rebuilds the operator from the DAG file and calls `execute()`; its return value is
-its output. It can't change scheduling behaviour (skips and branching stay with the master; see
-How the Python API works with the engine). By the principle in Thin translating classes, the
-Airflow layer can have them only if the native API does. Open: whether to support them at all.
-
-### Notifications
-
-Decided so far: see Outcomes, failures and joins (configured, not programmed; channels in the
-server configuration or DAG-defined `EmailChannel`s; sent by the master). Open:
-
-- The full list of events: at least a failed run and a task failed after its last retry;
-  possibly a retry (needed for Airflow's `email_on_retry`), a cleanup failure, a run cancelled.
-- The channel types besides email.
-- The message content.
-- How events are chosen per channel (e.g. `EmailChannel(..., events=[...])`, or on
-  `notify=`).
