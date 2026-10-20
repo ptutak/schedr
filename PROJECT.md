@@ -242,11 +242,13 @@ SchedrScriptOperator(
   (`task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`, `default_args`,
   `doc_md`, …) work as on every Airflow-layer operator.
 - **Output parsing, built in (no user code):** `.output` comes from the `ProcessResult` via
-  a fixed set of modes implemented in the agent (Rust), so no Python process is needed:
-  `LAST_LINE` (default, like `BashOperator`), `STDOUT` (all of it), `JSON` (stdout parsed as
-  JSON, checked like any output), `JSON_LAST_LINE`, `NONE`. A user-supplied Python callable
-  (like Airflow's `output_processor`) is not supported: it would need a Python process after
-  the script. Under review: Open question 18.
+  a fixed set of modes: `LAST_LINE` (default, like `BashOperator`), `STDOUT` (all of it),
+  `NONE`. **`JSON` and `JSON_LAST_LINE` are dropped** (*decided*): they parse stdout, which the
+  native API doesn't do; no migration cost, since no Airflow DAG uses this schedr-only class;
+  for structured output, a downstream Python task parses `.stdout`. `LAST_LINE` is produced
+  like `BashOperator`'s `.output` (a hidden native task, see Thin translating classes). A
+  user-supplied Python callable
+  (like Airflow's `output_processor`) is not supported.
 - **Reporting like Airflow:** `skip_on_exit_code` (default 99) skips the downstream tasks, as
   for `BashOperator` (translated onto outcomes: see Airflow compatibility, `skip_on_exit_code`);
   any other failing exit code fails the task with an Airflow-style error summary ("script
@@ -852,8 +854,8 @@ list) and likewise has no Python.
     uses). `secrets=` never sets environment variables.
   - Python tasks get secrets through t-strings in their arguments (over the socket, never a
     command line).
-  - Open: how a named storage is written in the `secrets=` list and in TOML; the name and flags
-    of `schedr secret` (to be confirmed with the other `schedr` commands).
+  - Open: the name and flags of `schedr secret` (to be confirmed with the other `schedr`
+    commands); other details in Open question 21.
 - Connections are stored in secret storage (see Scope).
 
 ## State storage
@@ -965,7 +967,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   **`@branch`** chooses **any subset** of its direct downstream tasks. The function returns
   **task handles** (one or a list), not task ID strings, so typos are caught at parse time. In
   the model the branch's output is the list of task IDs; the master skips the tasks not
-  chosen.
+  chosen. The **empty subset** is allowed: returning `[]` skips all direct downstream tasks
+  (`None` is not allowed; write `[]`).
 
   ```python
   @branch
@@ -1183,6 +1186,30 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
 
 **Result structure.**
 
+- **DAG-defined email channels.** Besides channels defined in the server configuration
+  (named by strings), a DAG can define an **`EmailChannel`** holding only recipients:
+
+  ```python
+  team_a = EmailChannel("team-a", ["a@example.com", "b@example.com"])
+
+  with Dag("etl", schedule=DAILY, notify=[team_a, "ops-slack"]): ...
+  ```
+
+  - **Objects are DAG channels, strings name server channels.** Passing the object (not its
+    name) means a typo is a `NameError` at import, and a DAG channel can't shadow a server
+    channel of the same name. It can be reused through a helper module in the DAG root; each
+    DAG's JSON carries the recipients it uses.
+  - **The server keeps everything with credentials:** the email **transport** (SMTP server and
+    its credentials) is in the server configuration; the DAG never handles a credential.
+  - **Checks:** address syntax at parse time; server channel names, and recipients against an
+    optional **allow-list of email domains** in the server configuration, when the master
+    validates the DAG (a violation is a DAG error in the UI). The server can **switch off**
+    DAG-defined channels entirely.
+  - **Email only, for now:** other channel types (e.g. a Slack webhook) need a credential, and
+    the master never reads the user-facing secret storage; they stay server-defined.
+  - Which events each channel gets: Open question 20.
+  - Not chosen: naming DAG channels by strings in `notify=` (mixes them with server channels in
+    one namespace); an inline `Email("a@x.com")` in `notify=` (can't be reused).
 - Every finished attempt has a **status** (`success`, `failed`, `timed_out`, …) and, when it
   succeeded, the pair **(output, outcome)**: in the DAG JSON, the `Finished` message and
   storage, whatever the task kind. The output may be `None`. The output size limit applies to
@@ -1406,7 +1433,8 @@ their output is a `ProcessResult` (a dataclass in the `schedr` package): `stdout
   taking the whole `ProcessResult` has opted in and sees the flags instead.
 - No automatic parsing of stdout (JSON, CSV, …): a downstream `@task` parses it and gives it a
   proper type.
-- In the Airflow layer, `.output` stays the last line of stdout (not a `ProcessResult`).
+- In the Airflow layer, `.output` stays the last line of stdout (not a `ProcessResult`),
+  produced by a hidden native task (see Thin translating classes).
 
 **Output size limits.**
 
@@ -1508,6 +1536,9 @@ primary one.
 - **Not allowed:** a model rule, task kind, edge type or run-time behaviour that the native API
   doesn't offer. An Airflow feature that needs one is either **added to the native API first**
   (then translated onto it) or is an **error** in the Airflow layer.
+- **The native API is never changed to accommodate Airflow**, only the other way round: an
+  Airflow feature maps onto what the native API has (directly, or as a combination of native
+  constructs), or it is an error. A native feature is added only for a native need.
 - Applies to every compatibility API, not only `schedr.airflow`.
 - Existing decisions that don't follow it yet are listed in Open question 18.
 
@@ -1535,12 +1566,12 @@ primary one.
     values (`depends_on_past=False`, `on_failure_callback=None`, …) are accepted silently.
 - **Unknown arguments** (not Airflow arguments at all) are an error, as in Airflow.
 - **`email_on_failure=True` is translated** (it is data, not code): with `email=[...]` it becomes
-  a native notification, event "task failed after its last retry", to those addresses through
-  the server's **email channel**. If no email channel is configured, the master's DAG
-  validation shows a **warning** on the DAG ("email_on_failure ignored: no email channel
-  configured"). Possibly an allow-list of recipient domains in the server configuration.
-  `email_on_retry=True` is translated the same way only if notifications get a retry event;
-  until then it is a warning.
+  a hidden native **`EmailChannel`** named after the DAG, with those addresses, for the event
+  "task failed after its last retry" (see Outcomes, failures and joins: DAG-defined email
+  channels). If no email transport is configured, the master's DAG validation shows a
+  **warning** on the DAG ("email_on_failure ignored: no email transport configured").
+  `email_on_retry=True` is translated the same way only if notifications get a retry event
+  (Open question 20); until then it is a warning.
 - **Callbacks are a parse error** (`on_failure_callback`, `on_success_callback`,
   `on_retry_callback`, `on_execute_callback`, `on_skipped_callback`, DAG-level `on_*_callback`,
   `sla_miss_callback`): they are arbitrary code with nowhere sound to run (not on the master;
@@ -1552,8 +1583,20 @@ primary one.
 - **Internal builder API.** A **private builder API** of the `schedr` package (e.g.
   `schedr._model`) may be used where Airflow's *syntax* can't go through the public native API
   directly (e.g. the `@dag` decorator, task IDs given as strings), never to build behaviour the
-  native API doesn't have (see the principle above). Earlier uses for Airflow-only behaviour
-  (last-line `.output`, `ti.xcom_pull`) are under review: Open question 18.
+  native API doesn't have (see the principle above).
+- **Last-line `.output`** (`BashOperator`, `@task.bash`, `SchedrScriptOperator`'s `LAST_LINE`
+  mode): where a DAG uses it, the factory inserts a **hidden native Python task** that takes the
+  whole `ProcessResult` and returns the last non-empty line of stdout (without the trailing
+  newline); downstream tasks get its output. A native DAG could write the same by hand.
+  - Exact even when stdout was truncated: truncation keeps the tail, and a task taking the
+    whole `ProcessResult` gets the text and its flags, not an error.
+  - Added only where `.output` is actually used; the UI shows the hidden task folded into the
+    command task.
+  - Cost: one extra Python process per such reference and a short delay before its consumer.
+  - Not chosen: a `last_line` field in the native `ProcessResult` (the native API isn't changed
+    for Airflow); translating `.output` to the whole stdout (a silent difference: trailing
+    newline, multi-line output); an error (breaks the common "Bash produces a value, Python
+    consumes it" pattern).
 - **`skip_on_exit_code`** (`BashOperator`, `@task.bash`, `SchedrScriptOperator`) is
   translated onto **outcomes**, so it needs nothing beyond the native API:
   - Default (`99`): the task gets `outcomes=AirflowCommandOutcome`, an ordinary `Outcome` enum
@@ -1594,11 +1637,29 @@ and Open question 18.
 - **`@task.branch` / `BranchPythonOperator`: supported.** They return task ID strings (one, a
   list, or `None`), computed at run time, so they can't be checked at parse time; at run time
   an ID that isn't a **direct downstream** task fails the branch task. `None` skips all direct
-  downstream tasks, as in Airflow.
+  downstream tasks, as in Airflow: it is translated to the native `[]` (the empty subset).
 - **`ShortCircuitOperator` / `@task.short_circuit`: supported.** A falsy return value skips
   downstream tasks; a truthy one continues. `ignore_downstream_trigger_rules=True` (default):
   skip everything downstream; `False`: skip only direct downstream tasks and let trigger rules
-  decide the rest. Under review: Open question 18.
+  decide the rest.
+  - **Translation:** a native Python task with outcomes: a truthy result gives
+    `Continue(value)`, a falsy one `Stop(value)` (dataclasses carrying the returned value, so a
+    pull of it still works); its direct downstream edges become `.on(Continue)`.
+  - **`ignore_downstream_trigger_rules=False`:** exact.
+  - **`ignore_downstream_trigger_rules=True`:** native skips spread only through trigger rules,
+    so it is exact where they give the same result, and a **parse error** otherwise (naming
+    the task; suggesting `ignore_downstream_trigger_rules=False` or changing that task's
+    rule):
+
+    | Downstream shape | Skip on `Stop` | Exact? |
+    |---|---|---|
+    | a chain or tree below the short-circuit | a task whose only upstream was skipped is skipped, under either rule | yes |
+    | a join with an upstream **outside** the short-circuit's subtree, rule `all_success` (→ `AllSucceeded`) | any skipped upstream → skipped | yes |
+    | such a join with `none_failed` / `none_failed_min_one_success` (→ `NoneFailed`) | runs if its other upstream succeeded (Airflow skips it) | no → parse error |
+    | an `always` task downstream (edges dropped) | no longer downstream, so not skipped (Airflow skips it) | no → parse error |
+
+  - Not chosen: emulating "skip regardless" for `none_failed` joins with hidden join tasks
+    (not exact either: data edges count in the join's rule).
 - **Not supported:** `BranchExternalPythonOperator`, `BranchPythonVirtualenvOperator`,
   `BranchDayOfWeekOperator`, `BranchDateTimeOperator`, `@task.branch_external_python`,
   `@task.branch_virtualenv`. They don't exist in `schedr.airflow`; importing them is an import
@@ -1615,7 +1676,7 @@ and Open question 18.
     run starts (it is never skipped or failed), added as one more upstream. With `NoneFailed`,
     the task then can't be skipped for "all upstream skipped".
   - **Dropped edges:** the task's incoming dependencies are removed from scheduling (kept for
-    display, and for a short-circuit's "skip everything downstream").
+    display only).
 
   | Airflow 3 rule | Airflow behaviour | Translated to | Exact? |
   |---|---|---|---|
@@ -1660,7 +1721,18 @@ and Open question 18.
   Airflow's `max_map_length`); more instances fail the mapped task with a clear error. Applies
   to both APIs.
 - **Empty expansion in the Airflow layer: skipped**, as in Airflow (the native API: succeeds
-  with `[]`), so migrated DAGs keep their behaviour. Under review: Open question 18.
+  with `[]`, unchanged), so migrated DAGs keep their behaviour.
+  - **Translation:** in front of a mapped task, the factory inserts a **hidden native Python
+    task** that takes the mapped arguments and returns the outcome `Empty` or `NotEmpty`
+    (`Empty` if any mapped argument is empty, as the cartesian product then is); the mapped
+    task's edge becomes `.on(NotEmpty)`. On `Empty` the mapped task is skipped and its
+    downstream tasks follow their rules (under `all_success` → `AllSucceeded`: skipped, as in
+    Airflow). Mapping over a literal list uses the same hidden task (one mechanism).
+  - Cost: one extra Python process per mapped task; the list counts against the hidden task's
+    input cap.
+  - Not chosen: changing the native rule (the native API isn't changed for Airflow); keeping
+    "succeeds with `[]`" in the Airflow layer (a silent difference: downstream `all_success`
+    tasks would run where Airflow skips them).
 
 ### Reference version: Airflow 3
 
@@ -1723,7 +1795,7 @@ with DAG(
 | Task groups | `TaskGroup` (context manager), `@task_group` | Branching, task groups and mapping |
 | Dynamic task mapping | `.partial(...)`, `.expand(...)`, `expand_kwargs` | Branching, task groups and mapping |
 | Setup / teardown | `@setup`, `@teardown`, `.as_teardown(setups=...)` | Resources (Open question 17) |
-| Passing values between tasks | outputs, `ti.xcom_pull` (restricted) | Output serialization; `ti.xcom_pull` below (Open question 18) |
+| Passing values between tasks | outputs, `ti.xcom_pull` (restricted, translated onto inputs) | Output serialization; `ti.xcom_pull` below |
 | Connections | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) | Secret storage; details: Open question 9 |
 
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
@@ -1738,26 +1810,37 @@ schedr's shared model and native API call them **outputs**:
 Airflow-specific names (`ti.xcom_pull`, `do_xcom_push`, …) appear only inside `schedr.airflow`,
 where they map onto outputs.
 
-**`ti.xcom_pull(...)`: a run-time fetch, restricted.** Supported because the migration promise
-(change only the imports) would otherwise break for many DAGs: pulling inside a
-`PythonOperator` callable is very common. The native API never gets a run-time pull (data flow
-stays the only way to pass data there).
+**`ti.xcom_pull(...)`: translated onto inputs, restricted.** Supported because the migration
+promise (change only the imports) would otherwise break for many DAGs: pulling inside a
+`PythonOperator` callable is very common. By the principle in Thin translating classes it uses
+only native data flow: there is **no run-time fetch** (the native API never gets one).
 
-- The runner asks the agent over the socket; the agent asks the master with a unary call; the
-  master returns the stored output (Airflow 3's Task SDK also fetches XComs at run time). The
-  core protocol message has a neutral name (e.g. `GetUpstreamOutput`); "XCom" appears only in
-  `schedr.airflow`.
-- **Only from upstream tasks** (ancestors in the graph) of the **same DAG run**: they are
-  guaranteed finished, so the result is deterministic. Pulling from any other task is an error
-  (Airflow returns `None` or a value depending on timing).
+- **Which tasks:** Airflow passes context to a callable through parameters named `ti`,
+  `**context` or `**kwargs`; the factory sees the callable's signature at parse time. Only
+  such tasks get the input below; others get nothing extra.
+- **What they get:** the **outputs of all their upstream tasks** (ancestors in the graph) of the
+  same DAG run, as an ordinary data input added behind the scenes (task ID → output; mapped
+  tasks per map index). A native DAG could write the same by passing each output as an
+  argument.
+- **How a pull is answered:** `ti.xcom_pull(task_ids=...)` is answered **by the runner,
+  locally**, from that input; no call to the master while the task runs (the master needn't be
+  reachable). Inputs travel as usual (inline in `AssignTask` up to 4 MB, in chunks above).
+- **Only from upstream tasks**: they are guaranteed finished, so the result is deterministic.
+  Pulling from any other task is an error at run time ("`extract` is not upstream of `load`";
+  Airflow returns `None` or a value depending on timing).
 - Only the default key (`return_value`, i.e. the task's output); other keys, `dag_id=` of
   another DAG and `include_prior_dates=True` are errors; `map_indexes=` is supported.
-- Pulled data counts against the task's **total-inputs cap**.
-- Needs the master reachable while the task runs: retried with backoff, then the task fails.
-- Not chosen: scanning the callable's source at parse time for literal `xcom_pull` calls
-  (fails with computed task IDs, helpers or aliases, and only at run time).
+- **Cost:** the task receives every upstream output, even ones it never pulls; this counts
+  against the task's **total-inputs cap** (64 MB). A task over the cap fails with a clear error
+  suggesting the data-flow rewrite (`load(extract.output)`); the migration tool reports every
+  `xcom_pull` with that suggestion.
+- Not chosen: a run-time fetch through the agent and the master (a mechanism the native API
+  doesn't have); adding a run-time pull to the native API (gives up "data flow is the only
+  way", which makes native DAGs checkable at parse time); an error (breaks migration of many
+  DAGs); only direct upstream tasks (cheaper, but more DAGs need changes; possible later as an
+  option); scanning the callable's source for literal `xcom_pull` calls (fails with computed
+  task IDs, helpers or aliases).
 - **Priority:** after the core output mechanism (it is a compatibility layer on top of it).
-- Under review: Open question 18 (the native API has no run-time pull).
 
 **Templating: no Jinja, by design. Replaced by t-strings.** schedr will not include Jinja.
 Airflow templates are replaced by Python template strings (t-strings, PEP 750) combined
@@ -1798,7 +1881,10 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     argument.
 - **Not needed for now:** template files (`.sh` / `.sql` files rendered as templates).
 - **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is
-  designed and implemented later in the project.
+  designed and implemented later in the project. Rule for that design (the principle in Thin translating classes):
+  every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
+  `run.scheduled_at` formatted `%Y-%m-%d`); one without a native equivalent is an error in the
+  Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
 - **Safe substitution into shell commands.** A t-string in a `command` inserts values into text
   run by a shell; unquoted, a value with spaces, `;` or `$(…)` would break the command or allow
@@ -2249,30 +2335,50 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     (above); a leaf task with `all_done` used for cleanup: still a parse error (open: whether it
     translates onto a resource used by its upstream tasks).
 
-18. **Airflow-only behaviour in existing decisions.** These were decided before the principle
+18. **Airflow-only behaviour in existing decisions.** *Decided* (all items below resolved).
+    These were decided before the principle
     "the Airflow layer can only use what the native API has" (see Thin translating classes)
     and don't follow it yet. Each one is either **added to the native API** or becomes an
     **error** (or is dropped) in the Airflow layer:
-    - **`ti.xcom_pull`**: a run-time fetch of an upstream output; the native API deliberately
-      has none (data flow only).
+    - ~~`ti.xcom_pull`~~ *Resolved:* translated onto inputs (see Airflow compatibility: Scope,
+      `ti.xcom_pull`).
     - ~~`skip_on_exit_code`~~ *Resolved:* translated onto outcomes (`AirflowCommandOutcome`,
       see Airflow compatibility: Thin translating classes).
-    - **Last-line `.output`** of `BashOperator` and the `SchedrScriptOperator` output modes
-      (`LAST_LINE`, `JSON`, `JSON_LAST_LINE`, …): the native API's output is the whole
-      `ProcessResult`, with no built-in stdout parsing.
-    - **`ShortCircuitOperator` with `ignore_downstream_trigger_rules=True`**: skips every
-      downstream task whatever its rule; native skips propagate only through rules.
-    - **`@task.branch` returning `None`** (skip all direct downstream tasks): only if a native
-      `@branch` may return no task.
-    - **Empty expansion skipped** in the Airflow layer; the native API succeeds with `[]`.
-    - **`email_on_failure` with `email=[...]`**: per-DAG recipient addresses; native
-      notifications name channels defined in the server configuration.
-    - **Airflow placeholders** (`ds`, `params`, `macros`, …): to check that each has a native
-      equivalent (e.g. `ds` as a formatted `run.scheduled_at`).
+    - ~~Last-line `.output`~~ *Resolved:* a hidden native task extracts the last line (see
+      Thin translating classes); `SchedrScriptOperator`'s `JSON` modes dropped.
+    - ~~`ShortCircuitOperator` with `ignore_downstream_trigger_rules=True`~~ *Resolved:* a
+      native task with outcomes; exact or a parse error by the shape of the graph (see
+      Branching, task groups and mapping).
+    - ~~`@task.branch` returning `None`~~ *Resolved:* translated to `[]`, the empty subset of the
+      native `@branch`.
+    - ~~Empty expansion skipped~~ *Resolved:* a hidden native `Empty` / `NotEmpty` task (see
+      Branching, task groups and mapping).
+    - ~~`email_on_failure` with `email=[...]`~~ *Resolved:* a hidden native `EmailChannel` (see
+      Outcomes, failures and joins: DAG-defined email channels).
+    - ~~Airflow placeholders~~ *Resolved:* each must be expressible with native placeholders;
+      the list is designed later (see Templating).
+
+    All items resolved.
 19. **Unified task results: outcomes for every task.** *Decided:* see Native API (Task
     results and outcomes).
 20. **Notifications: details.** Decided so far: see Outcomes, failures and joins (configured,
-    not programmed; channels in the server configuration; sent by the master). Open: the full
+    not programmed; channels in the server configuration or DAG-defined `EmailChannel`s; sent
+    by the master). Open: the full
     list of events (at least a failed run and a task failed after its last retry; possibly a
     retry, a cleanup failure, a run cancelled), the channel types besides email, the message
-    content, and an allow-list of email recipient domains (from Airflow's `email=[...]`).
+    content, and how events are chosen per channel (e.g. `EmailChannel(..., events=[...])`
+    or on `notify=`).
+21. **Secret storage: details** (the rest is decided, see Secret storage).
+    1. How a named storage is written in the `secrets=` list (placeholder objects such as
+       `secrets.other['path#key']`, or strings such as `"other:path#key"`) and in TOML.
+    2. The configuration format for storages: names, which one is the default, and for Vault
+       the address, mount and auth role.
+    3. When a secret can't be fetched (storage unreachable, permission denied, path or key
+       missing): an ordinary failure with retries, a failure without retries for a missing path,
+       and whether secrets are checked before the task starts or when used.
+    4. Caching of fetched values, renewal of the agent's own Vault token, and dynamic secrets
+       (Vault leases, e.g. database credentials) or static KV values only.
+    5. KV v1, v2 or both; with v2, pinning a secret's version in a placeholder.
+    6. Masking of values read with `schedr secret` (presumably like placeholders: every value
+       the agent hands out is masked).
+    7. Secret values too short to mask (`"1"`, `"true"`): a minimum length or a warning.
