@@ -158,7 +158,7 @@ script = "reports/daily.py"        # required; relative to this file, no "..", n
 interpreter = "etl-venv"           # required; an [interpreters] entry
 args = ["--region", "eu"]          # argument list, never a shell string
 env = { REPORT_MODE = "full", DB_PASSWORD = { secret = "etl/db#password" } }   # env var <- secret
-secrets = ["etl/api#token"]        # readable only with `schedr secret` (not in the environment)
+secrets = ["etl/api#token"]        # readable only with `schedr task-ctx secret get` (not in env)
 working_dir = "reports"            # relative to this file; default: this file's directory
 schedule = "0 3 * * *"             # optional; cron or preset ("@daily")
 every = "1h"                       # alternative to schedule; not both
@@ -636,6 +636,64 @@ permission to create pods.
     the worker.
   - Checkpoint/restore (CRIU): needs privileges OpenShift's restricted policy doesn't grant.
 
+### In-task CLI: `schedr task-ctx`
+
+Commands that only work **inside a running task** (they talk to the agent over
+`SCHEDR_AGENT_SOCKET`), for `command` / `script` tasks, their cleanups and resource setups.
+Python tasks use the Python API instead.
+
+- **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs)
+  and the server roles (`schedr master`, `schedr worker`, `schedr db migrate`); room for others
+  later (e.g. `schedr dag-ctx`). Outside a task they fail with "must be run inside a schedr
+  task".
+- **Noun, then verb**, the same verbs everywhere: `add` / `list` for collections, `set` / `get`
+  for single values.
+
+  | Purpose | Command | Used in |
+  |---|---|---|
+  | Register a per-task cleanup handle | `schedr task-ctx cleanup add ExportJob job_id="$id"` | the task |
+  | Read the handles | `schedr task-ctx cleanup list [ExportJob] [--field job_id]` | its cleanup |
+  | Report the resource value | `schedr task-ctx resource set cluster_id="$id" size:=8` | a `CommandResource` / `ScriptResource` setup |
+  | Read the resource value | `schedr task-ctx resource get [--field cluster_id]` | a command / script resource cleanup |
+  | Read a declared secret | `schedr task-ctx secret get 'ci/deploy#token'` | any command / script task |
+
+- **Field syntax** (from HTTPie): `key=value` (a string), `key:=json` (a raw JSON value:
+  `size:=8`, `enabled:=true`), `--json '{...}'` (a whole object). Checked against the declared
+  type with no coercion (`size=8` into an `int` field is an error).
+- **Output:** JSON by default (JSON Lines for lists); `--field NAME` prints raw values, one
+  per line (not for values that can contain newlines: use the JSON output for those). Not
+  chosen: a `-0` (NUL-separated) flag (only matters for file paths with newlines; JSON already
+  handles any value).
+- **Exit codes:** `0` success, `1` error, `2` wrong usage; messages on stderr.
+- Per command:
+  - `cleanup add`: synchronous (when it returns, the handle is journaled and forwarded to the
+    master); the type must be in `cleanup_handles=` if declared; not allowed inside a cleanup.
+  - `cleanup list`: only inside a cleanup; registration order; optional type filter; `--field`
+    on a type without that field is an error.
+  - `resource set`: only in a resource setup, once per attempt; validated against `value=` at
+    once; a setup exiting 0 without it fails ("resource value not reported").
+  - `resource get`: only in a resource cleanup.
+  - `secret get`: only secrets declared in the task's `secrets=`; printed **without a trailing
+    newline**; masked by the agent like placeholders.
+
+```bash
+# export.sh
+job_id=$(warehouse start-export orders "$1")
+schedr task-ctx cleanup add ExportJob job_id="$job_id"
+warehouse wait "$job_id"
+
+# undo_export.sh (its cleanup)
+schedr task-ctx cleanup list ExportJob --field job_id |
+  while read -r id; do warehouse cancel-if-running "$id"; done
+
+# create_cluster.sh (a resource setup)
+id=$(cloud create-cluster --size "$2")
+schedr task-ctx resource set cluster_id="$id" size:=8
+
+# deploy.sh
+curl -H "Authorization: Bearer $(schedr task-ctx secret get 'ci/deploy#token')" ...
+```
+
 ### Default deployment size
 
 - **2 workers** by default, **2 slots each** (4 concurrent tasks). To be tuned per deployment.
@@ -848,14 +906,14 @@ list) and likewise has no Python.
   - **On demand over the agent socket**, for secrets that should stay out of the environment
     (not inherited by child processes, not in `/proc/<pid>/environ`, not printed by a stray
     `env`): the task **declares** them with `secrets=["ci/deploy#token"]` (TOML:
-    `secrets = [...]`) and the script reads one with `schedr secret 'ci/deploy#token'`, the same
-    mechanism as `schedr cleanup-handle` / `resource-value`. Only **declared** secrets can be
+    `secrets = [...]`) and the script reads one with `schedr task-ctx secret get
+    'ci/deploy#token'` (see In-task CLI), the same mechanism as for cleanup handles and
+    resource values. Only **declared** secrets can be
     read (a typo or another team's path fails at once; the UI can show which secrets a task
     uses). `secrets=` never sets environment variables.
   - Python tasks get secrets through t-strings in their arguments (over the socket, never a
     command line).
-  - Open: the name and flags of `schedr secret` (to be confirmed with the other `schedr`
-    commands); other details in Open question 21.
+  - Other details: Open question 21.
 - Connections are stored in secret storage (see Scope).
 
 ## State storage
@@ -1908,7 +1966,7 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     monitoring agents, and ends up in tools' error messages, which masking doesn't cover. The
     error message points to the two ways below (see Secret storage). A tool that accepts a
     credential only as an argument still works, explicitly in the user's script
-    (`--token "$(schedr secret 'ci/deploy#token')"`).
+    (`--token "$(schedr task-ctx secret get 'ci/deploy#token')"`).
   - Not the main mechanism: passing every value through environment variables (`"$URL"` in
     the command); safe only if the user remembers the double quotes. Kept as the
     recommendation for secrets.
@@ -2156,12 +2214,12 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
         ```bash
         # create_cluster.sh
         id=$(cloud create-cluster --size "$2")
-        schedr resource-value cluster_id="$id" region=eu      # synchronous, validated at once
+        schedr task-ctx resource set cluster_id="$id" region=eu   # synchronous, validated at once
         ```
 
         - **Setup: `CommandResource` / `ScriptResource`** (`job=` a declared script), operator
           forms of `@resource`, with a declared **`value=` type**. The command reports the
-          value with **`schedr resource-value`** (fields, or `--json '{...}'`) over the agent
+          value with **`schedr task-ctx resource set`** (see In-task CLI) over the agent
           socket; validated against `value` at once.
         - The setup **succeeds only if it exits with 0 and reported a value**; a missing value is
           a setup failure ("resource value not reported"), so the cleanup never gets `None`.
@@ -2173,15 +2231,13 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
           job=..., args=[...])`**. Command and script cleanups receive the value **through
           t-strings**: the resource object stands for its value (`t"{cluster.cluster_id}"`,
           rendered by the agent, paths checked at parse time against the value type); a script
-          can also read it with `schedr resource-value --field cluster_id`.
+          can also read it with `schedr task-ctx resource get --field cluster_id`.
         - A setup that fails halfway: the setup's own per-task cleanup (`cleanup=`,
-          `schedr cleanup-handle`), as for Python.
+          `schedr task-ctx cleanup add`), as for Python.
         - Not chosen: the setup prints JSON on stdout for schedr to parse (stdout mixes with
           whatever the tools print, brings stdout parsing into the native API, a malformed value
           is noticed only when the cleanup needs it); giving the cleanup the whole
           `ProcessResult` (every cleanup would dig the ID out of text).
-        - The names and flags of `schedr resource-value` are to be confirmed together with
-          `schedr cleanup-handle` / `cleanup-handles`.
       - A per-run cleanup is a resource used by every task (shorthand such as
         `Dag(cleanup=...)` possible later).
       - **Compared with Airflow's setup/teardown:** the same idea and the same "runs if the
@@ -2293,32 +2349,31 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
          work instead of the cleanup); success with only a warning (a leak nobody acts on;
          contradicts the rationale of Outcomes, failures and joins).
        - The cleanup's own timeout: see point 2 (`cleanup_timeout`).
-    4. *Decided:* **`command` / `script` tasks.** (The exact command names and flags of the
-       `schedr` calls below are still to be confirmed.)
+    4. *Decided:* **`command` / `script` tasks** (commands: see In-task CLI).
        - **The cleanup is of the same kind as the task:** a command for `CommandOperator`
          (`cleanup=["./undo_export.sh"]`, same rules as `command`), a script for a script job
          (`[jobs.<name>.cleanup]` with `script`, `interpreter`, `args`). It gets the same
          environment as the task (`SCHEDR_*` run variables, the task's `env`, its declared `secrets`,
          working directory); its arguments may use t-strings. `ScriptOperator` can override its
          `args` / `env`. (A Python cleanup for a command task: possibly later.)
-       - **Registering a handle:** `schedr cleanup-handle ExportJob job_id="$job_id"` (or
-         `--json '{...}'`), over the agent socket, like the Python runner; **synchronous**: when
+       - **Registering a handle:** `schedr task-ctx cleanup add ExportJob job_id="$job_id"`
+         (or `--json '{...}'`), over the agent socket, like the Python runner; **synchronous**: when
          it returns the handle is journaled (and forwarded to the master); on failure it exits
          non-zero.
        - **Reading the handles** in the cleanup command, with the same tool:
-         `schedr cleanup-handles ExportJob --field job_id` (one value per line), `--json` (one
-         object per line, in registration order), `-0` (NUL-separated). No `jq` needed, no
+         `schedr task-ctx cleanup list ExportJob --field job_id` (one value per line), or JSON
+         Lines (the default, in registration order). No `jq` needed, no
          size limit, nothing in the environment or on disk; works unchanged with
          `cleanup_anywhere`.
 
          ```bash
          # export.sh
          job_id=$(warehouse start-export orders "$1")
-         schedr cleanup-handle ExportJob job_id="$job_id"
+         schedr task-ctx cleanup add ExportJob job_id="$job_id"
          warehouse wait "$job_id"
 
          # undo_export.sh
-         schedr cleanup-handles ExportJob --field job_id |
+         schedr task-ctx cleanup list ExportJob --field job_id |
            while read -r id; do warehouse cancel-if-running "$id"; done
          ```
 
@@ -2379,6 +2434,6 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     4. Caching of fetched values, renewal of the agent's own Vault token, and dynamic secrets
        (Vault leases, e.g. database credentials) or static KV values only.
     5. KV v1, v2 or both; with v2, pinning a secret's version in a placeholder.
-    6. Masking of values read with `schedr secret` (presumably like placeholders: every value
-       the agent hands out is masked).
+    6. *Decided:* values read with `schedr task-ctx secret get` are masked like placeholders
+       (every value the agent hands out is masked; see In-task CLI).
     7. Secret values too short to mask (`"1"`, `"true"`): a minimum length or a warning.
