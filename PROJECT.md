@@ -275,7 +275,9 @@ schedule = "0 3 * * *"             # optional; cron or preset ("@daily")
 every = "1h"                       # alternative to schedule; not both
 timezone = "Europe/Warsaw"         # default UTC
 start = 2026-01-01                 # TOML date/datetime
+end = 2026-12-31                   # optional; last scheduled run at or before it
 catchup = false                    # default false
+max_active_runs = 1                # default 1 (no overlapping runs)
 queue = "default"
 retries = 2
 retry_delay = "5m"
@@ -309,15 +311,15 @@ NO_DATA = 3
 
 ```python
 ScriptOperator("report", job="etl:team_a/schedr.toml#report_daily",
-               args=["--day", t"{run.scheduled_at}"])
+               args=["--day", t"{dag_ctx.run.scheduled_at}"])
 ```
 
 - Refers to a declaration by its **reference string**, the same format as the job ID (absolute
   `"/path/schedr.toml#name"` also accepted). **Checked at parse time** (file exists, job
   declared); otherwise an import error.
-- Takes **everything except the scheduling keys** (`schedule`, `every`, `timezone`, `start`,
-  `catchup`) and can **override** `args`, `env`, `secrets`, `queue`, `retries`, `retry_delay`,
-  `timeout`, `max_output_size`, `outcomes` (an `Outcome` enum).
+- Takes **everything except the scheduling keys** (`schedule`, `every`, `timezone`, `start`, `end`,
+  `catchup`, `max_active_runs`) and can **override** `args`, `env`, `secrets`, `queue`, `retries`,
+  `retry_delay`, `timeout`, `max_output_size`, `outcomes` (an `Outcome` enum).
 - In the operator, `args` and `env` values may be t-strings / output references (rendered by
   the agent; argument lists, so no shell quoting needed).
 - It is the **only** script operator: there is no operator that runs a script file directly.
@@ -760,16 +762,16 @@ permission to create pods.
     the worker.
   - Checkpoint/restore (CRIU): needs privileges OpenShift's restricted policy doesn't grant.
 
-### In-task CLI: `schedr task-ctx`
+### In-task CLI: `schedr task-ctx` and `schedr dag-ctx`
 
 Commands that only work **inside a running task** (they talk to the agent over
 `SCHEDR_AGENT_SOCKET`), for `command` / `script` tasks, their cleanups and resource setups.
 Python tasks use the Python API instead.
 
-- **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs)
-  and the server roles (`schedr master`, `schedr worker`, `schedr db migrate`); room for others
-  later (e.g. `schedr dag-ctx`). Outside a task they fail with "must be run inside a schedr
-  task".
+- **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs) and
+  the server roles (`schedr master`, `schedr worker`, `schedr db migrate`), and **`schedr dag-ctx`**
+  for the run's context (see Run parameters and the DAG context). Outside a task they fail with
+  "must be run inside a schedr task".
 - **Noun, then verb**, the same verbs everywhere: `add` / `list` for collections, `set` / `get`
   for single values.
 
@@ -780,6 +782,8 @@ Python tasks use the Python API instead.
   | Report the resource value | `schedr task-ctx resource set cluster_id="$id" size:=8` | a `CommandResource` / `ScriptResource` setup |
   | Read the resource value | `schedr task-ctx resource get [--field cluster_id]` | a command / script resource cleanup |
   | Read a declared secret | `schedr task-ctx secret get 'ci/deploy#token'` | any command / script task |
+  | Read the run's parameters | `schedr dag-ctx params get [--field region]` | any command / script of the run |
+  | Read the run information | `schedr dag-ctx run get [--field scheduled_at]` | any command / script of the run |
 
 - **Field syntax** (from HTTPie): `key=value` (a string), `key:=json` (a raw JSON value:
   `size:=8`, `enabled:=true`), `--json '{...}'` (a whole object). Checked against the declared
@@ -1282,10 +1286,26 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   (manual runs only), plus preset constants (`DAILY`, …). The time zone is set per schedule,
   **default UTC**.
 - **Run time semantics.** No Airflow-style "logical date" shifted one interval back. A run is
-  created **when its schedule fires** and knows **`run.scheduled_at`** (the fire time) and
-  **`run.interval`** (previous fire → this fire). The **first run** is the first fire time at
+  created **when its schedule fires** and knows **`dag_ctx.run.scheduled_at`** (the fire time)
+  and **`dag_ctx.run.interval`** (previous fire → this fire; see Run parameters and the DAG
+  context). The **first run** is the first fire time at
   or after `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
   schedules run at the fire time.)
+- **`end`** (optional, mirror of `start`): the **last scheduled run** is the last fire time **at
+  or before `end`** (in the schedule's time zone). After it the DAG stays listed with its
+  history, but no new scheduled runs are created; the UI shows it as "ended". Manual runs are
+  still allowed. Native use: temporary DAGs (a campaign, a migration window) that stop on
+  their own.
+- **`max_active_runs`** (default **1**; `None` = no limit): at most this many runs of the DAG
+  at a time. A fire time that comes while the DAG is at its limit is **treated as missed**
+  (like fire times missed while the master is down) and the **`catchup` rules** decide: with
+  `catchup=False`, when a run finishes only the most recent missed fire time gets a run (a slow
+  DAG never builds a backlog); with `catchup=True` the missed ones get runs in order, still at
+  most `max_active_runs` at a time. No run queue. Default 1 because overlapping runs are
+  rarely wanted in a sync-style workload. (Whether manual runs count: Open questions, Manual
+  runs.)
+- **`tags`** and **`description`**: metadata (shown in the UI, filter by tag).
+- **Run parameters:** `Dag(..., params=SomeDataclass)`; see Run parameters and the DAG context.
 - **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
   `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
 - **Routing: outcomes first, `@branch` for subsets** (see Task results and outcomes). To
@@ -1331,7 +1351,8 @@ Example:
 from datetime import timedelta
 
 from schedr import Cron, Dag, CommandOperator, TaskDefaults, task
-from schedr.templates import run, secrets
+from schedr import dag_ctx
+from schedr.templates import secrets
 
 with Dag(
     "sync_customers",
@@ -1351,7 +1372,7 @@ with Dag(
 
     CommandOperator(            # depends on load: its command uses `count`
         "notify",
-        command=t"./notify.sh {run.scheduled_at} {count}",
+        command=t"./notify.sh {dag_ctx.run.scheduled_at} {count}",
         env={"TOKEN": t"{secrets['slack/bot#token']}"},
     )
 ```
@@ -1527,6 +1548,95 @@ with Dag(
     cleanup failures, links to the run and the logs in the UI. Webhooks get the same
     information as **structured JSON**, so receiving systems can format it. Secret values never
     appear (error summaries are already masked by the agent).
+
+### Run parameters and the DAG context
+
+The **DAG context**, **`dag_ctx`**, describes the current run: the **run information** and the
+run's **parameters**. It is the same for every task of the run, known before any task starts,
+and never comes from another task, so reading it anywhere is safe and deterministic (it isn't
+task data: "data flow is the only way to pass task data" still holds).
+
+- **One name everywhere.** In the DAG body (parse time) `dag_ctx.params.region` is a
+  **reference**, filled in at run time; in a running task the same expression gives the
+  **value**. Using it as a value in the DAG body (e.g. `if dag_ctx.params.full:`) is a parse
+  error ("a reference can't be used as a value in the DAG file; branch with a task"), as for
+  outputs. `from schedr import dag_ctx`. (Replaces the earlier `schedr.templates.run`
+  placeholder.)
+- **Run information:** `dag_ctx.run.id`, `dag_ctx.run.scheduled_at`, `dag_ctx.run.interval`,
+  `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables, see Plain script
+  delivery).
+
+**Declaring parameters.**
+
+```python
+@dataclass
+class ReportParams:
+    region: Literal["eu", "us"] = "eu"
+    full: bool = False
+    day: date | None = None
+    limits: list[int] = field(default_factory=list)
+
+with Dag("report", schedule=DAILY, params=ReportParams):
+    ...
+```
+
+- A dataclass or a Pydantic model, with the same supported types as outputs.
+- On a DAG with a schedule **every field needs a default** (scheduled runs use the defaults); a
+  DAG without a schedule may have required fields, given at trigger time.
+- `schedr.toml` jobs: `[jobs.<name>.params]` with default values (each type taken from its
+  default):
+
+  ```toml
+  [jobs.report_daily.params]
+  region = "eu"
+  full = false
+  limit = 100
+  ```
+
+- The runner turns the declaration into a **JSON Schema** stored in the DAG JSON.
+
+**Setting values (per run).**
+
+| Run | Values |
+|---|---|
+| scheduled | the defaults |
+| manual, UI | a form generated from the schema, pre-filled with the defaults (text, number, checkbox, date picker, a select for `Literal`, JSON for lists / nested objects) |
+| manual, CLI | `schedr runs trigger report -p region=us -p full:=true -p 'limits:=[1,2]'`, or `--params '{"region": "us"}'` (the field syntax of In-task CLI) |
+
+The **master validates** the values against the schema **before** creating the run (no user
+code runs; Pydantic validators run only when a task decodes the values); unknown keys or wrong
+types are a rejected command with the reason. The values are stored with the run and shown in
+its summary.
+
+**Reading.**
+
+| Where | How | Example |
+|---|---|---|
+| a task argument (typed) | a reference in the DAG body | `extract(region=dag_ctx.params.region, day=dag_ctx.params.day)` |
+| t-strings (commands, script `args`, `env`, task arguments) | a reference, rendered by the agent | `command=["./publish.sh", t"{dag_ctx.params.region}"]` |
+| Python task code (also cleanups, resource setups) | read at run time, decoded strictly into the dataclass passed | `p = dag_ctx.params(ReportParams)`; `dag_ctx.run.scheduled_at` |
+| scripts and commands (incl. `schedr.toml` jobs) | `schedr dag-ctx` (see In-task CLI) | `schedr dag-ctx params get --field region` |
+
+- Paths are **checked at parse time** against the declared dataclass (an unknown field, or a type
+  that doesn't fit the task's parameter, is an import error). Statically `dag_ctx.params.x` is
+  untyped (`Any`), as with output paths; `dag_ctx.params(ReportParams)` is typed by the class
+  passed (one not matching the declaration is an error).
+- A task argument gets the **value with its type** (a `date` stays a `date`).
+- The context travels in each task's specification (`AssignTask`, run information): reading it
+  never calls the master.
+- Parameters are **not** environment variables (no clashes with other variables).
+- **What can't use parameters:** the master (it only validates them; scheduling never depends
+  on them); edge conditions (no routing on a parameter: a task returns an outcome, or a
+  `@branch` decides); notification messages show the values but have no templating.
+
+**Airflow** (see Airflow compatibility):
+
+| Airflow | Becomes |
+|---|---|
+| `params={"region": Param("eu", enum=["eu", "us"]), "full": False}` | the JSON Schema (`Param` is JSON Schema; supported: `type`, `enum`, `default`, `minimum` / `maximum`, `minLength` / `maxLength`, `format: date`; others a parse error) |
+| `{{ params.region }}` | `dag_ctx.params.region` (a t-string) |
+| `context["params"]`, a `params` argument of a callable | `dag_ctx`, behind the scenes (callables taking `**context` / `params`) |
+| `dag_run.conf` | the parameter values; unknown keys are an error |
 
 ### Task results and outcomes
 
@@ -2009,7 +2119,7 @@ with Dag("etl", schedule=DAILY):
 
   @cleanup(tmp)
   def drop_tmp() -> None:
-      s3.delete_prefix(f"tmp/{run_id()}/")
+      s3.delete_prefix(f"tmp/{dag_ctx.run.id}/")
 
   @task(uses=[tmp])
   def stage() -> None: ...
@@ -2246,7 +2356,9 @@ primary one.
   |---|---|
   | `DAG(dag_id=..., ...)` | `Dag("...", ...)` |
   | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `None` | `Cron(...)` / `DAILY` / `Every(...)` / `None` |
-  | `start_date=` | `start=` |
+  | `start_date=` / `end_date=` | `start=` / `end=` |
+  | `max_active_runs=` (default 16, Airflow's `max_active_runs_per_dag`) | `max_active_runs=` (set explicitly to 16 when not given, so migrated DAGs keep Airflow's default) |
+  | `tags=`, `description=` | `tags=`, `description=` |
   | `default_args={...}` | `defaults=TaskDefaults(...)` (keys translated the same way) |
   | `BashOperator(bash_command=...)` | `CommandOperator(command=...)` |
   | `PythonOperator(python_callable=f, op_args=..., op_kwargs=...)` | a `@task` wrapping `f` |
@@ -2610,8 +2722,8 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is designed and
   implemented later in the project. Rule for that design (the principle in Thin translating
   classes): every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
-  `run.scheduled_at` formatted `%Y-%m-%d`); one without a native equivalent is an error in the
-  Airflow layer, unless the native API gets it for a native reason.
+  `dag_ctx.run.scheduled_at` formatted `%Y-%m-%d`); one without a native equivalent is an error in
+  the Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
 - **Safe substitution into shell commands.** A t-string in a `command` inserts values into text
   run by a shell; unquoted, a value with spaces, `;` or `$(…)` would break the command or allow
@@ -2719,5 +2831,36 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ## Open questions
 
-None at the moment. New questions are added here and move into the sections above once
-decided. Deliberately deferred items ("possibly later") are noted where they belong.
+Questions still open. Once decided, they move into the sections above. Deliberately deferred
+items ("possibly later") are noted where they belong.
+
+### Concurrency limits
+
+Maximum active runs per DAG, maximum running tasks per DAG (Airflow's `max_active_tasks`).
+Today only slots and queues limit anything.
+
+### Manual runs
+
+What a manual run's `dag_ctx.run.scheduled_at` and `dag_ctx.run.interval` are; whether it may
+overlap with scheduled runs; whether it counts towards `max_active_runs`; how runs are
+identified.
+
+### Pausing
+
+What happens to runs in progress when a DAG is paused (finish them, or stop creating new
+tasks).
+
+### Cron and time zones
+
+Daylight-saving changes: a fire time that doesn't exist (skip, or run late?) and one that
+happens twice (once or twice?).
+
+### Retention
+
+How long run history, outputs, command rows and DAG versions are kept (only log retention is
+decided).
+
+### Observability
+
+Metrics of schedr itself (e.g. a Prometheus endpoint), health endpoints for the master and the
+webserver (the worker's `/healthz` is decided), schedr's own log format.
