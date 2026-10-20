@@ -157,8 +157,8 @@ One table per job under `[jobs.<name>]`:
 script = "reports/daily.py"        # required; relative to this file, no "..", no absolute
 interpreter = "etl-venv"           # required; an [interpreters] entry
 args = ["--region", "eu"]          # argument list, never a shell string
-env = { REPORT_MODE = "full" }
-secrets = { DB_PASSWORD = "etl/db#password" }   # env var <- secret storage (default storage)
+env = { REPORT_MODE = "full", DB_PASSWORD = { secret = "etl/db#password" } }   # env var <- secret
+secrets = ["etl/api#token"]        # readable only with `schedr secret` (not in the environment)
 working_dir = "reports"            # relative to this file; default: this file's directory
 schedule = "0 3 * * *"             # optional; cron or preset ("@daily")
 every = "1h"                       # alternative to schedule; not both
@@ -415,9 +415,15 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   - Failed Python tasks include a structured **error summary**: exception type, message and the
     last lines of the traceback, so the UI can show it without opening the log.
 - **Task instance states** (where the task stands in its DAG run, decided by the master from
-  attempt statuses, retries and the DAG structure), initial set to be refined with the API
-  design: `scheduled`, `queued`, `unschedulable`, `running`, `up_for_retry`, `success`,
+  attempt statuses, retries and the DAG structure): `scheduled`, `queued`, `unschedulable`,
+  `running`, **`cleaning_up`** (the task's process has ended and its per-task cleanup is
+  running; the slot is still taken and downstream tasks wait), `up_for_retry`, `success`,
   `failed`, `cancelled`, `skipped`, `upstream_failed`.
+  - Two **attributes** next to the state instead of more states: the **outcome** (on success)
+    and the **cleanup result** (`ok`, `failed`, `didn't run: worker lost`), shown together, e.g.
+    "success · `Unavailable` · cleanup failed".
+  - **Resources** have their own instance per run, with their own states: `waiting for users`,
+    `cleaning_up`, `cleaned`, `cleanup_failed`, `not needed` (the setup didn't succeed).
 - **Plain scripts are one kind of task, whatever the language.** A Bash script is treated
   exactly like a Python script, only run with a different interpreter. Task kinds:
   - `python`: a Python function from a DAG file (the runner imports the DAG and calls it).
@@ -504,8 +510,9 @@ OpenShift's restricted security policy doesn't grant.
   submodule, or a symlink).
 - **Task processes get a clean environment by default.** They do **not** inherit the worker
   agent's environment variables. A task process gets only: a small allow-list (`PATH`, `HOME`,
-  `LANG`, `LC_*`, `TZ`, `TMPDIR`), the `SCHEDR_*` run variables, and the task's own `env` /
-  `secrets`. The agent's own variables (configuration, certificate paths, Vault auth, anything
+  `LANG`, `LC_*`, `TZ`, `TMPDIR`), the `SCHEDR_*` run variables, and the task's own `env`
+  (with secret placeholders filled in; declared `secrets=` are not in the environment, see
+  Secret storage). The agent's own variables (configuration, certificate paths, Vault auth, anything
   from the pod spec) are passed only if listed in the worker configuration
   (`[worker] pass_env = ["HTTP_PROXY", ...]`). In the Airflow layer, `append_env=True`
   (`BashOperator`) means "add the allow-listed worker variables", never the whole agent
@@ -830,6 +837,23 @@ list) and likewise has no Python.
 - **Vault authentication:** Vault's **Kubernetes auth method** with the pod's service-account
   token; a token from an environment variable for local development.
 - **Secret values are masked** in task logs and outputs by the worker agent.
+- **Two separate, explicit ways for `command` / `script` tasks** (and their cleanups and
+  resource setups) to get a secret; never in the command line (a parse error, see Templating):
+  - **An environment variable**, set up by the user with a secret placeholder:
+    `env={"PGPASSWORD": t"{secrets['etl/db#password']}"}` (TOML: `env = { PGPASSWORD = {
+    secret = "etl/db#password" } }`). For the many tools that read credentials only from the
+    environment.
+  - **On demand over the agent socket**, for secrets that should stay out of the environment
+    (not inherited by child processes, not in `/proc/<pid>/environ`, not printed by a stray
+    `env`): the task **declares** them with `secrets=["ci/deploy#token"]` (TOML:
+    `secrets = [...]`) and the script reads one with `schedr secret 'ci/deploy#token'`, the same
+    mechanism as `schedr cleanup-handle` / `resource-value`. Only **declared** secrets can be
+    read (a typo or another team's path fails at once; the UI can show which secrets a task
+    uses). `secrets=` never sets environment variables.
+  - Python tasks get secrets through t-strings in their arguments (over the socket, never a
+    command line).
+  - Open: how a named storage is written in the `secrets=` list and in TOML; the name and flags
+    of `schedr secret` (to be confirmed with the other `schedr` commands).
 - Connections are stored in secret storage (see Scope).
 
 ## State storage
@@ -1049,8 +1073,9 @@ with Dag(
     upstream tasks were skipped; it becomes **`upstream_failed`** if any upstream task failed.
     Without skipped upstream tasks this is exactly Airflow's `all_success`; after a branch,
     joins work with nothing to configure.
-  - **`AllSucceeded`** (opt-in, e.g. `@task(run_if=ALL_SUCCEEDED)`, also on operators and in
-    `TaskDefaults`; name to be settled): runs only when **every** upstream task succeeded; any
+  - **`AllSucceeded`** (opt-in: `@task(run_if=RunIf.ALL_SUCCEEDED)`, also on operators,
+    groups and in `TaskDefaults`; enum `RunIf { NONE_FAILED, ALL_SUCCEEDED }`, default
+    `NONE_FAILED`): runs only when **every** upstream task succeeded; any
     failure → `upstream_failed`; otherwise any skip → skipped. For "run only if every upstream
     task really ran":
 
@@ -1104,7 +1129,15 @@ with Dag(
     green that hid a failure: a task failing behind a join already skipped (`AllSucceeded`
     decides on the first skip); a failed cleanup (not in the graph); a cleanup leaf that
     succeeded after the work failed. Migrated DAGs differ only in such cases.
-  - Runs cancelled by a user end as `cancelled` (a separate case, not decided here).
+  - **Runs cancelled by a user:** running attempts are cancelled (SIGTERM, then SIGKILL) and
+    their per-task cleanups run; tasks not started become `cancelled`; resource cleanups run if
+    their setup succeeded (`cancelled` is a final state, so all users are done). The run ends as
+    **`cancelled`**, unless an unexpected failure happened in it (including a cleanup failing
+    during the cancel): then **`failed`**, so a cancel never hides a failure. A pure cancel
+    sends no "run failed" notification.
+  - **No "clear" (re-running tasks of an existing run).** A run is never re-run partially; to
+    run again, **trigger the DAG again** (a new run). So a run's results, outcomes and
+    resources never change once it has finished.
 - **Failure notifications are configured, not programmed**, and live outside the task graph.
   A DAG names notification channels (`Dag(..., notify=["team-a-slack"])`); channels are defined
   in the **server configuration** by operators, with credentials from **environment variables**
@@ -1112,7 +1145,7 @@ with Dag(
   the master never fetches from it. The **master** sends them (formatting a message runs no user
   code). Events: at least a failed run and a task failed after its last retry (needed for the
   Airflow layer's `email_on_failure`); an **email** channel type is needed for the same reason.
-  The full event list, other channel types and message content are designed later.
+  The full event list, other channel types and message content: Open question 20.
 
 ### Task results and outcomes
 
@@ -1683,13 +1716,15 @@ with DAG(
 
 **Also in scope (beyond Tier 1):**
 
-| Feature                  | Airflow API to mirror (exact subset still open)                         |
-|--------------------------|-------------------------------------------------------------------------|
-| Branching                | `@task.branch`, `BranchPythonOperator`; skipped-state propagation and trigger rules |
-| Task groups              | `TaskGroup` (context manager), `@task_group`                            |
-| Dynamic task mapping     | `.partial(...)`, `.expand(...)`                                         |
-| Connections              | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) |
-| Passing values between tasks | Required. Decided: see Output serialization and `ti.xcom_pull` below. |
+| Feature | Airflow API mirrored | Decided in |
+|---|---|---|
+| Branching | `@task.branch`, `BranchPythonOperator`, `ShortCircuitOperator` | Branching, task groups and mapping |
+| Trigger rules | all Airflow 3 rules: translated or an error | Trigger rules |
+| Task groups | `TaskGroup` (context manager), `@task_group` | Branching, task groups and mapping |
+| Dynamic task mapping | `.partial(...)`, `.expand(...)`, `expand_kwargs` | Branching, task groups and mapping |
+| Setup / teardown | `@setup`, `@teardown`, `.as_teardown(setups=...)` | Resources (Open question 17) |
+| Passing values between tasks | outputs, `ti.xcom_pull` (restricted) | Output serialization; `ti.xcom_pull` below (Open question 18) |
+| Connections | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) | Secret storage; details: Open question 9 |
 
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
 schedr's shared model and native API call them **outputs**:
@@ -1754,7 +1789,8 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - **Nested values are filled in recursively**, all the way down: t-strings inside lists, tuples
   and dicts (e.g. `env={"RUN": t"{run_id}"}`, `op_kwargs={"day": t"{ds}"}`) are found and
   filled in at any depth.
-  - Traversed: lists, tuples, dict values. **Dict keys: possibly** (to be confirmed).
+  - Traversed: lists, tuples, dict values. **Dict keys: never**; a t-string used as a dict key
+    is a parse error (rendered keys could collide, and there's no real use).
   - **Not traversed:** sets, dataclasses and any other custom objects.
   - A t-string found inside a container that isn't traversed is **an error when the DAG is
     parsed**, so it can't silently reach a task unfilled. The error message tells the author
@@ -1779,9 +1815,14 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     program directly, each element one argument: no injection possible, no quoting needed.
     Recommended in the documentation whenever pipes, redirects or other shell features aren't
     needed. Script arguments (`schedr.toml`, `ScriptOperator`) are always argument lists.
-  - **Secrets:** putting `secrets[...]` into a command line is discouraged (other processes on
-    the worker can see it in the process list); pass secrets through `env` instead. Possibly a
-    parse-time warning.
+  - **Secrets in a command line are a parse error**: `secrets[...]` in a `command` (string or
+    list), in the `args` of a script / `ScriptOperator`, or in the `command` / `args` of a
+    cleanup or resource setup. A command line is readable by every user on the node (`ps`,
+    `/proc/<pid>/cmdline`, unless `/proc` is mounted with `hidepid`), including sidecars and
+    monitoring agents, and ends up in tools' error messages, which masking doesn't cover. The
+    error message points to the two ways below (see Secret storage). A tool that accepts a
+    credential only as an argument still works, explicitly in the user's script
+    (`--token "$(schedr secret 'ci/deploy#token')"`).
   - Not the main mechanism: passing every value through environment variables (`"$URL"` in
     the command); safe only if the user remembers the double quotes. Kept as the
     recommendation for secrets.
@@ -2062,8 +2103,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
         between setup and teardown in the graph), the cleanup is not a graph node (nothing can
         wait for it, it can't decide the run's result as a leaf), it receives only the setup's
         output, its failure fails the run (Airflow default: it doesn't), and there is one
-        cleanup per resource (Airflow: a teardown may serve several setups). Re-running a task
-        by hand ("clear") isn't designed in schedr yet.
+        cleanup per resource (Airflow: a teardown may serve several setups). schedr has no
+        "clear" (see Run result), so re-creating a resource for re-run tasks never arises.
       - Not chosen: a setup–cleanup pair with a scope computed from the graph between two
         tasks; a cleanup for a group, the whole run or an explicit task list (none of them
         knows whether anything was created); a `Resource(...)` object with a handle list.
@@ -2171,7 +2212,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
        - **The cleanup is of the same kind as the task:** a command for `CommandOperator`
          (`cleanup=["./undo_export.sh"]`, same rules as `command`), a script for a script job
          (`[jobs.<name>.cleanup]` with `script`, `interpreter`, `args`). It gets the same
-         environment as the task (`SCHEDR_*` run variables, the task's `env` and `secrets`,
+         environment as the task (`SCHEDR_*` run variables, the task's `env`, its declared `secrets`,
          working directory); its arguments may use t-strings. `ScriptOperator` can override its
          `args` / `env`. (A Python cleanup for a command task: possibly later.)
        - **Registering a handle:** `schedr cleanup-handle ExportJob job_id="$job_id"` (or
@@ -2230,3 +2271,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
       equivalent (e.g. `ds` as a formatted `run.scheduled_at`).
 19. **Unified task results: outcomes for every task.** *Decided:* see Native API (Task
     results and outcomes).
+20. **Notifications: details.** Decided so far: see Outcomes, failures and joins (configured,
+    not programmed; channels in the server configuration; sent by the master). Open: the full
+    list of events (at least a failed run and a task failed after its last retry; possibly a
+    retry, a cleanup failure, a run cancelled), the channel types besides email, the message
+    content, and an allow-list of email recipient domains (from Airflow's `email=[...]`).
