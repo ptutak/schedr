@@ -91,6 +91,52 @@ One Rust binary, four roles:
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
     are needed (with `auth.mode = "none"`). `schedr login` (fetching a token through OIDC's
     device flow): possibly later.
+- **Frontend: server-rendered HTML with htmx.** Pages are HTML rendered by the webserver from
+  Rust templates (`askama`, checked at compile time); **htmx** adds the interactive parts
+  (buttons, filters, partial refreshes) and, with its SSE extension, live updates and the log
+  tail.
+  - **No JavaScript build:** no Node.js / npm, nothing new in CI. htmx and a small pan/zoom
+    helper for the graph are vendored single files; all assets are **embedded in the `schedr`
+    binary**, so `schedr webserver` (and standalone) serves everything itself.
+  - The **DAG graph** is drawn as **SVG on the server** (a Rust graph-layout crate); logs are
+    converted from ANSI colours to HTML on the server.
+  - The webserver serves HTML fragments besides the JSON API used by the CLI; both use the same
+    queries, so the HTML layer is thin.
+  - Not chosen: a single-page app without a build step (Preact + `htm`: a JavaScript
+    application to maintain without types or tests, and a JS graph layout); a full
+    single-page app (React / Svelte + Vite + TypeScript: Node.js in the build and CI, a second
+    ecosystem to maintain).
+- **What the UI shows** (beyond what is decided elsewhere: DAG conflicts, import errors, parse
+  warnings, unschedulable tasks with each worker's reason, mixed code hashes in a run):
+  - **A task's status at a glance: state · outcome · cleanup**, each part only when it says
+    something: `success` (the only outcome `SUCCESS` isn't shown), `success · Unavailable`,
+    `success · cleanup failed`, `cleaning_up`, `skipped · not chosen` / `skipped · on Rows`
+    (why it was skipped), `failed · timed out`.
+  - **The run's graph (SVG):** nodes coloured by state, the outcome under the task name.
+    Edges styled by kind, with a legend: taken (solid); not taken (dashed, grey, labelled with
+    their condition, e.g. `on Unavailable`); branch selection (marked as from a branch);
+    requirement / `uses=` (dotted, own colour). **Generated tasks** (from the Airflow
+    translation: last-line extractor, `Empty` / `NotEmpty` check, start anchor) are **folded
+    into their task** by default, with a "show generated tasks" toggle. A **mapped task** is one
+    node with a summary (e.g. `120 success · 3 Unavailable · 2 skipped`); clicking it lists the
+    instances.
+  - **Task details panel** (on clicking a node or row), with tabs: **Attempts** (try number,
+    status, duration, worker, peak memory, error summary; rejections with each worker's
+    reason), **Output** (the outcome; a preview of the output as pretty JSON, cut off after a
+    size limit, with a download link), **Cleanup** (only if the task has one: its attempts,
+    result, duration, the registered handles, masked like everything else), **Logs** (the
+    task's log with live tail; the cleanup's log on its own sub-tab).
+  - **Resources:** a **Resources panel** in the run view (name, setup task, users, state:
+    `waiting for users` / `cleaning_up` / `cleaned` / `cleanup_failed` / `not needed`, the
+    cleanup's attempts and logs); **selecting a resource highlights its setup and users in the
+    graph** and dims the rest. Not chosen: drawing bands around users (hard to lay out well in
+    SVG).
+  - **Run summary:** the result with a **one-line reason** from the run result rule (e.g.
+    `failed: task load failed (timed out); cleanup of export failed`), and the **command
+    history** (the audit trail: who triggered, cancelled or paused, when, applied or rejected).
+  - **History and filters:** the runs list filters by result and date; a **per-task history
+    page** shows one task across runs (state, outcome, cleanup, duration) with **filters by
+    outcome** (e.g. runs where `fetch_primary` returned `Unavailable`).
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):
@@ -823,11 +869,12 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - **Tasks run on the latest code** the worker has. schedr does not keep old code versions.
 - schedr computes a **content hash** of the DAG code and records it for each task attempt.
   When tasks in the same DAG run used **different content hashes**, schedr shows a **warning**.
-- Changes are detected by **polling on a schedule** (interval set in configuration), not by filesystem notifications (which are
-  unreliable on network volumes and with git-sync's symlink switching).
+- Changes are detected by **polling on a schedule** (interval set in configuration), not by
+  filesystem notifications (which are unreliable on network volumes and with git-sync's symlink
+  switching).
 - Defaults: **poll every 30 s**, **settle time 5 s**.
-- After a change is seen, schedr waits for a **settle time** (configurable; no further changes) before
-  computing the new content hash, so half-written files are never parsed.
+- After a change is seen, schedr waits for a **settle time** (configurable; no further changes)
+  before computing the new content hash, so half-written files are never parsed.
 
 ### End-to-end flow: running a native-API DAG
 
@@ -1135,9 +1182,9 @@ list) and likewise has no Python.
     `task_ctx.secret("connections/db_eu#password")`), restricted to declared secrets and
     prefixes; `schedr task-ctx secret get` accepts secrets under a declared prefix too.
   - **Airflow:** every Airflow-layer Python task implicitly declares the prefix
-    `SecretPrefix("<connections_path>/")`, so `Connection.get` / `BaseHook.get_connection`
-    (often with computed IDs) work unchanged, using only native constructs. Cost: the "only declared secrets"
-    protection is coarser for Airflow tasks (any connection, not a list).
+    `SecretPrefix("<connections_path>/")`, so `Connection.get` / `BaseHook.get_connection` (often
+    with computed IDs) work unchanged, using only native constructs. Cost: the "only declared
+    secrets" protection is coarser for Airflow tasks (any connection, not a list).
   - Not chosen: requiring Airflow tasks to declare their connections (a schedr-only argument in
     Airflow code, a manual change in every DAG, awkward with computed IDs); on-demand reads only
     in the Airflow layer (breaks the principle in Thin translating classes).
@@ -1399,10 +1446,10 @@ with Dag(
   - Airflow's trigger rules are translated onto these two or are an error (see Airflow
     compatibility: Trigger rules).
   - **Rejected: `AtLeastOneSuccess`** (run as soon as one upstream task succeeded, tolerating
-    failures of the others; Airflow's `one_success`). Its main use, redundant sources ("if A
-    is down, use B"), is an *expected* problem: the source task returns it as an outcome and
-    `NoneFailed` joins the sources (see Task results and outcomes), with no failure tolerated. What remains
-    is racing (not waiting for the slower upstream), which doesn't justify the costs: inputs
+    failures of the others; Airflow's `one_success`). Its main use, redundant sources ("if A is
+    down, use B"), is an *expected* problem: the source task returns it as an outcome and
+    `NoneFailed` joins the sources (see Task results and outcomes), with no failure tolerated. What
+    remains is racing (not waiting for the slower upstream), which doesn't justify the costs: inputs
     that depend on timing (a retry could see different data), upstream tasks that can't be
     cancelled, and a downstream task that succeeded in a run that still fails.
 - **Run result: a run is `failed` if anything unexpected went wrong in it**, otherwise
@@ -1557,10 +1604,11 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
   runner (Python tasks) or the agent (`command` / `script`) builds the pair. Returning tuples
   would be worse to write and to type-check, and would allow nonsense like
   `(Rows(...), "Unavailable")`.
-- **The stored outcome name** is shown in the UI (Open questions: Web UI and CLI) and **decides which member a
-  stored output is decoded into** (a plain JSON object could fit several dataclasses). The name
-  comes from the DAG's declaration; decoding follows the downstream annotation (a parameter
-  annotated `Any` gets a plain `dict`), so no code is ever loaded by a stored name.
+- **The stored outcome name** is shown in the UI (see Web UI and CLI: What the UI shows) and
+  **decides which member a stored output is decoded into** (a plain JSON object could fit several
+  dataclasses). The name comes from the DAG's declaration; decoding follows the downstream
+  annotation (a parameter annotated `Any` gets a plain `dict`), so no code is ever loaded by a
+  stored name.
 - **Exceptions are never mapped to outcomes**: outcomes are only returned values (Python) or
   declared exit codes (`command` / `script`). An uncaught exception is a failure.
 
@@ -2035,13 +2083,13 @@ sure an output can be serialized, from earliest to last:
    rejected. Only as good as the user's tooling, and `Sequence` lets a few wrong types through
    (e.g. `bytes`), so it is a help, not the guarantee.
 2. **Parse time (the guarantee).** The runner reads the return annotation
-   (`typing.get_type_hints()`) and walks it recursively against the supported types: `None`,
-   `bool`, `int`, `float`, `str`, `datetime`, `date`, `timedelta`, `list`, `tuple`,
-   `dict[str, …]`, `Literal`, unions/`Optional`, `TypedDict`, dataclasses and Pydantic models
-   (see Dataclasses and Pydantic models below). An unsupported type is an **import error for the file**, naming the task and the
-   offending part (e.g. "task `extract`: return type `dict[int, str]`: output keys must be
-   `str`"); the DAG is not registered. The same type model checks **inputs**: passing an
-   `Output[T]` to a parameter whose annotation doesn't accept `T` is a parse error.
+   (`typing.get_type_hints()`) and walks it recursively against the supported types: `None`, `bool`,
+   `int`, `float`, `str`, `datetime`, `date`, `timedelta`, `list`, `tuple`, `dict[str, …]`,
+   `Literal`, unions/`Optional`, `TypedDict`, dataclasses and Pydantic models (see Dataclasses and
+   Pydantic models below). An unsupported type is an **import error for the file**, naming the task
+   and the offending part (e.g. "task `extract`: return type `dict[int, str]`: output keys must be
+   `str`"); the DAG is not registered. The same type model checks **inputs**: passing an `Output[T]`
+   to a parameter whose annotation doesn't accept `T` is a parse error.
 3. **Run time (the actual value).** The runner encodes the returned value **guided by the
    annotation** and fails the attempt (`failed`) on: unsupported types (`Decimal`, `set`,
    custom objects), non-`str` dict keys, `NaN`/`inf`, values not matching the annotation, or
@@ -2559,9 +2607,9 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     to convert the container explicitly, e.g. a set into a list, before passing it as an
     argument.
 - **Not needed for now:** template files (`.sh` / `.sql` files rendered as templates).
-- **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is
-  designed and implemented later in the project. Rule for that design (the principle in Thin translating classes):
-  every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
+- **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is designed and
+  implemented later in the project. Rule for that design (the principle in Thin translating
+  classes): every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
   `run.scheduled_at` formatted `%Y-%m-%d`); one without a native equivalent is an error in the
   Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
@@ -2671,18 +2719,5 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ## Open questions
 
-Only questions still open are listed here; decided ones have been moved into the sections
-above. Deliberately deferred items ("possibly later") are noted where they belong.
-
-### Web UI and CLI
-
-Required (see Architecture: Web UI and CLI). Still open:
-
-- Frontend technology.
-- Showing outcomes (see Task results and outcomes): the outcome next to the status in the run
-  view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped by
-  outcome (not by failure); history and filters by outcome (e.g. runs where `fetch_primary`
-  returned `Unavailable`).
-- Showing cleanups and resources (see Cleanup and resources): the per-task cleanup inside the
-  task (e.g. a dropdown or submenu), the cleanup result next to the status; resources shown
-  separately (e.g. a band over their users) with their own states.
+None at the moment. New questions are added here and move into the sections above once
+decided. Deliberately deferred items ("possibly later") are noted where they belong.
