@@ -246,9 +246,10 @@ SchedrScriptOperator(
   `LAST_LINE` (default, like `BashOperator`), `STDOUT` (all of it), `JSON` (stdout parsed as
   JSON, checked like any output), `JSON_LAST_LINE`, `NONE`. A user-supplied Python callable
   (like Airflow's `output_processor`) is not supported: it would need a Python process after
-  the script.
-- **Reporting like Airflow:** `skip_on_exit_code` (default 99) marks the task skipped; any
-  other failing exit code fails the task with an Airflow-style error summary ("script
+  the script. Under review: Open question 18.
+- **Reporting like Airflow:** `skip_on_exit_code` (default 99) skips the downstream tasks, as
+  for `BashOperator` (translated onto outcomes: see Airflow compatibility, `skip_on_exit_code`);
+  any other failing exit code fails the task with an Airflow-style error summary ("script
   returned non-zero exit code N" plus the tail of stderr) shown in the UI.
 
 ### Master–worker protocol
@@ -924,16 +925,30 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   schedules run at the fire time.)
 - **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
   `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
-- **Branching: `@branch`.** The function returns **task handles** (one or a list), not task ID
-  strings, so typos are caught at parse time. In the model the branch's output is still the
-  list of task IDs; the master skips the branches not chosen.
+- **Routing: outcomes first, `@branch` for subsets** (see Task results and outcomes). To
+  route on what a task found, the task returns an **outcome** and downstream tasks use
+  `.on(...)`:
+
+  ```python
+  @task
+  def size_of(rows: list[Row]) -> Big | Small: ...
+
+  size = size_of(rows)
+  full_load(size.on(Big))
+  incremental(size.on(Small))
+  ```
+
+  **`@branch`** chooses **any subset** of its direct downstream tasks. The function returns
+  **task handles** (one or a list), not task ID strings, so typos are caught at parse time. In
+  the model the branch's output is the list of task IDs; the master skips the tasks not
+  chosen.
 
   ```python
   @branch
-  def choose(count: int) -> Task | list[Task]:
-      return full_load if count > 10_000 else incremental
+  def targets(cfg: Config) -> list[Task]:
+      return [t for t, on in ((to_s3, cfg.s3), (to_gcs, cfg.gcs), (to_local, True)) if on]
 
-  choose(count) >> [full_load(), incremental()]
+  targets(cfg) >> [to_s3, to_gcs, to_local]
   ```
 
 - **Task groups: `with group("name"):`.** Task IDs become `name.task_id`; a dependency on the
@@ -981,15 +996,29 @@ with Dag(
 - **Only success branches.** A user cannot create a failure branch in the native API (no
   `on_failure` edges, no failure trigger rules, no callbacks). A failed task fails; its
   downstream tasks become `upstream_failed`.
-- **Python tasks:** an exception caught inside the task is a normal return (route on the value
-  with `@branch`); an uncaught exception is a failure. No exception-to-outcome mapping, so no
-  ambiguous cases with `try`/`except`.
+  - **Rationale: a failure means an unexpected failure.** A failure branch is the same as
+    catching an exception and reporting success: failure becomes control flow. Instead, the
+    user handles the problems they **expect** inside the task and turns them into success
+    paths: **outcomes**, routed with `.on(...)` (a caught exception returned as an outcome of
+    a Python task; a declared exit code of a `command` / `script` task; see Task results and
+    outcomes). So whenever a task fails, the failure
+    was not expected, and **schedr handles it**: retries, notifications, failing the run.
+  - **Rejected: master-side failure rules** (trigger rules such as `one_failed` or `all_done`
+    evaluated by the master). They would be sound (the master sees timeouts, memory kills and
+    lost workers, and retries stay intact), but they are still failure branches and defeat the
+    rationale above, even if limited to the Airflow layer.
+  - Work that must happen **whatever the result** (releasing a lock, deleting temporary
+    resources) is not error handling; see Open question 17 (Cleanup).
+- **Python tasks:** an exception caught inside the task is a normal return (route on it by
+  returning an outcome); an uncaught exception is a failure. No exception-to-outcome mapping,
+  so no ambiguous cases with `try`/`except`.
 - **Failures are still recognized and recorded** by schedr itself (UI, logs, run history,
   notifications): the attempt status (`failed`, `timed_out`, `oom_killed`, …), the structured
   error summary of a failed Python task, and the `ProcessResult` of a failed command/script
   (stderr, exit code) are stored and shown. They are **not** available to other tasks as
   inputs.
-- **Process outcomes for `command` / `script` tasks: an enum.** The user declares an `IntEnum`
+- **Process outcomes for `command` / `script` tasks: an enum** (Python tasks have outcomes
+  too: see Task results and outcomes). The user declares an `IntEnum`
   subclass of `schedr.Outcome`; values are exit codes, names are outcome names (shown in the
   UI). A declared exit code means **success** (no retry); any exit code not in the enum is a
   **failure**.
@@ -1013,17 +1042,49 @@ with Dag(
     declares their own enum is expected to know what they're doing).
   - A plain `>>` from a task with outcomes means **any success outcome**. Edges not taken are
     skipped like branch skips.
-- **No trigger rules in the native API: one fixed rule.** A task runs when **every upstream task
-  that wasn't skipped succeeded**, and at least one upstream succeeded; it is **skipped** when
-  all its upstream tasks were skipped; it becomes **`upstream_failed`** if any upstream task
-  failed. Without skipped upstream tasks this is exactly `all_success`; after a branch, joins
-  work with nothing to configure. In the native API skips come only from `@branch` and
-  `.on(...)`, so this covers every case.
-  - A task taking **data** from a task that can be skipped (downstream of a branch or outcome)
-    must have a parameter type that **allows `None`**, or it's a parse error. Order-only
-    dependencies (`>>`) need nothing.
-  - The other Airflow trigger rules (`one_failed`, `all_done`, `none_failed`, …) exist only in
-    the Airflow layer.
+- **Two trigger rules, no others.** The model (neutral names, no Airflow terms) has exactly two
+  rules, and the native API offers both:
+  - **`NoneFailed`** (the **default**): a task runs when **every upstream task that wasn't
+    skipped succeeded**, and at least one upstream succeeded; it is **skipped** when all its
+    upstream tasks were skipped; it becomes **`upstream_failed`** if any upstream task failed.
+    Without skipped upstream tasks this is exactly Airflow's `all_success`; after a branch,
+    joins work with nothing to configure.
+  - **`AllSucceeded`** (opt-in, e.g. `@task(run_if=ALL_SUCCEEDED)`, also on operators and in
+    `TaskDefaults`; name to be settled): runs only when **every** upstream task succeeded; any
+    failure → `upstream_failed`; otherwise any skip → skipped. For "run only if every upstream
+    task really ran":
+
+    ```python
+    check.on(Check.CHANGED) >> load      # load is skipped when nothing changed
+    [load, refresh_meta] >> publish      # with ALL_SUCCEEDED: skipped too
+    ```
+
+  - Both decide **as soon as the result is certain**, as Airflow does: the first failure makes
+    the task `upstream_failed` without waiting for the others; for `AllSucceeded`, the first
+    failure or skip decides.
+
+    | Upstream tasks…                    | `NoneFailed`                          | `AllSucceeded`    |
+    |------------------------------------|---------------------------------------|-------------------|
+    | all succeeded                      | runs                                  | runs              |
+    | some skipped, the rest succeeded   | **runs**                              | **skipped**       |
+    | all skipped                        | skipped                               | skipped           |
+    | any failed                         | `upstream_failed`                     | `upstream_failed` |
+    | Data from a skipped upstream task  | `None` (parameter must allow `None`)  | never happens     |
+
+  - A `NoneFailed` task taking **data** from a task that can be skipped (downstream of a branch
+    or outcome) must have a parameter type that **allows `None`**, or it's a parse error. An
+    `AllSucceeded` task never receives `None` from upstream, so it needs no `Optional`.
+    Order-only dependencies (`>>`) need nothing.
+  - In the native API skips come only from `@branch` and `.on(...)`.
+  - Airflow's trigger rules are translated onto these two or are an error (see Airflow
+    compatibility: Trigger rules).
+  - **Rejected: `AtLeastOneSuccess`** (run as soon as one upstream task succeeded, tolerating
+    failures of the others; Airflow's `one_success`). Its main use, redundant sources ("if A
+    is down, use B"), is an *expected* problem: the source task returns it as an outcome and
+    `NoneFailed` joins the sources (see Task results and outcomes), with no failure tolerated. What remains
+    is racing (not waiting for the slower upstream), which doesn't justify the costs: inputs
+    that depend on timing (a retry could see different data), upstream tasks that can't be
+    cancelled, and a downstream task that succeeded in a run that still fails.
 - **Failure notifications are configured, not programmed**, and live outside the task graph.
   A DAG names notification channels (`Dag(..., notify=["team-a-slack"])`); channels are defined
   in the **server configuration** by operators, with credentials from **environment variables**
@@ -1032,6 +1093,196 @@ with Dag(
   code). Events: at least a failed run and a task failed after its last retry (needed for the
   Airflow layer's `email_on_failure`); an **email** channel type is needed for the same reason.
   The full event list, other channel types and message content are designed later.
+
+### Task results and outcomes
+
+Every task, whatever its kind, can report **which kind of success** it had (its **outcome**),
+and downstream tasks route on it with **`.on(...)`**. Before this, only `command` / `script`
+tasks had outcomes, and a Python task needed an extra `@branch` task to route on its result.
+Outcomes are how a user turns the problems they **expect** into success paths (see Outcomes,
+failures and joins).
+
+```python
+@dataclass
+class Rows:
+    rows: list[dict[str, str]]
+
+@dataclass
+class Unavailable:
+    reason: str
+
+@task
+def fetch_primary() -> Rows | Unavailable:
+    try:
+        return Rows(download(PRIMARY))
+    except ConnectionError as e:      # expected problem → a success path
+        return Unavailable(str(e))
+
+primary = fetch_primary()
+mirror = fetch_mirror()               # same signature
+
+load(primary.on(Rows), mirror.on(Rows))        # load(primary: Rows | None, mirror: Rows | None)
+report_outage(primary.on(Unavailable))
+```
+
+With `NoneFailed`, `load` runs if at least one source returned `Rows` and is skipped if both
+returned `Unavailable`; a real failure (timeout, crash) still blocks it and fails the run.
+
+**Result structure.**
+
+- Every finished attempt has a **status** (`success`, `failed`, `timed_out`, …) and, when it
+  succeeded, the pair **(output, outcome)**: in the DAG JSON, the `Finished` message and
+  storage, whatever the task kind. The output may be `None`. The output size limit applies to
+  the output only. Mapped tasks: one pair per instance.
+- **Failures are never outcomes.** An outcome is always a kind of success, so "a failure is
+  unexpected" still holds.
+- **Every task has an outcome enum:** `DefaultOutcome` (single member `SUCCESS`) for ordinary
+  return types, `empty` tasks and commands without `outcomes=`; a declared `Outcome` enum
+  (`-> Check`, `outcomes=Check`); or an implicit one derived from an outcome union (one member
+  per class, each carrying its own data). In the backend an outcome is always a **name** (a
+  member's name or a class name) and each task declares the list of its names; the enums and
+  classes exist only in the Python API.
+- **Users never write the pair.** They write return types, `outcomes=` and `.on(X)`; the
+  runner (Python tasks) or the agent (`command` / `script`) builds the pair. Returning tuples
+  would be worse to write and to type-check, and would allow nonsense like
+  `(Rows(...), "Unavailable")`.
+- **The stored outcome name** is shown in the UI (Open question 5) and **decides which member a
+  stored output is decoded into** (a plain JSON object could fit several dataclasses). The name
+  comes from the DAG's declaration; decoding follows the downstream annotation (a parameter
+  annotated `Any` gets a plain `dict`), so no code is ever loaded by a stored name.
+- **Exceptions are never mapped to outcomes**: outcomes are only returned values (Python) or
+  declared exit codes (`command` / `script`). An uncaught exception is a failure.
+
+**Python outcomes.**
+
+- **With data: a union of classes.** A return type defines outcomes when it is a **union of
+  two or more outcome members**: dataclasses, Pydantic models and `None` (outcome name
+  `"None"`). They are the only types the runner tells apart reliably at run time
+  (`isinstance`): a `TypedDict` is a plain `dict`, `bool` is a subclass of `int`, `list[int]`
+  and `list[str]` are the same class. Any other return type (`int`, `Rows`, `int | None`,
+  `int | str`, `Rows | int`) is ordinary data with the single outcome `SUCCESS`; to route on
+  such a value, return an outcome instead, or use `@branch`.
+- **Without data: an `Outcome` enum**, the same kind as for `command` / `script` tasks:
+  `def check() -> Check`, then `.on(Check.CHANGED)`. The member values (exit codes) are ignored
+  for Python tasks; the output is `None` and the member is the outcome. The same enum works for
+  a Python task and a command task, so a check can be reimplemented (Bash ↔ Python) without
+  changing any edge.
+- A Python task's outcomes are **either a union of classes or one `Outcome` enum, never
+  both**; for "data or nothing", use an empty dataclass (`-> Rows | NoData`) or `None`.
+- **No marker is needed:** routing is opt-in, so an outcome union behaves like any other type
+  until `.on(...)` is used.
+- **Parse errors:** members that are subclasses of one another; the same class with different
+  type parameters (`Page[int] | Page[str]`); two members with the same name from different
+  modules. Only the top level of the return type counts (`list[Rows | Unavailable]` is data);
+  type aliases are resolved.
+- Not chosen: classes only (boilerplate, a different style from commands); mixing classes and
+  enum members in one union with `Literal[Enum.MEMBER]` (obscure, needs two typed variants of
+  `.on()`, adds nothing over an empty dataclass).
+
+What each task produces:
+
+| Task / return type | Outcome names | Stored (output, outcome), examples |
+|---|---|---|
+| `-> None` | `SUCCESS` | `(null, "SUCCESS")` |
+| `-> int` | `SUCCESS` | `(42, "SUCCESS")` |
+| `-> int \| None` | `SUCCESS` | `(42, "SUCCESS")`, `(null, "SUCCESS")` |
+| `-> int \| str`, `-> Rows \| int` | `SUCCESS` | `(42, "SUCCESS")`, `("abc", "SUCCESS")` |
+| `-> Rows` | `SUCCESS` | `({"rows": [...]}, "SUCCESS")` |
+| `-> Rows \| None` | `Rows`, `None` | `({...}, "Rows")`, `(null, "None")` |
+| `-> Rows \| Unavailable` | `Rows`, `Unavailable` | `({"rows": [...]}, "Rows")`, `({"reason": "..."}, "Unavailable")` |
+| `-> Rows \| Unavailable \| None` | `Rows`, `Unavailable`, `None` | also `(null, "None")` |
+| `-> Check` (`Outcome` enum) | `CHANGED`, `UNCHANGED` | `(null, "CHANGED")` |
+| `command` / `script`, no `outcomes` | `SUCCESS` (exit code 0) | `(<ProcessResult>, "SUCCESS")` |
+| `command` / `script`, `outcomes=Check` | `CHANGED`, `UNCHANGED` (from exit codes) | `(<ProcessResult>, "CHANGED")` |
+| `empty` | `SUCCESS` | `(null, "SUCCESS")` |
+| `@branch` | `SUCCESS` | `(["full_load"], "SUCCESS")` (the chosen task IDs) |
+
+`SUCCESS` is `DefaultOutcome.SUCCESS`.
+
+**Routing.**
+
+- **One edge model:** every edge is "on these outcomes"; a plain reference or plain `>>` means
+  "on any outcome". The only other edge kind is the **selection edge** of a `@branch` task.
+- **`.on(X)` is both an edge and data:** it makes the downstream task depend on that outcome
+  and passes the output **narrowed** to `X` (typed `def on[T](self, kind: type[T]) ->
+  Output[T]`, so the narrowing is checked statically). Edges whose outcome didn't happen are
+  not taken.
+- **`.outcome`** passes the outcome itself as data (`Output[Check]`), for enum tasks and
+  `command` / `script` tasks.
+
+Examples, with `f = fetch()` (`-> Rows | Unavailable`), `c = check()` (`-> Check`),
+`cmd = CommandOperator(..., outcomes=Check)`, `g` returning `Rows | None`. *Taken* means the
+edge's outcome condition was met (a plain reference or plain `>>` is always taken). *Data rule*
+when not taken: a `NoneFailed` task passes `None` (the parameter must allow `None`); an
+`AllSucceeded` task is skipped instead. If the upstream task itself was skipped, every edge
+from it counts as not taken.
+
+| Expression | Edge condition | Static type | Downstream receives when taken | When not taken |
+|---|---|---|---|---|
+| `x(f)` | any outcome | `Output[Rows \| Unavailable]` | the value, decoded into the member the outcome names | n/a |
+| `f >> x` | any outcome | — | nothing (order only) | n/a |
+| `x(f.on(Rows))` | `Rows` | `Output[Rows]` | the `Rows` value | data rule |
+| `f.on(Rows) >> x` | `Rows` | — | nothing (order only) | data rule (no data involved) |
+| `x(f.on(Rows, Unavailable))` | `Rows` or `Unavailable` | `Output[Rows \| Unavailable]` | the value | data rule |
+| `x(f.on(Rows).rows)` | `Rows` | `Output[list[...]]` | the field of the `Rows` value | data rule |
+| `x(f.rows)` | — | **parse error** | `rows` isn't on every member; narrow with `.on(Rows)` first | — |
+| `t"... {f.on(Rows).rows} ..."` | `Rows` | in a t-string | the rendered value | data rule (`None` in a template is an error) |
+| `x(c)` | any outcome | `Output[None]` | `None` (an enum task has no output) | n/a |
+| `c.on(Check.CHANGED) >> x` | `CHANGED` | — | nothing | data rule (no data involved) |
+| `x(c.outcome)` | any outcome | `Output[Check]` | the member, e.g. `Check.CHANGED` | n/a |
+| `x(cmd.on(Check.CHANGED))` | `CHANGED` | `Output[ProcessResult]` | the `ProcessResult` | data rule |
+| `x(cmd.on(Check.CHANGED).stdout)` | `CHANGED` | `Output[str]` | stdout (an error if truncated) | data rule |
+| `x(cmd.outcome)` | any outcome | `Output[Check]` | the member | n/a |
+| `x(g.on(None))` | `None` | `Output[None]` | `None` | data rule (useful only for order) |
+
+Rules:
+
+- **Trigger rules count edges, not tasks:** an edge not taken counts as skipped, so
+  `x(f.on(Rows), f.on(Unavailable))` runs under `NoneFailed` and is skipped under
+  `AllSucceeded`.
+- **A path on an outcome union needs narrowing first:** `f.rows` is a parse error,
+  `f.on(Rows).rows` is fine (the parse-time path check: a field must exist on the referenced
+  type).
+- **`.outcome` on a union task is a parse error:** its type would be an invented
+  `Literal["Rows", "Unavailable"]`, and the value's class already says it. On a plain task it
+  is always `DefaultOutcome.SUCCESS`.
+- **`.on()` accepts only members of the task's own outcome enum**, otherwise a parse error
+  (`.on(Other.CHANGED)`, `f.on(Check.CHANGED)`, `f.on(Unrelated)`). Such an edge could never be
+  taken: the downstream task would be skipped in every run, silently. Python itself catches
+  only misspelt members, not a wrong enum or an unrelated class.
+- **`.on(DefaultOutcome.SUCCESS)`** follows from the previous rule: allowed on a task whose
+  enum is `DefaultOutcome` (same as a plain reference; useful for generated edges, e.g. the
+  Airflow translation), a parse error on a task with another enum, even one with a member named
+  `SUCCESS` (membership is checked, not names).
+
+**`@branch` and outcomes.**
+
+- Outcomes cover "route on what happened" (exactly one outcome per result, routing in the DAG
+  structure); `@branch` covers what outcomes can't: choosing **any subset** of the direct
+  downstream tasks in the function's code. The documentation recommends **outcomes first**.
+- A branch task's result is `(list of chosen task IDs, "SUCCESS")`; its outgoing edges are
+  **selection edges**, taken when their target is in the list. `.on(...)` on a branch task is a
+  parse error.
+- Airflow's `@task.branch` / `BranchPythonOperator` translate onto `@branch` (they can select
+  several targets, so they can't translate onto outcomes).
+- Not chosen: several outcomes per result (would break "one outcome per result": `.outcome`,
+  decoding by outcome name, the tables above); removing `@branch` (Airflow's `@task.branch`
+  would become an error by the principle in Thin translating classes).
+
+**Mapped tasks.** Each mapped instance has its own (output, outcome) pair.
+
+- **Element by element inside `.expand()`: allowed.** `check.expand(r=results.on(Rows))` gives
+  `check[i]` the output of `process[i]` when its outcome was `Rows`; otherwise the edge to
+  `check[i]` isn't taken and `check[i]` is skipped. Map-index alignment is kept (the number of
+  instances doesn't change).
+- **On the whole mapped output: a parse error for now.** `x(results.on(Rows))` (with `x` not
+  mapped) has no single clear meaning (filter the list and lose the alignment with map
+  indexes; replace non-matches with `None`; take the edge only if all instances matched). To
+  collect them, write a task that takes the whole list and filters it. The same applies to
+  `.outcome`.
+- A downstream task taking the whole list of a mapped task whose instances can be skipped gets
+  **`None` for skipped instances**, in map-index order, so the element type must allow `None`
+  (`list[Rows | None]`), as for any skippable data.
 
 ### Output serialization
 
@@ -1189,7 +1440,23 @@ run-history retention policy is added).
 ### Thin translating classes
 
 The Airflow layer consists of **thin classes that translate onto the native API**; they don't
-build the model themselves:
+build the model themselves.
+
+**Principle: the Airflow layer can only use what the native API has.** No Airflow-only
+structures, rules or behaviours: everything a compatibility layer produces must be expressible
+in the native API **as it is**. Otherwise people would use the Airflow API just to get
+functionality they can't express in the native API, and the native API would stop being the
+primary one.
+
+- **Allowed:** different *syntax* for the same thing: Airflow's names, signatures and argument
+  types, the `@dag` decorator, task IDs as strings, `default_args` dicts, combinations of
+  native constructs (e.g. an extra `empty` task or dropped edges, which a native DAG could
+  write by hand).
+- **Not allowed:** a model rule, task kind, edge type or run-time behaviour that the native API
+  doesn't offer. An Airflow feature that needs one is either **added to the native API first**
+  (then translated onto it) or is an **error** in the Airflow layer.
+- Applies to every compatibility API, not only `schedr.airflow`.
+- Existing decisions that don't follow it yet are listed in Open question 18.
 
 - **Arguments with a native equivalent are translated**, including renamed ones and different
   types. Examples:
@@ -1229,19 +1496,45 @@ build the model themselves:
   configure notifications with `notify=`". The migration tool reports them as a manual step.
   Possibly later: Airflow's ready-made notifier objects (`SlackNotifier`, `SmtpNotifier`)
   recognized and translated to channels.
-- **Internal builder API.** Airflow behaviour with no public native equivalent (trigger rules
-  other than the fixed native rule, `skip_on_exit_code`, last-line `.output`, `ti.xcom_pull`,
-  the `@dag` decorator) is built through a **private builder API** of the `schedr` package
-  (e.g. `schedr._model`), not the public native API, which stays as strict as decided.
+- **Internal builder API.** A **private builder API** of the `schedr` package (e.g.
+  `schedr._model`) may be used where Airflow's *syntax* can't go through the public native API
+  directly (e.g. the `@dag` decorator, task IDs given as strings), never to build behaviour the
+  native API doesn't have (see the principle above). Earlier uses for Airflow-only behaviour
+  (last-line `.output`, `ti.xcom_pull`) are under review: Open question 18.
+- **`skip_on_exit_code`** (`BashOperator`, `@task.bash`, `SchedrScriptOperator`) is
+  translated onto **outcomes**, so it needs nothing beyond the native API:
+  - Default (`99`): the task gets `outcomes=AirflowCommandOutcome`, an ordinary `Outcome` enum
+    internal to `schedr.airflow`:
+
+    ```python
+    class AirflowCommandOutcome(Outcome):
+        SUCCESS = 0
+        SKIPPED = 99
+    ```
+
+    (A separate enum, not a subclass of `DefaultOutcome`: Python doesn't allow extending an
+    enum that has members.)
+  - Every outgoing edge becomes `.on(<enum>.SUCCESS)`. On a skip code the edges aren't taken,
+    so the downstream tasks see a skipped upstream: `all_success` (`AllSucceeded`) skips them,
+    `none_failed` (`NoneFailed` + start anchor) runs them, as in Airflow.
+  - `skip_on_exit_code=None` (disabled): `DefaultOutcome`.
+  - Another code or a list of codes: an enum **generated for that task**, `SUCCESS = 0` plus
+    one member per code (`SKIPPED_100`, …; one exit code per member, as decided for
+    outcomes). Edges are still `.on(SUCCESS)` only.
+  - Only difference from Airflow: the task itself shows as *success, outcome `SKIPPED`*, not
+    *skipped* (display only; the run's result is the same).
+  - By the `.on(DefaultOutcome.SUCCESS)` rule in Task results and outcomes, it is a parse
+    error on such a task; the translation writes the edges itself.
 - **Missing annotations** in Airflow-style callables are treated as `Any` (only the run-time
-  output check applies), through the same private builder API.
+  output check applies), the same as an explicit `-> Any` in the native API.
 - One translation path means the **same semantics** for both APIs: whatever the native API
   checks (types, references, outputs) is checked for Airflow-style DAGs too.
 
 ### Branching, task groups and mapping
 
-All translated onto the native API (`@branch`, `group`, `.partial()` / `.expand()`) through the
-private builder API where Airflow behaviour differs.
+All translated onto the native API (`@branch`, `group`, `.partial()` / `.expand()`). Where
+Airflow behaviour differs from the native API, see the principle in Thin translating classes
+and Open question 18.
 
 **Branching:**
 
@@ -1252,13 +1545,46 @@ private builder API where Airflow behaviour differs.
 - **`ShortCircuitOperator` / `@task.short_circuit`: supported.** A falsy return value skips
   downstream tasks; a truthy one continues. `ignore_downstream_trigger_rules=True` (default):
   skip everything downstream; `False`: skip only direct downstream tasks and let trigger rules
-  decide the rest.
+  decide the rest. Under review: Open question 18.
 - **Not supported:** `BranchExternalPythonOperator`, `BranchPythonVirtualenvOperator`,
   `BranchDayOfWeekOperator`, `BranchDateTimeOperator`, `@task.branch_external_python`,
   `@task.branch_virtualenv`. They don't exist in `schedr.airflow`; importing them is an import
   error naming them as unsupported.
-- Trigger rules: Open question 6c (two rules in the model, `All` and `Any`; other Airflow rules
-  translated onto them or an error).
+**Trigger rules:**
+
+- Translated onto the two model rules, `NoneFailed` and `AllSucceeded` (see Native API:
+  Outcomes, failures and joins), or an error.
+- **Translation by a factory** (private builder API) that returns a model rule and may also
+  **rewrite the task's incoming edges**, so some rules with no direct equivalent are emulated
+  exactly. Both rewrites are combinations a native DAG could write by hand, so they follow the
+  principle in Thin translating classes:
+  - **Start anchor:** a hidden `empty` root task of the DAG, completed by the master when the
+    run starts (it is never skipped or failed), added as one more upstream. With `NoneFailed`,
+    the task then can't be skipped for "all upstream skipped".
+  - **Dropped edges:** the task's incoming dependencies are removed from scheduling (kept for
+    display, and for a short-circuit's "skip everything downstream").
+
+  | Airflow 3 rule | Airflow behaviour | Translated to | Exact? |
+  |---|---|---|---|
+  | `all_success` (default) | all upstream succeeded; any failed → `upstream_failed`; any skipped → skipped | `AllSucceeded` | yes |
+  | `none_failed_min_one_success` | no failure and ≥1 success; all skipped → skipped | `NoneFailed` | yes |
+  | `none_failed` | no failure; runs even if all upstream skipped | `NoneFailed` + start anchor | yes |
+  | `always` | runs at any time, doesn't wait for upstream | dropped edges | yes; a data reference to an upstream output is an error (no edge, so no guaranteed output) |
+  | `one_success` | as soon as one succeeded; none succeeded: all skipped → skipped, else `upstream_failed` | **error** | `AtLeastOneSuccess` rejected (see Outcomes, failures and joins); the message suggests `none_failed_min_one_success`, usually what was meant |
+  | `all_failed`, `one_failed`, `one_done`, `all_done`, `all_done_min_one_success`, `none_skipped` | run, or keep waiting, when upstream tasks fail | **error** | not possible: no failure branches (see Outcomes, failures and joins) |
+  | `all_skipped` | runs only if all upstream skipped | **error** | not possible: no rule turns a skip into a run |
+  | `all_done_setup_success` | setup/teardown tasks | **error** | setup/teardown not supported (see Open question 17) |
+
+- **Why `AllSucceeded` exists:** `NoneFailed` runs a task when *some* upstream succeeded, so no
+  combination of it with empty tasks and anchors expresses "skipped if *any* upstream was
+  skipped". Translating `all_success` to `NoneFailed` with a check instead doesn't work either:
+  `BashOperator`'s `skip_on_exit_code` defaults to 99, so almost every Bash task is skippable,
+  and a warning or error on "join with a skippable upstream" would fire on the **default rule**
+  in most DAGs. By the principle, the native API offers it too.
+- Consequence: Airflow cleanup patterns (`all_done`) and alert/rollback tasks (`one_failed`)
+  must be reworked when migrating (the migration tool reports them; notifications replace
+  alert tasks). Failure-aware rules evaluated by the master were rejected (see Outcomes,
+  failures and joins); `all_done` cleanup may later translate onto Cleanup (Open question 17).
 
 **Task groups:**
 
@@ -1281,7 +1607,7 @@ private builder API where Airflow behaviour differs.
   Airflow's `max_map_length`); more instances fail the mapped task with a clear error. Applies
   to both APIs.
 - **Empty expansion in the Airflow layer: skipped**, as in Airflow (the native API: succeeds
-  with `[]`), so migrated DAGs keep their behaviour.
+  with `[]`), so migrated DAGs keep their behaviour. Under review: Open question 18.
 
 ### Reference version: Airflow 3
 
@@ -1376,6 +1702,7 @@ stays the only way to pass data there).
 - Not chosen: scanning the callable's source at parse time for literal `xcom_pull` calls
   (fails with computed task IDs, helpers or aliases, and only at run time).
 - **Priority:** after the core output mechanism (it is a compatibility layer on top of it).
+- Under review: Open question 18 (the native API has no run-time pull).
 
 **Templating: no Jinja, by design. Replaced by t-strings.** schedr will not include Jinja.
 Airflow templates are replaced by Python template strings (t-strings, PEP 750) combined
@@ -1526,39 +1853,21 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      master's gRPC API stays internal to workers.
    - How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, clear,
      …) are written to Postgres for the master to pick up, or sent to the master.
-6. **Branching in the Airflow layer.** *Decided* (except 6c): see Airflow compatibility (Branching,
-   task groups and mapping). Still open:
-   - c. **Trigger rules: two rules in the model; Airflow rules translated onto them or an
-     error.** (Direction decided; the exact mapping proposed below.) The model (neutral names,
-     no Airflow terms) has only:
-     - **`All`** (the native fixed rule): runs when every upstream task that wasn't skipped
-       succeeded and at least one succeeded; all skipped → skipped; any failure →
-       `upstream_failed`.
-     - **`Any`**: runs as soon as **one** upstream task succeeded; when all are done and none
-       succeeded: any failure → `upstream_failed`, otherwise skipped. Data from upstream tasks
-       that didn't succeed must be optional (`None`), as for skippable tasks.
-
-     Proposed mapping of Airflow rules:
-
-     | Airflow rule | Translated to | Difference |
-     |---|---|---|
-     | `none_failed_min_one_success` | `All` | none |
-     | `all_success` | `All` | Airflow skips a join after a branch (the classic trap); `All` runs it. Parse warning when the task is a join after a branch. |
-     | `none_failed` | `All` | Airflow runs the task when **all** upstream were skipped; `All` skips it. Parse warning. |
-     | `one_success` | `Any` | none |
-     | `all_done`, `all_done_min_one_success`, `one_done`, `one_failed`, `all_failed`, `always`, `all_skipped`, `none_skipped` | **error** | run on failure or on skips; no equivalent |
-
-     Consequence: Airflow cleanup patterns (`all_done`) and alert/rollback tasks (`one_failed`)
-     must be reworked when migrating (the migration tool reports them; notifications replace
-     alert tasks). Possibly later: a dedicated cleanup/teardown concept.
-     **To decide:**
-     1. The mapping table above (in particular: `all_success` and `none_failed` translated with
-        a parse warning, or an error when the difference applies).
-     2. **A run fails if any task in it failed**, whatever its last tasks did (unlike Airflow,
-        which decides from the leaf tasks), in both APIs. Proposed: yes (needed with `Any`:
-        one upstream failed, another succeeded, the downstream ran, the run must still fail).
-     3. Whether the **native API exposes `Any`** (e.g. `@task(wait_for=ANY)`, for "use whichever
-        source succeeded first") or keeps only its fixed rule for now.
+   - Showing outcomes (see Task results and outcomes): the outcome next to the status in the
+     run view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped
+     by outcome (not by failure); history and filters by outcome (e.g. runs where
+     `fetch_primary` returned `Unavailable`).
+6. **Branching in the Airflow layer.** *Decided* (except parts of 6c): see Airflow compatibility
+   (Branching, task groups and mapping).
+   - c. **Trigger rules.** *Decided:* two model rules, `NoneFailed` and `AllSucceeded`, both in
+     the native API, and the Airflow mapping (see Native API: Outcomes, failures and joins, and
+     Airflow compatibility: Trigger rules). `AtLeastOneSuccess`: rejected (same place). Still
+     open:
+     1. **A run fails if any task in it failed**, whatever its last tasks did (unlike Airflow,
+        which decides from the leaf tasks), in both APIs. Proposed: yes. With only these two
+        rules a failure always reaches the leaf tasks as `upstream_failed`, so today the result
+        is the same as Airflow's; stating it keeps it true with Cleanup (a cleanup task that
+        succeeds must not make a failed run succeed) and any future rule.
 7. **Task groups in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
    groups and mapping).
 8. **Dynamic task mapping in the Airflow layer.** *Decided:* see Airflow compatibility
@@ -1582,3 +1891,42 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 15. **Outcome-based routing.** *Decided:* see Native API (Outcomes, failures and joins). Later:
     retry control per exit code (e.g. retry on 75 / `EX_TEMPFAIL`, never on 2).
 16. **Environment of task processes.** *Decided:* see Worker environment.
+17. **Cleanup.** Work that must run **whatever the result** of the tasks before it (releasing a
+    lock, deleting temporary resources, stopping something that was started): `finally`, not
+    `except`. Proposed principles, consistent with "no failure branches":
+    - It runs when its **scope** finishes, however the tasks in it ended (including timeouts,
+      memory kills and lost workers, which only the master sees).
+    - It **never changes the result**: a failure stays a failure, the run still fails and
+      notifications are still sent.
+    - It **can't see the failure**: no failure status, no routing on it (otherwise it becomes
+      error handling).
+    - Its own failure fails the run, like any other task.
+
+    Open: the scope (a group, the whole run, or tasks named explicitly); what a cleanup task
+    receives as inputs (e.g. outputs of tasks that succeeded); the API in both the native API
+    and `schedr.airflow`; how Airflow translates onto it (`all_done` on a leaf task, setup /
+    teardown tasks and `all_done_setup_success`). Designed later, for both APIs together.
+    Related: Task results and outcomes (Native API). Outcomes cover the problems a user expects; Cleanup is only
+    for resources after unexpected failures, and sees neither outcomes nor failures.
+18. **Airflow-only behaviour in existing decisions.** These were decided before the principle
+    "the Airflow layer can only use what the native API has" (see Thin translating classes)
+    and don't follow it yet. Each one is either **added to the native API** or becomes an
+    **error** (or is dropped) in the Airflow layer:
+    - **`ti.xcom_pull`**: a run-time fetch of an upstream output; the native API deliberately
+      has none (data flow only).
+    - ~~`skip_on_exit_code`~~ *Resolved:* translated onto outcomes (`AirflowCommandOutcome`,
+      see Airflow compatibility: Thin translating classes).
+    - **Last-line `.output`** of `BashOperator` and the `SchedrScriptOperator` output modes
+      (`LAST_LINE`, `JSON`, `JSON_LAST_LINE`, …): the native API's output is the whole
+      `ProcessResult`, with no built-in stdout parsing.
+    - **`ShortCircuitOperator` with `ignore_downstream_trigger_rules=True`**: skips every
+      downstream task whatever its rule; native skips propagate only through rules.
+    - **`@task.branch` returning `None`** (skip all direct downstream tasks): only if a native
+      `@branch` may return no task.
+    - **Empty expansion skipped** in the Airflow layer; the native API succeeds with `[]`.
+    - **`email_on_failure` with `email=[...]`**: per-DAG recipient addresses; native
+      notifications name channels defined in the server configuration.
+    - **Airflow placeholders** (`ds`, `params`, `macros`, …): to check that each has a native
+      equivalent (e.g. `ds` as a formatted `run.scheduled_at`).
+19. **Unified task results: outcomes for every task.** *Decided:* see Native API (Task
+    results and outcomes).
