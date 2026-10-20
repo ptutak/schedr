@@ -488,6 +488,13 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
     for critical DAGs, or network access restrictions; not for dependencies.
 - **Order:** ready tasks run **oldest-ready first** (priorities and fairness between DAGs may
   come later). The assignment is **saved to Postgres before `AssignTask` is sent**.
+- **Concurrency limits** (see Native API: `max_active_runs`, `max_active_tasks`, `max_active`,
+  `max_active_per_run`): a ready task whose limit is reached stays **`queued`**, with the reason
+  shown in the UI (e.g. "waiting: `max_active_per_run` (10) reached"). Limits are checked
+  **when a task is assigned, in the same transaction** that records the assignment (two tasks
+  can't both take the last place); they count tasks in `running` and `cleaning_up` (a cleanup
+  still holds the slot) and assigned tasks not yet `Started`. When a place frees up, the order
+  stays oldest-ready first among tasks whose limits allow them.
 - `EmptyOperator` tasks and tasks skipped by branching are completed **by the master**, without
   a worker.
 - **The master resolves data; the worker renders and executes.** The master supplies upstream
@@ -1306,6 +1313,21 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   runs.)
 - **`tags`** and **`description`**: metadata (shown in the UI, filter by tag).
 - **Run parameters:** `Dag(..., params=SomeDataclass)`; see Run parameters and the DAG context.
+- **Concurrency limits** (besides worker slots and queues, which are capacity, not intent):
+  - **`max_active_tasks`** on the `Dag` (default `None`, no limit): at most this many tasks of
+    the DAG running at once, across all its runs (limit the load a DAG puts on other systems;
+    keep one big DAG from filling every worker).
+  - **`max_active_per_run`** on a task (default `None`): at most this many instances of the task
+    running at once **within one run**; mainly to limit a mapped task's fan-out
+    (`@task(max_active_per_run=10)`, 1,000 instances, 10 at a time).
+  - **`max_active`** on a task (default `None`): the same **across all runs** (e.g. a task holding
+    an exclusive external lock).
+  - Task limits also on operators and in `TaskDefaults`; an unmapped task has one instance per
+    run. `schedr.toml` jobs need no key (one-task DAGs: `max_active_runs` covers them).
+  - **Across DAGs** (a named limit shared by several DAGs, Airflow's pools): not now; queues (a
+    dedicated worker group with a fixed number of slots) cover it. Possibly later: named
+    limits in the server configuration, referenced by tasks.
+  - How the master applies them: see Task assignment.
 - **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
   `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
 - **Routing: outcomes first, `@branch` for subsets** (see Task results and outcomes). To
@@ -2359,6 +2381,8 @@ primary one.
   | `start_date=` / `end_date=` | `start=` / `end=` |
   | `max_active_runs=` (default 16, Airflow's `max_active_runs_per_dag`) | `max_active_runs=` (set explicitly to 16 when not given, so migrated DAGs keep Airflow's default) |
   | `tags=`, `description=` | `tags=`, `description=` |
+  | `max_active_tasks=` (default 16, `max_active_tasks_per_dag`) | `max_active_tasks=` (set explicitly to 16 when not given) |
+  | `max_active_tis_per_dagrun=` / `max_active_tis_per_dag=` | `max_active_per_run=` / `max_active=` |
   | `default_args={...}` | `defaults=TaskDefaults(...)` (keys translated the same way) |
   | `BashOperator(bash_command=...)` | `CommandOperator(command=...)` |
   | `PythonOperator(python_callable=f, op_args=..., op_kwargs=...)` | a `@task` wrapping `f` |
@@ -2757,7 +2781,8 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   `extract.output` as an argument) without forcing it, so migrated DAGs work at once and can be
   modernized gradually.
 
-Out of scope for now: sensors, Assets, callbacks, pools, hooks.
+Out of scope for now: sensors, Assets, callbacks, pools, hooks. (`pool=` is filtered out with a
+parse warning: dropping it doesn't hide failures; queues cover the need.)
 
 **Custom operators are not supported** (as in the native API, by the principle in Thin
 translating classes). A user class subclassing `BaseOperator` (or any `schedr.airflow`
@@ -2834,16 +2859,32 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
 
-### Concurrency limits
-
-Maximum active runs per DAG, maximum running tasks per DAG (Airflow's `max_active_tasks`).
-Today only slots and queues limit anything.
-
 ### Manual runs
 
 What a manual run's `dag_ctx.run.scheduled_at` and `dag_ctx.run.interval` are; whether it may
 overlap with scheduled runs; whether it counts towards `max_active_runs`; how runs are
 identified.
+
+Proposal (not yet accepted):
+
+1. **Time:** `schedr runs trigger report` → `scheduled_at` = the trigger time, `interval`
+   zero-length (`[scheduled_at, scheduled_at]`, as Airflow 3 does; never `None`).
+   `--at <time>`: if it's a fire time of the schedule, the run behaves exactly like that
+   scheduled run (same `scheduled_at`, interval `(previous fire, at]`), the way to re-run a past
+   day since there's no "clear"; otherwise that time with a zero-length interval. Parameters
+   from `-p` / `--params` / the UI form.
+2. **Backfill:** `schedr runs backfill report --from … --to … [-p …]`: one run per fire time in
+   the range, oldest first, each like `trigger --at`, respecting `max_active_runs`.
+3. **Overlap:** manual runs count towards `max_active_runs`; a manual run is **never dropped**:
+   at the limit it is created and **waits** ("waiting: `max_active_runs` (1) reached"), oldest
+   first (unlike a scheduled fire time, which is treated as missed: a missed fire time recurs,
+   a manual request doesn't). Several runs with the same `scheduled_at` are allowed.
+4. **Identity:** an opaque, unique, time-ordered run ID (ULID) as `dag_ctx.run.id` (never built
+   from the date, so re-running a date can't collide); each run records its kind
+   (`scheduled` / `manual` / `backfill`), `scheduled_at` and who triggered it (UI:
+   `report · 2026-10-15 03:00 · manual by anna`). Airflow's `{{ run_id }}` →
+   `dag_ctx.run.id`.
+5. Manual runs of a paused DAG: see Pausing.
 
 ### Pausing
 
