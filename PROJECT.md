@@ -1085,6 +1085,26 @@ with Dag(
     is racing (not waiting for the slower upstream), which doesn't justify the costs: inputs
     that depend on timing (a retry could see different data), upstream tasks that can't be
     cancelled, and a downstream task that succeeded in a run that still fails.
+- **Run result: a run is `failed` if anything unexpected went wrong in it**, otherwise
+  `success`. Follows from the rationale above: failing the run (and notifying) is part of how
+  schedr handles an unexpected failure. In both APIs.
+
+  | Event | Fails the run? | Why |
+  |---|---|---|
+  | A task failed **after its last retry** (`failed`, `timed_out`, `oom_killed`, `lost`, …) | **yes** | an unexpected failure that wasn't recovered |
+  | A cleanup failed **after its last retry** (Open question 17) | **yes** | the same; a resource may be leaking |
+  | An attempt failed but a retry then succeeded | no | schedr recovered from it |
+  | A task became `upstream_failed` | no | a consequence; the original failure already counts |
+  | A task was skipped (branch, outcome, edge not taken) | no | an expected path |
+  | A task returned an outcome such as `Unavailable` | no | an expected problem handled by the user: a success |
+
+  - The result is set when **every task and every cleanup has finished**; independent parts of
+    the graph keep running after a failure (no fail-fast; the UI may show "will fail" earlier).
+  - **Not Airflow's leaf rule** (the run fails only if a leaf task failed), which turns runs
+    green that hid a failure: a task failing behind a join already skipped (`AllSucceeded`
+    decides on the first skip); a failed cleanup (not in the graph); a cleanup leaf that
+    succeeded after the work failed. Migrated DAGs differ only in such cases.
+  - Runs cancelled by a user end as `cancelled` (a separate case, not decided here).
 - **Failure notifications are configured, not programmed**, and live outside the task graph.
   A DAG names notification channels (`Dag(..., notify=["team-a-slack"])`); channels are defined
   in the **server configuration** by operators, with credentials from **environment variables**
@@ -1573,7 +1593,7 @@ and Open question 18.
   | `one_success` | as soon as one succeeded; none succeeded: all skipped → skipped, else `upstream_failed` | **error** | `AtLeastOneSuccess` rejected (see Outcomes, failures and joins); the message suggests `none_failed_min_one_success`, usually what was meant |
   | `all_failed`, `one_failed`, `one_done`, `all_done`, `all_done_min_one_success`, `none_skipped` | run, or keep waiting, when upstream tasks fail | **error** | not possible: no failure branches (see Outcomes, failures and joins) |
   | `all_skipped` | runs only if all upstream skipped | **error** | not possible: no rule turns a skip into a run |
-  | `all_done_setup_success` | setup/teardown tasks | **error** | setup/teardown not supported (see Open question 17) |
+  | `all_done_setup_success` | setup/teardown tasks | **error** as a trigger rule | `@teardown` tasks translate onto resources instead (Open question 17) |
 
 - **Why `AllSucceeded` exists:** `NoneFailed` runs a task when *some* upstream succeeded, so no
   combination of it with empty tasks and anchors expresses "skipped if *any* upstream was
@@ -1857,17 +1877,10 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
      run view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped
      by outcome (not by failure); history and filters by outcome (e.g. runs where
      `fetch_primary` returned `Unavailable`).
-6. **Branching in the Airflow layer.** *Decided* (except parts of 6c): see Airflow compatibility
-   (Branching, task groups and mapping).
-   - c. **Trigger rules.** *Decided:* two model rules, `NoneFailed` and `AllSucceeded`, both in
-     the native API, and the Airflow mapping (see Native API: Outcomes, failures and joins, and
-     Airflow compatibility: Trigger rules). `AtLeastOneSuccess`: rejected (same place). Still
-     open:
-     1. **A run fails if any task in it failed**, whatever its last tasks did (unlike Airflow,
-        which decides from the leaf tasks), in both APIs. Proposed: yes. With only these two
-        rules a failure always reaches the leaf tasks as `upstream_failed`, so today the result
-        is the same as Airflow's; stating it keeps it true with Cleanup (a cleanup task that
-        succeeds must not make a failed run succeed) and any future rule.
+6. **Branching in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
+   groups and mapping); trigger rules (6c): Native API (Outcomes, failures and joins) and
+   Airflow compatibility (Trigger rules); run result (6c.1): Native API (Outcomes, failures and
+   joins: Run result).
 7. **Task groups in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
    groups and mapping).
 8. **Dynamic task mapping in the Airflow layer.** *Decided:* see Airflow compatibility
@@ -1902,12 +1915,299 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
       error handling).
     - Its own failure fails the run, like any other task.
 
-    Open: the scope (a group, the whole run, or tasks named explicitly); what a cleanup task
-    receives as inputs (e.g. outputs of tasks that succeeded); the API in both the native API
-    and `schedr.airflow`; how Airflow translates onto it (`all_done` on a leaf task, setup /
-    teardown tasks and `all_done_setup_success`). Designed later, for both APIs together.
-    Related: Task results and outcomes (Native API). Outcomes cover the problems a user expects; Cleanup is only
-    for resources after unexpected failures, and sees neither outcomes nor failures.
+    Related: Task results and outcomes (Native API). Outcomes cover the problems a user
+    expects; Cleanup is only for resources after unexpected failures, and sees neither outcomes
+    nor failures.
+
+    **Two layers**, solving different problems: the **per-task cleanup** and **resources**.
+
+    | | Per-task cleanup | Resource |
+    |---|---|---|
+    | Cleans up | what **one attempt** started | what **several tasks** share |
+    | Runs | after every attempt, however it ended | once, after its **last user** is done, if its setup succeeded |
+    | Where | the same worker (local disk) | any worker |
+    | In the graph | no (shown inside the task, e.g. a dropdown or submenu) | no (shown separately, e.g. a band over its users) |
+    | Receives | the task's inputs, run information, the attempt's handles | the setup's output, run information |
+    | Typical use | cancel a remote query after a timeout; delete temporary files | delete a cluster; release a lock held by several tasks |
+    | In Airflow | `on_kill()` | setup / teardown, `all_done_setup_success` |
+
+    - **Per-task cleanup** (`@task(cleanup=...)`, `CommandOperator(..., cleanup="./rm_tmp.sh")`):
+      `finally` for one task. Covers what schedr itself interrupts: when the agent kills a task
+      (timeout, memory watchdog, cancel, drain), work it started outside its process (a remote
+      query, a Spark job) keeps going, and the task's own `try`/`finally` can't run. Each
+      attempt cleans up after itself, so a retry starts clean. Not a node of the graph, so it is
+      never a leaf.
+    - **Resources** (*decided:* they replace a setup–cleanup pair, a per-run cleanup and
+      Airflow-style setup/teardown). A resource is created by a **setup** task, used by
+      **users**, and cleaned up once by its **cleanup** when every user is done: freed as soon
+      as its last user finishes, not at the end of the run, and no scope is computed from the
+      graph.
+
+      ```python
+      with Dag("etl", schedule=DAILY):
+
+          @resource                              # the setup: creates the resource
+          def cluster(size: int) -> ClusterInfo:
+              return cloud.create_cluster(size)
+
+          @cleanup(cluster)                      # how to clean it up
+          def delete_cluster(c: ClusterInfo) -> None:
+              cloud.delete_cluster_if_exists(c.cluster_id)
+
+          @task(uses=[cluster])                  # a user that doesn't need its data
+          def warm_cache() -> None: ...
+
+          @task
+          def transform(c: ClusterInfo) -> Parts: ...
+
+          @task
+          def load(c: ClusterInfo, parts: Parts) -> int: ...
+
+          c = cluster(size=8)                    # Output[ClusterInfo]; the setup runs once
+          warm_cache()
+          load(c, transform(c))                  # taking a resource's output makes a user
+      ```
+
+      - **`@resource`** marks the setup: an ordinary task (options as for `@task`) whose return
+        value is the resource. Its output follows the usual output rules; an outcome union as
+        a setup's return type is a parse error for now.
+      - **`@cleanup(resource)`** marks the cleanup; it receives **the setup's output** and the
+        run information, nothing else (no other outputs, no statuses). Options: timeout,
+        retries, retry delay, queue. Exactly one cleanup per resource (parse error otherwise).
+      - **Users:** a task **taking a resource's output** as data is a user (only a resource's
+        output counts; not general inference from data flow); a task needing the resource but
+        not its data declares **`uses=[cluster]`** (also on operators and groups, not in
+        `TaskDefaults`: too easy to make every task a user). The setup is implicitly a user.
+        Users depend on the setup, so they never start before the resource exists.
+      - **Typing:** `@cleanup(cluster)` takes its type from the resource, so mypy checks that
+        the cleanup accepts the setup's return type; parse time checks it too.
+
+        ```python
+        class Resource[**P, T]:                # called like a task
+            def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Output[T]: ...
+
+        def resource[**P, T: Json](fn: Callable[P, T]) -> Resource[P, T]: ...
+
+        def cleanup[T](r: Resource[..., T]) -> Callable[[Callable[[T], None]], Cleanup[T]]: ...
+        ```
+
+      - **No handles for resources:** the setup's return value is what the cleanup gets. A setup
+        that fails halfway (cluster created, then a crash before `return`) is handled by the
+        setup's own **per-task cleanup** (`cleanup=` and `cleanup_handle(...)` on the setup
+        task). Handles are for attempts, setup outputs for resources.
+      - **Done** means every user is in a final state: `success`, `failed` after its last
+        retry, `upstream_failed`, skipped, cancelled (a task that will never run counts as
+        done; a failed attempt with retries left doesn't; a mapped user is done when all its
+        instances are).
+      - **The cleanup runs once all users are done, if the setup succeeded** (`try: create →
+        use → finally: delete`: the `try` starts only once creation succeeded). It then
+        receives the setup's output, never `None`, and must be idempotent. (This replaces an
+        earlier decision that the cleanup runs every time, with an empty handle list; not
+        chosen: running every time with `T | None`, which puts `None` in every cleanup's type
+        for a check that almost never matters.) A deterministic name (e.g. an S3 prefix from
+        the run ID) is simply returned by the setup.
+      - It runs on **any worker**, so it must not depend on location; local leftovers belong to
+        the per-task cleanup. Its own retries, then it **fails the run** (see Run result).
+      - **Resources without a value** (a static resource: a fixed lock, a well-known bucket
+        prefix): the setup returns `None` (`@resource def lock() -> None`). The cleanup then
+        takes **no parameter** (`@cleanup(lock) def release() -> None`; an overload of
+        `cleanup` for `Resource[..., None]` keeps it typed); users declare `uses=[lock]`. No
+        ambiguity with a failed setup: the cleanup runs only if the setup succeeded.
+      - *Decided:* **setups and cleanups as commands or scripts.** Any setup kind works with
+        any cleanup kind (exactly one cleanup per resource).
+
+        ```python
+        cluster = CommandResource(
+            "cluster",
+            command=["./create_cluster.sh", "--size", "8"],
+            value=ClusterInfo,                    # the type of the reported value
+        )
+        CommandCleanup(cluster, command=["./delete_cluster.sh", t"{cluster.cluster_id}"])
+        load(cluster, transform(cluster))         # users receive a ClusterInfo
+        ```
+
+        ```bash
+        # create_cluster.sh
+        id=$(cloud create-cluster --size "$2")
+        schedr resource-value cluster_id="$id" region=eu      # synchronous, validated at once
+        ```
+
+        - **Setup: `CommandResource` / `ScriptResource`** (`job=` a declared script), operator
+          forms of `@resource`, with a declared **`value=` type**. The command reports the
+          value with **`schedr resource-value`** (fields, or `--json '{...}'`) over the agent
+          socket; validated against `value` at once.
+        - The setup **succeeds only if it exits with 0 and reported a value**; a missing value is
+          a setup failure ("resource value not reported"), so the cleanup never gets `None`.
+          Without `value=`, the resource has no value (type `None`) and nothing is reported.
+        - **Users receive the value** (`Output[ClusterInfo]`), not the `ProcessResult` (which
+          stays in the log): they can't tell which kind of setup made the resource.
+        - **Cleanup:** `@cleanup(cluster)` (Python, value as a parameter, decoded from the
+          reported value), **`CommandCleanup(cluster, command=[...])`**, **`ScriptCleanup(cluster,
+          job=..., args=[...])`**. Command and script cleanups receive the value **through
+          t-strings**: the resource object stands for its value (`t"{cluster.cluster_id}"`,
+          rendered by the agent, paths checked at parse time against the value type); a script
+          can also read it with `schedr resource-value --field cluster_id`.
+        - A setup that fails halfway: the setup's own per-task cleanup (`cleanup=`,
+          `schedr cleanup-handle`), as for Python.
+        - Not chosen: the setup prints JSON on stdout for schedr to parse (stdout mixes with
+          whatever the tools print, brings stdout parsing into the native API, a malformed value
+          is noticed only when the cleanup needs it); giving the cleanup the whole
+          `ProcessResult` (every cleanup would dig the ID out of text).
+        - The names and flags of `schedr resource-value` are to be confirmed together with
+          `schedr cleanup-handle` / `cleanup-handles`.
+      - A per-run cleanup is a resource used by every task (shorthand such as
+        `Dag(cleanup=...)` possible later).
+      - **Compared with Airflow's setup/teardown:** the same idea and the same "runs if the
+        setup succeeded" rule (`all_done_setup_success`), but users are explicit (not every task
+        between setup and teardown in the graph), the cleanup is not a graph node (nothing can
+        wait for it, it can't decide the run's result as a leaf), it receives only the setup's
+        output, its failure fails the run (Airflow default: it doesn't), and there is one
+        cleanup per resource (Airflow: a teardown may serve several setups). Re-running a task
+        by hand ("clear") isn't designed in schedr yet.
+      - Not chosen: a setup–cleanup pair with a scope computed from the graph between two
+        tasks; a cleanup for a group, the whole run or an explicit task list (none of them
+        knows whether anything was created); a `Resource(...)` object with a handle list.
+      - *Decided:* **Airflow setup / teardown translate onto resources when possible**, the
+        rest is a parse error: `@setup` → `@resource`; `@teardown` / `.as_teardown(setups=s)` →
+        `@cleanup(s)`, receiving the setup's output; the tasks between them → users.
+        `all_done_setup_success` is covered by this. **Parse errors:** teardowns with tasks
+        downstream of them, teardowns taking other data, a teardown for several setups.
+        Difference: Airflow by default doesn't fail the run when a teardown fails; schedr does.
+
+    Open, per-task cleanup:
+    1. *Decided:* **what it receives: a real `finally`.** The cleanup function gets the task's
+       **inputs**, the **run information**, and **every handle the attempt registered**, in
+       registration order. It never gets the output or the status.
+       - **Handles** carry what only existed during the attempt (e.g. a remote job ID; a killed
+         task has no output). `cleanup_handle(x)` **only registers** ("clean this up when the
+         attempt ends"), like Go's `defer`; it is sent to the agent at once and journaled.
+         Handles are **never released**: the task doesn't clean up after itself, all cleanup
+         logic is in the cleanup function.
+       - So the cleanup receives **the same list on success and on failure** and does the same
+         thing; a shorter list only means the attempt stopped earlier, not why. Cleanup actions
+         must be **idempotent** (e.g. `cancel_if_running`); after a success they usually have
+         nothing to do. Anything that must outlive the attempt isn't registered.
+       - Not chosen: releasing a handle when the task finished normally. The cleanup would then
+         get handles only after a failure, so it would behave like an `except` block
+         (principle 3).
+       - **Typing:** the cleanup declares `handles: list[ExportJob | TempDir]`; checked at parse
+         time (the cleanup's parameters are the task's inputs plus `handles`; the element type
+         follows the outcome-union rules) and at registration (a handle of another type fails
+         the attempt at once). `cleanup_handle` accepts any dataclass, so mypy can't check the
+         match (an injected typed parameter was considered: too awkward for `@task`'s typing).
+         Handles are stored with their class name, like (output, outcome).
+
+         ```python
+         def undo_export(day: date, handles: list[ExportJob | TempDir]) -> None:
+             for h in handles:
+                 match h:
+                     case ExportJob(job_id=j):
+                         warehouse.cancel_if_running(j)      # no-op if the job finished
+                     case TempDir(path=p):
+                         shutil.rmtree(p, ignore_errors=True)
+
+         @task(cleanup=undo_export)
+         def export(day: date) -> Exported:
+             tmp = tempfile.mkdtemp()
+             cleanup_handle(TempDir(tmp))
+             job = warehouse.start_export("orders", day)
+             cleanup_handle(ExportJob(job.id))
+             job.wait()
+             rows = compress_and_upload(tmp, f"s3://bucket/orders/{day}")
+             return Exported(f"s3://bucket/orders/{day}", rows)
+         ```
+    2. *Decided:* **where and when it runs.**
+       - **Same worker, same slot:** the agent starts the cleanup as soon as the attempt's
+         process has ended, for whatever reason (`<python> -m schedr.runner cleanup` for a
+         Python task, the cleanup command for a `command` / `script` task), with the same memory
+         budget and watchdog. The slot is freed only after the cleanup. Same worker, so the
+         same local disk.
+       - **The attempt finishes after its cleanup,** as a function call returns only after its
+         `finally` block: one `Finished` message carries the task's and the cleanup's results;
+         downstream tasks and retries start only then. Not chosen: reporting the task's result
+         at once and cleaning up in parallel (a retry or downstream task could meet the
+         previous attempt's resources, e.g. a lock not yet released).
+       - **`cleanup_timeout`** per task (and in `TaskDefaults`), server default e.g. 5 minutes.
+         On timeout the agent kills the cleanup (SIGTERM, then SIGKILL): that cleanup attempt
+         failed. Cleanup retries (point 3) run on the same worker.
+       - **Cancel:** the agent kills the task, then runs the cleanup (a cancelled export should
+         cancel its remote job too). **Drain:** the agent stops the remaining tasks early
+         enough to leave room for their cleanups (at the end of the grace period minus the
+         longest `cleanup_timeout` among them); if the pod is killed anyway, it is a lost
+         worker.
+       - **Agent restart on the same pod** (journal kept): the agent runs the cleanups of the
+         interrupted attempts from its journal.
+       - **Lost worker** (pod gone, node failure): handles are also **sent to the master** when
+         registered, so they survive the pod. The cleanup runs on another worker only if the
+         task opts in with **`cleanup_anywhere=True`** (idempotent isn't the same as safe on
+         another pod: `rmtree("/data/orders")` there could delete another task's files; only the
+         author knows whether the cleanup depends on where it runs). Without the opt-in the
+         cleanup is recorded as **"didn't run: worker lost"**, which counts as a failed
+         cleanup: the run fails even if the task's retry succeeds.
+
+       | Situation | Where the cleanup runs |
+       |---|---|
+       | The task ends (success, failure, timeout, OOM, cancel) | the same worker, at once, in the same slot |
+       | Drain | the same worker; tasks stopped early enough to leave time for it |
+       | The agent restarts on the same pod | the same worker, from the journal |
+       | The pod is lost, `cleanup_anywhere=True` | another worker, with the handles from the master |
+       | The pod is lost, no opt-in | not run → "didn't run: worker lost" → the run fails |
+    3. *Decided:* **a failed cleanup is a separate failure; the task keeps its own result.**
+       - The task's result stands: on success its outcome and output are kept and downstream
+         tasks run. The UI shows e.g. "success · cleanup failed".
+       - The cleanup has **its own retries** (count and delay configurable, separate from the
+         task's); being idempotent, it is always safe to run again.
+       - After its last retry it is an **unexpected failure**: it **fails the run** (principle
+         4) and triggers the failure notifications ("cleanup of `export` failed", with its
+         error summary).
+       - If the attempt failed too, both failures are recorded; the task's retry goes ahead
+         after the cleanup has ended (see point 2).
+       - Not chosen: failing the task (throws away a result that was delivered, retries the
+         work instead of the cleanup); success with only a warning (a leak nobody acts on;
+         contradicts the rationale of Outcomes, failures and joins).
+       - The cleanup's own timeout: see point 2 (`cleanup_timeout`).
+    4. *Decided:* **`command` / `script` tasks.** (The exact command names and flags of the
+       `schedr` calls below are still to be confirmed.)
+       - **The cleanup is of the same kind as the task:** a command for `CommandOperator`
+         (`cleanup=["./undo_export.sh"]`, same rules as `command`), a script for a script job
+         (`[jobs.<name>.cleanup]` with `script`, `interpreter`, `args`). It gets the same
+         environment as the task (`SCHEDR_*` run variables, the task's `env` and `secrets`,
+         working directory); its arguments may use t-strings. `ScriptOperator` can override its
+         `args` / `env`. (A Python cleanup for a command task: possibly later.)
+       - **Registering a handle:** `schedr cleanup-handle ExportJob job_id="$job_id"` (or
+         `--json '{...}'`), over the agent socket, like the Python runner; **synchronous**: when
+         it returns the handle is journaled (and forwarded to the master); on failure it exits
+         non-zero.
+       - **Reading the handles** in the cleanup command, with the same tool:
+         `schedr cleanup-handles ExportJob --field job_id` (one value per line), `--json` (one
+         object per line, in registration order), `-0` (NUL-separated). No `jq` needed, no
+         size limit, nothing in the environment or on disk; works unchanged with
+         `cleanup_anywhere`.
+
+         ```bash
+         # export.sh
+         job_id=$(warehouse start-export orders "$1")
+         schedr cleanup-handle ExportJob job_id="$job_id"
+         warehouse wait "$job_id"
+
+         # undo_export.sh
+         schedr cleanup-handles ExportJob --field job_id |
+           while read -r id; do warehouse cancel-if-running "$id"; done
+         ```
+
+       - **Typing:** optional `cleanup_handles=["ExportJob", "TempDir"]` (TOML:
+         `cleanup_handles = [...]`); registering another type name then fails at once.
+       - Not chosen: appending JSON lines to a file named by an environment variable (not
+         synchronous, a handle can be lost if the pod dies before the agent reads it, quoting
+         JSON in shell); passing the handles to the cleanup in an environment variable (128 KiB
+         limit per string, readable through `/proc/<pid>/environ`, needs `jq`) or in a JSON
+         Lines file (needs `jq`, a second mechanism next to the CLI).
+
+    Airflow translation, generally: `on_kill()` exists only in custom operators (Open question
+    13), nothing to translate; setup / teardown and `all_done_setup_success`: onto resources
+    (above); a leaf task with `all_done` used for cleanup: still a parse error (open: whether it
+    translates onto a resource used by its upstream tasks).
+
 18. **Airflow-only behaviour in existing decisions.** These were decided before the principle
     "the Airflow layer can only use what the native API has" (see Thin translating classes)
     and don't follow it yet. Each one is either **added to the native API** or becomes an
