@@ -26,7 +26,7 @@ operators that run a plain Python script or a Bash script file** as a task.
 - **No pod-per-task execution.** It isn't planned and probably never will be: too much
   overhead, and schedr can't count on permission to create pods. Tasks run as processes
   inside the long-running worker pods.
-- Remaining architecture details are open (see Open questions).
+- Architecture: see Architecture below.
 
 ### Constraints that follow
 
@@ -243,7 +243,7 @@ SchedrScriptOperator(
   `doc_md`, …) work as on every Airflow-layer operator.
 - **Output parsing, built in (no user code):** `.output` comes from the `ProcessResult` via
   a fixed set of modes: `LAST_LINE` (default, like `BashOperator`), `STDOUT` (all of it),
-  `NONE`. **`JSON` and `JSON_LAST_LINE` are dropped** (*decided*): they parse stdout, which the
+  `NONE`. **`JSON` and `JSON_LAST_LINE` are dropped**: they parse stdout, which the
   native API doesn't do; no migration cost, since no Airflow DAG uses this schedr-only class;
   for structured output, a downstream Python task parses `.stdout`. `LAST_LINE` is produced
   like `BashOperator`'s `.output` (a hidden native task, see Thin translating classes). A
@@ -917,7 +917,6 @@ list) and likewise has no Python.
     uses). `secrets=` never sets environment variables.
   - Python tasks get secrets through t-strings in their arguments (over the socket, never a
     command line).
-  - Other details: Open question 21.
 - **Writing a named storage** (the default storage needs no name):
 
   | Place | Default storage | Named storage |
@@ -1186,10 +1185,11 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   group applies to every task in it; a group can have its own `TaskDefaults`.
 - **Mapping keeps Airflow's names**, `.partial(...)` / `.expand(...)`, so both APIs share one
   mental model (e.g. `load_file.partial(bucket="raw").expand(path=files)`). Which mapping
-  features beyond that: Open question 8.
+  features beyond that: see Airflow compatibility (Dynamic task mapping), decided for both
+  APIs.
 - **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
   imported (so an import error). The native API never "accepts and warns"; that applies only to
-  the Airflow layer (Open question 3).
+  the Airflow layer (see Airflow compatibility: Thin translating classes).
 
 Example:
 
@@ -1252,7 +1252,8 @@ with Dag(
   too: see Task results and outcomes). The user declares an `IntEnum`
   subclass of `schedr.Outcome`; values are exit codes, names are outcome names (shown in the
   UI). A declared exit code means **success** (no retry); any exit code not in the enum is a
-  **failure**.
+  **failure**. Possibly later: retry control per exit code (e.g. retry on 75 /
+  `EX_TEMPFAIL`, never on 2).
 
   ```python
   class Check(Outcome):
@@ -1352,7 +1353,8 @@ with Dag(
   the master never fetches from it. The **master** sends them (formatting a message runs no user
   code). Events: at least a failed run and a task failed after its last retry (needed for the
   Airflow layer's `email_on_failure`); an **email** channel type is needed for the same reason.
-  The full event list, other channel types and message content: Open question 20.
+  The full event list, other channel types and message content: Open questions
+  (Notifications).
 
 ### Task results and outcomes
 
@@ -1411,7 +1413,7 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
     DAG-defined channels entirely.
   - **Email only, for now:** other channel types (e.g. a Slack webhook) need a credential, and
     the master never reads the user-facing secret storage; they stay server-defined.
-  - Which events each channel gets: Open question 20.
+  - Which events each channel gets: Open questions (Notifications).
   - Not chosen: naming DAG channels by strings in `notify=` (mixes them with server channels in
     one namespace); an inline `Email("a@x.com")` in `notify=` (can't be reused).
 - Every finished attempt has a **status** (`success`, `failed`, `timed_out`, …) and, when it
@@ -1430,7 +1432,7 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
   runner (Python tasks) or the agent (`command` / `script`) builds the pair. Returning tuples
   would be worse to write and to type-check, and would allow nonsense like
   `(Rows(...), "Unavailable")`.
-- **The stored outcome name** is shown in the UI (Open question 5) and **decides which member a
+- **The stored outcome name** is shown in the UI (Open questions: Web UI and CLI) and **decides which member a
   stored output is decoded into** (a plain JSON object could fit several dataclasses). The name
   comes from the DAG's declaration; decoding follows the downstream annotation (a parameter
   annotated `Any` gets a plain `dict`), so no code is ever loaded by a stored name.
@@ -2062,7 +2064,7 @@ primary one.
   Airflow feature maps onto what the native API has (directly, or as a combination of native
   constructs), or it is an error. A native feature is added only for a native need.
 - Applies to every compatibility API, not only `schedr.airflow`.
-- Earlier decisions that didn't follow it were reviewed in Open question 18 (all resolved).
+- Earlier decisions that didn't follow it were all reviewed and brought in line.
 
 - **Arguments with a native equivalent are translated**, including renamed ones and different
   types. Examples:
@@ -2093,7 +2095,7 @@ primary one.
   channels). If no email transport is configured, the master's DAG validation shows a
   **warning** on the DAG ("email_on_failure ignored: no email transport configured").
   `email_on_retry=True` is translated the same way only if notifications get a retry event
-  (Open question 20); until then it is a warning.
+  (Open questions: Notifications); until then it is a warning.
 - **Callbacks are a parse error** (`on_failure_callback`, `on_success_callback`,
   `on_retry_callback`, `on_execute_callback`, `on_skipped_callback`, DAG-level `on_*_callback`,
   `sla_miss_callback`): they are arbitrary code with nowhere sound to run (not on the master;
@@ -2262,7 +2264,8 @@ each case is described below.
 Translated onto the native per-task cleanup and resources (see Native API: Cleanup and
 resources).
 
-- **`on_kill()`** exists only in custom operators (Open question 13): nothing to translate.
+- **`on_kill()`** exists only in custom operators (Open questions: Custom operators): nothing to
+  translate.
 - **Setup / teardown translate onto resources when possible**, the rest is a parse error:
   `@setup` → `@resource`; `@teardown` / `.as_teardown(setups=s)` → `@cleanup(s)`, receiving the
   setup's output; the tasks between them → users. `all_done_setup_success` is covered by this.
@@ -2348,7 +2351,7 @@ with DAG(
 | Dynamic task mapping | `.partial(...)`, `.expand(...)`, `expand_kwargs` | Branching, task groups and mapping |
 | Setup / teardown | `@setup`, `@teardown`, `.as_teardown(setups=...)` | Cleanup and resources (Airflow) |
 | Passing values between tasks | outputs, `ti.xcom_pull` (restricted, translated onto inputs) | Output serialization; `ti.xcom_pull` below |
-| Connections | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) | Secret storage; details: Open question 9 |
+| Connections | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) | Secret storage (Connections) |
 
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
 schedr's shared model and native API call them **outputs**:
@@ -2537,84 +2540,45 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ## Open questions
 
-1. **Native Python API design.** *Decided:* see Native API and Output serialization.
-2. **Outputs: details.** *Decided:* see Output serialization, Outcomes, failures and joins, and
-   Airflow compatibility (`ti.xcom_pull`).
-3. **Unsupported Airflow arguments.** *Decided:* see Airflow compatibility (thin translating
-   classes).
-4. **Rust/Python integration.** *Decided:* see Rust/Python integration, How Python tasks
-   are started, and Packaging and releases.
-5. **Interface details:** web UI and CLI are required (see Architecture). Still open:
-   - Frontend technology.
-   - Live updates to the browser. Proposed: Server-Sent Events.
-   - UI authentication: OIDC, or trusting a reverse proxy (e.g. oauth-proxy) header.
-   - What the CLI talks to. Proposed: the webserver's API, the same one the UI uses; the
-     master's gRPC API stays internal to workers.
-   - How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, clear,
-     …) are written to Postgres for the master to pick up, or sent to the master.
-   - Showing outcomes (see Task results and outcomes): the outcome next to the status in the
-     run view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped
-     by outcome (not by failure); history and filters by outcome (e.g. runs where
-     `fetch_primary` returned `Unavailable`).
-6. **Branching in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
-   groups and mapping); trigger rules (6c): Native API (Outcomes, failures and joins) and
-   Airflow compatibility (Trigger rules); run result (6c.1): Native API (Outcomes, failures and
-   joins: Run result).
-7. **Task groups in the Airflow layer.** *Decided:* see Airflow compatibility (Branching, task
-   groups and mapping).
-8. **Dynamic task mapping in the Airflow layer.** *Decided:* see Airflow compatibility
-   (Branching, task groups and mapping).
-9. **Connections in secret storage: details.** *Decided:* see Secret storage (Connections,
-    Secret prefixes).
-10. **Variables in secret storage too?** *Decided:* yes, see Secret storage (Airflow
-    Variables, Unmasked prefixes).
-11. **Plain scripts.** *Decided:* see Plain script delivery.
-12. **Gaps found in the end-to-end flow.** *Decided:* the first scheduled run is covered by
-    Native API (run time semantics).
-13. **Custom operators** (users subclassing an operator base class, e.g. Airflow's
-    `BaseOperator`, with their own `execute()`). Not in scope yet. Proposed if added: a
-    custom operator runs as a `python` task: the runner rebuilds the operator from the DAG file
-    and calls `execute()`; its return value is its output. It can't change scheduling behaviour
-    (skips, branching stay with the master; see How the Python API works with the engine).
-    Open: whether to support them at all, in the native API, in `schedr.airflow`, or both.
-14. **Safe substitution into shell commands.** *Decided:* see Templating (Airflow
-    compatibility).
-15. **Outcome-based routing.** *Decided:* see Native API (Outcomes, failures and joins). Later:
-    retry control per exit code (e.g. retry on 75 / `EX_TEMPFAIL`, never on 2).
-16. **Environment of task processes.** *Decided:* see Worker environment.
-17. **Cleanup.** *Decided:* see Native API (Cleanup and resources) and Airflow compatibility
-    (Cleanup and resources).
-18. **Airflow-only behaviour in existing decisions.** *Decided* (all items below resolved).
-    These were decided before the principle
-    "the Airflow layer can only use what the native API has" (see Thin translating classes)
-    and don't follow it yet. Each one is either **added to the native API** or becomes an
-    **error** (or is dropped) in the Airflow layer:
-    - ~~`ti.xcom_pull`~~ *Resolved:* translated onto inputs (see Airflow compatibility: Scope,
-      `ti.xcom_pull`).
-    - ~~`skip_on_exit_code`~~ *Resolved:* translated onto outcomes (`AirflowCommandOutcome`,
-      see Airflow compatibility: Thin translating classes).
-    - ~~Last-line `.output`~~ *Resolved:* a hidden native task extracts the last line (see
-      Thin translating classes); `SchedrScriptOperator`'s `JSON` modes dropped.
-    - ~~`ShortCircuitOperator` with `ignore_downstream_trigger_rules=True`~~ *Resolved:* a
-      native task with outcomes; exact or a parse error by the shape of the graph (see
-      Branching, task groups and mapping).
-    - ~~`@task.branch` returning `None`~~ *Resolved:* translated to `[]`, the empty subset of the
-      native `@branch`.
-    - ~~Empty expansion skipped~~ *Resolved:* a hidden native `Empty` / `NotEmpty` task (see
-      Branching, task groups and mapping).
-    - ~~`email_on_failure` with `email=[...]`~~ *Resolved:* a hidden native `EmailChannel` (see
-      Outcomes, failures and joins: DAG-defined email channels).
-    - ~~Airflow placeholders~~ *Resolved:* each must be expressible with native placeholders;
-      the list is designed later (see Templating).
+Only questions still open are listed here; decided ones have been moved into the sections
+above. Deliberately deferred items ("possibly later") are noted where they belong.
 
-    All items resolved.
-19. **Unified task results: outcomes for every task.** *Decided:* see Native API (Task
-    results and outcomes).
-20. **Notifications: details.** Decided so far: see Outcomes, failures and joins (configured,
-    not programmed; channels in the server configuration or DAG-defined `EmailChannel`s; sent
-    by the master). Open: the full
-    list of events (at least a failed run and a task failed after its last retry; possibly a
-    retry, a cleanup failure, a run cancelled), the channel types besides email, the message
-    content, and how events are chosen per channel (e.g. `EmailChannel(..., events=[...])`
-    or on `notify=`).
-21. **Secret storage: details.** *Decided:* see Secret storage.
+### Web UI and CLI
+
+Required (see Architecture: Web UI and CLI). Still open:
+
+- Frontend technology.
+- Live updates to the browser. Proposed: Server-Sent Events.
+- UI authentication: OIDC, or trusting a reverse proxy (e.g. oauth-proxy) header.
+- What the CLI talks to. Proposed: the webserver's API, the same one the UI uses; the master's
+  gRPC API stays internal to workers.
+- How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, cancel,
+  …) are written to Postgres for the master to pick up, or sent to the master.
+- Showing outcomes (see Task results and outcomes): the outcome next to the status in the run
+  view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped by
+  outcome (not by failure); history and filters by outcome (e.g. runs where `fetch_primary`
+  returned `Unavailable`).
+- Showing cleanups and resources (see Cleanup and resources): the per-task cleanup inside the
+  task (e.g. a dropdown or submenu), the cleanup result next to the status; resources shown
+  separately (e.g. a band over their users) with their own states.
+
+### Custom operators
+
+Users subclassing an operator base class (e.g. Airflow's `BaseOperator`) with their own
+`execute()`. Not in scope yet. Proposed if added: a custom operator runs as a `python` task:
+the runner rebuilds the operator from the DAG file and calls `execute()`; its return value is
+its output. It can't change scheduling behaviour (skips and branching stay with the master; see
+How the Python API works with the engine). By the principle in Thin translating classes, the
+Airflow layer can have them only if the native API does. Open: whether to support them at all.
+
+### Notifications
+
+Decided so far: see Outcomes, failures and joins (configured, not programmed; channels in the
+server configuration or DAG-defined `EmailChannel`s; sent by the master). Open:
+
+- The full list of events: at least a failed run and a task failed after its last retry;
+  possibly a retry (needed for Airflow's `email_on_retry`), a cleanup failure, a run cancelled.
+- The channel types besides email.
+- The message content.
+- How events are chosen per channel (e.g. `EmailChannel(..., events=[...])`, or on
+  `notify=`).
