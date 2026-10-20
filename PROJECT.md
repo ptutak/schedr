@@ -55,6 +55,70 @@ One Rust binary, four roles:
 - A **CLI** is required alongside the web UI.
 - The web UI is served by a **separate process from the master scheduler** (`schedr webserver`),
   so the UI and the scheduler can restart, fail and scale independently.
+- **How the webserver gets state: through Postgres, for reads and actions.**
+  - **Reads:** the webserver queries Postgres directly, with a **read-only database role**. The
+    UI keeps working (history, runs, logs) while the master restarts.
+  - **Actions** (trigger, cancel, pause, drain, …): the webserver writes a **command** row; the
+    master picks it up, validates and applies it in its own transaction, and marks it
+    `applied` or `rejected` (with a reason). The UI shows a command as pending until then.
+    Actions are durable: one sent while the master restarts is applied when it returns. The
+    master stays the **only writer of scheduling state** (a command is a request).
+  - The master picks commands up via Postgres **`LISTEN/NOTIFY`** (at once), with polling every
+    few seconds as a fallback; standalone (SQLite) uses polling only.
+  - No API between the webserver and the master: both are the same binary at the same version
+    and `schedr db migrate` runs first, so sharing the schema is safe.
+  - Not chosen: an API on the master for reads and actions (the UI would go dark whenever the
+    single master is down); reads from Postgres and actions by gRPC to the master (actions
+    would fail while the master restarts).
+- **Live updates: Server-Sent Events (SSE).** Updates only flow from the server to the
+  browser; actions are ordinary HTTP requests (WebSockets would add complexity for nothing).
+  - The master issues a **`NOTIFY`** when state changes (task states, runs, workers); each
+    webserver replica listens and fans events out to its browsers. Events are small ("run X
+    changed"); the browser then fetches the details through the normal API.
+  - A comment line every ~15 s keeps proxies (e.g. the OpenShift router) from closing idle
+    streams; reconnection is built into SSE.
+  - **Live log tail** is SSE too: the webserver relays the worker's tail stream (see Task logs).
+  - Standalone: the webserver polls the database instead of listening.
+- **The user CLI uses the webserver's API**, the same one as the UI (`schedr dags list`,
+  `schedr runs trigger`, `schedr runs cancel`, `schedr workers drain`, …): one API, one place for
+  authentication and permissions. The master's gRPC API stays internal to the workers.
+  - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
+    to the repository, and **CI fails if it is out of date** (like the JSON Schema).
+  - Not part of the user CLI: `schedr task-ctx` (talks to the agent), server commands such as
+    `schedr db migrate` (talk to the database), the server roles.
+  - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
+    `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
+    (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
+    are needed (with `auth.mode = "none"`). `schedr login` (fetching a token through OIDC's
+    device flow): possibly later.
+- **Authentication: as little as possible in schedr.** Access is normally decided in front of
+  schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
+  repeat it. Modes (`[webserver.auth] mode`):
+
+  | Mode | How it works | Fits |
+  |---|---|---|
+  | **`none`** | schedr trusts whoever reaches it | behind a mesh that authenticates (the main deployment: Istio + Keycloak, the whole namespace trusted); standalone (localhost) |
+  | **`proxy_header`** | an SSO proxy in front (`oauth2-proxy`, OpenShift `oauth-proxy`, …) logs users in and passes `X-Forwarded-User`; schedr trusts it | Kubernetes without a mesh, with any identity provider |
+  | **`basic`** | HTTP Basic against users in the configuration; bcrypt hashes from an environment variable or a mounted Secret, never the config file | small setups without an identity provider (a VM, Docker Compose, a lab server) |
+
+  - **No roles:** an authenticated user can do everything (trigger, cancel, drain, …);
+    restricting that is the job of whatever is in front.
+  - **The user name is recorded for audit** on every command row and shown in the UI: the
+    header in `proxy_header`, the login in `basic`, and in `none` an optional
+    `identity_header` (e.g. `x-forwarded-user`, set by Istio from the Keycloak token). It is
+    **never used to allow or deny** anything.
+  - **Safety rules at startup:** `proxy_header` listens only on a loopback address unless
+    overridden explicitly (anything reaching it around the proxy could forge the header);
+    `basic` refuses plain HTTP on a non-loopback address unless `behind_tls_proxy = true`
+    (passwords would cross the network in the clear).
+  - **Not built** (possibly later, for deployments that need them): `jwt` (schedr validating
+    OIDC tokens itself), roles mapped from groups, per-DAG permissions (Airflow's
+    `access_control` is already kept as metadata), schedr-issued API tokens, user management
+    in the UI.
+- **Live updates through VPNs and HTTP proxies:** SSE responses carry `Cache-Control: no-cache`
+  and `X-Accel-Buffering: no`; since some proxies buffer `text/event-stream` anyway, the
+  browser **falls back to polling** (every few seconds) when no event, not even a keep-alive,
+  has arrived for ~30 s.
 
 ### Task logs
 
@@ -65,7 +129,8 @@ One Rust binary, four roles:
 - Each task attempt records which worker ran it, so its logs can be found.
 - The **webserver proxies** log requests to the worker; the browser never talks to workers
   directly.
-- The worker's log endpoint accepts only **short-lived tokens signed with a shared secret**.
+- The worker's log endpoint accepts only **short-lived tokens signed with a shared secret**
+  (with `tls.mode = "app"`; in `mesh` mode none, see Master–worker protocol).
 - The worker deletes logs **after N days or beyond a size limit** (configurable).
 - When a log can't be fetched (worker offline, file deleted, …), the UI states clearly that
   **the log file is unavailable at this location** (e.g. it may have been deleted).
@@ -277,6 +342,14 @@ SchedrScriptOperator(
 - **Mutual TLS from the start**: master and workers verify each other's certificates.
   Certificates are files mounted from Kubernetes Secrets (how they are issued is a deployment
   concern).
+- **`tls.mode = "app" | "mesh"`.** `app` (the **default**): schedr's own mTLS on every internal
+  link, as below, plus signed tokens on the workers' log endpoint. `mesh`: behind a service
+  mesh that provides mTLS between pods (e.g. Istio), schedr sends plain traffic to its sidecar
+  and does **no app-level mTLS and no log tokens**; the whole namespace is trusted (all schedr
+  pods in one namespace; which other namespaces may reach it is controlled by the mesh). So
+  schedr doesn't repeat what the mesh does. Long-lived streams (master ↔ worker, SSE) keep
+  alive with heartbeats (10 s / 15 s), within Envoy's idle timeouts; no VirtualService
+  timeouts on these routes.
 - Each worker has a **fixed number of task slots**, set in its configuration. The master never
   assigns more concurrent tasks to a worker than it has slots.
 - **Heartbeat interval, lease timeout and grace period are configurable**, with defaults.
@@ -289,7 +362,8 @@ SchedrScriptOperator(
   a configurable timeout. The attempt ends as **cancelled** (not failed) and is **not retried**.
 - **mTLS details:** mTLS replaces any shared token; certificates are **reloaded when the files
   change** (rotation without restart); the same mTLS setup is used for **every internal link**
-  (master ↔ worker, webserver → worker logs, webserver → master).
+  (master ↔ worker, webserver → worker logs). There is no webserver → master link (see Web
+  UI and CLI: the webserver talks to the master through Postgres).
 
 ### Worker lifecycle
 
@@ -878,6 +952,13 @@ list) and likewise has no Python.
   `SCHEDR_DAG_PATH` is kept as a **short alias**.
 - **Secrets** (database password, signing keys, …) come only from **environment variables**
   (filled from Kubernetes Secrets), never from the configuration file.
+- **Outgoing HTTP and proxies:** schedr's own outgoing HTTP calls (notification webhooks from
+  the master; Vault from the agent, if outside the cluster) honour `HTTPS_PROXY`, `HTTP_PROXY`
+  and `NO_PROXY`. **Internal links never use a proxy** (gRPC between master and workers, the
+  webserver's calls to the workers' log endpoints), whatever the environment says. Documented
+  for deployments: `NO_PROXY` with the cluster's service domains (`.svc`, `.cluster.local`)
+  and internal services; with Istio's `REGISTRY_ONLY` outbound policy, `ServiceEntry` resources
+  for outside hosts. Tasks get the proxy variables only via `[worker] pass_env`.
 
 ## Secret storage
 
@@ -2598,12 +2679,6 @@ above. Deliberately deferred items ("possibly later") are noted where they belon
 Required (see Architecture: Web UI and CLI). Still open:
 
 - Frontend technology.
-- Live updates to the browser. Proposed: Server-Sent Events.
-- UI authentication: OIDC, or trusting a reverse proxy (e.g. oauth-proxy) header.
-- What the CLI talks to. Proposed: the webserver's API, the same one the UI uses; the master's
-  gRPC API stays internal to workers.
-- How the webserver gets state. Proposed: reads Postgres directly; actions (trigger, cancel,
-  …) are written to Postgres for the master to pick up, or sent to the master.
 - Showing outcomes (see Task results and outcomes): the outcome next to the status in the run
   view (e.g. "success · `Unavailable`"); on the graph, edges not taken shown as skipped by
   outcome (not by failure); history and filters by outcome (e.g. runs where `fetch_primary`
