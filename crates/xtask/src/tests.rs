@@ -18,9 +18,9 @@ fn render_json_is_pretty_with_a_trailing_newline() {
 }
 
 #[test]
-fn schema_files_contain_the_dag_schema() {
+fn schema_files_contain_the_schemas_and_the_openapi_description() {
     let files = schema_files();
-    assert_eq!(files.len(), 2);
+    assert_eq!(files.len(), 3);
     assert_eq!(files[0].path, Path::new("schema").join("dag.schema.json"));
     assert_eq!(
         files[1].path,
@@ -32,6 +32,9 @@ fn schema_files_contain_the_dag_schema() {
         serde_json::to_value(schedr_model::schema::dag_schema()).unwrap()
     );
     assert!(files[0].contents.ends_with("}\n"));
+    assert_eq!(files[2].path, Path::new("schema").join("openapi.json"));
+    let openapi: serde_json::Value = serde_json::from_str(&files[2].contents).unwrap();
+    assert_eq!(openapi, schedr_api::openapi_json());
 }
 
 #[test]

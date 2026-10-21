@@ -120,7 +120,27 @@ One Rust binary, four roles:
       older than the server works (optionally a hint at most once a day that newer commands
       exist). A different major: the CLI refuses ("server is schedr 2.x, this CLI is 1.x:
       `pip install 'schedr>=2,<3'`").
-    - Other API clients (scripts, OpenAPI-generated clients) follow the same rules.
+    - Other API clients (scripts, OpenAPI-generated clients) follow the same rules. A request
+      **without** `Schedr-Client-Version` is served; one with another major version gets a
+      400 with what to install. `Schedr-Server-Version` is on every response, errors too.
+  - **Endpoints so far** (what the CLI needs in M1): `GET /api/v1/dags`, `GET
+    /api/v1/dags/{dag_id}`, `POST …/dags/{dag_id}/pause` (body `{"cancel_runs": …}`,
+    optional) and `…/unpause`, `GET …/dags/{dag_id}/runs?for=…&limit=…` (newest first,
+    default 50, at most 500), `POST …/dags/{dag_id}/runs` (body `{"planned_for": …}`,
+    optional), `GET …/runs/{run_id}` (with its tasks), `POST …/runs/{run_id}/cancel`, `GET
+    …/runs/{run_id}/tasks/{task_id}/attempts`, `GET …/commands/{command_id}`, and the OpenAPI
+    description at `GET /api/v1/openapi.json`.
+  - **Actions answer `202 Accepted` with the command** (pending); the client polls `GET
+    …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
+    API itself only checks the request's form (IDs, body); everything else is the master's
+    decision, so there is one place for the rules.
+  - **Errors are JSON**, `{"error": "…"}`: 400 for a malformed request, 404 for an unknown or
+    removed DAG, run or command, 500 for a database failure (details only in the webserver's
+    log). Times are UTC (RFC 3339); kinds and states are their model names.
+  - The user recorded on commands is the `identity_header`'s value, or `anonymous`.
+  - **The committed OpenAPI file** is `schema/openapi.json`, generated with the JSON Schemas
+    (`make schema`) and checked for staleness by CI. The check for **breaking changes within a
+    major** compares against the last release, so it starts with the first release.
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
     server commands such as `schedr db migrate` / `schedr db status` (talk to the database),
     the server roles,
@@ -4041,7 +4061,7 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
   | Language | Tools |
   |---|---|
   | Python | `pytest`, `pytest-cov` |
-  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`tempfile`** (temporary directories: DAG roots for scanning); **`cargo-llvm-cov`** |
+  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`tempfile`** (temporary directories: DAG roots for scanning); **`tower`** + **`http-body-util`** (REST API requests through the router, in process); **`cargo-llvm-cov`** |
 
 ### Documentation
 

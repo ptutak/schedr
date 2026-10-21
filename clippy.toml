@@ -1,0 +1,2 @@
+# Words that look like code to clippy's doc_markdown lint but are names in prose.
+doc-valid-idents = ["OpenAPI", "PostgreSQL", "SQLite", "UUIDv7", ".."]

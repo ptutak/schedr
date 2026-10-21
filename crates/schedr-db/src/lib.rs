@@ -10,6 +10,7 @@ pub mod dags;
 pub mod database;
 pub mod instances;
 mod query;
+pub mod reads;
 pub mod runs;
 pub mod status;
 

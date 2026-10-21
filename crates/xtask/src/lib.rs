@@ -1,5 +1,5 @@
 //! Development tasks for the schedr repository: generating the committed files under
-//! `schema/` and checking that they are up to date (see PROJECT.md, Rust/Python integration:
+//! `schema/` (JSON Schemas and the REST API's OpenAPI description) and checking that they are up to date (see PROJECT.md, Rust/Python integration:
 //! shared model and schemas), and generating the documentation sources (see [`docs`]).
 //!
 //! The logic here is pure; `main.rs` does the reading and writing.
@@ -52,6 +52,10 @@ pub fn schema_files() -> Vec<GeneratedFile> {
     vec![
         file("dag.schema.json", schedr_model::schema::dag_schema()),
         file("runner.schema.json", schedr_model::schema::runner_schema()),
+        GeneratedFile {
+            path: Path::new(SCHEMA_DIR).join("openapi.json"),
+            contents: render_json(&schedr_api::openapi_json()),
+        },
     ]
 }
 

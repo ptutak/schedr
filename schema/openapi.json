@@ -1,0 +1,899 @@
+{
+  "components": {
+    "schemas": {
+      "AttemptList": {
+        "description": "A task's attempts.",
+        "properties": {
+          "attempts": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/AttemptView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "AttemptView": {
+        "description": "An attempt of a task.",
+        "properties": {
+          "assigned_at": {
+            "description": "When it was assigned.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "attempt_id": {
+            "description": "Its ID.",
+            "type": "string"
+          },
+          "ended_at": {
+            "description": "When it ended.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_kind": {
+            "description": "The error kind schedr recognised.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_summary": {
+            "description": "The structured error summary (exception, message, traceback).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "description": "The process's exit code.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "When the worker started it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "How it ended (`success`, `failed`, `timed_out`, ...); none while it runs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "try_number": {
+            "description": "Its try number.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worker_id": {
+            "description": "The worker it ran on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "attempt_id",
+          "try_number",
+          "assigned_at"
+        ],
+        "type": "object"
+      },
+      "CommandView": {
+        "description": "A command: an action the master applies, then marks `applied` or `rejected`.",
+        "properties": {
+          "command_id": {
+            "description": "Its ID; poll `GET /api/v1/commands/{command_id}` for the decision.",
+            "type": "string"
+          },
+          "decided_at": {
+            "description": "When the master decided it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`trigger_run`, `cancel_run`, `pause_dag` or `unpause_dag`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was rejected.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "requested_by": {
+            "description": "Who asked for it.",
+            "type": "string"
+          },
+          "result": {
+            "description": "What it produced when applied, e.g. `{\"run_id\": ...}` for a trigger.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`pending`, `applied` or `rejected`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "kind",
+          "status",
+          "requested_by",
+          "requested_at"
+        ],
+        "type": "object"
+      },
+      "DagList": {
+        "description": "The DAGs.",
+        "properties": {
+          "dags": {
+            "description": "Every DAG not removed, in ID order.",
+            "items": {
+              "$ref": "#/components/schemas/DagView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dags"
+        ],
+        "type": "object"
+      },
+      "DagView": {
+        "description": "A DAG.",
+        "properties": {
+          "conflict": {
+            "description": "Every place defining it, while it is in conflict (then it can't run).",
+            "items": {
+              "$ref": "#/components/schemas/LocationView"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "dag_id": {
+            "description": "Its ID.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Its description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocationView",
+                "description": "Where its current version is defined (none for a DAG only ever seen in conflict)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paused": {
+            "description": "Whether the scheduler is stopped for it.",
+            "type": "boolean"
+          },
+          "schedule": {
+            "description": "Its schedule as in DAG JSON.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "tags": {
+            "description": "Its tags.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dag_id",
+          "paused",
+          "tags"
+        ],
+        "type": "object"
+      },
+      "ErrorBody": {
+        "description": "An error.",
+        "properties": {
+          "error": {
+            "description": "What went wrong.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "LocationView": {
+        "description": "Where a DAG is defined.",
+        "properties": {
+          "path": {
+            "description": "The file, relative to the root.",
+            "type": "string"
+          },
+          "root": {
+            "description": "The DAG root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "path"
+        ],
+        "type": "object"
+      },
+      "PauseRequest": {
+        "additionalProperties": false,
+        "description": "Pausing a DAG.",
+        "properties": {
+          "cancel_runs": {
+            "description": "Also cancel its queued and running runs.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RunDetail": {
+        "description": "A run with its tasks.",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/RunView",
+            "description": "The run."
+          },
+          "tasks": {
+            "description": "Its tasks, in task ID order.",
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "run",
+          "tasks"
+        ],
+        "type": "object"
+      },
+      "RunList": {
+        "description": "A DAG's runs.",
+        "properties": {
+          "runs": {
+            "description": "Newest `planned_for` first.",
+            "items": {
+              "$ref": "#/components/schemas/RunView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "RunView": {
+        "description": "A run.",
+        "properties": {
+          "dag_id": {
+            "description": "The DAG.",
+            "type": "string"
+          },
+          "ended_at": {
+            "description": "When it finished.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`scheduled`, `manual`, `backfill`, `chained` or `event`.",
+            "type": "string"
+          },
+          "planned_for": {
+            "description": "The moment it is for.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Its ID (a UUIDv7).",
+            "type": "string"
+          },
+          "since": {
+            "description": "The start of its window, `(since, planned_for]`.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When it started running.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`queued`, `running`, `success`, `failed` or `cancelled`.",
+            "type": "string"
+          },
+          "triggered_at": {
+            "description": "When it was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "triggered_by": {
+            "description": "`scheduler`, a user name, the parent run, or `trigger`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "dag_id",
+          "kind",
+          "state",
+          "planned_for",
+          "since",
+          "triggered_at",
+          "triggered_by"
+        ],
+        "type": "object"
+      },
+      "TaskView": {
+        "description": "A task of a run.",
+        "properties": {
+          "outcome": {
+            "description": "Its outcome, on success.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it waits or can't be scheduled.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "Its state (`scheduled`, `queued`, `running`, `success`, ...).",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "The task's ID.",
+            "type": "string"
+          },
+          "try_number": {
+            "description": "Attempts made.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When it last changed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "state",
+          "try_number",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TriggerRequest": {
+        "additionalProperties": false,
+        "description": "A manual run to start.",
+        "properties": {
+          "planned_for": {
+            "description": "The moment the run is for (`--for`); now if not given. Must not be in the future.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "email": "piotr.tutak@amartus.com",
+      "name": "Piotr Tutak"
+    },
+    "description": "The schedr REST API.",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "title": "schedr",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/commands/{command_id}": {
+      "get": {
+        "operationId": "get_command",
+        "parameters": [
+          {
+            "description": "The command's ID",
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A command and the master's decision about it.",
+        "tags": [
+          "commands"
+        ]
+      }
+    },
+    "/api/v1/dags": {
+      "get": {
+        "operationId": "list_dags",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DagList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every DAG not removed.",
+        "tags": [
+          "dags"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}": {
+      "get": {
+        "operationId": "get_dag",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DagView"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One DAG.",
+        "tags": [
+          "dags"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/pause": {
+      "post": {
+        "operationId": "pause_dag",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseRequest"
+              }
+            }
+          },
+          "description": "Optional; `{}` by default",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Pause a DAG: the scheduler creates no runs of it (optionally cancelling those in\nprogress). Applied by the master; poll the command for the decision.",
+        "tags": [
+          "dags"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/runs": {
+      "get": {
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the runs for this moment (`--for`).",
+            "in": "query",
+            "name": "for",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many (default 50, at most 500).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A DAG's runs, newest first.",
+        "tags": [
+          "runs"
+        ]
+      },
+      "post": {
+        "operationId": "trigger_run",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRequest"
+              }
+            }
+          },
+          "description": "Optional; now by default",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start a manual run (`schedr runs trigger`). Applied by the master; poll the command for the\ndecision and the run's ID.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/unpause": {
+      "post": {
+        "operationId": "unpause_dag",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Unpause a DAG. Applied by the master; poll the command for the decision.",
+        "tags": [
+          "dags"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A run with its tasks.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel a run (`schedr runs cancel`). Applied by the master; poll the command for the\ndecision.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/attempts": {
+      "get": {
+        "operationId": "list_attempts",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The attempts of a run's task, oldest first.",
+        "tags": [
+          "runs"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "DAGs and pausing",
+      "name": "dags"
+    },
+    {
+      "description": "Runs, their tasks and attempts",
+      "name": "runs"
+    },
+    {
+      "description": "Actions and the master's decisions",
+      "name": "commands"
+    }
+  ]
+}
