@@ -17,19 +17,21 @@ mod tests;
 pub enum RunKind {
     /// Created by the scheduler for a fire time.
     Scheduled,
-    /// Triggered by a person (UI, CLI, API).
+    /// Started by a person (UI, CLI, API).
     Manual,
     /// One of the runs of a backfill.
     Backfill,
     /// Created by another DAG's run (`TriggerDagOperator`).
-    Triggered,
+    Chained,
+    /// Created by an event from the DAG's trigger (`When` schedule).
+    Event,
 }
 
 /// Where a run stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
-    /// Created and waiting for `max_active_runs` (only manual, backfill and triggered runs).
+    /// Created and waiting for `max_active_runs` (only manual, backfill, chained and event runs).
     Queued,
     /// Tasks are being scheduled or running.
     Running,

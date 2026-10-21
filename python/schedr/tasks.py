@@ -180,8 +180,16 @@ def _check_function(fn: Callable[..., Any]) -> inspect.Signature:
     """Checks that ``fn`` can be a task and returns its signature."""
     if not inspect.isfunction(fn):
         raise TypeError(f"@task needs a function, got {type(fn).__name__}")
-    if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
-        raise TypeError(f"@task `{fn.__name__}`: async functions aren't supported")
+    if inspect.isasyncgenfunction(fn):
+        raise TypeError(
+            f"@task `{fn.__name__}` is an async generator: a function that yields events is a "
+            "trigger (@trigger, milestone M4), not a task"
+        )
+    if inspect.iscoroutinefunction(fn):
+        raise TypeError(
+            f"@task `{fn.__name__}`: async tasks come with milestone M4; to wait for something, "
+            "use a sensor (@sensor, milestone M4)"
+        )
     annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
     if "return" not in annotations:
         raise TypeError(

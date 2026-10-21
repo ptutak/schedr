@@ -1,7 +1,7 @@
 //! DAG runs: creating them, and what the scheduler reads to decide on new ones.
 //!
 //! A scheduled run is unique per (DAG, `planned_for`) (a partial unique index), so a master
-//! that crashes after creating one can't create it twice; manual, backfill and triggered runs
+//! that crashes after creating one can't create it twice; manual, backfill, chained and event runs
 //! are exempt (see PROJECT.md, Runs: manual runs, backfill and pausing).
 
 use jiff::Timestamp;

@@ -548,7 +548,7 @@
         },
         {
           "const": "manual",
-          "description": "Triggered by a person (UI, CLI, API).",
+          "description": "Started by a person (UI, CLI, API).",
           "type": "string"
         },
         {
@@ -557,8 +557,13 @@
           "type": "string"
         },
         {
-          "const": "triggered",
+          "const": "chained",
           "description": "Created by another DAG's run (`TriggerDagOperator`).",
+          "type": "string"
+        },
+        {
+          "const": "event",
+          "description": "Created by an event from the DAG's trigger (`When` schedule).",
           "type": "string"
         }
       ]

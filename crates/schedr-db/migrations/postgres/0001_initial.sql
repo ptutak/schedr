@@ -64,7 +64,7 @@ CREATE TABLE runs (
     id             UUID PRIMARY KEY,
     dag_id         TEXT NOT NULL REFERENCES dags (dag_id),
     dag_version_id UUID NOT NULL REFERENCES dag_versions (id),
-    kind           TEXT NOT NULL CHECK (kind IN ('scheduled', 'manual', 'backfill', 'triggered')),
+    kind           TEXT NOT NULL CHECK (kind IN ('scheduled', 'manual', 'backfill', 'chained', 'event')),
     state          TEXT NOT NULL CHECK (state IN ('queued', 'running', 'success', 'failed', 'cancelled')),
     planned_for    TIMESTAMPTZ NOT NULL,
     since          TIMESTAMPTZ NOT NULL,

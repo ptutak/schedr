@@ -163,6 +163,7 @@ async fn a_run_goes_through_assignment_start_and_finish() {
         ts(NOW).as_second()
     );
     assert_eq!(assign.dag_file.as_ref().unwrap().path, "team/sync.py");
+    assert_eq!(assign.expected_code_hash, "h1");
     assert_eq!(assign.inputs_json, b"{}");
     assert!(!assign.inputs_external);
     assert_eq!(assign.cancel_grace_ms, 30_000);

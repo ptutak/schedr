@@ -304,11 +304,12 @@ fn queued(id: &str, kind: RunKind, at: &str) -> QueuedRun {
 }
 
 #[test]
-fn manual_and_triggered_runs_start_before_backfills_oldest_first() {
+fn manual_chained_and_event_runs_start_before_backfills_oldest_first() {
     let waiting = [
         queued("b1", RunKind::Backfill, "2026-10-01T00:00:00Z"),
         queued("m2", RunKind::Manual, "2026-10-03T00:00:00Z"),
-        queued("t1", RunKind::Triggered, "2026-10-02T00:00:00Z"),
+        queued("t1", RunKind::Chained, "2026-10-02T00:00:00Z"),
+        queued("e1", RunKind::Event, "2026-10-02T12:00:00Z"),
         queued("b2", RunKind::Backfill, "2026-10-01T00:00:00Z"),
     ];
     let ids = |free| -> Vec<&str> {
@@ -317,7 +318,7 @@ fn manual_and_triggered_runs_start_before_backfills_oldest_first() {
             .map(|r| r.id.as_str())
             .collect()
     };
-    assert_eq!(ids(10), ["t1", "m2", "b1", "b2"]);
+    assert_eq!(ids(10), ["t1", "e1", "m2", "b1", "b2"]);
     assert_eq!(ids(1), ["t1"]);
     assert_eq!(ids(0), Vec::<&str>::new());
     assert_eq!(priority(RunKind::Scheduled), 0);

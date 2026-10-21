@@ -504,7 +504,7 @@ impl Dispatcher {
                 root: ready.dag.location.root.clone(),
                 path: ready.dag.location.path.clone(),
             }),
-            expected_code_hash: String::new(),
+            expected_code_hash: ready.content_hash.clone(),
             inputs_json: if external { Vec::new() } else { inputs },
             inputs_external: external,
             cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),

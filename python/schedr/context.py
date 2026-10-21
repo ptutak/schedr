@@ -107,7 +107,7 @@ class RunContext:
 
     @property
     def kind(self) -> Any:
-        """The run's kind: ``scheduled``, ``manual``, ``backfill`` or ``triggered``."""
+        """The run's kind: ``scheduled``, ``manual``, ``backfill``, ``chained`` or ``event``."""
         values = _RUNNING.get()
         return DagCtxReference(DagCtxField.RUN_KIND) if values is None else values.kind
 

@@ -200,7 +200,7 @@ message Registered {
 
 message RunInfo {
   string run_id = 1;
-  // A schedr-model RunKind name: "scheduled", "manual", "backfill", "triggered".
+  // A schedr-model RunKind name: "scheduled", "manual", "backfill", "chained", "event".
   string kind = 2;
   google.protobuf.Timestamp planned_for = 3;
   google.protobuf.Timestamp since = 4;

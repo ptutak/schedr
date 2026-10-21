@@ -10,8 +10,8 @@
 //!   the most recent such fire time gets a run; with it on every one does, in order. Either
 //!   way at most `max_active_runs` runs run at a time; a fire time that finds no place is
 //!   missed, and the same rules decide when a place frees up.
-//! - **Queued runs** (manual, triggered, backfill) take the places left: manual and triggered
-//!   first, then backfill, oldest first within each.
+//! - **Queued runs** (manual, chained, event, backfill) take the places left: manual, chained
+//!   and event runs first, then backfill, oldest first within each.
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::runs::QueuedRun;
@@ -174,7 +174,7 @@ pub fn manual_planned_for(requested: Option<Timestamp>, now: Timestamp) -> Times
     requested.unwrap_or(now)
 }
 
-/// The queued runs to start with `free` places: manual and triggered runs first, then
+/// The queued runs to start with `free` places: manual, chained and event runs first, then
 /// backfill, oldest first within each.
 #[must_use]
 pub fn runs_to_start(queued: &[QueuedRun], free: usize) -> Vec<&QueuedRun> {
@@ -187,7 +187,7 @@ pub fn runs_to_start(queued: &[QueuedRun], free: usize) -> Vec<&QueuedRun> {
 const fn priority(kind: RunKind) -> u8 {
     match kind {
         RunKind::Scheduled => 0,
-        RunKind::Manual | RunKind::Triggered => 1,
+        RunKind::Manual | RunKind::Chained | RunKind::Event => 1,
         RunKind::Backfill => 2,
     }
 }

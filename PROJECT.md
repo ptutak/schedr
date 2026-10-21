@@ -489,7 +489,8 @@ SchedrScriptOperator(
   alive with heartbeats (10 s / 15 s), within Envoy's idle timeouts; no VirtualService
   timeouts on these routes.
 - Each worker has a **fixed number of task slots**, set in its configuration. The master never
-  assigns more concurrent tasks to a worker than it has slots.
+  assigns more concurrent tasks to a worker than it has slots. **Sensor slots** are separate
+  (`[sensors] slots`, see Sensors and triggers): wait steps and triggers never use task slots.
 - **Heartbeat interval, lease timeout and grace period are configurable**, with defaults.
 - **Running tasks can be cancelled from the UI** (the master sends a cancel command to the
   worker over the stream).
@@ -524,7 +525,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
 **Messages:**
 
 1. **Register** (worker → master), on every connect: worker ID, incarnation ID, protocol and
-   schedr versions, queues, slots, log endpoint address (pod IP from the Kubernetes downward
+   schedr versions, queues, task and sensor slots, log endpoint address (pod IP from the Kubernetes downward
    API + port), content hashes per DAG/script root, the names of its configured secret
    storages (see Secret storage), and the journal summary (running attempts, unacknowledged
    results).
@@ -532,7 +533,8 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
    timeout; **owned by the master's configuration** so all workers behave the same) and a
    decision per reported attempt: **continue**, **kill** (already abandoned/reassigned), or
    **ack** (result stored; remove from the journal).
-3. **Heartbeat** (worker → master), every 10 s by default: free slots and running attempts.
+3. **Heartbeat** (worker → master), every 10 s by default: free task and sensor slots and
+   running attempts.
    Kept small.
 4. **CodeVersionChanged** (worker → master): sent when a content hash changes (after the settle
    time). A new hash makes the master create a parse job.
@@ -682,6 +684,8 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   - `command`: an inline command (e.g. `BashOperator`'s `bash_command`).
   - `script`: a script file declared in a `schedr.toml`, run with an **interpreter** (Python,
     Bash, …).
+  - `sensor`: a wait step (`@sensor`, `@sensor.poke`), run in the worker's sensor host on a
+    sensor slot (see Sensors and triggers).
 - **Interpreters are named in the configuration file**, in an `[interpreters]` section, so each
   worker image can map names to its own paths and virtualenvs:
 
@@ -747,7 +751,9 @@ and the worker agent. schedr therefore uses both:
 - **Memory watchdog** in the worker agent: about once a second it measures each task's memory
   (summed over the task's process tree, from `/proc`) and **kills only the task that exceeds
   its memory budget**, reporting the exact reason (e.g. "exceeded memory budget 2 GiB").
-  Needs no privileges; negligible overhead.
+  Needs no privileges; negligible overhead. The **sensor host** is watched the same way as one
+  process with its own budget (`[sensors] memory_budget`); killing it ends every sensor on it
+  (see Sensors and triggers).
 - **Journal on the worker's disk** of the attempts it is running and of finished results not
   yet acknowledged by the master. If the container dies anyway (memory spike faster than the
   watchdog, node failure, eviction), the restarted agent reads the journal and reports those
@@ -790,7 +796,9 @@ OpenShift's restricted security policy doesn't grant.
 
 A **mix**: mainly a **synchronization scheduler** (many short tasks), plus some heavier or
 longer tasks (downloads, longer-running commands). **No big-data workloads.** Starting a
-fresh Python process per task is acceptable; warm Python worker processes are not needed.
+fresh Python process per task is acceptable; warm Python worker processes are not needed for
+tasks. (The one long-lived Python process is the **sensor host**, for sensors, which mostly
+wait: see Sensors and triggers.)
 Tasks run on **long-running workers** (not pod-per-task) because schedr can't count on
 permission to create pods.
 
@@ -808,7 +816,7 @@ permission to create pods.
     agent down, and one Python environment would be forced on every DAG.
   - A Rust extension module that connects Python to the scheduler.
 - **The Python runner** is a module of the `schedr` package, started by the agent as
-  `<interpreter> -m schedr.runner parse`, `... task` or `... cleanup` (`-m`, so it works with
+  `<interpreter> -m schedr.runner parse`, `... task`, `... cleanup` or `... sensors` (`-m`, so it works with
   any configured interpreter executable, whatever virtualenv it belongs to). Only the mode and
   the socket path are passed on the command line / environment; everything else comes from the
   agent over the channel, so no secrets appear in the command line.
@@ -821,6 +829,9 @@ permission to create pods.
     Python resource setups (`@resource`) run in this mode too: a setup is a task.
   - `cleanup`: like `task`, for a per-task cleanup (gets the task's inputs and the attempt's
     handles) or a Python resource cleanup (`@cleanup`, gets the setup's output).
+  - `sensors`: the worker's **sensor host**, one long-lived asyncio process running every wait
+    step and trigger assigned to the worker as coroutines, multiplexed over one socket (see
+    Sensors and triggers). The only long-lived runner; the others handle one request and exit.
   - The runner does **not** decide retries, enforce timeouts, watch memory or write log files.
     The agent supervises it from outside (process group, stdout/stderr to the log file,
     watchdog, SIGTERM/SIGKILL).
@@ -1049,6 +1060,8 @@ curl -H "Authorization: Bearer $(schedr task-ctx secret get 'ci/deploy#token')" 
 ### Default deployment size
 
 - **2 workers** by default, **2 slots each** (4 concurrent tasks). To be tuned per deployment.
+- **Sensors:** 500 sensor slots and a 1 GiB sensor host per worker by default (see Sensors and
+  triggers); the pod's memory limit must cover the tasks' budgets plus the host's.
 
 ### Ports
 
@@ -1321,8 +1334,8 @@ list) and likewise has no Python.
 
   | Role | Examples |
   |---|---|
-  | master | scheduling loop duration; runs by state; tasks `queued` by reason (`max_active_*`, no free slot); `unschedulable` tasks; assignments and rejections by reason; parse jobs and durations; command apply latency; workers by state; notifications sent / failed |
-  | worker | slots used / free; attempts by status; watchdog kills; peak memory per task (histogram); journal size; log disk usage; secret fetches, errors by kind, cache hits |
+  | master | scheduling loop duration; runs by state and kind; triggers by state, events received / dropped as repeats, back-pressure stops; tasks `queued` by reason (`max_active_*`, no free slot); `unschedulable` tasks; assignments and rejections by reason; parse jobs and durations; command apply latency; workers by state; notifications sent / failed |
+  | worker | slots used / free; attempts by status; watchdog kills; peak memory per task (histogram); journal size; log disk usage; secret fetches, errors by kind, cache hits; sensor host: sensor slots used / free, event loop lag, blocked-loop kills, host restarts, memory |
   | webserver | HTTP requests by route and status; open SSE streams; log proxy errors |
 
   - **Labels:** `dag_id` on run-level metrics (bounded, useful for alerts); **never** `task_id`,
@@ -1587,6 +1600,7 @@ handles "log unavailable".
 [retention]
 runs = "90d"          # "forever" disables it
 outputs = "90d"       # default: the same as runs; may be shorter
+events = "90d"        # default: the same as runs
 commands = "365d"
 interval = "1h"       # how often the retention job runs
 batch_runs = 100      # runs deleted per transaction
@@ -1603,6 +1617,10 @@ batch_runs = 100      # runs deleted per transaction
 - **Outputs:** optionally shorter than runs (they are the bulky part, and nothing needs them
   once a run has finished, since there's no "clear"; only the UI shows them). The run, its
   outcomes and statuses stay; the UI shows "output deleted by retention".
+- **Events** (of triggers, see Sensors and triggers): older than `events` are deleted. A
+  trigger's **bookmark is never deleted** (it lives with the trigger), so dropping repeated
+  keys only needs to cover the retention window: a trigger never goes back further than its
+  bookmark.
 - **Command rows** (the audit trail) are kept independently of runs: a command about a
   deleted run stays readable.
 - **DAG versions** are kept while **current** or **referenced by a retained run** (a run's
@@ -1995,6 +2013,7 @@ with Dag(
     | `RUN_CANCELLED` | a run was cancelled by a user | opt-in |
     | `RUN_SUCCEEDED` | a run ended `success` ("the report is ready") | opt-in |
     | `RUN_RECOVERED` | a run succeeded after the DAG's previous run failed ("it's fixed") | opt-in |
+    | `TRIGGER_FAILING` | the DAG's trigger raised `[sensors] failing_after` times in a row (default 5), or stopped because its generator returned (see Sensors and triggers): otherwise a broken trigger fails silently, with no runs and nothing red | opt-in |
 
     Not now: a task running too long / SLAs (a separate, large feature; errors in the Airflow
     layer). The default event set is a server setting (default: `RUN_FAILED`).
@@ -2214,8 +2233,11 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      previous fire time, else an empty window.
    - **A manual run is stored `queued`** and starts at once if the DAG has a free place, so
      one path serves both; it never waits for the scheduler's next pass.
-   - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill` / `triggered` (by another
-     DAG's run, see Dependencies between DAGs).
+   - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill` / `chained` (created by
+     another DAG's run, see Dependencies between DAGs) / `event` (created by an event from the
+     DAG's trigger, see Sensors and triggers). Not chosen: `triggered` for runs of another DAG
+     and `sensed` for event runs ("trigger" already names the CLI verb and `@trigger`, so a
+     "triggered" run wouldn't come from a trigger).
    - **`triggered_at`** (when the run was created) is **run metadata only** (UI, CLI, audit
      trail), **not in `dag_ctx`**: a task using it would behave differently on a re-run of the
      same day. It differs from `planned_for` for missed runs, catchup, re-runs and backfills.
@@ -2280,7 +2302,8 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      in the UI ("waiting: `max_active_runs` (1) reached"). Cancelling a queued run ends it as
      `cancelled` without starting any task.
    - **Who gets a freed place: by kind**, then oldest first within each kind: **scheduled** (a
-     missed fire time, per the `catchup` rules) → **manual** and **triggered** → **backfill**.
+     missed fire time, per the `catchup` rules) → **manual**, **chained** and **event** →
+     **backfill**.
      Production runs are never delayed by people or bulk work; a person who clicked doesn't wait
      behind a long backfill; a backfill uses whatever capacity is left. Not chosen: creation order
      (a click could wait days behind a backfill, and production behind both); manual first (delays
@@ -2295,9 +2318,9 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    (RFC 9562; Postgres stores it natively as `uuid`), as `dag_ctx.run.id`, never built from the
    date, so re-running a day can't collide. Not chosen: ULID (a community spec; its only
    advantage, a shorter text form, matters little since runs are shown by DAG and date).
-   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill` / `triggered`),
-     `planned_for`, `since`, `triggered_at`, **`triggered_by`** (`scheduler`, the parent run for
-     `triggered`, or the user name from the command row, the same one recorded for audit and never
+   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill` / `chained` /
+     `event`), `planned_for`, `since`, `triggered_at`, **`triggered_by`** (`scheduler`, the
+     parent run for `chained`, `trigger` for `event` runs, or the user name from the command row, the same one recorded for audit and never
      used to allow or deny anything), `backfill_id` (backfill runs), and the parameter values.
    - **UI label:** `sync_orders · 2026-10-15 03:00 · manual by anna` (or `· scheduled`,
      `· backfill 3/31 by anna`); runs with the same `planned_for` are told apart by kind and
@@ -2342,7 +2365,7 @@ TriggerDagOperator(
 )
 ```
 
-- **The new run:** kind **`triggered`**, linked to the parent run (`triggered_by`; the UI links
+- **The new run:** kind **`chained`**, linked to the parent run (`triggered_by`; the UI links
   both ways); `planned_for` = the parent run's `planned_for` (same day), `since` by the usual
   rules for the target's schedule (see Runs: manual runs, backfill and pausing). It counts
   towards the target's `max_active_runs` and waits as `queued` with the priority of manual
@@ -2644,8 +2667,8 @@ with Dag("sync_orders", schedule=DAILY):
   `NotYet`. schedr calls it every `every`, each call limited to `every` (calls never overlap);
   a call that raises is a failure with the usual retries (a flaky source is the user's to catch
   and turn into `NOT_YET`).
-- **Timeout:** a wait step that hasn't finished within its `timeout` (required, or the default
-  from the configuration) ends with the **`TimedOut` outcome**, not a failure: waiting in vain
+- **Timeout:** a wait step that hasn't finished within its `timeout` (or `[sensors]
+  default_timeout`, 24 h) ends with the **`TimedOut` outcome**, not a failure: waiting in vain
   is an expected problem (see Outcomes, failures and joins); tasks branch on it with `.on(...)`,
   and plain `>>` downstream tasks are skipped.
 
@@ -2678,16 +2701,16 @@ with Dag("ingest", schedule=When(new_files, prefix="s3://in/")):
   failures; the next call comes at the next interval.
 - **Arguments** of a trigger are literals given in `When(...)` (no run exists, so no
   references).
-- **Runs it creates:** kind **`sensed`**; `dag_ctx.event.key`, `.data`, `.at` (references in
+- **Runs it creates:** kind **`event`**; `dag_ctx.event.key`, `.data`, `.at` (references in
   the DAG body, values at run time, like `dag_ctx.run`); `planned_for` = the event's `at`, or
   when the master received it; `since` = the previous event's `planned_for`.
 - **A schedule and a trigger together are not possible:** a DAG has `schedule=When(...)` or a
   time schedule. (A periodic catch-up is a second DAG on a schedule; if that needs syncing what
   each processed, the job needs another kind of orchestration.)
 - **`max_active_runs`:** events are requests from the outside world, so they **queue** like
-  manual runs and are never dropped. Who gets a freed place: scheduled → manual, triggered and
-  sensed → backfill. **Back-pressure:** when a DAG has `[sensors] max_queued_events` (default
-  1000) queued sensed runs, the master stops its trigger and starts it again from the bookmark
+  manual runs and are never dropped. Who gets a freed place: scheduled → manual, chained and
+  event → backfill. **Back-pressure:** when a DAG has `[sensors] max_queued_events` (default
+  1000) queued event runs, the master stops its trigger and starts it again from the bookmark
   when the queue drains: the events wait in the source, not in our database.
 - **Lifecycle:** one instance per `When` DAG in the cluster. It starts when the DAG is
   unpaused and stops when it is paused, removed or in conflict; it starts again from the
@@ -2705,6 +2728,16 @@ with Dag("ingest", schedule=When(new_files, prefix="s3://in/")):
 - Not available for `When` DAGs: `catchup` and backfill (there are no fire times).
 
 **The sensor host.**
+
+```toml
+[sensors]
+slots = 500                 # sensor slots per worker; 0 runs no sensors
+memory_budget = "1GiB"      # for the host as a whole
+block_limit = "30s"         # a sensor must reach an `await` within this
+max_queued_events = 1000    # queued event runs per DAG before its trigger is stopped
+default_timeout = "24h"     # wait steps without their own `timeout`
+failing_after = 5           # consecutive trigger errors before TRIGGER_FAILING
+```
 
 - **One per worker:** the agent starts `python -m schedr.runner sensors`, one long-lived asyncio
   process, and supervises it like any runner (same socket protocol, multiplexed by sensor ID:
@@ -2769,7 +2802,7 @@ create duplicate events).
 - **DAG JSON:** task kind `sensor` (`mode`, `every_ms`, timeout), schedule `When` (trigger
   name, literal arguments, queue), `dag_ctx` fields `event_key` / `event_data` / `event_at`, the
   `Event` type in the type model, the `TimedOut` outcome.
-- **States and storage:** run kind `sensed`; tables `events` and `triggers` (instance, worker,
+- **States and storage:** run kind `event`; tables `events` and `triggers` (instance, worker,
   state, bookmark, last error, consecutive failures); error kind `blocked_event_loop`.
 - **Protocol:** `AssignTask` for wait steps; `AssignTrigger`, `CancelTrigger`,
   `TriggerEvent` / `TriggerEventAck`, `TriggerStopped`; sensor slots in `Register` and

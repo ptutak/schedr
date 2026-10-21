@@ -60,7 +60,8 @@ fn unspecified_and_unknown_statuses_are_errors(#[case] value: i32) {
 #[case(RunKind::Scheduled, "scheduled")]
 #[case(RunKind::Manual, "manual")]
 #[case(RunKind::Backfill, "backfill")]
-#[case(RunKind::Triggered, "triggered")]
+#[case(RunKind::Chained, "chained")]
+#[case(RunKind::Event, "event")]
 fn run_kinds_travel_as_their_model_names(#[case] kind: RunKind, #[case] name: &str) {
     assert_eq!(run_kind_to_proto(kind), name);
     assert_eq!(run_kind_from_proto(name), Ok(kind));

@@ -114,6 +114,7 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
         (ts(NOW), ts("2026-10-20T08:00:00Z"))
     );
     assert_eq!(extract.dag, dag());
+    assert_eq!(extract.content_hash, "h1");
     assert_eq!(
         db.ready_instances(ts("2026-10-21T07:59:59Z"))
             .await

@@ -43,7 +43,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - SQLite only at run time; the schema and migrations exist for Postgres too and are tested in
   CI.
 
-**Out (later milestones):** async task functions (M4, an open question), outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping,
+**Out (later milestones):** async task functions, sensors and triggers (M4), outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping,
 `schedr.toml` and scripts, cleanup and resources, secrets and connections, params, notifications,
 `TriggerDagOperator`, `Once`, concurrency limits other than `max_active_runs`, backfill,
 retention, the journal, the memory watchdog, mTLS, separate roles and Postgres at run time (M2),

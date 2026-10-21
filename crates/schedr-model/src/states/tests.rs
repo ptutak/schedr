@@ -8,7 +8,8 @@ use super::*;
 #[case(RunKind::Scheduled, "scheduled")]
 #[case(RunKind::Manual, "manual")]
 #[case(RunKind::Backfill, "backfill")]
-#[case(RunKind::Triggered, "triggered")]
+#[case(RunKind::Chained, "chained")]
+#[case(RunKind::Event, "event")]
 fn run_kinds_serialize_in_snake_case(#[case] kind: RunKind, #[case] name: &str) {
     assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
     assert_eq!(

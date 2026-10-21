@@ -143,7 +143,8 @@ pub fn run_kind_from_proto(name: &str) -> Result<RunKind, ConversionError> {
         "scheduled" => Ok(RunKind::Scheduled),
         "manual" => Ok(RunKind::Manual),
         "backfill" => Ok(RunKind::Backfill),
-        "triggered" => Ok(RunKind::Triggered),
+        "chained" => Ok(RunKind::Chained),
+        "event" => Ok(RunKind::Event),
         other => Err(ConversionError::UnknownRunKind(other.to_owned())),
     }
 }
