@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check test test-rust test-python check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python check clean
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -44,6 +44,16 @@ schema:          ## Regenerate the committed files under schema/
 schema-check:    ## Fail if the files under schema/ are out of date
 	cargo xtask schema --check
 
+docs:            ## Build the documentation site into site/ (fails on any warning)
+	cargo xtask docs-sources
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude xtask
+	uv run --group docs sphinx-build -W --keep-going -q -b html docs site
+	rm -rf site/rust
+	cp -r target/doc site/rust
+
+docs-serve: docs ## Build the docs and serve them at http://localhost:8000
+	uv run python -m http.server --directory site 8000
+
 test-rust:       ## Run Rust tests with coverage (fails below COVERAGE_MIN)
 	cargo llvm-cov nextest --workspace --ignore-filename-regex $(LLVM_COV_IGNORE) \
 		--fail-under-lines $(COVERAGE_MIN)
@@ -59,4 +69,4 @@ check: fmt-check lint schema-check test   ## Everything CI runs
 clean:           ## Remove build artifacts
 	cargo clean
 	cargo llvm-cov clean --workspace 2>/dev/null || true
-	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov
+	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov site docs/_generated

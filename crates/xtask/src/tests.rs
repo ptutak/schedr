@@ -67,6 +67,11 @@ fn stale_message_lists_the_files_and_the_fix() {
 }
 
 #[test]
+fn parse_args_accepts_docs_sources() {
+    assert_eq!(parse_args(&["docs-sources"]), Ok(Command::DocsSources));
+}
+
+#[test]
 fn parse_args_accepts_schema_with_optional_check() {
     assert_eq!(parse_args(&["schema"]), Ok(Command::WriteSchemas));
     assert_eq!(
@@ -77,7 +82,7 @@ fn parse_args_accepts_schema_with_optional_check() {
 
 #[test]
 fn parse_args_rejects_anything_else() {
-    let usage = Err("usage: cargo xtask schema [--check]".to_owned());
+    let usage = Err(USAGE.to_owned());
     assert_eq!(parse_args::<&str>(&[]), usage);
     assert_eq!(parse_args(&["other"]), usage);
     assert_eq!(parse_args(&["schema", "--force"]), usage);

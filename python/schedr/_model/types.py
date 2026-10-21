@@ -1,5 +1,7 @@
-"""Type descriptors: the type of a task's output in DAG JSON (``schedr-model``,
-``types.rs``)."""
+"""Type descriptors: the type of a task's output in DAG JSON.
+
+Mirrors ``schedr-model`` (``types.rs``).
+"""
 
 from collections.abc import Sequence
 from dataclasses import dataclass

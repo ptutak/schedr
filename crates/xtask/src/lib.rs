@@ -1,10 +1,12 @@
 //! Development tasks for the schedr repository: generating the committed files under
 //! `schema/` and checking that they are up to date (see PROJECT.md, Rust/Python integration:
-//! shared model and schemas).
+//! shared model and schemas), and generating the documentation sources (see [`docs`]).
 //!
 //! The logic here is pure; `main.rs` does the reading and writing.
 
 use std::path::{Path, PathBuf};
+
+pub mod docs;
 
 #[cfg(test)]
 mod tests;
@@ -70,6 +72,9 @@ pub fn stale_message(stale: &[&Path]) -> String {
     )
 }
 
+/// The usage message.
+pub const USAGE: &str = "usage: cargo xtask schema [--check] | cargo xtask docs-sources";
+
 /// What `xtask` was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -77,18 +82,21 @@ pub enum Command {
     WriteSchemas,
     /// Check that the committed files are up to date.
     CheckSchemas,
+    /// Generate the documentation sources under [`docs::DOCS_GENERATED_DIR`].
+    DocsSources,
 }
 
 /// Parses the command-line arguments (without the program name).
 ///
 /// # Errors
 ///
-/// Returns a usage message for anything but `schema` or `schema --check`.
+/// Returns [`USAGE`] for anything but `schema`, `schema --check` or `docs-sources`.
 pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
     let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
     match args.as_slice() {
         ["schema"] => Ok(Command::WriteSchemas),
         ["schema", "--check"] => Ok(Command::CheckSchemas),
-        _ => Err("usage: cargo xtask schema [--check]".to_owned()),
+        ["docs-sources"] => Ok(Command::DocsSources),
+        _ => Err(USAGE.to_owned()),
     }
 }

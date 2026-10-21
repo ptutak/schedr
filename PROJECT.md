@@ -3546,11 +3546,14 @@ its configuration, not the content.
   (`PLAN.md`), **Python API** (from docstrings), **Rust API** (from `rustdoc`); later, user
   guides from a `docs/` folder.
 - **`PROJECT.md` stays one file in the repository.** The split into chapters is generated at
-  build time (`cargo xtask split-design`): one Markdown file per `##` chapter, numbered in
-  order, into a git-ignored build directory. The split output is engine-neutral Markdown;
+  build time by `cargo xtask docs-sources` (which generates every page taken from repository
+  files: the chapters, the README, the plan, the list of crates): one Markdown file per `##`
+  chapter, numbered in order, into the git-ignored `docs/_generated/`. The split output is engine-neutral Markdown;
   only the engine's index picks the files up.
-- **Engine: Sphinx** with **MyST** (Markdown pages as they are), **Furo** (theme) and
-  **autodoc** (Python API from docstrings and type hints). The documentation tools are a
+- **Engine: Sphinx** with **MyST** (Markdown pages as they are), **Furo** (theme),
+  **autodoc** + **autosummary** (the Python API from docstrings and type hints, every module
+  found recursively) and **napoleon** (Google style). Committed in `docs/`: only `conf.py`,
+  the index pages and the autosummary template. The documentation tools are a
   dev-only dependency group; the `schedr` package stays dependency-free.
 - **Rust API: `rustdoc`** (`cargo doc --workspace --no-deps`), copied into the site under
   `rust/` and linked from its navigation.

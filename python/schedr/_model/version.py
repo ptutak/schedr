@@ -1,5 +1,7 @@
-"""The schedr version that produced stored data, as ``major.minor`` (``schedr-model``,
-``version.rs``)."""
+"""The schedr version that produced stored data, as ``major.minor``.
+
+Mirrors ``schedr-model`` (``version.rs``).
+"""
 
 import re
 from dataclasses import dataclass

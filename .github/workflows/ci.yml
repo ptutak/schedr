@@ -45,6 +45,22 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
 
+  # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on
+  # any warning.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --group docs --python 3.14
+      - run: make docs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: site
+
   # Platform wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md,
   # Packaging and releases).
   wheels:

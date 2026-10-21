@@ -46,6 +46,9 @@ rstest = "0.28.0"
 unsafe_code = "forbid"
 missing_docs = "warn"
 
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }

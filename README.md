@@ -19,6 +19,7 @@ crates/
     src/<module>/tests.rs   # its unit tests
   xtask/            # development tasks: `cargo xtask schema [--check]`
 schema/             # generated from schedr-model, committed (make schema)
+docs/               # Sphinx config and index pages; the rest is generated (make docs)
 python/
   schedr/           # Python DAG API package
   tests/
@@ -38,5 +39,6 @@ make fmt        # format Rust + Python
 make lint       # clippy, ruff, mypy
 make test       # Rust (nextest) + pytest, both with an 85 % coverage floor
 make schema     # regenerate schema/ from the Rust model (CI fails if it's stale)
+make docs       # build the documentation site into site/ (make docs-serve: localhost:8000)
 make check      # everything CI runs
 ```

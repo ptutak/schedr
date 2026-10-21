@@ -1,5 +1,7 @@
-"""A DAG in DAG JSON: what the runner sends after parsing a DAG file (``schedr-model``,
-``dag.rs``)."""
+"""A DAG in DAG JSON: what the runner sends after parsing a DAG file.
+
+Mirrors ``schedr-model`` (``dag.rs``).
+"""
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
