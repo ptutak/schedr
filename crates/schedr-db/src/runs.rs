@@ -177,6 +177,23 @@ impl Database {
             .collect()
     }
 
+    /// The DAG's runs not finished (`queued` or `running`), oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn runs_in_progress(&self, dag_id: &DagId) -> Result<Vec<String>, DbError> {
+        const IN_PROGRESS: &str = "SELECT id{text} FROM runs \
+            WHERE dag_id = $1 AND state IN ('queued', 'running') ORDER BY triggered_at, id";
+        let ids: Vec<String> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, IN_PROGRESS))
+                .bind(dag_id.as_str())
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(ids)
+    }
+
     /// Starts a queued run: it becomes `running`.
     ///
     /// # Errors

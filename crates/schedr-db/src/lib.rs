@@ -5,6 +5,7 @@
 
 pub mod attempts;
 pub mod backend;
+pub mod commands;
 pub mod dags;
 pub mod database;
 pub mod instances;

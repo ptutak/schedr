@@ -143,6 +143,8 @@ CREATE TABLE commands (
     requested_at TIMESTAMPTZ NOT NULL,
     status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'applied', 'rejected')),
     reason       TEXT,
+    -- What an applied command produced, e.g. the run a trigger created.
+    result       JSONB,
     decided_at   TIMESTAMPTZ
 );
 

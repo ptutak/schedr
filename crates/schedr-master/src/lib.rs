@@ -4,6 +4,7 @@
 //! jobs ([`parse_jobs`]) and the DAG list worked out from the parses ([`catalog`]).
 
 pub mod catalog;
+pub mod commands;
 pub mod discovery;
 pub mod dispatch;
 pub mod execution;

@@ -260,3 +260,45 @@ async fn stored_values_that_dont_read_are_errors() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn runs_in_progress_are_the_queued_and_running_ones() {
+    let (db, version) = with_dag().await;
+    let id = sync();
+    assert_eq!(
+        db.runs_in_progress(&id).await.unwrap(),
+        Vec::<String>::new()
+    );
+    let running = db
+        .insert_run(&run(
+            &id,
+            &version,
+            RunKind::Scheduled,
+            RunState::Running,
+            "2026-10-14T03:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let queued = db
+        .insert_run(&run(
+            &id,
+            &version,
+            RunKind::Manual,
+            RunState::Queued,
+            "2026-10-15T03:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    db.insert_run(&run(
+        &id,
+        &version,
+        RunKind::Manual,
+        RunState::Success,
+        "2026-10-16T03:00:00Z",
+    ))
+    .await
+    .unwrap();
+    assert_eq!(db.runs_in_progress(&id).await.unwrap(), [running, queued]);
+}

@@ -65,6 +65,17 @@ One Rust binary, four roles:
     master stays the **only writer of scheduling state** (a command is a request).
   - The master picks commands up via Postgres **`LISTEN/NOTIFY`** (at once), with polling every
     few seconds as a fallback; standalone (SQLite) uses polling only.
+  - **Commands so far:** `trigger_run` (`dag_id`, optional `planned_for`), `cancel_run`
+    (`run_id`), `pause_dag` (`dag_id`, `cancel_runs`: the "pause and cancel runs in progress"
+    choice), `unpause_dag` (`dag_id`); stored as the command's JSON with its kind. Applied in
+    request order. An **applied** command records what it produced (`{"run_id": …}` for a
+    trigger, the attempts being stopped for a cancel, the runs cancelled by a pause), so the CLI
+    can show it; a **rejected** one records the reason: an unknown DAG or run, a run already
+    finished, a DAG that can't run (removed, in conflict), `--for` in the future, a payload
+    that doesn't read. A **database failure** leaves the command pending for the next pass: a
+    command is rejected only for what is wrong with it, never for a passing outage.
+  - **The CLI waits for the decision** by reading the command row back (every second or so,
+    with a timeout), and prints the result or the reason.
   - No API between the webserver and the master: both are the same binary at the same version
     and `schedr db migrate` runs first, so sharing the schema is safe.
   - Not chosen: an API on the master for reads and actions (the UI would go dark whenever the
