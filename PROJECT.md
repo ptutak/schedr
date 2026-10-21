@@ -2017,11 +2017,11 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    - **Run state `queued`**, next to `running`, `success`, `failed`, `cancelled`, with the reason
      in the UI ("waiting: `max_active_runs` (1) reached"). Cancelling a queued run ends it as
      `cancelled` without starting any task.
-   - **Who gets a freed place: by kind**, then oldest first within each kind: **scheduled**
-     (a missed fire time, per the `catchup` rules) → **manual** and **triggered** → **backfill**. Production runs
-     are never delayed by people or bulk work; a person who clicked doesn't wait behind a long
-     backfill; a backfill uses whatever capacity is left. Not chosen: creation order (a click
-     could wait days behind a backfill, and production behind both); manual first (delays
+   - **Who gets a freed place: by kind**, then oldest first within each kind: **scheduled** (a
+     missed fire time, per the `catchup` rules) → **manual** and **triggered** → **backfill**.
+     Production runs are never delayed by people or bulk work; a person who clicked doesn't wait
+     behind a long backfill; a backfill uses whatever capacity is left. Not chosen: creation order
+     (a click could wait days behind a backfill, and production behind both); manual first (delays
      production for little gain).
    - **No per-backfill override** of `max_active_runs` (e.g. `--max-active 4`): the limit
      usually protects something (a source system, a table being written). To go faster, change
@@ -2033,10 +2033,10 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    (RFC 9562; Postgres stores it natively as `uuid`), as `dag_ctx.run.id`, never built from the
    date, so re-running a day can't collide. Not chosen: ULID (a community spec; its only
    advantage, a shorter text form, matters little since runs are shown by DAG and date).
-   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill` / `triggered`), `planned_for`,
-     `since`, `triggered_at`, **`triggered_by`** (`scheduler`, the parent run for `triggered`,
-     or the user name from the command row, the same one recorded for audit and never used to allow or deny anything),
-     `backfill_id` (backfill runs), and the parameter values.
+   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill` / `triggered`),
+     `planned_for`, `since`, `triggered_at`, **`triggered_by`** (`scheduler`, the parent run for
+     `triggered`, or the user name from the command row, the same one recorded for audit and never
+     used to allow or deny anything), `backfill_id` (backfill runs), and the parameter values.
    - **UI label:** `sync_orders · 2026-10-15 03:00 · manual by anna` (or `· scheduled`,
      `· backfill 3/31 by anna`); runs with the same `planned_for` are told apart by kind and
      `triggered_at`; the ID is in the run's details, with a copy button.
