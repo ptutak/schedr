@@ -7,7 +7,10 @@ use std::path::Path;
 use schedr_config::{Config, ConfigError, FileSource, config_file, load};
 use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
-use crate::cli::{Command, DbCommand};
+use crate::cli::{ClientArgs, Command, DbCommand};
+use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
+use crate::times::local_zone;
+use crate::user::{Output, run_dags, run_runs};
 
 #[cfg(test)]
 mod tests;
@@ -40,6 +43,12 @@ pub enum AppError {
         /// The milestone that brings it (PROJECT.md, Roadmap).
         milestone: &'static str,
     },
+    /// Talking to the schedr server failed, or the master rejected the command.
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    /// An argument doesn't read (e.g. a `--for` time).
+    #[error("{0}")]
+    BadArgument(String),
     /// Writing the command's output failed.
     #[error("can't write output: {0}")]
     Output(#[from] io::Error),
@@ -143,13 +152,50 @@ pub async fn run_db(
 pub async fn execute(
     command: &Command,
     config: &Config,
+    env: &BTreeMap<String, String>,
     out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<(), AppError> {
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
+        (Command::Dags { client, command }, None) => {
+            let (api, output) = connect(client, env);
+            run_dags(command, &api, &output, out).await
+        }
+        (Command::Runs { client, command }, None) => {
+            let (api, output) = connect(client, env);
+            run_runs(command, &api, &output, out, err).await
+        }
         (other, milestone) => Err(AppError::NotImplemented {
             command: other.name(),
             milestone: milestone.unwrap_or("unknown"),
         }),
     }
+}
+
+/// The client and output settings of a user CLI command: the server, credentials (the password
+/// from `SCHEDR_PASSWORD`), `--json` and the local zone (`TZ`, else the system's).
+#[must_use]
+pub fn connect(
+    args: &ClientArgs,
+    env: &BTreeMap<String, String>,
+) -> (Client<HttpTransport>, Output) {
+    let auth = match (&args.token, &args.user) {
+        (Some(token), _) => Auth::Bearer(token.clone()),
+        (None, Some(user)) => Auth::Basic {
+            user: user.clone(),
+            password: env.get("SCHEDR_PASSWORD").cloned(),
+        },
+        (None, None) => Auth::None,
+    };
+    let client = Client::new(
+        HttpTransport::new(&args.server, auth),
+        POLL_INTERVAL,
+        WAIT_TIMEOUT,
+    );
+    let output = Output {
+        json: args.json,
+        local: local_zone(env.get("TZ").map(String::as_str)),
+    };
+    (client, output)
 }

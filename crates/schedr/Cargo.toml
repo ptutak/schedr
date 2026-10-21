@@ -18,6 +18,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+schedr-api.workspace = true
+schedr-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 schedr-config.workspace = true
 schedr-db.workspace = true
 thiserror.workspace = true
@@ -26,7 +32,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
 pretty_assertions.workspace = true
+schedr-master.workspace = true
+tower.workspace = true
 rstest.workspace = true
 
 [lints]

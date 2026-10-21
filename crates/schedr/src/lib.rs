@@ -13,7 +13,10 @@ use clap::error::ErrorKind;
 
 pub mod app;
 pub mod cli;
+pub mod client;
 pub mod logging;
+pub mod times;
+pub mod user;
 
 #[cfg(test)]
 mod tests;
@@ -65,7 +68,7 @@ where
             );
         }
     };
-    match runtime.block_on(app::execute(&cli.command, &config, out)) {
+    match runtime.block_on(app::execute(&cli.command, &config, env, out, err)) {
         Ok(()) => 0,
         Err(e) => report(err, &format!("error: {e}\n"), e.exit_code()),
     }

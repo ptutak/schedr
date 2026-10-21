@@ -1,0 +1,377 @@
+//! The user CLI's client of the webserver's REST API (`/api/v1`).
+//!
+//! Requests go through a [`Transport`]: HTTP in the real CLI ([`HttpTransport`]), something in
+//! process in tests. Every request carries `Schedr-Client-Version`. Actions return a command;
+//! [`Client::wait`] reads it back until the master has decided it (see PROJECT.md, Web UI and
+//! CLI: the CLI waits for the decision).
+
+use std::fmt::Write as _;
+use std::time::Duration;
+
+use jiff::Timestamp;
+use schedr_api::views::{CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest};
+use serde::de::DeserializeOwned;
+
+use crate::VERSION;
+
+#[cfg(test)]
+mod tests;
+
+/// The header carrying this client's version.
+pub const CLIENT_VERSION_HEADER: &str = "schedr-client-version";
+
+/// How often [`Client::wait`] reads a command back.
+pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long [`Client::wait`] waits for the master's decision.
+pub const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// An HTTP method the client uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    /// `GET`.
+    Get,
+    /// `POST`.
+    Post,
+}
+
+/// A request to the API.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiRequest {
+    /// The method.
+    pub method: Method,
+    /// The path and query, e.g. `/api/v1/dags/sync/runs?for=...`.
+    pub path: String,
+    /// The JSON body, if any.
+    pub body: Option<serde_json::Value>,
+}
+
+/// The API's answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiResponse {
+    /// The HTTP status.
+    pub status: u16,
+    /// The JSON body (`null` when empty or not JSON).
+    pub body: serde_json::Value,
+}
+
+/// Why a request failed.
+#[derive(Debug, thiserror::Error)]
+pub enum ClientError {
+    /// The server can't be reached.
+    #[error("can't reach the schedr server at {server}: {reason}")]
+    Connect {
+        /// The server's URL.
+        server: String,
+        /// Why.
+        reason: String,
+    },
+    /// The server answered with an error.
+    #[error("{message}")]
+    Server {
+        /// The HTTP status.
+        status: u16,
+        /// The server's message.
+        message: String,
+    },
+    /// The answer isn't what the API describes.
+    #[error("unexpected answer from the server: {0}")]
+    Unexpected(String),
+    /// The master rejected the command.
+    #[error("rejected: {0}")]
+    Rejected(String),
+    /// The master didn't decide in time.
+    #[error(
+        "the master hasn't applied the command yet (command {command_id}); is the master \
+         running? `schedr` will apply it when it is"
+    )]
+    Timeout {
+        /// The command.
+        command_id: String,
+    },
+}
+
+/// Sends requests to the API.
+pub trait Transport: Sync {
+    /// Sends one request.
+    fn send(
+        &self,
+        request: ApiRequest,
+    ) -> impl Future<Output = Result<ApiResponse, ClientError>> + Send;
+}
+
+/// Credentials the CLI sends (never validated here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Auth {
+    /// None (`auth.mode = "none"`, from inside the namespace).
+    None,
+    /// A bearer token (`--token` / `SCHEDR_TOKEN`).
+    Bearer(String),
+    /// HTTP Basic (`--user` / `SCHEDR_USER`, password from `SCHEDR_PASSWORD`).
+    Basic {
+        /// The user name.
+        user: String,
+        /// The password.
+        password: Option<String>,
+    },
+}
+
+/// The API over HTTP.
+#[derive(Debug, Clone)]
+pub struct HttpTransport {
+    client: reqwest::Client,
+    server: String,
+    auth: Auth,
+}
+
+impl HttpTransport {
+    /// A transport to `server` (e.g. `http://localhost:8080`) sending `auth`.
+    #[must_use]
+    pub fn new(server: &str, auth: Auth) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            server: server.trim_end_matches('/').to_owned(),
+            auth,
+        }
+    }
+}
+
+impl HttpTransport {
+    /// The server's URL, without a trailing slash.
+    #[must_use]
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
+    /// The credentials it sends.
+    #[must_use]
+    pub const fn auth(&self) -> &Auth {
+        &self.auth
+    }
+}
+
+impl Transport for HttpTransport {
+    async fn send(&self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        let url = format!("{}{}", self.server, request.path);
+        let mut builder = match request.method {
+            Method::Get => self.client.get(&url),
+            Method::Post => self.client.post(&url),
+        }
+        .header(CLIENT_VERSION_HEADER, VERSION);
+        builder = match &self.auth {
+            Auth::None => builder,
+            Auth::Bearer(token) => builder.bearer_auth(token),
+            Auth::Basic { user, password } => builder.basic_auth(user, password.as_ref()),
+        };
+        if let Some(body) = &request.body {
+            builder = builder.json(body);
+        }
+        let response = builder.send().await.map_err(|e| ClientError::Connect {
+            server: self.server.clone(),
+            reason: e.to_string(),
+        })?;
+        let status = response.status().as_u16();
+        let bytes = response.bytes().await.map_err(|e| ClientError::Connect {
+            server: self.server.clone(),
+            reason: e.to_string(),
+        })?;
+        Ok(ApiResponse {
+            status,
+            body: serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        })
+    }
+}
+
+/// Typed calls to the API.
+#[derive(Debug, Clone)]
+pub struct Client<T> {
+    transport: T,
+    poll: Duration,
+    timeout: Duration,
+}
+
+impl<T: Transport> Client<T> {
+    /// A client over `transport`, waiting for decisions every `poll` for at most `timeout`.
+    pub const fn new(transport: T, poll: Duration, timeout: Duration) -> Self {
+        Self {
+            transport,
+            poll,
+            timeout,
+        }
+    }
+
+    /// The transport.
+    pub const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// `GET /api/v1/dags`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn dags(&self) -> Result<DagList, ClientError> {
+        self.call(Method::Get, "/api/v1/dags".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/runs`, optionally for one moment.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn runs(
+        &self,
+        dag: &str,
+        planned_for: Option<Timestamp>,
+    ) -> Result<RunList, ClientError> {
+        let query = planned_for.map_or_else(String::new, |t| format!("?for={t}"));
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/runs{query}", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/runs/{run}`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn run(&self, run_id: &str) -> Result<RunDetail, ClientError> {
+        self.call(Method::Get, format!("/api/v1/runs/{}", path(run_id)), None)
+            .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/pause` or `.../unpause`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn set_paused(
+        &self,
+        dag: &str,
+        paused: bool,
+        cancel_runs: bool,
+    ) -> Result<CommandView, ClientError> {
+        let (action, body) = if paused {
+            let request = PauseRequest { cancel_runs };
+            ("pause", Some(to_body(&request)?))
+        } else {
+            ("unpause", None)
+        };
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/{action}", path(dag)),
+            body,
+        )
+        .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/runs`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn trigger(
+        &self,
+        dag: &str,
+        planned_for: Option<Timestamp>,
+    ) -> Result<CommandView, ClientError> {
+        let body = to_body(&TriggerRequest { planned_for })?;
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/runs", path(dag)),
+            Some(body),
+        )
+        .await
+    }
+
+    /// `POST /api/v1/runs/{run}/cancel`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn cancel(&self, run_id: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!("/api/v1/runs/{}/cancel", path(run_id)),
+            None,
+        )
+        .await
+    }
+
+    /// Reads `command` back until the master decides it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Rejected`] with the master's reason, [`ClientError::Timeout`] if it
+    /// stays pending, or a request failure.
+    pub async fn wait(&self, command: CommandView) -> Result<CommandView, ClientError> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let mut current = command;
+        loop {
+            match current.status.as_str() {
+                "applied" => return Ok(current),
+                "rejected" => {
+                    return Err(ClientError::Rejected(current.reason.unwrap_or_default()));
+                }
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ClientError::Timeout {
+                    command_id: current.command_id,
+                });
+            }
+            tokio::time::sleep(self.poll).await;
+            current = self
+                .call(
+                    Method::Get,
+                    format!("/api/v1/commands/{}", path(&current.command_id)),
+                    None,
+                )
+                .await?;
+        }
+    }
+
+    async fn call<R: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: String,
+        body: Option<serde_json::Value>,
+    ) -> Result<R, ClientError> {
+        let response = self
+            .transport
+            .send(ApiRequest { method, path, body })
+            .await?;
+        if !(200..300).contains(&response.status) {
+            let message = response.body["error"].as_str().map_or_else(
+                || format!("the server answered {}", response.status),
+                str::to_owned,
+            );
+            return Err(ClientError::Server {
+                status: response.status,
+                message,
+            });
+        }
+        serde_json::from_value(response.body).map_err(|e| ClientError::Unexpected(e.to_string()))
+    }
+}
+
+fn to_body(value: &impl serde::Serialize) -> Result<serde_json::Value, ClientError> {
+    serde_json::to_value(value).map_err(|e| ClientError::Unexpected(e.to_string()))
+}
+
+/// A path segment, with the characters that would break the path escaped.
+fn path(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
+}

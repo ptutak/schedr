@@ -8,7 +8,8 @@ use rstest::rstest;
 use super::*;
 use clap::Parser;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, ClientArgs};
+use crate::client::Auth;
 
 fn env(vars: &[(&str, &str)]) -> BTreeMap<String, String> {
     vars.iter()
@@ -157,9 +158,15 @@ async fn output_errors_are_reported() {
 async fn execute_dispatches_db_commands() {
     let cli = Cli::try_parse_from(["schedr", "db", "migrate"]).unwrap();
     let mut out = Vec::new();
-    execute(&cli.command, &memory_config(), &mut out)
-        .await
-        .unwrap();
+    execute(
+        &cli.command,
+        &memory_config(),
+        &BTreeMap::new(),
+        &mut out,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "migrated sqlite::memory:: schema up to date\n"
@@ -177,9 +184,15 @@ async fn execute_reports_later_milestones(
     #[case] milestone: &str,
 ) {
     let cli = Cli::try_parse_from(args).unwrap();
-    let err = execute(&cli.command, &memory_config(), &mut Vec::new())
-        .await
-        .unwrap_err();
+    let err = execute(
+        &cli.command,
+        &memory_config(),
+        &BTreeMap::new(),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(&err, AppError::NotImplemented { command: c, milestone: m } if *c == command && *m == milestone)
     );
@@ -204,5 +217,70 @@ fn no_database_message_names_the_variable() {
     assert_eq!(
         AppError::NoDatabase.to_string(),
         "no database configured: set `SCHEDR_CONFIG__DATABASE__URL` (or [database] url)"
+    );
+}
+
+fn client_args(token: Option<&str>, user: Option<&str>, json: bool) -> ClientArgs {
+    ClientArgs {
+        server: "http://127.0.0.1:1".to_owned(),
+        token: token.map(str::to_owned),
+        user: user.map(str::to_owned),
+        json,
+    }
+}
+
+#[test]
+fn connect_sends_the_token_else_basic_credentials_else_nothing() {
+    let env = BTreeMap::from([
+        ("SCHEDR_PASSWORD".to_owned(), "secret".to_owned()),
+        ("TZ".to_owned(), "Europe/Warsaw".to_owned()),
+    ]);
+    let (client, output) = connect(&client_args(Some("t0k"), Some("anna"), true), &env);
+    assert_eq!(client.transport().auth(), &Auth::Bearer("t0k".to_owned()));
+    assert!(output.json);
+    assert_eq!(output.local.iana_name(), Some("Europe/Warsaw"));
+    let (client, _) = connect(&client_args(None, Some("anna"), false), &env);
+    assert_eq!(
+        client.transport().auth(),
+        &Auth::Basic {
+            user: "anna".to_owned(),
+            password: Some("secret".to_owned())
+        }
+    );
+    let (client, output) = connect(&client_args(None, None, false), &BTreeMap::new());
+    assert_eq!(client.transport().auth(), &Auth::None);
+    assert_eq!(client.transport().server(), "http://127.0.0.1:1");
+    assert!(!output.json);
+}
+
+#[rstest]
+#[case(&["schedr", "dags", "--server", "http://127.0.0.1:1", "list"])]
+#[case(&["schedr", "runs", "--server", "http://127.0.0.1:1", "list", "sync"])]
+#[tokio::test]
+async fn user_commands_go_to_the_server(#[case] args: &[&str]) {
+    let cli = Cli::try_parse_from(args).unwrap();
+    let error = execute(
+        &cli.command,
+        &memory_config(),
+        &BTreeMap::new(),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, AppError::Client(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("can't reach the schedr server at http://127.0.0.1:1: "),
+        "{error}"
+    );
+}
+
+#[test]
+fn bad_arguments_are_reported_as_given() {
+    assert_eq!(
+        AppError::BadArgument("bad --for".to_owned()).to_string(),
+        "bad --for"
     );
 }

@@ -74,8 +74,11 @@ One Rust binary, four roles:
     finished, a DAG that can't run (removed, in conflict), `--for` in the future, a payload
     that doesn't read. A **database failure** leaves the command pending for the next pass: a
     command is rejected only for what is wrong with it, never for a passing outage.
-  - **The CLI waits for the decision** by reading the command row back (every second or so,
-    with a timeout), and prints the result or the reason.
+  - **The CLI waits for the decision** by reading the command back (every 0.5 s, for up to
+    30 s), and prints the result (`triggered run … of sync for 2026-10-15 01:00 UTC · 03:00
+    CEST (running)`); a rejection is an error (exit 1) with the master's reason. When the
+    master doesn't decide in time, the CLI says so and exits 1; the command stays pending
+    and is applied when the master runs (it is durable).
   - No API between the webserver and the master: both are the same binary at the same version
     and `schedr db migrate` runs first, so sharing the schema is safe.
   - Not chosen: an API on the master for reads and actions (the UI would go dark whenever the
@@ -146,6 +149,11 @@ One Rust binary, four roles:
     the server roles,
     and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
     see Testing DAGs).
+  - **Human output** is aligned columns (`DAG PAUSED SCHEDULE DEFINED IN`, `RUN KIND STATE
+    FOR BY`; a DAG in conflict shows `CONFLICT: N places`), times in UTC and the machine's
+    zone (`TZ`, else the system's); **`--json`** prints the API's JSON as it is (UTC only),
+    for scripts. **`--for`** takes an RFC 3339 / ISO 8601 date-time with an offset, one
+    without (UTC, with the warning on stderr), or a date (midnight UTC).
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
     `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
@@ -4007,6 +4015,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | time and zones | `jiff` | explicit handling of DST gaps and overlaps |
 | cron | `croner` (with its `jiff` support) | parsing and wall-clock matching of 5/6-field cron and presets; schedr's own DST rules on top (croner's differ: it skips gap times of interval-type expressions) |
 | UUIDv7 | `uuid` (`v7`) | see Runs: identity |
+| HTTP client (user CLI) | `reqwest` (rustls, system proxy) | tokio-native; honours `HTTPS_PROXY` / `NO_PROXY` (see Configuration: outgoing HTTP) |
 | CLI | `clap` (derive) | standard |
 | configuration | `figment` | file < env (`SCHEDR_CONFIG__`, `__` nesting) < flags out of the box |
 | logging | `tracing` + `tracing-subscriber` | see Observability |

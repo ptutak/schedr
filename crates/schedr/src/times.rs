@@ -1,0 +1,98 @@
+//! Times in the CLI: reading `--for` and showing a moment in UTC and local time (see
+//! PROJECT.md, Web UI and CLI: times and time zones).
+//!
+//! `--for` without an offset is **UTC**, with a warning naming the moment taken; an explicit
+//! offset is used as given. Every time shown to a person appears twice, UTC and the machine's
+//! zone (`2026-10-15 03:00 UTC · 05:00 CEST`); JSON output has UTC only.
+
+use jiff::civil::{Date, DateTime};
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, Zoned};
+
+#[cfg(test)]
+mod tests;
+
+/// A moment read from `--for`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForTime {
+    /// The moment.
+    pub at: Timestamp,
+    /// A warning when it had no offset and was read as UTC.
+    pub warning: Option<String>,
+}
+
+/// Reads a `--for` value: an RFC 3339 / ISO 8601 date-time with an offset, or one without
+/// (UTC), or a date (midnight UTC).
+///
+/// # Errors
+///
+/// A message naming the accepted forms.
+pub fn parse_for(text: &str) -> Result<ForTime, String> {
+    if let Ok(at) = text.parse::<Timestamp>() {
+        return Ok(ForTime { at, warning: None });
+    }
+    let civil = text
+        .parse::<DateTime>()
+        .or_else(|_| {
+            text.parse::<Date>()
+                .map(|d| d.to_datetime(jiff::civil::Time::midnight()))
+        })
+        .map_err(|_| {
+            format!(
+                "`--for {text}` isn't a date or a date-time \
+                 (e.g. 2026-10-15T03:00, 2026-10-15T03:00+02:00, 2026-10-15)"
+            )
+        })?;
+    let at = civil
+        .to_zoned(TimeZone::UTC)
+        .map_err(|e| e.to_string())?
+        .timestamp();
+    Ok(ForTime {
+        at,
+        warning: Some(format!(
+            "warning: no offset given: interpreted as {} (UTC)",
+            short_utc(at)
+        )),
+    })
+}
+
+/// A moment in UTC and in `local`, e.g. `2026-10-15 03:00 UTC · 05:00 CEST`; the local date is
+/// shown only when it differs, and the local part is left out when `local` is UTC.
+#[must_use]
+pub fn show(at: Timestamp, local: &TimeZone) -> String {
+    let utc = at.to_zoned(TimeZone::UTC);
+    let text = format!("{} {} UTC", utc.strftime("%Y-%m-%d"), clock(&utc));
+    let here = at.to_zoned(local.clone());
+    if here.offset() == utc.offset() && local.iana_name() == Some("UTC") {
+        return text;
+    }
+    let date = if here.date() == utc.date() {
+        String::new()
+    } else {
+        format!("{} ", here.strftime("%Y-%m-%d"))
+    };
+    format!("{text} · {date}{} {}", clock(&here), here.strftime("%Z"))
+}
+
+/// `HH:MM`, with seconds when they aren't zero.
+fn clock(zoned: &Zoned) -> String {
+    if zoned.second() == 0 && zoned.subsec_nanosecond() == 0 {
+        zoned.strftime("%H:%M").to_string()
+    } else {
+        zoned.strftime("%H:%M:%S").to_string()
+    }
+}
+
+/// `2026-10-15T03:00Z`, as the `--for` warning shows it.
+fn short_utc(at: Timestamp) -> String {
+    let utc = at.to_zoned(TimeZone::UTC);
+    format!("{}T{}Z", utc.strftime("%Y-%m-%d"), clock(&utc))
+}
+
+/// The machine's time zone: `TZ` when set and known, else the system's, else UTC.
+#[must_use]
+pub fn local_zone(tz: Option<&str>) -> TimeZone {
+    tz.and_then(|name| TimeZone::get(name.trim_start_matches(':')).ok())
+        .or_else(|| TimeZone::try_system().ok())
+        .unwrap_or(TimeZone::UTC)
+}
