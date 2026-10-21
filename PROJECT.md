@@ -817,7 +817,7 @@ permission to create pods.
   attempt; it imports the DAG file, runs one task and exits. A straight `1 >> 2 >> 3 >> 4 >> 5`
   DAG starts five processes, possibly on five workers. Main cost: re-importing the DAG file
   and its libraries for each task.
-- **Later (designed): a fork server** as an optional start method. A parent process imports
+- **M2.5 (designed, see Roadmap): a fork server** as an optional start method. A parent process imports
   libraries once and forks one child per task attempt, so each task is still its own process (the
   memory watchdog, timeouts, signal-based cancellation and the journal work unchanged). The runner
   and the agent ↔ runner protocol must not depend on how the process was started, so this can be
@@ -3456,13 +3456,18 @@ gRPC, journal) come before breadth of features.
 | Milestone | Contents | Done when |
 |---|---|---|
 | **M0. Foundations** | the shared model as Rust types (DAG JSON, JSON Schema, Protobuf); configuration loading; database schema and `schedr db migrate` (SQLite and Postgres); CLI skeleton | — |
-| **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test` | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
+| **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; the webserver's REST API subset (`/api/v1`) the CLI needs (the UI comes in M3); CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test`; the runner and its protocol independent of how the process was started (for M2.5) | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
+| **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
 | **M4. Native API complete** | outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
-| **Later** | sensors and events (see Open questions), fork server, the "possibly later" items | — |
+| **Later** | sensors and events (see Open questions), the "possibly later" items | — |
 
+- **The fork server is M2.5**, after M2 and before M3: everything it builds on (the watchdog,
+  metrics, a stable agent on Linux pods) is finished in M2, M2 stays focused on running and
+  surviving on OpenShift, and M2's metrics show its value just before it is built. It is part
+  of the first version.
 - **The first version of schedr is M1–M4:** native schedr, complete and distributed, with its
   UI. The Airflow layer (M5) follows in a later release. Not chosen: including Airflow Tier 1
   in the first version (delays using schedr for new DAGs).
