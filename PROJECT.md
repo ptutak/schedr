@@ -3425,8 +3425,8 @@ items ("possibly later") are noted where they belong.
 
 ### Sensors and events
 
-**Deferred: not revisited until the first version of schedr (M1–M4, see Roadmap) works.** Until then, sensors stay
-out of scope (see Airflow compatibility, Scope).
+**Deferred: not revisited until the first version of schedr (M1–M4, see Roadmap) works.**
+Until then, sensors stay out of scope (see Airflow compatibility, Scope).
 
 Whether and how tasks can wait for a condition or an external event (Airflow's sensors,
 `ExternalTaskSensor`, deferrable operators, Assets). Outline from the first discussion, as a
