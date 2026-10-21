@@ -97,7 +97,8 @@ One Rust binary, four roles:
     to the repository, and **CI fails if it is out of date** (like the JSON Schema).
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
     server commands such as `schedr db migrate` (talk to the database), the server roles,
-    and `schedr dags check <path>` (local, no server; see Upgrades and compatibility).
+    and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
+    see Testing DAGs).
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
     `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
@@ -1166,7 +1167,8 @@ list) and likewise has no Python.
 
 - **Secret storage is built into schedr**, not an optional add-on or plugin.
 - The core defines a generic **secret storage** abstraction, so several kinds of secret storage
-  can be supported. **Only one implementation is built for now: HashiCorp Vault.**
+  can be supported. **Only one implementation is built for now: HashiCorp Vault**, plus a
+  development-only `file` storage (see Testing DAGs).
 - Core code, the shared model and the native API use the generic name (secret storage), never
   "Vault". Vault-specific names appear only in the Vault implementation.
 - **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a Vault-specific
@@ -1239,8 +1241,8 @@ list) and likewise has no Python.
     `SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN`; Kubernetes auth uses the pod's
     service-account token file (no secret at all). Every key can also be set through
     `SCHEDR_CONFIG__SECRET_STORAGE__...` variables.
-  - **Startup errors:** `default` not a configured storage; unknown `type` (only `vault` for
-    now); auth without the fields its method needs.
+  - **Startup errors:** `default` not a configured storage; unknown `type` (`vault`, and
+    `file` in standalone only); auth without the fields its method needs.
   - **Vault: KV v2 only** (KV v1 is not supported).
   - **Validation of storage names in DAGs:** workers **report their configured storage names**
     when they register; the master's DAG validation shows a DAG error for an unknown storage.
@@ -2765,6 +2767,79 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
   - Type checker: a `DataclassInstance` protocol in the `Json` alias makes dataclass return
     types accepted (verified with `mypy --strict`); unsupported field types are caught at parse
     time, not by the type checker.
+
+## Testing DAGs
+
+For a DAG author on a laptop or in CI, with `pip install schedr` (the wheel includes the binary)
+and no cluster. Four levels, from cheapest to fullest.
+
+- **Static check: `schedr dags check <path>`** (see Upgrades and compatibility): parses DAG
+  files and `schedr.toml` files, reports import errors and parse warnings; non-zero exit code
+  on errors.
+- **Unit tests of task functions.** Outside `with Dag(...)` a `@task` function is **the plain
+  function**: calling it runs it and returns the real value (inside a DAG the same call returns
+  an `Output[...]`). For code reading the run context or registering handles,
+  **`schedr.testing.task_context(...)`** sets `dag_ctx` (`planned_for`, `since`, `params`, …),
+  declared secrets and a handle collector; pure Python, no processes:
+
+  ```python
+  with task_context(planned_for=datetime(2026, 10, 15, 3, tzinfo=UTC),
+                    params=ReportParams(region="us"),
+                    secrets={"etl/db#password": "x"}) as ctx:
+      export(date(2026, 10, 15))
+  assert ctx.handles == [TempDir(...), ExportJob("j-1")]
+  ```
+
+  Outside a task and outside `task_context`, `dag_ctx` / `cleanup_handle` fail as decided ("must
+  be run inside a schedr task").
+- **One whole run: `schedr dags test <dag> [--for <time>] [-p …] [--secret 'path#key=value']
+  [--task <id>]`.** One **real run** in standalone mode with a temporary SQLite database: every
+  task is its own process, exactly as in production (runner, rendering, quoting, masking,
+  outputs, outcomes, routing, cleanups, resources). The terminal shows each task's state,
+  outcome and duration, logs streamed with a task-name prefix, outputs as JSON at the end; exit
+  code 0 if the run ended `success`, 1 if `failed`. `--task <id>` runs that task and its
+  upstream tasks only. Not chosen: running the tasks in one Python process like Airflow's
+  `dag.test()` (faster, but skips what differs in production).
+- **From Python: `schedr.testing.run_dag(path, dag_id, for_=..., params=..., secrets=...)`**
+  starts the same thing as a subprocess. Every task can be inspected and asserted separately:
+
+  ```python
+  result = run_dag("dags/sync.py", "sync_orders", for_=datetime(2026, 10, 15, 3, tzinfo=UTC))
+  assert result.state == "success"
+  fetch = result.tasks["fetch_primary"]
+  assert fetch.outcome == "Rows" and len(fetch.output.rows) == 120
+  assert result.tasks["report_outage"].skip_reason == "edge not taken: on Unavailable"
+  load = result.tasks["load"]
+  assert [a.status for a in load.attempts] == ["failed", "success"]
+  assert "inserted 120" in load.log and load.cleanup.result == "ok"
+  ```
+
+  - **Per task:** `state`, `outcome`, `output` (decoded by the task's annotation, as a
+    downstream task would; `output_json` raw), `skip_reason`, `attempts` (status, exit code,
+    duration, peak memory, error summary), `log`, `cleanup` (result, attempts, log),
+    `handles`. **Mapped tasks:** `result.tasks["process"][3]`, `len(...)`, `.outputs` (map-index
+    order). **Resources:** `result.resources["cluster"]` (value, state, cleanup log). **The
+    run:** `state`, `planned_for`, `since`, `params`, the one-line reason of its result.
+  - **Step by step:** `with run_dag(..., step=True) as run: for task in run: ...` yields each
+    task as it reaches a final state; the master **starts no new task until the test
+    continues**, so a test sees each result (and outside state, e.g. "the file is in the
+    bucket") before any downstream task runs. Parallel tasks still start together and are
+    yielded one at a time, in the order they finish. Leaving the loop (`break`, a failed
+    `assert`) **cancels the run**; cleanups and resource cleanups still run. Implemented as a
+    test-only setting of the standalone master ("hold assignments until released"), driven
+    through the command mechanism; no hooks, no user code in the master.
+  - **Replacing a task's result:** `run_dag(..., replace={"fetch_primary":
+    Unavailable("down")})`: the master completes that task with the given value, like an
+    `empty` task; the value must match the task's return type and its outcome follows from the
+    value. Tests routing (`.on(...)`) without network access. Only in `run_dag`, never in a
+    deployed DAG.
+- **Secrets locally:** `--secret 'path#key=value'` / `run_dag(secrets={...})` gives values
+  directly (in memory, masked as usual). For standalone used as a dev environment, a **`file`
+  secret storage** (`type = "file"`, a local TOML file of paths and values), one more
+  implementation behind the generic abstraction; it **refuses to start outside standalone**, so
+  it can't reach production.
+- **Airflow:** `dag.test()` runs `run_dag` for that DAG (`conf` → `params`, `logical_date` →
+  `for_`).
 
 ## Airflow compatibility
 
