@@ -3535,6 +3535,36 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
   | Python | `pytest`, `pytest-cov` |
   | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`cargo-llvm-cov`** |
 
+### Documentation
+
+**Generated HTML documentation for both languages, built from the repository by one command**
+(`make docs`; `make docs-serve` serves it locally). Nothing generated is committed: the site
+can be rebuilt at any time, and changing the documentation engine later means changing only
+its configuration, not the content.
+
+- **Sections:** Overview (`README.md`), **Design** (`PROJECT.md`, one page per chapter), Plan
+  (`PLAN.md`), **Python API** (from docstrings), **Rust API** (from `rustdoc`); later, user
+  guides from a `docs/` folder.
+- **`PROJECT.md` stays one file in the repository.** The split into chapters is generated at
+  build time (`cargo xtask split-design`): one Markdown file per `##` chapter, numbered in
+  order, into a git-ignored build directory. The split output is engine-neutral Markdown;
+  only the engine's index picks the files up.
+- **Engine: Sphinx** with **MyST** (Markdown pages as they are), **Furo** (theme) and
+  **autodoc** (Python API from docstrings and type hints). The documentation tools are a
+  dev-only dependency group; the `schedr` package stays dependency-free.
+- **Rust API: `rustdoc`** (`cargo doc --workspace --no-deps`), copied into the site under
+  `rust/` and linked from its navigation.
+- **Docstrings are required in the source:**
+  - **Python: Google style** (`Args:`, `Returns:`, `Raises:`) on every public module, class,
+    function and method, enforced by ruff's `D` (pydocstyle) rules with the Google
+    convention; private `_` names are exempt (as in Testing).
+  - **Rust:** `///` and `//!` comments on every public item (`missing_docs`, an error in CI),
+    and `rustdoc::broken_intra_doc_links` as an error, so links in comments must resolve.
+- **CI builds the docs and fails on warnings** (a broken reference, a missing docstring, a
+  page not in the navigation). Publishing (e.g. GitHub Pages): possibly later.
+- Not chosen: MkDocs + Material + mkdocstrings (nicer to configure, but MkDocs core is
+  under-maintained and Material is in maintenance mode).
+
 ### Workflow
 
 - `make check` runs everything CI runs: format check, clippy, ruff, mypy, the Rust tests
