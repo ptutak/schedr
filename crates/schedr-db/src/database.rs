@@ -24,6 +24,15 @@ pub enum DbError {
     /// Applying migrations failed.
     #[error("migration failed: {0}")]
     Migrate(#[from] MigrateError),
+    /// Stored data doesn't read back as the model (written by hand, or by an incompatible
+    /// version).
+    #[error("invalid stored data in {what}: {reason}")]
+    InvalidData {
+        /// The table and column.
+        what: &'static str,
+        /// Why it doesn't read.
+        reason: String,
+    },
     /// The schema isn't usable by this binary: `schedr db migrate` must run first.
     #[error("the database schema is outdated ({status:?}); run `schedr db migrate` first")]
     SchemaNotUsable {

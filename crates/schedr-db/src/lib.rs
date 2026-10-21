@@ -4,6 +4,7 @@
 //! upgraded by `schedr db migrate`; the roles refuse to start against an outdated schema.
 
 pub mod backend;
+pub mod dags;
 pub mod database;
 pub mod status;
 

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
+use schedr_model::dag::Dag;
 use serde_json::json;
 
 use super::*;

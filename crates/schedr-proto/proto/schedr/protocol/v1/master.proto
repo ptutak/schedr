@@ -255,7 +255,16 @@ message ParsedFile {
   // Each DAG the file defines, as schedr-model DAG JSON.
   repeated bytes dag_json = 2;
   // Set if importing the file failed (including a per-file timeout).
-  optional string import_error = 3;
+  optional ImportError import_error = 3;
+}
+
+// Why a DAG file couldn't be imported (schedr-model ErrorSummary).
+message ImportError {
+  // The exception's class name; ParseTimeout or RunnerDied when the agent stopped the file.
+  string exception = 1;
+  string message = 2;
+  // The last lines of the traceback.
+  string traceback = 3;
 }
 
 message ParseResult {

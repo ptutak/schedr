@@ -9,8 +9,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use schedr_model::dag::Dag;
-use schedr_model::runner::{ErrorSummary, ParseRequest, RunnerMessage};
+use schedr_model::runner::{ErrorSummary, ParseRequest, ParsedFile, RunnerMessage};
 
 use crate::channel::ChannelError;
 
@@ -22,17 +21,6 @@ pub const TIMEOUT_EXCEPTION: &str = "ParseTimeout";
 
 /// The exception name of the import error recorded for a file whose runner died.
 pub const RUNNER_DIED_EXCEPTION: &str = "RunnerDied";
-
-/// One parsed file: its DAGs, or why it couldn't be imported.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedFile {
-    /// The path relative to the root.
-    pub path: String,
-    /// The DAGs it defines (none for a helper module or a failed import).
-    pub dags: Vec<Dag>,
-    /// Why importing it failed, if it did.
-    pub error: Option<ErrorSummary>,
-}
 
 /// Why a parse job couldn't be finished.
 #[derive(Debug, thiserror::Error)]

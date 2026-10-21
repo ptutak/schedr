@@ -1,6 +1,7 @@
 //! Conversions between protocol enums and `schedr-model`, and the master's reaction to each
 //! rejection reason.
 
+use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{AttemptStatus, RunKind};
 
 use crate::pb;
@@ -22,6 +23,68 @@ pub enum ConversionError {
     /// A run kind name that isn't a `RunKind`.
     #[error("RunInfo.kind: unknown run kind `{0}`")]
     UnknownRunKind(String),
+    /// A DAG in a parsed file that isn't valid DAG JSON.
+    #[error("ParsedFile `{path}`: DAG {index} isn't valid DAG JSON: {reason}")]
+    InvalidDagJson {
+        /// The file.
+        path: String,
+        /// The DAG's position in the file's list.
+        index: usize,
+        /// Why it doesn't parse.
+        reason: String,
+    },
+}
+
+/// The protocol's form of a parsed file: each DAG as DAG JSON bytes.
+///
+/// # Panics
+///
+/// Never: model DAGs always serialize (their maps have string keys).
+#[must_use]
+pub fn parsed_file_to_proto(file: &ParsedFile) -> pb::ParsedFile {
+    pb::ParsedFile {
+        path: file.path.clone(),
+        dag_json: file
+            .dags
+            .iter()
+            .map(|dag| serde_json::to_vec(dag).expect("a DAG always serializes"))
+            .collect(),
+        import_error: file.error.as_ref().map(|e| pb::ImportError {
+            exception: e.exception.clone(),
+            message: e.message.clone(),
+            traceback: e.traceback.clone(),
+        }),
+    }
+}
+
+/// A parsed file from its protocol form.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::InvalidDagJson`] for a DAG that doesn't parse as DAG JSON (the
+/// master's validation then reports the problems of DAGs that do).
+pub fn parsed_file_from_proto(file: pb::ParsedFile) -> Result<ParsedFile, ConversionError> {
+    let dags = file
+        .dag_json
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            serde_json::from_slice(bytes).map_err(|e| ConversionError::InvalidDagJson {
+                path: file.path.clone(),
+                index,
+                reason: e.to_string(),
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(ParsedFile {
+        dags,
+        error: file.import_error.map(|e| ErrorSummary {
+            exception: e.exception,
+            message: e.message,
+            traceback: e.traceback,
+        }),
+        path: file.path,
+    })
 }
 
 /// The protocol's attempt status for a model status.

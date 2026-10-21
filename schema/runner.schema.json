@@ -380,7 +380,7 @@
       "description": "A structured error summary: why a DAG file couldn't be imported, or why a task failed.",
       "properties": {
         "exception": {
-          "description": "The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent\nstopped a file that took too long.",
+          "description": "The exception's class name, e.g. `ModuleNotFoundError`; `ParseTimeout` or\n`RunnerDied` when the agent stopped a file that took too long or lost its runner.",
           "type": "string"
         },
         "message": {

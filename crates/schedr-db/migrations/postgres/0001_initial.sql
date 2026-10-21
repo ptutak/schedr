@@ -30,11 +30,15 @@ CREATE TABLE parse_results (
     UNIQUE (root, content_hash, schedr_version)
 );
 
-CREATE TABLE import_errors (
+-- Each file of a parse as the worker reported it (after the master's validation): its DAGs
+-- (a JSON array of DAG JSON) or its import error (exception, message, traceback). The DAG list
+-- is worked out from the current parse of each root (see PROJECT.md, DAG code delivery).
+CREATE TABLE parse_files (
     parse_result_id UUID NOT NULL REFERENCES parse_results (id) ON DELETE CASCADE,
-    file_path       TEXT NOT NULL,
-    message         TEXT NOT NULL,
-    PRIMARY KEY (parse_result_id, file_path)
+    path            TEXT NOT NULL,
+    dags            JSONB NOT NULL,
+    error           JSONB,
+    PRIMARY KEY (parse_result_id, path)
 );
 
 CREATE TABLE dags (
@@ -42,7 +46,9 @@ CREATE TABLE dags (
     paused             BOOLEAN NOT NULL DEFAULT TRUE,
     current_version_id UUID,
     first_seen_at      TIMESTAMPTZ NOT NULL,
-    removed_at         TIMESTAMPTZ
+    removed_at         TIMESTAMPTZ,
+    -- Set while the DAG ID is defined in more than one place: a JSON array of {root, path}.
+    conflict           JSONB
 );
 
 CREATE TABLE dag_versions (

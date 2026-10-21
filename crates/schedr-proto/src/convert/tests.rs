@@ -105,3 +105,53 @@ fn unspecified_and_unknown_reasons_are_errors(#[case] value: i32) {
         })
     );
 }
+
+fn parsed_file() -> ParsedFile {
+    serde_json::from_value(serde_json::json!({
+        "path": "team/sync.py",
+        "dags": [{
+            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+            "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+            "catchup": false, "max_active_runs": 1, "tasks": [], "edges": []
+        }],
+        "error": null
+    }))
+    .unwrap()
+}
+
+#[test]
+fn parsed_files_round_trip() {
+    let file = parsed_file();
+    assert_eq!(
+        parsed_file_from_proto(parsed_file_to_proto(&file)).unwrap(),
+        file
+    );
+    let failed = ParsedFile {
+        path: "bad.py".to_owned(),
+        dags: vec![],
+        error: Some(ErrorSummary {
+            exception: "ImportError".to_owned(),
+            message: "no module".to_owned(),
+            traceback: "Traceback ...".to_owned(),
+        }),
+    };
+    let proto = parsed_file_to_proto(&failed);
+    assert_eq!(
+        proto.import_error.as_ref().unwrap().exception,
+        "ImportError"
+    );
+    assert_eq!(parsed_file_from_proto(proto).unwrap(), failed);
+}
+
+#[test]
+fn invalid_dag_json_names_the_file_and_the_dag() {
+    let mut proto = parsed_file_to_proto(&parsed_file());
+    proto.dag_json.push(b"{\"id\": 3}".to_vec());
+    let error = parsed_file_from_proto(proto).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("ParsedFile `team/sync.py`: DAG 1 isn't valid DAG JSON: "),
+        "{error}"
+    );
+}

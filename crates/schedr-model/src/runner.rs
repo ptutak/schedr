@@ -29,13 +29,26 @@ pub enum RunnerMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorSummary {
-    /// The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent
-    /// stopped a file that took too long.
+    /// The exception's class name, e.g. `ModuleNotFoundError`; `ParseTimeout` or
+    /// `RunnerDied` when the agent stopped a file that took too long or lost its runner.
     pub exception: String,
     /// The exception's message.
     pub message: String,
     /// The last lines of the traceback (empty for a timeout).
     pub traceback: String,
+}
+
+/// One file of a parse job: the DAGs it defines, or why it couldn't be imported. The agent
+/// builds it from `file_parsed`, uploads it to the master, which stores it as is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParsedFile {
+    /// The path relative to the root.
+    pub path: String,
+    /// The DAGs it defines (none for a helper module or a failed import).
+    pub dags: Vec<Dag>,
+    /// Why importing it failed, if it did.
+    pub error: Option<ErrorSummary>,
 }
 
 /// A message from the runner to the agent.

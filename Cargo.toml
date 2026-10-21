@@ -38,6 +38,7 @@ tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 tracing = "0.1.44"
+uuid = { version = "1.28.0", features = ["v7"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
 
 # Test-only crates (see PROJECT.md, Repository and tooling: Testing).

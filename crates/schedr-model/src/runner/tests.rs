@@ -189,3 +189,14 @@ fn task_results_round_trip() {
         );
     }
 }
+
+#[test]
+fn parsed_files_round_trip_as_stored() {
+    let json = json!({
+        "path": "x.py", "dags": [],
+        "error": {"exception": "ParseTimeout", "message": "slow", "traceback": ""}
+    });
+    let file: ParsedFile = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(file.error.as_ref().unwrap().exception, "ParseTimeout");
+    assert_eq!(serde_json::to_value(&file).unwrap(), json);
+}

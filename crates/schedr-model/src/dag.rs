@@ -13,7 +13,9 @@ use crate::version::SchedrVersion;
 mod tests;
 
 /// Where a DAG is defined: a DAG root and a file path relative to it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct DagLocation {
     /// The root's name (see PROJECT.md, DAG roots).

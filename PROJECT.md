@@ -253,6 +253,28 @@ One Rust binary, four roles:
     cancelled.
   - **History** stays in the database, hidden. If a DAG with the same ID appears again, its
     history shows again, until retention deletes it (see State storage: Retention).
+    A DAG that comes back is **paused again**, like a new one (it may have been gone long
+    enough for its schedule to surprise).
+- **A file that fails to import keeps its DAGs** at their last good version, with the import
+  error shown; it doesn't remove them. This covers a broken push and a DAG that doesn't parse
+  with a new major version of schedr alike. A DAG defined in another file in the meantime
+  counts as a second place (a conflict) until the broken file is fixed or removed.
+- **How the DAG list is worked out:** the master stores each parse **as the worker reported
+  it** (table `parse_files`: per file, its DAGs or its import error) and, whenever a root's
+  current parse changes, works the DAG list out again from the current parse of **every**
+  root: new DAGs, new versions, conflicts, removals. Each DAG has **one version per parse**
+  that defines it (the version records which code it came from); the newest becomes current.
+  A root's current parse is the parse of the hash its worker last reported; until a new hash
+  is parsed, the previous parse stays current. A parse that arrives for a hash no longer
+  reported is stored but not used.
+- **The master's checks of DAG JSON** (it never runs user code, so DAG JSON is all it sees):
+  produced by a version it can read; located in the file it was parsed from; unique task IDs;
+  edges between tasks of the DAG, no task depending on itself, no cycles; every output
+  reference along a data edge from a task of the DAG; `max_active_runs` at least 1; `start`
+  not after `end`; file paths relative and inside the root. Types and paths into outputs are
+  checked by the Python API at parse time and not again. A file with an invalid DAG is
+  treated as a **failed import** (`InvalidDag`, listing every problem; a bad path is
+  `InvalidPath`): all its DAGs keep their last good version.
 
 ### Plain script delivery
 
@@ -1058,6 +1080,11 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   conflict is resolved.
 - When the conflict is resolved, the DAG becomes runnable again on its own (its paused or
   unpaused setting is unchanged).
+- **The same ID twice in one file** is a conflict too (both places are the same file).
+- A DAG first seen in conflict is stored **paused** and with no version; it gets one when
+  the conflict is resolved.
+- **M1 has a single worker**, so only conflicts within one worker's roots arise; the rules
+  across workers (relevant workers by queue) come with several workers in M2.
 
 ### Code versions and change detection
 
@@ -1096,6 +1123,13 @@ then workers) means a new master works with old workers for a while.
   between the master and worker upgrades, every parse comes from old workers. Within a major
   version, DAG JSON changes are **additive only** (new optional fields), so a newer master reads
   older JSON with no migration code.
+- **Parse jobs** live in the master's memory (after a restart, workers report their hashes
+  again). A job goes to the first `ACTIVE` worker that reported the hash; if that worker is
+  lost or the job isn't finished within **10 minutes**, it goes to the next worker that
+  reported the same hash (or the same worker again). An upload is accepted by its (root, hash,
+  schedr version) whatever job it answers, so a restart of the master loses nothing; the
+  first parse stored wins. In the protocol an import error is structured (`ImportError`:
+  exception, message, traceback).
 - **Re-parse after an upgrade:** parse jobs are keyed by **(root, hash, schedr version)**. When
   a worker of a newer version reports a hash that has only an older parse, the master creates a
   parse job, once per root, so existing DAGs get the new checks and features. Until it is
@@ -1506,6 +1540,12 @@ list) and likewise has no Python.
   changes within a major version are additive), so older roles keep running during a rolling
   upgrade. Each backend has its own migration files (column types differ: `TIMESTAMPTZ`,
   `UUID`, `JSONB` in Postgres; text in SQLite), always with the same versions.
+- **Before the first release**, `0001_initial.sql` is edited in place (no further migrations
+  until there is something released to migrate); development databases are recreated.
+- **Queries** are the same text for both backends: parameters that go into typed Postgres
+  columns are cast there (`$1::uuid`, `::timestamptz`, `::jsonb`) and read back as text; the
+  casts vanish for SQLite. Unit tests run against in-memory SQLite; Postgres is covered by the
+  integration tests (1.17).
 
 ### Retention
 
