@@ -373,8 +373,7 @@ impl Command {
     #[must_use]
     pub const fn milestone(&self) -> Option<&'static str> {
         match self {
-            Self::Db { .. } | Self::Dags { .. } | Self::Runs { .. } => None,
-            Self::Standalone => Some("M1"),
+            Self::Db { .. } | Self::Dags { .. } | Self::Runs { .. } | Self::Standalone => None,
             Self::Master
             | Self::Worker
             | Self::Webserver

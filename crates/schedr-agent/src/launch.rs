@@ -1,27 +1,31 @@
-//! Starting real processes for attempts and parse jobs: the runner on a fresh Unix socket,
-//! commands as they are, each supervised (timeout, cancel, SIGTERM then SIGKILL).
+//! Starting real processes for attempts and parse jobs: the runner with its end of a fresh
+//! socket pair, commands as they are, each supervised (timeout, cancel, SIGTERM then SIGKILL).
+//!
+//! A runner gets its channel to the agent as an **inherited, already connected socket**
+//! (`SCHEDR_AGENT_FD`), not a path to connect to: no socket file, no directory, no path-length
+//! limit, and no other process can connect (see PROJECT.md, Rust/Python integration).
 //!
 //! The thin operating-system layer under [`crate::agent`], like [`crate::process`]: exercised
 //! by the integration tests (milestone 1.17); the decisions around it are unit-tested in
 //! [`crate::attempt`], [`crate::parse`] and [`crate::supervise`].
 
-use std::path::{Path, PathBuf};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixStream;
 
 use crate::attempt::Ran;
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
 use crate::parse::{ParseRunner, ParseSession};
-use crate::process::{OsProcess, ProcessSpec, spawn};
+use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
 use crate::status::StopReason;
 use crate::supervise::{Limits, Process, Signal, supervise};
 
-/// The environment variable naming the agent's socket, read by the runner.
-pub const SOCKET_ENV: &str = "SCHEDR_AGENT_SOCKET";
+/// The environment variable with the runner's descriptor of its socket to the agent.
+pub const FD_ENV: &str = "SCHEDR_AGENT_FD";
 
-/// How long a started runner has to connect and say hello.
+/// How long a started runner has to say hello.
 pub const RUNNER_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The version runners must have (the same `schedr` package as the agent).
@@ -38,9 +42,9 @@ pub enum LaunchError {
         /// The error.
         source: std::io::Error,
     },
-    /// The runner didn't connect in time.
-    #[error("the runner didn't connect within {0:?}")]
-    NoConnection(Duration),
+    /// The runner didn't say hello in time.
+    #[error("the runner didn't say hello within {0:?}")]
+    NoHello(Duration),
     /// The runner connected in another mode than it was started in.
     #[error("the runner said it is in {got:?} mode, expected {expected:?}")]
     WrongMode {
@@ -66,37 +70,35 @@ pub struct Runner {
     pub stream: UnixStream,
 }
 
-/// Starts the runner described by `spec` in `mode`, on a new socket in `socket_dir`, and
-/// completes the handshake.
+/// Starts the runner described by `spec` in `mode`, handing it its end of a new socket pair,
+/// and completes the handshake.
 ///
 /// # Errors
 ///
-/// [`LaunchError`] if it can't be started, doesn't connect in time, or is in another mode or
+/// [`LaunchError`] if it can't be started, doesn't say hello in time, or is in another mode or
 /// version (it was refused then).
-pub async fn start_runner(
-    spec: &ProcessSpec,
-    socket_dir: &Path,
-    mode: RunnerMode,
-) -> Result<Runner, LaunchError> {
+pub async fn start_runner(spec: &ProcessSpec, mode: RunnerMode) -> Result<Runner, LaunchError> {
     let start = |what: &str, source| LaunchError::Start {
         what: what.to_owned(),
         source,
     };
-    tokio::fs::create_dir_all(socket_dir)
-        .await
-        .map_err(|e| start("the runner's socket directory", e))?;
-    let socket = socket_dir.join(format!("{}.sock", uuid_like()));
-    let listener = UnixListener::bind(&socket).map_err(|e| start("the runner's socket", e))?;
+    let (ours, theirs) =
+        std::os::unix::net::UnixStream::pair().map_err(|e| start("the runner's socket", e))?;
     let mut spec = spec.clone();
     spec.env
-        .insert(SOCKET_ENV.to_owned(), socket.to_string_lossy().into_owned());
-    let process = spawn(&spec).await.map_err(|e| start("the runner", e))?;
-    let accepted = tokio::time::timeout(RUNNER_START_TIMEOUT, listener.accept()).await;
-    let _ = tokio::fs::remove_file(&socket).await;
-    let (mut stream, _) = accepted
-        .map_err(|_| LaunchError::NoConnection(RUNNER_START_TIMEOUT))?
-        .map_err(|e| start("the runner's connection", e))?;
-    let said = accept_runner(&mut stream, AGENT_VERSION).await?;
+        .insert(FD_ENV.to_owned(), theirs.as_raw_fd().to_string());
+    let process = spawn_passing(&spec, Some(OwnedFd::from(theirs)))
+        .await
+        .map_err(|e| start("the runner", e))?;
+    ours.set_nonblocking(true)
+        .map_err(|e| start("the runner's socket", e))?;
+    let mut stream = UnixStream::from_std(ours).map_err(|e| start("the runner's socket", e))?;
+    let said = tokio::time::timeout(
+        RUNNER_START_TIMEOUT,
+        accept_runner(&mut stream, AGENT_VERSION),
+    )
+    .await
+    .map_err(|_| LaunchError::NoHello(RUNNER_START_TIMEOUT))??;
     if said != mode {
         return Err(LaunchError::WrongMode {
             expected: mode,
@@ -116,7 +118,6 @@ pub async fn start_runner(
 pub async fn run_python(
     process: &ProcessSpec,
     request: TaskRequest,
-    socket_dir: &Path,
     limits: Limits,
     stop: impl Future<Output = StopReason>,
 ) -> Result<Ran, LaunchError> {
@@ -124,7 +125,7 @@ pub async fn run_python(
     let Runner {
         mut process,
         mut stream,
-    } = start_runner(process, socket_dir, RunnerMode::Task).await?;
+    } = start_runner(process, RunnerMode::Task).await?;
     write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
     let result = async {
         let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
@@ -173,8 +174,6 @@ pub async fn run_command(
 pub struct ProcessParseRunner {
     /// The runner process (interpreter, `-m schedr.runner parse`, environment, log file).
     pub process: ProcessSpec,
-    /// Where its sockets go.
-    pub socket_dir: PathBuf,
 }
 
 /// A parse runner that connected and got its request.
@@ -198,7 +197,7 @@ impl ParseRunner for ProcessParseRunner {
     type Session = ProcessParseSession;
 
     async fn start(&mut self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
-        let mut runner = start_runner(&self.process, &self.socket_dir, RunnerMode::Parse)
+        let mut runner = start_runner(&self.process, RunnerMode::Parse)
             .await
             .map_err(|e| match e {
                 LaunchError::Channel(channel) => channel,
@@ -207,15 +206,4 @@ impl ParseRunner for ProcessParseRunner {
         write_message(&mut runner.stream, &AgentMessage::Parse(request)).await?;
         Ok(ProcessParseSession { runner })
     }
-}
-
-/// A unique enough name for a socket file (the process ID and a counter).
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "runner-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    )
 }

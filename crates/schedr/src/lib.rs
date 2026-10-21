@@ -15,6 +15,7 @@ pub mod app;
 pub mod cli;
 pub mod client;
 pub mod logging;
+pub mod standalone;
 pub mod times;
 pub mod user;
 

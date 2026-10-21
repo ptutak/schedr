@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
-from schedr.runner.main import EXIT_ERROR, EXIT_USAGE, SOCKET_ENV, main
+from schedr.runner.main import EXIT_ERROR, EXIT_USAGE, FD_ENV, main
 from schedr.runner.parse import import_dag_file
 from schedr.runner.protocol import Channel
 
-ENV = {SOCKET_ENV: "/run/agent.sock"}
+ENV = {FD_ENV: "7"}
 
 
 class FakeAgent:
@@ -23,10 +23,10 @@ class FakeAgent:
         self.agent = Channel(agent_end)
         for reply in replies:
             self.agent.send(reply)
-        self.opened: list[str] = []
+        self.opened: list[int] = []
 
-    def open(self, path: str) -> Channel:
-        self.opened.append(path)
+    def open(self, fd: int) -> Channel:
+        self.opened.append(fd)
         return Channel(self.runner_end)
 
     def messages(self) -> list[dict[str, Any]]:
@@ -59,7 +59,7 @@ def test_parse_mode_handshakes_then_parses(
     agent = FakeAgent({"type": "welcome"}, request)
     code, err = run(["parse"], agent)
     assert (code, err) == (0, "")
-    assert agent.opened == ["/run/agent.sock"]
+    assert agent.opened == [7]
     messages = agent.messages()
     assert messages[0] == {"type": "hello", "schedr_version": version("schedr"), "mode": "parse"}
     assert [m["type"] for m in messages[1:]] == ["file_started", "file_parsed", "parse_finished"]
@@ -77,17 +77,23 @@ def test_wrong_arguments_print_usage(argv: list[str]) -> None:
 def test_without_the_socket_variable_it_explains_who_starts_it() -> None:
     code, err = run(["parse"], FakeAgent(), env={})
     assert code == EXIT_USAGE
-    assert "SCHEDR_AGENT_SOCKET is not set" in err
+    assert "SCHEDR_AGENT_FD is not set" in err
 
 
-def test_an_unreachable_socket_is_an_error() -> None:
-    def refuse(path: str) -> Channel:
-        raise ConnectionRefusedError(111, "Connection refused")
+def test_a_value_that_isnt_a_descriptor_is_a_wrong_start() -> None:
+    code, err = run(["parse"], FakeAgent(), env={FD_ENV: "/run/agent.sock"})
+    assert code == EXIT_USAGE
+    assert err == "SCHEDR_AGENT_FD=/run/agent.sock isn't a file descriptor\n"
+
+
+def test_an_unusable_descriptor_is_an_error() -> None:
+    def refuse(fd: int) -> Channel:
+        raise OSError(9, "Bad file descriptor")
 
     err = io.StringIO()
     code = main(["parse"], ENV, open_channel=refuse, stderr=err)
     assert code == EXIT_ERROR
-    assert "can't connect to the agent at /run/agent.sock" in err.getvalue()
+    assert "can't use the agent's socket (descriptor 7): " in err.getvalue()
 
 
 def test_a_refused_handshake_stops_the_runner() -> None:

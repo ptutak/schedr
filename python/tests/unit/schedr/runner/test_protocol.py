@@ -1,11 +1,12 @@
 import json
+import os
 import socket
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError, connect
+from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError, from_fd
 
 
 @pytest.fixture
@@ -92,22 +93,21 @@ def test_send_rejects_messages_over_the_limit(
         channel.send({"type": "too long for ten"})
 
 
-def test_connect_reaches_a_listening_socket(tmp_path: Path) -> None:
-    path = str(tmp_path / "agent.sock")
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(path)
-    server.listen(1)
-    try:
-        channel = connect(path)
-        peer, _ = server.accept()
-        channel.send({"type": "hello"})
-        assert Channel(peer).receive() == {"type": "hello"}
-        channel.close()
-        peer.close()
-    finally:
-        server.close()
+def test_from_fd_uses_the_handed_over_socket_and_keeps_it_from_children() -> None:
+    ours, theirs = socket.socketpair()
+    fd = os.dup(theirs.fileno())
+    os.set_inheritable(fd, True)
+    theirs.close()
+    channel = from_fd(fd)
+    assert not os.get_inheritable(fd)
+    channel.send({"type": "hello"})
+    assert Channel(ours).receive() == {"type": "hello"}
+    channel.close()
+    ours.close()
 
 
-def test_connect_fails_without_a_listener(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        connect(str(tmp_path / "missing.sock"))
+def test_from_fd_fails_for_a_descriptor_that_isnt_a_socket(tmp_path: Path) -> None:
+    path = tmp_path / "plain.txt"
+    path.write_text("x")
+    with path.open() as file, pytest.raises(OSError, match="non-socket"):
+        from_fd(os.dup(file.fileno()))

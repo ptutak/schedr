@@ -38,6 +38,12 @@ pub struct Config {
     pub ops: OpsSection,
     /// `[database]`: the state database.
     pub database: DatabaseSection,
+    /// `[master]`: the master's port and timing.
+    pub master: MasterSection,
+    /// `[webserver]`: the REST API (and later the UI).
+    pub webserver: WebserverSection,
+    /// `[worker]`: this worker's identity, capacity and data directory.
+    pub worker: WorkerSection,
     /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
     #[serde(skip)]
     pub dag_roots: Vec<Root>,
@@ -62,10 +68,14 @@ pub struct DagsSection {
     /// How long a root must stay unchanged before its new content hash is computed.
     #[serde(deserialize_with = "deserialize_duration")]
     pub settle_time: Duration,
+    /// How long one DAG file may take to import before the agent stops its runner.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub parse_file_timeout: Duration,
 }
 
 impl Default for DagsSection {
-    /// No DAG directories, the `python` interpreter, polling every 30 s with a 5 s settle time.
+    /// No DAG directories, the `python` interpreter, polling every 30 s with a 5 s settle time,
+    /// 60 s per file to import.
     fn default() -> Self {
         Self {
             path: PathList::default(),
@@ -73,6 +83,7 @@ impl Default for DagsSection {
             interpreter: DEFAULT_DAG_INTERPRETER.to_owned(),
             poll_interval: Duration::from_secs(30),
             settle_time: Duration::from_secs(5),
+            parse_file_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -218,6 +229,98 @@ impl Default for OpsSection {
         Self {
             port: 8090,
             loop_stall_timeout: Duration::from_secs(120),
+        }
+    }
+}
+
+/// `[master]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MasterSection {
+    /// The gRPC port workers connect to.
+    pub grpc_port: u16,
+    /// How often the master's loop runs (scheduler, commands, dispatching).
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub tick_interval: Duration,
+    /// How often workers send `Heartbeat` (the master's setting, sent to every worker).
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub heartbeat_interval: Duration,
+    /// A worker silent for this long is lost.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub lease_timeout: Duration,
+    /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub cancel_grace: Duration,
+}
+
+impl Default for MasterSection {
+    /// Port 8070, a tick every second, heartbeats every 10 s, lost after 60 s, 30 s grace.
+    fn default() -> Self {
+        Self {
+            grpc_port: 8070,
+            tick_interval: Duration::from_secs(1),
+            heartbeat_interval: Duration::from_secs(10),
+            lease_timeout: Duration::from_secs(60),
+            cancel_grace: Duration::from_secs(30),
+        }
+    }
+}
+
+/// `[webserver]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebserverSection {
+    /// The HTTP port of the REST API (and later the UI).
+    pub port: u16,
+    /// `[webserver.auth]`.
+    pub auth: WebserverAuthSection,
+}
+
+impl Default for WebserverSection {
+    /// Port 8080.
+    fn default() -> Self {
+        Self {
+            port: 8080,
+            auth: WebserverAuthSection::default(),
+        }
+    }
+}
+
+/// `[webserver.auth]` (only the identity so far; the modes come with the UI, milestone M3).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebserverAuthSection {
+    /// The header naming the user, recorded on commands (e.g. `x-forwarded-user`); never used
+    /// to allow or deny anything.
+    pub identity_header: Option<String>,
+}
+
+/// `[worker]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkerSection {
+    /// The worker's ID, stable across restarts; the host name when not set.
+    pub id: Option<String>,
+    /// Task slots.
+    pub slots: u32,
+    /// The queues served; none serves `default`.
+    pub queues: Vec<String>,
+    /// Where task logs, runner sockets and (in standalone) the SQLite database go;
+    /// `$XDG_DATA_HOME/schedr` (else `~/.local/share/schedr`) when not set.
+    pub data_dir: Option<PathBuf>,
+    /// Agent environment variables passed to tasks besides the allow-list.
+    pub pass_env: Vec<String>,
+}
+
+impl Default for WorkerSection {
+    /// The host name, 2 slots, the `default` queue, the default data directory.
+    fn default() -> Self {
+        Self {
+            id: None,
+            slots: 2,
+            queues: Vec::new(),
+            data_dir: None,
+            pass_env: Vec::new(),
         }
     }
 }

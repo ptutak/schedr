@@ -174,7 +174,6 @@ async fn execute_dispatches_db_commands() {
 }
 
 #[rstest]
-#[case(&["schedr", "standalone"], "standalone", "M1")]
 #[case(&["schedr", "workers", "drain", "w1"], "workers", "M2")]
 #[case(&["schedr", "task-ctx", "cleanup", "list"], "task-ctx", "M4")]
 #[tokio::test]

@@ -6,11 +6,11 @@ from importlib.metadata import version
 from typing import TextIO
 
 from schedr.runner.parse import run_parse
-from schedr.runner.protocol import Channel, ProtocolError, connect
+from schedr.runner.protocol import Channel, ProtocolError, from_fd
 from schedr.runner.task import run_task
 
-SOCKET_ENV = "SCHEDR_AGENT_SOCKET"
-"""The environment variable naming the agent's socket."""
+FD_ENV = "SCHEDR_AGENT_FD"
+"""The environment variable with the descriptor of the socket the agent handed over."""
 
 MODES = ("parse", "task")
 """The modes the runner can be started in."""
@@ -19,22 +19,22 @@ EXIT_ERROR = 1
 """Exit code for a failure talking to the agent."""
 
 EXIT_USAGE = 2
-"""Exit code for a wrong start: unknown mode, no socket, refused handshake."""
+"""Exit code for a wrong start: unknown mode, no agent socket, refused handshake."""
 
 
 def main(
     argv: list[str],
     environ: Mapping[str, str],
     *,
-    open_channel: Callable[[str], Channel] = connect,
+    open_channel: Callable[[int], Channel] = from_fd,
     stderr: TextIO | None = None,
 ) -> int:
     """Runs the runner: ``parse`` or ``task``.
 
     Args:
         argv: The arguments after ``-m schedr.runner``.
-        environ: The environment (for ``SCHEDR_AGENT_SOCKET``).
-        open_channel: Connects to the agent's socket (replaced in tests).
+        environ: The environment (for ``SCHEDR_AGENT_FD``).
+        open_channel: Opens the channel on the inherited descriptor (replaced in tests).
         stderr: Where messages go; ``sys.stderr`` by default.
 
     Returns:
@@ -46,14 +46,17 @@ def main(
         print(f"usage: python -m schedr.runner {{{','.join(MODES)}}}", file=err)
         return EXIT_USAGE
     mode = argv[0]
-    path = environ.get(SOCKET_ENV)
-    if not path:
-        print(f"{SOCKET_ENV} is not set: the runner is started by the schedr agent", file=err)
+    value = environ.get(FD_ENV)
+    if not value:
+        print(f"{FD_ENV} is not set: the runner is started by the schedr agent", file=err)
+        return EXIT_USAGE
+    if not value.isdigit():
+        print(f"{FD_ENV}={value} isn't a file descriptor", file=err)
         return EXIT_USAGE
     try:
-        channel = open_channel(path)
+        channel = open_channel(int(value))
     except OSError as e:
-        print(f"can't connect to the agent at {path}: {e}", file=err)
+        print(f"can't use the agent's socket (descriptor {value}): {e}", file=err)
         return EXIT_ERROR
     try:
         return _serve(channel, mode, err)

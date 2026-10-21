@@ -85,22 +85,20 @@ class Channel:
         return b"".join(chunks)
 
 
-def connect(path: str) -> Channel:
-    """Connects to the agent's socket.
+def from_fd(fd: int) -> Channel:
+    """The channel on the socket the agent handed over (``SCHEDR_AGENT_FD``).
+
+    The descriptor is made non-inheritable, so processes the task starts don't get it.
 
     Args:
-        path: The socket's path (``SCHEDR_AGENT_SOCKET``).
+        fd: The inherited descriptor of the runner's end of the agent's socket pair.
 
     Returns:
         The channel.
 
     Raises:
-        OSError: If the socket can't be reached.
+        OSError: If the descriptor isn't an open socket.
     """
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sock.connect(path)
-    except OSError:
-        sock.close()
-        raise
+    sock = socket.socket(fileno=fd)
+    sock.set_inheritable(False)
     return Channel(sock)

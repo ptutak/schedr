@@ -163,3 +163,81 @@ fn reads_the_database_url() {
 fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expected: bool) {
     assert_eq!(url_has_password(url), expected);
 }
+
+#[test]
+fn master_webserver_and_worker_defaults() {
+    let config = Config::default();
+    assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(60));
+    assert_eq!(
+        config.master,
+        MasterSection {
+            grpc_port: 8070,
+            tick_interval: Duration::from_secs(1),
+            heartbeat_interval: Duration::from_secs(10),
+            lease_timeout: Duration::from_secs(60),
+            cancel_grace: Duration::from_secs(30),
+        }
+    );
+    assert_eq!(config.webserver.port, 8080);
+    assert_eq!(config.webserver.auth.identity_header, None);
+    assert_eq!(
+        config.worker,
+        WorkerSection {
+            id: None,
+            slots: 2,
+            queues: vec![],
+            data_dir: None,
+            pass_env: vec![],
+        }
+    );
+}
+
+#[test]
+fn reads_the_master_webserver_and_worker_sections() {
+    let config = parse(
+        r#"
+        [dags]
+        parse_file_timeout = "2m"
+
+        [master]
+        grpc_port = 9070
+        tick_interval = "500ms"
+        heartbeat_interval = "5s"
+        lease_timeout = "30s"
+        cancel_grace = "10s"
+
+        [webserver]
+        port = 9080
+
+        [webserver.auth]
+        identity_header = "x-forwarded-user"
+
+        [worker]
+        id = "worker-1"
+        slots = 4
+        queues = ["default", "large"]
+        data_dir = "/var/lib/schedr"
+        pass_env = ["HTTPS_PROXY"]
+        "#,
+    )
+    .unwrap();
+    assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(120));
+    assert_eq!(config.master.grpc_port, 9070);
+    assert_eq!(config.master.tick_interval, Duration::from_millis(500));
+    assert_eq!(config.master.heartbeat_interval, Duration::from_secs(5));
+    assert_eq!(config.master.lease_timeout, Duration::from_secs(30));
+    assert_eq!(config.master.cancel_grace, Duration::from_secs(10));
+    assert_eq!(config.webserver.port, 9080);
+    assert_eq!(
+        config.webserver.auth.identity_header.as_deref(),
+        Some("x-forwarded-user")
+    );
+    assert_eq!(config.worker.id.as_deref(), Some("worker-1"));
+    assert_eq!(config.worker.slots, 4);
+    assert_eq!(config.worker.queues, ["default", "large"]);
+    assert_eq!(
+        config.worker.data_dir,
+        Some(PathBuf::from("/var/lib/schedr"))
+    );
+    assert_eq!(config.worker.pass_env, ["HTTPS_PROXY"]);
+}

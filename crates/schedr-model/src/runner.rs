@@ -1,6 +1,6 @@
 //! Messages between the worker agent and the Python runner (`python -m schedr.runner`).
 //!
-//! They travel over the Unix socket named by `SCHEDR_AGENT_SOCKET`, each one as a 4-byte
+//! They travel over the runner's inherited socket (`SCHEDR_AGENT_FD`), each one as a 4-byte
 //! big-endian length followed by that many bytes of UTF-8 JSON (see PROJECT.md, Rust/Python
 //! integration: the agent <-> runner channel). Every message is an object tagged by `type`.
 

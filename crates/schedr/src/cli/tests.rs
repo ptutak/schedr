@@ -203,7 +203,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 
 #[rstest]
 #[case(&["db", "migrate"], None)]
-#[case(&["standalone"], Some("M1"))]
+#[case(&["standalone"], None)]
 #[case(&["dags", "list"], None)]
 #[case(&["runs", "list", "sync"], None)]
 #[case(&["dag-ctx", "run", "get"], Some("M1"))]

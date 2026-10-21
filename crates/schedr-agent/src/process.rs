@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -48,19 +49,39 @@ pub struct OsProcess {
     stderr: JoinHandle<io::Result<TailBuffer>>,
 }
 
+/// Processes are started one at a time: a descriptor made inheritable for one child (see
+/// [`spawn_passing`]) must not leak into another started at the same moment.
+static SPAWNING: Mutex<()> = Mutex::const_new(());
+
 /// Starts a task process.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the log file can't be opened or the program can't be started.
 pub async fn spawn(spec: &ProcessSpec) -> io::Result<OsProcess> {
+    spawn_passing(spec, None).await
+}
+
+/// Starts a process that inherits `pass` (open, at the same descriptor number); the parent's
+/// copy is closed once the child has it. Used to hand a runner its end of the agent's socket
+/// pair.
+///
+/// # Errors
+///
+/// Returns an I/O error if the log file can't be opened, the descriptor can't be made
+/// inheritable, or the program can't be started.
+pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Result<OsProcess> {
     let log = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&spec.log_file)
         .await?;
     let log = Arc::new(Mutex::new(log));
-    let mut child = Command::new(&spec.program)
+    let spawning = SPAWNING.lock().await;
+    if let Some(fd) = &pass {
+        rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
+    }
+    let child = Command::new(&spec.program)
         .args(&spec.args)
         .env_clear()
         .envs(&spec.env)
@@ -70,7 +91,10 @@ pub async fn spawn(spec: &ProcessSpec) -> io::Result<OsProcess> {
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true)
-        .spawn()?;
+        .spawn();
+    drop(pass);
+    drop(spawning);
+    let mut child = child?;
     let pid = child
         .id()
         .and_then(|id| i32::try_from(id).ok())

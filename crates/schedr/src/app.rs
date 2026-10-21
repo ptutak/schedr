@@ -158,6 +158,7 @@ pub async fn execute(
 ) -> Result<(), AppError> {
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
+        (Command::Standalone, None) => crate::standalone::command(config, env).await,
         (Command::Dags { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_dags(command, &api, &output, out).await

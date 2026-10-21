@@ -87,8 +87,6 @@ pub trait Executor: Clone + Send + Sync + 'static {
 pub struct ProcessExecutor {
     /// How tasks run here.
     pub setup: WorkerSetup,
-    /// Where runner sockets go.
-    pub socket_dir: PathBuf,
     /// How long one file may take to import.
     pub parse_file_timeout: Duration,
 }
@@ -112,9 +110,7 @@ impl Executor for ProcessExecutor {
         };
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let ran = match plan {
-            Plan::Python { process, request } => {
-                run_python(&process, *request, &self.socket_dir, limits, stop).await
-            }
+            Plan::Python { process, request } => run_python(&process, *request, limits, stop).await,
             Plan::Command(process) => run_command(&process, limits, stop).await,
         };
         match ran {
@@ -149,7 +145,6 @@ impl Executor for ProcessExecutor {
                 log_file: self.setup.log_dir.join(format!("parse-{root}.log")),
                 max_output_size: 64 * 1024,
             },
-            socket_dir: self.socket_dir.clone(),
         };
         let request = ParseRequest {
             root,

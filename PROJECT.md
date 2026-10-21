@@ -516,6 +516,16 @@ SchedrScriptOperator(
 - **Standalone mode uses the same gRPC protocol** (over localhost) as the distributed setup,
   not a separate in-process transport: less code, same code paths. In `standalone` mode
   **TLS is disabled** (everything listens on localhost).
+  - **`schedr standalone`** runs the master's gRPC service (`[master] grpc_port`, 8070), the
+    REST API (`[webserver] port`, 8080), the master's loop (`[master] tick_interval`, 1 s)
+    and one worker agent in one process, all on `127.0.0.1`; Ctrl-C stops them together.
+  - **It migrates the database at start** (a laptop has no separate `schedr db migrate`
+    step) and, without `[database] url`, uses **SQLite in the data directory**
+    (`<data_dir>/schedr.db`).
+  - **The data directory** (task logs, the SQLite file) is `[worker] data_dir`, else
+    `$XDG_DATA_HOME/schedr`, else `~/.local/share/schedr`.
+  - **The worker's identity and capacity:** `[worker] id` (else the host name), `slots` (2),
+    `queues` (none: `default`), `pass_env`; `[dags] parse_file_timeout` (60 s) per file.
 - **Mutual TLS from the start**: master and workers verify each other's certificates.
   Certificates are files mounted from Kubernetes Secrets (how they are issued is a deployment
   concern).
@@ -891,7 +901,7 @@ permission to create pods.
 - **The Python runner** is a module of the `schedr` package, started by the agent as
   `<interpreter> -m schedr.runner parse`, `... task`, `... cleanup` or `... watchers` (`-m`, so it works with
   any configured interpreter executable, whatever virtualenv it belongs to). Only the mode and
-  the socket path are passed on the command line / environment; everything else comes from the
+  the socket's descriptor are passed on the command line / environment; everything else comes from the
   agent over the channel, so no secrets appear in the command line.
   - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`,
     imports the files one at a time (native API calls only record DAGs), and sends back the
@@ -923,15 +933,30 @@ permission to create pods.
   - Plain script tasks don't use the runner: they run with the interpreter from their
     `schedr.toml` declaration, which doesn't need `schedr` installed.
   - Possible later: an interpreter per DAG root (in `[dags.roots]`).
-- **Agent ↔ runner channel: a Unix domain socket** per runner process, created by the agent in
-  a private directory; its path is passed in **`SCHEDR_AGENT_SOCKET`**. Files are not enough
-  because a running task can ask for things not known in advance (`Connection.get(conn_id)`,
-  secrets). Messages:
+- **Agent ↔ runner channel: a Unix domain socket pair** per runner process. The agent creates
+  a connected pair and the runner **inherits its end as an open descriptor**, named by
+  **`SCHEDR_AGENT_FD`**; the runner makes it non-inheritable at once, so processes the task
+  starts don't get it. Files are not enough because a running task can ask for things not
+  known in advance (`Connection.get(conn_id)`, secrets). Messages:
   - task specification and inputs (agent → runner, on request);
   - secret / connection requests and answers;
   - outputs, or a structured error summary (runner → agent);
   - for parsing: per-file progress and results (DAG JSON, import errors).
-- **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
+  - **Why a socket pair, not a path:** no socket file, no directory to choose or clean up,
+    no path-length limit (a socket path is limited to about 108 bytes, data directories can
+    be deep), no connect race or timeout, and **no other process can connect**, not even one
+    of the same user: a runner gets secrets over this channel. Works on Linux and macOS.
+  - **Processes are started one at a time** (a lock in the agent): the runner's descriptor is
+    made inheritable only while its own process starts, so it can't leak into a task started
+    at the same moment. A start takes milliseconds.
+  - **More connections later (M4):** the in-task CLI (`schedr task-ctx` from a `command`
+    task, several calls at once) and the fork server's children need connections of their
+    own; a process asks for one over its channel and the agent sends a new socket-pair end as
+    a descriptor (`SCM_RIGHTS`). Still no path.
+  - Not chosen: a socket file in a short directory (`$XDG_RUNTIME_DIR` / `/tmp`, mode
+    `0700`): a file to clean up, a writable `/tmp` needed, and any process of the same user
+    could connect while it exists; an abstract socket (Linux): no file, but no permissions
+    either, safe only with a check of the peer's process ID, and Linux only.- **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
   dependencies; messages are small. (Protobuf would add a dependency to the Python package.)
   - **Framing:** a 4-byte big-endian length, then that many bytes of UTF-8 JSON: an object
     tagged by `type`. Either side refuses a message over **64 MiB** (the cap on inputs per
@@ -958,7 +983,7 @@ permission to create pods.
     `output_too_large` (over `max_output_size`), or `null` for the task's own exception
     (including `SystemExit`). The runner doesn't enforce timeouts or memory: the agent does.
   - **Runner exit codes:** 0 done (in task mode: the task succeeded); 1 a failed task or a
-    failure on the channel; 2 a wrong start (unknown mode, no `SCHEDR_AGENT_SOCKET`, refused
+    failure on the channel; 2 a wrong start (unknown mode, no `SCHEDR_AGENT_FD`, refused
     handshake).
   - **Module names:** each DAG file is imported under a stable name derived from its root and
     path (e.g. `_schedr_dag_etl_repo_team_a_sync_1a2b3c4d`) and kept in `sys.modules`, so
@@ -1035,8 +1060,8 @@ permission to create pods.
     timeouts, cancellation and the watchdog are unchanged), gets the **log file descriptors
     passed by the agent** over the Unix socket as stdout / stderr, replaces its whole
     environment with the task's clean environment, changes to the working directory, closes
-    inherited descriptors, and runs the normal runner `task` code with **its own** connection to
-    `SCHEDR_AGENT_SOCKET`. The agent is a **child subreaper** (`PR_SET_CHILD_SUBREAPER`) and
+    inherited descriptors, and runs the normal runner `task` code with **its own** channel: a socket-pair end
+    the agent passes over the fork server's socket (`SCM_RIGHTS`). The agent is a **child subreaper** (`PR_SET_CHILD_SUBREAPER`) and
     watches each child through a **`pidfd`**: signals reach the right process even if PIDs are
     reused, and children of a fork server that dies are re-parented to the agent and keep
     running.
@@ -1072,8 +1097,9 @@ permission to create pods.
 
 ### In-task CLI: `schedr task-ctx` and `schedr dag-ctx`
 
-Commands that only work **inside a running task** (they talk to the agent over
-`SCHEDR_AGENT_SOCKET`), for `command` / `script` tasks, their cleanups and resource setups.
+Commands that only work **inside a running task** (they talk to the agent over the task's
+channel, `SCHEDR_AGENT_FD`, each call on a connection of its own; see Rust/Python
+integration), for `command` / `script` tasks, their cleanups and resource setups.
 Python tasks use the Python API instead.
 
 - **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs) and
