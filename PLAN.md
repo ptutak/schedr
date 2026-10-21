@@ -74,26 +74,9 @@ python/schedr/     # the Python package
 - The user CLI lives in the binary crate (a thin REST client); the in-task CLI
   (`task-ctx`, `dag-ctx`) too, talking to the agent socket.
 
-## Library choices (to confirm)
+## Library choices
 
-| Need | Proposal | Why / alternative |
-|---|---|---|
-| Async runtime | `tokio` | required by `tonic` and `axum` |
-| gRPC | `tonic` + `prost` | decided |
-| REST | `axum` | tokio-native; small |
-| OpenAPI from Rust types | `utoipa` | derives next to serde; alternative `aide` |
-| JSON Schema | `schemars` | decided |
-| Database | `sqlx` (SQLite + Postgres), **runtime-checked queries**, migrations per backend | compile-time `query!` macros fight two backends; alternative `sea-query` as a query builder on top |
-| Time and zones | **`jiff`** | correct DST handling and IANA zones built in; alternative `chrono` + `chrono-tz` |
-| Cron | `croner` | parses 5/6-field cron and presets; DST behaviour still checked against our rules (PROJECT.md: Daylight-saving changes) with our own tests, wrapped if needed |
-| UUIDv7 | `uuid` with `v7` | decided |
-| CLI | `clap` (derive) | standard |
-| Configuration | `figment` (TOML + `Env::prefixed("SCHEDR_CONFIG__").split("__")`) | layering and precedence as decided; alternative hand-rolled on `toml` + `serde` |
-| Logging | `tracing` + `tracing-subscriber` (JSON / text) | decided |
-| Processes and signals | `tokio::process` with `process_group(0)`; `rustix` for signals to a process group | `unsafe_code = "forbid"` in our crates: only safe APIs |
-| Shell quoting | own implementation | must match `shlex.quote` exactly; parity tests against Python |
-
-Python stays dependency-free (decided); the runner uses only the standard library.
+Confirmed: see PROJECT.md, Repository and tooling: Libraries.
 
 ## M0: Foundations
 
@@ -156,16 +139,12 @@ DAG, trigger a run with `schedr runs trigger --for ...`, and see it succeed with
 
 ## Testing approach
 
-- **Rust:** unit tests next to the code; integration tests per crate in `tests/`; process tests
-  marked so they can be skipped on macOS where Linux-only behaviour is involved.
-- **Python:** unit tests for the API and serialization; integration tests (marked
-  `integration`) that spawn the runner or the binary.
+- **Rules: PROJECT.md, Repository and tooling: Testing** (unit tests for every public function
+  and class, private ones not tested directly, 85 % coverage, structure mirroring the code, no
+  skipped tests without asking). **Unit tests only** in M0 / M1; the integration and end-to-end
+  items below come once integration tests start.
 - **Cross-language parity:** produced DAG JSON validated against the committed schema; shell
   quoting against `shlex.quote`; encode in Python / decode in Python after a round trip through
   Rust storage.
 - **End to end:** `examples/` DAGs with `run_dag` tests, run in CI against the built binary.
 - **Time:** the master's clock is injectable; scheduling tests never sleep.
-
-## Notes for PROJECT.md
-
-- Library choices above, once confirmed, could go into PROJECT.md (Repository and tooling).

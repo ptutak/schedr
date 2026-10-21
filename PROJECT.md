@@ -3392,12 +3392,22 @@ own `providers.schedr`) don't exist in `schedr.airflow` either.
 Cargo.toml              # Cargo workspace; shared lints
 rust-toolchain.toml     # stable + rustfmt + clippy
 crates/
-  schedr-core/          # scheduling engine (library); unit tests inline, integration in tests/
-  schedr/               # scheduler binary
+  schedr-model/         # shared model (DAG JSON, states); JSON Schema
+  schedr-proto/         # Protobuf + tonic code, master <-> agent
+  schedr-config/        # configuration loading and validation
+  schedr-db/            # schema, migrations, queries (SQLite, Postgres)
+  schedr-master/        # scheduling loop, DAG validation, commands, gRPC server
+  schedr-agent/         # worker agent
+  schedr-api/           # webserver: REST API, UI
+  schedr/               # the binary: roles, user CLI, in-task CLI
+    src/<module>.rs     # unit tests in src/<module>/tests.rs (see Testing)
+    tests/              # integration tests (later)
+schema/                 # generated, committed: JSON Schemas, OpenAPI
 pyproject.toml          # Python package
 python/
   schedr/               # Python API package (typed: py.typed)
-  tests/{unit,integration}/
+  tests/unit/schedr/    # unit tests mirroring the package (see Testing)
+  tests/integration/    # integration tests (later)
 Makefile                # setup / fmt / fmt-check / lint / test / check
 .pre-commit-config.yaml
 .github/workflows/ci.yml
@@ -3419,7 +3429,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   package version is dynamic, taken from the Cargo workspace. `uv sync` rebuilds the project
   when Rust sources change (`[tool.uv] cache-keys`).
 - `ruff` handles formatting and linting with a broad rule set; `mypy` runs in strict mode;
-  `pytest` runs the tests with coverage. Tests that spawn processes are marked `integration`.
+  `pytest` runs the tests with coverage (see Testing).
 - Local environment: pyenv-virtualenv selected by `.python-version` (git-ignored). The Makefile
   points uv at that env via `pyenv prefix`. Pre-commit hooks call `ruff`/`mypy` directly.
 
@@ -3442,9 +3452,74 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   are released together. The runner reports its version when it connects to the agent; the
   agent **rejects a mismatched runner** with a clear error.
 
+### Libraries
+
+Rust crates chosen for the implementation (versions pinned when added):
+
+| Need | Crate | Why |
+|---|---|---|
+| async runtime | `tokio` | required by `tonic` and `axum` |
+| gRPC | `tonic` + `prost` | see Master–worker protocol |
+| REST | `axum` | tokio-native, the same stack as `tonic` |
+| OpenAPI from Rust types | `utoipa` | derives next to serde |
+| JSON Schema | `schemars` | see Rust/Python integration |
+| database | `sqlx` (SQLite and Postgres), **runtime-checked queries**, migrations per backend | compile-time `query!` checking needs one backend |
+| time and zones | `jiff` | explicit handling of DST gaps and overlaps |
+| cron | `croner` | 5/6-field cron and presets; DST behaviour tested against our rules, wrapped if needed |
+| UUIDv7 | `uuid` (`v7`) | see Runs: identity |
+| CLI | `clap` (derive) | standard |
+| configuration | `figment` | file < env (`SCHEDR_CONFIG__`, `__` nesting) < flags out of the box |
+| logging | `tracing` + `tracing-subscriber` | see Observability |
+| processes and signals | `tokio::process` (`process_group`), `rustix` | safe APIs only (`unsafe_code = "forbid"`) |
+| shell quoting | own implementation | must match `shlex.quote` exactly |
+
+Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-time `sqlx` macros
+(two backends); `actix-web` (a second async stack). The Python package stays dependency-free.
+
+### Testing
+
+**Unit tests only for now**; integration tests come later (`python/tests/integration/`,
+`crates/*/tests/`).
+
+- **Every public function, method and class / struct has unit tests. Private ones are not
+  tested directly**: testing them would break the point of making them private (an
+  implementation detail, free to change). They are covered through the public code that uses
+  them.
+  - **Python:** private means a name starting with `_` (`def _parse_line`, `class _Cache`,
+    `self._buffer`) or name-mangled `__x`. Special methods (`__init__`, `__eq__`, `__call__`, …)
+    are public behaviour and are tested. An underscore on a **module or package**
+    (`schedr/_serialization/`, `schedr/_model/`) means "internal to schedr, not user API": its
+    non-underscore names are still public **within schedr** and are tested.
+  - **Rust:** private means an item without any `pub` (visible only in its module). Anything
+    with `pub`, `pub(crate)` or `pub(super)` is tested.
+- **Coverage floor: 85 %** per language over the whole code base, private code included
+  (reached through the public tests); `make check` and CI fail below it. Python: `pytest-cov`
+  with branch coverage, `--cov-fail-under=85`. Rust: `cargo-llvm-cov`, `--fail-under-lines 85`.
+- **Never skip a test** (`pytest.mark.skip`, `skipif`, `xfail`, Rust `#[ignore]`) without
+  asking first, with the reason stated clearly. A test that can't run is fixed, or the question
+  is raised.
+- **Structure mirrors the code:**
+  - **Python:** `python/tests/unit/schedr/...` mirrors the package; one `test_<module>.py` per
+    module (`schedr/runner/protocol.py` → `tests/unit/schedr/runner/test_protocol.py`).
+    `pytest --import-mode=importlib`, so test files with the same name in different folders
+    don't clash and test folders need no `__init__.py`.
+  - **Rust:** one test file per module, next to it: `src/scheduler.rs` ends with
+    `#[cfg(test)] mod tests;` and its tests are in `src/scheduler/tests.rs` (nested modules
+    the same way: `src/scheduler/fire_times/tests.rs`). As a child module, it reaches
+    `pub(crate)` / `pub(super)` items, which a crate's `tests/` folder (integration tests,
+    public API only) can't. Test code is compiled only for tests. Not chosen: a `mod tests { … }`
+    block inside each source file (mixes code and tests in long files).
+- **Tools:**
+
+  | Language | Tools |
+  |---|---|
+  | Python | `pytest`, `pytest-cov` |
+  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`cargo-llvm-cov`** |
+
 ### Workflow
 
-- `make check` runs everything CI runs: format check, clippy, ruff, mypy, cargo test, pytest.
+- `make check` runs everything CI runs: format check, clippy, ruff, mypy, the Rust tests
+  (`cargo nextest`) and pytest, both with the coverage floor.
 - Pre-commit hooks run the same checks on commit.
 - CI: GitHub Actions, one Rust job and a Python version matrix.
 
