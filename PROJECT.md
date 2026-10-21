@@ -817,7 +817,7 @@ permission to create pods.
   attempt; it imports the DAG file, runs one task and exits. A straight `1 >> 2 >> 3 >> 4 >> 5`
   DAG starts five processes, possibly on five workers. Main cost: re-importing the DAG file
   and its libraries for each task.
-- **Later: a fork server** as an optional start method. A parent process imports libraries
+- **Later (designed): a fork server** as an optional start method. A parent process imports libraries
   once and forks one child per task attempt, so each task is still its own process (the memory
   watchdog, timeouts, signal-based cancellation and the journal work unchanged). The runner
   and the agent ↔ runner protocol must not depend on how the process was started, so this can
@@ -833,6 +833,54 @@ permission to create pods.
     against every task.
   - Not planned: a fork server per DAG (memory multiplied by the number of DAGs, restarts on
     every push to its root, user code run before `fork()`).
+  - **Configuration: per interpreter, off by default.** An `[interpreters]` entry may be a
+    table; a plain string means spawn:
+
+    ```toml
+    [interpreters]
+    python = "/usr/bin/python3"
+
+    [interpreters.etl-venv]
+    path = "/opt/venvs/etl/bin/python"
+    fork_server = true
+    preload = ["schedr", "pandas", "sqlalchemy"]
+    ```
+
+  - **What uses it:** Python tasks, Python cleanups and resource setups (runner `task` /
+    `cleanup`), and **parse jobs** (a fresh child per parse job imports the DAG files; the
+    parent never sees DAG code). **`script` tasks always spawn**, even with a Python
+    interpreter (a plain script expects a fresh interpreter: `__main__`, `sys.argv`, `atexit`;
+    and needs no `schedr`); `command` tasks aren't Python. A task can opt out with
+    **`@task(fresh_process=True)`** (also in `TaskDefaults`), for code that misbehaves after a
+    fork.
+  - **Process model:** the agent starts `<interpreter> -m schedr.runner forkserver` **when the
+    worker starts** (the first task is fast; a failing preload shows at once). Per attempt the
+    agent asks it to fork; the child calls `setsid()` (its own process group, as with spawn, so
+    timeouts, cancellation and the watchdog are unchanged), gets the **log file descriptors
+    passed by the agent** over the Unix socket as stdout / stderr, replaces its whole
+    environment with the task's clean environment, changes to the working directory, closes
+    inherited descriptors, and runs the normal runner `task` code with **its own** connection to
+    `SCHEDR_AGENT_SOCKET`. The agent is a **child subreaper** (`PR_SET_CHILD_SUBREAPER`) and
+    watches each child through a **`pidfd`**: signals reach the right process even if PIDs are
+    reused, and children of a fork server that dies are re-parented to the agent and keep
+    running.
+  - **Safety checks:** after preloading, the parent must be **single-threaded** (checked in
+    `/proc/self/task`; forking with threads, e.g. BLAS pools or database drivers, can deadlock
+    the child). A second thread or a failing preload **disables the fork server for that
+    interpreter** with a worker warning in the UI, and tasks **fall back to spawn**: a task never
+    fails because of the fork server's setup. **Linux only:** on macOS `fork_server = true` is
+    ignored with a warning (fork is unsafe there), like the memory watchdog.
+  - **State after fork:** the child reseeds `random`, resets `logging` handlers, closes the
+    parent's sockets and runs the libraries' `os.register_at_fork` handlers. The parent calls
+    **`gc.freeze()`** after preloading, so the garbage collector doesn't copy shared pages in
+    every child (keeps each task's PSS small).
+  - **Crashes and versions:** a crashed fork server is restarted by the agent with backoff;
+    running children are unaffected, and meanwhile tasks spawn. It reports its `schedr` version
+    like any runner; a mismatch disables it. It can't go stale (libraries change only with the
+    image, which restarts the pod).
+  - **Visibility:** each attempt records its **start method** (`spawn` / `fork`), shown in the
+    Attempts tab; metrics: fork server up / down per interpreter, process start time by start
+    method, fallbacks to spawn by reason.
 - **Rejected:**
   - Warm worker pools (long-lived Python processes reused across tasks): globals, leaked
     memory and old code carry over between tasks; the watchdog can't tell whose task used
