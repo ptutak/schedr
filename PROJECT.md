@@ -3616,21 +3616,40 @@ items ("possibly later") are noted where they belong.
 
 ### Async task functions
 
-**To be decided in M4** (see Roadmap); until then `async def` tasks are a parse error (see
-Native API).
+**Direction agreed; built and finished in M4** (see Roadmap). Until then `async def` tasks are a
+parse error (see Native API).
 
-Whether `@task` (and later cleanups and resource setups) accepts `async def` functions, and
-how. Starting points:
+`@task` (and later cleanups and resource setups) accepting `async def` functions:
 
-- **It fits the process model:** each attempt is its own process, so the runner can run the
-  coroutine with `asyncio.run(...)`: one event loop per attempt, nothing shared between tasks.
-  Timeouts and the memory watchdog stay outside, in the agent, unchanged; it works the same
-  with the fork server (a fresh child per attempt).
-- **To settle:** what SIGTERM does (cancel the main coroutine so `try` / `finally` and `async
-  with` blocks run within the grace time, then SIGKILL as today); what a plain call outside
-  a DAG returns (the coroutine, to `await` in tests; `task_context` and `run_dag` support);
-  async cleanups and resource setups / cleanups; whether the event loop is configurable
-  (e.g. `uvloop`); errors from tasks left running when the main coroutine returns.
+- **Direction (agreed): `asyncio.run(...)` per attempt.** Each attempt is its own process, so
+  the runner runs the coroutine in its own event loop: nothing shared between tasks. Timeouts
+  and the memory watchdog stay outside, in the agent, unchanged; it works the same with the
+  fork server (a fresh child per attempt). The master doesn't know or care that a function is
+  `async`: nothing changes in DAG JSON or the protocol.
+- **The division between async and the model:** waiting **within one attempt** (concurrent
+  HTTP calls, an async database driver, an async-only SDK) is local concurrency, `asyncio.run`
+  inside the attempt. Waiting **across time** (a file, an event, another DAG, two hours) is a
+  **model construct** the master tracks (sensors, events, `TriggerDagOperator`), never a
+  suspended coroutine. One rule: a running attempt always holds a slot; anything that waits
+  without a slot is a state the master understands.
+- **Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
+  runner) so `finally` / `async with` blocks run within the grace time, then SIGKILL as today;
+  async variants of the in-task calls (`await task_ctx.secret(...)`, `await
+  cleanup_handle(...)`) over the same agent socket, so async code never blocks its own event
+  loop; optionally `uvloop` per interpreter in the configuration.
+- **A natural base for sensors (future):** a sensor's check can be an `async def` (one poke is
+  one short attempt running the async check with `asyncio.run`), while the waiting between
+  checks stays the master's (`waiting`, no slot held). So async task support built in M4 is
+  what poll sensors later build on (see Sensors and events).
+- Not chosen: Rust driving the coroutines inside the agent (no Python in the agent: user code
+  could crash it); one shared async process for many tasks (no per-task memory budget or
+  signal-based cancel, one crash or blocking call hurts all of them, like threads and
+  subinterpreters); coroutines that suspend across time and resume later, as deferrable
+  operators do (a coroutine's state can't be saved and restored in another process; waiting
+  across time is the model's job).
+- **Still to settle in M4:** what a plain call outside a DAG returns (the coroutine, to
+  `await` in tests; `task_context` and `run_dag` support); async cleanups and resource setups
+  / cleanups; errors from tasks left running when the main coroutine returns.
 - Not the same as deferrable operators or waiting for events (see Sensors and events): an
   async task still holds its slot until it ends.
 
@@ -3647,7 +3666,8 @@ starting point:
   1. **Waiting for a time** ("start at 06:00", "2 hours after upstream"): done by the master
      alone, like `empty`; a task state `waiting`. Airflow's `TimeDeltaSensor`,
      `DateTimeSensor`, `TimeSensor`.
-  2. **Polling a condition** (a file, a row, an HTTP status): a `@sensor` returning
+  2. **Polling a condition** (a file, a row, an HTTP status; the check may be an `async def`,
+     built on async task support from M4, see Async task functions): a `@sensor` returning
      `Ready[T] | NotYet` (commands and scripts: a reserved "not yet" exit code); each check is
      one short process on a worker, **no slot held between checks** (Airflow's
      `mode="reschedule"`; `mode="poke"` would hold scarce slots for hours). A `NotYet` uses no
