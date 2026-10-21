@@ -2,15 +2,17 @@
 //!
 //! The Python API already refuses wrong DAGs at parse time; the master checks again what it
 //! relies on to schedule (it never runs user code, so DAG JSON is its only view of a DAG): the
-//! version that produced it, where it is, task IDs, edges, cycles and the references between
-//! tasks. A file with an invalid DAG is treated as a file that failed to import: its DAGs keep
-//! their last good version (see PROJECT.md, DAG code delivery).
+//! version that produced it, where it is, its schedule, task IDs, edges, cycles and the
+//! references between tasks. A file with an invalid DAG is treated as a file that failed to
+//! import: its DAGs keep their last good version (see PROJECT.md, DAG code delivery).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{Dag, EdgeKind, Reference, SchedrVersion, TaskId};
+
+use crate::fire_times::FireTimes;
 
 #[cfg(test)]
 mod tests;
@@ -36,6 +38,9 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             "located at {}:{} in its DAG JSON, but parsed from {root}:{path}",
             dag.location.root, dag.location.path
         ));
+    }
+    if let Err(error) = FireTimes::new(&dag.schedule, dag.start) {
+        problems.push(format!("schedule: {error}"));
     }
     if dag.max_active_runs == Some(0) {
         problems.push("max_active_runs must be at least 1".to_owned());

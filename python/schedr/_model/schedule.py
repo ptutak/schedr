@@ -1,7 +1,10 @@
 """A DAG's schedule in DAG JSON (``schedr-model``, ``schedule.rs``)."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+
+from schedr._model.timestamps import format_timestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,5 +69,24 @@ class EverySchedule:
         return {"kind": "every", "interval_ms": self.interval_ms}
 
 
-type Schedule = NoSchedule | CronSchedule | EverySchedule
+@dataclass(frozen=True, slots=True)
+class OnceSchedule:
+    """A single fire time.
+
+    Attributes:
+        at: The fire time (aware).
+    """
+
+    at: datetime
+
+    def to_json(self) -> dict[str, Any]:
+        """The schedule as DAG JSON.
+
+        Returns:
+            ``{"kind": "once", "at": ...}`` in UTC.
+        """
+        return {"kind": "once", "at": format_timestamp(self.at)}
+
+
+type Schedule = NoSchedule | CronSchedule | EverySchedule | OnceSchedule
 """Any schedule."""

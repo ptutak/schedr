@@ -8,15 +8,19 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+croner.workspace = true
 jiff.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true
+thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+proptest.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 
 [lints]

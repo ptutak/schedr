@@ -8,51 +8,13 @@
 use jiff::Timestamp;
 use schedr_model::runner::ParsedFile;
 use schedr_model::{Dag, DagId, DagLocation};
-use sqlx::AssertSqlSafe;
 use uuid::Uuid;
 
-use crate::backend::Backend;
 use crate::database::{Database, DbError};
+use crate::query::{db_time, from_json, on_pool, sql, to_json};
 
 #[cfg(test)]
 mod tests;
-
-/// Runs `$body` with `$pool` bound to the pool and `$backend` to its [`Backend`], once per
-/// backend (the queries are the same text, typed per driver).
-macro_rules! on_pool {
-    ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {
-        match $db {
-            Database::Sqlite($pool) => {
-                let $backend = Backend::Sqlite;
-                $body
-            }
-            Database::Postgres($pool) => {
-                let $backend = Backend::Postgres;
-                $body
-            }
-        }
-    };
-}
-
-/// A query in this module's dialect for one backend: `{uuid}`, `{ts}` and `{json}` after a
-/// parameter cast it for Postgres (whose columns are typed) and vanish for SQLite (text
-/// columns); `{text}` after a column reads it as text.
-fn sql(backend: Backend, query: &'static str) -> AssertSqlSafe<String> {
-    let casts: [(&str, &str); 4] = match backend {
-        Backend::Sqlite => [("{uuid}", ""), ("{ts}", ""), ("{json}", ""), ("{text}", "")],
-        Backend::Postgres => [
-            ("{uuid}", "::uuid"),
-            ("{ts}", "::timestamptz"),
-            ("{json}", "::jsonb"),
-            ("{text}", "::text"),
-        ],
-    };
-    let text = casts.iter().fold(query.to_owned(), |text, (marker, cast)| {
-        text.replace(marker, cast)
-    });
-    // Safe: built only from the static queries of this module and fixed casts.
-    AssertSqlSafe(text)
-}
 
 /// A parse result to store.
 #[derive(Debug, Clone)]
@@ -188,7 +150,7 @@ impl Database {
                 .bind(parse.content_hash)
                 .bind(parse.schedr_version)
                 .bind(parse.worker_id)
-                .bind(parse.parsed_at.to_string())
+                .bind(db_time(parse.parsed_at))
                 .execute(&mut *tx)
                 .await?;
             let inserted = done.rows_affected() == 1;
@@ -260,6 +222,24 @@ impl Database {
         rows.into_iter().map(stored_dag).collect()
     }
 
+    /// Pauses or unpauses a DAG. Returns whether it exists.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_paused(&self, dag_id: &DagId, paused: bool) -> Result<bool, DbError> {
+        const PAUSE: &str = "UPDATE dags SET paused = $1 WHERE dag_id = $2";
+        let changed = on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, PAUSE))
+                .bind(paused)
+                .bind(dag_id.as_str())
+                .execute(pool)
+                .await?
+                .rows_affected()
+        });
+        Ok(changed == 1)
+    }
+
     /// Stores changes to the DAG list, all or none.
     ///
     /// # Errors
@@ -283,7 +263,7 @@ impl Database {
             paused = (paused OR $2) WHERE dag_id = $3";
         const REMOVE: &str =
             "UPDATE dags SET removed_at = $1{ts}, conflict = NULL WHERE dag_id = $2";
-        let now = now.to_string();
+        let now = db_time(now);
         on_pool!(self, |pool, backend| {
             let mut tx = pool.begin().await?;
             for change in changes {
@@ -343,17 +323,6 @@ impl Database {
         });
         Ok(())
     }
-}
-
-fn to_json(value: &impl serde::Serialize) -> String {
-    serde_json::to_string(value).expect("model types always serialize")
-}
-
-fn from_json<T: serde::de::DeserializeOwned>(what: &'static str, text: &str) -> Result<T, DbError> {
-    serde_json::from_str(text).map_err(|e| DbError::InvalidData {
-        what,
-        reason: e.to_string(),
-    })
 }
 
 fn stored_dag(row: DagRow) -> Result<StoredDag, DbError> {

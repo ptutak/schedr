@@ -86,6 +86,20 @@ fn run_limits_and_the_window_are_checked() {
 }
 
 #[test]
+fn the_schedule_must_be_usable() {
+    assert_eq!(
+        problems(
+            &json!({"schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base"}})
+        ),
+        ["schedule: unknown time zone `Mars/Base`"]
+    );
+    assert_eq!(
+        problems(&json!({"schedule": {"kind": "every", "interval_ms": 0}})),
+        ["schedule: the interval of an Every schedule must be positive"]
+    );
+}
+
+#[test]
 fn task_ids_are_unique() {
     assert_eq!(
         problems(&json!({"tasks": [task("a", &json!({})), task("a", &json!({}))], "edges": []})),

@@ -3,6 +3,7 @@
 //! Cron expressions and time zone names are validated by the master when it stores a DAG;
 //! here they are plain data (see PROJECT.md, Native API: schedules are typed objects).
 
+use jiff::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +27,11 @@ pub enum Schedule {
     Every {
         /// The interval in milliseconds.
         interval_ms: u64,
+    },
+    /// A single fire time (it has no previous fire time).
+    Once {
+        /// The fire time.
+        at: Timestamp,
     },
 }
 

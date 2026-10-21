@@ -10,12 +10,18 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from types import TracebackType
 from typing import Self
-from zoneinfo import ZoneInfo
 
 from schedr import _build
 from schedr._model import Dag as DagModel
-from schedr._model import NoSchedule, registry, validate_dag_id
-from schedr.schedules import Cron, Every
+from schedr._model import (
+    DagCtxField,
+    DagCtxRef,
+    NoSchedule,
+    parse_moment,
+    registry,
+    validate_dag_id,
+)
+from schedr.schedules import Cron, Every, Once
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,20 +59,7 @@ class TaskDefaults:
 
 def _moment(value: datetime | date | str | None, tz: str, name: str) -> datetime | None:
     """Reads ``start`` / ``end`` / ``initial_since``: naive values are in ``tz``."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError as e:
-            raise ValueError(f"{name}: `{value}` is not an ISO 8601 date or date-time") from e
-    if not isinstance(value, datetime):
-        if not isinstance(value, date):
-            raise TypeError(f"{name} must be a datetime, a date or an ISO string")
-        value = datetime(value.year, value.month, value.day)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=ZoneInfo(tz))
-    return value
+    return None if value is None else parse_moment(value, tz, name)
 
 
 class Dag:
@@ -108,14 +101,15 @@ class Dag:
     ) -> None:
         """Records the DAG's settings; tasks are added inside the ``with`` block."""
         self.dag_id = validate_dag_id(dag_id)
-        if schedule is not None and not isinstance(schedule, Cron | Every):
+        if schedule is not None and not isinstance(schedule, Cron | Every | Once):
             raise TypeError(
-                f"schedule must be Cron(...), Every(...) or None, got {type(schedule).__name__}"
+                "schedule must be Cron(...), Every(...), Once(...) or None, "
+                f"got {type(schedule).__name__}"
             )
         if isinstance(tags, str):
             raise TypeError("tags must be a list of strings, not a string")
         self.schedule = schedule
-        tz = schedule.tz if isinstance(schedule, Cron) else "UTC"
+        tz = schedule.tz if isinstance(schedule, Cron | Once) else "UTC"
         self.start = _moment(start, tz, "start")
         self.end = _moment(end, tz, "end")
         self.initial_since = _moment(initial_since, tz, "initial_since")
@@ -163,6 +157,7 @@ class Dag:
         cycle = builder.find_cycle()
         if cycle is not None:
             raise ValueError(f"DAG `{self.dag_id}` has a dependency cycle: {' -> '.join(cycle)}")
+        self._check_since(builder)
         self.model = DagModel(
             id=self.dag_id,
             location=self._location,
@@ -178,3 +173,15 @@ class Dag:
             tags=self.tags,
         )
         registry.register(self.model, builder.functions)
+
+    def _check_since(self, builder: _build.DagBuilder) -> None:
+        if self.initial_since is not None or isinstance(self.schedule, Cron | Every):
+            return
+        since = DagCtxRef(DagCtxField.SINCE)
+        for task in builder.tasks.values():
+            if since in task.references():
+                what = "no schedule" if self.schedule is None else "a Once schedule"
+                raise ValueError(
+                    f"DAG `{self.dag_id}` has {what}, so its first run has no previous fire "
+                    f"time, but task `{task.id}` uses dag_ctx.run.since: set initial_since="
+                )

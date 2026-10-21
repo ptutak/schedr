@@ -15,6 +15,7 @@ fn cron() -> Schedule {
 #[case(Schedule::None, json!({"kind": "none"}))]
 #[case(cron(), json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw"}))]
 #[case(Schedule::Every { interval_ms: 3_600_000 }, json!({"kind": "every", "interval_ms": 3_600_000}))]
+#[case(Schedule::Once { at: "2026-12-24T22:00:00Z".parse().unwrap() }, json!({"kind": "once", "at": "2026-12-24T22:00:00Z"}))]
 fn serializes_with_a_kind_tag(#[case] schedule: Schedule, #[case] expected: serde_json::Value) {
     assert_eq!(serde_json::to_value(&schedule).unwrap(), expected);
     assert_eq!(

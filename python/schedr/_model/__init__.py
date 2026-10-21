@@ -11,7 +11,13 @@ user API: names and signatures may change between versions.
 
 from schedr._model.dag import Dag, DagLocation, Edge, EdgeKind
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
-from schedr._model.schedule import CronSchedule, EverySchedule, NoSchedule, Schedule
+from schedr._model.schedule import (
+    CronSchedule,
+    EverySchedule,
+    NoSchedule,
+    OnceSchedule,
+    Schedule,
+)
 from schedr._model.tasks import (
     ArgvCommand,
     CommandKind,
@@ -23,7 +29,7 @@ from schedr._model.tasks import (
     TaskKind,
     TaskSettings,
 )
-from schedr._model.timestamps import format_timestamp
+from schedr._model.timestamps import format_timestamp, parse_moment
 from schedr._model.types import (
     DataclassType,
     DictType,
@@ -76,6 +82,7 @@ __all__ = [
     "LiteralValue",
     "MapValue",
     "NoSchedule",
+    "OnceSchedule",
     "OutputRef",
     "PythonKind",
     "RefValue",
@@ -97,6 +104,7 @@ __all__ = [
     "UnionType",
     "Value",
     "format_timestamp",
+    "parse_moment",
     "validate_dag_id",
     "validate_task_id",
 ]

@@ -1,9 +1,10 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from schedr._model import CronSchedule, EverySchedule
-from schedr.schedules import DAILY, HOURLY, MONTHLY, PRESETS, WEEKLY, YEARLY, Cron, Every
+from schedr._model import CronSchedule, EverySchedule, OnceSchedule
+from schedr.schedules import DAILY, HOURLY, MONTHLY, PRESETS, WEEKLY, YEARLY, Cron, Every, Once
 
 
 @pytest.mark.parametrize("expression", ["0 3 * * *", "0 0 3 * * *", "  @daily ", "*/15 * * * *"])
@@ -64,3 +65,19 @@ def test_presets_are_utc_cron_presets() -> None:
     ]
     assert {p.tz for p in (HOURLY, DAILY, WEEKLY, MONTHLY, YEARLY)} == {"UTC"}
     assert {"@annually", "@midnight"} <= PRESETS
+
+
+def test_once_reads_a_naive_time_in_its_zone() -> None:
+    once = Once("2026-12-24T23:00", tz="Europe/Warsaw")
+    expected = datetime(2026, 12, 24, 23, tzinfo=ZoneInfo("Europe/Warsaw"))
+    assert once.to_model() == OnceSchedule(expected)
+    assert Once(datetime(2026, 12, 24, tzinfo=UTC)).to_model().at == datetime(
+        2026, 12, 24, tzinfo=UTC
+    )
+
+
+def test_once_rejects_bad_values() -> None:
+    with pytest.raises(ValueError, match="unknown time zone `Mars/Base`"):
+        Once("2026-12-24", tz="Mars/Base")
+    with pytest.raises(ValueError, match="at: `tonight` is not an ISO 8601"):
+        Once("tonight")

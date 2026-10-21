@@ -19,10 +19,11 @@ schedr-agent = { path = "crates/schedr-agent" }
 schedr-api = { path = "crates/schedr-api" }
 
 # Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
+croner = { version = "4.0.1", default-features = false, features = ["jiff"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
 ignore = "0.4.33"
-jiff = { version = "0.2.38", features = ["serde"] }
+jiff = { version = "0.2.38", features = ["serde", "tzdb-bundle-always"] }
 prost = "0.14.4"
 rustix = { version = "1.1.5", features = ["process"] }
 prost-types = "0.14.4"

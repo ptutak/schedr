@@ -1,16 +1,17 @@
 """Schedules: when the scheduler creates runs of a DAG.
 
 ``Cron`` fires at the times a cron expression describes, in a time zone (default UTC);
-``Every`` fires at a fixed interval measured in real time. A DAG without a schedule
-(``schedule=None``) has manual runs only. See PROJECT.md, Native API.
+``Every`` fires at a fixed interval measured in real time; ``Once`` fires once, at a given
+moment. A DAG without a schedule (``schedule=None``) has manual runs only. See PROJECT.md,
+Native API.
 """
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from schedr._build import to_ms
-from schedr._model import CronSchedule, EverySchedule
+from schedr._model import CronSchedule, EverySchedule, OnceSchedule, parse_moment
 
 PRESETS = frozenset(
     {"@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly"}
@@ -48,10 +49,7 @@ class Cron:
             raise ValueError(
                 f"cron expression `{self.expression}` must have 5 fields (or 6 with seconds)"
             )
-        try:
-            ZoneInfo(self.tz)
-        except (ZoneInfoNotFoundError, ValueError) as e:
-            raise ValueError(f"unknown time zone `{self.tz}`") from e
+        _check_zone(self.tz)
 
     def to_model(self) -> CronSchedule:
         """The schedule in DAG JSON.
@@ -93,6 +91,49 @@ class Every:
         return EverySchedule(to_ms(self.interval, "interval"))
 
 
+@dataclass(frozen=True, slots=True)
+class Once:
+    """A single fire time, e.g. ``Once("2026-12-24T23:00", tz="Europe/Warsaw")``.
+
+    The way to run a DAG once at a future time: an ordinary schedule, so catchup, ``end`` and
+    pausing work as for any other. It has no previous fire time, so a DAG whose tasks use
+    ``dag_ctx.run.since`` must set ``initial_since``.
+
+    Attributes:
+        at: The fire time: an aware datetime, or a naive one / a date / an ISO string, read in
+            ``tz``.
+        tz: The IANA time zone of a naive ``at`` (and of the DAG's naive ``start`` / ``end``).
+    """
+
+    at: datetime | date | str
+    tz: str = "UTC"
+
+    def __post_init__(self) -> None:
+        """Checks the time zone and reads the fire time.
+
+        Raises:
+            ValueError: For an unknown time zone or a malformed string.
+            TypeError: For a fire time of another type.
+        """
+        _check_zone(self.tz)
+        parse_moment(self.at, self.tz, "at")
+
+    def to_model(self) -> OnceSchedule:
+        """The schedule in DAG JSON.
+
+        Returns:
+            The single fire time.
+        """
+        return OnceSchedule(parse_moment(self.at, self.tz, "at"))
+
+
+def _check_zone(tz: str) -> None:
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(f"unknown time zone `{tz}`") from e
+
+
 HOURLY = Cron("@hourly")
 """Every hour, on the hour (UTC)."""
 
@@ -108,5 +149,5 @@ MONTHLY = Cron("@monthly")
 YEARLY = Cron("@yearly")
 """January 1st at midnight (UTC)."""
 
-type Schedule = Cron | Every
+type Schedule = Cron | Every | Once
 """A schedule for ``Dag(schedule=...)``."""

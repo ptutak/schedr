@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
 use schedr_model::runner::ErrorSummary;
 use serde_json::json;
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 use super::*;
 
@@ -283,4 +283,21 @@ async fn stored_data_that_doesnt_read_back_is_an_error() {
             .starts_with("invalid stored data in dags.dag_id: "),
         "{error}"
     );
+}
+
+#[tokio::test]
+async fn dags_can_be_paused_and_unpaused() {
+    let db = migrated().await;
+    let parse_id = store_parse(&db, "sha256:a", &files()).await;
+    let change = DagChange::Define {
+        dag: Box::new(dag("sync", "sync.py")),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], now()).await.unwrap();
+    assert!(db.set_paused(&id("sync"), false).await.unwrap());
+    assert!(!db.stored_dags().await.unwrap()[0].paused);
+    assert!(db.set_paused(&id("sync"), true).await.unwrap());
+    assert!(db.stored_dags().await.unwrap()[0].paused);
+    assert!(!db.set_paused(&id("nope"), true).await.unwrap());
 }

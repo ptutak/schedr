@@ -1542,6 +1542,9 @@ list) and likewise has no Python.
   `UUID`, `JSONB` in Postgres; text in SQLite), always with the same versions.
 - **Before the first release**, `0001_initial.sql` is edited in place (no further migrations
   until there is something released to migrate); development databases are recreated.
+- **Times in SQLite** are text in one fixed format, `2026-10-21T08:00:00.000000Z` (UTC,
+  six fraction digits), so comparing and sorting the text is comparing times; Postgres reads
+  its `TIMESTAMPTZ` columns back in the same format.
 - **Queries** are the same text for both backends: parameters that go into typed Postgres
   columns are cast there (`$1::uuid`, `::timestamptz`, `::jsonb`) and read back as text; the
   casts vanish for SQLite. Unit tests run against in-memory SQLite; Postgres is covered by the
@@ -1696,7 +1699,18 @@ User code can never change scheduling behaviour (skips, branching, retries) from
       `0 * * * *`) fires on **each real occurrence** (otherwise an hour without runs).
     - Windows stay consecutive: the runs around a change cover 23.5 or 25 hours of real time,
       correct for "one run per day".
-    - **`Every(...)`** is measured in real time (UTC), unaffected by DST.
+    - **`Every(...)`** is measured in real time (UTC), unaffected by DST. Its fire times are
+      whole intervals from **`start`**, or from the **Unix epoch** without one (so
+      `Every(timedelta(hours=1))` fires on the hour, UTC); fire times before `start` exist too.
+  - **Cron details:** 5 fields, or 6 with **seconds first** (no year field); presets
+    `@yearly`, `@monthly`, `@weekly`, `@daily`, `@hourly`; when both day of month and day of
+    week are restricted either one matches (classic cron). The **hour field is fixed** when it
+    is a single number (all presets but `@hourly` are); anything else (`*`, a step, a range, a
+    list) is not, for the overlap rule. The expression is matched against wall-clock times by
+    `croner`; schedr turns each match into real moments by the rules above.
+  - **Time zones:** the master uses the system's time zone database, with one bundled into
+    the binary as a fallback (containers often have none); the Python API checks zone names
+    with `zoneinfo`.
 - **Run time semantics.** No Airflow-style "logical date" shifted one interval back. A run is
   created **when its schedule fires** and knows **`dag_ctx.run.planned_for`** (the fire time)
   and **`dag_ctx.run.since`** (the previous fire time), so the run covers
@@ -1704,6 +1718,12 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   manual runs, backfill and pausing). The **first run** is the first fire time at or after
   `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
   schedules run at the fire time.)
+- **Without `start`** the schedule starts when the master **first stored the DAG**: a new
+  daily DAG unpaused at 10:00 gets the run for today's fire time at once; with `catchup=True`
+  every fire time since it was first stored gets a run.
+- **`max_active_runs` counts running runs**; queued runs wait outside it. A scheduler pass
+  creates at most **100** runs per DAG (a `catchup` backlog with no limit continues in the
+  next pass).
 - **`end`** (optional, mirror of `start`): the **last scheduled run** is the last fire time **at
   or before `end`** (in the schedule's time zone). After it the DAG stays listed with its
   history, but no new scheduled runs are created; the UI shows it as "ended". Manual runs are
@@ -2160,6 +2180,13 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    - Not chosen: separate chains for manual and scheduled runs (a manual run's window would
      depend on when somebody last clicked, possibly months ago); manual runs moving the
      scheduled chain (a click would split a scheduled period; a failed click would lose data).
+   - **When there is nothing to go back to:** a run on a fire time with no previous fire
+     time (`Once`) and no `initial_since` gets an empty window (`since` = `planned_for`); the
+     Python API makes that a parse error when a task uses `since` ("set initial_since=").
+     A manual run not on a fire time with no earlier run uses `initial_since`, else the
+     previous fire time, else an empty window.
+   - **A manual run is stored `queued`** and starts at once if the DAG has a free place, so
+     one path serves both; it never waits for the scheduler's next pass.
    - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill` / `triggered` (by another
      DAG's run, see Dependencies between DAGs).
    - **`triggered_at`** (when the run was created) is **run metadata only** (UI, CLI, audit
@@ -3637,7 +3664,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | JSON Schema | `schemars` | see Rust/Python integration |
 | database | `sqlx` (SQLite and Postgres), **runtime-checked queries**, migrations per backend | compile-time `query!` checking needs one backend |
 | time and zones | `jiff` | explicit handling of DST gaps and overlaps |
-| cron | `croner` | 5/6-field cron and presets; DST behaviour tested against our rules, wrapped if needed |
+| cron | `croner` (with its `jiff` support) | parsing and wall-clock matching of 5/6-field cron and presets; schedr's own DST rules on top (croner's differ: it skips gap times of interval-type expressions) |
 | UUIDv7 | `uuid` (`v7`) | see Runs: identity |
 | CLI | `clap` (derive) | standard |
 | configuration | `figment` | file < env (`SCHEDR_CONFIG__`, `__` nesting) < flags out of the box |

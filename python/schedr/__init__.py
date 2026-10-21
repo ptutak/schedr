@@ -9,7 +9,7 @@ from importlib.metadata import version
 from schedr.context import dag_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.operators import CommandOperator, EmptyOperator
-from schedr.schedules import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every
+from schedr.schedules import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once
 from schedr.tasks import Output, chain, task
 from schedr.types import KiB, MiB
 
@@ -26,6 +26,7 @@ __all__ = [
     "Every",
     "KiB",
     "MiB",
+    "Once",
     "Output",
     "TaskDefaults",
     "chain",

@@ -3,7 +3,8 @@
 See PROJECT.md, Times and time zones.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 
 def format_timestamp(moment: datetime) -> str:
@@ -27,3 +28,32 @@ def format_timestamp(moment: datetime) -> str:
     if utc.microsecond:
         text += f".{utc.microsecond:06d}"
     return text + "Z"
+
+
+def parse_moment(value: datetime | date | str, tz: str, name: str) -> datetime:
+    """Reads a moment given in DAG code: naive values (and dates) are in the time zone ``tz``.
+
+    Args:
+        value: An aware or naive datetime, a date (midnight), or an ISO 8601 string.
+        tz: The IANA time zone of naive values (the schedule's).
+        name: The argument's name, for messages.
+
+    Returns:
+        An aware datetime.
+
+    Raises:
+        TypeError: For another type.
+        ValueError: For a string that isn't ISO 8601.
+    """
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError as e:
+            raise ValueError(f"{name}: `{value}` is not an ISO 8601 date or date-time") from e
+    if not isinstance(value, datetime):
+        if not isinstance(value, date):
+            raise TypeError(f"{name} must be a datetime, a date or an ISO string")
+        value = datetime(value.year, value.month, value.day)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo(tz))
+    return value

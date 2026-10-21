@@ -6,8 +6,11 @@
 pub mod backend;
 pub mod dags;
 pub mod database;
+mod query;
+pub mod runs;
 pub mod status;
 
 pub use backend::{Backend, UnsupportedUrl, redact_password};
 pub use database::{Database, DbError};
+pub use query::db_time;
 pub use status::SchemaStatus;

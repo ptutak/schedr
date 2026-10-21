@@ -281,6 +281,26 @@
             "interval_ms"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A single fire time (it has no previous fire time).",
+          "properties": {
+            "at": {
+              "description": "The fire time.",
+              "format": "date-time",
+              "type": "string"
+            },
+            "kind": {
+              "const": "once",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },

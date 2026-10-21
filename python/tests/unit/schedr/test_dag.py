@@ -4,7 +4,17 @@ from typing import Any
 
 import pytest
 
-from schedr import CommandOperator, Cron, Dag, EmptyOperator, Every, TaskDefaults, task
+from schedr import (
+    CommandOperator,
+    Cron,
+    Dag,
+    EmptyOperator,
+    Every,
+    Once,
+    TaskDefaults,
+    dag_ctx,
+    task,
+)
 from schedr._model import IdError, NoSchedule, TaskSettings, registry
 
 Validate = Callable[[str, Any], None]
@@ -63,6 +73,34 @@ def test_naive_moments_are_utc_without_a_cron_schedule() -> None:
     assert model.end == datetime(2026, 1, 1, tzinfo=UTC)
     assert model.initial_since == datetime(2020, 1, 1, tzinfo=UTC)
     assert model.start is None
+
+
+def test_naive_moments_follow_a_once_schedules_zone() -> None:
+    with Dag("d", schedule=Once("2026-12-24T23:00", tz="Europe/Warsaw"), end="2026-12-25"):
+        pass
+    model = only_dag()
+    assert model.end == datetime(2026, 12, 24, 23, tzinfo=UTC)
+    assert model.to_json()["schedule"] == {"kind": "once", "at": "2026-12-24T22:00:00Z"}
+
+
+@pytest.mark.parametrize(
+    ("schedule", "what"), [(None, "no schedule"), (Once("2026-12-24"), "a Once schedule")]
+)
+def test_since_without_a_previous_fire_time_needs_initial_since(
+    schedule: Once | None, what: str
+) -> None:
+    with (
+        pytest.raises(ValueError, match=f"DAG `d` has {what}, so its first run has no previous"),
+        Dag("d", schedule=schedule),
+    ):
+        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+    with Dag("d", schedule=schedule, initial_since="2020-01-01"):
+        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+    with Dag("e", schedule=schedule):
+        CommandOperator("load", t"load --until {dag_ctx.run.planned_for}")
+    with Dag("f", schedule=Every(timedelta(hours=1))):
+        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+    assert [d.id for d in registry.take_defined()] == ["d", "e", "f"]
 
 
 def test_bad_moments_are_rejected() -> None:

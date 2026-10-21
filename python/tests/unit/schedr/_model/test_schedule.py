@@ -1,9 +1,16 @@
 from collections.abc import Callable as _Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from schedr._model.schedule import CronSchedule, EverySchedule, NoSchedule, Schedule
+from schedr._model.schedule import (
+    CronSchedule,
+    EverySchedule,
+    NoSchedule,
+    OnceSchedule,
+    Schedule,
+)
 
 Validate = _Callable[[str, Any], None]
 
@@ -18,6 +25,10 @@ Validate = _Callable[[str, Any], None]
         ),
         (CronSchedule("@daily"), {"kind": "cron", "expression": "@daily", "timezone": "UTC"}),
         (EverySchedule(3_600_000), {"kind": "every", "interval_ms": 3_600_000}),
+        (
+            OnceSchedule(datetime(2026, 12, 24, 22, tzinfo=UTC)),
+            {"kind": "once", "at": "2026-12-24T22:00:00Z"},
+        ),
     ],
 )
 def test_schedules_serialize_to_the_schema(
