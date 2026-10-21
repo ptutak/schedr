@@ -189,6 +189,22 @@ One Rust binary, four roles:
     OIDC tokens itself), roles mapped from groups, per-DAG permissions (Airflow's
     `access_control` is already kept as metadata), schedr-issued API tokens, user management
     in the UI.
+- **Times and time zones: the server works only in UTC; people see UTC and local.**
+  - **Server side:** the database, the scheduler, the API, JSON and schedr's own logs use
+    UTC. Times are **always stored with their zone** even though it is always UTC
+    (`timestamptz` in Postgres; ISO 8601 with `Z` in SQLite), never as naive timestamps.
+    Cron expressions are evaluated in their schedule's zone and converted to UTC at once.
+  - **Every time shown to a person appears twice, UTC and local**, e.g.
+    `01:00 UTC · 21:00 EDT`. "Local" is: in the **UI** the browser's zone (read by a few lines
+    of inline JavaScript into a cookie; until then only UTC, labelled); in the **CLI** the
+    machine's zone (JSON output: UTC only); in **email notifications**, which have no viewer,
+    the **DAG's schedule zone**; in the **task log viewer**, the browser's zone next to the UTC
+    written in the log. **Webhooks:** UTC only (ISO 8601), plus the DAG's zone name as a field.
+  - The schedule's zone is shown with the cron expression on the DAG's page (`0 3 * * *`
+    Europe/Warsaw), not as a third display zone.
+  - **Input** (`--for`, `--from` / `--to`, the UI's date fields): without an offset it is
+    **UTC, with a warning** that it was interpreted as UTC; any explicit offset is accepted.
+    The UI's date field shows the entered time in both zones before confirming.
 - **Live updates through VPNs and HTTP proxies:** SSE responses carry `Cache-Control: no-cache`
   and `X-Accel-Buffering: no`; since some proxies buffer `text/event-stream` anyway, the
   browser **falls back to polling** (every few seconds) when no event, not even a keep-alive,
@@ -1994,11 +2010,12 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      date (e.g. backfilling December for a DAG deployed in January, without moving `start`, which
      with `catchup=True` would make the scheduler create those runs itself). Fire times before
      `start` are still fire times of the schedule, so such runs get the usual window.
-   - **Time zone of `--for`:** a time without an offset is in the **schedule's time zone** (UTC
-     for a DAG without a schedule), so the time shown in the UI for a run can be typed back
-     as is; an explicit offset (`+02:00`, `Z`) wins. A time that doesn't exist (in a DST gap)
-     is an error naming the gap; a time that happens twice (in a DST overlap) is an error asking
-     for an explicit offset (`+02:00` or `+01:00`): guessing could re-run the wrong hour.
+   - **Time zone of `--for`:** a time without an offset is **UTC**, with a warning ("no offset
+     given: interpreted as 2026-10-15T03:00Z (UTC)"); an explicit offset (`+02:00`, `-04:00`)
+     is accepted. The UTC time shown in the UI can be copied as is (see Web UI and CLI: Times
+     and time zones), and `--for` is never ambiguous (UTC has no DST gaps or overlaps; the DST
+     rules apply only to schedules). Not chosen: the schedule's time zone (not shown in the UI,
+     and ambiguous around DST changes).
    - **The scheduler is independent of manual runs:** it keeps its own bookkeeping (the last
      fire time it created a run for), which manual and backfill runs never change; a manual run
      for a fire time never stops the scheduled run for it (e.g. a `--for` run for a fire time
@@ -2019,7 +2036,7 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
        the UI; `schedr runs cancel --backfill <id>` cancels what's left); `[backfill] max_runs`
        (default **1000**: a year of a daily DAG, a month of an hourly one; close to
        `[mapping] max_instances`) rejects bigger backfills, suggesting to split the range.
-     - **Range:** `--from` / `--to` inclusive, time zone as for `--for`; `--to` optional, a
+     - **Range:** `--from` / `--to` inclusive, time zone as for `--for` (UTC without an offset, with a warning); `--to` optional, a
        range ending in the future ends at now; no fire time in the range is an error; a DAG
        without a schedule is an error; `start` / `end` don't limit it (point 1).
      - **Order:** oldest first, at most `max_active_runs` at a time (competition with scheduled
