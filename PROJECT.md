@@ -877,6 +877,21 @@ curl -H "Authorization: Bearer $(schedr task-ctx secret get 'ci/deploy#token')" 
 
 - **2 workers** by default, **2 slots each** (4 concurrent tasks). To be tuned per deployment.
 
+### Ports
+
+All configurable; none clashes with Istio's sidecar ports (15000–15090).
+
+| Port | Role | Default |
+|---|---|---|
+| webserver HTTP (UI and REST API) | webserver | **8080** |
+| master gRPC (workers connect) | master | **8070** |
+| worker log endpoint | worker | **8081** |
+| ops (`/healthz`, `/readyz`, `/metrics`) | every role | **8090** |
+
+Standalone uses 8080 and 8090, and 8070 / 8081 on localhost (it keeps the gRPC protocol
+internally). Not chosen: 9090 for ops (Prometheus's own port: a clash in standalone next to a
+local Prometheus, and confusing in a `ServiceMonitor`).
+
 ### DAG roots
 
 DAG files are referenced the same way as scripts, so references are portable between workers
@@ -1049,7 +1064,7 @@ list) and likewise has no Python.
 ### Observability
 
 - **Ops port on every role** (master, worker, webserver): a separate **plain-HTTP** port,
-  `[ops] port` (default e.g. 9090), serving only **`/healthz`**, **`/readyz`** and
+  `[ops] port` (default **8090**, see Ports), serving only **`/healthz`**, **`/readyz`** and
   **`/metrics`**, never data or actions, so no TLS or authentication. Needed because a
   kubelet's probe and Prometheus can't present a client certificate to the mTLS log port
   (`tls.mode = "app"`). Not chosen: `/healthz` on the worker's log port (fails under mTLS).
@@ -1061,7 +1076,7 @@ list) and likewise has no Python.
 
   | Role | `/healthz` (liveness) | `/readyz` (readiness) |
   |---|---|---|
-  | master | the process is up and the scheduling loop is ticking (an iteration started within e.g. 5 min, whether or not the database answered): catches a stuck scheduler | startup finished (schema checked, listening for workers) |
+  | master | the process is up and the scheduling loop is ticking (an iteration started within `[ops] loop_stall_timeout`, default **2 min**, whether or not the database answered; every database query has a timeout below it, default 30 s, so one hung query doesn't look like a stuck loop): catches a stuck scheduler | startup finished (schema checked, listening for workers) |
   | webserver | the process is up | startup finished |
   | worker | the agent's own health (see Worker lifecycle) | not needed |
 
@@ -1315,6 +1330,8 @@ handles "log unavailable".
 runs = "90d"          # "forever" disables it
 outputs = "90d"       # default: the same as runs; may be shorter
 commands = "365d"
+interval = "1h"       # how often the retention job runs
+batch_runs = 100      # runs deleted per transaction
 ```
 
 - **Runs:** finished runs older than `runs` are deleted with everything that belongs to them:
@@ -1336,9 +1353,10 @@ commands = "365d"
   it starts with no history.
 - **Parse results and import errors:** only the latest per file is kept (older ones are
   deleted when a newer parse of that root is stored); no setting.
-- **How:** a background job on the master (every hour by default), deleting in **batches**
-  (e.g. 1000 runs per transaction) so it never holds long locks or blocks scheduling; the same
-  in standalone (SQLite). Partitioning tables by time: possibly later.
+- **How:** a background job on the master (`interval`, every hour by default), deleting in
+  **batches** of `batch_runs` runs per transaction (default **100**: one run can hold over a
+  thousand rows, e.g. a mapped task's instances, attempts and outputs), repeated until nothing
+  is left, so it never holds long locks or blocks scheduling; the same in standalone (SQLite). Partitioning tables by time: possibly later.
 
 ## Python API structure
 
@@ -1942,7 +1960,8 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
        ("31 fire times, 27 already succeeded, creating 4 runs"); `--all` for every fire time.
      - **Creation:** all runs at once, as waiting runs sharing a **backfill ID** (progress in
        the UI; `schedr runs cancel --backfill <id>` cancels what's left); `[backfill] max_runs`
-       (default e.g. 1000) rejects bigger backfills.
+       (default **1000**: a year of a daily DAG, a month of an hourly one; close to
+       `[mapping] max_instances`) rejects bigger backfills, suggesting to split the range.
      - **Range:** `--from` / `--to` inclusive, time zone as for `--for`; `--to` optional, a
        range ending in the future ends at now; no fire time in the range is an error; a DAG
        without a schedule is an error; `start` / `end` don't limit it (point 1).
@@ -2298,13 +2317,17 @@ def export(day: date) -> Exported:
   downstream tasks and retries start only then (task instance state `cleaning_up` meanwhile).
   Not chosen: reporting the task's result at once and cleaning up in parallel (a retry or
   downstream task could meet the previous attempt's resources, e.g. a lock not yet released).
-- **`cleanup_timeout`** per task (and in `TaskDefaults`), server default e.g. 5 minutes. On
+- **`cleanup_timeout`** per task (and in `TaskDefaults`), server default **5 minutes**. On
   timeout the agent kills the cleanup (SIGTERM, then SIGKILL): that cleanup attempt failed.
   Cleanup retries run on the same worker.
 - **Cancel:** the agent kills the task, then runs the cleanup (a cancelled export should cancel
   its remote job too). **Drain:** the agent stops the remaining tasks early enough to leave room
   for their cleanups (at the end of the grace period minus the longest `cleanup_timeout` among
   them); if the pod is killed anyway, it is a lost worker.
+  - Kubernetes' default `terminationGracePeriodSeconds` (30 s) is far too short for that: the
+    **Helm chart sets 600 s** for workers (5 min for tasks, then 5 min for cleanups). The worker
+    is told its grace period (`[worker] termination_grace_period`, matching the pod spec) and
+    logs a warning at startup when a task's `cleanup_timeout` doesn't fit in it.
 - **Agent restart on the same pod** (journal kept): the agent runs the cleanups of the
   interrupted attempts from its journal.
 - **Lost worker** (pod gone, node failure): handles are also **sent to the master** when
