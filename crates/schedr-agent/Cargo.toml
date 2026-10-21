@@ -10,19 +10,28 @@ authors.workspace = true
 [dependencies]
 ignore.workspace = true
 jiff.workspace = true
+prost-types.workspace = true
 rustix.workspace = true
 schedr-model.workspace = true
+schedr-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+hyper-util.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
 rstest.workspace = true
+schedr-db.workspace = true
+schedr-master.workspace = true
 tempfile.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true

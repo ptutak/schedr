@@ -104,6 +104,7 @@ fn a_watcher_reports_a_hash_once_settled_then_only_new_hashes() {
         panic!("expected a change");
     };
     assert_eq!(watcher.hash(), Some(hash.as_str()));
+    assert_eq!(watcher.snapshot(), Some(&snapshot));
     assert_eq!(snapshot.python_files(), ["a.py"]);
     assert_eq!(watcher.poll(start + secs(30)).unwrap(), Poll::Unchanged);
 

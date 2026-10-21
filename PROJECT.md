@@ -661,7 +661,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   UI show it); the **retry budget** counts only attempts that used a retry. So an attempt
   interrupted by draining or never started is try 2 without using up `retries`.
 - **Never retried** (certain to repeat): the error kinds `secret_not_found`,
-  `secret_denied`, `input_mismatch`, `output_not_serializable`, `output_too_large`. A secret
+  `secret_denied`, `input_mismatch`, `output_not_serializable`, `output_too_large`,
+  `inputs_too_large`, `render_failed` (a command's templates can't be filled in from these
+  inputs). A secret
   storage that is down (`secret_unavailable`), an import error and a task no longer in its
   file (`task_not_found`) are retried: they can pass, or new code can fix them.
 - **While a run is being cancelled** nothing runs again: an attempt that fails then is not
@@ -682,6 +684,20 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   - Inputs: upstream outputs used by the task, and run information.
   - Execution settings: environment variables, working directory, interpreter (scripts),
     `execution_timeout`, cancel grace time, memory budget, `setrlimit` opt-in.
+- **On the worker, before a process starts:** an assignment that doesn't read is rejected as
+  an invalid specification; a DAG root or file missing here is "code not there yet"; no free
+  slot is temporary. A command whose templates can't be rendered is accepted and fails at once
+  (`render_failed`), as does a process that can't be started (`start_failed`, retried: the
+  interpreter may be fixed); a Python runner that exits 0 without reporting a result fails
+  with `runner_failed` (retried). A command's `ProcessResult` is its output on success and its
+  error summary on failure. Python tasks run in their root's directory, commands in their DAG
+  file's directory; each attempt's log is `<log_dir>/<attempt_id>.log`.
+- **The worker's journal** is in memory in M1 (running attempts and results not yet
+  acknowledged, reported in `Register` after a reconnect); on disk, surviving an agent
+  restart, in M2.
+- **Before registering**, the agent waits for each root's first content hash (it settles
+  too). A parse job is run only if the root still has the job's hash; a failed parse job is
+  logged and left to the job timeout, which gives it to another worker (or this one again).
 - **Over the inputs cap** the attempt fails at once with error kind `inputs_too_large`,
   never retried (the same inputs always are too large). Inputs are the outputs of the
   upstream tasks the task's references name, as `{task_id: output}`.

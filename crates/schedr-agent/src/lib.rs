@@ -5,8 +5,11 @@
 //! SIGTERM then SIGKILL (see PROJECT.md, Worker environment and Master–worker protocol). The
 //! Python runner talks to it over a Unix socket ([`channel`]).
 
+pub mod agent;
+pub mod attempt;
 pub mod channel;
 pub mod env;
+pub mod launch;
 pub mod output;
 pub mod parse;
 pub mod process;

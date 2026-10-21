@@ -93,6 +93,7 @@ pub struct RootWatcher {
     settle: Duration,
     detector: ChangeDetector,
     hash: Option<String>,
+    snapshot: Option<Snapshot>,
 }
 
 impl RootWatcher {
@@ -104,6 +105,7 @@ impl RootWatcher {
             settle,
             detector: ChangeDetector::new(settle),
             hash: None,
+            snapshot: None,
         }
     }
 
@@ -117,6 +119,13 @@ impl RootWatcher {
     #[must_use]
     pub fn hash(&self) -> Option<&str> {
         self.hash.as_deref()
+    }
+
+    /// The scan the last reported hash was computed from (its `.py` files are what a parse
+    /// job for that hash imports).
+    #[must_use]
+    pub const fn snapshot(&self) -> Option<&Snapshot> {
+        self.snapshot.as_ref()
     }
 
     /// Scans the root at `now`; when it has settled, hashes it and checks that it didn't
@@ -143,6 +152,7 @@ impl RootWatcher {
             return Ok(Poll::Unchanged);
         }
         self.hash = Some(hash.clone());
+        self.snapshot = Some(snapshot.clone());
         Ok(Poll::Changed { hash, snapshot })
     }
 }

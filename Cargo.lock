@@ -2390,19 +2390,28 @@ dependencies = [
 name = "schedr-agent"
 version = "0.1.0"
 dependencies = [
+ "hyper-util",
  "ignore",
  "jiff",
  "pretty_assertions",
  "proptest",
+ "prost-types",
  "rstest",
  "rustix",
+ "schedr-db",
+ "schedr-master",
  "schedr-model",
+ "schedr-proto",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
