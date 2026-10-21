@@ -2036,9 +2036,10 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
        the UI; `schedr runs cancel --backfill <id>` cancels what's left); `[backfill] max_runs`
        (default **1000**: a year of a daily DAG, a month of an hourly one; close to
        `[mapping] max_instances`) rejects bigger backfills, suggesting to split the range.
-     - **Range:** `--from` / `--to` inclusive, time zone as for `--for` (UTC without an offset, with a warning); `--to` optional, a
-       range ending in the future ends at now; no fire time in the range is an error; a DAG
-       without a schedule is an error; `start` / `end` don't limit it (point 1).
+     - **Range:** `--from` / `--to` inclusive, time zone as for `--for` (UTC without an
+       offset, with a warning); `--to` optional, a range ending in the future ends at now; no
+       fire time in the range is an error; a DAG without a schedule is an error; `start` /
+       `end` don't limit it (point 1).
      - **Order:** oldest first, at most `max_active_runs` at a time (competition with scheduled
        runs: point 3).
      - **Parameters:** the `-p` / `--params` values apply to every run, validated once before
