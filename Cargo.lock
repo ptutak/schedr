@@ -2458,6 +2458,7 @@ name = "schedr-master"
 version = "0.1.0"
 dependencies = [
  "croner",
+ "hyper-util",
  "jiff",
  "pretty_assertions",
  "proptest",
@@ -2470,6 +2471,10 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
  "uuid",
 ]
 

@@ -584,6 +584,24 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
    - On **admin request from the UI or CLI** (maintenance): the same, but the worker **stays
      running and idle** and can be resumed.
 
+- **Journal decisions in detail:** an attempt the master doesn't know, or that belongs to
+  another worker: **kill**. One the master ended (lost, assignment expired) while the worker
+  still runs it: **kill**. One whose result is stored and that the worker reports finished:
+  **ack**. One still open: **continue** (the worker keeps its slot for it, or sends its
+  `Finished` again); if its run is being cancelled, `CancelAttempt` is sent again right
+  after `Registered`, since a cancel sent while the worker was away was lost.
+- **Refusals:** a stream must start with `Register` (else `INVALID_ARGUMENT`); an
+  incompatible protocol version, a missing worker ID or a worker ID with a live stream end
+  it with `FAILED_PRECONDITION` and the reason.
+- **Messages for a worker without a live stream are dropped**, not queued: an assignment then
+  expires (no `Started`), a cancel is sent again on reconnect (above), and everything else is
+  either repeated by the worker (`Finished` until `FinishedAck`) or recomputed by the master.
+- **The master's loop** ticks on a timer: commands, then the scheduler, then dispatching (new
+  runs' tasks, retries, expired assignments, assignments), then parse jobs past their timeout
+  and workers past their lease. A failing tick is logged and the next one goes on.
+- **`FetchInputs`** streams an open attempt's inputs in 1 MiB chunks; for an unknown or ended
+  attempt it answers `NOT_FOUND`.
+
 **Rules:**
 
 - **When the master's connection drops, the worker keeps running its tasks**, reconnects with

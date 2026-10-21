@@ -132,6 +132,33 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// A reconnecting worker still runs `attempt_id`: it keeps its slot.
+    pub fn adopt(&mut self, worker_id: &str, attempt_id: &str, now: Timestamp) {
+        self.workers.reserve(worker_id, attempt_id, now);
+    }
+
+    /// The inputs of an open attempt as JSON (what `FetchInputs` streams when they were too
+    /// big for `AssignTask`); `None` for an unknown or ended attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails.
+    pub async fn attempt_inputs(&self, attempt_id: &str) -> Result<Option<Vec<u8>>, DispatchError> {
+        let Some(attempt) = self.db.attempt(attempt_id).await? else {
+            return Ok(None);
+        };
+        if attempt.status.is_some() {
+            return Ok(None);
+        }
+        let Some(run) = self.db.run_tasks(&attempt.run_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.inputs(&run.dag, &attempt.run_id, &attempt.task_id)
+                .await?,
+        ))
+    }
+
     /// A worker is draining: it gets no new tasks.
     pub fn draining(&mut self, worker_id: &str) {
         self.workers.draining(worker_id);
@@ -180,7 +207,9 @@ impl Dispatcher {
             else {
                 continue;
             };
-            let inputs = self.inputs(&ready).await?;
+            let inputs = self
+                .inputs(&ready.dag, &ready.run_id, &ready.task_id)
+                .await?;
             if inputs.len() > MAX_INPUTS {
                 self.end(
                     &attempt_id,
@@ -458,8 +487,13 @@ impl Dispatcher {
     }
 
     /// The upstream outputs the task uses, as JSON (`{task_id: output}`).
-    async fn inputs(&self, ready: &ReadyInstance) -> Result<Vec<u8>, DispatchError> {
-        let Some(task) = ready.dag.task(&ready.task_id) else {
+    async fn inputs(
+        &self,
+        dag: &schedr_model::Dag,
+        run_id: &str,
+        task_id: &TaskId,
+    ) -> Result<Vec<u8>, DispatchError> {
+        let Some(task) = dag.task(task_id) else {
             return Ok(b"{}".to_vec());
         };
         let used: BTreeSet<&TaskId> = task
@@ -470,7 +504,7 @@ impl Dispatcher {
         if used.is_empty() {
             return Ok(b"{}".to_vec());
         }
-        let outputs = self.db.run_outputs(&ready.run_id).await?;
+        let outputs = self.db.run_outputs(run_id).await?;
         let inputs: BTreeMap<&TaskId, &serde_json::Value> =
             outputs.iter().filter(|(id, _)| used.contains(id)).collect();
         Ok(serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()))

@@ -5,6 +5,7 @@
 
 pub mod catalog;
 pub mod commands;
+pub mod core;
 pub mod discovery;
 pub mod dispatch;
 pub mod execution;
@@ -13,5 +14,6 @@ pub mod parse_jobs;
 pub mod planning;
 pub mod progress;
 pub mod scheduler;
+pub mod service;
 pub mod validate;
 pub mod workers;
