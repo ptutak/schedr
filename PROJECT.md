@@ -604,6 +604,11 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   | `lost`               | The worker disappeared                                    | Master     |
   | `assignment_expired` | No `Started` within ~10 s                                 | Master     |
 
+- **How the agent decides the status:** a process the agent stopped (timeout, cancel,
+  drain, memory) gets the status of that reason, however it then ended (a task that exits 0
+  on SIGTERM after its timeout still `timed_out`); otherwise an exit code of the task's
+  outcomes (default `0`) is `success`, any other exit code or a signal is `failed`. A process
+  killed by a signal reports exit code `128 + signal` in its `ProcessResult`, as shells do.
 - **`Finished` contains:** the attempt status, the exit code or signal, the **(output, outcome)
   pair** on success (see Task results and outcomes; for `command` / `script` tasks the output is a
   `ProcessResult` with stdout and stderr), the duration, the peak memory, and an **error kind** for
@@ -724,7 +729,9 @@ OpenShift's restricted security policy doesn't grant.
   (with secret placeholders filled in; declared `secrets=` are not in the environment, see
   Secret storage). The agent's own variables (configuration, certificate paths, Vault auth, anything
   from the pod spec) are passed only if listed in the worker configuration
-  (`[worker] pass_env = ["HTTP_PROXY", ...]`). In the Airflow layer, `append_env=True`
+  (`[worker] pass_env = ["HTTP_PROXY", ...]`). Layers, later ones winning: the allow-list (and
+  every `LC_*`), `pass_env`, the task's `env`, the `SCHEDR_*` run variables. **`SCHEDR_*`
+  names are reserved:** a task's `env` setting one fails the attempt. In the Airflow layer, `append_env=True`
   (`BashOperator`) means "add the allow-listed worker variables", never the whole agent
   environment.
 - **Each DAG root is added to `sys.path`** when parsing DAGs and running Python tasks, so helper

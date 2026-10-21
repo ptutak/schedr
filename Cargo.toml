@@ -23,6 +23,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
 jiff = { version = "0.2.38", features = ["serde"] }
 prost = "0.14.4"
+rustix = { version = "1.1.5", features = ["process"] }
 prost-types = "0.14.4"
 protoc-bin-vendored = "3.3.0"
 schemars = { version = "1.2.3", features = ["jiff02"] }
@@ -30,7 +31,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "macros"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "test-util"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
