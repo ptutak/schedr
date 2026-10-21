@@ -1301,8 +1301,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     there is no deferred manual trigger (see Open questions, Manual runs).
 - **Run time semantics.** No Airflow-style "logical date" shifted one interval back. A run is
   created **when its schedule fires** and knows **`dag_ctx.run.planned_for`** (the fire time;
-  manual runs: see Open questions, Manual runs) and **`dag_ctx.run.since`** (the
-  `planned_for` of the previous scheduled run, so the run covers `(since, planned_for]`; see
+  manual runs: see Open questions, Manual runs) and **`dag_ctx.run.since`** (the previous
+  fire time, so the run covers `(since, planned_for]`; see
   Run parameters and the DAG context). The **first run** is the first fire time at or after
   `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
   schedules run at the fire time.)
@@ -2882,48 +2882,55 @@ Proposal (not yet accepted):
 1. **Time (agreed):** every run has **`dag_ctx.run.planned_for`**, the moment the run is
    **for** (renamed from `scheduled_at`, which promised a schedule a manual run doesn't have;
    not `planned_at`: `*_at` names say when something happened, like `triggered_at`, so it would
-   read as the time the run was planned), and **`dag_ctx.run.since`**, the `planned_for` of a previous run; the run covers
+   read as the time the run was planned), and **`dag_ctx.run.since`**; the run covers
    **`(since, planned_for]`**. Both are always set (never `None`), computed **once when the run
    is created** and stored with it (a later schedule change or another run's result never
-   changes them). `since` replaces an `interval` taken from the schedule's previous fire time,
-   which lost data whenever fire times got no run (master down, `catchup=False`,
-   `max_active_runs`).
+   changes them).
 
    ```python
    extract(since=dag_ctx.run.since, until=dag_ctx.run.planned_for)
    # WHERE updated_at > since AND updated_at <= until
    ```
 
-   | Run | `planned_for` | `since` = `planned_for` of… |
+   | Run | `planned_for` | `since` |
    |---|---|---|
-   | scheduled | the fire time | the previous **scheduled** run |
-   | backfill, `trigger --for <fire time>` | that fire time | the previous **scheduled** run before that fire time (the window the schedule gives it) |
-   | plain `trigger` | the trigger time | the nearest earlier run **of any kind** |
-   | `trigger --for <other time>` | that time | the nearest earlier run **of any kind** |
+   | `planned_for` is a fire time: scheduled, backfill, `trigger --for <fire time>` | the fire time | the **previous fire time** of the schedule |
+   | plain `trigger` | the trigger time | the `planned_for` of the nearest earlier run **of any kind** |
+   | `trigger --for <other time>` | that time | the `planned_for` of the nearest earlier run **of any kind** |
+   | DAG without a schedule (only manual runs) | the trigger time or `--for` | the `planned_for` of the nearest earlier run |
 
-   - **Scheduled runs form their own chain**, which manual runs never change: a manual click
-     never cuts a scheduled period (a daily aggregation still covers the whole day) and the
-     scheduler stays independent of manual runs. A manual run loads everything since the last
-     run of any kind, so it may **overlap** with the next scheduled run (harmless for
-     idempotent loads). A DAG without a schedule has only manual runs: a plain chain of its own
-     runs.
-   - **Missed fire times are folded in:** with the master down for the 10-14 and 10-15 fire
-     times, the 10-16 run gets `since` = 10-13 03:00, so nothing is lost; a DAG that needs
-     strictly one period per run sets `catchup=True`.
-   - **"Previous" means the nearest earlier `planned_for`**, not the run created last, so
-     `--for <fire time>` reproduces the original window: the way to re-run a past day, since
-     there's no "clear". A manual run between two fire times doesn't shrink it.
+   - **One rule for every run on a fire time:** its window is one schedule period, whatever
+     runs exist. So a scheduled run, a backfill run and a `--for` re-run of the same fire time
+     get the same window (the way to re-run a past day, since there's no "clear"); a backfill
+     cuts its range into clean, consecutive periods; a manual click never cuts a scheduled
+     period (a daily aggregation still covers the whole day), and the scheduler stays
+     independent of manual runs.
+   - **Manual runs not on a fire time** load everything since the last run of any kind
+     ("previous" = the nearest earlier `planned_for`, not the run created last), so they may
+     **overlap** with the next scheduled run (harmless for idempotent loads). A DAG without a
+     schedule has only such runs: a plain chain of its own runs.
+   - **Missed fire times leave a hole, by design.** With `catchup=False`, fire times without a
+     run (master down, `max_active_runs` reached) are skipped **with their data**: with the
+     master down for the 10-14 and 10-15 fire times, the 10-16 run covers only
+     `(10-15 03:00, 10-16 03:00]`. A user who needs the hole filled says so explicitly:
+     **`catchup=True`** on the DAG (every period gets its own run) or a **manual backfill**
+     (whose default picks exactly the fire times without a successful run). The UI marks
+     skipped fire times on the DAG's run list. Not chosen: folding missed fire times into the
+     next scheduled run's window (a hidden third behaviour besides `catchup=True/False`; windows
+     would depend on which runs exist, so a backfill or `--for` run couldn't get one clean
+     period).
    - **Failed runs still count**: `since` doesn't depend on how other runs ended (a failed day
-     stays failed until re-run with `--for`). Not chosen: "since the last successful run" (windows
-     would depend on other runs' results and timing).
-   - **First run** (no previous run to measure from): on a scheduled DAG, the **previous fire
-     time** of the schedule (one ordinary period); a DAG can set **`initial_since=`** (a
-     datetime) instead, e.g. to load history on the first run. A DAG **without a schedule**, or
-     with a **`Once`** schedule (no previous fire time), whose references use `since` must set
-     `initial_since` (a parse error otherwise). Not
-     chosen: `-inf` (no such datetime in Python; `datetime.min` breaks many systems, e.g.
-     MySQL's `DATETIME` starts at year 1000; `None` would bring `Optional` into every task); an
-     empty window (the first run silently does nothing).
+     stays failed until re-run with `--for` or a backfill). Not chosen: "since the last
+     successful run" (windows would depend on other runs' results and timing).
+   - **First run:** on a `Cron` / `Every` schedule the rule above already gives one ordinary
+     period (the cron has a previous fire time even before `start`). A DAG can set
+     **`initial_since=`** (a datetime) for the run on its first fire time at or after `start`,
+     e.g. to load history on the first run. A DAG **without a schedule** (its first run) or with
+     a **`Once`** schedule (no previous fire time) whose references use `since` must set
+     `initial_since` (a parse error otherwise). Not chosen: `-inf` (no such datetime in Python;
+     `datetime.min` breaks many systems, e.g. MySQL's `DATETIME` starts at year 1000; `None`
+     would bring `Optional` into every task); an empty window (the first run silently does
+     nothing).
    - Not chosen: separate chains for manual and scheduled runs (a manual run's window would
      depend on when somebody last clicked, possibly months ago); manual runs moving the
      scheduled chain (a click would split a scheduled period; a failed click would lose data).
@@ -2960,8 +2967,25 @@ Proposal (not yet accepted):
      (DAG, `planned_for`) is unique for `kind = scheduled` (a database constraint), so a master
      that crashes after creating a run and restarts can't create the same scheduled run twice;
      manual and backfill runs are exempt (several runs for the same day are allowed).
-2. **Backfill:** `schedr runs backfill report --from … --to … [-p …]`: one run per fire time in
-   the range, oldest first, each like `trigger --for`, respecting `max_active_runs`.
+2. **Backfill (agreed):** `schedr runs backfill report --from … --to … [-p …]`: one run (kind
+   `backfill`) per fire time in the range, each like `trigger --for <fire time>`.
+   - **Window (agreed):** one schedule period per run (see point 1), whether or not a scheduled
+     run ever happened at that fire time; the runs of a backfill cover consecutive periods with
+     no overlap.
+   - **Also agreed:**
+     - **Fire times that already have a run:** by default only fire times with **no successful
+       run** for that `planned_for` (of any kind), evaluated when the backfill is created
+       ("31 fire times, 27 already succeeded, creating 4 runs"); `--all` for every fire time.
+     - **Creation:** all runs at once, as waiting runs sharing a **backfill ID** (progress in
+       the UI; `schedr runs cancel --backfill <id>` cancels what's left); `[backfill] max_runs`
+       (default e.g. 1000) rejects bigger backfills.
+     - **Range:** `--from` / `--to` inclusive, time zone as for `--for`; `--to` optional, a
+       range ending in the future ends at now; no fire time in the range is an error; a DAG
+       without a schedule is an error; `start` / `end` don't limit it (point 1).
+     - **Order:** oldest first, at most `max_active_runs` at a time (competition with scheduled
+       runs: point 3).
+     - **Parameters:** the `-p` / `--params` values apply to every run, validated once before
+       anything is created.
 3. **Overlap:** manual runs count towards `max_active_runs`; a manual run is **never dropped**:
    at the limit it is created and **waits** ("waiting: `max_active_runs` (1) reached"), oldest
    first (unlike a scheduled fire time, which is treated as missed: a missed fire time recurs,
