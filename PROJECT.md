@@ -817,8 +817,8 @@ permission to create pods.
   attempt; it imports the DAG file, runs one task and exits. A straight `1 >> 2 >> 3 >> 4 >> 5`
   DAG starts five processes, possibly on five workers. Main cost: re-importing the DAG file
   and its libraries for each task.
-- **Later (designed): a fork server** as an optional start method. A parent process imports libraries
-  once and forks one child per task attempt, so each task is still its own process (the memory
+- **Later (designed): a fork server** as an optional start method. A parent process imports
+  libraries once and forks one child per task attempt, so each task is still its own process (the memory
   watchdog, timeouts, signal-based cancellation and the journal work unchanged). The runner
   and the agent ↔ runner protocol must not depend on how the process was started, so this can
   be added without changing them.
