@@ -3293,5 +3293,32 @@ items ("possibly later") are noted where they belong.
 
 ### Sensors and events
 
+**Deferred: not revisited until the first version of schedr works.** Until then, sensors stay
+out of scope (see Airflow compatibility, Scope).
+
 Whether and how tasks can wait for a condition or an external event (Airflow's sensors,
-`ExternalTaskSensor`, deferrable operators, Assets). Under discussion.
+`ExternalTaskSensor`, deferrable operators, Assets). Outline from the first discussion, as a
+starting point:
+
+- **Three kinds of waiting**, built in stages:
+  1. **Waiting for a time** ("start at 06:00", "2 hours after upstream"): done by the master
+     alone, like `empty`; a task state `waiting`. Airflow's `TimeDeltaSensor`,
+     `DateTimeSensor`, `TimeSensor`.
+  2. **Polling a condition** (a file, a row, an HTTP status): a `@sensor` returning
+     `Ready[T] | NotYet` (commands and scripts: a reserved "not yet" exit code); each check is
+     one short process on a worker, **no slot held between checks** (Airflow's
+     `mode="reschedule"`; `mode="poke"` would hold scarce slots for hours). A `NotYet` uses no
+     retry; a crash is a failure with the usual retries. Timeout: a failure, or an outcome such
+     as `TimedOut` to route on (Airflow's `soft_fail`). Airflow's `PythonSensor`,
+     `@task.sensor`, `FileSensor`.
+  3. **Events pushed in**: `POST /api/events/<name>` / `schedr events send`; an `EventSensor`
+     matched by name and equality on payload fields (no user code), the payload as output; an
+     `OnEvent(...)` schedule starting runs (overlaps with Assets); internal events emitted by
+     runs and tasks, replacing `ExternalTaskSensor` without polling. Needs event storage and
+     retention, idempotency keys, authentication, rules for events arriving before anything
+     waits, UI views.
+- **Constraints:** the master never runs user code (conditions needing code are worker
+  checks); nothing waits while holding a slot; a sensor's result is its output (a re-run checks
+  again); every Airflow sensor maps onto one of these or stays an error.
+- To settle then: the new task state and the engine rules for checks (`max_active*`, cancel,
+  pause, drain), timeouts as failure or outcome, and the whole event model.
