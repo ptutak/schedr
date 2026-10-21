@@ -1573,7 +1573,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   "load_eu")` (Airflow's name), which can also override `retries`, `retry_delay`, `timeout`,
   `queue`, `max_output_size`; the duplicate-ID error points to it.
 - **`@task` functions declare each parameter**: `*args` / `**kwargs` are a parse error
-  (arguments are stored by name). Async functions are a parse error for now.
+  (arguments are stored by name). Async functions are a parse error for now (see Open
+  questions, Async task functions; planned for M4).
 - **`start`, `end`, `initial_since` without a time zone** (`start="2026-01-01"`, a `date`, a
   naive `datetime`) are read in the **schedule's time zone**, like the cron expression (UTC for
   `Every` and no schedule). An explicit offset wins. (Unlike CLI input, where no offset means
@@ -3596,7 +3597,7 @@ gRPC, journal) come before breadth of features.
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
-| **M4. Native API complete** | outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
+| **M4. Native API complete** | async task functions (decided then, see Open questions); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **Later** | sensors and events (see Open questions), the "possibly later" items | — |
 
@@ -3612,6 +3613,26 @@ gRPC, journal) come before breadth of features.
 
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
+
+### Async task functions
+
+**To be decided in M4** (see Roadmap); until then `async def` tasks are a parse error (see
+Native API).
+
+Whether `@task` (and later cleanups and resource setups) accepts `async def` functions, and
+how. Starting points:
+
+- **It fits the process model:** each attempt is its own process, so the runner can run the
+  coroutine with `asyncio.run(...)`: one event loop per attempt, nothing shared between tasks.
+  Timeouts and the memory watchdog stay outside, in the agent, unchanged; it works the same
+  with the fork server (a fresh child per attempt).
+- **To settle:** what SIGTERM does (cancel the main coroutine so `try` / `finally` and `async
+  with` blocks run within the grace time, then SIGKILL as today); what a plain call outside
+  a DAG returns (the coroutine, to `await` in tests; `task_context` and `run_dag` support);
+  async cleanups and resource setups / cleanups; whether the event loop is configurable
+  (e.g. `uvloop`); errors from tasks left running when the main coroutine returns.
+- Not the same as deferrable operators or waiting for events (see Sensors and events): an
+  async task still holds its slot until it ends.
 
 ### Sensors and events
 
