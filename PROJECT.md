@@ -4129,7 +4129,10 @@ a real server or talks to Postgres is an integration test.
   **Postgres** container (`postgres:17.6-alpine`, Podman when installed, else Docker; on a
   random local port, removed afterwards) and passes `SCHEDR_TEST_POSTGRES_URL`, and passes the
   Python with `schedr` installed as `SCHEDR_TEST_PYTHON`. Run without them, a test fails with a
-  message saying how to run it.
+  message saying how to run it. **In CI** the same tests run in their own `integration` job,
+  with Postgres as a GitHub Actions service container (the same image) and the Python from
+  `uv sync`; the `rust` and `python` jobs run the unit tests only (`-E 'not kind(test)'`,
+  `python/tests/unit`), as `make test-rust` / `make test-python` do.
 - **Each test is isolated:** its own temporary directories, its own database on the test
   server, free ports, and a `schedr standalone` of its own for end-to-end tests; they run in
   parallel.

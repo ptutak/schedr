@@ -26,6 +26,7 @@ jobs:
           cargo llvm-cov nextest --workspace
           --ignore-filename-regex '(^|/)(tests|main)\.rs$'
           --fail-under-lines 85
+          -E 'not kind(test)'
       - run: cargo test --workspace --doc
 
   python:
@@ -43,7 +44,39 @@ jobs:
       - run: uv run ruff format --check python
       - run: uv run ruff check python
       - run: uv run mypy
-      - run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+      - run: uv run pytest python/tests/unit --cov --cov-report=term-missing --cov-fail-under=85
+
+  # Integration tests (see the Makefile, test-integration): real processes, the binary with
+  # the real Python runner, and every query on Postgres (a service container here).
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.6-alpine
+        env:
+          POSTGRES_PASSWORD: schedr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: astral-sh/setup-uv@v4
+      # Installs schedr (built with maturin) into the environment the runner runs from.
+      - run: uv sync --python 3.14
+      - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - run: cargo nextest run --workspace -E 'kind(test)'
+      - run: uv run pytest python/tests/integration
 
   # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on
   # any warning.
