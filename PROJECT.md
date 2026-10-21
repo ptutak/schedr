@@ -1442,7 +1442,10 @@ list) and likewise has no Python.
   losing anything.
 - **Schema upgrades** are applied by a separate command, **`schedr db migrate`**, run as a
   Kubernetes Job or init container before the master starts. The master **refuses to start**
-  against an outdated schema.
+  against an outdated schema. A schema migrated by a **newer** schedr is still usable (schema
+  changes within a major version are additive), so older roles keep running during a rolling
+  upgrade. Each backend has its own migration files (column types differ: `TIMESTAMPTZ`,
+  `UUID`, `JSONB` in Postgres; text in SQLite), always with the same versions.
 
 ### Retention
 
