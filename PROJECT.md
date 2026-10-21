@@ -1700,8 +1700,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   "load_eu")` (Airflow's name), which can also override `retries`, `retry_delay`, `timeout`,
   `queue`, `max_output_size`; the duplicate-ID error points to it.
 - **`@task` functions declare each parameter**: `*args` / `**kwargs` are a parse error
-  (arguments are stored by name). Async functions are a parse error for now (see Open
-  questions, Async task functions; planned for M4).
+  (arguments are stored by name). Async functions are a parse error until M4 (see Async
+  task functions); sensors and triggers are always async (see Sensors and triggers).
 - **`start`, `end`, `initial_since` without a time zone** (`start="2026-01-01"`, a `date`, a
   naive `datetime`) are read in the **schedule's time zone**, like the cron expression (UTC for
   `Every` and no schedule). An explicit offset wins. (Unlike CLI input, where no offset means
@@ -2362,13 +2362,13 @@ TriggerDagOperator(
   trigger whose target is **already in the chain of parent runs** fails the task ("cycle: `a`
   → `b` → `a`"), so runs can't spawn forever.
 - Not chosen: leaving it out (merging DAGs, or triggering from task code: no link, no waiting,
-  failures don't propagate); waiting on another DAG's run (a sensor: see Open questions,
-  Sensors and events).
+  failures don't propagate); waiting on another DAG's run (not covered yet: see Sensors and
+  triggers).
 - **Airflow:** `TriggerDagRunOperator`: `trigger_dag_id` → `dag`, `conf` → `params`,
   `logical_date` → `planned_for` of the new run, `wait_for_completion` → `wait` (Airflow's
   default `False` is set explicitly); `reset_dag_run=True` is an error (no "clear"); non-default
   `allowed_states` / `failed_states` are an error; `poke_interval` is filtered out with a parse
-  warning. `ExternalTaskSensor`: see Open questions, Sensors and events.
+  warning. `ExternalTaskSensor`: not covered yet (see Sensors and triggers).
 
 ### Task results and outcomes
 
@@ -2567,6 +2567,231 @@ Rules:
 - A downstream task taking the whole list of a mapped task whose instances can be skipped gets
   **`None` for skipped instances**, in map-index order, so the element type must allow `None`
   (`list[Rows | None]`), as for any skippable data.
+
+### Async task functions
+
+`@task` accepts `async def` functions (milestone M4; until then they are a parse error).
+
+- **`asyncio.run(...)` per attempt.** Each attempt is its own process, so the runner runs the
+  coroutine in its own event loop: nothing shared between tasks. Timeouts and the memory
+  watchdog stay outside, in the agent, unchanged; it works the same with the fork server (a
+  fresh child per attempt). The master doesn't know or care that a function is `async`:
+  nothing changes in DAG JSON or the protocol.
+- **The division between async and the model:** waiting **within one attempt** (concurrent
+  HTTP calls, an async database driver, an async-only SDK) is local concurrency, `asyncio.run`
+  inside the attempt. Waiting **for something to happen** (a file, an event) is a sensor or a
+  trigger (see Sensors and triggers), which run in the worker's sensor host, not in a task
+  process holding a task slot.
+- **Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
+  runner) so `finally` / `async with` blocks run within the grace time, then SIGKILL as today;
+  async variants of the in-task calls (`await task_ctx.secret(...)`, `await
+  cleanup_handle(...)`) over the same agent socket, so async code never blocks its own event
+  loop; optionally `uvloop` per interpreter in the configuration.
+- Not chosen for tasks: Rust driving the coroutines inside the agent (no Python in the agent:
+  user code could crash it); one shared async process for many tasks (no per-task memory
+  budget or signal-based cancel, one crash or blocking call hurts all of them; sensors accept
+  this trade-off because they mostly wait, tasks don't); coroutines that suspend and resume in
+  another process (a coroutine's state can't be saved).
+- **To settle in M4:** what a plain call outside a DAG returns (the coroutine, to `await` in
+  tests; `task_context` and `run_dag` support); async cleanups and resource setups /
+  cleanups; errors from tasks left running when the main coroutine returns.
+
+### Sensors and triggers
+
+Two ways of waiting for the outside world, both `async def` user code running in the worker's
+**sensor host** (milestone M4, part of the first version):
+
+- A **wait step** (`@sensor`) is a step **inside a run**: it waits for one thing that belongs
+  to that run (the partner's file for this day) and **ends**, with a value or with the
+  `TimedOut` outcome. Downstream tasks run after it, with its value as data.
+- A **trigger** (`@trigger`) **starts runs**: it watches for events (new files in a bucket)
+  and **never ends**; each event creates a run. It belongs to the DAG, not to a run: a DAG
+  with a trigger has `schedule=When(...)` instead of a time schedule.
+
+| | Wait step (inside a run) | Trigger (starts runs) |
+|---|---|---|
+| Full control | `@sensor`: `async def`, returns a value | `@trigger`: async generator, yields events |
+| Poke | `@sensor.poke(every=…)`: returns a value or `NOT_YET` | `@trigger.poke(every=…)`: returns a list of events; empty means nothing happened |
+| Used as | a task in the graph | `Dag(schedule=When(trigger, …))` |
+
+A plain `def` is a parse error for all four; using a wait step in `When(...)`, or a trigger in
+the graph, is a parse error too.
+
+**Wait steps.**
+
+```python
+@sensor(timeout=timedelta(hours=6))
+async def partner_file(day: date) -> Path:          # full control: the user writes the loop
+    async with listen("orders_ready") as channel:    # e.g. Postgres LISTEN
+        ...
+        return path
+
+@sensor.poke(every=timedelta(minutes=1), timeout=timedelta(hours=6))
+async def partner_file(day: date) -> Path | NotYet:  # schedr calls it every minute
+    path = f"s3://in/orders_{day}.csv"
+    return Path(path) if await exists(path) else NOT_YET
+
+with Dag("sync_orders", schedule=DAILY):
+    load(partner_file(dag_ctx.run.planned_for.date()))
+```
+
+- A wait step is a **task kind** (`sensor` in DAG JSON, next to `python`, `command`, `empty`,
+  with `mode: loop | poke`): arguments and references, data flow, `>>`, retries, queues and run
+  results work as for any task. It only runs differently: in the sensor host, on a **sensor
+  slot**, not a task slot.
+- **Poke:** the function always returns something, the value or the `NOT_YET` marker (so a
+  legitimate `None` is never "not yet"); the output type is the return annotation without
+  `NotYet`. schedr calls it every `every`, each call limited to `every` (calls never overlap);
+  a call that raises is a failure with the usual retries (a flaky source is the user's to catch
+  and turn into `NOT_YET`).
+- **Timeout:** a wait step that hasn't finished within its `timeout` (required, or the default
+  from the configuration) ends with the **`TimedOut` outcome**, not a failure: waiting in vain
+  is an expected problem (see Outcomes, failures and joins); tasks branch on it with `.on(...)`,
+  and plain `>>` downstream tasks are skipped.
+
+**Triggers.**
+
+```python
+@trigger
+async def new_files(after: str | None, prefix: str) -> AsyncIterator[Event[Path]]:
+    async for obj in watch_bucket(prefix, start_after=after):
+        yield Event(key=obj.name, data=Path(obj.name), at=obj.modified)
+
+@trigger.poke(every=timedelta(minutes=1))
+async def new_files(after: str | None, prefix: str) -> list[Event[Path]]:
+    return [Event(key=o.name, data=Path(o.name)) for o in await list_after(prefix, after)]
+
+with Dag("ingest", schedule=When(new_files, prefix="s3://in/")):
+    load(dag_ctx.event.data)
+```
+
+- **Events:** `Event(key, data, at=None)`; `data` has a type (`Event[T]`, checked like outputs).
+  The master stores every event in an **`events` table, unique per (DAG, key)**: a key seen
+  before creates no run. Events are acted on in order (yield order; list order for a poke,
+  oldest first); the **last key acted on is the bookmark**, passed back as `after` whenever the
+  trigger starts again (restart, new worker, new code). Delivery is at least once; repeated keys
+  are dropped, so no event is lost or run twice.
+- **A poke that finds nothing leaves no trace:** an empty list creates no run, no event and no
+  history, and the bookmark stays; only "last poked at" on the trigger's status and a debug line
+  in its log. Nothing is kept between calls except `after`. A poke that raises creates nothing,
+  keeps the bookmark, and shows the error on the trigger's status with a count of consecutive
+  failures; the next call comes at the next interval.
+- **Arguments** of a trigger are literals given in `When(...)` (no run exists, so no
+  references).
+- **Runs it creates:** kind **`sensed`**; `dag_ctx.event.key`, `.data`, `.at` (references in
+  the DAG body, values at run time, like `dag_ctx.run`); `planned_for` = the event's `at`, or
+  when the master received it; `since` = the previous event's `planned_for`.
+- **A schedule and a trigger together are not possible:** a DAG has `schedule=When(...)` or a
+  time schedule. (A periodic catch-up is a second DAG on a schedule; if that needs syncing what
+  each processed, the job needs another kind of orchestration.)
+- **`max_active_runs`:** events are requests from the outside world, so they **queue** like
+  manual runs and are never dropped. Who gets a freed place: scheduled → manual, triggered and
+  sensed → backfill. **Back-pressure:** when a DAG has `[sensors] max_queued_events` (default
+  1000) queued sensed runs, the master stops its trigger and starts it again from the bookmark
+  when the queue drains: the events wait in the source, not in our database.
+- **Lifecycle:** one instance per `When` DAG in the cluster. It starts when the DAG is
+  unpaused and stops when it is paused, removed or in conflict; it starts again from the
+  bookmark on unpause and on a new DAG version (new code); `start` / `end` limit when it runs.
+  A trigger that **raises** starts again with backoff (often temporary), the error shown on its
+  status. A generator that **returns** is an error (triggers must keep yielding): it is stopped
+  and not started again until a new DAG version or an explicit restart (UI / CLI).
+- **Manual runs** of a `When` DAG must bring an event (its tasks read `dag_ctx.event`): **re-run
+  a stored event** (`schedr runs trigger ingest --event <key>`, or "Run again" next to the
+  event in the UI), or **supply one** (`--event-key test-1 --event-data '{…}'` or
+  `--event-data @file.json`; a JSON field in the UI form). A plain trigger with neither is
+  rejected. Either way it is a `manual` run, and it **never writes to `events`** (a supplied
+  key there would make the real event a duplicate later). The data is checked as JSON when the
+  command is applied, and against `Event[T]` when the task decodes it (`input_mismatch`).
+- Not available for `When` DAGs: `catchup` and backfill (there are no fire times).
+
+**The sensor host.**
+
+- **One per worker:** the agent starts `python -m schedr.runner sensors`, one long-lived asyncio
+  process, and supervises it like any runner (same socket protocol, multiplexed by sensor ID:
+  `start_sensor`, `cancel_sensor`, `event_ack` from the agent; `sensor_done`, `sensor_failed`,
+  `event`, `log`, `loop_blocked` from the host). Every wait step and trigger assigned to the
+  worker runs in it as a coroutine. Not chosen: a host per queue (more processes and
+  configuration for a half isolation, since tasks on the worker still share it); a thread in
+  the agent (Python inside the agent through PyO3: user code could crash the supervisor); Rust
+  driving the coroutines (they are Python's asyncio and its async libraries; Rust can't make
+  waiting cheaper); a process per sensor (Airflow's poke mode problem: a slot and a process
+  held for hours).
+- **The 30-second rule:** a sensor must reach an `await` within **30 s**
+  (`[sensors] block_limit`); one sensor calling `time.sleep()` or a blocking client would
+  freeze every sensor on the worker. A watchdog thread in the host checks every second that the
+  loop turns; after 30 s it finds the sensor running from the loop thread's stack and reports
+  `loop_blocked`. Python can't cancel a coroutine that doesn't yield, so the agent **kills the
+  host**: that sensor fails with error kind **`blocked_event_loop`** (never retried: it would
+  block again), the others start again without using a retry, and the agent starts a new host.
+  A host that stops answering altogether (its watchdog stuck too) is handled the same way by the
+  agent's own 30 s timeout.
+- **A host crash or memory kill** can't be pinned on one sensor: every sensor on it ends
+  `lost` and uses a retry, as a lost worker's tasks do (retries keep a crash loop bounded).
+  Memory is watched for the host as a whole (`[sensors] memory_budget`).
+- **Cancelling** a sensor cancels its coroutine (`CancelledError` at its next `await`), with
+  the usual grace time; one that doesn't end in time is handled as blocking.
+- **Logs:** each sensor is its own asyncio task with its own context, so `print` and `logging`
+  are routed per sensor; lines go over the socket to the agent, which masks secrets and writes
+  the sensor's log file as for any attempt. Output from threads or C code goes to the host's own
+  log.
+- **Code:** in the host a DAG file is imported under a module name that includes its content
+  hash, so old and new code run side by side; `AssignTask` therefore carries the expected code
+  hash.
+- **Isolation:** sensors on one worker share a process and can read each other's memory and
+  secrets: within "a worker is one trust domain" (see Rust/Python integration), documented;
+  teams that must be separated use separate queues and workers.
+- **Secrets and connections** are asked from the agent over the socket, as in task mode.
+
+**Where sensors run.** Each wait step and each trigger runs on **exactly one worker**, assigned
+by the master (never on all workers: that would multiply the load on the watched system and
+create duplicate events).
+
+- **Wait steps** are attempts: the usual assignment rules (queue, spread by free **sensor
+  slots**, rejections, "code not there yet"), and a wait step with no free sensor slot waits
+  `queued` with the reason shown.
+- **Triggers:** queue from `When(…, queue=…)`, else the DAG's default queue, else `default`;
+  the same spread rule; at most one instance at a time. A trigger with no free sensor slot
+  waits, with the reason on its status.
+- **Capacity:** `[sensors] slots` per worker (e.g. 500), separate from task slots; 0 runs no
+  sensors.
+- **Workers coming and going:** a new worker doesn't take running sensors (no rebalancing in the
+  first version; moving triggers would be cheap, from their bookmark, so it may come later).
+  A **draining** worker hands its triggers and poke wait steps to other workers at once (they
+  start fresh, no retry used); full-control wait steps get the drain grace time, then are
+  interrupted and run again elsewhere without using a retry. A **disconnected** worker keeps
+  them running (the 60 s lease, as for tasks); a **lost** worker's wait steps end `lost` (a
+  retry used), its triggers start elsewhere from the bookmark, and if it comes back it is told
+  to kill them. Two instances of a trigger overlapping briefly after a network split is
+  harmless: repeated event keys are dropped.
+
+**What it adds elsewhere.**
+
+- **DAG JSON:** task kind `sensor` (`mode`, `every_ms`, timeout), schedule `When` (trigger
+  name, literal arguments, queue), `dag_ctx` fields `event_key` / `event_data` / `event_at`, the
+  `Event` type in the type model, the `TimedOut` outcome.
+- **States and storage:** run kind `sensed`; tables `events` and `triggers` (instance, worker,
+  state, bookmark, last error, consecutive failures); error kind `blocked_event_loop`.
+- **Protocol:** `AssignTask` for wait steps; `AssignTrigger`, `CancelTrigger`,
+  `TriggerEvent` / `TriggerEventAck`, `TriggerStopped`; sensor slots in `Register` and
+  `Heartbeat`.
+- **Runner:** a third mode, `sensors`, long-lived and multiplexed.
+- **Master:** a trigger supervisor next to the scheduler; `When` DAGs get no scheduled runs.
+- **CLI / API / UI:** `runs trigger --event …` / `--event-key` / `--event-data`; a DAG's
+  trigger status (running, worker, bookmark, last poke, last error, restart) and its events
+  with "Run again".
+- **Testing DAGs:** wait steps run in the test's event loop (a poke until it returns a value);
+  `run_dag(dag, event=Event(...))` for `When` DAGs; `run_trigger(new_files, after=None,
+  take=3)` collects a trigger's first events; `schedr dags test` takes `--event-key` /
+  `--event-data` for `When` DAGs.
+- **Airflow layer:** `BaseSensorOperator`, `PythonSensor`, `@task.sensor`, `FileSensor` map
+  onto `@sensor.poke` (`poke_interval` → `every`, `timeout` → `timeout`, `soft_fail=True` → the
+  `TimedOut` outcome; `mode` is irrelevant: no slot is held either way); a synchronous `poke()`
+  runs in a bounded thread pool (`asyncio.to_thread`; a thread that hangs can't be killed,
+  documented); deferrable operators and Airflow's triggerer are the same idea as the sensor
+  host and translate onto it where their triggers are plain `async` code.
+- **Not covered (possibly later):** waiting for a time with no user code (a master-side wait,
+  like `empty`); events pushed in through the API (`POST /api/events/...`); runs of other DAGs
+  as events (`ExternalTaskSensor` without polling).
 
 ### Cleanup and resources
 
@@ -3598,7 +3823,8 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   `extract.output` as an argument) without forcing it, so migrated DAGs work at once and can be
   modernized gradually.
 
-Out of scope for now: sensors, Assets, callbacks, pools, hooks. (`pool=` is filtered out with a
+Sensors map onto `@sensor.poke` (see Sensors and triggers: what it adds elsewhere). Out of
+scope for now: Assets, callbacks, pools, hooks. (`pool=` is filtered out with a
 parse warning: dropping it doesn't hide failures; queues cover the need.)
 
 **Custom operators are not supported** (as in the native API, by the principle in Thin
@@ -3801,9 +4027,9 @@ gRPC, journal) come before breadth of features.
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
-| **M4. Native API complete** | async task functions (decided then, see Open questions); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
+| **M4. Native API complete** | async task functions; sensors and triggers with the sensor host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
-| **Later** | sensors and events (see Open questions), the "possibly later" items | — |
+| **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 
 - **The fork server is M2.5**, after M2 and before M3: everything it builds on (the watchdog,
   metrics, a stable agent on Linux pods) is finished in M2, M2 stays focused on running and
@@ -3818,74 +4044,4 @@ gRPC, journal) come before breadth of features.
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
 
-### Async task functions
-
-**Direction agreed; built and finished in M4** (see Roadmap). Until then `async def` tasks are a
-parse error (see Native API).
-
-`@task` (and later cleanups and resource setups) accepting `async def` functions:
-
-- **Direction (agreed): `asyncio.run(...)` per attempt.** Each attempt is its own process, so
-  the runner runs the coroutine in its own event loop: nothing shared between tasks. Timeouts
-  and the memory watchdog stay outside, in the agent, unchanged; it works the same with the
-  fork server (a fresh child per attempt). The master doesn't know or care that a function is
-  `async`: nothing changes in DAG JSON or the protocol.
-- **The division between async and the model:** waiting **within one attempt** (concurrent
-  HTTP calls, an async database driver, an async-only SDK) is local concurrency, `asyncio.run`
-  inside the attempt. Waiting **across time** (a file, an event, another DAG, two hours) is a
-  **model construct** the master tracks (sensors, events, `TriggerDagOperator`), never a
-  suspended coroutine. One rule: a running attempt always holds a slot; anything that waits
-  without a slot is a state the master understands.
-- **Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
-  runner) so `finally` / `async with` blocks run within the grace time, then SIGKILL as today;
-  async variants of the in-task calls (`await task_ctx.secret(...)`, `await
-  cleanup_handle(...)`) over the same agent socket, so async code never blocks its own event
-  loop; optionally `uvloop` per interpreter in the configuration.
-- **A natural base for sensors (future):** a sensor's check can be an `async def` (one poke is
-  one short attempt running the async check with `asyncio.run`), while the waiting between
-  checks stays the master's (`waiting`, no slot held). So async task support built in M4 is
-  what poll sensors later build on (see Sensors and events).
-- Not chosen: Rust driving the coroutines inside the agent (no Python in the agent: user code
-  could crash it); one shared async process for many tasks (no per-task memory budget or
-  signal-based cancel, one crash or blocking call hurts all of them, like threads and
-  subinterpreters); coroutines that suspend across time and resume later, as deferrable
-  operators do (a coroutine's state can't be saved and restored in another process; waiting
-  across time is the model's job).
-- **Still to settle in M4:** what a plain call outside a DAG returns (the coroutine, to
-  `await` in tests; `task_context` and `run_dag` support); async cleanups and resource setups
-  / cleanups; errors from tasks left running when the main coroutine returns.
-- Not the same as deferrable operators or waiting for events (see Sensors and events): an
-  async task still holds its slot until it ends.
-
-### Sensors and events
-
-**Deferred: not revisited until the first version of schedr (M1–M4, see Roadmap) works.**
-Until then, sensors stay out of scope (see Airflow compatibility, Scope).
-
-Whether and how tasks can wait for a condition or an external event (Airflow's sensors,
-`ExternalTaskSensor`, deferrable operators, Assets). Outline from the first discussion, as a
-starting point:
-
-- **Three kinds of waiting**, built in stages:
-  1. **Waiting for a time** ("start at 06:00", "2 hours after upstream"): done by the master
-     alone, like `empty`; a task state `waiting`. Airflow's `TimeDeltaSensor`,
-     `DateTimeSensor`, `TimeSensor`.
-  2. **Polling a condition** (a file, a row, an HTTP status; the check may be an `async def`,
-     built on async task support from M4, see Async task functions): a `@sensor` returning
-     `Ready[T] | NotYet` (commands and scripts: a reserved "not yet" exit code); each check is
-     one short process on a worker, **no slot held between checks** (Airflow's
-     `mode="reschedule"`; `mode="poke"` would hold scarce slots for hours). A `NotYet` uses no
-     retry; a crash is a failure with the usual retries. Timeout: a failure, or an outcome such
-     as `TimedOut` to route on (Airflow's `soft_fail`). Airflow's `PythonSensor`,
-     `@task.sensor`, `FileSensor`.
-  3. **Events pushed in**: `POST /api/events/<name>` / `schedr events send`; an `EventSensor`
-     matched by name and equality on payload fields (no user code), the payload as output; an
-     `OnEvent(...)` schedule starting runs (overlaps with Assets); internal events emitted by
-     runs and tasks, replacing `ExternalTaskSensor` without polling. Needs event storage and
-     retention, idempotency keys, authentication, rules for events arriving before anything
-     waits, UI views.
-- **Constraints:** the master never runs user code (conditions needing code are worker
-  checks); nothing waits while holding a slot; a sensor's result is its output (a re-run checks
-  again); every Airflow sensor maps onto one of these or stays an error.
-- To settle then: the new task state and the engine rules for checks (`max_active*`, cancel,
-  pause, drain), timeouts as failure or outcome, and the whole event model.
+None at the moment.
