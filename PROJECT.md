@@ -207,7 +207,7 @@ One Rust binary, four roles:
   - **Runs in progress:** attempts already running finish; tasks not started yet are
     cancelled.
   - **History** stays in the database, hidden. If a DAG with the same ID appears again, its
-    history shows again. (A future retention policy may clean it up.)
+    history shows again, until retention deletes it (see State storage: Retention).
 
 ### Plain script delivery
 
@@ -1213,6 +1213,42 @@ list) and likewise has no Python.
 - **Schema upgrades** are applied by a separate command, **`schedr db migrate`**, run as a
   Kubernetes Job or init container before the master starts. The master **refuses to start**
   against an outdated schema.
+
+### Retention
+
+How long the database keeps things (logs live on the workers and have their own retention,
+see Task logs). A log may disappear before its run or the other way round; the UI already
+handles "log unavailable".
+
+```toml
+[retention]
+runs = "90d"          # "forever" disables it
+outputs = "90d"       # default: the same as runs; may be shorter
+commands = "365d"
+```
+
+- **Runs:** finished runs older than `runs` are deleted with everything that belongs to them:
+  task instances, attempts, outputs, cleanup handles, resource instances.
+  - **Never deleted:** runs not finished (`queued`, `running`), and **the latest run of each
+    DAG**, whatever its age: a DAG without a schedule quiet for longer than `runs` would
+    otherwise lose its chain (the next manual run would fall back to `initial_since` and reload
+    everything); `RUN_RECOVERED` needs the previous run's result; the UI shows the last run.
+  - Documented consequence: a backfill's default ("fire times without a successful run")
+    sees deleted runs as missing, so a backfill over an old range creates them again.
+- **Outputs:** optionally shorter than runs (they are the bulky part, and nothing needs them
+  once a run has finished, since there's no "clear"; only the UI shows them). The run, its
+  outcomes and statuses stay; the UI shows "output deleted by retention".
+- **Command rows** (the audit trail) are kept independently of runs: a command about a
+  deleted run stays readable.
+- **DAG versions** are kept while **current** or **referenced by a retained run** (a run's
+  graph is drawn from the version it ran with); others are deleted. A **removed DAG** (hidden,
+  history kept) disappears completely once its last run is deleted; if its ID appears again,
+  it starts with no history.
+- **Parse results and import errors:** only the latest per file is kept (older ones are
+  deleted when a newer parse of that root is stored); no setting.
+- **How:** a background job on the master (every hour by default), deleting in **batches**
+  (e.g. 1000 runs per transaction) so it never holds long locks or blocks scheduling; the same
+  in standalone (SQLite). Partitioning tables by time: possibly later.
 
 ## Python API structure
 
@@ -2502,8 +2538,8 @@ map index). A reference to the mapped task's output as a whole, e.g.
 parameter taking data from a task that can be skipped must allow `None` (parse-time check) and
 receives `None` (see Outcomes, failures and joins).
 
-**Retention.** Outputs are stored with their DAG run and **deleted together with it** (when a
-run-history retention policy is added).
+**Retention.** Outputs are stored with their DAG run and **deleted together with it**, or
+earlier if `[retention] outputs` is shorter (see State storage: Retention).
 
 **Dataclasses and Pydantic models** are supported as output and input types.
 
@@ -3054,11 +3090,6 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
-
-### Retention
-
-How long run history, outputs, command rows and DAG versions are kept (only log retention is
-decided).
 
 ### Observability
 
