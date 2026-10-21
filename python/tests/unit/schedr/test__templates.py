@@ -1,9 +1,12 @@
-from datetime import date, timedelta
+import json
+import shlex
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from schedr._model import DagCtxField, DagCtxRef, OutputRef, Template, TemplateRef
-from schedr._templates import RAW, check_spec, is_tstring, to_template
+from schedr._templates import RAW, as_text, check_spec, is_tstring, to_template
 from schedr.context import dag_ctx
 from schedr.tasks import Output
 
@@ -44,8 +47,29 @@ def test_literals_in_shell_commands_are_quoted_unless_raw() -> None:
 
 
 def test_conversions_on_literals() -> None:
-    name, delta = "x", timedelta(seconds=1)
-    assert to_template(t"{name!s}{name!a}{delta}", "w", shell=False) == Template(["x'x'0:00:01"])
+    name = "x"
+    assert to_template(t"{name!s}{name!a}", "w", shell=False) == Template(["x'x'"])
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        ("a b", "a b"),
+        (7, "7"),
+        (1.5, "1.5"),
+        (1.0, "1.0"),
+        (1e20, "1e+20"),
+        (True, "True"),
+        (datetime(2026, 10, 19, 3, tzinfo=UTC), "2026-10-19T03:00:00+00:00"),
+        (date(2026, 10, 19), "2026-10-19"),
+        (timedelta(hours=1), "3600"),
+        (timedelta(milliseconds=1500), "1.5"),
+        (timedelta(days=-1), "-86400"),
+    ],
+)
+def test_literals_are_written_like_the_agent_writes_references(value: object, text: str) -> None:
+    assert as_text(value) == text
+    assert to_template(t"{value}", "w", shell=False) == Template([text])
 
 
 def test_empty_text_pieces_are_dropped() -> None:
@@ -90,3 +114,12 @@ def test_check_spec_raw_only_in_shell() -> None:
 def test_literals_that_format_to_nothing_add_no_text() -> None:
     empty = ""
     assert to_template(t"{empty}x", "w", shell=False) == Template(["x"])
+
+
+def test_the_shared_shell_quoting_fixture_matches_shlex_quote() -> None:
+    """``testdata/shell_quote.json`` is also checked by the Rust tests (render.rs)."""
+    fixture = Path(__file__).parents[4] / "testdata" / "shell_quote.json"
+    cases = json.loads(fixture.read_text())["cases"]
+    assert len(cases) > 20
+    for case in cases:
+        assert shlex.quote(case["input"]) == case["quoted"], case

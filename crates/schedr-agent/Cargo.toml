@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+jiff.workspace = true
 rustix.workspace = true
 schedr-model.workspace = true
 serde.workspace = true
@@ -17,6 +18,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+proptest.workspace = true
 rstest.workspace = true
 
 [lints]

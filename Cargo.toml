@@ -41,6 +41,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fm
 # Test-only crates (see PROJECT.md, Repository and tooling: Testing).
 insta = { version = "1.49.0", features = ["json"] }
 pretty_assertions = "1.4.1"
+proptest = "1.12.0"
 rstest = "0.28.0"
 
 [workspace.lints.rust]

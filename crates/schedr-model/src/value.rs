@@ -26,7 +26,9 @@ pub enum PathElem {
 }
 
 /// A field of the run's context, `dag_ctx.run.*` and `dag_ctx.dag_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DagCtxField {
     /// `dag_ctx.run.id`.

@@ -9,5 +9,6 @@ pub mod channel;
 pub mod env;
 pub mod output;
 pub mod process;
+pub mod render;
 pub mod status;
 pub mod supervise;

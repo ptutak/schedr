@@ -59,6 +59,28 @@ def check_spec(spec: str, *, shell: bool, where: str) -> None:
     )
 
 
+def as_text(value: object) -> str:
+    """A value written as text the way the agent writes references (``render.rs``).
+
+    Strings as they are; numbers and booleans as ``str()`` does; ``datetime`` and ``date`` in
+    ISO 8601 (``2026-10-19T03:00:00+00:00``); ``timedelta`` as total seconds (``3600``,
+    ``1.5``).
+
+    Args:
+        value: The value.
+
+    Returns:
+        Its text.
+    """
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        micros = (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
+        seconds, rest = divmod(micros, 1_000_000)
+        return str(seconds) if rest == 0 else str(micros / 1_000_000)
+    return str(value)
+
+
 def _format_literal(item: Interpolation[object], *, shell: bool, where: str) -> str:
     value = item.value
     if value is None or not isinstance(value, _LITERAL_TYPES):
@@ -76,8 +98,8 @@ def _format_literal(item: Interpolation[object], *, shell: bool, where: str) -> 
     if spec == RAW:
         if not shell:
             raise ValueError(f"{where}: `:raw` only applies to shell commands")
-        return str(value)
-    text = format(value, spec)
+        return as_text(value)
+    text = as_text(value) if not spec else format(value, spec)
     return shlex.quote(text) if shell else text
 
 

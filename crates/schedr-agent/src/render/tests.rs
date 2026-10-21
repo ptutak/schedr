@@ -1,0 +1,333 @@
+use pretty_assertions::assert_eq;
+use proptest::prelude::*;
+use rstest::rstest;
+use schedr_model::{TaskId, TemplateRef};
+
+use super::*;
+
+fn ctx() -> RenderContext {
+    let mut ctx = RenderContext::new(
+        "sync",
+        "0192c4e1",
+        "manual",
+        "2026-10-15T03:00:00Z",
+        "2026-10-14T03:00:00Z",
+    );
+    ctx.inputs.insert("count".into(), json!(120));
+    ctx.inputs.insert(
+        "extract".into(),
+        json!({"rows": [{"id": "a b"}, {"id": "c"}], "pair": {"$tuple": [1, "x"]}}),
+    );
+    ctx.inputs.insert(
+        "listing".into(),
+        json!({"stdout": "...tail", "stderr": "", "exit_code": 0,
+               "stdout_truncated": true, "stderr_truncated": false}),
+    );
+    ctx
+}
+
+fn output(task: &str, path: Vec<PathElem>) -> Reference {
+    Reference::Output {
+        task: TaskId::new(task).unwrap(),
+        path,
+    }
+}
+
+fn field(name: &str) -> PathElem {
+    PathElem::Field(name.into())
+}
+
+fn part(reference: Reference, format: Option<&str>) -> TemplatePart {
+    TemplatePart::Ref(TemplateRef {
+        reference,
+        format: format.map(str::to_owned),
+    })
+}
+
+fn text(s: &str) -> TemplatePart {
+    TemplatePart::Text(s.into())
+}
+
+const PLANNED_FOR: Reference = Reference::DagCtx {
+    field: DagCtxField::PlannedFor,
+};
+
+#[rstest]
+#[case(Reference::DagCtx { field: DagCtxField::DagId }, "dag_ctx.dag_id")]
+#[case(Reference::DagCtx { field: DagCtxField::RunId }, "dag_ctx.run.id")]
+#[case(Reference::DagCtx { field: DagCtxField::RunKind }, "dag_ctx.run.kind")]
+#[case(PLANNED_FOR, "dag_ctx.run.planned_for")]
+#[case(output("extract", vec![field("rows"), PathElem::Index(0), field("id")]), "extract.rows[0].id")]
+fn reference_labels(#[case] reference: Reference, #[case] label: &str) {
+    assert_eq!(reference_label(&reference), label);
+}
+
+#[test]
+fn resolve_follows_paths_tuples_and_dag_ctx() {
+    let ctx = ctx();
+    assert_eq!(
+        resolve(&output("count", vec![]), &ctx).unwrap(),
+        &json!(120)
+    );
+    assert_eq!(
+        resolve(
+            &output(
+                "extract",
+                vec![field("rows"), PathElem::Index(1), field("id")]
+            ),
+            &ctx
+        )
+        .unwrap(),
+        &json!("c")
+    );
+    assert_eq!(
+        resolve(
+            &output("extract", vec![field("pair"), PathElem::Index(1)]),
+            &ctx
+        )
+        .unwrap(),
+        &json!("x")
+    );
+    assert_eq!(
+        resolve(&PLANNED_FOR, &ctx).unwrap(),
+        &json!({"$datetime": "2026-10-15T03:00:00Z"})
+    );
+}
+
+#[rstest]
+#[case(output("missing", vec![]), RenderError::MissingInput("missing".into()))]
+#[case(output("extract", vec![field("nope")]), RenderError::MissingPath("extract.nope".into()))]
+#[case(output("extract", vec![field("rows"), PathElem::Index(9)]), RenderError::MissingPath("extract.rows[9]".into()))]
+#[case(output("count", vec![field("x")]), RenderError::MissingPath("count.x".into()))]
+#[case(output("count", vec![PathElem::Index(0)]), RenderError::MissingPath("count[0]".into()))]
+#[case(output("listing", vec![field("stdout")]), RenderError::Truncated("listing.stdout".into()))]
+fn resolve_errors(#[case] reference: Reference, #[case] expected: RenderError) {
+    assert_eq!(resolve(&reference, &ctx()).unwrap_err(), expected);
+}
+
+#[test]
+fn a_missing_dag_ctx_field_is_a_missing_input() {
+    let err = resolve(&PLANNED_FOR, &RenderContext::default()).unwrap_err();
+    assert_eq!(
+        err,
+        RenderError::MissingInput("dag_ctx.run.planned_for".into())
+    );
+}
+
+#[test]
+fn an_untruncated_stream_resolves() {
+    let ctx = ctx();
+    assert_eq!(
+        resolve(&output("listing", vec![field("stderr")]), &ctx).unwrap(),
+        &json!("")
+    );
+}
+
+#[rstest]
+#[case(0.0, "0.0")]
+#[case(1.0, "1.0")]
+#[case(1.5, "1.5")]
+#[case(-2.25, "-2.25")]
+#[case(0.1, "0.1")]
+#[case(1e15, "1000000000000000.0")]
+#[case(1e16, "1e+16")]
+#[case(1.5e20, "1.5e+20")]
+#[case(0.0001, "0.0001")]
+#[case(0.00001, "1e-05")]
+#[case(-0.0, "-0.0")]
+#[case(f64::NAN, "nan")]
+#[case(f64::INFINITY, "inf")]
+#[case(f64::NEG_INFINITY, "-inf")]
+fn floats_are_written_like_python(#[case] value: f64, #[case] expected: &str) {
+    assert_eq!(python_float(value), expected);
+}
+
+#[rstest]
+#[case(json!("a b"), None, "a b")]
+#[case(json!(7), None, "7")]
+#[case(json!(1.5), None, "1.5")]
+#[case(json!(true), None, "True")]
+#[case(json!(false), None, "False")]
+#[case(json!({"$datetime": "2026-10-19T03:00:00+00:00"}), None, "2026-10-19T03:00:00+00:00")]
+#[case(json!({"$datetime": "2026-10-19T05:30:00+02:00"}), Some("%Y-%m-%d %H:%M %z"), "2026-10-19 05:30 +0200")]
+#[case(json!({"$datetime": "2026-10-15T03:00:00Z"}), Some("%d.%m.%Y"), "15.10.2026")]
+#[case(json!({"$date": "2026-10-19"}), None, "2026-10-19")]
+#[case(json!({"$date": "2026-10-19"}), Some("%Y%m%d"), "20261019")]
+#[case(json!({"$timedelta": 3_600_000_000_i64}), None, "3600")]
+#[case(json!({"$timedelta": 1_500_000}), None, "1.5")]
+#[case(json!({"$timedelta": -86_400_000_000_i64}), None, "-86400")]
+#[case(json!("x"), Some("raw"), "x")]
+#[case(json!("x"), Some(""), "x")]
+fn values_as_text(#[case] value: Value, #[case] spec: Option<&str>, #[case] expected: &str) {
+    assert_eq!(to_text(&value, spec, "r").unwrap(), expected);
+}
+
+#[rstest]
+#[case(json!(null), "`r` is None, which can't be rendered into text")]
+#[case(json!([1]), "`r` is a list, which can't be rendered into text")]
+#[case(json!({"a": 1}), "`r` is an object, which can't be rendered into text")]
+fn unrenderable_values(#[case] value: Value, #[case] message: &str) {
+    assert_eq!(to_text(&value, None, "r").unwrap_err().to_string(), message);
+}
+
+#[rstest]
+#[case(json!(5), "%Y", "only dates and times take a format spec")]
+#[case(json!({"$timedelta": 1}), "%S", "durations are written as seconds")]
+#[case(json!({"$datetime": "not a date"}), "%Y", "the stored date is invalid")]
+#[case(json!({"$datetime": "2026-10-19T03:00:00+00:00"}), "%Y %", "")]
+fn bad_format_specs(#[case] value: Value, #[case] spec: &str, #[case] reason: &str) {
+    let err = to_text(&value, Some(spec), "r").unwrap_err();
+    assert!(matches!(&err, RenderError::BadFormat { .. }), "{err:?}");
+    assert!(err.to_string().contains(reason), "{err}");
+}
+
+#[derive(serde::Deserialize)]
+struct Fixture {
+    cases: Vec<Case>,
+}
+
+#[derive(serde::Deserialize)]
+struct Case {
+    input: String,
+    quoted: String,
+}
+
+#[test]
+fn shell_quote_matches_python_shlex_quote_on_the_shared_fixture() {
+    let text = include_str!("../../../../testdata/shell_quote.json");
+    let fixture: Fixture = serde_json::from_str(text).unwrap();
+    assert!(fixture.cases.len() > 20);
+    for case in fixture.cases {
+        assert_eq!(
+            shell_quote(&case.input),
+            case.quoted,
+            "input {:?}",
+            case.input
+        );
+    }
+}
+
+/// Undoes POSIX single quoting as `sh` would: a test oracle for `shell_quote`.
+fn sh_unquote(quoted: &str) -> String {
+    let mut out = String::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => out.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => out.extend(chars.by_ref().take_while(|&c| c != '"')),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+proptest! {
+    #[test]
+    fn quoting_round_trips_through_the_shell(s in ".*") {
+        prop_assert_eq!(sh_unquote(&shell_quote(&s)), s);
+    }
+
+    #[test]
+    fn safe_strings_stay_as_they_are(s in "[A-Za-z0-9_@%+=:,./-]+") {
+        prop_assert_eq!(shell_quote(&s), s);
+    }
+
+    #[test]
+    fn unsafe_strings_are_wrapped_in_single_quotes(s in ".*[^A-Za-z0-9_@%+=:,./-].*") {
+        let quoted = shell_quote(&s);
+        prop_assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
+    }
+}
+
+#[test]
+fn render_quotes_references_in_shell_commands_unless_raw() {
+    let template = Template(vec![
+        text("./notify.sh "),
+        part(
+            output(
+                "extract",
+                vec![field("rows"), PathElem::Index(0), field("id")],
+            ),
+            None,
+        ),
+        text(" "),
+        part(output("count", vec![]), Some("raw")),
+        text(" "),
+        part(PLANNED_FOR, Some("%Y-%m-%d")),
+    ]);
+    let ctx = ctx();
+    assert_eq!(
+        render(&template, &ctx, true).unwrap(),
+        "./notify.sh 'a b' 120 2026-10-15"
+    );
+    assert_eq!(
+        render(&template, &ctx, false).unwrap(),
+        "./notify.sh a b 120 2026-10-15"
+    );
+}
+
+#[test]
+fn render_reports_resolution_errors() {
+    let template = Template(vec![part(output("missing", vec![]), None)]);
+    assert_eq!(
+        render(&template, &ctx(), false).unwrap_err().to_string(),
+        "the output of `missing` isn't among the task's inputs"
+    );
+}
+
+#[test]
+fn shell_command_lines_run_through_sh() {
+    let line = CommandLine::Shell(Template(vec![
+        text("echo "),
+        part(
+            output(
+                "extract",
+                vec![field("rows"), PathElem::Index(0), field("id")],
+            ),
+            None,
+        ),
+    ]));
+    assert_eq!(
+        command_line(&line, &ctx()).unwrap(),
+        (
+            "/bin/sh".to_owned(),
+            vec!["-c".to_owned(), "echo 'a b'".to_owned()]
+        )
+    );
+}
+
+#[test]
+fn argument_lists_render_each_element_unquoted() {
+    let line = CommandLine::Argv(vec![
+        Template::text("./notify.sh"),
+        Template(vec![text("--day="), part(PLANNED_FOR, Some("%Y-%m-%d"))]),
+        Template(vec![part(
+            output(
+                "extract",
+                vec![field("rows"), PathElem::Index(0), field("id")],
+            ),
+            None,
+        )]),
+    ]);
+    assert_eq!(
+        command_line(&line, &ctx()).unwrap(),
+        (
+            "./notify.sh".to_owned(),
+            vec!["--day=2026-10-15".to_owned(), "a b".to_owned()]
+        )
+    );
+}
+
+#[test]
+fn an_empty_argument_list_has_no_program() {
+    assert_eq!(
+        command_line(&CommandLine::Argv(vec![]), &ctx()).unwrap(),
+        (String::new(), vec![])
+    );
+}
+
+#[test]
+fn argument_list_errors_are_reported() {
+    let line = CommandLine::Argv(vec![Template(vec![part(output("missing", vec![]), None)])]);
+    assert!(command_line(&line, &ctx()).is_err());
+}

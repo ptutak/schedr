@@ -3431,6 +3431,16 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     `t"--region {region}"`) are formatted **at parse time** (any Python format spec and
     conversion); in a shell command they are shell-quoted too, unless `:raw`. `None`,
     containers, objects and nested t-strings are parse errors.
+  - **Values as text** (references rendered by the agent and plain values formatted by the
+    Python API at parse time, so a t-string mixing both is consistent): strings as they are;
+    `int` / `float` / `bool` as Python's `str()` (`7`, `1.5`, `1.0`, `1e+20`, `True`);
+    `datetime` and `date` in ISO 8601 (`2026-10-19T03:00:00+00:00`, `2026-10-19`; not
+    `str()`'s space); `timedelta` as total seconds (`3600`, `1.5`; not `1:00:00`). A
+    `strftime` spec formats a `datetime` in its own offset. A reference to a truncated
+    `stdout` / `stderr` is a run-time error.
+  - **Quoting parity:** the agent's quoting is tested against a shared fixture
+    (`testdata/shell_quote.json`) that the Python tests check against `shlex.quote`, plus
+    property tests (quoting always round-trips through the shell).
   - **Where t-strings go:** a `CommandOperator` command (a shell string), each element of an
     argument list, `env` values, and any task argument (also inside lists, tuples and dict
     values). A t-string task argument renders to a `str`, so its parameter must accept `str`.
