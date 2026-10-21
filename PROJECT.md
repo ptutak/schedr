@@ -79,9 +79,18 @@ One Rust binary, four roles:
     streams; reconnection is built into SSE.
   - **Live log tail** is SSE too: the webserver relays the worker's tail stream (see Task logs).
   - Standalone: the webserver polls the database instead of listening.
-- **The user CLI uses the webserver's API**, the same one as the UI (`schedr dags list`,
-  `schedr runs trigger`, `schedr runs cancel`, `schedr workers drain`, …): one API, one place for
-  authentication and permissions. The master's gRPC API stays internal to the workers.
+- **The user CLI uses the webserver's API**, the same one as the UI: one API, one place for
+  authentication and permissions. Commands (see Runs: manual runs, backfill and pausing):
+
+  | Command | Does |
+  |---|---|
+  | `schedr dags list`, `schedr dags pause <dag>` / `unpause <dag>` | list DAGs; stop / resume the scheduler creating runs |
+  | `schedr runs trigger <dag> [--for <time>] [-p …] [--params '{…}']` | a manual run |
+  | `schedr runs backfill <dag> --from … [--to …] [--all] [-p …]` | a backfill |
+  | `schedr runs list <dag> [--for <time>]` | runs, with their IDs |
+  | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
+  | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
+ The master's gRPC API stays internal to the workers.
   - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
     to the repository, and **CI fails if it is out of date** (like the JSON Schema).
   - Not part of the user CLI: `schedr task-ctx` (talks to the agent), server commands such as
@@ -272,12 +281,15 @@ env = { REPORT_MODE = "full", DB_PASSWORD = { secret = "etl/db#password" } }   #
 secrets = ["etl/api#token"]        # readable only with `schedr task-ctx secret get` (not in env)
 working_dir = "reports"            # relative to this file; default: this file's directory
 schedule = "0 3 * * *"             # optional; cron or preset ("@daily")
-every = "1h"                       # alternative to schedule; not both
+every = "1h"                       # alternative to schedule
+once = 2026-12-24T23:00:00         # alternative to schedule: one fire time (native Once)
 timezone = "Europe/Warsaw"         # default UTC
 start = 2026-01-01                 # TOML date/datetime
 end = 2026-12-31                   # optional; last scheduled run at or before it
+initial_since = 2020-01-01         # optional; `since` of the first run (native initial_since)
 catchup = false                    # default false
 max_active_runs = 1                # default 1 (no overlapping runs)
+notify = ["ops-slack"]             # server channels; or { "ops-slack" = ["RUN_FAILED", "RUN_RECOVERED"] }
 queue = "default"
 retries = 2
 retry_delay = "5m"
@@ -295,10 +307,16 @@ NO_DATA = 3
   limits, `ProcessResult` output). **Unknown keys are an error.**
 - Durations as `"30s"`, `"5m"`, `"1h30m"`; sizes as `"4MiB"` (same format as the server
   configuration).
-- **`schedule` is optional.** With a schedule (or `every`), the declaration is a **standalone
-  job**: a one-task DAG, paused when first found like any new DAG, whose ID is its reference
-  (e.g. `etl-repo:team_a/schedr.toml#report_daily`); it can also be used from DAGs. Without
-  one, it is only used from DAGs or triggered manually.
+- **At most one of `schedule`, `every`, `once`.**
+- **`notify`** names **server channels** only, as a list (default events) or a table choosing
+  events per channel (event names as in `Event`). DAG-defined `EmailChannel`s are Python
+  objects, so they exist only in DAG files.
+- **No concurrency keys** (`max_active_tasks`, `max_active`, `max_active_per_run`): a job is a
+  one-task DAG, so `max_active_runs` covers it.
+- **`schedule` is optional.** With a schedule (or `every` / `once`), the declaration is a
+  **standalone job**: a one-task DAG, paused when first found like any new DAG, whose ID is its
+  reference (e.g. `etl-repo:team_a/schedr.toml#report_daily`); it can also be used from DAGs.
+  Without one, it is only used from DAGs or triggered manually.
 - **To use a script in a DAG, it must be declared** in a `schedr.toml` inside
   `SCHEDR_SCRIPT_PATH`, typically **without a schedule**. There is no way to run an undeclared
   script file.
@@ -317,9 +335,10 @@ ScriptOperator("report", job="etl:team_a/schedr.toml#report_daily",
 - Refers to a declaration by its **reference string**, the same format as the job ID (absolute
   `"/path/schedr.toml#name"` also accepted). **Checked at parse time** (file exists, job
   declared); otherwise an import error.
-- Takes **everything except the scheduling keys** (`schedule`, `every`, `timezone`, `start`, `end`,
-  `catchup`, `max_active_runs`) and can **override** `args`, `env`, `secrets`, `queue`, `retries`,
-  `retry_delay`, `timeout`, `max_output_size`, `outcomes` (an `Outcome` enum).
+- Takes **everything except the DAG-level keys** (`schedule`, `every`, `once`, `timezone`,
+  `start`, `end`, `initial_since`, `catchup`, `max_active_runs`, `notify`, `params`) and can
+  **override** `args`, `env`, `secrets`, `queue`, `retries`, `retry_delay`, `timeout`,
+  `max_output_size`, `outcomes` (an `Outcome` enum).
 - In the operator, `args` and `env` values may be t-strings / output references (rendered by
   the agent; argument lists, so no shell quoting needed).
 - It is the **only** script operator: there is no operator that runs a script file directly.
@@ -464,9 +483,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   lease clock starts again from zero.
 - A worker that was declared `LOST` and comes back is told to **kill** the attempts it still
   runs (they were already failed and retried).
-- The worker's **liveness probe** (`/healthz` on the ops port, see Observability) checks only the agent's own
-  health, **never** whether the master is reachable (otherwise a master outage would restart
-  every worker and kill all running tasks). Workers need no readiness probe.
+- The worker's **liveness probe** (`/healthz` on the ops port, see Observability) checks only
+  the agent's own health, **never** whether the master is reachable (otherwise a master outage
+  would restart every worker and kill all running tasks). Workers need no readiness probe.
 - `OFFLINE` and `LOST` workers **stay listed for the same period as log retention**, so old
   logs can still be located (the UI shows them as unavailable).
 
@@ -549,6 +568,10 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
     compatibility.
   - Failed Python tasks include a structured **error summary**: exception type, message and the
     last lines of the traceback, so the UI can show it without opening the log.
+- **Run states:** **`queued`** (created, waiting for `max_active_runs`; only manual and backfill
+  runs wait, see Runs: manual runs, backfill and pausing), **`running`**, and the results
+  **`success`**, **`failed`**, **`cancelled`** (set once every task and cleanup has finished,
+  by the run result rule, see Outcomes, failures and joins: Run result).
 - **Task instance states** (where the task stands in its DAG run, decided by the master from
   attempt statuses, retries and the DAG structure): `scheduled`, `queued`, `unschedulable`,
   `running`, **`cleaning_up`** (the task's process has ended and its per-task cleanup is
@@ -940,8 +963,11 @@ list) and likewise has no Python.
 **Phase 3: Creating a run (master)**
 
 11. **Trigger.** The master's scheduling loop finds that `sync` is due by its schedule; missed
-    runs follow the `catchup` rules. [D] A run can also be started manually from the UI or CLI.
-    The master creates a **DAG run** in Postgres.
+    fire times follow the `catchup` rules. [D] The master creates a **DAG run** in Postgres
+    (kind `scheduled`, ID a UUIDv7) with `planned_for` = the fire time and `since` = the
+    previous fire time; the run covers `(since, planned_for]`. [D] A run can also be created
+    by a person (`schedr runs trigger`, a backfill, the UI): the command is validated and
+    applied by the master, and the run may wait as `queued` for `max_active_runs`. [D]
 12. **Task instances.** The master creates `extract` and `load` in state `scheduled`. `extract`
     has no upstream tasks, so it is ready and moves to `queued`. [D]
 
