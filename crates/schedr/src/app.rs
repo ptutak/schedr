@@ -7,7 +7,7 @@ use std::path::Path;
 use schedr_config::{Config, ConfigError, FileSource, config_file, load};
 use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
-use crate::cli::{ClientArgs, Command, DbCommand};
+use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
 use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
 use crate::times::local_zone;
 use crate::user::{Output, run_dags, run_runs};
@@ -49,6 +49,10 @@ pub enum AppError {
     /// An argument doesn't read (e.g. a `--for` time).
     #[error("{0}")]
     BadArgument(String),
+    /// The command did its job and the answer is "no": checks found errors, a run didn't
+    /// succeed.
+    #[error("{0}")]
+    Failed(String),
     /// Writing the command's output failed.
     #[error("can't write output: {0}")]
     Output(#[from] io::Error),
@@ -159,6 +163,13 @@ pub async fn execute(
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
         (Command::Standalone, None) => crate::standalone::command(config, env).await,
+        (
+            Command::Dags {
+                client,
+                command: command @ (DagsCommand::Check { .. } | DagsCommand::Test { .. }),
+            },
+            None,
+        ) => crate::local::run_local(command, config, env, client.json, out).await,
         (Command::Dags { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_dags(command, &api, &output, out).await

@@ -161,6 +161,10 @@ pub enum DagsCommand {
         /// Run only this task and its upstream tasks.
         #[arg(long, value_name = "TASK_ID")]
         task: Option<String>,
+        /// The DAG files: a directory (a DAG root) or one file; default: the configured DAG
+        /// roots (`SCHEDR_DAG_PATH`), else the current directory.
+        #[arg(long, value_name = "PATH")]
+        path: Option<PathBuf>,
     },
 }
 

@@ -14,6 +14,7 @@ use clap::error::ErrorKind;
 pub mod app;
 pub mod cli;
 pub mod client;
+pub mod local;
 pub mod logging;
 pub mod standalone;
 pub mod times;

@@ -8,6 +8,7 @@ raises reports an import error and doesn't stop the others.
 
 import hashlib
 import importlib.util
+import os
 import re
 import sys
 import traceback
@@ -81,8 +82,18 @@ def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:
     return [entry.model for entry in import_dag_entries(root, root_dir, path)]
 
 
+_SCHEDR_DIR = str(Path(__file__).resolve().parents[1]) + os.sep
+
+
+def _internal(filename: str) -> bool:
+    return filename.startswith((_SCHEDR_DIR, "<frozen importlib"))
+
+
 def import_error(error: BaseException) -> dict[str, str]:
-    """An import error as sent to the agent.
+    """An import error (or a task's failure) as sent to the agent.
+
+    The traceback starts at the user's code: the runner's own frames and ``importlib``'s before
+    it are left out (all of them are kept when every frame is schedr's).
 
     Args:
         error: The exception.
@@ -90,7 +101,11 @@ def import_error(error: BaseException) -> dict[str, str]:
     Returns:
         Its class name, message and the last :data:`TRACEBACK_LINES` lines of the traceback.
     """
-    lines = "".join(traceback.format_exception(error)).splitlines()
+    tb = error.__traceback__
+    while tb is not None and _internal(tb.tb_frame.f_code.co_filename):
+        tb = tb.tb_next
+    shown = error.__traceback__ if tb is None else tb
+    lines = "".join(traceback.format_exception(type(error), error, shown)).splitlines()
     return {
         "exception": type(error).__name__,
         "message": str(error),

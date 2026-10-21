@@ -162,6 +162,21 @@ def test_import_error_keeps_the_type_message_and_traceback_tail(
     assert len(import_error(info.value)["traceback"].splitlines()) == 2
 
 
+def test_an_import_traceback_starts_at_the_dag_file(root: Path) -> None:
+    lines = file_result("etl", root, "partial.py")["error"]["traceback"].splitlines()
+    assert lines[0] == "Traceback (most recent call last):"
+    assert lines[1].startswith(f'  File "{root / "partial.py"}", line ')
+    assert all("schedr/runner" not in line for line in lines)
+
+
+def test_an_error_inside_schedr_keeps_its_whole_traceback(root: Path) -> None:
+    (root / "data.txt").write_text("x")
+    with pytest.raises(ImportError) as info:
+        import_dag_file("etl", root, "data.txt")
+    lines = import_error(info.value)["traceback"].splitlines()
+    assert any("schedr/runner/parse.py" in line for line in lines)
+
+
 def test_file_result_for_success_and_failure(
     root: Path, validate_runner_message: Callable[[Any], None]
 ) -> None:

@@ -350,7 +350,7 @@ async fn later_features_and_bad_arguments_are_errors() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "`schedr dags check / dags test` isn't implemented yet (milestone M1 (1.15))"
+        "`dags check` and `dags test` run locally, not against a server"
     );
 }
 

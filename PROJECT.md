@@ -3441,6 +3441,17 @@ and no cluster. Four levels, from cheapest to fullest.
 - **Static check: `schedr dags check <path>`** (see Upgrades and compatibility): parses DAG
   files and `schedr.toml` files, reports import errors and parse warnings; non-zero exit code
   on errors.
+  - **How it works (1.15a):** `<path>` is a directory (a DAG root named after it, scanned
+    with its `.schedrignore` like a configured root) or one file (checked alone, its directory
+    on `sys.path`). The files are parsed by the **real runner** (`python -m schedr.runner
+    parse`, the `[dags] interpreter`) and then go through **the master's own checks** (the same
+    `validate_files`: cron fields, schedules, task references, ...), so a DAG that passes here
+    isn't rejected by the master. One line per file (`ok  sync.py: sync (2 tasks)` or `error
+    broken.py: ModuleNotFoundError: ...` with its traceback), then a summary; `--json` gives
+    `{"files": [{path, dags, error}]}`. Exit code 1 if any file has an error.
+  - **Tracebacks start at the user's code:** the runner drops its own and `importlib`'s leading
+    frames from import errors (in `dags check`, the UI and the DB alike), so the first frame
+    shown is the DAG file's.
 - **Local version vs the workers:** a DAG written with a newer local `schedr` than the worker
   image may use a feature the workers don't have (an import error in the UI, never silent).
   Documented: pin the local `schedr` to the worker image's version in the DAG repository's dev
@@ -3470,6 +3481,22 @@ and no cluster. Four levels, from cheapest to fullest.
   code 0 if the run ended `success`, 1 if `failed`. `--task <id>` runs that task and its
   upstream tasks only. Not chosen: running the tasks in one Python process like Airflow's
   `dag.test()` (faster, but skips what differs in production).
+  - **How it works (1.15a):** `schedr standalone` in the same process, on 127.0.0.1 with ports
+    chosen by the system (0) and a temporary data directory (SQLite, logs) removed afterwards;
+    the run is a `manual` run triggered and followed through the REST API, like the CLI does.
+    The DAG roots are `--path <file or dir>` if given, else the configured roots, else the
+    current directory. **Before starting anything the files are parsed** (as in `dags check`):
+    an unknown DAG fails at once, naming the files that didn't import. Shown while it runs:
+    each task's state changes; at the end, each task's log lines prefixed `task | `, each
+    failed attempt's error (`task | try 1 failed (task_failed):` and the traceback), a table
+    TASK / STATE / OUTCOME / TRIES / DURATION (of the last attempt), the outputs as JSON and
+    the run's state. `--json` gives `{"run", "tasks": [{task_id, state, outcome, try_number,
+    output, attempts, log}]}`. A run not finished within an hour fails the test.
+  - **Exit codes:** like every CLI command, 0 on success and 1 on any failure (errors found,
+    a run that didn't succeed, a bad argument); 2 only for wrong usage from the argument
+    parser.
+  - **Later:** `-p` and `--secret` (run parameters and secrets, M4), `--task` (M4) and `dags
+    check --against` (M2) say so with the milestone; they aren't silently ignored.
 - **From Python: `schedr.testing.run_dag(path, dag_id, for_=..., params=..., secrets=...)`**
   starts the same thing as a subprocess. Every task can be inspected and asserted separately:
 

@@ -31,7 +31,8 @@ pub struct Output {
 /// # Errors
 ///
 /// [`AppError::Client`] if the server can't be reached, answers with an error or rejects the
-/// command; [`AppError::NotImplemented`] for `check` / `test` (milestone 1.15).
+/// command; [`AppError::BadArgument`] for `check` / `test`, which run locally
+/// ([`crate::local`]).
 pub async fn run_dags<T: Transport>(
     command: &DagsCommand,
     client: &Client<T>,
@@ -63,10 +64,9 @@ pub async fn run_dags<T: Transport>(
             done(out, output, &command, &format!("unpaused {dag}"))?;
         }
         DagsCommand::Check { .. } | DagsCommand::Test { .. } => {
-            return Err(AppError::NotImplemented {
-                command: "dags check / dags test",
-                milestone: "M1 (1.15)",
-            });
+            return Err(AppError::BadArgument(
+                "`dags check` and `dags test` run locally, not against a server".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -240,7 +240,7 @@ fn run_row(run: &RunView, local: &TimeZone) -> Vec<String> {
 }
 
 /// Writes rows under headers in aligned columns (two spaces apart); no trailing spaces.
-fn write_table(
+pub(crate) fn write_table(
     out: &mut impl Write,
     headers: &[&str],
     rows: &[Vec<String>],

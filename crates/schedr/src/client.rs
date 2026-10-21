@@ -9,7 +9,9 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use schedr_api::views::{CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest};
+use schedr_api::views::{
+    AttemptList, CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest,
+};
 use serde::de::DeserializeOwned;
 
 use crate::VERSION;
@@ -242,6 +244,24 @@ impl<T: Transport> Client<T> {
     pub async fn run(&self, run_id: &str) -> Result<RunDetail, ClientError> {
         self.call(Method::Get, format!("/api/v1/runs/{}", path(run_id)), None)
             .await
+    }
+
+    /// `GET /api/v1/runs/{run}/tasks/{task}/attempts`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn attempts(&self, run_id: &str, task_id: &str) -> Result<AttemptList, ClientError> {
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/runs/{}/tasks/{}/attempts",
+                path(run_id),
+                path(task_id)
+            ),
+            None,
+        )
+        .await
     }
 
     /// `POST /api/v1/dags/{dag}/pause` or `.../unpause`: the command.
