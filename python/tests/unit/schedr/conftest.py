@@ -1,14 +1,14 @@
-"""Validation of produced JSON against the committed ``schema/dag.schema.json``."""
+"""Shared fixtures: schema validation of produced JSON, and a clean DAG registry per test."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
 
-SCHEMA_PATH = Path(__file__).parents[5] / "schema" / "dag.schema.json"
+SCHEMA_PATH = Path(__file__).parents[4] / "schema" / "dag.schema.json"
 
 type Validate = Callable[[str, Any], None]
 
@@ -32,3 +32,13 @@ def validate(dag_schema: dict[str, Any]) -> Validate:
         Draft202012Validator(schema).validate(instance)
 
     return check
+
+
+@pytest.fixture(autouse=True)
+def clean_registry() -> Iterator[None]:
+    """Forgets the DAGs a test defined, so tests don't see each other's DAGs."""
+    from schedr._model import registry  # noqa: PLC0415 - imported where it is used
+
+    registry.take_defined()
+    yield
+    registry.take_defined()

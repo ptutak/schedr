@@ -1,10 +1,11 @@
+from collections.abc import Callable as _Callable
 from typing import Any
 
 import pytest
 
 from schedr._model.schedule import CronSchedule, EverySchedule, NoSchedule, Schedule
 
-from .conftest import Validate
+Validate = _Callable[[str, Any], None]
 
 
 @pytest.mark.parametrize(

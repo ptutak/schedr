@@ -79,6 +79,10 @@ select = [
     "D",        # pydocstyle: docstrings on public names (Google convention, below)
 ]
 
+[tool.ruff.lint.pylint]
+# The public API takes many keyword-only options (Dag, operators, @task), as designed.
+max-args = 12
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

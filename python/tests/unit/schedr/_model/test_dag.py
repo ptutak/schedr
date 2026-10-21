@@ -1,4 +1,6 @@
+from collections.abc import Callable as _Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -10,7 +12,7 @@ from schedr._model.types import ScalarType
 from schedr._model.values import Template
 from schedr._model.version import SchedrVersion
 
-from .conftest import Validate
+Validate = _Callable[[str, Any], None]
 
 LOCATION = DagLocation("etl-repo", "team_a/sync.py")
 

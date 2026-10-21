@@ -1569,6 +1569,15 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   come later.
 - **IDs.** The DAG ID is an **explicit, required string**. A task ID defaults to the **function
   name** for `@task` and is **required** for operators. Duplicate IDs are a parse error.
+  **Using a `@task` function more than once** in a DAG (e.g. in a loop): `fn.override(task_id=
+  "load_eu")` (Airflow's name), which can also override `retries`, `retry_delay`, `timeout`,
+  `queue`, `max_output_size`; the duplicate-ID error points to it.
+- **`@task` functions declare each parameter**: `*args` / `**kwargs` are a parse error
+  (arguments are stored by name). Async functions are a parse error for now.
+- **`start`, `end`, `initial_since` without a time zone** (`start="2026-01-01"`, a `date`, a
+  naive `datetime`) are read in the **schedule's time zone**, like the cron expression (UTC for
+  `Every` and no schedule). An explicit offset wins. (Unlike CLI input, where no offset means
+  UTC: this is DAG code, written next to the schedule.)
 - **Schedules are typed objects:** `Cron("0 3 * * *")`, `Every(timedelta(hours=1))`,
   `Once("2026-12-24T23:00")` (a single fire time), `None` (manual runs only), plus preset
   constants (`DAILY`, …). The time zone is set per schedule, **default UTC**.

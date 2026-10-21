@@ -1,0 +1,191 @@
+"""Operators: the task kinds other than Python functions.
+
+``CommandOperator`` runs an inline command; ``EmptyOperator`` does nothing and is completed
+by the master. Operators can't be subclassed: reuse is by composition, e.g. a function that
+creates tasks (see PROJECT.md, Native API: no custom operators).
+"""
+
+import re
+from collections.abc import Mapping, Sequence
+from datetime import timedelta
+from typing import Any, Self
+
+from schedr import _build
+from schedr._model import (
+    ArgvCommand,
+    CommandKind,
+    EdgeKind,
+    EmptyKind,
+    ScalarType,
+    ShellCommand,
+    Template,
+)
+from schedr.tasks import Output
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+class Operator:
+    """The base of the operator classes; not for subclassing outside schedr."""
+
+    _task_id: str
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuses subclasses outside schedr.
+
+        Raises:
+            TypeError: For a subclass defined outside the ``schedr`` package.
+        """
+        if not cls.__module__.startswith("schedr."):
+            raise TypeError(
+                f"custom operators are not supported (`{cls.__name__}`): create tasks in a "
+                "function instead, or share a @task function"
+            )
+        super().__init_subclass__(**kwargs)
+
+    @property
+    def task_id(self) -> str:
+        """The task's ID."""
+        return self._task_id
+
+    @property
+    def _schedr_task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def output(self) -> Output[Any]:
+        """The task's output, as a reference."""
+        return Output(self._task_id)
+
+    def __rshift__(self, other: object) -> object:
+        """``self >> other``: ``other`` runs after this task.
+
+        Returns:
+            ``other``, so dependencies can be chained.
+        """
+        _build.order(self, other, ">>")
+        return other
+
+    def __rrshift__(self, other: object) -> Self:
+        """``[a, b] >> self``: this task runs after the tasks in the list.
+
+        Returns:
+            This task.
+        """
+        _build.order(other, self, ">>")
+        return self
+
+    def __lshift__(self, other: object) -> object:
+        """``self << other``: this task runs after ``other``.
+
+        Returns:
+            ``other``.
+        """
+        _build.order(other, self, "<<")
+        return other
+
+    def __rlshift__(self, other: object) -> Self:
+        """``[a, b] << self``: the tasks in the list run after this task.
+
+        Returns:
+            This task.
+        """
+        _build.order(self, other, "<<")
+        return self
+
+    def __repr__(self) -> str:
+        """A readable form, e.g. ``CommandOperator('notify')``."""
+        return f"{type(self).__name__}({self._task_id!r})"
+
+
+class CommandOperator(Operator):
+    """Runs an inline command.
+
+    A string is run by a shell; a list is a program and its arguments, run without a shell
+    (each element one argument, so no quoting is needed). List elements and ``env`` values may
+    be references, filled in at run time. The output is a ``ProcessResult``; ``.stdout`` and
+    ``.stderr`` reference its parts.
+
+    Args:
+        task_id: The task's ID.
+        command: A shell string, or a list of arguments.
+        env: Extra environment variables for the process.
+        retries: How many times a failed attempt is retried.
+        retry_delay: The delay before each retry.
+        timeout: The attempt's timeout.
+        queue: The queue the task goes to.
+        max_output_size: The output size limit in bytes (per stream).
+
+    Raises:
+        RuntimeError: Outside ``with Dag(...)``.
+        TypeError: For a command or environment value of the wrong type.
+        ValueError: For an empty argument list or an invalid environment variable name.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        command: str | Sequence[object],
+        *,
+        env: Mapping[str, object] | None = None,
+        retries: int | None = None,
+        retry_delay: timedelta | None = None,
+        timeout: timedelta | None = None,
+        queue: str | None = None,
+        max_output_size: int | None = None,
+    ) -> None:
+        """Records the command task in the DAG being defined."""
+        builder = _build.require_active("CommandOperator")
+        self._task_id = task_id
+        upstream: list[str] = []
+        where = f"task `{task_id}`"
+        line: ShellCommand | ArgvCommand
+        if isinstance(command, str):
+            line = ShellCommand(Template([command]))
+        elif isinstance(command, Sequence):
+            line = ArgvCommand(
+                [
+                    _build.to_template(arg, f"{where}, command[{i}]", upstream)
+                    for i, arg in enumerate(command)
+                ]
+            )
+        else:
+            raise TypeError(f"{where}: command must be a string or a list")
+        variables: dict[str, Template] = {}
+        for name, value in (env or {}).items():
+            if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+                raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
+            variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
+        options = _build.TaskOptions(retries, retry_delay, timeout, queue, max_output_size)
+        builder.add_task(
+            task_id, CommandKind(line, variables), ScalarType("process_result"), options
+        )
+        for up in dict.fromkeys(upstream):
+            builder.add_edge(up, task_id, EdgeKind.DATA)
+
+    @property
+    def stdout(self) -> Output[str]:
+        """The command's standard output, as a reference."""
+        return Output(self._task_id, ("stdout",))
+
+    @property
+    def stderr(self) -> Output[str]:
+        """The command's standard error, as a reference."""
+        return Output(self._task_id, ("stderr",))
+
+
+class EmptyOperator(Operator):
+    """A task that does nothing; the master completes it without a worker.
+
+    Args:
+        task_id: The task's ID.
+
+    Raises:
+        RuntimeError: Outside ``with Dag(...)``.
+    """
+
+    def __init__(self, task_id: str) -> None:
+        """Records the empty task in the DAG being defined."""
+        builder = _build.require_active("EmptyOperator")
+        self._task_id = task_id
+        builder.add_task(task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions())

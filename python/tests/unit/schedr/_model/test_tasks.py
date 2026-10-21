@@ -1,3 +1,4 @@
+from collections.abc import Callable as _Callable
 from typing import Any
 
 import pytest
@@ -24,7 +25,7 @@ from schedr._model.values import (
     TemplateRef,
 )
 
-from .conftest import Validate
+Validate = _Callable[[str, Any], None]
 
 PLANNED_FOR = DagCtxRef(DagCtxField.PLANNED_FOR)
 

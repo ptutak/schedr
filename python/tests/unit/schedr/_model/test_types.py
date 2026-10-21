@@ -1,3 +1,4 @@
+from collections.abc import Callable as _Callable
 from typing import Any
 
 import pytest
@@ -15,7 +16,7 @@ from schedr._model.types import (
     UnionType,
 )
 
-from .conftest import Validate
+Validate = _Callable[[str, Any], None]
 
 ROWS = DataclassType(
     "Rows",
