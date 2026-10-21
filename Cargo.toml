@@ -19,6 +19,7 @@ schedr-agent = { path = "crates/schedr-agent" }
 schedr-api = { path = "crates/schedr-api" }
 
 # Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
+figment = { version = "0.10.19", features = ["toml", "parse-value"] }
 jiff = { version = "0.2.38", features = ["serde"] }
 schemars = { version = "1.2.3", features = ["jiff02"] }
 serde = { version = "1.0.229", features = ["derive"] }

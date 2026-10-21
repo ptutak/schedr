@@ -1228,7 +1228,14 @@ list) and likewise has no Python.
   `SCHEDR_CONFIG__SECTION__KEY`).
 - File format: **TOML**.
 - The file is found via the **`--config <path>`** flag, then the **`SCHEDR_CONFIG_FILE`**
-  environment variable, then a default location.
+  environment variable (both: the file must exist), then the default location
+  **`/etc/schedr/config.toml`** (read if it exists; otherwise defaults and environment only).
+- **Unknown keys are an error**, and every error names the key and where its value came from
+  (the file, e.g. `SCHEDR_CONFIG__OPS__PORT`, `SCHEDR_DAG_PATH`, or a flag). In the file a path
+  list is an array; in an environment variable a colon-separated string. Setting an alias and
+  its full variable at once (`SCHEDR_DAG_PATH` and `SCHEDR_CONFIG__DAGS__PATH`) is an error.
+- **Built-in interpreter:** if `[interpreters]` doesn't define `python`, it is `python3` (found
+  on `PATH`), so a fresh `pip install schedr` works without configuration.
 - Precedence: **command-line flags > environment variables > configuration file**.
 - `SCHEDR_DAG_PATH` is a normal configuration key (`SCHEDR_CONFIG__DAGS__PATH`);
   `SCHEDR_DAG_PATH` is kept as a **short alias**.

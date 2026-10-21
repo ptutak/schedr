@@ -1,0 +1,199 @@
+//! The configuration sections and their defaults.
+//!
+//! Only the keys the first milestones need exist so far; sections grow additively. Unknown
+//! keys are an error, so a typo never passes silently.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde::Deserialize;
+
+use crate::roots::{PathList, Root};
+use crate::units::deserialize_duration;
+
+#[cfg(test)]
+mod tests;
+
+/// The interpreter name used for parsing DAGs and running Python tasks unless configured.
+pub const DEFAULT_DAG_INTERPRETER: &str = "python";
+
+/// The executable behind the built-in `python` interpreter when `[interpreters]` doesn't
+/// define one.
+pub const BUILTIN_PYTHON: &str = "python3";
+
+/// The whole configuration, after loading and validation.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    /// `[dags]`: where DAG files are and how they are parsed.
+    pub dags: DagsSection,
+    /// `[scripts]`: where plain scripts are.
+    pub scripts: ScriptsSection,
+    /// `[interpreters]`: interpreter names and their executables.
+    pub interpreters: BTreeMap<String, Interpreter>,
+    /// `[log]`: schedr's own logs.
+    pub log: LogSection,
+    /// `[ops]`: the ops port (health and metrics).
+    pub ops: OpsSection,
+    /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
+    #[serde(skip)]
+    pub dag_roots: Vec<Root>,
+    /// The script roots, resolved from `scripts.path` and `scripts.roots` when loading.
+    #[serde(skip)]
+    pub script_roots: Vec<Root>,
+}
+
+/// `[dags]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DagsSection {
+    /// The DAG directories (`SCHEDR_DAG_PATH`).
+    pub path: PathList,
+    /// Root renames: name → one of the `path` entries.
+    pub roots: BTreeMap<String, PathBuf>,
+    /// The `[interpreters]` entry used for parsing and for Python tasks.
+    pub interpreter: String,
+    /// How often the roots are scanned for changes.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub poll_interval: Duration,
+    /// How long a root must stay unchanged before its new content hash is computed.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub settle_time: Duration,
+}
+
+impl Default for DagsSection {
+    /// No DAG directories, the `python` interpreter, polling every 30 s with a 5 s settle time.
+    fn default() -> Self {
+        Self {
+            path: PathList::default(),
+            roots: BTreeMap::new(),
+            interpreter: DEFAULT_DAG_INTERPRETER.to_owned(),
+            poll_interval: Duration::from_secs(30),
+            settle_time: Duration::from_secs(5),
+        }
+    }
+}
+
+/// `[scripts]`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScriptsSection {
+    /// The script directories (`SCHEDR_SCRIPT_PATH`).
+    pub path: PathList,
+    /// Root renames: name → one of the `path` entries.
+    pub roots: BTreeMap<String, PathBuf>,
+}
+
+/// An `[interpreters]` entry: a plain path, or a table with fork server settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "InterpreterRepr")]
+pub struct Interpreter {
+    /// The executable.
+    pub path: PathBuf,
+    /// Whether Python tasks start from a fork server (M2.5; off by default).
+    pub fork_server: bool,
+    /// The libraries the fork server preloads.
+    pub preload: Vec<String>,
+}
+
+impl Interpreter {
+    /// An interpreter given by its path only (spawn, no preloading).
+    #[must_use]
+    pub fn path(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            fork_server: false,
+            preload: Vec::new(),
+        }
+    }
+}
+
+/// How an interpreter is written in TOML.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum InterpreterRepr {
+    /// `python = "/usr/bin/python3"`.
+    Path(PathBuf),
+    /// `[interpreters.etl-venv]` with `path`, `fork_server`, `preload`.
+    Table(InterpreterTable),
+}
+
+/// The table form of an interpreter.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InterpreterTable {
+    path: PathBuf,
+    #[serde(default)]
+    fork_server: bool,
+    #[serde(default)]
+    preload: Vec<String>,
+}
+
+impl From<InterpreterRepr> for Interpreter {
+    fn from(repr: InterpreterRepr) -> Self {
+        match repr {
+            InterpreterRepr::Path(path) => Self::path(path),
+            InterpreterRepr::Table(t) => Self {
+                path: t.path,
+                fork_server: t.fork_server,
+                preload: t.preload,
+            },
+        }
+    }
+}
+
+/// `[log] format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    /// JSON when stdout isn't a terminal, readable text when it is.
+    #[default]
+    Auto,
+    /// Always JSON.
+    Json,
+    /// Always readable text.
+    Text,
+}
+
+/// `[log]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogSection {
+    /// The output format.
+    pub format: LogFormat,
+    /// The level, with per-module filters in the `RUST_LOG` style.
+    pub level: String,
+}
+
+impl Default for LogSection {
+    /// `auto` format at level `info`.
+    fn default() -> Self {
+        Self {
+            format: LogFormat::Auto,
+            level: "info".to_owned(),
+        }
+    }
+}
+
+/// `[ops]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OpsSection {
+    /// The plain-HTTP port for `/healthz`, `/readyz` and `/metrics`.
+    pub port: u16,
+    /// The master's liveness fails when its scheduling loop hasn't started an iteration for
+    /// this long.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub loop_stall_timeout: Duration,
+}
+
+impl Default for OpsSection {
+    /// Port 8090 and a 2 minute loop stall timeout.
+    fn default() -> Self {
+        Self {
+            port: 8090,
+            loop_stall_timeout: Duration::from_secs(120),
+        }
+    }
+}
