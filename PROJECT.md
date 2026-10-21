@@ -1356,7 +1356,8 @@ batch_runs = 100      # runs deleted per transaction
 - **How:** a background job on the master (`interval`, every hour by default), deleting in
   **batches** of `batch_runs` runs per transaction (default **100**: one run can hold over a
   thousand rows, e.g. a mapped task's instances, attempts and outputs), repeated until nothing
-  is left, so it never holds long locks or blocks scheduling; the same in standalone (SQLite). Partitioning tables by time: possibly later.
+  is left, so it never holds long locks or blocks scheduling; the same in standalone (SQLite).
+  Partitioning tables by time: possibly later.
 
 ## Python API structure
 
