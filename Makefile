@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration check clean
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -15,6 +15,14 @@ help:            ## Show this help
 # Rust test coverage: unit-test files (`src/**/tests.rs`) and `main.rs` (only calls into the
 # library) aren't counted; see PROJECT.md, Repository and tooling: Testing.
 COVERAGE_MIN := 85
+
+# Integration tests: the Python with `schedr` installed (for the real runner, found through uv
+# inside the recipe, where the uv settings above apply) and a throwaway Postgres container; see
+# PROJECT.md, Repository and tooling: Testing.
+POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine
+# Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
+# under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
+CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # Port for make docs-serve; override with e.g. `make docs-serve DOCS_PORT=9000`.
 DOCS_PORT ?= 8765
@@ -57,17 +65,32 @@ docs:            ## Build the documentation site into site/ (fails on any warnin
 docs-serve: docs ## Build the docs and serve them at http://localhost:$(DOCS_PORT)
 	uv run python -m http.server --directory site $(DOCS_PORT)
 
-test-rust:       ## Run Rust tests with coverage (fails below COVERAGE_MIN)
+test-rust:       ## Run Rust unit tests with coverage (fails below COVERAGE_MIN)
 	cargo llvm-cov nextest --workspace --ignore-filename-regex $(LLVM_COV_IGNORE) \
-		--fail-under-lines $(COVERAGE_MIN)
+		--fail-under-lines $(COVERAGE_MIN) -E 'not kind(test)'
 	cargo test --workspace --doc
 
-test-python:     ## Run Python tests with coverage (fails below COVERAGE_MIN)
-	uv run pytest --cov --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN)
+test-python:     ## Run Python unit tests with coverage (fails below COVERAGE_MIN)
+	uv run pytest python/tests/unit --cov --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN)
 
-test: test-rust test-python  ## Run all tests
+test: test-rust test-python  ## Run all unit tests
 
-check: fmt-check lint schema-check test   ## Everything CI runs
+test-integration: ## Run integration tests (real processes, the binary, Postgres in Docker)
+	@set -e; \
+	name=schedr-test-pg-$$$$; \
+	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
+		$(POSTGRES_IMAGE) >/dev/null; \
+	trap '$(CONTAINER) rm -f '$$name' >/dev/null' EXIT; \
+	port=$$($(CONTAINER) port $$name 5432/tcp | head -1 | sed 's/.*://'); \
+	until $(CONTAINER) exec $$name psql -h 127.0.0.1 -U postgres -c 'select 1' >/dev/null 2>&1; do \
+		sleep 0.5; done; \
+	export SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:$$port/postgres; \
+	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
+	test -x "$$SCHEDR_TEST_PYTHON"; \
+	cargo nextest run --workspace -E 'kind(test)'; \
+	uv run pytest python/tests/integration
+
+check: fmt-check lint schema-check test test-integration   ## Everything CI runs
 
 clean:           ## Remove build artifacts
 	cargo clean

@@ -95,11 +95,11 @@ type RunRow = (
     Option<String>,
 );
 
-type InstanceRow = (String, String, Option<String>, i64, Option<String>, String);
+type InstanceRow = (String, String, Option<String>, i32, Option<String>, String);
 
 type AttemptRow = (
     String,
-    i64,
+    i32,
     Option<String>,
     Option<String>,
     Option<i32>,
@@ -199,7 +199,7 @@ impl Database {
         task_id: &TaskId,
     ) -> Result<Vec<AttemptRecord>, DbError> {
         const ATTEMPTS: &str = "SELECT a.id{text}, a.try_number, a.worker_id, a.status, \
-            a.exit_code, a.error_kind, a.error_summary, {ts<}a.assigned_at{>ts}, \
+            a.exit_code, a.error_kind, a.error_summary{text}, {ts<}a.assigned_at{>ts}, \
             {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts} FROM attempts a \
             JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 ORDER BY a.try_number";

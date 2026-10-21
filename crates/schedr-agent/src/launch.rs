@@ -6,7 +6,7 @@
 //! limit, and no other process can connect (see PROJECT.md, Rust/Python integration).
 //!
 //! The thin operating-system layer under [`crate::agent`], like [`crate::process`]: exercised
-//! by the integration tests (milestone 1.17); the decisions around it are unit-tested in
+//! by the integration tests (`tests/runner.rs`); the decisions around it are unit-tested in
 //! [`crate::attempt`], [`crate::parse`] and [`crate::supervise`].
 
 use std::os::fd::{AsRawFd, OwnedFd};

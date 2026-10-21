@@ -4089,8 +4089,31 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
 
 ### Testing
 
-**Unit tests only for now**; integration tests (`python/tests/integration/`,
-`crates/*/tests/`) start as the **last step of M1** (see PLAN.md), before M1 counts as done.
+**Unit tests and integration tests.** Every step brings its unit tests, and integration tests
+where it needs real processes, files, a real database or the whole system (see PLAN.md). Unit
+tests use fakes, in-memory streams and socket pairs; anything that starts a real process, binds
+a real server or talks to Postgres is an integration test.
+
+- **Integration tests** live in `crates/*/tests/` (the public API only, like any user of the
+  crate; the binary's tests run `schedr` itself) and `python/tests/integration/`. They run
+  with **`make test-integration`**, part of `make check` and CI, and are **not counted** for
+  the coverage floor (which measures the unit tests).
+- **What they need is provided, never skipped:** `make test-integration` starts a throwaway
+  **Postgres** container (`postgres:17.6-alpine`, Podman when installed, else Docker; on a
+  random local port, removed afterwards) and passes `SCHEDR_TEST_POSTGRES_URL`, and passes the
+  Python with `schedr` installed as `SCHEDR_TEST_PYTHON`. Run without them, a test fails with a
+  message saying how to run it.
+- **Each test is isolated:** its own temporary directories, its own database on the test
+  server, free ports, and a `schedr standalone` of its own for end-to-end tests; they run in
+  parallel.
+- **What they cover so far:** real processes under supervision (exit codes and log files,
+  timeouts, SIGTERM then SIGKILL, process groups, output floods, the clean environment); the
+  real runner started by the agent (a directory of DAG files with broken, hanging and crashing
+  files; task mode with inputs, failures, timeouts and cancels); every database query on
+  Postgres; the runner as a real process from Python; `schedr standalone` end to end through
+  the CLI and the API (data flow into a command, retries and upstream failure, cancelling a
+  running task, files added, changed and removed, a conflict, scheduled runs while unpaused,
+  rejections) on SQLite and on Postgres.
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

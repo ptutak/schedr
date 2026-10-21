@@ -3,6 +3,8 @@
 //! Queries are written once. `{uuid}`, `{ts}` and `{json}` after a parameter cast it for
 //! Postgres (whose columns are typed) and vanish for SQLite (text columns); `{text}` after a
 //! column reads it as text; `{ts<}expr{>ts}` reads a time as stored text (see [`db_time`]).
+//! `INTEGER` columns are read as `i32`: Postgres keeps them in four bytes and refuses a wider
+//! Rust type, SQLite reads either.
 
 use jiff::Timestamp;
 use sqlx::AssertSqlSafe;

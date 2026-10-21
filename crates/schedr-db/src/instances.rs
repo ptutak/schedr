@@ -65,7 +65,7 @@ pub struct InstanceUpdate {
     pub used_retry: bool,
 }
 
-type InstanceRow = (String, String, String, i64, i64, Option<String>);
+type InstanceRow = (String, String, String, i32, i32, Option<String>);
 
 impl Database {
     /// Running runs with no task instances yet, oldest first.

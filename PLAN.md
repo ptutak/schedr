@@ -112,9 +112,10 @@ python/schedr/
 
 ## M1: Standalone runs a native DAG
 
-In dependency order; each step ends with **unit tests**. Where a "done when" needs real
-processes, files or the whole system, it is checked by the integration tests in 1.17, the last
-step of M1.
+In dependency order; each step ends with **unit tests**, and with **integration tests**
+where its "done when" needs real processes, files or the whole system. The integration tests
+of 1.4–1.14 were written after 1.14 (first planned as one step at the end, 1.17); from 1.15
+on, each step brings its own.
 
 | # | Work | Done when |
 |---|---|---|
@@ -135,7 +136,7 @@ step of M1.
 | 1.15 | **`dags check`, `dags test`, `schedr.testing`:** plain-function `@task` calls, `task_context`, `run_dag` with per-task inspection (`state`, `output`, `attempts`, `log`, …) | the example DAGs in `examples/` have tests that pass in CI |
 | 1.16 | **Packaging:** maturin wheel with the binary for Linux x86_64 (others in M2), `pip install` + `schedr standalone` smoke test in CI | a wheel built in CI runs the example |
 
-| 1.17 | **Integration tests** (the first ones; everything before is unit-tested only): the checks above that need real processes, files or the whole system (1.4 a directory of DAG files through the runner, 1.5 / 1.7 real processes through the agent, 1.8 a temp root with changes, 1.10 / 1.11 runs through master and agent, 1.13 the CLI against a running standalone, 1.14 / 1.15 the examples end to end, 1.16 the wheel smoke test), in `python/tests/integration/` and `crates/*/tests/` | all pass in CI |
+| 1.17 | **Integration tests:** written after 1.14 for 1.4–1.14 (a directory of DAG files through the runner, real processes through the agent, every query on Postgres, the runner as a real process, `schedr standalone` end to end through the CLI and the API, also on Postgres), and with each step since | all pass in CI |
 
 **M1 is done** when a new user can `pip install` the wheel, write the example DAG from
 PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
@@ -146,8 +147,8 @@ DAG, trigger a run with `schedr runs trigger --for ...`, and see it succeed with
 
 - **Rules: PROJECT.md, Repository and tooling: Testing** (unit tests for every public function
   and class, private ones not tested directly, 85 % coverage, structure mirroring the code, no
-  skipped tests without asking). **Unit tests only** in M0 / M1; the integration and end-to-end
-  items below come once integration tests start.
+  skipped tests without asking), and integration tests with each step from 1.15 on (those of
+  1.4–1.14 were written after 1.14).
 - **Cross-language parity:** produced DAG JSON validated against the committed schema; shell
   quoting against `shlex.quote`; encode in Python / decode in Python after a round trip through
   Rust storage.

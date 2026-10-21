@@ -101,7 +101,7 @@ type ReadyRow = (
     String,
     String,
     String,
-    i64,
+    i32,
     String,
     String,
     String,
@@ -113,7 +113,7 @@ type AttemptRow = (
     String,
     String,
     String,
-    i64,
+    i32,
     Option<String>,
     Option<String>,
     bool,
@@ -180,7 +180,7 @@ impl Database {
             VALUES ($1{uuid}, $2{uuid}, $3, $4, $5{ts})";
         let id = Uuid::now_v7().to_string();
         let now = db_time(now);
-        let try_number: Option<i64> = on_pool!(self, |pool, backend| {
+        let try_number: Option<i32> = on_pool!(self, |pool, backend| {
             let mut tx = pool.begin().await?;
             let claimed = sqlx::query(sql(backend, CLAIM))
                 .bind(&now)
@@ -189,7 +189,7 @@ impl Database {
                 .await?
                 .rows_affected();
             if claimed == 1 {
-                let try_number: i64 = sqlx::query_scalar(sql(backend, TRY))
+                let try_number: i32 = sqlx::query_scalar(sql(backend, TRY))
                     .bind(instance_id)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -341,7 +341,7 @@ impl Database {
         now: Timestamp,
     ) -> Result<bool, DbError> {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
-            peak_memory_bytes = $4, error_kind = $5, error_summary = $6, code_hash = $7, \
+            peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
             ended_at = $8{ts} WHERE id = $9{uuid} AND status IS NULL";
         let updated = on_pool!(self, |pool, backend| {
             sqlx::query(sql(backend, END))

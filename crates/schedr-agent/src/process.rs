@@ -3,7 +3,7 @@
 //! `ProcessResult`.
 //!
 //! This is the thin operating-system layer under [`crate::supervise`]; it is exercised by
-//! the integration tests (milestone 1.17), the logic around it by unit tests.
+//! the integration tests (`tests/processes.rs`), the logic around it by unit tests.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -127,6 +127,9 @@ async fn collect(
     loop {
         let n = pipe.read(&mut chunk).await?;
         if n == 0 {
+            // A tokio file write may still be in flight when `write_all` returns: the log is
+            // complete only once flushed.
+            log.lock().await.flush().await?;
             return Ok(tail);
         }
         tail.push(&chunk[..n]);
