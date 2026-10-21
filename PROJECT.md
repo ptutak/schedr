@@ -464,7 +464,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   lease clock starts again from zero.
 - A worker that was declared `LOST` and comes back is told to **kill** the attempts it still
   runs (they were already failed and retried).
-- The worker's **liveness probe** (`/healthz` on the log port) checks only the agent's own
+- The worker's **liveness probe** (`/healthz` on the ops port, see Observability) checks only the agent's own
   health, **never** whether the master is reachable (otherwise a master outage would restart
   every worker and kill all running tasks). Workers need no readiness probe.
 - `OFFLINE` and `LOST` workers **stay listed for the same period as log retention**, so old
@@ -998,6 +998,48 @@ list) and likewise has no Python.
     joins: Run result). [D] The UI shows the run; logs come from the worker through the
     webserver proxy. If tasks in the run used different code hashes, the UI shows a warning.
     [D]
+
+### Observability
+
+- **Ops port on every role** (master, worker, webserver): a separate **plain-HTTP** port,
+  `[ops] port` (default e.g. 9090), serving only **`/healthz`**, **`/readyz`** and
+  **`/metrics`**, never data or actions, so no TLS or authentication. Needed because a
+  kubelet's probe and Prometheus can't present a client certificate to the mTLS log port
+  (`tls.mode = "app"`). Not chosen: `/healthz` on the worker's log port (fails under mTLS).
+- **Health endpoints.** **Liveness never depends on another component** (otherwise a database
+  outage would restart the master and the webserver in a loop); **readiness doesn't check the
+  database either** (with one master, or webserver replicas sharing one database, taking pods
+  out of the Service helps nobody: the UI shows a "database unavailable" banner, workers keep
+  retrying the master).
+
+  | Role | `/healthz` (liveness) | `/readyz` (readiness) |
+  |---|---|---|
+  | master | the process is up and the scheduling loop is ticking (an iteration started within e.g. 5 min, whether or not the database answered): catches a stuck scheduler | startup finished (schema checked, listening for workers) |
+  | webserver | the process is up | startup finished |
+  | worker | the agent's own health (see Worker lifecycle) | not needed |
+
+- **Metrics: Prometheus format** on `/metrics` (scraped e.g. by OpenShift's user-workload
+  monitoring through a `ServiceMonitor`).
+
+  | Role | Examples |
+  |---|---|
+  | master | scheduling loop duration; runs by state; tasks `queued` by reason (`max_active_*`, no free slot, unschedulable); assignments and rejections by reason; parse jobs and durations; command apply latency; workers by state; notifications sent / failed |
+  | worker | slots used / free; attempts by status; watchdog kills; peak memory per task (histogram); journal size; log disk usage; secret fetches, errors by kind, cache hits |
+  | webserver | HTTP requests by route and status; open SSE streams; log proxy errors |
+
+  - **Labels:** `dag_id` on run-level metrics (bounded, useful for alerts); **never** `task_id`,
+    `run_id`, `attempt_id` (unbounded; per-task detail is in the database and the UI).
+  - OpenTelemetry (OTLP push, traces of a run across master and workers): possibly later.
+- **schedr's own logs** go to stdout/stderr (collected by Kubernetes), separate from task logs
+  (files on the worker, see Task logs).
+  - `[log] format = "auto" | "json" | "text"`: `auto` writes JSON when stdout isn't a terminal
+    (pods) and readable text in a terminal (standalone, development).
+  - `[log] level`, with per-module filters in the `RUST_LOG` style (e.g.
+    `"info,schedr::scheduler=debug"`); the `tracing` crate.
+  - **Context fields** where they apply: `dag_id`, `run_id`, `task_id`, `attempt_id`,
+    `worker_id` ("everything about run X" is one search).
+  - **No secrets:** configuration secrets are never logged; task values are already masked by
+    the agent.
 
 ## Configuration
 
@@ -3091,7 +3133,4 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
 
-### Observability
-
-Metrics of schedr itself (e.g. a Prometheus endpoint), health endpoints for the master and the
-webserver (the worker's `/healthz` is decided), schedr's own log format.
+None at the moment.
