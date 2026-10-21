@@ -8,6 +8,20 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+prost.workspace = true
+prost-types.workspace = true
+schedr-model.workspace = true
+thiserror.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rstest.workspace = true
 
 [lints]
 workspace = true

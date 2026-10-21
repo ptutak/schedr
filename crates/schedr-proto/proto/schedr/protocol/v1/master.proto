@@ -1,0 +1,277 @@
+// The schedr master <-> worker agent protocol (see PROJECT.md, Master–worker protocol, Worker
+// lifecycle, Task assignment, Task rejections).
+//
+// Workers always open the connection. The package carries the protocol's major version; the
+// minor version is exchanged in Register (same major, equal or lower minor is accepted).
+// Within a major version changes are additive only.
+
+syntax = "proto3";
+
+package schedr.protocol.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service Master {
+  // The long-lived control stream, one per worker. The first message is Register.
+  rpc Control(stream WorkerMessage) returns (stream MasterMessage);
+  // A parse job's result (bulky, so a unary call rather than the stream).
+  rpc UploadParseResult(ParseResult) returns (ParseResultAck);
+  // An attempt's inputs when they are too big to travel inside AssignTask.
+  rpc FetchInputs(FetchInputsRequest) returns (stream InputChunk);
+}
+
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+// ---------------------------------------------------------------- worker -> master
+
+message WorkerMessage {
+  oneof message {
+    Register register = 1;
+    Heartbeat heartbeat = 2;
+    CodeVersionChanged code_version_changed = 3;
+    Started started = 4;
+    Rejected rejected = 5;
+    Finished finished = 6;
+    Draining draining = 7;
+    Deregister deregister = 8;
+  }
+}
+
+enum RootKind {
+  ROOT_KIND_UNSPECIFIED = 0;
+  ROOT_KIND_DAG = 1;
+  ROOT_KIND_SCRIPT = 2;
+}
+
+message RootHash {
+  RootKind kind = 1;
+  string root = 2;
+  string content_hash = 3;
+}
+
+enum JournalState {
+  JOURNAL_STATE_UNSPECIFIED = 0;
+  // The attempt is still running on the worker.
+  JOURNAL_STATE_RUNNING = 1;
+  // The attempt finished; its result is journaled but not acknowledged yet.
+  JOURNAL_STATE_FINISHED = 2;
+}
+
+message JournalEntry {
+  string attempt_id = 1;
+  JournalState state = 2;
+}
+
+// Sent on every connect.
+message Register {
+  string worker_id = 1;
+  // A UUID generated each time the agent process starts.
+  string incarnation_id = 2;
+  ProtocolVersion protocol = 3;
+  string schedr_version = 4;
+  repeated string queues = 5;
+  uint32 slots = 6;
+  // host:port of the worker's log endpoint.
+  string log_endpoint = 7;
+  repeated RootHash roots = 8;
+  repeated string secret_storages = 9;
+  repeated JournalEntry journal = 10;
+}
+
+message Heartbeat {
+  uint32 free_slots = 1;
+  repeated string running_attempt_ids = 2;
+}
+
+// A root's content hash changed (after the settle time).
+message CodeVersionChanged {
+  RootHash root = 1;
+}
+
+// The attempt was accepted and its process started.
+message Started {
+  string attempt_id = 1;
+  StartMethod start_method = 2;
+}
+
+enum StartMethod {
+  START_METHOD_UNSPECIFIED = 0;
+  START_METHOD_SPAWN = 1;
+  START_METHOD_FORK = 2;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_NO_FREE_SLOT = 1;
+  REJECT_REASON_DRAINING = 2;
+  REJECT_REASON_INTERPRETER_UNDEFINED = 3;
+  REJECT_REASON_SCRIPT_ROOT_UNKNOWN = 4;
+  REJECT_REASON_SCRIPT_REFERENCE_NOT_FOUND = 5;
+  REJECT_REASON_DAG_FILE_MISSING = 6;
+  REJECT_REASON_MEMORY_BUDGET_TOO_LARGE = 7;
+  REJECT_REASON_DISK_NOT_WRITABLE = 8;
+  REJECT_REASON_INVALID_SPECIFICATION = 9;
+}
+
+message Rejected {
+  string attempt_id = 1;
+  RejectReason reason = 2;
+  // A human-readable detail, e.g. "interpreter `etl-venv` not defined on worker-1".
+  string detail = 3;
+}
+
+enum AttemptStatus {
+  ATTEMPT_STATUS_UNSPECIFIED = 0;
+  ATTEMPT_STATUS_SUCCESS = 1;
+  ATTEMPT_STATUS_FAILED = 2;
+  ATTEMPT_STATUS_TIMED_OUT = 3;
+  ATTEMPT_STATUS_OOM_KILLED = 4;
+  ATTEMPT_STATUS_CANCELLED = 5;
+  ATTEMPT_STATUS_INTERRUPTED = 6;
+  ATTEMPT_STATUS_LOST = 7;
+  ATTEMPT_STATUS_ASSIGNMENT_EXPIRED = 8;
+}
+
+message Finished {
+  string attempt_id = 1;
+  AttemptStatus status = 2;
+  optional int32 exit_code = 3;
+  optional int32 signal = 4;
+  // On success: the output as tagged JSON (schedr-model), and its outcome name.
+  bytes output_json = 5;
+  string outcome = 6;
+  uint64 duration_ms = 7;
+  uint64 peak_memory_bytes = 8;
+  // For failures schedr recognises, e.g. "secret_not_found"; empty otherwise.
+  string error_kind = 9;
+  // A structured error summary as JSON; empty if none.
+  bytes error_summary_json = 10;
+  // The content hash of the code the attempt ran with.
+  string code_hash = 11;
+}
+
+// SIGTERM received, or an admin drain: stop assigning to this worker.
+message Draining {}
+
+// Clean deregistration before the agent exits (or idles after an admin drain).
+message Deregister {}
+
+// ---------------------------------------------------------------- master -> worker
+
+message MasterMessage {
+  oneof message {
+    Registered registered = 1;
+    AssignTask assign_task = 2;
+    AssignParse assign_parse = 3;
+    CancelAttempt cancel_attempt = 4;
+    FinishedAck finished_ack = 5;
+  }
+}
+
+// Timing is owned by the master's configuration so all workers behave the same.
+message Timing {
+  uint64 heartbeat_interval_ms = 1;
+  uint64 lease_timeout_ms = 2;
+  uint64 cancel_grace_ms = 3;
+}
+
+enum AttemptDecision {
+  ATTEMPT_DECISION_UNSPECIFIED = 0;
+  // Keep running it.
+  ATTEMPT_DECISION_CONTINUE = 1;
+  // Already abandoned or reassigned: kill it.
+  ATTEMPT_DECISION_KILL = 2;
+  // Its result is stored: remove it from the journal.
+  ATTEMPT_DECISION_ACK = 3;
+}
+
+message JournalDecision {
+  string attempt_id = 1;
+  AttemptDecision decision = 2;
+}
+
+message Registered {
+  Timing timing = 1;
+  repeated JournalDecision decisions = 2;
+}
+
+message RunInfo {
+  string run_id = 1;
+  // A schedr-model RunKind name: "scheduled", "manual", "backfill", "triggered".
+  string kind = 2;
+  google.protobuf.Timestamp planned_for = 3;
+  google.protobuf.Timestamp since = 4;
+  string dag_id = 5;
+}
+
+message DagFileRef {
+  string root = 1;
+  // Relative to the root, `/` separators.
+  string path = 2;
+}
+
+message AssignTask {
+  string attempt_id = 1;
+  string task_id = 2;
+  // -1 for a task that isn't mapped.
+  int32 map_index = 3;
+  uint32 try_number = 4;
+  RunInfo run = 5;
+  // The task as schedr-model JSON (kind, command templates, arguments, settings).
+  bytes task_json = 6;
+  // Where the DAG is defined (Python tasks import it; it also locates relative paths).
+  DagFileRef dag_file = 7;
+  // The content hash the master expects; the worker reports what it actually ran.
+  string expected_code_hash = 8;
+  // The upstream outputs the task uses, as JSON; empty if fetched with FetchInputs.
+  bytes inputs_json = 9;
+  bool inputs_external = 10;
+  uint64 cancel_grace_ms = 11;
+  uint64 memory_budget_bytes = 12;
+  bool setrlimit = 13;
+}
+
+message AssignParse {
+  string parse_job_id = 1;
+  RootHash root = 2;
+}
+
+message CancelAttempt {
+  string attempt_id = 1;
+}
+
+message FinishedAck {
+  string attempt_id = 1;
+}
+
+// ---------------------------------------------------------------- unary calls
+
+message ParsedFile {
+  // Relative to the root.
+  string path = 1;
+  // Each DAG the file defines, as schedr-model DAG JSON.
+  repeated bytes dag_json = 2;
+  // Set if importing the file failed (including a per-file timeout).
+  optional string import_error = 3;
+}
+
+message ParseResult {
+  string parse_job_id = 1;
+  string worker_id = 2;
+  RootHash root = 3;
+  string schedr_version = 4;
+  repeated ParsedFile files = 5;
+}
+
+message ParseResultAck {}
+
+message FetchInputsRequest {
+  string attempt_id = 1;
+}
+
+message InputChunk {
+  bytes data = 1;
+}
