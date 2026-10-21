@@ -8,7 +8,9 @@ import pytest
 
 from schedr.runner.parse import (
     TRACEBACK_LINES,
+    extend_sys_path,
     file_result,
+    import_dag_entries,
     import_dag_file,
     import_error,
     module_name,
@@ -121,6 +123,20 @@ def test_a_failing_file_leaves_nothing_behind(root: Path) -> None:
         import_dag_file("etl", root, "partial.py")
     assert module_name("etl", "partial.py") not in sys.modules
     assert import_dag_file("etl", root, "two.py")[0].id == "a"
+
+
+def test_import_dag_entries_keeps_the_task_functions(root: Path) -> None:
+    (entry,) = import_dag_entries("etl", root, "typed.py")
+    assert entry.model.id == "typed"
+    assert list(entry.functions) == ["extract"]
+    assert entry.functions["extract"].__name__ == "extract"
+
+
+def test_extend_sys_path_puts_entries_first_in_order_once() -> None:
+    extend_sys_path(["/x", "/y", "/x"])
+    assert sys.path[:2] == ["/x", "/y"]
+    extend_sys_path(["/y"])
+    assert sys.path.count("/y") == 1
 
 
 def test_a_non_python_file_is_an_import_error(root: Path) -> None:

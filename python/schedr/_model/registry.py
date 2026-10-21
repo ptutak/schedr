@@ -6,9 +6,11 @@ collected the same way, located as ``local:<file name>``.
 """
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from schedr._model.dag import Dag, DagLocation
 
@@ -16,7 +18,22 @@ LOCAL_ROOT = "local"
 """The root name of DAGs defined outside any configured DAG root."""
 
 _ROOT: ContextVar[tuple[str, Path] | None] = ContextVar("schedr_parse_root", default=None)
-_DEFINED: list[Dag] = []
+
+
+@dataclass(frozen=True, slots=True)
+class DefinedDag:
+    """A DAG whose ``with Dag(...)`` block finished, with its tasks' Python functions.
+
+    Attributes:
+        model: The DAG as DAG JSON types.
+        functions: The function of each Python task, by task ID (the runner calls them).
+    """
+
+    model: Dag
+    functions: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
+
+
+_DEFINED: list[DefinedDag] = []
 
 
 @contextlib.contextmanager
@@ -54,21 +71,31 @@ def location_for(filename: str) -> DagLocation:
     return DagLocation(LOCAL_ROOT, file.name)
 
 
-def register(dag: Dag) -> None:
+def register(dag: Dag, functions: Mapping[str, Callable[..., Any]] | None = None) -> None:
     """Records a DAG whose ``with Dag(...)`` block finished.
 
     Args:
         dag: The DAG.
+        functions: The function of each of its Python tasks, by task ID.
     """
-    _DEFINED.append(dag)
+    _DEFINED.append(DefinedDag(dag, dict(functions or {})))
+
+
+def take_entries() -> list[DefinedDag]:
+    """Returns the DAGs defined since the last call, with their functions, and forgets them.
+
+    Returns:
+        The DAGs, in definition order.
+    """
+    entries = list(_DEFINED)
+    _DEFINED.clear()
+    return entries
 
 
 def take_defined() -> list[Dag]:
     """Returns the DAGs defined since the last call, in definition order, and forgets them.
 
     Returns:
-        The DAGs.
+        The DAGs (their models).
     """
-    dags = list(_DEFINED)
-    _DEFINED.clear()
-    return dags
+    return [entry.model for entry in take_entries()]

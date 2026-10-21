@@ -259,6 +259,7 @@ class TaskFunction[**P, R]:
             for name, value in bound.arguments.items()
         }
         builder.add_task(self._task_id, PythonKind(arguments), output_type, self._options)
+        builder.functions[self._task_id] = self._fn
         for task_id in dict.fromkeys(upstream):
             builder.add_edge(task_id, self._task_id, EdgeKind.DATA)
         return Output(self._task_id)

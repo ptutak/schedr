@@ -6,10 +6,10 @@ every upstream output they reference.
 """
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
 from schedr._model import (
     DagCtxField,
@@ -160,6 +160,7 @@ class DagBuilder:
         self.defaults = defaults
         self.tasks: dict[str, Task] = {}
         self.edges: list[Edge] = []
+        self.functions: dict[str, Callable[..., Any]] = {}
 
     def add_task(
         self, task_id: str, kind: TaskKind, output_type: TypeDesc, options: TaskOptions

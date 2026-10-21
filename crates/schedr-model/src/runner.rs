@@ -21,14 +21,14 @@ pub const MAX_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 pub enum RunnerMode {
     /// Import DAG files and report the DAGs they define.
     Parse,
-    /// Run one task attempt (milestone 1.7).
+    /// Run one task attempt.
     Task,
 }
 
-/// Why a DAG file couldn't be imported.
+/// A structured error summary: why a DAG file couldn't be imported, or why a task failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ImportError {
+pub struct ErrorSummary {
     /// The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent
     /// stopped a file that took too long.
     pub exception: String,
@@ -61,10 +61,25 @@ pub enum RunnerMessage {
         /// The DAGs it defines (none for a helper module).
         dags: Vec<Dag>,
         /// Why importing it failed, if it did; then `dags` is empty.
-        error: Option<ImportError>,
+        error: Option<ErrorSummary>,
     },
     /// Every requested file was handled.
     ParseFinished,
+    /// The task's function returned; its output is encoded and within the size limit.
+    TaskSucceeded {
+        /// The output as stored JSON (tagged extra types).
+        output: serde_json::Value,
+        /// The outcome's name (`SUCCESS` until outcome types arrive, milestone M4).
+        outcome: String,
+    },
+    /// The task failed: an exception, or an output that can't be stored.
+    TaskFailed {
+        /// What went wrong.
+        error: ErrorSummary,
+        /// A failure schedr recognises, e.g. `output_not_serializable`; `None` for an
+        /// exception from the task's own code.
+        kind: Option<String>,
+    },
 }
 
 /// A parse job: the files of one root to import.
@@ -77,6 +92,56 @@ pub struct ParseRequest {
     pub root_dir: String,
     /// The files to import, relative to the root, in order.
     pub files: Vec<String>,
+    /// Directories put first on `sys.path` (every DAG root).
+    pub sys_path: Vec<String>,
+}
+
+/// Where a DAG file is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DagFile {
+    /// The DAG root's name.
+    pub root: String,
+    /// The root's directory on this worker.
+    pub root_dir: String,
+    /// The file's path relative to the root.
+    pub path: String,
+}
+
+/// The run information a task gets (`dag_ctx` and the `SCHEDR_*` variables).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunInfo {
+    /// The DAG's ID.
+    pub dag_id: String,
+    /// The run's ID (a `UUIDv7`).
+    pub run_id: String,
+    /// The run's kind.
+    pub kind: crate::states::RunKind,
+    /// The moment the run is for.
+    pub planned_for: jiff::Timestamp,
+    /// The start of the run's window.
+    pub since: jiff::Timestamp,
+    /// The attempt's try number, from 1.
+    pub try_number: u32,
+    /// The instance of a mapped task.
+    pub map_index: Option<u32>,
+}
+
+/// One task attempt for the runner to run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRequest {
+    /// The DAG file to import.
+    pub dag_file: DagFile,
+    /// The DAG's ID (the file may define several DAGs).
+    pub dag_id: String,
+    /// The task as stored in DAG JSON (its arguments and settings).
+    pub task: crate::task::Task,
+    /// The upstream outputs the task uses, by task ID, as stored JSON.
+    pub inputs: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The run information.
+    pub run: RunInfo,
     /// Directories put first on `sys.path` (every DAG root).
     pub sys_path: Vec<String>,
 }
@@ -94,6 +159,8 @@ pub enum AgentMessage {
     },
     /// A parse job.
     Parse(ParseRequest),
+    /// A task attempt.
+    Task(Box<TaskRequest>),
 }
 
 /// Whether the agent accepts a runner: the versions must be equal (the binary and the

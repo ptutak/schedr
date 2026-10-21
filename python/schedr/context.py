@@ -1,12 +1,18 @@
 """The DAG context, ``dag_ctx``: the current run's information.
 
 In the DAG body, ``dag_ctx.run.planned_for`` is a **reference**, filled in at run time; it
-can be passed to tasks and commands, but not used as a value in the DAG file (see
-PROJECT.md, Run parameters and the DAG context). Reading the values inside a running task
-comes with the runner (milestone 1.7); ``dag_ctx.params`` with milestone M4.
+can be passed to tasks and commands, but not used as a value in the DAG file. Inside a
+running task (while the runner calls its function) the same expression gives the **value**
+(see PROJECT.md, Run parameters and the DAG context). ``dag_ctx.params`` comes with
+milestone M4.
 """
 
+import contextlib
+from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from schedr._model import DagCtxField, DagCtxRef, Reference
 
@@ -46,28 +52,76 @@ class DagCtxReference:
         raise TypeError(_VALUE_IN_DAG_BODY)
 
 
+@dataclass(frozen=True, slots=True)
+class RunValues:
+    """The run's context as values, inside a running task.
+
+    Attributes:
+        dag_id: The DAG's ID.
+        run_id: The run's ID.
+        kind: The run's kind.
+        planned_for: The moment the run is for.
+        since: The start of the run's window.
+    """
+
+    dag_id: str
+    run_id: str
+    kind: str
+    planned_for: datetime
+    since: datetime
+
+
+_RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
+
+
+@contextlib.contextmanager
+def running(values: RunValues) -> Iterator[None]:
+    """Makes ``dag_ctx`` give values instead of references inside the block (the runner).
+
+    Args:
+        values: The run's context.
+
+    Yields:
+        Nothing.
+    """
+    token = _RUNNING.set(values)
+    try:
+        yield
+    finally:
+        _RUNNING.reset(token)
+
+
 class RunContext:
-    """``dag_ctx.run``: the run's information."""
+    """``dag_ctx.run``: the run's information.
+
+    Each field is a reference in the DAG body and a value inside a running task; for type
+    checkers it is ``Any`` (as ``dag_ctx.params`` fields are), since the same expression is
+    used in both places.
+    """
 
     @property
-    def id(self) -> DagCtxReference:
+    def id(self) -> Any:
         """The run's ID (a UUIDv7)."""
-        return DagCtxReference(DagCtxField.RUN_ID)
+        values = _RUNNING.get()
+        return DagCtxReference(DagCtxField.RUN_ID) if values is None else values.run_id
 
     @property
-    def kind(self) -> DagCtxReference:
+    def kind(self) -> Any:
         """The run's kind: ``scheduled``, ``manual``, ``backfill`` or ``triggered``."""
-        return DagCtxReference(DagCtxField.RUN_KIND)
+        values = _RUNNING.get()
+        return DagCtxReference(DagCtxField.RUN_KIND) if values is None else values.kind
 
     @property
-    def planned_for(self) -> DagCtxReference:
+    def planned_for(self) -> Any:
         """The moment the run is for (a fire time for scheduled runs)."""
-        return DagCtxReference(DagCtxField.PLANNED_FOR)
+        values = _RUNNING.get()
+        return DagCtxReference(DagCtxField.PLANNED_FOR) if values is None else values.planned_for
 
     @property
-    def since(self) -> DagCtxReference:
+    def since(self) -> Any:
         """The start of the run's window, which is ``(since, planned_for]``."""
-        return DagCtxReference(DagCtxField.SINCE)
+        values = _RUNNING.get()
+        return DagCtxReference(DagCtxField.SINCE) if values is None else values.since
 
 
 class DagContext:
@@ -79,9 +133,10 @@ class DagContext:
         return RunContext()
 
     @property
-    def dag_id(self) -> DagCtxReference:
+    def dag_id(self) -> Any:
         """The DAG's ID."""
-        return DagCtxReference(DagCtxField.DAG_ID)
+        values = _RUNNING.get()
+        return DagCtxReference(DagCtxField.DAG_ID) if values is None else values.dag_id
 
     @property
     def params(self) -> None:

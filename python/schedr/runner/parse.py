@@ -36,8 +36,8 @@ def module_name(root: str, path: str) -> str:
     return f"_schedr_dag_{readable}_{digest}"
 
 
-def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:
-    """Imports one DAG file and returns the DAGs it defined.
+def import_dag_entries(root: str, root_dir: Path, path: str) -> list[registry.DefinedDag]:
+    """Imports one DAG file and returns the DAGs it defined, with their task functions.
 
     Args:
         root: The DAG root's name.
@@ -62,9 +62,23 @@ def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:
             spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(name, None)
-        registry.take_defined()
+        registry.take_entries()
         raise
-    return registry.take_defined()
+    return registry.take_entries()
+
+
+def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:
+    """Imports one DAG file and returns the DAGs it defined.
+
+    Args:
+        root: The DAG root's name.
+        root_dir: The root's directory.
+        path: The file's path relative to the root.
+
+    Returns:
+        The DAGs, in definition order (empty for a helper module).
+    """
+    return [entry.model for entry in import_dag_entries(root, root_dir, path)]
 
 
 def import_error(error: BaseException) -> dict[str, str]:
@@ -103,6 +117,17 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
     return {"type": "file_parsed", "path": path, "dags": documents, "error": None}
 
 
+def extend_sys_path(entries: list[str]) -> None:
+    """Puts directories first on ``sys.path``, in order, each at most once.
+
+    Args:
+        entries: The directories (every DAG root).
+    """
+    for entry in reversed(list(dict.fromkeys(entries))):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+
+
 def run_parse(channel: Channel, request: dict[str, Any]) -> None:
     """Handles a ``parse`` request: imports each file, reporting progress and results.
 
@@ -110,9 +135,7 @@ def run_parse(channel: Channel, request: dict[str, Any]) -> None:
         channel: The channel to the agent.
         request: The ``parse`` message (root, root directory, files, ``sys.path`` entries).
     """
-    for entry in reversed(request["sys_path"]):
-        if entry not in sys.path:
-            sys.path.insert(0, entry)
+    extend_sys_path(request["sys_path"])
     root, root_dir = request["root"], Path(request["root_dir"])
     for path in request["files"]:
         channel.send({"type": "file_started", "path": path})

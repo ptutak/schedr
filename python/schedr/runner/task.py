@@ -1,0 +1,274 @@
+"""Task mode: run one Python task attempt.
+
+The runner imports the DAG file (latest code on the worker) under the same module name as
+parse mode, finds the task's function, builds its arguments from the stored values, calls it
+with ``dag_ctx`` giving values, and sends back the encoded output or an error summary. It
+doesn't enforce timeouts or watch memory: the agent does (see PROJECT.md, Rust/Python
+integration).
+"""
+
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from pathlib import Path
+from typing import Any, get_args, get_origin
+
+from schedr._serialization import CodecError, check_size, decode, decode_any, encode
+from schedr._serialization.annotations import (
+    MAPPING_ORIGINS,
+    SEQUENCE_ORIGINS,
+    TypeModelError,
+    type_hints,
+    unwrap,
+)
+from schedr._templates import as_text
+from schedr.context import RunValues, running
+from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
+from schedr.runner.protocol import Channel
+
+SUCCESS = "SUCCESS"
+"""The outcome of every successful task until outcome types arrive (milestone M4)."""
+
+
+class TaskInputError(Exception):
+    """A stored input or argument that can't be given to the task's function."""
+
+
+class TaskSetupError(Exception):
+    """The task can't be started: its DAG or function isn't in the DAG file."""
+
+
+def resolve(reference: Mapping[str, Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) -> Any:
+    """The stored value a reference stands for.
+
+    Args:
+        reference: A reference as stored (``{"kind": "output", "task": ..., "path": [...]}``
+            or ``{"kind": "dag_ctx", "field": ...}``).
+        inputs: The upstream outputs, by task ID, as stored JSON.
+        run: The request's run information.
+
+    Returns:
+        The stored value (``planned_for`` / ``since`` tagged as ``$datetime``).
+
+    Raises:
+        TaskInputError: For a missing input or path, or a truncated stream.
+    """
+    if reference["kind"] == "dag_ctx":
+        field = reference["field"]
+        values = {
+            "dag_id": run["dag_id"],
+            "run_id": run["run_id"],
+            "run_kind": run["kind"],
+            "planned_for": {"$datetime": run["planned_for"]},
+            "since": {"$datetime": run["since"]},
+        }
+        return values[field]
+    task = reference["task"]
+    if task not in inputs:
+        raise TaskInputError(f"the output of `{task}` isn't among the task's inputs")
+    value = inputs[task]
+    for step in reference.get("path", []):
+        if isinstance(step, str):
+            if not isinstance(value, dict) or step not in value:
+                raise TaskInputError(f"`{task}`: `{step}` doesn't exist in the output")
+            if value.get(f"{step}_truncated") is True:
+                raise TaskInputError(
+                    f"`{task}.{step}` was truncated (over the output size limit); "
+                    "take the whole ProcessResult instead"
+                )
+            value = value[step]
+        else:
+            items = value.get("$tuple") if isinstance(value, dict) else value
+            if not isinstance(items, list) or step >= len(items):
+                raise TaskInputError(f"`{task}`: index {step} doesn't exist in the output")
+            value = items[step]
+    return value
+
+
+def render(parts: list[Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) -> str:
+    """Renders a stored template to text, the way the agent renders command lines.
+
+    Args:
+        parts: The template's parts (``{"text": ...}`` and ``{"ref": {...}}``).
+        inputs: The upstream outputs.
+        run: The run information.
+
+    Returns:
+        The text.
+
+    Raises:
+        TaskInputError: For a reference that can't be resolved or written as text.
+    """
+    out: list[str] = []
+    for part in parts:
+        if "text" in part:
+            out.append(part["text"])
+            continue
+        reference = part["ref"]
+        value = decode_any(resolve(reference, inputs, run))
+        spec = reference.get("format")
+        if value is None or isinstance(value, list | dict | tuple):
+            raise TaskInputError(f"a {type(value).__name__} can't be rendered into text")
+        if spec and "%" in spec:
+            out.append(value.strftime(spec))
+        else:
+            out.append(as_text(value))
+    return "".join(out)
+
+
+def build(
+    value: Mapping[str, Any], annotation: object, inputs: Mapping[str, Any], run: Mapping[str, Any]
+) -> Any:
+    """An argument's Python value from its stored form, decoded against the parameter type.
+
+    Args:
+        value: The stored value (``literal``, ``ref``, ``template``, ``list`` or ``map``).
+        annotation: The parameter's annotation.
+        inputs: The upstream outputs.
+        run: The run information.
+
+    Returns:
+        The value to pass.
+
+    Raises:
+        TaskInputError: If a stored value doesn't fit the parameter.
+    """
+    try:
+        if "literal" in value:
+            return decode(value["literal"], annotation)
+        if "ref" in value:
+            return decode(resolve(value["ref"], inputs, run), annotation)
+        if "template" in value:
+            return render(value["template"], inputs, run)
+        target = unwrap(annotation)
+        args = get_args(target)
+        if "list" in value:
+            item = args[0] if get_origin(target) in SEQUENCE_ORIGINS and args else Any
+            return [build(v, item, inputs, run) for v in value["list"]]
+        item = args[1] if get_origin(target) in MAPPING_ORIGINS and args else Any
+        return {k: build(v, item, inputs, run) for k, v in value["map"].items()}
+    except CodecError as e:
+        raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
+
+
+def run_values(run: Mapping[str, Any]) -> RunValues:
+    """The ``dag_ctx`` values for a request's run information.
+
+    Args:
+        run: The run information.
+
+    Returns:
+        The values.
+    """
+    return RunValues(
+        dag_id=run["dag_id"],
+        run_id=run["run_id"],
+        kind=run["kind"],
+        planned_for=datetime.fromisoformat(run["planned_for"]),
+        since=datetime.fromisoformat(run["since"]),
+    )
+
+
+def find_function(request: Mapping[str, Any]) -> Callable[..., Any]:
+    """Imports the DAG file and finds the task's function.
+
+    Args:
+        request: The ``task`` message.
+
+    Returns:
+        The task's function.
+
+    Raises:
+        TaskSetupError: If the DAG or the task isn't in the file.
+    """
+    dag_file = request["dag_file"]
+    entries = import_dag_entries(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
+    task_id = request["task"]["id"]
+    for entry in entries:
+        if entry.model.id == request["dag_id"]:
+            if task_id not in entry.functions:
+                raise TaskSetupError(
+                    f"DAG `{request['dag_id']}` has no Python task `{task_id}` (any more?)"
+                )
+            return entry.functions[task_id]
+    raise TaskSetupError(
+        f"`{dag_file['path']}` doesn't define DAG `{request['dag_id']}` (any more?)"
+    )
+
+
+def failure(error: BaseException, kind: str | None, message: str | None = None) -> dict[str, Any]:
+    """A ``task_failed`` message.
+
+    Args:
+        error: The exception.
+        kind: The failure kind schedr recognises, or ``None`` for the task's own exception.
+        message: A message replacing the exception's, if given.
+
+    Returns:
+        The message.
+    """
+    summary = import_error(error)
+    if message is not None:
+        summary["message"] = message
+    return {"type": "task_failed", "error": summary, "kind": kind}
+
+
+def execute(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Runs a task request and returns the message to send.
+
+    Args:
+        request: The ``task`` message.
+
+    Returns:
+        ``task_succeeded`` with the encoded output, or ``task_failed``.
+    """
+    task, inputs, run = request["task"], request["inputs"], request["run"]
+    task_id = task["id"]
+    try:
+        function = find_function(request)
+        hints = type_hints(function, f"task `{task_id}`")
+        arguments = {
+            name: build(value, hints.get(name, Any), inputs, run)
+            for name, value in task.get("arguments", {}).items()
+        }
+    except TaskSetupError as e:
+        return failure(e, "task_not_found")
+    except (TaskInputError, TypeModelError) as e:
+        return failure(e, "input_mismatch")
+    except (Exception, SystemExit) as e:
+        return failure(e, "import_failed")
+    try:
+        with running(run_values(run)):
+            result = function(**arguments)
+    except (Exception, SystemExit) as e:
+        return failure(e, None)
+    return _stored(result, hints.get("return", Any), task)
+
+
+def _stored(result: object, annotation: object, task: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        output = encode(result, annotation)
+    except CodecError as e:
+        return failure(
+            e, "output_not_serializable", f"the output of `{task['id']}` can't be stored, {e}"
+        )
+    try:
+        check_size(output, task["settings"]["max_output_size"])
+    except CodecError as e:
+        return failure(e, "output_too_large", f"the output of `{task['id']}`: {e.reason}")
+    return {"type": "task_succeeded", "output": output, "outcome": SUCCESS}
+
+
+def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
+    """Handles a ``task`` request: runs it and reports the result.
+
+    Args:
+        channel: The channel to the agent.
+        request: The ``task`` message.
+
+    Returns:
+        The exit code: 0 if the task succeeded, 1 otherwise.
+    """
+    extend_sys_path(request["sys_path"])
+    result = execute(request)
+    channel.send(result)
+    return 0 if result["type"] == "task_succeeded" else 1

@@ -177,4 +177,4 @@ class Dag:
             description=self.description,
             tags=self.tags,
         )
-        registry.register(self.model)
+        registry.register(self.model, builder.functions)

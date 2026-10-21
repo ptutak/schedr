@@ -811,8 +811,22 @@ permission to create pods.
     the runner sends `file_started { path }` (the agent times files from it) and then
     `file_parsed { path, dags, error }` (`error`: the exception's class, message and the last
     20 lines of the traceback); then `parse_finished`.
-  - **Runner exit codes:** 0 done; 1 a failure on the channel; 2 a wrong start (unknown mode,
-    no `SCHEDR_AGENT_SOCKET`, refused handshake).
+  - **Task mode (one attempt of a Python task):** the agent sends `task { dag_file { root,
+    root_dir, path }, dag_id, task, inputs, run, sys_path }`: the task as in the DAG JSON, the
+    upstream outputs it references (stored JSON, by task ID) and the run information (`dag_id`,
+    `run_id`, `kind`, `planned_for`, `since`, `try_number`, `map_index`). The runner imports
+    the file (latest code on the worker), finds the task's function, builds each argument from
+    its stored form decoded against the parameter's type (templates rendered as on the agent),
+    calls it and answers `task_succeeded { output, outcome }` (encoded against the return
+    type; outcome `SUCCESS` until outcome types arrive in M4) or `task_failed { error, kind }`.
+    `kind` is what schedr recognised: `task_not_found` (the DAG or the task is no longer in
+    the file), `input_mismatch` (a stored input doesn't fit the parameter, or a referenced
+    path is missing or truncated), `import_failed`, `output_not_serializable`,
+    `output_too_large` (over `max_output_size`), or `null` for the task's own exception
+    (including `SystemExit`). The runner doesn't enforce timeouts or memory: the agent does.
+  - **Runner exit codes:** 0 done (in task mode: the task succeeded); 1 a failed task or a
+    failure on the channel; 2 a wrong start (unknown mode, no `SCHEDR_AGENT_SOCKET`, refused
+    handshake).
   - **Module names:** each DAG file is imported under a stable name derived from its root and
     path (e.g. `_schedr_dag_etl_repo_team_a_sync_1a2b3c4d`) and kept in `sys.modules`, so
     dataclasses defined in DAG files resolve; task mode imports a file under the same name.
@@ -1946,6 +1960,11 @@ task data: "data flow is the only way to pass task data" still holds).
 - **Run information:** `dag_ctx.run.id`, `dag_ctx.run.kind`, `dag_ctx.run.planned_for`,
   `dag_ctx.run.since`, `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables,
   see Plain script delivery).
+- **Values at run time:** while the runner calls a task's function, `dag_ctx` gives the
+  values (`planned_for` / `since` as aware `datetime`s in UTC), set with a context variable
+  for the call only; everywhere else (DAG body, tests outside a run) it gives references.
+  Because the same expression is both, the fields are typed `Any` for type checkers (as
+  `dag_ctx.params` fields will be).
 
 **Declaring parameters.**
 

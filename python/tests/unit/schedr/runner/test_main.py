@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from schedr.runner.main import EXIT_ERROR, EXIT_USAGE, SOCKET_ENV, main
+from schedr.runner.parse import import_dag_file
 from schedr.runner.protocol import Channel
 
 ENV = {SOCKET_ENV: "/run/agent.sock"}
@@ -18,6 +19,7 @@ class FakeAgent:
 
     def __init__(self, *replies: dict[str, Any]) -> None:
         self.runner_end, agent_end = socket.socketpair()
+        self.runner_end.settimeout(10)  # a runner waiting for a message fails instead of hanging
         self.agent = Channel(agent_end)
         for reply in replies:
             self.agent.send(reply)
@@ -112,7 +114,39 @@ def test_unexpected_messages_are_channel_errors(
     assert err == f"agent channel: {message}\n"
 
 
-def test_task_mode_comes_later() -> None:
-    code, err = run(["task"], FakeAgent({"type": "welcome"}))
-    assert code == EXIT_USAGE
-    assert "milestone 1.7" in err
+def test_task_mode_runs_the_task_and_exits_with_its_code(
+    tmp_path: Path, validate_runner_message: Callable[[Any], None]
+) -> None:
+    (tmp_path / "a.py").write_text(
+        "from schedr import Dag, task\n"
+        "@task\n"
+        "def fails() -> None:\n"
+        "    raise ValueError('no rows')\n"
+        "with Dag('a'):\n"
+        "    fails()\n"
+    )
+    (dag,) = import_dag_file("etl", tmp_path, "a.py")
+    request = {
+        "type": "task",
+        "dag_file": {"root": "etl", "root_dir": str(tmp_path), "path": "a.py"},
+        "dag_id": "a",
+        "task": dag.to_json()["tasks"][0],
+        "inputs": {},
+        "run": {
+            "dag_id": "a",
+            "run_id": "0190a3e5-0000-7000-8000-000000000000",
+            "kind": "manual",
+            "planned_for": "2026-03-04T05:06:07Z",
+            "since": "2026-03-04T05:06:07Z",
+            "try_number": 1,
+            "map_index": None,
+        },
+        "sys_path": [],
+    }
+    validate_runner_message(request)
+    agent = FakeAgent({"type": "welcome"}, request)
+    code, err = run(["task"], agent)
+    assert (code, err) == (1, "")
+    hello, result = agent.messages()
+    assert hello["mode"] == "task"
+    assert (result["type"], result["kind"]) == ("task_failed", None)

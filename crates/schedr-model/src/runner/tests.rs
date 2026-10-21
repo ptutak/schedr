@@ -31,7 +31,7 @@ fn file_messages_round_trip() {
         RunnerMessage::FileParsed {
             path: "broken.py".into(),
             dags: vec![],
-            error: Some(ImportError {
+            error: Some(ErrorSummary {
                 exception: "ModuleNotFoundError".into(),
                 message: "No module named 'pandas'".into(),
                 traceback: "  File \"broken.py\", line 1".into(),
@@ -120,4 +120,72 @@ fn the_runner_version_must_match_exactly() {
 #[test]
 fn the_message_size_cap_is_64_mib() {
     assert_eq!(MAX_MESSAGE_SIZE, 67_108_864);
+}
+
+fn request() -> TaskRequest {
+    TaskRequest {
+        dag_file: DagFile {
+            root: "etl".into(),
+            root_dir: "/git/dags/etl".into(),
+            path: "sync.py".into(),
+        },
+        dag_id: "sync".into(),
+        task: serde_json::from_value(json!({
+            "id": "load", "kind": "python",
+            "arguments": {"rows": {"ref": {"kind": "output", "task": "extract"}}},
+            "settings": {"retries": 0, "retry_delay_ms": 300_000, "timeout_ms": null,
+                         "queue": "default", "max_output_size": 1_048_576},
+            "output_type": {"type": "int"},
+        }))
+        .unwrap(),
+        inputs: [("extract".to_owned(), json!([1, 2]))].into(),
+        run: RunInfo {
+            dag_id: "sync".into(),
+            run_id: "0192c4e1".into(),
+            kind: crate::states::RunKind::Manual,
+            planned_for: "2026-10-15T03:00:00Z".parse().unwrap(),
+            since: "2026-10-14T03:00:00Z".parse().unwrap(),
+            try_number: 1,
+            map_index: None,
+        },
+        sys_path: vec!["/git/dags/etl".into()],
+    }
+}
+
+#[test]
+fn task_requests_round_trip() {
+    let message = AgentMessage::Task(Box::new(request()));
+    let json = serde_json::to_value(&message).unwrap();
+    assert_eq!(json["type"], "task");
+    assert_eq!(json["dag_file"]["path"], "sync.py");
+    assert_eq!(json["run"]["planned_for"], "2026-10-15T03:00:00Z");
+    assert_eq!(json["run"]["kind"], "manual");
+    assert_eq!(
+        serde_json::from_value::<AgentMessage>(json).unwrap(),
+        message
+    );
+}
+
+#[test]
+fn task_results_round_trip() {
+    for message in [
+        RunnerMessage::TaskSucceeded {
+            output: json!(3),
+            outcome: "SUCCESS".into(),
+        },
+        RunnerMessage::TaskFailed {
+            error: ErrorSummary {
+                exception: "ValueError".into(),
+                message: "bad".into(),
+                traceback: String::new(),
+            },
+            kind: Some("output_not_serializable".into()),
+        },
+    ] {
+        let json = serde_json::to_value(&message).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RunnerMessage>(json).unwrap(),
+            message
+        );
+    }
 }

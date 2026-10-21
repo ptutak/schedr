@@ -1,7 +1,15 @@
 from pathlib import Path
 
 from schedr._model.dag import Dag, DagLocation
-from schedr._model.registry import LOCAL_ROOT, location_for, parse_root, register, take_defined
+from schedr._model.registry import (
+    LOCAL_ROOT,
+    DefinedDag,
+    location_for,
+    parse_root,
+    register,
+    take_defined,
+    take_entries,
+)
 
 
 def test_without_a_parse_root_dags_are_local_by_file_name(tmp_path: Path) -> None:
@@ -33,3 +41,12 @@ def test_take_defined_returns_registered_dags_once_in_order() -> None:
     register(second)
     assert take_defined() == [first, second]
     assert take_defined() == []
+
+
+def test_take_entries_keeps_the_task_functions() -> None:
+    def extract() -> None: ...
+
+    dag = Dag("a", DagLocation("r", "a.py"))
+    register(dag, {"extract": extract})
+    assert take_entries() == [DefinedDag(dag, {"extract": extract})]
+    assert take_entries() == []

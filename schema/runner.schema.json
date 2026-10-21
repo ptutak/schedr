@@ -75,6 +75,54 @@
             "sys_path"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A task attempt.",
+          "properties": {
+            "dag_file": {
+              "$ref": "#/$defs/DagFile",
+              "description": "The DAG file to import."
+            },
+            "dag_id": {
+              "description": "The DAG's ID (the file may define several DAGs).",
+              "type": "string"
+            },
+            "inputs": {
+              "additionalProperties": true,
+              "description": "The upstream outputs the task uses, by task ID, as stored JSON.",
+              "type": "object"
+            },
+            "run": {
+              "$ref": "#/$defs/RunInfo",
+              "description": "The run information."
+            },
+            "sys_path": {
+              "description": "Directories put first on `sys.path` (every DAG root).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/Task",
+              "description": "The task as stored in DAG JSON (its arguments and settings)."
+            },
+            "type": {
+              "const": "task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dag_file",
+            "dag_id",
+            "task",
+            "inputs",
+            "run",
+            "sys_path"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -239,6 +287,30 @@
         }
       ]
     },
+    "DagFile": {
+      "additionalProperties": false,
+      "description": "Where a DAG file is.",
+      "properties": {
+        "path": {
+          "description": "The file's path relative to the root.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The DAG root's name.",
+          "type": "string"
+        },
+        "root_dir": {
+          "description": "The root's directory on this worker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "root_dir",
+        "path"
+      ],
+      "type": "object"
+    },
     "DagId": {
       "maxLength": 250,
       "minLength": 1,
@@ -303,6 +375,30 @@
         }
       ]
     },
+    "ErrorSummary": {
+      "additionalProperties": false,
+      "description": "A structured error summary: why a DAG file couldn't be imported, or why a task failed.",
+      "properties": {
+        "exception": {
+          "description": "The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent\nstopped a file that took too long.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The exception's message.",
+          "type": "string"
+        },
+        "traceback": {
+          "description": "The last lines of the traceback (empty for a timeout).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exception",
+        "message",
+        "traceback"
+      ],
+      "type": "object"
+    },
     "Field": {
       "additionalProperties": false,
       "description": "A named field of a `TypedDict` or dataclass.",
@@ -324,30 +420,6 @@
         "name",
         "type",
         "required"
-      ],
-      "type": "object"
-    },
-    "ImportError": {
-      "additionalProperties": false,
-      "description": "Why a DAG file couldn't be imported.",
-      "properties": {
-        "exception": {
-          "description": "The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent\nstopped a file that took too long.",
-          "type": "string"
-        },
-        "message": {
-          "description": "The exception's message.",
-          "type": "string"
-        },
-        "traceback": {
-          "description": "The last lines of the traceback (empty for a timeout).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "exception",
-        "message",
-        "traceback"
       ],
       "type": "object"
     },
@@ -414,6 +486,83 @@
         }
       ]
     },
+    "RunInfo": {
+      "additionalProperties": false,
+      "description": "The run information a task gets (`dag_ctx` and the `SCHEDR_*` variables).",
+      "properties": {
+        "dag_id": {
+          "description": "The DAG's ID.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RunKind",
+          "description": "The run's kind."
+        },
+        "map_index": {
+          "description": "The instance of a mapped task.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "planned_for": {
+          "description": "The moment the run is for.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "The run's ID (a `UUIDv7`).",
+          "type": "string"
+        },
+        "since": {
+          "description": "The start of the run's window.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "try_number": {
+          "description": "The attempt's try number, from 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dag_id",
+        "run_id",
+        "kind",
+        "planned_for",
+        "since",
+        "try_number"
+      ],
+      "type": "object"
+    },
+    "RunKind": {
+      "description": "Who or what created a run.",
+      "oneOf": [
+        {
+          "const": "scheduled",
+          "description": "Created by the scheduler for a fire time.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Triggered by a person (UI, CLI, API).",
+          "type": "string"
+        },
+        {
+          "const": "backfill",
+          "description": "One of the runs of a backfill.",
+          "type": "string"
+        },
+        {
+          "const": "triggered",
+          "description": "Created by another DAG's run (`TriggerDagOperator`).",
+          "type": "string"
+        }
+      ]
+    },
     "RunnerMessage": {
       "description": "A message from the runner to the agent.",
       "oneOf": [
@@ -474,7 +623,7 @@
             "error": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ImportError"
+                  "$ref": "#/$defs/ErrorSummary"
                 },
                 {
                   "type": "null"
@@ -511,6 +660,55 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The task's function returned; its output is encoded and within the size limit.",
+          "properties": {
+            "outcome": {
+              "description": "The outcome's name (`SUCCESS` until outcome types arrive, milestone M4).",
+              "type": "string"
+            },
+            "output": {
+              "description": "The output as stored JSON (tagged extra types)."
+            },
+            "type": {
+              "const": "task_succeeded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "output",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The task failed: an exception, or an output that can't be stored.",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/ErrorSummary",
+              "description": "What went wrong."
+            },
+            "kind": {
+              "description": "A failure schedr recognises, e.g. `output_not_serializable`; `None` for an\nexception from the task's own code.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "task_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -524,7 +722,7 @@
         },
         {
           "const": "task",
-          "description": "Run one task attempt (milestone 1.7).",
+          "description": "Run one task attempt.",
           "type": "string"
         }
       ]
