@@ -27,9 +27,10 @@ mod tests;
 /// isn't permitted, and what the same inputs always do again. (`secret_unavailable`, a secret
 /// storage that is down, and `import_failed` / `task_not_found`, which new code can fix, are
 /// retried.)
-pub const NOT_RETRIED_ERRORS: [&str; 5] = [
+pub const NOT_RETRIED_ERRORS: [&str; 6] = [
     "secret_not_found",
     "secret_denied",
+    "inputs_too_large",
     "input_mismatch",
     "output_not_serializable",
     "output_too_large",

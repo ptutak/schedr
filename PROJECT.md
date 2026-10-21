@@ -623,6 +623,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   - Inputs: upstream outputs used by the task, and run information.
   - Execution settings: environment variables, working directory, interpreter (scripts),
     `execution_timeout`, cancel grace time, memory budget, `setrlimit` opt-in.
+- **Over the inputs cap** the attempt fails at once with error kind `inputs_too_large`,
+  never retried (the same inputs always are too large). Inputs are the outputs of the
+  upstream tasks the task's references name, as `{task_id: output}`.
 - **Input size:** small inputs travel inside `AssignTask`; when the total exceeds a threshold
   (default 4 MB, gRPC's default message limit) the worker downloads them separately in chunks
   with a unary call. A configurable **cap on total inputs per task** (default 64 MB) makes the
@@ -721,6 +724,16 @@ uses up a retry. Reasons and how the master reacts:
 - **Code not there yet** (e.g. git-sync on that pod hasn't pulled the new commit): retry after
   roughly the sync interval plus settle time, on any worker. Marked **unschedulable** only if
   still missing everywhere after a configurable wait.
+- **A rejection takes the assignment back:** the attempt isn't kept (it was never a try)
+  and the try number goes back; the reason is shown on the task (e.g. "waiting for the code on
+  the workers: …", or for `unschedulable` every worker's reason). Which workers rejected a
+  task for a worker-specific reason is kept in the master's memory: a master restart, or a
+  change in the set of workers (a new worker, or a restarted one), gives the task another
+  chance. **Code not there yet** retries after **35 s** (the default poll interval plus the
+  settle time); turning it into `unschedulable` after a longer wait comes with several
+  workers (M2).
+- A **`Started` for an attempt that was taken back** (no `Started` in time), ended, or
+  belongs to another worker is answered with `CancelAttempt`.
 - An **import error** in a DAG file is **not** a rejection: the agent can't detect it without
   starting Python, so it is an ordinary task **failure** with the `ImportError` in the error
   summary.

@@ -10,8 +10,10 @@ authors.workspace = true
 [dependencies]
 croner.workspace = true
 jiff.workspace = true
+prost-types.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true
+schedr-proto.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
