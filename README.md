@@ -39,6 +39,7 @@ make fmt        # format Rust + Python
 make lint       # clippy, ruff, mypy
 make test       # Rust (nextest) + pytest, both with an 85 % coverage floor
 make schema     # regenerate schema/ from the Rust model (CI fails if it's stale)
-make docs       # build the documentation site into site/ (make docs-serve: localhost:8000)
+make docs       # build the documentation site into site/
+make docs-serve # ...and serve it at localhost:8765 (DOCS_PORT=9000 for another port)
 make check      # everything CI runs
 ```

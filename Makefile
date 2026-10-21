@@ -15,6 +15,9 @@ help:            ## Show this help
 # Rust test coverage: unit-test files (`src/**/tests.rs`) and `main.rs` (only calls into the
 # library) aren't counted; see PROJECT.md, Repository and tooling: Testing.
 COVERAGE_MIN := 85
+
+# Port for make docs-serve; override with e.g. `make docs-serve DOCS_PORT=9000`.
+DOCS_PORT ?= 8765
 LLVM_COV_IGNORE := '(^|/)(tests|main)\.rs$$'
 
 setup:           ## Install dev tools, Python dev deps and pre-commit hooks
@@ -51,8 +54,8 @@ docs:            ## Build the documentation site into site/ (fails on any warnin
 	rm -rf site/rust
 	cp -r target/doc site/rust
 
-docs-serve: docs ## Build the docs and serve them at http://localhost:8000
-	uv run python -m http.server --directory site 8000
+docs-serve: docs ## Build the docs and serve them at http://localhost:$(DOCS_PORT)
+	uv run python -m http.server --directory site $(DOCS_PORT)
 
 test-rust:       ## Run Rust tests with coverage (fails below COVERAGE_MIN)
 	cargo llvm-cov nextest --workspace --ignore-filename-regex $(LLVM_COV_IGNORE) \

@@ -3538,7 +3538,7 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
 ### Documentation
 
 **Generated HTML documentation for both languages, built from the repository by one command**
-(`make docs`; `make docs-serve` serves it locally). Nothing generated is committed: the site
+(`make docs`; `make docs-serve` serves it locally, port `DOCS_PORT`, default 8765). Nothing generated is committed: the site
 can be rebuilt at any time, and changing the documentation engine later means changing only
 its configuration, not the content.
 
