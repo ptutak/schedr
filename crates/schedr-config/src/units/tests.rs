@@ -83,7 +83,7 @@ fn deserialize_duration_reads_strings() {
     ))
     .extract()
     .unwrap();
-    assert_eq!(parsed.timeout, Duration::from_secs(5400));
+    assert_eq!(parsed.timeout, Duration::from_mins(90));
 }
 
 #[test]

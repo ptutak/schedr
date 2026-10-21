@@ -3423,7 +3423,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ### Rust
 
-- Edition 2024, stable toolchain pinned via `rust-toolchain.toml`.
+- Edition 2024, stable toolchain pinned via `rust-toolchain.toml`. **Minimum supported Rust
+  version: 1.99** (`rust-version` in the workspace `Cargo.toml`).
 - `rustfmt` (max width 100).
 - `clippy` with `all` and `pedantic` lint groups at warn; CI fails on any warning (`-D warnings`).
 - `unsafe_code = "forbid"`, `missing_docs = "warn"`.
