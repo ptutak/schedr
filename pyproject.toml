@@ -108,6 +108,8 @@ markers = ["integration: tests that spawn processes or touch the filesystem"]
 [tool.coverage.run]
 source = ["schedr"]
 branch = true
+# `python -m` entry points only call into tested code (like Rust's main.rs).
+omit = ["*/__main__.py"]
 
 [tool.coverage.report]
 fail_under = 85

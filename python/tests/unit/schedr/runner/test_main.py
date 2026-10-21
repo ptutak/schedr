@@ -1,0 +1,118 @@
+import io
+import socket
+from collections.abc import Callable
+from importlib.metadata import version
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from schedr.runner.main import EXIT_ERROR, EXIT_USAGE, SOCKET_ENV, main
+from schedr.runner.protocol import Channel
+
+ENV = {SOCKET_ENV: "/run/agent.sock"}
+
+
+class FakeAgent:
+    """The agent's end of a socket pair, with its replies queued before the runner starts."""
+
+    def __init__(self, *replies: dict[str, Any]) -> None:
+        self.runner_end, agent_end = socket.socketpair()
+        self.agent = Channel(agent_end)
+        for reply in replies:
+            self.agent.send(reply)
+        self.opened: list[str] = []
+
+    def open(self, path: str) -> Channel:
+        self.opened.append(path)
+        return Channel(self.runner_end)
+
+    def messages(self) -> list[dict[str, Any]]:
+        self.agent._sock.settimeout(5)
+        found: list[dict[str, Any]] = []
+        while True:
+            try:
+                found.append(self.agent.receive())
+            except Exception:
+                return found
+
+
+def run(argv: list[str], agent: FakeAgent, env: dict[str, str] | None = None) -> tuple[int, str]:
+    err = io.StringIO()
+    code = main(argv, ENV if env is None else env, open_channel=agent.open, stderr=err)
+    return code, err.getvalue()
+
+
+def test_parse_mode_handshakes_then_parses(
+    tmp_path: Path, validate_runner_message: Callable[[Any], None]
+) -> None:
+    (tmp_path / "a.py").write_text("from schedr import Dag\nwith Dag('a'):\n    pass\n")
+    request = {
+        "type": "parse",
+        "root": "etl",
+        "root_dir": str(tmp_path),
+        "files": ["a.py"],
+        "sys_path": [],
+    }
+    agent = FakeAgent({"type": "welcome"}, request)
+    code, err = run(["parse"], agent)
+    assert (code, err) == (0, "")
+    assert agent.opened == ["/run/agent.sock"]
+    messages = agent.messages()
+    assert messages[0] == {"type": "hello", "schedr_version": version("schedr"), "mode": "parse"}
+    assert [m["type"] for m in messages[1:]] == ["file_started", "file_parsed", "parse_finished"]
+    for message in messages:
+        validate_runner_message(message)
+
+
+@pytest.mark.parametrize("argv", [[], ["parse", "extra"], ["serve"]])
+def test_wrong_arguments_print_usage(argv: list[str]) -> None:
+    code, err = run(argv, FakeAgent())
+    assert code == EXIT_USAGE
+    assert err == "usage: python -m schedr.runner {parse,task}\n"
+
+
+def test_without_the_socket_variable_it_explains_who_starts_it() -> None:
+    code, err = run(["parse"], FakeAgent(), env={})
+    assert code == EXIT_USAGE
+    assert "SCHEDR_AGENT_SOCKET is not set" in err
+
+
+def test_an_unreachable_socket_is_an_error() -> None:
+    def refuse(path: str) -> Channel:
+        raise ConnectionRefusedError(111, "Connection refused")
+
+    err = io.StringIO()
+    code = main(["parse"], ENV, open_channel=refuse, stderr=err)
+    assert code == EXIT_ERROR
+    assert "can't connect to the agent at /run/agent.sock" in err.getvalue()
+
+
+def test_a_refused_handshake_stops_the_runner() -> None:
+    code, err = run(["parse"], FakeAgent({"type": "refused", "reason": "version mismatch"}))
+    assert code == EXIT_USAGE
+    assert err == "the agent refused the runner: version mismatch\n"
+
+
+@pytest.mark.parametrize(
+    ("replies", "message"),
+    [
+        ([{"type": "parse"}], "expected `welcome`, got `parse`"),
+        ([{"type": "welcome"}, {"type": "task"}], "expected `parse`, got `task`"),
+        ([], "the other side closed the connection"),
+    ],
+)
+def test_unexpected_messages_are_channel_errors(
+    replies: list[dict[str, Any]], message: str
+) -> None:
+    agent = FakeAgent(*replies)
+    agent.agent._sock.shutdown(socket.SHUT_WR)
+    code, err = run(["parse"], agent)
+    assert code == EXIT_ERROR
+    assert err == f"agent channel: {message}\n"
+
+
+def test_task_mode_comes_later() -> None:
+    code, err = run(["task"], FakeAgent({"type": "welcome"}))
+    assert code == EXIT_USAGE
+    assert "milestone 1.7" in err

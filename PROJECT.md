@@ -793,6 +793,22 @@ permission to create pods.
   - for parsing: per-file progress and results (DAG JSON, import errors).
 - **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
   dependencies; messages are small. (Protobuf would add a dependency to the Python package.)
+  - **Framing:** a 4-byte big-endian length, then that many bytes of UTF-8 JSON: an object
+    tagged by `type`. Either side refuses a message over **64 MiB** (the cap on inputs per
+    task). The shapes are Rust types in `schedr-model` (`runner`), generated into
+    `schema/runner.schema.json`.
+  - **Handshake:** the runner sends `hello { schedr_version, mode }`; the agent answers
+    `welcome`, or `refused { reason }` when the versions differ (they must be equal), and the
+    runner exits with code 2.
+  - **Parse mode:** the agent sends `parse { root, root_dir, files, sys_path }`; for each file
+    the runner sends `file_started { path }` (the agent times files from it) and then
+    `file_parsed { path, dags, error }` (`error`: the exception's class, message and the last
+    20 lines of the traceback); then `parse_finished`.
+  - **Runner exit codes:** 0 done; 1 a failure on the channel; 2 a wrong start (unknown mode,
+    no `SCHEDR_AGENT_SOCKET`, refused handshake).
+  - **Module names:** each DAG file is imported under a stable name derived from its root and
+    path (e.g. `_schedr_dag_etl_repo_team_a_sync_1a2b3c4d`) and kept in `sys.modules`, so
+    dataclasses defined in DAG files resolve; task mode imports a file under the same name.
 - **Parsing granularity:** **one parse process per parse job** (a root whose hash changed),
   importing files one at a time and reporting progress per file. A **per-file timeout**
   (configurable) is enforced by the agent: on timeout it kills the process, records an import
@@ -3555,7 +3571,8 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
 - **Coverage floor: 85 %** per language over the whole code base, private code included
   (reached through the public tests); `make check` and CI fail below it. Not counted: the test
   files themselves (`src/**/tests.rs`) and a binary's `main.rs`, which only calls into the
-  crate's library (everything testable lives there). Python: `pytest-cov`
+  crate's library (everything testable lives there), and likewise a Python package's
+  `__main__.py`, which only calls into a tested module. Python: `pytest-cov`
   with branch coverage, `--cov-fail-under=85`. Rust: `cargo-llvm-cov`, `--fail-under-lines 85`.
 - **Never skip a test** (`pytest.mark.skip`, `skipif`, `xfail`, Rust `#[ignore]`) without
   asking first, with the reason stated clearly. A test that can't run is fixed, or the question

@@ -43,12 +43,16 @@ pub fn render_json(value: &serde_json::Value) -> String {
 /// Never in practice: a generated schema always serializes.
 #[must_use]
 pub fn schema_files() -> Vec<GeneratedFile> {
-    let dag = serde_json::to_value(schedr_model::schema::dag_schema())
-        .expect("a generated schema serializes");
-    vec![GeneratedFile {
-        path: Path::new(SCHEMA_DIR).join("dag.schema.json"),
-        contents: render_json(&dag),
-    }]
+    let file = |name: &str, schema: schemars::Schema| GeneratedFile {
+        path: Path::new(SCHEMA_DIR).join(name),
+        contents: render_json(
+            &serde_json::to_value(schema).expect("a generated schema serializes"),
+        ),
+    };
+    vec![
+        file("dag.schema.json", schedr_model::schema::dag_schema()),
+        file("runner.schema.json", schedr_model::schema::runner_schema()),
+    ]
 }
 
 /// The files whose committed contents differ from `files`; `read` returns a file's committed

@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-SCHEMA_PATH = Path(__file__).parents[4] / "schema" / "dag.schema.json"
+SCHEMA_DIR = Path(__file__).parents[4] / "schema"
+SCHEMA_PATH = SCHEMA_DIR / "dag.schema.json"
 
 type Validate = Callable[[str, Any], None]
 
@@ -32,6 +33,14 @@ def validate(dag_schema: dict[str, Any]) -> Validate:
         Draft202012Validator(schema).validate(instance)
 
     return check
+
+
+@pytest.fixture(scope="session")
+def validate_runner_message() -> Callable[[Any], None]:
+    """Validates one agent <-> runner message against ``schema/runner.schema.json``."""
+    schema = json.loads((SCHEMA_DIR / "runner.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    return validator.validate
 
 
 @pytest.fixture(autouse=True)

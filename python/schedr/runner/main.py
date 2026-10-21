@@ -1,0 +1,80 @@
+"""The runner's entry point: the handshake with the agent, then the requested mode."""
+
+import sys
+from collections.abc import Callable, Mapping
+from importlib.metadata import version
+from typing import TextIO
+
+from schedr.runner.parse import run_parse
+from schedr.runner.protocol import Channel, ProtocolError, connect
+
+SOCKET_ENV = "SCHEDR_AGENT_SOCKET"
+"""The environment variable naming the agent's socket."""
+
+MODES = ("parse", "task")
+"""The modes the runner can be started in."""
+
+EXIT_ERROR = 1
+"""Exit code for a failure talking to the agent."""
+
+EXIT_USAGE = 2
+"""Exit code for a wrong start: unknown mode, no socket, refused handshake."""
+
+
+def main(
+    argv: list[str],
+    environ: Mapping[str, str],
+    *,
+    open_channel: Callable[[str], Channel] = connect,
+    stderr: TextIO | None = None,
+) -> int:
+    """Runs the runner: ``parse`` or ``task``.
+
+    Args:
+        argv: The arguments after ``-m schedr.runner``.
+        environ: The environment (for ``SCHEDR_AGENT_SOCKET``).
+        open_channel: Connects to the agent's socket (replaced in tests).
+        stderr: Where messages go; ``sys.stderr`` by default.
+
+    Returns:
+        The exit code: 0 on success, 1 on a failure talking to the agent, 2 on a wrong start.
+    """
+    err = stderr or sys.stderr
+    if len(argv) != 1 or argv[0] not in MODES:
+        print(f"usage: python -m schedr.runner {{{','.join(MODES)}}}", file=err)
+        return EXIT_USAGE
+    mode = argv[0]
+    path = environ.get(SOCKET_ENV)
+    if not path:
+        print(f"{SOCKET_ENV} is not set: the runner is started by the schedr agent", file=err)
+        return EXIT_USAGE
+    try:
+        channel = open_channel(path)
+    except OSError as e:
+        print(f"can't connect to the agent at {path}: {e}", file=err)
+        return EXIT_ERROR
+    try:
+        return _serve(channel, mode, err)
+    except ProtocolError as e:
+        print(f"agent channel: {e}", file=err)
+        return EXIT_ERROR
+    finally:
+        channel.close()
+
+
+def _serve(channel: Channel, mode: str, err: TextIO) -> int:
+    channel.send({"type": "hello", "schedr_version": version("schedr"), "mode": mode})
+    reply = channel.receive()
+    if reply["type"] == "refused":
+        print(f"the agent refused the runner: {reply.get('reason', '')}", file=err)
+        return EXIT_USAGE
+    if reply["type"] != "welcome":
+        raise ProtocolError(f"expected `welcome`, got `{reply['type']}`")
+    if mode == "task":
+        print("task mode isn't implemented yet (milestone 1.7)", file=err)
+        return EXIT_USAGE
+    request = channel.receive()
+    if request["type"] != "parse":
+        raise ProtocolError(f"expected `parse`, got `{request['type']}`")
+    run_parse(channel, request)
+    return 0

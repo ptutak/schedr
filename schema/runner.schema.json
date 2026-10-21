@@ -1,0 +1,1220 @@
+{
+  "$defs": {
+    "AgentMessage": {
+      "description": "A message from the agent to the runner.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The handshake succeeded.",
+          "properties": {
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The handshake failed; the runner exits.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. a version mismatch.",
+              "type": "string"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A parse job.",
+          "properties": {
+            "files": {
+              "description": "The files to import, relative to the root, in order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "root": {
+              "description": "The root's name, e.g. `etl-repo`.",
+              "type": "string"
+            },
+            "root_dir": {
+              "description": "The root's directory.",
+              "type": "string"
+            },
+            "sys_path": {
+              "description": "Directories put first on `sys.path` (every DAG root).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "parse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "root",
+            "root_dir",
+            "files",
+            "sys_path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CommandLine": {
+      "description": "What a `command` task runs.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A string run by a shell; interpolated values are shell-quoted unless `raw`.",
+          "properties": {
+            "shell": {
+              "$ref": "#/$defs/Template"
+            }
+          },
+          "required": [
+            "shell"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A program and its arguments, run without a shell; each element is one argument.",
+          "properties": {
+            "argv": {
+              "items": {
+                "$ref": "#/$defs/Template"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "argv"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Dag": {
+      "additionalProperties": false,
+      "description": "A DAG: its identity, schedule, tasks and dependencies.",
+      "properties": {
+        "catchup": {
+          "description": "Whether missed fire times get runs in order (`true`) or only the most recent (`false`).",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "A description shown in the UI.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edges": {
+          "description": "The dependencies between them.",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "The last scheduled run is the last fire time at or before it.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/DagId",
+          "description": "The DAG's ID."
+        },
+        "initial_since": {
+          "description": "`since` of the run on the DAG's first fire time (see PROJECT.md, Runs).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/DagLocation",
+          "description": "Where it is defined."
+        },
+        "max_active_runs": {
+          "description": "At most this many runs at a time; `None` for no limit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "produced_by": {
+          "$ref": "#/$defs/SchedrVersion",
+          "description": "The schedr version whose runner produced this JSON."
+        },
+        "schedule": {
+          "$ref": "#/$defs/Schedule",
+          "description": "When the scheduler creates runs."
+        },
+        "start": {
+          "description": "The first scheduled run is the first fire time at or after it.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "description": "Tags shown in the UI and used for filtering.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tasks": {
+          "description": "The tasks, in declaration order.",
+          "items": {
+            "$ref": "#/$defs/Task"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "produced_by",
+        "id",
+        "location",
+        "schedule",
+        "catchup",
+        "tasks",
+        "edges"
+      ],
+      "type": "object"
+    },
+    "DagCtxField": {
+      "description": "A field of the run's context, `dag_ctx.run.*` and `dag_ctx.dag_id`.",
+      "oneOf": [
+        {
+          "const": "run_id",
+          "description": "`dag_ctx.run.id`.",
+          "type": "string"
+        },
+        {
+          "const": "run_kind",
+          "description": "`dag_ctx.run.kind`.",
+          "type": "string"
+        },
+        {
+          "const": "planned_for",
+          "description": "`dag_ctx.run.planned_for`.",
+          "type": "string"
+        },
+        {
+          "const": "since",
+          "description": "`dag_ctx.run.since`.",
+          "type": "string"
+        },
+        {
+          "const": "dag_id",
+          "description": "`dag_ctx.dag_id`.",
+          "type": "string"
+        }
+      ]
+    },
+    "DagId": {
+      "maxLength": 250,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:/#-]+$",
+      "type": "string"
+    },
+    "DagLocation": {
+      "additionalProperties": false,
+      "description": "Where a DAG is defined: a DAG root and a file path relative to it.",
+      "properties": {
+        "path": {
+          "description": "The file's path relative to the root, with `/` separators.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The root's name (see PROJECT.md, DAG roots).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Edge": {
+      "additionalProperties": false,
+      "description": "A dependency: `to` runs after `from`.",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/TaskId",
+          "description": "The upstream task."
+        },
+        "kind": {
+          "$ref": "#/$defs/EdgeKind",
+          "description": "Why the dependency exists."
+        },
+        "to": {
+          "$ref": "#/$defs/TaskId",
+          "description": "The downstream task."
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "EdgeKind": {
+      "description": "Why one task depends on another.",
+      "oneOf": [
+        {
+          "const": "data",
+          "description": "The downstream task takes the upstream task's output (or a part of it).",
+          "type": "string"
+        },
+        {
+          "const": "order",
+          "description": "An order-only dependency (`>>`), no data passed.",
+          "type": "string"
+        }
+      ]
+    },
+    "Field": {
+      "additionalProperties": false,
+      "description": "A named field of a `TypedDict` or dataclass.",
+      "properties": {
+        "name": {
+          "description": "The field or key name.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether the field must be present (`TypedDict`) or has no default (dataclass).",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/TypeDesc",
+          "description": "The field's type."
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "required"
+      ],
+      "type": "object"
+    },
+    "ImportError": {
+      "additionalProperties": false,
+      "description": "Why a DAG file couldn't be imported.",
+      "properties": {
+        "exception": {
+          "description": "The exception's class name, e.g. `ModuleNotFoundError`; `Timeout` when the agent\nstopped a file that took too long.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The exception's message.",
+          "type": "string"
+        },
+        "traceback": {
+          "description": "The last lines of the traceback (empty for a timeout).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exception",
+        "message",
+        "traceback"
+      ],
+      "type": "object"
+    },
+    "PathElem": {
+      "anyOf": [
+        {
+          "description": "A dataclass field or dictionary key.",
+          "type": "string"
+        },
+        {
+          "description": "A list or tuple index.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "One step of a path into an output: a field or key, or a list / tuple index."
+    },
+    "Reference": {
+      "description": "A reference to data known only at run time.",
+      "oneOf": [
+        {
+          "description": "An upstream task's output, or a part of it.",
+          "properties": {
+            "kind": {
+              "const": "output",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path into the output; empty for the whole output.",
+              "items": {
+                "$ref": "#/$defs/PathElem"
+              },
+              "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskId",
+              "description": "The upstream task."
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A field of the run's context.",
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/DagCtxField",
+              "description": "Which field."
+            },
+            "kind": {
+              "const": "dag_ctx",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RunnerMessage": {
+      "description": "A message from the runner to the agent.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The first message: who is speaking and what for.",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/RunnerMode",
+              "description": "The mode the runner was started in."
+            },
+            "schedr_version": {
+              "description": "The installed `schedr` package version; it must equal the agent's.",
+              "type": "string"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schedr_version",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The runner starts importing a file (the agent times each file).",
+          "properties": {
+            "path": {
+              "description": "The file's path relative to the root.",
+              "type": "string"
+            },
+            "type": {
+              "const": "file_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A file was imported, or failed to import.",
+          "properties": {
+            "dags": {
+              "description": "The DAGs it defines (none for a helper module).",
+              "items": {
+                "$ref": "#/$defs/Dag"
+              },
+              "type": "array"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ImportError"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Why importing it failed, if it did; then `dags` is empty."
+            },
+            "path": {
+              "description": "The file's path relative to the root.",
+              "type": "string"
+            },
+            "type": {
+              "const": "file_parsed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "dags"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every requested file was handled.",
+          "properties": {
+            "type": {
+              "const": "parse_finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RunnerMode": {
+      "description": "What the runner was started to do.",
+      "oneOf": [
+        {
+          "const": "parse",
+          "description": "Import DAG files and report the DAGs they define.",
+          "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "Run one task attempt (milestone 1.7).",
+          "type": "string"
+        }
+      ]
+    },
+    "SchedrVersion": {
+      "description": "A schedr version as `major.minor`.",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "type": "string"
+    },
+    "Schedule": {
+      "description": "When the scheduler creates runs of a DAG.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No scheduled runs: manual runs only.",
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A cron expression (5 or 6 fields, or a preset such as `@daily`) evaluated in a time zone.",
+          "properties": {
+            "expression": {
+              "description": "The cron expression.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "cron",
+              "type": "string"
+            },
+            "timezone": {
+              "description": "An IANA time zone name, e.g. `Europe/Warsaw`; `UTC` by default in the Python API.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expression",
+            "timezone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A fixed interval measured in real time (UTC), unaffected by daylight saving.",
+          "properties": {
+            "interval_ms": {
+              "description": "The interval in milliseconds.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "every",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "interval_ms"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Task": {
+      "description": "A task of a DAG.",
+      "oneOf": [
+        {
+          "description": "A `@task` function, found by task ID when the runner imports the DAG file.",
+          "properties": {
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "default": {},
+              "description": "The arguments by parameter name.",
+              "type": "object"
+            },
+            "kind": {
+              "const": "python",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An inline command, run by the agent.",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/CommandLine",
+              "description": "The command line."
+            },
+            "env": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Template"
+              },
+              "description": "Extra environment variables for the process.",
+              "type": "object"
+            },
+            "kind": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "command"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An `EmptyOperator`: completed by the master, no process.",
+          "properties": {
+            "kind": {
+              "const": "empty",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "The task's ID, unique within its DAG."
+        },
+        "output_type": {
+          "$ref": "#/$defs/TypeDesc",
+          "description": "The type of its output (`process_result` for commands, `none` for empty tasks)."
+        },
+        "settings": {
+          "$ref": "#/$defs/TaskSettings",
+          "description": "Its resolved settings."
+        }
+      },
+      "required": [
+        "id",
+        "settings",
+        "output_type"
+      ],
+      "type": "object"
+    },
+    "TaskId": {
+      "maxLength": 250,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$",
+      "type": "string"
+    },
+    "TaskSettings": {
+      "additionalProperties": false,
+      "description": "A task's settings, resolved from its own arguments and the defaults that apply to it.",
+      "properties": {
+        "max_output_size": {
+          "description": "The output size limit in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "queue": {
+          "description": "The queue the task goes to.",
+          "type": "string"
+        },
+        "retries": {
+          "description": "How many times a failed attempt is retried.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_delay_ms": {
+          "description": "The delay before each retry, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "description": "The attempt's timeout in milliseconds; `None` for no timeout.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "retries",
+        "retry_delay_ms",
+        "queue",
+        "max_output_size"
+      ],
+      "type": "object"
+    },
+    "Template": {
+      "description": "A t-string as data: its parts in order.",
+      "items": {
+        "$ref": "#/$defs/TemplatePart"
+      },
+      "type": "array"
+    },
+    "TemplatePart": {
+      "description": "One part of a template: literal text, or a reference filled in at run time.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Literal text.",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reference, rendered at run time.",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/TemplateRef"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TemplateRef": {
+      "description": "A reference inside a template, with its optional format spec (e.g. `raw`, `%Y-%m-%d`).",
+      "oneOf": [
+        {
+          "description": "An upstream task's output, or a part of it.",
+          "properties": {
+            "kind": {
+              "const": "output",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path into the output; empty for the whole output.",
+              "items": {
+                "$ref": "#/$defs/PathElem"
+              },
+              "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskId",
+              "description": "The upstream task."
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A field of the run's context.",
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/DagCtxField",
+              "description": "Which field."
+            },
+            "kind": {
+              "const": "dag_ctx",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "format": {
+          "description": "The t-string format spec, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TypeDesc": {
+      "description": "The type of a value that can be stored as a task output.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Anything (an explicit `Any`): only the run-time check applies.",
+          "properties": {
+            "type": {
+              "const": "any",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`None`.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`bool`.",
+          "properties": {
+            "type": {
+              "const": "bool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`int`.",
+          "properties": {
+            "type": {
+              "const": "int",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`float`.",
+          "properties": {
+            "type": {
+              "const": "float",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`str`.",
+          "properties": {
+            "type": {
+              "const": "str",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`datetime` (stored tagged).",
+          "properties": {
+            "type": {
+              "const": "datetime",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`date` (stored tagged).",
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`timedelta` (stored tagged).",
+          "properties": {
+            "type": {
+              "const": "timedelta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`list[T]`.",
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/TypeDesc",
+              "description": "The element type."
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "item"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`tuple[A, B, ...]` (stored tagged).",
+          "properties": {
+            "items": {
+              "description": "The element types, in order.",
+              "items": {
+                "$ref": "#/$defs/TypeDesc"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "tuple",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`dict[str, T]` (keys are always strings).",
+          "properties": {
+            "type": {
+              "const": "dict",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/TypeDesc",
+              "description": "The value type."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Literal[...]`.",
+          "properties": {
+            "type": {
+              "const": "literal",
+              "type": "string"
+            },
+            "values": {
+              "description": "The allowed values (strings, integers, booleans or `null`).",
+              "items": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A union, including `Optional[T]` (`T | None`).",
+          "properties": {
+            "type": {
+              "const": "union",
+              "type": "string"
+            },
+            "variants": {
+              "description": "The member types.",
+              "items": {
+                "$ref": "#/$defs/TypeDesc"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "variants"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `TypedDict`.",
+          "properties": {
+            "fields": {
+              "description": "The keys, in declaration order.",
+              "items": {
+                "$ref": "#/$defs/Field"
+              },
+              "type": "array"
+            },
+            "name": {
+              "description": "The class name, for messages.",
+              "type": "string"
+            },
+            "type": {
+              "const": "typed_dict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A dataclass.",
+          "properties": {
+            "fields": {
+              "description": "The fields, in declaration order.",
+              "items": {
+                "$ref": "#/$defs/Field"
+              },
+              "type": "array"
+            },
+            "name": {
+              "description": "The class name, for messages and outcome names.",
+              "type": "string"
+            },
+            "type": {
+              "const": "dataclass",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The output of a `command` or `script` task.",
+          "properties": {
+            "type": {
+              "const": "process_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Value": {
+      "description": "A task argument: a literal, a reference, a template, or a container of values (so\nreferences inside lists and dictionaries stay visible).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A JSON value as encoded by the Python API (with tagged extra types such as\n`{\"$datetime\": \"...\"}`), passed as is.",
+          "properties": {
+            "literal": true
+          },
+          "required": [
+            "literal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reference, passed with its type (a `date` stays a `date`).",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/Reference"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A t-string, rendered to a string.",
+          "properties": {
+            "template": {
+              "$ref": "#/$defs/Template"
+            }
+          },
+          "required": [
+            "template"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A list whose elements may contain references.",
+          "properties": {
+            "list": {
+              "items": {
+                "$ref": "#/$defs/Value"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "list"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A dictionary (string keys) whose values may contain references.",
+          "properties": {
+            "map": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "map"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RunnerMessage",
+      "description": "From the runner."
+    },
+    {
+      "$ref": "#/$defs/AgentMessage",
+      "description": "From the agent."
+    }
+  ],
+  "description": "Any message on the agent <-> runner channel (only used to generate one schema for both).",
+  "title": "RunnerChannelMessage"
+}

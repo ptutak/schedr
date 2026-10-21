@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 schedr-model.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

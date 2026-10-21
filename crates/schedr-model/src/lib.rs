@@ -6,6 +6,7 @@
 
 pub mod dag;
 pub mod ids;
+pub mod runner;
 pub mod schedule;
 pub mod schema;
 pub mod states;

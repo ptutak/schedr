@@ -4,6 +4,7 @@
 use schemars::{Schema, schema_for};
 
 use crate::dag::Dag;
+use crate::runner::{AgentMessage, RunnerMessage};
 
 #[cfg(test)]
 mod tests;
@@ -12,4 +13,21 @@ mod tests;
 #[must_use]
 pub fn dag_schema() -> Schema {
     schema_for!(Dag)
+}
+
+/// The JSON Schema of the agent <-> runner messages: one message in either direction.
+#[must_use]
+pub fn runner_schema() -> Schema {
+    schema_for!(RunnerChannelMessage)
+}
+
+/// Any message on the agent <-> runner channel (only used to generate one schema for both).
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[expect(dead_code, reason = "only its schema is used")]
+enum RunnerChannelMessage {
+    /// From the runner.
+    Runner(RunnerMessage),
+    /// From the agent.
+    Agent(AgentMessage),
 }

@@ -23,6 +23,16 @@ fn dag_schema_describes_a_dag_with_its_definitions() {
 }
 
 #[test]
+fn runner_schema_covers_both_directions() {
+    let schema = serde_json::to_value(runner_schema()).unwrap();
+    assert_eq!(schema["title"], "RunnerChannelMessage");
+    let defs = schema["$defs"].as_object().unwrap();
+    for name in ["RunnerMessage", "AgentMessage", "ImportError", "Dag"] {
+        assert!(defs.contains_key(name), "missing definition {name}");
+    }
+}
+
+#[test]
 fn dag_schema_requires_the_identity_and_schedule() {
     let schema = serde_json::to_value(dag_schema()).unwrap();
     let required: Vec<&str> = schema["required"]
