@@ -95,6 +95,21 @@ One Rust binary, four roles:
  The master's gRPC API stays internal to the workers.
   - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
     to the repository, and **CI fails if it is out of date** (like the JSON Schema).
+  - **Compatibility between the CLI and the server** (the CLI comes from `pip install schedr`
+    on a laptop or in CI and drifts from the deployed version; the UI is served by the
+    webserver, so it always matches):
+    - **Paths carry the major version** (`/api/v1/...`); within a major, API changes are
+      **additive only** (new endpoints, new optional fields, new enum values clients treat as
+      open), as for DAG JSON and the protocol. Clients ignore unknown fields. **CI fails on a
+      breaking change** to the committed OpenAPI description within a major.
+    - **Versions on every request:** the CLI sends `Schedr-Client-Version`, the server answers
+      with `Schedr-Server-Version`. Same major, any minor: works. A command or flag the server
+      doesn't have yet gives a clear error ("`schedr runs backfill --all` needs schedr server ≥
+      1.6 (server: 1.4)"; the CLI knows which version introduced each command and flag). A CLI
+      older than the server works (optionally a hint at most once a day that newer commands
+      exist). A different major: the CLI refuses ("server is schedr 2.x, this CLI is 1.x:
+      `pip install 'schedr>=2,<3'`").
+    - Other API clients (scripts, OpenAPI-generated clients) follow the same rules.
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
     server commands such as `schedr db migrate` (talk to the database), the server roles,
     and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
@@ -2776,6 +2791,11 @@ and no cluster. Four levels, from cheapest to fullest.
 - **Static check: `schedr dags check <path>`** (see Upgrades and compatibility): parses DAG
   files and `schedr.toml` files, reports import errors and parse warnings; non-zero exit code
   on errors.
+- **Local version vs the workers:** a DAG written with a newer local `schedr` than the worker
+  image may use a feature the workers don't have (an import error in the UI, never silent).
+  Documented: pin the local `schedr` to the worker image's version in the DAG repository's dev
+  dependencies (e.g. `schedr==1.4.*`). `schedr dags check --against <server URL>` asks the
+  server which worker versions are running and warns when the DAGs need a newer one.
 - **Unit tests of task functions.** Outside `with Dag(...)` a `@task` function is **the plain
   function**: calling it runs it and returns the real value (inside a DAG the same call returns
   an `Output[...]`). For code reading the run context or registering handles,
