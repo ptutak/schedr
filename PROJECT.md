@@ -96,7 +96,8 @@ One Rust binary, four roles:
   - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
     to the repository, and **CI fails if it is out of date** (like the JSON Schema).
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
-    server commands such as `schedr db migrate` (talk to the database), the server roles.
+    server commands such as `schedr db migrate` (talk to the database), the server roles,
+    and `schedr dags check <path>` (local, no server; see Upgrades and compatibility).
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
     `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
@@ -925,7 +926,8 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   (queues taken from all reported definitions). `DISCONNECTED`, `LOST` and `OFFLINE` workers
   don't count, so a dead pod can't block a DAG forever.
 - **No duplicate parsing.** Workers report a content hash per root; each (root, hash) is
-  **parsed once**, by any `ACTIVE` worker that reported that hash. The master derives each
+  **parsed once** per schedr version (see Upgrades and compatibility), by any `ACTIVE` worker
+  that reported that hash. The master derives each
   worker's DAGs from the parse of the hash it reported, so "parsed and reported by every
   worker" doesn't mean parsing the same code on every pod.
 - While a DAG is in conflict, **no new runs are created and no tasks are assigned**. In runs
@@ -946,6 +948,40 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - After a change is seen, schedr waits for a **settle time** (configurable; no further changes)
   before computing the new content hash, so half-written files are never parsed.
 
+### Upgrades and compatibility
+
+Upgrading schedr doesn't change a root's content hash, and the upgrade order (master first,
+then workers) means a new master works with old workers for a while.
+
+- **DAG JSON carries the schedr version that produced it** (`major.minor`). The master accepts
+  DAG JSON of the **same major and an equal or lower minor** version (the protocol's rule):
+  between the master and worker upgrades, every parse comes from old workers. Within a major
+  version, DAG JSON changes are **additive only** (new optional fields), so a newer master reads
+  older JSON with no migration code.
+- **Re-parse after an upgrade:** parse jobs are keyed by **(root, hash, schedr version)**. When
+  a worker of a newer version reports a hash that has only an older parse, the master creates a
+  parse job, once per root, so existing DAGs get the new checks and features. Until it is
+  stored the old parse stays in use; runs in progress keep the DAG version they started with.
+- **A DAG that becomes invalid after an upgrade:**
+  - **Within a major version this must not happen:** a minor release accepts every DAG the
+    previous minor accepted; a new check starts as a **parse warning** and becomes an error only
+    in the next major.
+  - **Across a major upgrade** the new parse records an import error and the **last good
+    version keeps running**, with the error shown in the UI ("doesn't parse with schedr 2.0");
+    not treated as a removed DAG (the code didn't change, schedr did).
+  - **Checking before an upgrade:** `schedr dags check <path>` (from the new `pip install
+    schedr`) parses DAG files and `schedr.toml` files locally, without a cluster, and reports
+    import errors and parse warnings; also for CI.
+- **Rolling upgrade:** a task is assigned only to workers whose version is **at least the
+  version of the parse in use** (a DAG parsed by a new runner may use a feature only the new
+  `schedr` package has). Until enough workers are upgraded such tasks wait as `queued`
+  ("waiting: no worker with schedr ≥ 1.5"); old workers keep running tasks of DAGs on older
+  parses, so an upgrade needs no downtime.
+- **Other stored data:** the database schema is upgraded by `schedr db migrate` (see State
+  storage). Outputs, cleanup handles and resource values (tagged JSON) also change only
+  additively within a major version: a new runner must decode what an old one stored, since a
+  run started before the upgrade continues after it.
+
 ### End-to-end flow: running a native-API DAG
 
 What happens from the moment a DAG file written with the native Python API lands in
@@ -965,7 +1001,8 @@ Running example: `/git/dags/etl-repo/team_a/sync.py` defines DAG `sync` with two
 3. **Hash.** It computes a new content hash `H2` for root `etl-repo`. [D]
 4. **Report.** It sends `CodeVersionChanged(root=etl-repo, hash=H2)` over its stream to the
    master. [D] Every worker sees the change on its own, so the master gets one report per
-   worker; it creates only one parse job per (root, hash) (see DAG ID conflicts). [D]
+   worker; it creates only one parse job per (root, hash, schedr version) (see DAG ID
+   conflicts; Upgrades and compatibility). [D]
 
 **Phase 2: Parsing (master → worker → master)**
 
