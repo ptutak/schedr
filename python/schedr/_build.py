@@ -5,6 +5,7 @@ edges to it. Arguments are turned into DAG JSON values here, recording a data de
 every upstream output they reference.
 """
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -28,12 +29,15 @@ from schedr._model import (
     TaskSettings,
     Template,
     TemplateRef,
+    TemplateValue,
     TypeDesc,
     UnionType,
     Value,
     validate_task_id,
 )
 from schedr._serialization import CodecError, encode_any, follow_path, type_name
+from schedr._templates import is_tstring
+from schedr._templates import to_template as tstring_to_template
 
 
 class HasReference(Protocol):
@@ -282,7 +286,43 @@ def require_active(what: str) -> DagBuilder:
     return builder
 
 
-def to_value(value: object, where: str, upstream: list[str]) -> Value:
+def _note_upstream(reference: Reference, upstream: list[str]) -> None:
+    """Records the upstream task of an output reference."""
+    if isinstance(reference, OutputRef):
+        upstream.append(reference.task)
+
+
+def _hides_tstring(value: object) -> bool:
+    """Whether a container that isn't searched (a set, a dataclass, ...) holds a t-string."""
+    if isinstance(value, set | frozenset):
+        return any(is_tstring(v) or _hides_tstring(v) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            is_tstring(getattr(value, f.name)) or _hides_tstring(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+        )
+    return False
+
+
+def templates_in(value: Value) -> list[Template]:
+    """Every template inside a value, at any depth.
+
+    Args:
+        value: A DAG JSON value.
+
+    Returns:
+        The templates, in order.
+    """
+    if isinstance(value, TemplateValue):
+        return [value.template]
+    if isinstance(value, ListValue):
+        return [t for item in value.items for t in templates_in(item)]
+    if isinstance(value, MapValue):
+        return [t for key in sorted(value.entries) for t in templates_in(value.entries[key])]
+    return []
+
+
+def to_value(value: object, where: str, upstream: list[str]) -> Value:  # noqa: PLR0911
     """Converts an argument to a DAG JSON value.
 
     Args:
@@ -299,13 +339,18 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:
     """
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
-        task = getattr(reference, "task", None)
-        if task is not None:
-            upstream.append(task)
+        _note_upstream(reference, upstream)
         return RefValue(reference)
+    if is_tstring(value):
+        template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
+        for ref in template.references():
+            _note_upstream(ref, upstream)
+        return TemplateValue(template)
     if isinstance(value, Mapping):
         items: dict[str, Value] = {}
         for key, item in value.items():
+            if is_tstring(key):
+                raise TypeError(f"{where}: a t-string can't be a dictionary key")
             if not isinstance(key, str):
                 raise TypeError(f"{where}: dictionary keys must be str, got {type(key).__name__}")
             items[key] = to_value(item, f"{where}[{key!r}]", upstream)
@@ -318,6 +363,11 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:
             plain = [e.value for e in elements]  # type: ignore[union-attr]
             return LiteralValue({"$tuple": plain} if isinstance(value, tuple) else plain)
         return ListValue(elements)
+    if _hides_tstring(value):
+        raise TypeError(
+            f"{where}: a t-string inside a {type(value).__name__} isn't filled in (only lists, "
+            "tuples and dict values are searched); convert it, e.g. a set to a list"
+        )
     try:
         return LiteralValue(encode_any(value))
     except CodecError as e:
@@ -328,7 +378,7 @@ def to_template(value: object, where: str, upstream: list[str]) -> Template:
     """Converts one command-line argument or environment value to a template.
 
     Args:
-        value: A string, or a reference (rendered at run time).
+        value: A string, a t-string, or a reference (rendered at run time).
         where: The argument's name, for messages.
         upstream: Receives the IDs of the upstream tasks it references.
 
@@ -336,17 +386,22 @@ def to_template(value: object, where: str, upstream: list[str]) -> Template:
         The template.
 
     Raises:
-        TypeError: For anything but a string or a reference.
+        TypeError: For anything but a string, a t-string or a reference.
     """
     if isinstance(value, str):
         return Template([value])
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
-        task = getattr(reference, "task", None)
-        if task is not None:
-            upstream.append(task)
+        _note_upstream(reference, upstream)
         return Template([TemplateRef(reference)])
-    raise TypeError(f"{where}: expected a string or a reference, got {type(value).__name__}")
+    if is_tstring(value):
+        template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
+        for ref in template.references():
+            _note_upstream(ref, upstream)
+        return template
+    raise TypeError(
+        f"{where}: expected a string, a t-string or a reference, got {type(value).__name__}"
+    )
 
 
 def task_ids_of(operand: object, what: str) -> list[str]:
@@ -460,6 +515,12 @@ def is_renderable(desc: TypeDesc) -> bool:
     return isinstance(desc, ScalarType) and desc.name in _RENDERABLE
 
 
+def _is_date_like(desc: TypeDesc) -> bool:
+    if isinstance(desc, UnionType):
+        return all(_is_date_like(v) for v in desc.variants)
+    return isinstance(desc, ScalarType) and desc.name in ("datetime", "date", "any")
+
+
 def check_template_references(builder: DagBuilder, template: Template, where: str) -> None:
     """Checks that every reference in a template exists and can be rendered.
 
@@ -469,13 +530,20 @@ def check_template_references(builder: DagBuilder, template: Template, where: st
         where: Where it is used, for messages.
 
     Raises:
-        TypeError: For a missing path or a type that can't be rendered (e.g. ``None`` or a
-            list).
+        TypeError: For a missing path, a type that can't be rendered (e.g. ``None`` or a
+            list), or a strftime spec on something that isn't a date or a time.
     """
-    for reference in template.references():
-        desc = reference_type(builder, reference, where)
+    for part in template.parts:
+        if not isinstance(part, TemplateRef):
+            continue
+        desc = reference_type(builder, part.reference, where)
         if not is_renderable(desc):
             raise TypeError(
                 f"{where}: a value of type `{type_name(desc)}` can't be rendered into text; "
                 "pass a part of it (e.g. a field), or convert it in a task"
+            )
+        if part.format and "%" in part.format and not _is_date_like(desc):
+            raise TypeError(
+                f"{where}: `:{part.format}` formats dates and times, but "
+                f"`{reference_label(part.reference)}` is `{type_name(desc)}`"
             )

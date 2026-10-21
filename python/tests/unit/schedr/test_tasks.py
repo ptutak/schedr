@@ -18,6 +18,9 @@ from schedr._model import (
     PythonKind,
     RefValue,
     ScalarType,
+    Template,
+    TemplateRef,
+    TemplateValue,
     registry,
 )
 
@@ -383,3 +386,47 @@ def test_an_unsupported_parameter_type_is_a_parse_error() -> None:
         Dag("d"),
     ):
         odd([])  # type: ignore[arg-type]
+
+
+def test_t_strings_in_task_arguments() -> None:
+    @task
+    def greet(message: str, lines: list[str]) -> None: ...
+
+    with Dag("d"):
+        rows = extract()
+        greet(t"day {dag_ctx.run.planned_for:%Y-%m-%d}", [t"first {rows[0]['id']}", "plain"])
+    model = only_dag()
+    arguments = model.tasks[1].kind.arguments
+    assert arguments["message"] == TemplateValue(
+        Template(["day ", TemplateRef(DagCtxRef(DagCtxField.PLANNED_FOR), "%Y-%m-%d")])
+    )
+    assert arguments["lines"] == ListValue(
+        [
+            TemplateValue(Template(["first ", TemplateRef(OutputRef("extract", (0, "id")))])),
+            LiteralValue("plain"),
+        ]
+    )
+    assert edges(model) == [("extract", "greet", EdgeKind.DATA)]
+
+
+def test_a_t_string_needs_a_parameter_that_accepts_str() -> None:
+    with pytest.raises(TypeError, match="argument `limit`: expects `int`, but a t-string gives"):
+        pass_t_string_as_int()
+
+
+def pass_t_string_as_int() -> None:
+    with Dag("d"):
+        load([], limit=t"10")  # type: ignore[arg-type]
+
+
+def test_references_in_argument_t_strings_must_render() -> None:
+    with pytest.raises(TypeError, match=r"a value of type `list\[dict\[str, str\]\]` can't be"):
+        render_list_in_t_string()
+
+
+def render_list_in_t_string() -> None:
+    @task
+    def say(text: str) -> None: ...
+
+    with Dag("d"):
+        say(t"{extract()}")

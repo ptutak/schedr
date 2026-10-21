@@ -8,6 +8,7 @@ creates tasks (see PROJECT.md, Native API: no custom operators).
 import re
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from string.templatelib import Template as TString
 from typing import Any, Self
 
 from schedr import _build
@@ -16,10 +17,12 @@ from schedr._model import (
     CommandKind,
     EdgeKind,
     EmptyKind,
+    OutputRef,
     ScalarType,
     ShellCommand,
     Template,
 )
+from schedr._templates import is_tstring, to_template
 from schedr.tasks import Output
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -101,14 +104,16 @@ class Operator:
 class CommandOperator(Operator):
     """Runs an inline command.
 
-    A string is run by a shell; a list is a program and its arguments, run without a shell
-    (each element one argument, so no quoting is needed). List elements and ``env`` values may
-    be references, filled in at run time. The output is a ``ProcessResult``; ``.stdout`` and
-    ``.stderr`` reference its parts.
+    A string or a t-string is run by a shell; in a t-string every interpolated value is
+    shell-quoted unless its format spec is ``:raw`` (``t"./run.sh {flags:raw}"``). A list is a
+    program and its arguments, run without a shell (each element one argument, so nothing needs
+    quoting). List elements and ``env`` values may be strings, t-strings or references, filled
+    in at run time. The output is a ``ProcessResult``; ``.stdout`` and ``.stderr`` reference its
+    parts.
 
     Args:
         task_id: The task's ID.
-        command: A shell string, or a list of arguments.
+        command: A shell string or t-string, or a list of arguments.
         env: Extra environment variables for the process.
         retries: How many times a failed attempt is retried.
         retry_delay: The delay before each retry.
@@ -125,7 +130,7 @@ class CommandOperator(Operator):
     def __init__(
         self,
         task_id: str,
-        command: str | Sequence[object],
+        command: str | TString | Sequence[object],
         *,
         env: Mapping[str, object] | None = None,
         retries: int | None = None,
@@ -142,6 +147,11 @@ class CommandOperator(Operator):
         line: ShellCommand | ArgvCommand
         if isinstance(command, str):
             line = ShellCommand(Template([command]))
+        elif is_tstring(command):
+            line = ShellCommand(to_template(command, where, shell=True))  # type: ignore[arg-type]
+            for ref in line.template.references():
+                if isinstance(ref, OutputRef):
+                    upstream.append(ref.task)
         elif isinstance(command, Sequence):
             line = ArgvCommand(
                 [
@@ -150,7 +160,7 @@ class CommandOperator(Operator):
                 ]
             )
         else:
-            raise TypeError(f"{where}: command must be a string or a list")
+            raise TypeError(f"{where}: command must be a string, a t-string or a list")
         variables: dict[str, Template] = {}
         for name, value in (env or {}).items():
             if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):

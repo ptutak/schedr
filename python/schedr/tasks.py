@@ -16,7 +16,17 @@ from datetime import timedelta
 from typing import Any, overload
 
 from schedr import _build
-from schedr._model import EdgeKind, LiteralValue, OutputRef, PythonKind, Reference, RefValue, Value
+from schedr._model import (
+    EdgeKind,
+    LiteralValue,
+    OutputRef,
+    PythonKind,
+    Reference,
+    RefValue,
+    ScalarType,
+    TemplateValue,
+    Value,
+)
 from schedr._serialization import (
     CodecError,
     TypeModelError,
@@ -269,6 +279,10 @@ class TaskFunction[**P, R]:
         converted = _build.to_value(value, where, upstream)
         for reference in converted.references():
             _build.reference_type(builder, reference, where)
+        for template in _build.templates_in(converted):
+            _build.check_template_references(builder, template, where)
+        if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
+            raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
         if isinstance(converted, RefValue):
             produced = _build.reference_type(builder, converted.reference, where)
             if not is_assignable(produced, expected):

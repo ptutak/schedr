@@ -90,9 +90,9 @@ def test_stdout_and_stderr_reference_parts_of_the_output() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "error", "message"),
     [
-        ({"command": 5}, TypeError, "command must be a string or a list"),
+        ({"command": 5}, TypeError, "command must be a string, a t-string or a list"),
         ({"command": []}, ValueError, "needs at least the program"),
-        ({"command": ["ls", 5]}, TypeError, r"command\[1\]: expected a string or a reference"),
+        ({"command": ["ls", 5]}, TypeError, r"command\[1\]: expected a string, a t-string or a"),
         ({"command": "ls", "env": {"1BAD": "x"}}, ValueError, "not a valid environment variable"),
         ({"command": "ls", "env": {"A": 5}}, TypeError, r"env\['A'\]: expected a string"),
     ],
@@ -170,3 +170,43 @@ def test_command_references_must_be_renderable() -> None:
 def test_command_reference_paths_must_exist() -> None:
     with pytest.raises(TypeError, match=r"`count\.total` doesn't exist"):
         echo_missing_field()
+
+
+def test_a_t_string_shell_command(validate: Validate) -> None:
+    region = "eu west"
+    with Dag("d"):
+        n = count()
+        CommandOperator("t", t"./run.sh {region} {n} {dag_ctx.run.planned_for:%Y-%m-%d}")
+    model = only_dag()
+    assert model.tasks[1].kind.command == ShellCommand(
+        Template(
+            [
+                "./run.sh 'eu west' ",
+                TemplateRef(OutputRef("count")),
+                " ",
+                TemplateRef(DagCtxRef(DagCtxField.PLANNED_FOR), "%Y-%m-%d"),
+            ]
+        )
+    )
+    assert [(e.from_, e.to) for e in model.edges] == [("count", "t")]
+    validate("Dag", model.to_json())
+
+
+def test_t_strings_in_arguments_and_env_are_not_quoted() -> None:
+    name = "a b"
+    with Dag("d"):
+        CommandOperator("t", ["./x", t"--name={name}"], env={"RUN": t"run-{dag_ctx.run.id}"})
+    kind = only_dag().tasks[0].kind
+    assert kind.command.args[1] == Template(["--name=a b"])
+    assert kind.env["RUN"] == Template(["run-", TemplateRef(DagCtxRef(DagCtxField.RUN_ID))])
+
+
+def test_a_strftime_spec_on_a_number_is_a_parse_error() -> None:
+    with pytest.raises(TypeError, match=r"`:%Y` formats dates and times, but `count` is `int`"):
+        echo_count_as_date()
+
+
+def echo_count_as_date() -> None:
+    with Dag("d"):
+        n = count()
+        CommandOperator("t", t"echo {n:%Y}")

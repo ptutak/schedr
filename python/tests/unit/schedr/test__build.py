@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import timedelta
 
 import pytest
@@ -21,6 +22,7 @@ from schedr._model import (
     TaskSettings,
     Template,
     TemplateRef,
+    TemplateValue,
     UnionType,
 )
 from schedr.tasks import Output
@@ -202,7 +204,7 @@ def test_to_template() -> None:
         [TemplateRef(DagCtxRef(DagCtxField.SINCE))]
     )
     assert upstream == ["a"]
-    with pytest.raises(TypeError, match="x: expected a string or a reference, got int"):
+    with pytest.raises(TypeError, match="x: expected a string, a t-string or a reference, got int"):
         _build.to_template(5, "x", upstream)
 
 
@@ -303,3 +305,73 @@ def test_check_template_references() -> None:
         _build.check_template_references(b, Template([TemplateRef(OutputRef("maybe"))]), "x")
     with pytest.raises(TypeError, match="doesn't exist"):
         _build.check_template_references(b, Template([TemplateRef(OutputRef("n", ("x",)))]), "x")
+
+
+def test_to_value_turns_t_strings_into_templates() -> None:
+    upstream: list[str] = []
+    out = Output[int]("n")
+    value = _build.to_value({"msg": t"count={out}", "plain": t"x"}, "w", upstream)
+    assert value == MapValue(
+        {
+            "msg": TemplateValue(Template(["count=", TemplateRef(OutputRef("n"))])),
+            "plain": TemplateValue(Template(["x"])),
+        }
+    )
+    assert upstream == ["n"]
+    assert _build.templates_in(value) == [
+        Template(["count=", TemplateRef(OutputRef("n"))]),
+        Template(["x"]),
+    ]
+    assert _build.templates_in(ListValue([LiteralValue(1), TemplateValue(Template(["y"]))])) == [
+        Template(["y"])
+    ]
+    assert _build.templates_in(LiteralValue(1)) == []
+
+
+@dataclass
+class Holder:
+    text: object
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({t"k": 1}, "a t-string can't be a dictionary key"),
+        (frozenset({"a", t"x"}), "inside a frozenset isn't filled in"),
+        ({"a", t"x"}, "inside a set isn't filled in"),
+        (Holder(t"x"), "inside a Holder isn't filled in"),
+        (Holder(Holder(t"x")), "inside a Holder isn't filled in"),
+    ],
+)
+def test_t_strings_in_places_that_arent_searched_are_errors(value: object, message: str) -> None:
+    with pytest.raises(TypeError, match=message):
+        _build.to_value(value, "w", [])
+
+
+def test_a_dataclass_without_t_strings_is_a_plain_literal() -> None:
+    assert _build.to_value(Holder("x"), "w", []) == LiteralValue({"text": "x"})
+
+
+def test_to_template_accepts_t_strings() -> None:
+    upstream: list[str] = []
+    out = Output[int]("n")
+    assert _build.to_template(t"n={out}", "w", upstream) == Template(
+        ["n=", TemplateRef(OutputRef("n"))]
+    )
+    assert upstream == ["n"]
+
+
+def test_strftime_specs_need_dates() -> None:
+    b = typed_builder()
+    _build.check_template_references(
+        b, Template([TemplateRef(DagCtxRef(DagCtxField.PLANNED_FOR), "%Y")]), "w"
+    )
+    with pytest.raises(TypeError, match=r"w: `:%Y` formats dates and times, but `n` is `int`"):
+        _build.check_template_references(b, Template([TemplateRef(OutputRef("n"), "%Y")]), "w")
+
+
+def test_strftime_specs_accept_unions_of_dates() -> None:
+    b = builder()
+    when = UnionType([ScalarType("datetime"), ScalarType("date")])
+    b.add_task("when", EmptyKind(), when, _build.TaskOptions())
+    _build.check_template_references(b, Template([TemplateRef(OutputRef("when"), "%Y")]), "w")

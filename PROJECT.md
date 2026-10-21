@@ -3400,6 +3400,17 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   - **Explicit opt-out with the format spec:** `t"./run.sh {flags:raw}"` inserts the value
     unquoted (t-strings keep the format spec, so no extra API). Unknown format specs are a
     parse error.
+  - **Format specs on references:** none; `raw` (shell commands only: elsewhere nothing is
+    quoted); a `strftime` pattern (`:%Y-%m-%d`), only on a `datetime` / `date` / `Any`
+    reference. Others are parse errors, and so are conversions (`!r`, `!s`) on references:
+    they are rendered at run time, without Python.
+  - **Plain Python values** interpolated in a t-string (known in the DAG body, e.g.
+    `t"--region {region}"`) are formatted **at parse time** (any Python format spec and
+    conversion); in a shell command they are shell-quoted too, unless `:raw`. `None`,
+    containers, objects and nested t-strings are parse errors.
+  - **Where t-strings go:** a `CommandOperator` command (a shell string), each element of an
+    argument list, `env` values, and any task argument (also inside lists, tuples and dict
+    values). A t-string task argument renders to a `str`, so its parameter must accept `str`.
   - **Argument-list commands, no shell:** `command=["./notify.sh", out.report_url]` runs the
     program directly, each element one argument: no injection possible, no quoting needed.
     Recommended in the documentation whenever pipes, redirects or other shell features aren't
