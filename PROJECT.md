@@ -3402,6 +3402,7 @@ crates/
   schedr/               # the binary: roles, user CLI, in-task CLI
     src/<module>.rs     # unit tests in src/<module>/tests.rs (see Testing)
     tests/              # integration tests (later)
+  xtask/                # development tasks: `cargo xtask schema [--check]`
 schema/                 # generated, committed: JSON Schemas, OpenAPI
 pyproject.toml          # Python package
 python/

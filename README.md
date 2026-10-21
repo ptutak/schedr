@@ -17,6 +17,8 @@ crates/
   schedr/           # the binary: roles, user CLI, in-task CLI
     src/<module>.rs         # code
     src/<module>/tests.rs   # its unit tests
+  xtask/            # development tasks: `cargo xtask schema [--check]`
+schema/             # generated from schedr-model, committed (make schema)
 python/
   schedr/           # Python DAG API package
   tests/
