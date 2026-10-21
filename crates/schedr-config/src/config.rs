@@ -36,6 +36,8 @@ pub struct Config {
     pub log: LogSection,
     /// `[ops]`: the ops port (health and metrics).
     pub ops: OpsSection,
+    /// `[database]`: the state database.
+    pub database: DatabaseSection,
     /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
     #[serde(skip)]
     pub dag_roots: Vec<Root>,
@@ -174,6 +176,28 @@ impl Default for LogSection {
             level: "info".to_owned(),
         }
     }
+}
+
+/// `[database]`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DatabaseSection {
+    /// The connection URL (`sqlite:...` or `postgres://...`). A URL with a password must come
+    /// from `SCHEDR_CONFIG__DATABASE__URL`, never the file (see PROJECT.md, Configuration:
+    /// secrets).
+    pub url: Option<String>,
+}
+
+/// Whether a URL has a password in its user-info part (`scheme://user:password@host`).
+#[must_use]
+pub fn url_has_password(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    authority
+        .rsplit_once('@')
+        .is_some_and(|(user_info, _)| user_info.contains(':'))
 }
 
 /// `[ops]`.

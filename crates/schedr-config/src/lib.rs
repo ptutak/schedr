@@ -12,7 +12,8 @@ pub mod sources;
 pub mod units;
 
 pub use config::{
-    Config, DagsSection, Interpreter, LogFormat, LogSection, OpsSection, ScriptsSection,
+    Config, DagsSection, DatabaseSection, Interpreter, LogFormat, LogSection, OpsSection,
+    ScriptsSection, url_has_password,
 };
 pub use loader::{ConfigError, load};
 pub use roots::{PathList, Root, RootError};

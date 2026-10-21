@@ -17,6 +17,17 @@ name = "schedr"
 path = "src/main.rs"
 
 [dependencies]
+clap.workspace = true
+schedr-config.workspace = true
+schedr-db.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rstest.workspace = true
 
 [lints]
 workspace = true

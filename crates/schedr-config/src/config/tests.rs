@@ -121,7 +121,7 @@ fn interpreter_table_defaults_to_spawn_without_preloading() {
 
 #[rstest]
 #[case("[dags]\npoll = \"30s\"\n", "unknown field")]
-#[case("[database]\nurl = \"x\"\n", "unknown field")]
+#[case("[database]\nhost = \"x\"\n", "unknown field")]
 #[case(
     "[interpreters.venv]\npath = \"/p\"\nthreads = 2\n",
     "data did not match"
@@ -140,4 +140,26 @@ fn interpreter_path_builder() {
     assert_eq!(interpreter.path, PathBuf::from("/bin/bash"));
     assert!(!interpreter.fork_server);
     assert_eq!(interpreter.preload, Vec::<String>::new());
+}
+
+#[test]
+fn reads_the_database_url() {
+    let config = parse("[database]\nurl = \"sqlite:///var/lib/schedr/schedr.db\"\n").unwrap();
+    assert_eq!(
+        config.database.url.as_deref(),
+        Some("sqlite:///var/lib/schedr/schedr.db")
+    );
+    assert_eq!(Config::default().database, DatabaseSection { url: None });
+}
+
+#[rstest]
+#[case("postgres://schedr:secret@db/schedr", true)]
+#[case("postgres://schedr:p@ss@db/schedr", true)]
+#[case("postgres://schedr@db/schedr", false)]
+#[case("postgres://db/schedr", false)]
+#[case("postgres://db/path:with@colon", false)]
+#[case("sqlite::memory:", false)]
+#[case("sqlite:///x.db", false)]
+fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expected: bool) {
+    assert_eq!(url_has_password(url), expected);
 }

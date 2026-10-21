@@ -111,7 +111,8 @@ One Rust binary, four roles:
       `pip install 'schedr>=2,<3'`").
     - Other API clients (scripts, OpenAPI-generated clients) follow the same rules.
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
-    server commands such as `schedr db migrate` (talk to the database), the server roles,
+    server commands such as `schedr db migrate` / `schedr db status` (talk to the database),
+    the server roles,
     and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
     see Testing DAGs).
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
@@ -1240,7 +1241,9 @@ list) and likewise has no Python.
 - `SCHEDR_DAG_PATH` is a normal configuration key (`SCHEDR_CONFIG__DAGS__PATH`);
   `SCHEDR_DAG_PATH` is kept as a **short alias**.
 - **Secrets** (database password, signing keys, …) come only from **environment variables**
-  (filled from Kubernetes Secrets), never from the configuration file.
+  (filled from Kubernetes Secrets), never from the configuration file. The database URL is
+  `[database] url` / `SCHEDR_CONFIG__DATABASE__URL`; a URL with a password in the file is a
+  startup error.
 - **Outgoing HTTP and proxies:** schedr's own outgoing HTTP calls (notification webhooks from
   the master; Vault from the agent, if outside the cluster) honour `HTTPS_PROXY`, `HTTP_PROXY`
   and `NO_PROXY`. **Internal links never use a proxy** (gRPC between master and workers, the

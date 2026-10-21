@@ -193,3 +193,43 @@ fn paths_in_roots_are_kept_as_given() {
     let config = load(None, &env(&[("SCHEDR_DAG_PATH", "dags/local")]), &[]).unwrap();
     assert_eq!(config.dag_roots[0].path, PathBuf::from("dags/local"));
 }
+
+#[test]
+fn a_database_url_with_a_password_is_refused_from_the_file() {
+    let contents = "[database]\nurl = \"postgres://schedr:secret@db/schedr\"\n";
+    let err = load(Some(file(contents)), &env(&[]), &[]).unwrap_err();
+    assert_eq!(
+        err,
+        ConfigError::SecretInFile {
+            key: "database.url",
+            env: "SCHEDR_CONFIG__DATABASE__URL"
+        }
+    );
+    assert!(
+        err.to_string().contains("never in the configuration file"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_database_url_with_a_password_is_accepted_from_the_environment() {
+    let vars = env(&[(
+        "SCHEDR_CONFIG__DATABASE__URL",
+        "postgres://schedr:secret@db/schedr",
+    )]);
+    let config = load(Some(file("")), &vars, &[]).unwrap();
+    assert_eq!(
+        config.database.url.as_deref(),
+        Some("postgres://schedr:secret@db/schedr")
+    );
+}
+
+#[test]
+fn a_database_url_without_a_password_may_be_in_the_file() {
+    let contents = "[database]\nurl = \"postgres://schedr@db/schedr\"\n";
+    let config = load(Some(file(contents)), &env(&[]), &[]).unwrap();
+    assert_eq!(
+        config.database.url.as_deref(),
+        Some("postgres://schedr@db/schedr")
+    );
+}

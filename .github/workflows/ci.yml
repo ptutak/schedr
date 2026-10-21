@@ -74,7 +74,7 @@ jobs:
         run: |
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install dist/*.whl
-          /tmp/smoke/bin/schedr
+          /tmp/smoke/bin/schedr --version
           /tmp/smoke/bin/python -c "import schedr; print(schedr.__version__)"
       - uses: actions/upload-artifact@v4
         with:

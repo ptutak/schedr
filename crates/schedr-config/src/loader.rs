@@ -7,7 +7,9 @@ use figment::providers::{Format, Toml};
 use figment::value::{Dict, Map};
 use figment::{Figment, Metadata, Profile, Provider};
 
-use crate::config::{BUILTIN_PYTHON, Config, DEFAULT_DAG_INTERPRETER, Interpreter};
+use crate::config::{
+    BUILTIN_PYTHON, Config, DEFAULT_DAG_INTERPRETER, Interpreter, url_has_password,
+};
 use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
     FileSource, Override, SourceError, env_provider, file_metadata, override_provider,
@@ -29,6 +31,16 @@ pub enum ConfigError {
     /// The roots are invalid (nested or repeated entries, duplicate names, bad renames).
     #[error(transparent)]
     Roots(#[from] RootError),
+    /// A secret (e.g. a database URL with a password) is in the configuration file.
+    #[error(
+        "`{key}` contains a password: set it with the environment variable `{env}`, never in the configuration file"
+    )]
+    SecretInFile {
+        /// The configuration key.
+        key: &'static str,
+        /// The environment variable to use instead.
+        env: &'static str,
+    },
     /// The DAG interpreter isn't an `[interpreters]` entry.
     #[error("[dags] interpreter `{name}` is not defined in [interpreters] (defined: {defined})")]
     UnknownInterpreter {
@@ -81,6 +93,15 @@ pub fn load(
         .merge(env_provider(env)?)
         .merge(override_provider(overrides));
     let mut config: Config = figment.extract()?;
+    let url_from_file = figment
+        .find_metadata("database.url")
+        .is_some_and(|m| m.source.as_ref().is_some_and(|s| s.file_path().is_some()));
+    if url_from_file && config.database.url.as_deref().is_some_and(url_has_password) {
+        return Err(ConfigError::SecretInFile {
+            key: "database.url",
+            env: "SCHEDR_CONFIG__DATABASE__URL",
+        });
+    }
     config
         .interpreters
         .entry(DEFAULT_DAG_INTERPRETER.to_owned())
