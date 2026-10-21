@@ -3478,8 +3478,8 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
 
 ### Testing
 
-**Unit tests only for now**; integration tests come later (`python/tests/integration/`,
-`crates/*/tests/`).
+**Unit tests only for now**; integration tests (`python/tests/integration/`,
+`crates/*/tests/`) start as the **last step of M1** (see PLAN.md), before M1 counts as done.
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

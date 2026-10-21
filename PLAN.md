@@ -111,7 +111,9 @@ python/schedr/
 
 ## M1: Standalone runs a native DAG
 
-In dependency order; each step ends with tests.
+In dependency order; each step ends with **unit tests**. Where a "done when" needs real
+processes, files or the whole system, it is checked by the integration tests in 1.17, the last
+step of M1.
 
 | # | Work | Done when |
 |---|---|---|
@@ -131,6 +133,8 @@ In dependency order; each step ends with tests.
 | 1.14 | **`schedr standalone`:** all roles in one process, SQLite, gRPC on localhost | the end-to-end example from PROJECT.md runs |
 | 1.15 | **`dags check`, `dags test`, `schedr.testing`:** plain-function `@task` calls, `task_context`, `run_dag` with per-task inspection (`state`, `output`, `attempts`, `log`, …) | the example DAGs in `examples/` have tests that pass in CI |
 | 1.16 | **Packaging:** maturin wheel with the binary for Linux x86_64 (others in M2), `pip install` + `schedr standalone` smoke test in CI | a wheel built in CI runs the example |
+
+| 1.17 | **Integration tests** (the first ones; everything before is unit-tested only): the checks above that need real processes, files or the whole system (1.4 a directory of DAG files through the runner, 1.5 / 1.7 real processes through the agent, 1.8 a temp root with changes, 1.10 / 1.11 runs through master and agent, 1.13 the CLI against a running standalone, 1.14 / 1.15 the examples end to end, 1.16 the wheel smoke test), in `python/tests/integration/` and `crates/*/tests/` | all pass in CI |
 
 **M1 is done** when a new user can `pip install` the wheel, write the example DAG from
 PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
