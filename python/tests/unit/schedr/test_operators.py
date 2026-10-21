@@ -19,6 +19,7 @@ from schedr._model import (
     registry,
 )
 from schedr.operators import Operator
+from schedr.types import ProcessResult
 
 Validate = Callable[[str, Any], None]
 
@@ -72,15 +73,18 @@ def test_stdout_and_stderr_reference_parts_of_the_output() -> None:
     @task
     def show(text: str) -> None: ...
 
+    @task
+    def show_all(result: ProcessResult) -> None: ...
+
     with Dag("d"):
         listing = CommandOperator("listing", ["ls"])
         show(listing.stdout)
         show.override(task_id="show_err")(listing.stderr)
-        show.override(task_id="show_all")(listing.output)
+        show_all(listing.output)
     tasks = only_dag().tasks
     assert tasks[1].kind.arguments["text"].reference == OutputRef("listing", ("stdout",))
     assert tasks[2].kind.arguments["text"].reference == OutputRef("listing", ("stderr",))
-    assert tasks[3].kind.arguments["text"].reference == OutputRef("listing")
+    assert tasks[3].kind.arguments["result"].reference == OutputRef("listing")
 
 
 @pytest.mark.parametrize(
@@ -144,3 +148,25 @@ def test_operator_shift_operators() -> None:
         assert ([c] << a) is a
     # `[c] << a` repeats a -> c, which is recorded once.
     assert [(e.from_, e.to) for e in only_dag().edges] == [("a", "b"), ("a", "c"), ("b", "c")]
+
+
+def echo_whole_result() -> None:
+    with Dag("d"):
+        listing = CommandOperator("listing", ["ls"])
+        CommandOperator("t", ["echo", listing.output])
+
+
+def echo_missing_field() -> None:
+    with Dag("d"):
+        n = count()
+        CommandOperator("t", ["echo", n.total])
+
+
+def test_command_references_must_be_renderable() -> None:
+    with pytest.raises(TypeError, match=r"task `t`: a value of type `ProcessResult` can't be"):
+        echo_whole_result()
+
+
+def test_command_reference_paths_must_exist() -> None:
+    with pytest.raises(TypeError, match=r"`count\.total` doesn't exist"):
+        echo_missing_field()

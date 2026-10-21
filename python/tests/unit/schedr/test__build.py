@@ -6,9 +6,12 @@ from schedr import _build
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
+    DataclassType,
     EdgeKind,
     EmptyKind,
+    Field,
     IdError,
+    ListType,
     ListValue,
     LiteralValue,
     MapValue,
@@ -18,6 +21,7 @@ from schedr._model import (
     TaskSettings,
     Template,
     TemplateRef,
+    UnionType,
 )
 from schedr.tasks import Output
 
@@ -144,7 +148,10 @@ def test_to_value_keeps_literals_literal() -> None:
     assert _build.to_value({"a": [1, None, "s", 1.5, True]}, "x", upstream) == LiteralValue(
         {"a": [1, None, "s", 1.5, True]}
     )
-    assert _build.to_value((1, 2), "x", upstream) == LiteralValue([1, 2])
+    assert _build.to_value((1, 2), "x", upstream) == LiteralValue({"$tuple": [1, 2]})
+    assert _build.to_value(timedelta(seconds=1), "x", upstream) == LiteralValue(
+        {"$timedelta": 1_000_000}
+    )
     assert upstream == []
 
 
@@ -173,9 +180,9 @@ def test_to_value_keeps_references_visible_in_containers() -> None:
     [
         ({1: "a"}, TypeError, r"x: dictionary keys must be str, got int"),
         ({"a": {2: "b"}}, TypeError, r"x\['a'\]: dictionary keys must be str"),
-        (float("nan"), ValueError, "NaN and infinity"),
-        ([float("inf")], ValueError, r"x\[0\]: NaN and infinity"),
-        ({1, 2}, TypeError, "values of type set can't be passed yet"),
+        (float("nan"), TypeError, r"x: nan can't be stored \(NaN and infinity"),
+        ([float("inf")], TypeError, r"x\[0\]: inf can't be stored"),
+        ({1, 2}, TypeError, "x: set is not supported"),
     ],
 )
 def test_to_value_rejects_unstorable_values(
@@ -223,5 +230,76 @@ def test_order_outside_a_dag_fails() -> None:
         _build.order(Output("a"), Output("b"), ">>")
 
 
-def test_any_type() -> None:
-    assert _build.any_type() == ScalarType("any")
+def typed_builder() -> _build.DagBuilder:
+    b = builder()
+    rows = DataclassType("Rows", [Field("rows", ListType(ScalarType("str")))])
+    b.add_task("rows", EmptyKind(), rows, _build.TaskOptions())
+    b.add_task("n", EmptyKind(), ScalarType("int"), _build.TaskOptions())
+    b.add_task(
+        "maybe",
+        EmptyKind(),
+        UnionType([ScalarType("int"), ScalarType("none")]),
+        _build.TaskOptions(),
+    )
+    return b
+
+
+def test_reference_type_follows_paths() -> None:
+    b = typed_builder()
+    assert _build.reference_type(b, OutputRef("rows", ("rows", 0)), "x") == ScalarType("str")
+    assert _build.reference_type(b, OutputRef("n"), "x") == ScalarType("int")
+    assert _build.reference_type(b, DagCtxRef(DagCtxField.PLANNED_FOR), "x") == ScalarType(
+        "datetime"
+    )
+    assert _build.reference_type(b, DagCtxRef(DagCtxField.RUN_ID), "x") == ScalarType("str")
+
+
+def test_reference_type_rejects_missing_paths_and_other_dags() -> None:
+    b = typed_builder()
+    with pytest.raises(
+        TypeError, match=r"x: `rows\.count` doesn't exist: the output of `rows` is `Rows`"
+    ):
+        _build.reference_type(b, OutputRef("rows", ("count",)), "x")
+    with pytest.raises(ValueError, match="task `other` is not part of DAG `d`"):
+        _build.reference_type(b, OutputRef("other"), "x")
+
+
+@pytest.mark.parametrize(
+    ("reference", "text"),
+    [
+        (OutputRef("extract"), "extract"),
+        (OutputRef("extract", ("rows", 0, "id")), "extract.rows[0].id"),
+        (DagCtxRef(DagCtxField.PLANNED_FOR), "dag_ctx.run.planned_for"),
+        (DagCtxRef(DagCtxField.RUN_ID), "dag_ctx.run.id"),
+        (DagCtxRef(DagCtxField.RUN_KIND), "dag_ctx.run.kind"),
+        (DagCtxRef(DagCtxField.DAG_ID), "dag_ctx.dag_id"),
+    ],
+)
+def test_reference_label(reference: object, text: str) -> None:
+    assert _build.reference_label(reference) == text  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("desc", "renderable"),
+    [
+        (ScalarType("str"), True),
+        (ScalarType("datetime"), True),
+        (ScalarType("any"), True),
+        (ScalarType("none"), False),
+        (ScalarType("process_result"), False),
+        (ListType(ScalarType("str")), False),
+        (UnionType([ScalarType("int"), ScalarType("str")]), True),
+        (UnionType([ScalarType("int"), ScalarType("none")]), False),
+    ],
+)
+def test_is_renderable(desc: object, renderable: bool) -> None:
+    assert _build.is_renderable(desc) is renderable  # type: ignore[arg-type]
+
+
+def test_check_template_references() -> None:
+    b = typed_builder()
+    _build.check_template_references(b, Template(["n=", TemplateRef(OutputRef("n"))]), "x")
+    with pytest.raises(TypeError, match=r"x: a value of type `int \| None` can't be rendered"):
+        _build.check_template_references(b, Template([TemplateRef(OutputRef("maybe"))]), "x")
+    with pytest.raises(TypeError, match="doesn't exist"):
+        _build.check_template_references(b, Template([TemplateRef(OutputRef("n", ("x",)))]), "x")

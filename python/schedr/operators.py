@@ -156,6 +156,8 @@ class CommandOperator(Operator):
             if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
                 raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
             variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
+        for template in [*line.templates(), *variables.values()]:
+            _build.check_template_references(builder, template, where)
         options = _build.TaskOptions(retries, retry_delay, timeout, queue, max_output_size)
         builder.add_task(
             task_id, CommandKind(line, variables), ScalarType("process_result"), options

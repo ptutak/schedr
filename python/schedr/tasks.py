@@ -16,7 +16,16 @@ from datetime import timedelta
 from typing import Any, overload
 
 from schedr import _build
-from schedr._model import EdgeKind, OutputRef, PythonKind, Reference
+from schedr._model import EdgeKind, LiteralValue, OutputRef, PythonKind, Reference, RefValue, Value
+from schedr._serialization import (
+    CodecError,
+    TypeModelError,
+    describe,
+    encode,
+    is_assignable,
+    type_name,
+)
+from schedr._serialization.annotations import label, type_hints
 
 _VALUE_IN_DAG_BODY = (
     "an output can't be used as a value in the DAG file (it exists only at run time); "
@@ -222,19 +231,57 @@ class TaskFunction[**P, R]:
         builder = _build.active()
         if builder is None:
             return self._fn(*args, **kwargs)  # type: ignore[return-value]
+        where = f"task `{self._task_id}`"
         try:
             bound = self._signature.bind(*args, **kwargs)
         except TypeError as e:
-            raise TypeError(f"task `{self._task_id}`: {e}") from None
+            raise TypeError(f"{where}: {e}") from None
+        hints = type_hints(self._fn, where)
+        try:
+            output_type = describe(hints["return"])
+        except TypeModelError as e:
+            raise TypeModelError(f"{where}: return type `{label(hints['return'])}`: {e}") from None
         upstream: list[str] = []
         arguments = {
-            name: _build.to_value(value, f"task `{self._task_id}`, argument `{name}`", upstream)
+            name: self._argument(
+                builder, value, hints.get(name, Any), f"{where}, argument `{name}`", upstream
+            )
             for name, value in bound.arguments.items()
         }
-        builder.add_task(self._task_id, PythonKind(arguments), _build.any_type(), self._options)
+        builder.add_task(self._task_id, PythonKind(arguments), output_type, self._options)
         for task_id in dict.fromkeys(upstream):
             builder.add_edge(task_id, self._task_id, EdgeKind.DATA)
         return Output(self._task_id)
+
+    @staticmethod
+    def _argument(
+        builder: _build.DagBuilder,
+        value: object,
+        annotation: object,
+        where: str,
+        upstream: list[str],
+    ) -> Value:
+        """Converts one argument, checking it against its parameter's type."""
+        try:
+            expected = describe(annotation)
+        except TypeModelError as e:
+            raise TypeModelError(f"{where}: parameter type `{label(annotation)}`: {e}") from None
+        converted = _build.to_value(value, where, upstream)
+        for reference in converted.references():
+            _build.reference_type(builder, reference, where)
+        if isinstance(converted, RefValue):
+            produced = _build.reference_type(builder, converted.reference, where)
+            if not is_assignable(produced, expected):
+                raise TypeError(
+                    f"{where}: expects `{type_name(expected)}`, but "
+                    f"`{_build.reference_label(converted.reference)}` is `{type_name(produced)}`"
+                )
+        elif isinstance(converted, LiteralValue):
+            try:
+                converted = LiteralValue(encode(value, annotation))
+            except CodecError as e:
+                raise TypeError(f"{where}: {e.reason}") from None
+        return converted
 
     def override(
         self,

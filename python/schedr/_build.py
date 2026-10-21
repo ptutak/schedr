@@ -5,19 +5,21 @@ edges to it. Arguments are turned into DAG JSON values here, recording a data de
 every upstream output they reference.
 """
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
 
 from schedr._model import (
+    DagCtxField,
+    DagCtxRef,
     Edge,
     EdgeKind,
     IdError,
     ListValue,
     LiteralValue,
     MapValue,
+    OutputRef,
     Reference,
     RefValue,
     ScalarType,
@@ -27,9 +29,11 @@ from schedr._model import (
     Template,
     TemplateRef,
     TypeDesc,
+    UnionType,
     Value,
     validate_task_id,
 )
+from schedr._serialization import CodecError, encode_any, follow_path, type_name
 
 
 class HasReference(Protocol):
@@ -278,20 +282,6 @@ def require_active(what: str) -> DagBuilder:
     return builder
 
 
-def _literal(value: object, where: str) -> object:
-    """Checks a literal value (JSON types only, until tagged types arrive in 1.2)."""
-    if value is None or isinstance(value, bool | int | str):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(f"{where}: NaN and infinity can't be stored")
-        return value
-    raise TypeError(
-        f"{where}: values of type {type(value).__name__} can't be passed yet "
-        "(supported: None, bool, int, float, str, and lists and dicts of them)"
-    )
-
-
 def to_value(value: object, where: str, upstream: list[str]) -> Value:
     """Converts an argument to a DAG JSON value.
 
@@ -304,8 +294,8 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:
         The value, keeping references visible inside lists and dicts.
 
     Raises:
-        TypeError: For a value that can't be stored, or a dict with non-string keys.
-        ValueError: For NaN or infinity.
+        TypeError: For a value that can't be stored (e.g. ``set``, ``Decimal``, NaN), or a
+            dict with non-string keys.
     """
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
@@ -325,9 +315,13 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:
     if isinstance(value, list | tuple):
         elements = [to_value(item, f"{where}[{i}]", upstream) for i, item in enumerate(value)]
         if all(isinstance(e, LiteralValue) for e in elements):
-            return LiteralValue([e.value for e in elements])  # type: ignore[union-attr]
+            plain = [e.value for e in elements]  # type: ignore[union-attr]
+            return LiteralValue({"$tuple": plain} if isinstance(value, tuple) else plain)
         return ListValue(elements)
-    return LiteralValue(_literal(value, where))
+    try:
+        return LiteralValue(encode_any(value))
+    except CodecError as e:
+        raise TypeError(f"{where}: {e.reason}") from None
 
 
 def to_template(value: object, where: str, upstream: list[str]) -> Template:
@@ -392,10 +386,96 @@ def order(upstream: object, downstream: object, what: str) -> None:
             builder.add_edge(up, down, EdgeKind.ORDER)
 
 
-def any_type() -> TypeDesc:
-    """The output type recorded until return annotations are converted (milestone 1.2).
+_DAG_CTX_TYPES: dict[DagCtxField, TypeDesc] = {
+    DagCtxField.RUN_ID: ScalarType("str"),
+    DagCtxField.RUN_KIND: ScalarType("str"),
+    DagCtxField.PLANNED_FOR: ScalarType("datetime"),
+    DagCtxField.SINCE: ScalarType("datetime"),
+    DagCtxField.DAG_ID: ScalarType("str"),
+}
+
+
+def reference_label(reference: Reference) -> str:
+    """A reference as written in the DAG file, for messages.
+
+    Args:
+        reference: The reference.
 
     Returns:
-        ``Any``.
+        E.g. ``extract.rows[0]`` or ``dag_ctx.run.planned_for``.
     """
-    return ScalarType("any")
+    if isinstance(reference, DagCtxRef):
+        name = reference.field.value
+        return "dag_ctx.dag_id" if name == "dag_id" else f"dag_ctx.run.{name.removeprefix('run_')}"
+    assert isinstance(reference, OutputRef)
+    path = "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in reference.path)
+    return f"{reference.task}{path}"
+
+
+_RENDERABLE = frozenset({"any", "str", "int", "float", "bool", "datetime", "date", "timedelta"})
+
+
+def reference_type(builder: DagBuilder, reference: Reference, where: str) -> TypeDesc:
+    """The type of the data a reference stands for.
+
+    Args:
+        builder: The DAG being defined (for upstream output types).
+        reference: The reference.
+        where: Where it is used, for messages.
+
+    Returns:
+        Its type.
+
+    Raises:
+        TypeError: If the path doesn't exist in the upstream output's type.
+        ValueError: If the upstream task belongs to another DAG.
+    """
+    if isinstance(reference, DagCtxRef):
+        return _DAG_CTX_TYPES[reference.field]
+    assert isinstance(reference, OutputRef)
+    if reference.task not in builder.tasks:
+        raise ValueError(f"task `{reference.task}` is not part of DAG `{builder.dag_id}`")
+    produced = builder.tasks[reference.task].output_type
+    found = follow_path(produced, tuple(reference.path))
+    if found is None:
+        raise TypeError(
+            f"{where}: `{reference_label(reference)}` doesn't exist: the output of "
+            f"`{reference.task}` is `{type_name(produced)}`"
+        )
+    return found
+
+
+def is_renderable(desc: TypeDesc) -> bool:
+    """Whether values of a type can be rendered into a command line or a template.
+
+    Args:
+        desc: The type.
+
+    Returns:
+        True for strings, numbers, booleans, dates, times, durations and ``Any`` (and unions
+        of them); ``None``, lists, dicts and classes can't be rendered.
+    """
+    if isinstance(desc, UnionType):
+        return all(is_renderable(v) for v in desc.variants)
+    return isinstance(desc, ScalarType) and desc.name in _RENDERABLE
+
+
+def check_template_references(builder: DagBuilder, template: Template, where: str) -> None:
+    """Checks that every reference in a template exists and can be rendered.
+
+    Args:
+        builder: The DAG being defined.
+        template: The template.
+        where: Where it is used, for messages.
+
+    Raises:
+        TypeError: For a missing path or a type that can't be rendered (e.g. ``None`` or a
+            list).
+    """
+    for reference in template.references():
+        desc = reference_type(builder, reference, where)
+        if not is_renderable(desc):
+            raise TypeError(
+                f"{where}: a value of type `{type_name(desc)}` can't be rendered into text; "
+                "pass a part of it (e.g. a field), or convert it in a task"
+            )

@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -8,8 +8,10 @@ from schedr import Dag, EmptyOperator, Output, chain, dag_ctx, task
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
+    DictType,
     EdgeKind,
     IdError,
+    ListType,
     ListValue,
     LiteralValue,
     OutputRef,
@@ -66,7 +68,8 @@ def test_calls_inside_a_dag_record_tasks_and_data_edges(validate: Validate) -> N
     )
     assert second.settings.queue == "large"
     assert second.settings.retries == 3
-    assert second.output_type == ScalarType("any")
+    assert first.output_type == ListType(DictType(ScalarType("str")))
+    assert second.output_type == ScalarType("int")
     assert edges(model) == [("extract", "load", EdgeKind.DATA)]
     validate("Dag", model.to_json())
 
@@ -101,11 +104,24 @@ def test_paths_into_outputs() -> None:
     with Dag("d"):
         out = extract()
         use(out[0]["id"])
-        use.override(task_id="use2")(out.rows)
     model = only_dag()
     assert model.tasks[1].kind.arguments["value"] == RefValue(OutputRef("extract", (0, "id")))
-    assert model.tasks[2].kind.arguments["value"] == RefValue(OutputRef("extract", ("rows",)))
     assert repr(out[0].name) == "Output(extract[0].name)"
+
+
+def test_a_path_that_doesnt_exist_is_a_parse_error() -> None:
+    @task
+    def use(value: Any) -> None: ...
+
+    with (
+        pytest.raises(
+            TypeError,
+            match=r"`extract\.rows` doesn't exist: the output of `extract` is "
+            r"`list\[dict\[str, str\]\]`",
+        ),
+        Dag("d"),
+    ):
+        use(extract().rows)
 
 
 def test_output_paths_reject_bad_keys_and_private_names() -> None:
@@ -178,7 +194,7 @@ def test_wrong_arguments_name_the_task() -> None:
 
 def test_unstorable_arguments_name_the_task_and_argument() -> None:
     with (
-        pytest.raises(TypeError, match="task `load`, argument `rows`: values of type set"),
+        pytest.raises(TypeError, match="task `load`, argument `rows`: set is not supported"),
         Dag("d"),
     ):
         load({1})  # type: ignore[arg-type]
@@ -277,3 +293,93 @@ def test_a_repeated_dependency_is_recorded_once() -> None:
         a >> b
         a >> b
     assert len(only_dag().edges) == 1
+
+
+def test_return_types_are_described_in_the_dag_json(validate: Validate) -> None:
+    @task
+    def rows() -> dict[str, list[int]]: ...
+
+    with Dag("d"):
+        rows()
+    model = only_dag()
+    assert model.tasks[0].output_type == DictType(ListType(ScalarType("int")))
+    validate("Dag", model.to_json())
+
+
+def test_an_unsupported_return_type_is_a_parse_error() -> None:
+    @task
+    def bad() -> dict[int, str]: ...
+
+    with (
+        pytest.raises(
+            TypeError, match=r"task `bad`: return type `dict\[int, str\]`: .*keys must be `str`"
+        ),
+        Dag("d"),
+    ):
+        bad()
+
+
+def test_annotations_are_resolved_when_the_task_is_called() -> None:
+    @task
+    def later() -> Later: ...  # noqa: F821
+
+    with pytest.raises(TypeError, match="task `later`: can't resolve an annotation"), Dag("d"):
+        later()
+
+
+def test_an_output_must_fit_the_parameter() -> None:
+    @task
+    def wants_int(n: int) -> None: ...
+
+    with (
+        pytest.raises(
+            TypeError,
+            match=r"argument `n`: expects `int`, but `extract` is `list\[dict\[str, str\]\]`",
+        ),
+        Dag("d"),
+    ):
+        wants_int(extract())
+
+
+def test_parts_and_dag_ctx_are_checked_too() -> None:
+    @task
+    def wants_str(s: str) -> None: ...
+
+    @task
+    def wants_date(d: datetime) -> None: ...
+
+    with Dag("d"):
+        wants_str(extract()[0]["id"])
+        wants_date(dag_ctx.run.planned_for)
+    registry.take_defined()
+    with (
+        pytest.raises(
+            TypeError, match=r"expects `int`, but `dag_ctx\.run\.planned_for` is `datetime`"
+        ),
+        Dag("e"),
+    ):
+        load.override(task_id="x")(rows=[], limit=dag_ctx.run.planned_for)
+
+
+def test_literal_arguments_are_encoded_against_the_parameter() -> None:
+    @task
+    def at(when: datetime, pair: tuple[int, str]) -> None: ...
+
+    with Dag("d"):
+        at(datetime(2026, 1, 1, tzinfo=UTC), (1, "a"))
+    arguments = only_dag().tasks[0].kind.arguments
+    assert arguments["when"] == LiteralValue({"$datetime": "2026-01-01T00:00:00+00:00"})
+    assert arguments["pair"] == LiteralValue({"$tuple": [1, "a"]})
+    with pytest.raises(TypeError, match="argument `limit`: expected int, got str"), Dag("e"):
+        load([], limit="ten")  # type: ignore[arg-type]
+
+
+def test_an_unsupported_parameter_type_is_a_parse_error() -> None:
+    @task
+    def odd(values: set[int]) -> None: ...
+
+    with (
+        pytest.raises(TypeError, match=r"argument `values`: parameter type `set\[int\]`"),
+        Dag("d"),
+    ):
+        odd([])  # type: ignore[arg-type]

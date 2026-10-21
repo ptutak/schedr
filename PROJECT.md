@@ -2737,16 +2737,18 @@ sure an output can be serialized, from earliest to last:
 
    ```python
    type Json = (
-       None | bool | int | float | str | datetime | date | timedelta
-       | Sequence[Json] | Mapping[str, Json]
+       bool | int | float | str | datetime | date | timedelta
+       | Sequence[Json] | Mapping[str, object] | DataclassInstance | None
    )
 
    def task[**P, R: Json](fn: Callable[P, R]) -> Callable[P, R]: ...
    ```
 
    `Sequence`/`Mapping` (not `list`/`dict`, which are invariant) so that e.g. `list[int]` is
-   accepted. Verified with `mypy --strict`: `set[int]`, `dict[int, str]` and custom classes are
-   rejected. Only as good as the user's tooling, and `Sequence` lets a few wrong types through
+   accepted; `Mapping[str, object]` (not `Mapping[str, Json]`) because a `TypedDict` is only a
+   `Mapping[str, object]` to type checkers, so dict values aren't checked statically (the
+   parse-time check does). Verified with `mypy --strict`: `TypedDict`s and dataclasses are
+   accepted; `set[int]`, `dict[int, str]` and `object` are rejected. Only as good as the user's tooling, and `Sequence` lets a few wrong types through
    (e.g. `bytes`), so it is a help, not the guarantee.
 2. **Parse time (the guarantee).** The runner reads the return annotation
    (`typing.get_type_hints()`) and walks it recursively against the supported types: `None`, `bool`,
@@ -2756,16 +2758,38 @@ sure an output can be serialized, from earliest to last:
    and the offending part (e.g. "task `extract`: return type `dict[int, str]`: output keys must be
    `str`"); the DAG is not registered. The same type model checks **inputs**: passing an `Output[T]`
    to a parameter whose annotation doesn't accept `T` is a parse error.
+   - Annotations are resolved when the task is first called in the DAG body, so they may refer
+     to names defined later in the file.
+   - **Not supported** (parse errors naming the part): `tuple[T, ...]` (use `list[T]`), a bare
+     `tuple`, recursive types (a dataclass referring to itself), generic `type` aliases with
+     parameters, `set`, `bytes`, `Decimal`, `object` and other classes. Pydantic models come
+     with M4 (they need their own type descriptor).
+   - **Compatibility of an output with a parameter:** `int` fits `float`; `bool` doesn't fit
+     `int` (no coercion, as at run time); containers are checked element by element; a union
+     fits if each member fits; a `Literal` fits if each value fits; dataclasses and
+     `TypedDict`s match by name and fields. Paths (`out.rows[0]`) are checked against the
+     producer's type, for every reference at any depth.
+   - **Literal arguments** are encoded against the parameter's type at parse time, so a wrong
+     literal is a parse error too.
+   - **References in command lines and templates** must have a type that can be rendered as
+     text: strings, numbers, booleans, dates, times, durations, `Any`, or unions of them.
+     `None`, lists, dicts and classes are parse errors (pass a field, or convert in a task).
 3. **Run time (the actual value).** The runner encodes the returned value **guided by the
    annotation** and fails the attempt (`failed`) on: unsupported types (`Decimal`, `set`,
    custom objects), non-`str` dict keys, `NaN`/`inf`, values not matching the annotation, or
    values over the output size limit. The error summary names the exact location (e.g. "output
    of `extract` not serializable at `[3].created`: `Decimal` is not supported").
 
-**Tagged extra types.** `datetime`, `date`, `timedelta` and `tuple` are stored tagged, e.g.
-`{"$datetime": "2026-10-19T03:00:00+00:00"}`, not as plain strings, so Rust can render them
-correctly in t-strings without Python, and a downstream task annotated `Any` still gets the
-real type back.
+**Tagged extra types.** `datetime`, `date`, `timedelta` and `tuple` are stored tagged, not as
+plain strings, so Rust can render them correctly in t-strings without Python, and a downstream
+task annotated `Any` still gets the real type back:
+
+| Type | Stored as |
+|---|---|
+| `datetime` (aware only; a naive one is a run-time error) | `{"$datetime": "2026-10-19T03:00:00+00:00"}` (its offset kept) |
+| `date` | `{"$date": "2026-10-19"}` |
+| `timedelta` | `{"$timedelta": 3600000000}` (whole microseconds: exact, simple to read in Rust) |
+| `tuple` | `{"$tuple": [1, "a"]}` |
 
 **One output per task; references can point inside it.** There is no separate "multiple
 outputs" concept in the native API. A task has **one output value**, stored once per (DAG run,
