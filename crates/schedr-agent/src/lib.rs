@@ -8,7 +8,10 @@
 pub mod channel;
 pub mod env;
 pub mod output;
+pub mod parse;
 pub mod process;
 pub mod render;
+pub mod scan;
 pub mod status;
 pub mod supervise;
+pub mod watch;

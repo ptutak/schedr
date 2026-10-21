@@ -835,6 +835,11 @@ permission to create pods.
   (configurable) is enforced by the agent: on timeout it kills the process, records an import
   error ("timed out") for that file and starts a new process for the remaining files. A fresh
   process per parse job avoids stale cached modules.
+  - The import error of a file that timed out is `ParseTimeout`; of a file during which the
+    runner died (closed the socket, e.g. a crash in a C extension or `os._exit`), `RunnerDied`.
+  - The per-file timeout also covers waiting outside a file (starting, the handshake, between
+    files); silence or a closed socket there can't be blamed on a file and **fails the parse
+    job**, as do messages out of order.
 - **Trust boundary: a worker is one trust domain.** All tasks on a worker run under the same
   UID, so they are **not isolated from each other** (a task can read another task's
   environment or files). Teams that must be isolated get separate queues and workers. This is
@@ -1065,6 +1070,21 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - Defaults: **poll every 30 s**, **settle time 5 s**.
 - After a change is seen, schedr waits for a **settle time** (configurable; no further changes)
   before computing the new content hash, so half-written files are never parsed.
+- **What is scanned:** each root recursively, **following symbolic links** (git-sync switches
+  a link to each new checkout; the root is resolved on every scan), skipping what
+  `.schedrignore` files exclude, `.git` and `__pycache__` directories and `*.pyc` files.
+  `.gitignore` and `.airflowignore` are not honoured. A scan compares each file's path, size
+  and modification time with the previous scan.
+- **What is hashed:** **every scanned file, not only `.py` files** (tasks read SQL,
+  configuration and other files next to their DAG files): `sha256:` and the hex SHA-256 of each
+  file's relative path, length and bytes, in path order. The hash depends only on paths and
+  contents, so every worker with the same code gets the same hash; only `.py` files are parsed.
+- **Settling in detail:** a changed scan must stay the same for the settle time; a further
+  change restarts it, and going back to the last settled scan cancels it. The **first scan
+  after the agent starts settles too**. After hashing, the root is scanned again and a change
+  during hashing restarts the settle time. Only a **new hash** is reported: files touched
+  without changing (same contents) report nothing. A scan that fails (a file removed during
+  the scan, a dangling link, a path that isn't UTF-8) is retried at the next poll.
 
 ### Upgrades and compatibility
 
@@ -3584,6 +3604,8 @@ Rust crates chosen for the implementation (versions pinned when added):
 | logging | `tracing` + `tracing-subscriber` | see Observability |
 | processes and signals | `tokio::process` (`process_group`), `rustix` | safe APIs only (`unsafe_code = "forbid"`) |
 | shell quoting | own implementation | must match `shlex.quote` exactly |
+| ignore files | `ignore` | gitignore semantics for `.schedrignore`, directory walking with symbolic links |
+| content hashes | `sha2` | SHA-256 of DAG roots |
 
 Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-time `sqlx` macros
 (two backends); `actix-web` (a second async stack). The Python package stays dependency-free.
@@ -3631,7 +3653,7 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
   | Language | Tools |
   |---|---|
   | Python | `pytest`, `pytest-cov` |
-  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`cargo-llvm-cov`** |
+  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`tempfile`** (temporary directories: DAG roots for scanning); **`cargo-llvm-cov`** |
 
 ### Documentation
 

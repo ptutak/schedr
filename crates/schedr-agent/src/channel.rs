@@ -127,7 +127,7 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 /// The `type` of a runner message, for messages.
-fn describe(message: &RunnerMessage) -> String {
+pub(crate) fn describe(message: &RunnerMessage) -> String {
     serde_json::to_value(message)
         .ok()
         .and_then(|v| v["type"].as_str().map(str::to_owned))

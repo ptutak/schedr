@@ -21,6 +21,7 @@ schedr-api = { path = "crates/schedr-api" }
 # Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
 clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
+ignore = "0.4.33"
 jiff = { version = "0.2.38", features = ["serde"] }
 prost = "0.14.4"
 rustix = { version = "1.1.5", features = ["process"] }
@@ -29,6 +30,7 @@ protoc-bin-vendored = "3.3.0"
 schemars = { version = "1.2.3", features = ["jiff02"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "macros"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "test-util"] }
@@ -43,6 +45,7 @@ insta = { version = "1.49.0", features = ["json"] }
 pretty_assertions = "1.4.1"
 proptest = "1.12.0"
 rstest = "0.28.0"
+tempfile = "3.27.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
