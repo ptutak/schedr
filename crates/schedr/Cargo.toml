@@ -1,14 +1,22 @@
 [package]
 name = "schedr"
-description = "schedr scheduler binary."
+description = "The schedr binary: server roles, user CLI and in-task CLI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+# The library part holds everything testable; `main.rs` only calls into it.
+[lib]
+name = "schedr_bin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "schedr"
+path = "src/main.rs"
+
 [dependencies]
-schedr-core.workspace = true
 
 [lints]
 workspace = true

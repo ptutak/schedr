@@ -1,0 +1,13 @@
+[package]
+name = "schedr-model"
+description = "Shared model of schedr: DAG JSON, run and task states, and the JSON Schema generated from them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

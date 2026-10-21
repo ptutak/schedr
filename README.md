@@ -7,25 +7,33 @@ defined with an Airflow-like API.
 
 ```
 crates/
-  schedr-core/      # scheduling engine (library)
-    src/            #   unit tests live next to code (#[cfg(test)])
-    tests/          #   integration tests
-  schedr/           # scheduler binary
+  schedr-model/     # shared model: DAG JSON, states, JSON Schema
+  schedr-proto/     # Protobuf + gRPC, master <-> worker agent
+  schedr-config/    # configuration loading and validation
+  schedr-db/        # schema, migrations, queries (SQLite, Postgres)
+  schedr-master/    # scheduling loop, DAG validation, commands
+  schedr-agent/     # worker agent
+  schedr-api/       # webserver: REST API, web UI
+  schedr/           # the binary: roles, user CLI, in-task CLI
+    src/<module>.rs         # code
+    src/<module>/tests.rs   # its unit tests
 python/
   schedr/           # Python DAG API package
   tests/
-    unit/
-    integration/
+    unit/schedr/    # unit tests mirroring the package: test_<module>.py
 ```
+
+Design decisions: PROJECT.md. Implementation plan: PLAN.md.
 
 ## Development
 
-Requirements: Rust (stable, via rustup), [uv](https://docs.astral.sh/uv/), make.
+Requirements: Rust (stable, via rustup), [uv](https://docs.astral.sh/uv/), make. `make setup`
+also installs `cargo-nextest`, `cargo-llvm-cov` and the `llvm-tools-preview` component.
 
 ```sh
 make setup      # uv sync + pre-commit hooks
 make fmt        # format Rust + Python
 make lint       # clippy, ruff, mypy
-make test       # cargo test + pytest
+make test       # Rust (nextest) + pytest, both with an 85 % coverage floor
 make check      # everything CI runs
 ```

@@ -5,10 +5,31 @@ version = 4
 [[package]]
 name = "schedr"
 version = "0.1.0"
-dependencies = [
- "schedr-core",
-]
 
 [[package]]
-name = "schedr-core"
+name = "schedr-agent"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-api"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-config"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-db"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-master"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-model"
+version = "0.1.0"
+
+[[package]]
+name = "schedr-proto"
 version = "0.1.0"

@@ -3493,7 +3493,9 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
   - **Rust:** private means an item without any `pub` (visible only in its module). Anything
     with `pub`, `pub(crate)` or `pub(super)` is tested.
 - **Coverage floor: 85 %** per language over the whole code base, private code included
-  (reached through the public tests); `make check` and CI fail below it. Python: `pytest-cov`
+  (reached through the public tests); `make check` and CI fail below it. Not counted: the test
+  files themselves (`src/**/tests.rs`) and a binary's `main.rs`, which only calls into the
+  crate's library (everything testable lives there). Python: `pytest-cov`
   with branch coverage, `--cov-fail-under=85`. Rust: `cargo-llvm-cov`, `--fail-under-lines 85`.
 - **Never skip a test** (`pytest.mark.skip`, `skipif`, `xfail`, Rust `#[ignore]`) without
   asking first, with the reason stated clearly. A test that can't run is fixed, or the question
@@ -3501,11 +3503,13 @@ Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-tim
 - **Structure mirrors the code:**
   - **Python:** `python/tests/unit/schedr/...` mirrors the package; one `test_<module>.py` per
     module (`schedr/runner/protocol.py` → `tests/unit/schedr/runner/test_protocol.py`).
+    A package's `__init__.py` is tested in `test_init.py` in the package's test folder.
     `pytest --import-mode=importlib`, so test files with the same name in different folders
     don't clash and test folders need no `__init__.py`.
   - **Rust:** one test file per module, next to it: `src/scheduler.rs` ends with
     `#[cfg(test)] mod tests;` and its tests are in `src/scheduler/tests.rs` (nested modules
-    the same way: `src/scheduler/fire_times/tests.rs`). As a child module, it reaches
+    the same way: `src/scheduler/fire_times/tests.rs`; the crate root `src/lib.rs` has its tests
+    in `src/tests.rs`). As a child module, it reaches
     `pub(crate)` / `pub(super)` items, which a crate's `tests/` folder (integration tests,
     public API only) can't. Test code is compiled only for tests. Not chosen: a `mod tests { … }`
     block inside each source file (mixes code and tests in long files).

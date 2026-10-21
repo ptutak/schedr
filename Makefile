@@ -12,7 +12,15 @@ endif
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
 
-setup:           ## Install Python dev deps and pre-commit hooks
+# Rust test coverage: unit-test files (`src/**/tests.rs`) and `main.rs` (only calls into the
+# library) aren't counted; see PROJECT.md, Repository and tooling: Testing.
+COVERAGE_MIN := 85
+LLVM_COV_IGNORE := '(^|/)(tests|main)\.rs$$'
+
+setup:           ## Install dev tools, Python dev deps and pre-commit hooks
+	rustup component add llvm-tools-preview
+	command -v cargo-nextest >/dev/null || cargo install --locked cargo-nextest
+	command -v cargo-llvm-cov >/dev/null || cargo install --locked cargo-llvm-cov
 	uv sync
 	uv run pre-commit install
 
@@ -30,11 +38,13 @@ lint:            ## Run clippy, ruff and mypy
 	uv run ruff check python
 	uv run mypy
 
-test-rust:       ## Run Rust tests
-	cargo test --workspace
+test-rust:       ## Run Rust tests with coverage (fails below COVERAGE_MIN)
+	cargo llvm-cov nextest --workspace --ignore-filename-regex $(LLVM_COV_IGNORE) \
+		--fail-under-lines $(COVERAGE_MIN)
+	cargo test --workspace --doc
 
-test-python:     ## Run Python tests
-	uv run pytest --cov --cov-report=term-missing
+test-python:     ## Run Python tests with coverage (fails below COVERAGE_MIN)
+	uv run pytest --cov --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN)
 
 test: test-rust test-python  ## Run all tests
 
@@ -42,4 +52,5 @@ check: fmt-check lint test   ## Everything CI runs
 
 clean:           ## Remove build artifacts
 	cargo clean
+	cargo llvm-cov clean --workspace 2>/dev/null || true
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov

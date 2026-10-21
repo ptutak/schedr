@@ -1,5 +1,5 @@
-//! schedr scheduler binary.
+//! The `schedr` executable.
 
 fn main() {
-    println!("{}", schedr_core::greet("schedr"));
+    println!("{}", schedr_bin::banner());
 }

@@ -10,7 +10,13 @@ license = "MIT"
 authors = ["Piotr Tutak <piotr.tutak@amartus.com>"]
 
 [workspace.dependencies]
-schedr-core = { path = "crates/schedr-core" }
+schedr-model = { path = "crates/schedr-model" }
+schedr-proto = { path = "crates/schedr-proto" }
+schedr-config = { path = "crates/schedr-config" }
+schedr-db = { path = "crates/schedr-db" }
+schedr-master = { path = "crates/schedr-master" }
+schedr-agent = { path = "crates/schedr-agent" }
+schedr-api = { path = "crates/schedr-api" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

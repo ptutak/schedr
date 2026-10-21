@@ -37,6 +37,8 @@ bindings = "bin"
 manifest-path = "crates/schedr/Cargo.toml"
 python-source = "python"
 python-packages = ["schedr"]
+# The binary crate's library is named `schedr_bin`; the Python package is `schedr`.
+module-name = "schedr"
 
 # --- uv -----------------------------------------------------------------
 # Rebuild the (editable) project install when Rust code changes, not only Python metadata.
@@ -84,9 +86,14 @@ packages = ["schedr"]
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 pythonpath = ["python"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+# importlib: test files with the same name in different folders don't clash, and test folders
+# need no __init__.py (see PROJECT.md, Repository and tooling: Testing).
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = ["integration: tests that spawn processes or touch the filesystem"]
 
 [tool.coverage.run]
 source = ["schedr"]
 branch = true
+
+[tool.coverage.report]
+fail_under = 85
