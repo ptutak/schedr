@@ -75,7 +75,9 @@ CREATE TABLE runs (
     params         JSONB NOT NULL DEFAULT '{}',
     started_at     TIMESTAMPTZ,
     ended_at       TIMESTAMPTZ,
-    result_reason  TEXT
+    result_reason  TEXT,
+    -- Set when a user asked to cancel the run: nothing new starts, failures aren't retried.
+    cancel_requested_at TIMESTAMPTZ
 );
 
 -- A master that crashes after creating a scheduled run can't create it twice.
@@ -94,6 +96,8 @@ CREATE TABLE task_instances (
         'success', 'failed', 'cancelled', 'skipped', 'upstream_failed')),
     outcome       TEXT,
     try_number    INTEGER NOT NULL DEFAULT 0 CHECK (try_number >= 0),
+    -- Attempts that used a retry (try_number also counts those that didn't).
+    retries_used  INTEGER NOT NULL DEFAULT 0 CHECK (retries_used >= 0),
     queued_reason TEXT,
     ready_at      TIMESTAMPTZ,
     updated_at    TIMESTAMPTZ NOT NULL,

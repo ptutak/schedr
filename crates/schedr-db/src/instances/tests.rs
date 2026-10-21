@@ -1,0 +1,269 @@
+use pretty_assertions::assert_eq;
+use schedr_model::{DagId, RunKind};
+use serde_json::json;
+
+use super::*;
+use crate::dags::{DagChange, NewParse};
+use crate::runs::NewRun;
+
+fn ts(text: &str) -> Timestamp {
+    text.parse().unwrap()
+}
+
+fn id(text: &str) -> TaskId {
+    TaskId::new(text).unwrap()
+}
+
+fn dag() -> Dag {
+    let task = |name: &str| {
+        json!({
+            "id": name, "kind": "python",
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        })
+    };
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "catchup": false, "max_active_runs": 1,
+        "tasks": [task("extract"), task("load")],
+        "edges": [{"from": "extract", "to": "load", "kind": "order"}]
+    }))
+    .unwrap()
+}
+
+/// A database with DAG `sync` and one run of it in `state`; returns it with the run's ID.
+async fn with_run(state: RunState) -> (Database, String) {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h1",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts("2026-10-01T00:00:00Z"),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let change = DagChange::Define {
+        dag: Box::new(dag()),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], ts("2026-10-01T00:00:00Z"))
+        .await
+        .unwrap();
+    let version_id = db.active_dags().await.unwrap()[0].version_id.clone();
+    let dag_id = DagId::new("sync").unwrap();
+    let run_id = db
+        .insert_run(&NewRun {
+            dag_id: &dag_id,
+            dag_version_id: &version_id,
+            kind: RunKind::Manual,
+            state,
+            planned_for: ts("2026-10-21T08:00:00Z"),
+            since: ts("2026-10-20T08:00:00Z"),
+            triggered_at: ts("2026-10-21T08:00:00Z"),
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    (db, run_id)
+}
+
+#[tokio::test]
+async fn running_runs_without_instances_are_newly_running() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    let new = db.newly_running().await.unwrap();
+    assert_eq!(new.len(), 1);
+    assert_eq!(
+        (new[0].run_id.as_str(), &new[0].dag),
+        (run_id.as_str(), &dag())
+    );
+    let now = ts("2026-10-21T08:00:01Z");
+    db.create_instances(
+        &run_id,
+        &[
+            (id("extract"), TaskInstanceState::Queued),
+            (id("load"), TaskInstanceState::Scheduled),
+        ],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.newly_running().await.unwrap(), []);
+    let (queued_db, _) = with_run(RunState::Queued).await;
+    assert_eq!(queued_db.newly_running().await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn instances_are_read_back_with_the_run() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    let now = ts("2026-10-21T08:00:01Z");
+    db.create_instances(
+        &run_id,
+        &[
+            (id("load"), TaskInstanceState::Scheduled),
+            (id("extract"), TaskInstanceState::Queued),
+        ],
+        now,
+    )
+    .await
+    .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.state, RunState::Running);
+    assert!(!run.cancel_requested);
+    assert_eq!(run.dag, dag());
+    let summary: Vec<(&str, TaskInstanceState, Option<Timestamp>)> = run
+        .instances
+        .iter()
+        .map(|i| (i.task_id.as_str(), i.state, i.ready_at))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("extract", TaskInstanceState::Queued, Some(now)),
+            ("load", TaskInstanceState::Scheduled, None)
+        ]
+    );
+    assert_eq!(
+        (run.instances[0].try_number, run.instances[0].retries_used),
+        (0, 0)
+    );
+    assert_eq!(
+        db.run_tasks("0190a3e5-0000-7000-8000-000000000000")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn updates_change_states_and_count_retries() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    let now = ts("2026-10-21T08:00:01Z");
+    db.create_instances(&run_id, &[(id("extract"), TaskInstanceState::Running)], now)
+        .await
+        .unwrap();
+    let retry_at = ts("2026-10-21T08:05:00Z");
+    let retry = InstanceUpdate {
+        task_id: id("extract"),
+        state: TaskInstanceState::UpForRetry,
+        ready_at: Some(retry_at),
+        outcome: None,
+        used_retry: true,
+    };
+    db.update_instances(&run_id, &[retry], now).await.unwrap();
+    let instance = &db.run_tasks(&run_id).await.unwrap().unwrap().instances[0];
+    assert_eq!(
+        (instance.state, instance.retries_used, instance.ready_at),
+        (TaskInstanceState::UpForRetry, 1, Some(retry_at))
+    );
+    assert_eq!(
+        db.due_retries(ts("2026-10-21T08:04:59Z")).await.unwrap(),
+        []
+    );
+    assert_eq!(
+        db.due_retries(retry_at).await.unwrap(),
+        [(run_id.clone(), id("extract"))]
+    );
+}
+
+#[tokio::test]
+async fn outputs_are_stored_once_per_instance() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    db.create_instances(
+        &run_id,
+        &[(id("extract"), TaskInstanceState::Running)],
+        ts("2026-10-21T08:00:01Z"),
+    )
+    .await
+    .unwrap();
+    let instance_id = db.run_tasks(&run_id).await.unwrap().unwrap().instances[0]
+        .id
+        .clone();
+    assert_eq!(db.output(&instance_id).await.unwrap(), None);
+    db.store_output(&instance_id, "SUCCESS", &json!({"rows": 3}))
+        .await
+        .unwrap();
+    db.store_output(&instance_id, "SUCCESS", &json!({"rows": 4}))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.output(&instance_id).await.unwrap(),
+        Some(("SUCCESS".to_owned(), json!({"rows": 4})))
+    );
+}
+
+#[tokio::test]
+async fn runs_are_cancelled_once_and_finished() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    db.request_cancel(&run_id, ts("2026-10-21T09:00:00Z"))
+        .await
+        .unwrap();
+    db.request_cancel(&run_id, ts("2026-10-21T10:00:00Z"))
+        .await
+        .unwrap();
+    assert!(
+        db.run_tasks(&run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .cancel_requested
+    );
+    db.finish_run(&run_id, RunState::Cancelled, ts("2026-10-21T09:00:01Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.run_tasks(&run_id).await.unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn stored_values_that_dont_read_are_errors() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    db.create_instances(
+        &run_id,
+        &[(id("extract"), TaskInstanceState::UpForRetry)],
+        ts("2026-10-21T08:00:01Z"),
+    )
+    .await
+    .unwrap();
+    let Database::Sqlite(pool) = &db else {
+        panic!("expected SQLite")
+    };
+    sqlx::query("UPDATE task_instances SET ready_at = 'soon'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let error = db.run_tasks(&run_id).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("invalid stored data in task_instances.ready_at: "),
+        "{error}"
+    );
+    sqlx::query(
+        "UPDATE task_instances SET ready_at = '2026-01-01T00:00:00.000000Z', task_id = 'bad id!'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let error = db
+        .due_retries(ts("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("invalid stored data in task_instances.task_id: "),
+        "{error}"
+    );
+}

@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod dags;
 pub mod database;
+pub mod instances;
 mod query;
 pub mod runs;
 pub mod status;

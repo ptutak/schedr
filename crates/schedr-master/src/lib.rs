@@ -5,8 +5,10 @@
 
 pub mod catalog;
 pub mod discovery;
+pub mod execution;
 pub mod fire_times;
 pub mod parse_jobs;
 pub mod planning;
+pub mod progress;
 pub mod scheduler;
 pub mod validate;

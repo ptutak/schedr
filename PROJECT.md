@@ -598,6 +598,20 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   own memory spike). **Failures certain to repeat are not retried** (e.g. a secret that is not
   found or not permitted, see Secret storage); the master learns this from the error kind in
   `Finished`.
+- **Try number and retries:** the **try number** counts every attempt (`dag_ctx` and the
+  UI show it); the **retry budget** counts only attempts that used a retry. So an attempt
+  interrupted by draining or never started is try 2 without using up `retries`.
+- **Never retried** (certain to repeat): the error kinds `secret_not_found`,
+  `secret_denied`, `input_mismatch`, `output_not_serializable`, `output_too_large`. A secret
+  storage that is down (`secret_unavailable`), an import error and a task no longer in its
+  file (`task_not_found`) are retried: they can pass, or new code can fix them.
+- **While a run is being cancelled** nothing runs again: an attempt that fails then is not
+  retried (the failure counts, and the run ends `failed`), and one interrupted or never
+  started becomes `cancelled`. A **queued run** that is cancelled ends `cancelled` at once.
+- **A cancelled task cancels the tasks downstream of it** (they can't run without it, and
+  nothing failed).
+- **Empty tasks** are completed by the master as soon as they are ready, with outcome
+  `SUCCESS` and no output.
 - **Parse jobs** are assigned with `AssignParse` over the stream; the result (DAG JSON, import
   errors per file) is sent with a unary call. Each worker has **one dedicated parse slot**, not
   counted against task slots, with its own memory budget.

@@ -12,6 +12,7 @@ croner.workspace = true
 jiff.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
@@ -19,7 +20,6 @@ uuid.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
 rstest.workspace = true
-serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 
