@@ -304,14 +304,14 @@ NO_DATA = 3
   script file.
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
-  `SCHEDR_RUN_ID`, `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, `SCHEDR_SCHEDULED_AT`,
-  `SCHEDR_INTERVAL_START`, `SCHEDR_INTERVAL_END` (ISO 8601).
+  `SCHEDR_RUN_ID`, `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, `SCHEDR_PLANNED_FOR`,
+  `SCHEDR_SINCE` (ISO 8601).
 
 #### `ScriptOperator`
 
 ```python
 ScriptOperator("report", job="etl:team_a/schedr.toml#report_daily",
-               args=["--day", t"{dag_ctx.run.scheduled_at}"])
+               args=["--day", t"{dag_ctx.run.planned_for}"])
 ```
 
 - Refers to a declaration by its **reference string**, the same format as the job ID (absolute
@@ -790,7 +790,7 @@ Python tasks use the Python API instead.
   | Read the resource value | `schedr task-ctx resource get [--field cluster_id]` | a command / script resource cleanup |
   | Read a declared secret | `schedr task-ctx secret get 'ci/deploy#token'` | any command / script task |
   | Read the run's parameters | `schedr dag-ctx params get [--field region]` | any command / script of the run |
-  | Read the run information | `schedr dag-ctx run get [--field scheduled_at]` | any command / script of the run |
+  | Read the run information | `schedr dag-ctx run get [--field planned_for]` | any command / script of the run |
 
 - **Field syntax** (from HTTPie): `key=value` (a string), `key:=json` (a raw JSON value:
   `size:=8`, `enabled:=true`), `--json '{...}'` (a whole object). Checked against the declared
@@ -1292,19 +1292,26 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   come later.
 - **IDs.** The DAG ID is an **explicit, required string**. A task ID defaults to the **function
   name** for `@task` and is **required** for operators. Duplicate IDs are a parse error.
-- **Schedules are typed objects:** `Cron("0 3 * * *")`, `Every(timedelta(hours=1))`, `None`
-  (manual runs only), plus preset constants (`DAILY`, …). The time zone is set per schedule,
-  **default UTC**.
+- **Schedules are typed objects:** `Cron("0 3 * * *")`, `Every(timedelta(hours=1))`,
+  `Once("2026-12-24T23:00")` (a single fire time), `None` (manual runs only), plus preset
+  constants (`DAILY`, …). The time zone is set per schedule, **default UTC**.
+  - **`Once`** is the way to run a DAG once at a future time (e.g. a migration tonight at
+    23:00): an ordinary schedule with one fire time, so catchup, `end`, pausing, `since` and
+    the UI's "next run" work as for any schedule. It is set in the DAG file (reviewed, in git);
+    there is no deferred manual trigger (see Open questions, Manual runs).
 - **Run time semantics.** No Airflow-style "logical date" shifted one interval back. A run is
-  created **when its schedule fires** and knows **`dag_ctx.run.scheduled_at`** (the fire time)
-  and **`dag_ctx.run.interval`** (previous fire → this fire; see Run parameters and the DAG
-  context). The **first run** is the first fire time at
-  or after `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
+  created **when its schedule fires** and knows **`dag_ctx.run.planned_for`** (the fire time;
+  manual runs: see Open questions, Manual runs) and **`dag_ctx.run.since`** (the
+  `planned_for` of the previous scheduled run, so the run covers `(since, planned_for]`; see
+  Run parameters and the DAG context). The **first run** is the first fire time at or after
+  `start`. **`catchup` defaults to False.** (Airflow 3 moved the same way: cron
   schedules run at the fire time.)
 - **`end`** (optional, mirror of `start`): the **last scheduled run** is the last fire time **at
   or before `end`** (in the schedule's time zone). After it the DAG stays listed with its
   history, but no new scheduled runs are created; the UI shows it as "ended". Manual runs are
-  still allowed. Native use: temporary DAGs (a campaign, a migration window) that stop on
+  still allowed: **`start` and `end` apply only to runs of kind `scheduled`**; manual and
+  backfill runs may be for any time, before `start` or after `end` (see Open questions, Manual
+  runs). Native use: temporary DAGs (a campaign, a migration window) that stop on
   their own.
 - **`max_active_runs`** (default **1**; `None` = no limit): at most this many runs of the DAG
   at a time. A fire time that comes while the DAG is at its limit is **treated as missed**
@@ -1397,7 +1404,7 @@ with Dag(
 
     CommandOperator(            # depends on load: its command uses `count`
         "notify",
-        command=t"./notify.sh {dag_ctx.run.scheduled_at} {count}",
+        command=t"./notify.sh {dag_ctx.run.planned_for} {count}",
         env={"TOKEN": t"{secrets['slack/bot#token']}"},
     )
 ```
@@ -1611,8 +1618,8 @@ task data: "data flow is the only way to pass task data" still holds).
   error ("a reference can't be used as a value in the DAG file; branch with a task"), as for
   outputs. `from schedr import dag_ctx`. (Replaces the earlier `schedr.templates.run`
   placeholder.)
-- **Run information:** `dag_ctx.run.id`, `dag_ctx.run.scheduled_at`, `dag_ctx.run.interval`,
-  `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables, see Plain script
+- **Run information:** `dag_ctx.run.id`, `dag_ctx.run.kind`, `dag_ctx.run.planned_for`,
+  `dag_ctx.run.since`, `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables, see Plain script
   delivery).
 
 **Declaring parameters.**
@@ -1663,7 +1670,7 @@ its summary.
 |---|---|---|
 | a task argument (typed) | a reference in the DAG body | `extract(region=dag_ctx.params.region, day=dag_ctx.params.day)` |
 | t-strings (commands, script `args`, `env`, task arguments) | a reference, rendered by the agent | `command=["./publish.sh", t"{dag_ctx.params.region}"]` |
-| Python task code (also cleanups, resource setups) | read at run time, decoded strictly into the dataclass passed | `p = dag_ctx.params(ReportParams)`; `dag_ctx.run.scheduled_at` |
+| Python task code (also cleanups, resource setups) | read at run time, decoded strictly into the dataclass passed | `p = dag_ctx.params(ReportParams)`; `dag_ctx.run.planned_for` |
 | scripts and commands (incl. `schedr.toml` jobs) | `schedr dag-ctx` (see In-task CLI) | `schedr dag-ctx params get --field region` |
 
 - Paths are **checked at parse time** against the declared dataclass (an unknown field, or a type
@@ -2380,7 +2387,7 @@ primary one.
   | Airflow | Native |
   |---|---|
   | `DAG(dag_id=..., ...)` | `Dag("...", ...)` |
-  | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `None` | `Cron(...)` / `DAILY` / `Every(...)` / `None` |
+  | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `"@once"` / `None` | `Cron(...)` / `DAILY` / `Every(...)` / `Once(start_date)` / `None` |
   | `start_date=` / `end_date=` | `start=` / `end=` |
   | `max_active_runs=` (default 16, Airflow's `max_active_runs_per_dag`) | `max_active_runs=` (set explicitly to 16 when not given, so migrated DAGs keep Airflow's default) |
   | `tags=`, `description=` | `tags=`, `description=` |
@@ -2751,7 +2758,7 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is designed and
   implemented later in the project. Rule for that design (the principle in Thin translating
   classes): every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
-  `dag_ctx.run.scheduled_at` formatted `%Y-%m-%d`); one without a native equivalent is an error in
+  `dag_ctx.run.planned_for` formatted `%Y-%m-%d`); one without a native equivalent is an error in
   the Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
 - **Safe substitution into shell commands.** A t-string in a `command` inserts values into text
@@ -2866,27 +2873,102 @@ items ("possibly later") are noted where they belong.
 
 ### Manual runs
 
-What a manual run's `dag_ctx.run.scheduled_at` and `dag_ctx.run.interval` are; whether it may
+What a manual run's `dag_ctx.run.planned_for` and `dag_ctx.run.since` are; whether it may
 overlap with scheduled runs; whether it counts towards `max_active_runs`; how runs are
 identified.
 
 Proposal (not yet accepted):
 
-1. **Time:** `schedr runs trigger report` → `scheduled_at` = the trigger time, `interval`
-   zero-length (`[scheduled_at, scheduled_at]`, as Airflow 3 does; never `None`).
-   `--at <time>`: if it's a fire time of the schedule, the run behaves exactly like that
-   scheduled run (same `scheduled_at`, interval `(previous fire, at]`), the way to re-run a past
-   day since there's no "clear"; otherwise that time with a zero-length interval. Parameters
-   from `-p` / `--params` / the UI form.
+1. **Time (agreed):** every run has **`dag_ctx.run.planned_for`**, the moment the run is
+   **for** (renamed from `scheduled_at`, which promised a schedule a manual run doesn't have;
+   not `planned_at`: `*_at` names say when something happened, like `triggered_at`, so it would
+   read as the time the run was planned), and **`dag_ctx.run.since`**, the `planned_for` of a previous run; the run covers
+   **`(since, planned_for]`**. Both are always set (never `None`), computed **once when the run
+   is created** and stored with it (a later schedule change or another run's result never
+   changes them). `since` replaces an `interval` taken from the schedule's previous fire time,
+   which lost data whenever fire times got no run (master down, `catchup=False`,
+   `max_active_runs`).
+
+   ```python
+   extract(since=dag_ctx.run.since, until=dag_ctx.run.planned_for)
+   # WHERE updated_at > since AND updated_at <= until
+   ```
+
+   | Run | `planned_for` | `since` = `planned_for` of… |
+   |---|---|---|
+   | scheduled | the fire time | the previous **scheduled** run |
+   | backfill, `trigger --for <fire time>` | that fire time | the previous **scheduled** run before that fire time (the window the schedule gives it) |
+   | plain `trigger` | the trigger time | the nearest earlier run **of any kind** |
+   | `trigger --for <other time>` | that time | the nearest earlier run **of any kind** |
+
+   - **Scheduled runs form their own chain**, which manual runs never change: a manual click
+     never cuts a scheduled period (a daily aggregation still covers the whole day) and the
+     scheduler stays independent of manual runs. A manual run loads everything since the last
+     run of any kind, so it may **overlap** with the next scheduled run (harmless for
+     idempotent loads). A DAG without a schedule has only manual runs: a plain chain of its own
+     runs.
+   - **Missed fire times are folded in:** with the master down for the 10-14 and 10-15 fire
+     times, the 10-16 run gets `since` = 10-13 03:00, so nothing is lost; a DAG that needs
+     strictly one period per run sets `catchup=True`.
+   - **"Previous" means the nearest earlier `planned_for`**, not the run created last, so
+     `--for <fire time>` reproduces the original window: the way to re-run a past day, since
+     there's no "clear". A manual run between two fire times doesn't shrink it.
+   - **Failed runs still count**: `since` doesn't depend on how other runs ended (a failed day
+     stays failed until re-run with `--for`). Not chosen: "since the last successful run" (windows
+     would depend on other runs' results and timing).
+   - **First run** (no previous run to measure from): on a scheduled DAG, the **previous fire
+     time** of the schedule (one ordinary period); a DAG can set **`initial_since=`** (a
+     datetime) instead, e.g. to load history on the first run. A DAG **without a schedule**, or
+     with a **`Once`** schedule (no previous fire time), whose references use `since` must set
+     `initial_since` (a parse error otherwise). Not
+     chosen: `-inf` (no such datetime in Python; `datetime.min` breaks many systems, e.g.
+     MySQL's `DATETIME` starts at year 1000; `None` would bring `Optional` into every task); an
+     empty window (the first run silently does nothing).
+   - Not chosen: separate chains for manual and scheduled runs (a manual run's window would
+     depend on when somebody last clicked, possibly months ago); manual runs moving the
+     scheduled chain (a click would split a scheduled period; a failed click would lose data).
+   - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill`.
+   - **`triggered_at`** (when the run was created) is **run metadata only** (UI, CLI, audit
+     trail), **not in `dag_ctx`**: a task using it would behave differently on a re-run of the
+     same day. It differs from `planned_for` for missed runs, catchup, re-runs and backfills.
+   - Parameters from `-p` / `--params` / the UI form.
+   - Airflow's `ds` / `logical_date` / `data_interval_end` translate onto `planned_for`,
+     `data_interval_start` onto `since`. Scripts get `SCHEDR_PLANNED_FOR` and `SCHEDR_SINCE`.
+   - **`--for`** (option of `schedr runs trigger`, and a field in the UI's trigger form) sets
+     `planned_for`; without it the run is for now.
+   - **`--for` in the future is rejected** ("`--for` must not be in the future"; measured by the
+     master's clock with a small tolerance, about a minute, for clock skew). Running it now
+     would build a report for a day that hasn't happened or record a window covering data that
+     doesn't exist yet; almost always a typo. A run once at a future time comes from the
+     schedule instead (`Once(...)`, or `start` / `end`; see Native API). Not chosen: a deferred
+     manual trigger (a run stored now and started later: waiting runs to show, cancel, and
+     reconcile with pausing and DAG removal; the schedule already does all of that).
+   - **`start` / `end` don't limit manual runs.** They are data of the **scheduled** runs: the
+     check is made **by the run's kind**, only for `kind = scheduled`. A manual trigger or a
+     backfill may be for any time, before `start` or after `end`, by design: a person chose that
+     date (e.g. backfilling December for a DAG deployed in January, without moving `start`, which
+     with `catchup=True` would make the scheduler create those runs itself). Fire times before
+     `start` are still fire times of the schedule, so such runs get the usual window.
+   - **Time zone of `--for`:** a time without an offset is in the **schedule's time zone** (UTC
+     for a DAG without a schedule), so the time shown in the UI for a run can be typed back
+     as is; an explicit offset (`+02:00`, `Z`) wins. Times that don't exist or happen twice on
+     a daylight-saving change: see Cron and time zones.
+   - **The scheduler is independent of manual runs:** it keeps its own bookkeeping (the last
+     fire time it created a run for), which manual and backfill runs never change; a manual run
+     for a fire time never stops the scheduled run for it (e.g. a `--for` run for a fire time
+     missed while the master was down: the scheduler still creates its own run). **Uniqueness:**
+     (DAG, `planned_for`) is unique for `kind = scheduled` (a database constraint), so a master
+     that crashes after creating a run and restarts can't create the same scheduled run twice;
+     manual and backfill runs are exempt (several runs for the same day are allowed).
 2. **Backfill:** `schedr runs backfill report --from … --to … [-p …]`: one run per fire time in
-   the range, oldest first, each like `trigger --at`, respecting `max_active_runs`.
+   the range, oldest first, each like `trigger --for`, respecting `max_active_runs`.
 3. **Overlap:** manual runs count towards `max_active_runs`; a manual run is **never dropped**:
    at the limit it is created and **waits** ("waiting: `max_active_runs` (1) reached"), oldest
    first (unlike a scheduled fire time, which is treated as missed: a missed fire time recurs,
-   a manual request doesn't). Several runs with the same `scheduled_at` are allowed.
+   a manual request doesn't). Several runs with the same `planned_for` are allowed.
 4. **Identity:** an opaque, unique, time-ordered run ID (ULID) as `dag_ctx.run.id` (never built
    from the date, so re-running a date can't collide); each run records its kind
-   (`scheduled` / `manual` / `backfill`), `scheduled_at` and who triggered it (UI:
+   (`scheduled` / `manual` / `backfill`), `planned_for`, `triggered_at` and who triggered it (UI:
    `report · 2026-10-15 03:00 · manual by anna`). Airflow's `{{ run_id }}` →
    `dag_ctx.run.id`.
 5. Manual runs of a paused DAG: see Pausing.
