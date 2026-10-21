@@ -3335,8 +3335,9 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
     to convert the container explicitly, e.g. a set into a list, before passing it as an
     argument.
 - **Not needed for now:** template files (`.sh` / `.sql` files rendered as templates).
-- **Later:** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …) is designed and
-  implemented later in the project. Rule for that design (the principle in Thin translating
+- **Later (M5; deferred: not designed until the first version of schedr, M1–M4, works, see
+  Roadmap):** the set of placeholders and macros (`ds`, `params`, `macros.ds_add`, …). Rule for
+  that design (the principle in Thin translating
   classes): every Airflow placeholder must be **expressible with native placeholders** (e.g. `ds` as
   `dag_ctx.run.planned_for` formatted `%Y-%m-%d`); one without a native equivalent is an error in
   the Airflow layer, unless the native API gets it for a native reason.
@@ -3459,7 +3460,7 @@ gRPC, journal) come before breadth of features.
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
 | **M4. Native API complete** | outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
-| **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (still to be done); the migration tool | — |
+| **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **Later** | sensors and events (see Open questions), fork server, the "possibly later" items | — |
 
 - **The first version of schedr is M1–M4:** native schedr, complete and distributed, with its
