@@ -3399,6 +3399,25 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 - Pre-commit hooks run the same checks on commit.
 - CI: GitHub Actions, one Rust job and a Python version matrix.
 
+## Roadmap
+
+Milestones, each ending with something that works; architectural risks (processes, agent,
+gRPC, journal) come before breadth of features.
+
+| Milestone | Contents | Done when |
+|---|---|---|
+| **M0. Foundations** | the shared model as Rust types (DAG JSON, JSON Schema, Protobuf); configuration loading; database schema and `schedr db migrate` (SQLite and Postgres); CLI skeleton | — |
+| **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test` | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
+| **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
+| **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
+| **M4. Native API complete** | outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; `Once`; backfill; retention; upgrade rules | — |
+| **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (still to be done); the migration tool | — |
+| **Later** | sensors and events (see Open questions), fork server, the "possibly later" items | — |
+
+- **The first version of schedr is M1–M4:** native schedr, complete and distributed, with its
+  UI. The Airflow layer (M5) follows in a later release. Not chosen: including Airflow Tier 1
+  in the first version (delays using schedr for new DAGs).
+
 ## Open questions
 
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
@@ -3406,7 +3425,7 @@ items ("possibly later") are noted where they belong.
 
 ### Sensors and events
 
-**Deferred: not revisited until the first version of schedr works.** Until then, sensors stay
+**Deferred: not revisited until the first version of schedr (M1–M4, see Roadmap) works.** Until then, sensors stay
 out of scope (see Airflow compatibility, Scope).
 
 Whether and how tasks can wait for a condition or an external event (Airflow's sensors,
