@@ -89,12 +89,14 @@ One Rust binary, four roles:
   | `schedr runs backfill <dag> --from … [--to …] [--all] [-p …]` | a backfill |
   | `schedr runs list <dag> [--for <time>]` | runs, with their IDs |
   | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
+  | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one running task (see Master–worker protocol) |
+  | `schedr tasks retry <run id> <task id> [--map-index N]` | retry an `unschedulable` task of an unfinished run |
   | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
  The master's gRPC API stays internal to the workers.
   - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
     to the repository, and **CI fails if it is out of date** (like the JSON Schema).
-  - Not part of the user CLI: `schedr task-ctx` (talks to the agent), server commands such as
-    `schedr db migrate` (talk to the database), the server roles.
+  - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
+    server commands such as `schedr db migrate` (talk to the database), the server roles.
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
     `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
@@ -297,10 +299,23 @@ timeout = "30m"
 max_output_size = "4MiB"
 description = "Daily report"
 tags = ["reports"]
+cleanup_handles = ["ExportJob"]    # optional; handle types `schedr task-ctx cleanup add` accepts
 
 [jobs.report_daily.outcomes]       # optional; same meaning as an Outcome enum
 SUCCESS = 0
 NO_DATA = 3
+
+[jobs.report_daily.params]         # optional; run parameters with defaults (see Run parameters)
+region = "eu"
+
+[jobs.report_daily.cleanup]        # optional; per-task cleanup (see Cleanup and resources)
+script = "reports/undo.sh"         # required; same rules as the job's script
+interpreter = "bash"               # required
+args = ["--region", "eu"]
+timeout = "5m"                     # native cleanup_timeout; default: the server default
+retries = 3                        # the cleanup's own retries
+retry_delay = "30s"
+anywhere = false                   # native cleanup_anywhere
 ```
 
 - Same semantics as the native API (schedules, run time semantics, defaults, outcomes, output
@@ -322,8 +337,8 @@ NO_DATA = 3
   script file.
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
-  `SCHEDR_RUN_ID`, `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, `SCHEDR_PLANNED_FOR`,
-  `SCHEDR_SINCE` (ISO 8601).
+  `SCHEDR_RUN_ID`, `SCHEDR_RUN_KIND`, `SCHEDR_TASK_ID`, `SCHEDR_MAP_INDEX` (mapped tasks
+  only), `SCHEDR_TRY_NUMBER`, `SCHEDR_PLANNED_FOR`, `SCHEDR_SINCE` (times in ISO 8601).
 
 #### `ScriptOperator`
 
@@ -555,16 +570,17 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   | `lost`               | The worker disappeared                                    | Master     |
   | `assignment_expired` | No `Started` within ~10 s                                 | Master     |
 
-- **`Finished` contains:** the attempt status, the exit code or signal, **stdout and stderr**
-  (which are the task's **outputs** for scripts), the **defined outputs** (for Python API
-  tasks), the duration, the peak memory, and an **error kind** for failures schedr itself
-  recognises (e.g. `secret_unavailable`, `secret_denied`, `secret_not_found`).
+- **`Finished` contains:** the attempt status, the exit code or signal, the **(output, outcome)
+  pair** on success (see Task results and outcomes; for `command` / `script` tasks the output is a
+  `ProcessResult` with stdout and stderr), the duration, the peak memory, and an **error kind** for
+  failures schedr itself recognises (e.g. `secret_unavailable`, `secret_denied`,
+  `secret_not_found`).
   - When stdout/stderr exceed the output size limit, the output keeps **the last part (up to the
     limit) and is marked `truncated`**. A downstream task that reads a truncated output **gets
     an error**, so partial data is never used silently. The full stdout/stderr are always in
     the task's log file.
-  - **Inline commands** (`command` kind) produce outputs **the same way as scripts** (stdout and
-    stderr). The Airflow layer exposes the **last line of stdout** through `.output` for
+  - **Inline commands** (`command` kind) produce their output **the same way as scripts** (a
+    `ProcessResult`). The Airflow layer exposes the **last line of stdout** through `.output` for
     compatibility.
   - Failed Python tasks include a structured **error summary**: exception type, message and the
     last lines of the traceback, so the UI can show it without opening the log.
@@ -624,7 +640,9 @@ uses up a retry. Reasons and how the master reacts:
 - **Worker-specific** reasons: the master tries other eligible workers. When every eligible
   worker has rejected the attempt, the task instance becomes **unschedulable**, shown in the
   UI with each worker's reason. It is tried again only when the set of workers changes or a
-  user retries it.
+  user retries it (`schedr tasks retry`, or the UI). Retry is allowed **only for
+  `unschedulable` tasks of a run not yet finished**; it doesn't conflict with "no clear", which
+  is about re-running finished runs.
 - **Code not there yet** (e.g. git-sync on that pod hasn't pulled the new commit): retry after
   roughly the sync interval plus settle time, on any worker. Marked **unschedulable** only if
   still missing everywhere after a configurable wait.
@@ -700,16 +718,19 @@ permission to create pods.
     agent down, and one Python environment would be forced on every DAG.
   - A Rust extension module that connects Python to the scheduler.
 - **The Python runner** is a module of the `schedr` package, started by the agent as
-  `<interpreter> -m schedr.runner parse` or `... task` (`-m`, so it works with any configured
-  interpreter executable, whatever virtualenv it belongs to). Only the mode and the socket path
-  are passed on the command line / environment; everything else comes from the agent over the
-  channel, so no secrets appear in the command line.
+  `<interpreter> -m schedr.runner parse`, `... task` or `... cleanup` (`-m`, so it works with
+  any configured interpreter executable, whatever virtualenv it belongs to). Only the mode and
+  the socket path are passed on the command line / environment; everything else comes from the
+  agent over the channel, so no secrets appear in the command line.
   - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`,
     imports the files one at a time (native API calls only record DAGs), and sends back the
     DAG JSON and per-file import errors.
   - `task`: gets the task specification from the agent, imports the DAG file (latest code on
     disk), finds the task by ID, fills in t-strings (secrets fetched by the agent), calls the
     function, and sends back the output or a structured error summary; exit code 0 or non-zero.
+    Python resource setups (`@resource`) run in this mode too: a setup is a task.
+  - `cleanup`: like `task`, for a per-task cleanup (gets the task's inputs and the attempt's
+    handles) or a Python resource cleanup (`@cleanup`, gets the setup's output).
   - The runner does **not** decide retries, enforce timeouts, watch memory or write log files.
     The agent supervises it from outside (process group, stdout/stderr to the log file,
     watchdog, SIGTERM/SIGKILL).
@@ -799,9 +820,9 @@ Commands that only work **inside a running task** (they talk to the agent over
 Python tasks use the Python API instead.
 
 - **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs) and
-  the server roles (`schedr master`, `schedr worker`, `schedr db migrate`), and **`schedr dag-ctx`**
-  for the run's context (see Run parameters and the DAG context). Outside a task they fail with
-  "must be run inside a schedr task".
+  the server roles and commands (`schedr master`, `schedr worker`, `schedr db migrate`), and
+  **`schedr dag-ctx`** for the run's context (see Run parameters and the DAG context). Outside a
+  task they fail with "must be run inside a schedr task".
 - **Noun, then verb**, the same verbs everywhere: `add` / `list` for collections, `set` / `get`
   for single values.
 
@@ -1007,11 +1028,11 @@ list) and likewise has no Python.
 
 **Phase 6: Result and what happens next (worker → master)**
 
-23. **`Finished`** goes to the master: status, output and outcome, duration, peak memory. Delivery is at
-    least once; the attempt ID makes repeats harmless. [D]
-24. **Store and acknowledge.** The master stores the attempt result and the (output, outcome)
-    pair under (run, `extract`), then sends `FinishedAck`; the agent removes the attempt from its journal.
-    [D]
+23. **`Finished`** goes to the master: status, output and outcome, duration, peak memory. Delivery
+    is at least once; the attempt ID makes repeats harmless. [D]
+24. **Store and acknowledge.** The master stores the attempt result and the (output, outcome) pair
+    under (run, `extract`), then sends `FinishedAck`; the agent removes the attempt from its
+    journal. [D]
 25. **Decide.**
     - On success, `extract` → `success`. `load`'s upstream condition is now met, so it goes
       through steps 13–24; its `AssignTask` carries `extract`'s output as input.
@@ -1049,7 +1070,7 @@ list) and likewise has no Python.
 
   | Role | Examples |
   |---|---|
-  | master | scheduling loop duration; runs by state; tasks `queued` by reason (`max_active_*`, no free slot, unschedulable); assignments and rejections by reason; parse jobs and durations; command apply latency; workers by state; notifications sent / failed |
+  | master | scheduling loop duration; runs by state; tasks `queued` by reason (`max_active_*`, no free slot); `unschedulable` tasks; assignments and rejections by reason; parse jobs and durations; command apply latency; workers by state; notifications sent / failed |
   | worker | slots used / free; attempts by status; watchdog kills; peak memory per task (histogram); journal size; log disk usage; secret fetches, errors by kind, cache hits |
   | webserver | HTTP requests by route and status; open SSE streams; log proxy errors |
 
@@ -1096,8 +1117,8 @@ list) and likewise has no Python.
   can be supported. **Only one implementation is built for now: HashiCorp Vault.**
 - Core code, the shared model and the native API use the generic name (secret storage), never
   "Vault". Vault-specific names appear only in the Vault implementation.
-- **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a
-  Vault-specific one) that refers to a value in secret storage (see Templating), e.g.
+- **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a Vault-specific
+  one) that refers to a value in secret storage (see Airflow compatibility, Scope: Templating), e.g.
   `t"{secrets['etl/db#password']}"`.
 - **Several secret storages** can be configured at the same time, each with a name. For now
   only one is set up, but the placeholder syntax **names the storage** a secret comes from, so
@@ -1111,8 +1132,9 @@ list) and likewise has no Python.
 - **Vault authentication:** Vault's **Kubernetes auth method** with the pod's service-account
   token; a token from an environment variable for local development.
 - **Secret values are masked** in task logs and outputs by the worker agent.
-- **Two separate, explicit ways for `command` / `script` tasks** (and their cleanups and
-  resource setups) to get a secret; never in the command line (a parse error, see Templating):
+- **Two separate, explicit ways for `command` / `script` tasks** (and their cleanups and resource
+  setups) to get a secret; never in the command line (a parse error, see Airflow compatibility,
+  Scope: Templating):
   - **An environment variable**, set up by the user with a secret placeholder:
     `env={"PGPASSWORD": t"{secrets['etl/db#password']}"}` (TOML: `env = { PGPASSWORD = {
     secret = "etl/db#password" } }`). For the many tools that read credentials only from the
@@ -1400,8 +1422,9 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   `Once("2026-12-24T23:00")` (a single fire time), `None` (manual runs only), plus preset
   constants (`DAILY`, …). The time zone is set per schedule, **default UTC**.
   - **`Once`** is the way to run a DAG once at a future time (e.g. a migration tonight at
-    23:00): an ordinary schedule with one fire time, so catchup, `end`, pausing, `since` and
-    the UI's "next run" work as for any schedule. It is set in the DAG file (reviewed, in git);
+    23:00): an ordinary schedule with one fire time, so catchup, `end`, pausing and the UI's
+    "next run" work as for any schedule (it has no previous fire time, so a DAG using `since`
+    must set `initial_since`). It is set in the DAG file (reviewed, in git);
     there is no deferred manual trigger (see Runs: manual runs, backfill and pausing).
   - **Daylight-saving changes** (cron schedules in a time zone with DST; e.g. `30 2 * * *` in
     Europe/Warsaw):
@@ -1435,7 +1458,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   (like fire times missed while the master is down) and the **`catchup` rules** decide: with
   `catchup=False`, when a run finishes only the most recent missed fire time gets a run (a slow
   DAG never builds a backlog); with `catchup=True` the missed ones get runs in order, still at
-  most `max_active_runs` at a time. No run queue. Default 1 because overlapping runs are
+  most `max_active_runs` at a time. Scheduled fire times never queue (they are missed);
+  only manual and backfill runs wait, as `queued`. Default 1 because overlapping runs are
   rarely wanted in a sync-style workload. Manual and backfill runs count too, and wait instead
   of being dropped (see Runs: manual runs, backfill and pausing).
 - **`tags`** and **`description`**: metadata (shown in the UI, filter by tag).
@@ -1736,8 +1760,8 @@ task data: "data flow is the only way to pass task data" still holds).
   outputs. `from schedr import dag_ctx`. (Replaces the earlier `schedr.templates.run`
   placeholder.)
 - **Run information:** `dag_ctx.run.id`, `dag_ctx.run.kind`, `dag_ctx.run.planned_for`,
-  `dag_ctx.run.since`, `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables, see Plain script
-  delivery).
+  `dag_ctx.run.since`, `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables,
+  see Plain script delivery).
 
 **Declaring parameters.**
 
@@ -1849,8 +1873,9 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      schedule has only such runs: a plain chain of its own runs.
    - **Missed fire times leave a hole, by design.** With `catchup=False`, fire times without a
      run (master down, `max_active_runs` reached) are skipped **with their data**: with the
-     master down for the 10-14 and 10-15 fire times, the 10-16 run covers only
-     `(10-15 03:00, 10-16 03:00]`. A user who needs the hole filled says so explicitly:
+     master down for the 10-14 and 10-15 fire times, it creates only the 10-15 run when it
+     returns (the most recent missed one), covering `(10-14 03:00, 10-15 03:00]`; the period of
+     10-14 is never loaded. A user who needs the hole filled says so explicitly:
      **`catchup=True`** on the DAG (every period gets its own run) or a **manual backfill**
      (whose default picks exactly the fire times without a successful run). The UI marks
      skipped fire times on the DAG's run list. Not chosen: folding missed fire times into the
@@ -2204,7 +2229,7 @@ including after unexpected failures, and sees neither outcomes nor failures.
 | Cleans up | what **one attempt** started | what **several tasks** share |
 | Runs | after every attempt, however it ended | once, after its **last user** is done, if its setup succeeded |
 | Where | the same worker (local disk) | any worker |
-| In the graph | no (shown inside the task, e.g. a dropdown or submenu) | no (shown separately, e.g. a band over its users) |
+| In the graph | no (shown inside the task, e.g. a dropdown or submenu) | no (shown in the run's Resources panel; selecting it highlights its users) |
 | Receives | the task's inputs, run information, the attempt's handles | the setup's output, run information |
 | Typical use | cancel a remote query after a timeout; delete temporary files | delete a cluster; release a lock held by several tasks |
 | In Airflow | `on_kill()` | setup / teardown, `all_done_setup_success` |
@@ -2797,8 +2822,8 @@ each case is described below.
 
 **Trigger rules:**
 
-- Translated onto the two model rules, `NoneFailed` and `AllSucceeded` (see Native API:
-  Outcomes, failures and joins), or an error.
+- Translated onto the two model rules, `NoneFailed` and `AllSucceeded` (see Outcomes,
+  failures and joins), or an error.
 - **Translation by a factory** (private builder API) that returns a model rule and may also
   **rewrite the task's incoming edges**, so some rules with no direct equivalent are emulated
   exactly. Both rewrites are combinations a native DAG could write by hand, so they follow the
@@ -2868,7 +2893,7 @@ each case is described below.
 
 ### Cleanup and resources (Airflow)
 
-Translated onto the native per-task cleanup and resources (see Native API: Cleanup and
+Translated onto the native per-task cleanup and resources (see Cleanup and
 resources).
 
 - **`on_kill()`** exists only in custom operators, which aren't supported (see Scope): nothing
@@ -2943,16 +2968,16 @@ with DAG(
 | Area                 | Included                                                                     |
 |----------------------|------------------------------------------------------------------------------|
 | `schedr.airflow.sdk` | `DAG` (context manager), `@dag`, `@task`, `@task.bash`, `chain`, `TriggerRule` |
-| `DAG` arguments      | `dag_id`, `schedule` (cron, `@daily`-style presets, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs`, `max_active_tasks`, `params` |
+| `DAG` arguments      | `dag_id`, `schedule` (cron, `@daily`-style presets, `@once`, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs`, `max_active_tasks`, `params` |
 | Operators            | `BashOperator`, `PythonOperator` (`python_callable`, `op_args`, `op_kwargs`), `EmptyOperator` |
-| Per-task arguments   | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`, `max_active_tis_per_dagrun`, `max_active_tis_per_dag` |
+| Per-task arguments   | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`, `max_active_tis_per_dagrun`, `max_active_tis_per_dag`, `email`, `email_on_failure`, `email_on_retry` |
 | Dependencies         | `>>`, `<<`, `set_upstream` / `set_downstream`, `chain()`, lists on either side |
 
 **Also in scope (beyond Tier 1):**
 
 | Feature | Airflow API mirrored | Decided in |
 |---|---|---|
-| Branching | `@task.branch`, `BranchPythonOperator`, `ShortCircuitOperator` | Branching, task groups and mapping |
+| Branching | `@task.branch`, `BranchPythonOperator`, `ShortCircuitOperator`, `@task.short_circuit` | Branching, task groups and mapping |
 | Trigger rules | all Airflow 3 rules: translated or an error | Trigger rules |
 | Task groups | `TaskGroup` (context manager), `@task_group` | Branching, task groups and mapping |
 | Dynamic task mapping | `.partial(...)`, `.expand(...)`, `expand_kwargs` | Branching, task groups and mapping |
@@ -3028,7 +3053,7 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
 - The native API uses the same placeholder mechanism.
 - **Secrets** have their own placeholder, resolved from secret storage on the worker (see
   Secret storage).
-- Requires Python 3.14+ (the whole package's minimum version, see Python tooling).
+- Requires Python 3.14+ (the whole package's minimum version, see Repository and tooling: Python).
 - **Any argument may contain a t-string.** Every operator and task argument is checked for
   t-strings and filled in at run time; there is no per-operator list of templated arguments
   (Airflow's `template_fields`).
@@ -3119,7 +3144,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ### Python
 
-- Supported versions: **Python 3.14+** (required by t-strings, see Templating). CI tests 3.14.
+- Supported versions: **Python 3.14+** (required by t-strings, see Airflow compatibility, Scope:
+  Templating). CI tests 3.14.
 - Dependency management: **uv** (lockfile `uv.lock`, dev deps in `[dependency-groups]`).
 - Build backend: **maturin** with `bindings = "bin"` (see Packaging and releases). The Python
   package version is dynamic, taken from the Cargo workspace. `uv sync` rebuilds the project
