@@ -1434,6 +1434,7 @@ the runner turns the record into DAG JSON in the shared model:
 | Dynamic task mapping            | The task, its fixed arguments, and what it maps over (a literal or an output reference) | Master: once the upstream output exists, creates N task instances (`map_index` 0…N−1) |
 | t-strings                       | Literal text plus typed references                   | Agent / runner: filled in at run time |
 | `EmptyOperator`                 | An `empty` task                                      | Master completes it, no worker |
+| `TriggerDagOperator`            | A `trigger_dag` task                                 | Master creates the target run and waits for it, no worker |
 
 **Run time: Python runs one callable.** For a `python` task the runner (`task` mode) imports
 the DAG file again, finds the task by ID, fills in its arguments (inputs from upstream
@@ -1458,7 +1459,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   annotation is a parse error. `-> Any` is the explicit opt-out from the parse-time type check
   (the run-time check still applies).
 - **Task kinds:** Python tasks are **decorated functions** (`@task`); other kinds are **operator
-  classes**: `CommandOperator`, `ScriptOperator`, `EmptyOperator`.
+  classes**: `CommandOperator`, `ScriptOperator`, `EmptyOperator`, `TriggerDagOperator`.
 - **No custom operators.** Users can't subclass an operator class to define their own task kind
   with its own `execute()`; subclassing a schedr operator class is a parse error. Reuse is by
   **composition**: a plain Python function that creates tasks with parameters (a task
@@ -1953,7 +1954,8 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    - Not chosen: separate chains for manual and scheduled runs (a manual run's window would
      depend on when somebody last clicked, possibly months ago); manual runs moving the
      scheduled chain (a click would split a scheduled period; a failed click would lose data).
-   - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill`.
+   - **`dag_ctx.run.kind`**: `scheduled` / `manual` / `backfill` / `triggered` (by another
+     DAG's run, see Dependencies between DAGs).
    - **`triggered_at`** (when the run was created) is **run metadata only** (UI, CLI, audit
      trail), **not in `dag_ctx`**: a task using it would behave differently on a re-run of the
      same day. It differs from `planned_for` for missed runs, catchup, re-runs and backfills.
@@ -2016,7 +2018,7 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      in the UI ("waiting: `max_active_runs` (1) reached"). Cancelling a queued run ends it as
      `cancelled` without starting any task.
    - **Who gets a freed place: by kind**, then oldest first within each kind: **scheduled**
-     (a missed fire time, per the `catchup` rules) → **manual** → **backfill**. Production runs
+     (a missed fire time, per the `catchup` rules) → **manual** and **triggered** → **backfill**. Production runs
      are never delayed by people or bulk work; a person who clicked doesn't wait behind a long
      backfill; a backfill uses whatever capacity is left. Not chosen: creation order (a click
      could wait days behind a backfill, and production behind both); manual first (delays
@@ -2031,9 +2033,9 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
    (RFC 9562; Postgres stores it natively as `uuid`), as `dag_ctx.run.id`, never built from the
    date, so re-running a day can't collide. Not chosen: ULID (a community spec; its only
    advantage, a shorter text form, matters little since runs are shown by DAG and date).
-   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill`), `planned_for`,
-     `since`, `triggered_at`, **`triggered_by`** (`scheduler`, or the user name from the command
-     row, the same one recorded for audit and never used to allow or deny anything),
+   - **Each run records:** `id`, `kind` (`scheduled` / `manual` / `backfill` / `triggered`), `planned_for`,
+     `since`, `triggered_at`, **`triggered_by`** (`scheduler`, the parent run for `triggered`,
+     or the user name from the command row, the same one recorded for audit and never used to allow or deny anything),
      `backfill_id` (backfill runs), and the parameter values.
    - **UI label:** `sync_orders · 2026-10-15 03:00 · manual by anna` (or `· scheduled`,
      `· backfill 3/31 by anna`); runs with the same `planned_for` are told apart by kind and
@@ -2063,6 +2065,48 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      do. Testing a fix by hand before unpausing is a common need, and new DAGs start paused.
      Not chosen: queueing them until unpause; rejecting them.
    - **Queued runs** (manual or backfill, waiting for `max_active_runs`) keep their place.
+
+### Dependencies between DAGs
+
+"After `extract_crm` finishes, run `load_dwh`", across teams or schedules: a **`trigger_dag`**
+task kind, carried out by the **master** (like `empty`: no worker, no slot, no user code).
+
+```python
+TriggerDagOperator(
+    "load_dwh",
+    dag="dwh_load",                    # the target DAG's ID
+    params={"region": dag_ctx.params.region},
+    wait=True,                         # default: succeed or fail with the target run
+)
+```
+
+- **The new run:** kind **`triggered`**, linked to the parent run (`triggered_by`; the UI links
+  both ways); `planned_for` = the parent run's `planned_for` (same day), `since` by the usual
+  rules for the target's schedule (see Runs: manual runs, backfill and pausing). It counts
+  towards the target's `max_active_runs` and waits as `queued` with the priority of manual
+  runs; it runs even if the target is paused (like a manual run).
+- **`params`** may use references (outputs, `dag_ctx`), resolved by the master, and are
+  validated against the target's schema when the task runs; invalid values fail the task,
+  not retried (certain to repeat).
+- **`wait=True`** (default): the task stays `running` until the target run ends, and succeeds
+  if it succeeded, **fails if it failed or was cancelled** (the failure propagates). It holds no
+  worker slot but counts as a running task for `max_active_tasks` / `max_active*`.
+  **`wait=False`**: succeeds as soon as the run is created.
+- **Cancelling the parent run** cancels a triggered run it is still waiting for; with
+  `wait=False` the triggered run is independent.
+- **Output:** the triggered run's ID (`Output[str]`).
+- **Checks:** an unknown target DAG ID is a DAG **warning** at validation (the target may be in
+  a root not parsed yet); a missing or conflicting target fails the task at run time; a
+  trigger whose target is **already in the chain of parent runs** fails the task ("cycle: `a`
+  → `b` → `a`"), so runs can't spawn forever.
+- Not chosen: leaving it out (merging DAGs, or triggering from task code: no link, no waiting,
+  failures don't propagate); waiting on another DAG's run (a sensor: see Open questions,
+  Sensors and events).
+- **Airflow:** `TriggerDagRunOperator`: `trigger_dag_id` → `dag`, `conf` → `params`,
+  `logical_date` → `planned_for` of the new run, `wait_for_completion` → `wait` (Airflow's
+  default `False` is set explicitly); `reset_dag_run=True` is an error (no "clear"); non-default
+  `allowed_states` / `failed_states` are an error; `poke_interval` is filtered out with a parse
+  warning. `ExternalTaskSensor`: see Open questions, Sensors and events.
 
 ### Task results and outcomes
 
@@ -3043,6 +3087,7 @@ with DAG(
 | Task groups | `TaskGroup` (context manager), `@task_group` | Branching, task groups and mapping |
 | Dynamic task mapping | `.partial(...)`, `.expand(...)`, `expand_kwargs` | Branching, task groups and mapping |
 | Setup / teardown | `@setup`, `@teardown`, `.as_teardown(setups=...)` | Cleanup and resources (Airflow) |
+| Triggering another DAG | `TriggerDagRunOperator` | Dependencies between DAGs |
 | Passing values between tasks | outputs, `ti.xcom_pull` (restricted, translated onto inputs) | Output serialization; `ti.xcom_pull` below |
 | Connections | `Connection` in **Airflow's JSON format**, stored in **secret storage** (Vault first) | Secret storage (Connections) |
 
@@ -3246,4 +3291,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
 
-None at the moment.
+### Sensors and events
+
+Whether and how tasks can wait for a condition or an external event (Airflow's sensors,
+`ExternalTaskSensor`, deferrable operators, Assets). Under discussion.
