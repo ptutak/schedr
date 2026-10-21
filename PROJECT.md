@@ -943,7 +943,7 @@ list) and likewise has no Python.
     runs follow the `catchup` rules. [D] A run can also be started manually from the UI or CLI.
     The master creates a **DAG run** in Postgres.
 12. **Task instances.** The master creates `extract` and `load` in state `scheduled`. `extract`
-    has no upstream tasks, so it is ready and moves to `queued`. [D, states to be refined]
+    has no upstream tasks, so it is ready and moves to `queued`. [D]
 
 **Phase 4: Assignment (master → worker)**
 
@@ -981,18 +981,21 @@ list) and likewise has no Python.
 
 **Phase 6: Result and what happens next (worker → master)**
 
-23. **`Finished`** goes to the master: status, outputs, duration, peak memory. Delivery is at
+23. **`Finished`** goes to the master: status, output and outcome, duration, peak memory. Delivery is at
     least once; the attempt ID makes repeats harmless. [D]
-24. **Store and acknowledge.** The master stores the attempt result and the output under
-    (run, `extract`), then sends `FinishedAck`; the agent removes the attempt from its journal.
+24. **Store and acknowledge.** The master stores the attempt result and the (output, outcome)
+    pair under (run, `extract`), then sends `FinishedAck`; the agent removes the attempt from its journal.
     [D]
 25. **Decide.**
     - On success, `extract` → `success`. `load`'s upstream condition is now met, so it goes
       through steps 13–24; its `AssignTask` carries `extract`'s output as input.
     - On failure, the master either retries (`up_for_retry` after `retry_delay`) or marks the
       task `failed`, and downstream tasks become `upstream_failed`. [D]
-26. **Run complete.** When every task instance is in a final state, the DAG run is marked
-    `success` or `failed`. The UI shows the run; logs come from the worker through the
+26. **Run complete.** When every task instance is in a final state and every cleanup has
+    finished, the DAG run gets its result by the run result rule: **`failed`** if anything
+    unexpected went wrong (a task or a cleanup failed after its last retry), **`cancelled`** if a
+    user cancelled it and nothing failed, otherwise **`success`** (see Outcomes, failures and
+    joins: Run result). [D] The UI shows the run; logs come from the worker through the
     webserver proxy. If tasks in the run used different code hashes, the UI shows a warning.
     [D]
 
@@ -1570,6 +1573,30 @@ with Dag(
     cleanup failures, links to the run and the logs in the UI. Webhooks get the same
     information as **structured JSON**, so receiving systems can format it. Secret values never
     appear (error summaries are already masked by the agent).
+  - **DAG-defined email channels.** Besides channels defined in the server configuration
+    (named by strings), a DAG can define an **`EmailChannel`** holding only recipients:
+
+    ```python
+    team_a = EmailChannel("team-a", ["a@example.com", "b@example.com"])
+
+    with Dag("etl", schedule=DAILY, notify=[team_a, "ops-slack"]): ...
+    ```
+
+    - **Objects are DAG channels, strings name server channels.** Passing the object (not its
+      name) means a typo is a `NameError` at import, and a DAG channel can't shadow a server
+      channel of the same name. It can be reused through a helper module in the DAG root; each
+      DAG's JSON carries the recipients it uses.
+    - **The server keeps everything with credentials:** the email **transport** (SMTP server
+      and its credentials) is in the server configuration; the DAG never handles a credential.
+    - **Checks:** address syntax at parse time; server channel names, and recipients against an
+      optional **allow-list of email domains** in the server configuration, when the master
+      validates the DAG (a violation is a DAG error in the UI). The server can **switch off**
+      DAG-defined channels entirely.
+    - **Email only, for now:** other channel types (e.g. a Slack webhook) need a credential,
+      and the master never reads the user-facing secret storage; they stay server-defined.
+    - Which events each channel gets: chosen in `notify=` (see above).
+    - Not chosen: naming DAG channels by strings in `notify=` (mixes them with server channels
+      in one namespace); an inline `Email("a@x.com")` in `notify=` (can't be reused).
 
 ### Run parameters and the DAG context
 
@@ -1696,30 +1723,6 @@ returned `Unavailable`; a real failure (timeout, crash) still blocks it and fail
 
 **Result structure.**
 
-- **DAG-defined email channels.** Besides channels defined in the server configuration
-  (named by strings), a DAG can define an **`EmailChannel`** holding only recipients:
-
-  ```python
-  team_a = EmailChannel("team-a", ["a@example.com", "b@example.com"])
-
-  with Dag("etl", schedule=DAILY, notify=[team_a, "ops-slack"]): ...
-  ```
-
-  - **Objects are DAG channels, strings name server channels.** Passing the object (not its
-    name) means a typo is a `NameError` at import, and a DAG channel can't shadow a server
-    channel of the same name. It can be reused through a helper module in the DAG root; each
-    DAG's JSON carries the recipients it uses.
-  - **The server keeps everything with credentials:** the email **transport** (SMTP server and
-    its credentials) is in the server configuration; the DAG never handles a credential.
-  - **Checks:** address syntax at parse time; server channel names, and recipients against an
-    optional **allow-list of email domains** in the server configuration, when the master
-    validates the DAG (a violation is a DAG error in the UI). The server can **switch off**
-    DAG-defined channels entirely.
-  - **Email only, for now:** other channel types (e.g. a Slack webhook) need a credential, and
-    the master never reads the user-facing secret storage; they stay server-defined.
-  - Which events each channel gets: chosen in `notify=` (see above).
-  - Not chosen: naming DAG channels by strings in `notify=` (mixes them with server channels in
-    one namespace); an inline `Email("a@x.com")` in `notify=` (can't be reused).
 - Every finished attempt has a **status** (`success`, `failed`, `timed_out`, …) and, when it
   succeeded, the pair **(output, outcome)**: in the DAG JSON, the `Finished` message and
   storage, whatever the task kind. The output may be `None`. The output size limit applies to
@@ -2496,6 +2499,7 @@ each case is described below.
   `BranchDayOfWeekOperator`, `BranchDateTimeOperator`, `@task.branch_external_python`,
   `@task.branch_virtualenv`. They don't exist in `schedr.airflow`; importing them is an import
   error naming them as unsupported.
+
 **Trigger rules:**
 
 - Translated onto the two model rules, `NoneFailed` and `AllSucceeded` (see Native API:
@@ -2644,9 +2648,9 @@ with DAG(
 | Area                 | Included                                                                     |
 |----------------------|------------------------------------------------------------------------------|
 | `schedr.airflow.sdk` | `DAG` (context manager), `@dag`, `@task`, `@task.bash`, `chain`, `TriggerRule` |
-| `DAG` arguments      | `dag_id`, `schedule` (cron, `@daily`-style presets, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs` |
+| `DAG` arguments      | `dag_id`, `schedule` (cron, `@daily`-style presets, `timedelta`, `None`), `start_date`, `end_date`, `catchup`, `default_args`, `tags`, `description`, `max_active_runs`, `max_active_tasks`, `params` |
 | Operators            | `BashOperator`, `PythonOperator` (`python_callable`, `op_args`, `op_kwargs`), `EmptyOperator` |
-| Per-task arguments   | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`     |
+| Per-task arguments   | `task_id`, `retries`, `retry_delay`, `execution_timeout`, `trigger_rule`, `max_active_tis_per_dagrun`, `max_active_tis_per_dag` |
 | Dependencies         | `>>`, `<<`, `set_upstream` / `set_downstream`, `chain()`, lists on either side |
 
 **Also in scope (beyond Tier 1):**
@@ -2664,10 +2668,11 @@ with DAG(
 **Naming: "outputs", not "XCom".** XCom is Airflow's name for passing values between tasks.
 schedr's shared model and native API call them **outputs**:
 
-- A task produces outputs: one default output, plus optional named outputs (replacing
-  Airflow's `multiple_outputs`).
-- A downstream task takes an **output reference** as an input (`extract.output`,
-  `output["rows"]`).
+- A task produces **one output and one outcome** (see Task results and outcomes). There are no
+  named outputs: Airflow's `multiple_outputs` maps onto references into parts of that one
+  output (see Output serialization).
+- A downstream task takes an **output reference** as an input (`extract.output`, or a part of
+  it: `output["rows"]`).
 - `.expand()` maps over an output; a branch task's output is the list of task IDs to follow.
 
 Airflow-specific names (`ti.xcom_pull`, `do_xcom_push`, …) appear only inside `schedr.airflow`,
