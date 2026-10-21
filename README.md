@@ -35,5 +35,6 @@ make setup      # uv sync + pre-commit hooks
 make fmt        # format Rust + Python
 make lint       # clippy, ruff, mypy
 make test       # Rust (nextest) + pytest, both with an 85 % coverage floor
+make schema     # regenerate schema/ from the Rust model (CI fails if it's stale)
 make check      # everything CI runs
 ```

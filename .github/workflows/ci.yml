@@ -19,6 +19,8 @@ jobs:
           tool: cargo-nextest,cargo-llvm-cov
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The committed JSON Schemas must match the Rust model (see the Makefile, schema-check).
+      - run: cargo xtask schema --check
       # Coverage floor and ignored files: see the Makefile (test-rust).
       - run: >-
           cargo llvm-cov nextest --workspace

@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint test test-rust test-python check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check test test-rust test-python check clean
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -38,6 +38,12 @@ lint:            ## Run clippy, ruff and mypy
 	uv run ruff check python
 	uv run mypy
 
+schema:          ## Regenerate the committed files under schema/
+	cargo xtask schema
+
+schema-check:    ## Fail if the files under schema/ are out of date
+	cargo xtask schema --check
+
 test-rust:       ## Run Rust tests with coverage (fails below COVERAGE_MIN)
 	cargo llvm-cov nextest --workspace --ignore-filename-regex $(LLVM_COV_IGNORE) \
 		--fail-under-lines $(COVERAGE_MIN)
@@ -48,7 +54,7 @@ test-python:     ## Run Python tests with coverage (fails below COVERAGE_MIN)
 
 test: test-rust test-python  ## Run all tests
 
-check: fmt-check lint test   ## Everything CI runs
+check: fmt-check lint schema-check test   ## Everything CI runs
 
 clean:           ## Remove build artifacts
 	cargo clean
