@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use schedr_db::DbError;
+use schedr_db::commands::CommandNotifications;
 use schedr_proto::pb::master_server::{Master, MasterServer};
 use schedr_proto::pb::{self, master_message, worker_message};
 use tokio::sync::{Mutex, mpsc};
@@ -78,20 +80,58 @@ impl Hub {
         Ok(())
     }
 
-    /// Runs the master's loop: a tick every `interval` until `stop` completes. A failing tick
-    /// is logged; the next one goes on.
-    pub async fn run(&self, interval: Duration, stop: impl Future<Output = ()>) {
+    /// Runs the master's loop: a tick every `interval` until `stop` completes, and at once when
+    /// a new command is announced (`notifications`, Postgres; notifications that arrived
+    /// meanwhile are taken by the same tick, and the tick interval starts again after it). A
+    /// failing tick is logged; the next one goes on. When notifications fail (the database is
+    /// unreachable), they are tried again after [`NOTIFICATION_RETRY`]; polling goes on.
+    pub async fn run(
+        &self,
+        interval: Duration,
+        mut notifications: Option<CommandNotifications>,
+        stop: impl Future<Output = ()>,
+    ) {
+        enum Wake {
+            Stop,
+            Tick,
+            Command,
+            NotificationsFailed(DbError),
+        }
         let mut ticks = tokio::time::interval(interval);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut paused_until: Option<tokio::time::Instant> = None;
         tokio::pin!(stop);
         loop {
-            tokio::select! {
-                () = &mut stop => return,
-                _ = ticks.tick() => {
-                    if let Err(error) = self.tick().await {
-                        tracing::error!(%error, "master tick failed");
+            let wake = tokio::select! {
+                () = &mut stop => Wake::Stop,
+                _ = ticks.tick() => Wake::Tick,
+                result = next_command(notifications.as_mut(), paused_until) => match result {
+                    Ok(()) => Wake::Command,
+                    Err(error) => Wake::NotificationsFailed(error),
+                },
+            };
+            match wake {
+                Wake::Stop => return,
+                Wake::Command => {
+                    paused_until = None;
+                    if let Some(notifications) = notifications.as_mut() {
+                        notifications.skip_arrived().await;
                     }
+                    ticks.reset();
                 }
+                Wake::NotificationsFailed(error) => {
+                    tracing::warn!(
+                        %error,
+                        "command notifications failed; polling, trying again in {}s",
+                        NOTIFICATION_RETRY.as_secs()
+                    );
+                    paused_until = Some(tokio::time::Instant::now() + NOTIFICATION_RETRY);
+                    continue;
+                }
+                Wake::Tick => {}
+            }
+            if let Err(error) = self.tick().await {
+                tracing::error!(%error, "master tick failed");
             }
         }
     }
@@ -240,5 +280,24 @@ impl Master for Hub {
             let _ = sender.try_send(Ok(pb::InputChunk { data }));
         }
         Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+}
+
+/// How long the master waits before listening again after notifications failed.
+pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);
+
+/// The next command notification, not before `paused_until`; never, without notifications.
+async fn next_command(
+    notifications: Option<&mut CommandNotifications>,
+    paused_until: Option<tokio::time::Instant>,
+) -> Result<(), DbError> {
+    match notifications {
+        Some(notifications) => {
+            if let Some(until) = paused_until {
+                tokio::time::sleep_until(until).await;
+            }
+            notifications.next().await
+        }
+        None => std::future::pending().await,
     }
 }

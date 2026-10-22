@@ -171,6 +171,7 @@ fn master_webserver_and_worker_defaults() {
     assert_eq!(
         config.master,
         MasterSection {
+            bind: std::net::IpAddr::from([0, 0, 0, 0]),
             grpc_port: 8070,
             tick_interval: Duration::from_secs(1),
             heartbeat_interval: Duration::from_secs(10),
@@ -188,6 +189,7 @@ fn master_webserver_and_worker_defaults() {
             queues: vec![],
             data_dir: None,
             pass_env: vec![],
+            master_url: None,
         }
     );
 }

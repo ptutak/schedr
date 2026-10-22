@@ -169,10 +169,21 @@ fn an_invalid_log_level_is_reported() {
 
 #[test]
 fn commands_of_later_milestones_say_when_they_arrive() {
-    let result = schedr(&["master"], &[], &[]);
+    let result = schedr(&["workers", "drain", "w1"], &[], &[]);
     assert_eq!(result.code, 1);
     assert_eq!(
         result.err,
-        "error: `schedr master` isn't implemented yet (milestone M2)\n"
+        "error: `schedr workers` isn't implemented yet (milestone M2)\n"
+    );
+}
+
+#[test]
+fn the_master_without_a_database_says_how_to_set_one() {
+    let result = schedr(&["master"], &[], &[]);
+    assert_eq!(result.code, 1);
+    assert!(
+        result.err.contains("SCHEDR_CONFIG__DATABASE__URL"),
+        "{}",
+        result.err
     );
 }

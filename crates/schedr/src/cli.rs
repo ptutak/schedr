@@ -377,12 +377,14 @@ impl Command {
     #[must_use]
     pub const fn milestone(&self) -> Option<&'static str> {
         match self {
-            Self::Db { .. } | Self::Dags { .. } | Self::Runs { .. } | Self::Standalone => None,
-            Self::Master
+            Self::Db { .. }
+            | Self::Dags { .. }
+            | Self::Runs { .. }
+            | Self::Standalone
+            | Self::Master
             | Self::Worker
-            | Self::Webserver
-            | Self::Tasks { .. }
-            | Self::Workers { .. } => Some("M2"),
+            | Self::Webserver => None,
+            Self::Tasks { .. } | Self::Workers { .. } => Some("M2"),
             Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
         }
     }

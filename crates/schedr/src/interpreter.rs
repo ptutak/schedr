@@ -182,18 +182,19 @@ pub fn pyenv_which(pyenv: &Path, host: &Host<'_>) -> Result<PathBuf, String> {
     Ok(PathBuf::from(path))
 }
 
-/// Sets the built-in `python` interpreter for a local command, if `[interpreters]` doesn't
-/// define it and the DAG interpreter is `python`, and records how it was found
-/// ([`Config::builtin_python`]). Another DAG interpreter needs no lookup.
+/// Sets the built-in `python` interpreter, if `[interpreters]` doesn't define it and the DAG
+/// interpreter is `python`, and records how it was found ([`Config::builtin_python`]).
+/// Another DAG interpreter needs no lookup. `project` as for [`discover`]: on for the local
+/// commands, off for a worker.
 ///
 /// # Errors
 ///
 /// [`PyenvError`] as for [`discover`].
-pub fn apply_local(config: &mut Config, host: &Host<'_>) -> Result<(), PyenvError> {
+pub fn apply(config: &mut Config, host: &Host<'_>, project: bool) -> Result<(), PyenvError> {
     if config.builtin_python.is_none() || config.dags.interpreter != PYTHON {
         return Ok(());
     }
-    let found = discover(host, true, pyenv_which)?;
+    let found = discover(host, project, pyenv_which)?;
     tracing::info!(python = %found.path.display(), how = %found.how, "DAG interpreter");
     config
         .interpreters

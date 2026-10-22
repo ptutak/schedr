@@ -238,7 +238,7 @@ async fn the_loop_ticks_until_stopped() {
         .await
         .unwrap();
     let stop = tokio::time::sleep(Duration::from_millis(100));
-    hub.run(Duration::from_millis(10), stop).await;
+    hub.run(Duration::from_millis(10), None, stop).await;
     let decided = db.command(&id).await.unwrap().unwrap();
     assert_eq!(
         decided.status,

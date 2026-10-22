@@ -4,6 +4,7 @@
 //! keys are an error, so a typo never passes silently.
 
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -245,6 +246,9 @@ impl Default for OpsSection {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MasterSection {
+    /// The address `schedr master` listens on (all interfaces by default; `schedr standalone`
+    /// always listens on 127.0.0.1).
+    pub bind: IpAddr,
     /// The gRPC port workers connect to.
     pub grpc_port: u16,
     /// How often the master's loop runs (scheduler, commands, dispatching).
@@ -262,9 +266,11 @@ pub struct MasterSection {
 }
 
 impl Default for MasterSection {
-    /// Port 8070, a tick every second, heartbeats every 10 s, lost after 60 s, 30 s grace.
+    /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
+    /// 60 s, 30 s grace.
     fn default() -> Self {
         Self {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             grpc_port: 8070,
             tick_interval: Duration::from_secs(1),
             heartbeat_interval: Duration::from_secs(10),
@@ -278,6 +284,9 @@ impl Default for MasterSection {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebserverSection {
+    /// The address `schedr webserver` listens on (all interfaces by default; `schedr
+    /// standalone` always listens on 127.0.0.1).
+    pub bind: IpAddr,
     /// The HTTP port of the REST API (and later the UI).
     pub port: u16,
     /// `[webserver.auth]`.
@@ -285,9 +294,10 @@ pub struct WebserverSection {
 }
 
 impl Default for WebserverSection {
-    /// Port 8080.
+    /// All interfaces, port 8080.
     fn default() -> Self {
         Self {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8080,
             auth: WebserverAuthSection::default(),
         }
@@ -318,6 +328,9 @@ pub struct WorkerSection {
     pub data_dir: Option<PathBuf>,
     /// Agent environment variables passed to tasks besides the allow-list.
     pub pass_env: Vec<String>,
+    /// The master's gRPC URL, e.g. `http://schedr-master:8070`; required by `schedr worker`
+    /// (`schedr standalone` connects to its own master).
+    pub master_url: Option<String>,
 }
 
 impl Default for WorkerSection {
@@ -329,6 +342,7 @@ impl Default for WorkerSection {
             queues: Vec::new(),
             data_dir: None,
             pass_env: Vec::new(),
+            master_url: None,
         }
     }
 }

@@ -292,7 +292,7 @@ fn pyenv_which_reports_a_pyenv_that_cant_start() {
 }
 
 #[test]
-fn apply_local_replaces_only_the_builtin_python() {
+fn apply_replaces_only_the_builtin_python() {
     let tmp = TempDir::new().unwrap();
     let python = touch(&tmp.path().join(".venv/bin/python3"));
     let empty = BTreeMap::new();
@@ -305,7 +305,7 @@ fn apply_local_replaces_only_the_builtin_python() {
         builtin_python: Some(BUILTIN_PYTHON_ORIGIN.to_owned()),
         ..Config::default()
     };
-    apply_local(&mut builtin, &host).unwrap();
+    apply(&mut builtin, &host, true).unwrap();
     assert_eq!(builtin.interpreters["python"], Interpreter::path(&python));
     assert_eq!(builtin.builtin_python.as_deref(), Some("project venv"));
     let mut configured = Config::default();
@@ -313,7 +313,7 @@ fn apply_local_replaces_only_the_builtin_python() {
         "python".to_owned(),
         Interpreter::path("/usr/bin/python3.14"),
     );
-    apply_local(&mut configured, &host).unwrap();
+    apply(&mut configured, &host, true).unwrap();
     assert_eq!(
         configured.interpreters["python"],
         Interpreter::path("/usr/bin/python3.14")
@@ -322,7 +322,7 @@ fn apply_local_replaces_only_the_builtin_python() {
 }
 
 #[test]
-fn apply_local_doesnt_look_when_the_dag_interpreter_is_another() {
+fn apply_doesnt_look_when_the_dag_interpreter_is_another() {
     let tmp = TempDir::new().unwrap();
     // A pyenv shim pyenv can't resolve would fail the lookup, if it ran.
     let (_, vars) = pyenv_layout(&tmp);
@@ -339,7 +339,7 @@ fn apply_local_doesnt_look_when_the_dag_interpreter_is_another() {
     config
         .interpreters
         .insert("python".to_owned(), Interpreter::path("python3"));
-    apply_local(&mut config, &host).unwrap();
+    apply(&mut config, &host, true).unwrap();
     assert_eq!(config.interpreters["python"], Interpreter::path("python3"));
     assert_eq!(
         config.builtin_python.as_deref(),

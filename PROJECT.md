@@ -49,6 +49,45 @@ One Rust binary, four roles:
 | `schedr webserver`  | Web UI and the API used by the UI and CLI                             | **Never.**  |
 | `schedr standalone` | All of the above in one process, with SQLite                          | Yes (local development only) |
 
+**Running the roles separately (M2.1):**
+
+- `schedr master` and `schedr webserver` need `[database] url` and a schema `schedr db
+  migrate` brought up to date (an outdated one is refused); `schedr worker` needs no database,
+  only **`[worker] master_url`** (e.g. `http://schedr-master:8070`, env
+  `SCHEDR_CONFIG__WORKER__MASTER_URL`). The master listens on **`[master] bind`** :
+  `grpc_port`, the webserver on **`[webserver] bind`** : `port`, both **`0.0.0.0` by default**;
+  `standalone` always listens on 127.0.0.1. Not chosen: a `--master` flag only (the
+  configuration and its env mirror are how everything else is set); separate host and port
+  keys for the worker (one URL carries the scheme, which mTLS will change).
+- **Postgres, or SQLite on one host.** The roles may share one SQLite file **when they run
+  on the same host with a local disk** (a VM, Docker Compose, local testing of the role split):
+  SQLite's file locks work across processes there, WAL lets readers and the writer pass each
+  other, and writes rarely compete (the master writes scheduling state, the webserver only
+  command rows, the worker nothing). Commands are then picked up by polling. The master and the
+  webserver warn at startup on SQLite. Across hosts (a network filesystem, pods on different
+  nodes) SQLite's locks are unreliable, so anything distributed uses Postgres. Not chosen:
+  Postgres only (rules out a working single-host setup).
+- **Commands at once on Postgres:** inserting a command also sends `pg_notify` on
+  `schedr_commands`; the master listens on a connection of its own and ticks at once (the
+  tick interval starts again after it; notifications that arrived meanwhile are taken by the
+  same tick, so a burst of commands costs one tick). Polling every tick stays the fallback:
+  a notification that fails after the command is stored is only logged (the command is
+  there; failing the request would make a retry store it twice), and when listening fails
+  (the database is down) the master tries again after 30 s.
+- **Plain gRPC until mTLS (2.7):** a master listening beyond loopback, or a worker connecting
+  beyond it, warns at startup that the traffic is unencrypted. Not chosen: refusing
+  non-loopback addresses until 2.7 (the split couldn't be tested across hosts).
+  `[worker] master_url` is checked at startup: an `http://` URL with a host (`https://` comes
+  with mTLS), else a configuration error rather than a worker retrying forever.
+- **The REST API has no authentication of its own until M3:** a webserver listening beyond
+  loopback warns at startup to keep it behind an authenticating proxy or mesh (the main
+  deployment, `auth.mode = "none"` behind Istio), or to bind 127.0.0.1.
+- **SIGTERM or Ctrl-C stops a role** (the server stops accepting, the loop and the agent
+  end), handled from the role's first moment; draining a worker on SIGTERM comes with 2.6.
+  A master whose gRPC server fails ends with the error, instead of running a loop no worker
+  can reach.
+- `standalone` runs the same role functions as the separate commands (one code path).
+
 ### Web UI and CLI
 
 - A **web dashboard** is required: live view of what is running, and access to task logs.
@@ -4286,7 +4325,9 @@ a real server or talks to Postgres is an integration test.
   the CLI and the API (data flow into a command, retries and upstream failure, cancelling a
   running task, files added, changed and removed, a conflict, scheduled runs while unpaused,
   rejections) on SQLite and on Postgres; `schedr.testing.run_dag` against the binary (failed
-  runs, attempts, decoded outputs) and the `examples/` tests.
+  runs, attempts, decoded outputs) and the `examples/` tests; the roles as separate processes
+  (master, webserver and worker running a DAG on Postgres and on one SQLite file, a command
+  applied at once through `LISTEN/NOTIFY`, an unmigrated database refused, SIGTERM).
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

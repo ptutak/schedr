@@ -504,3 +504,57 @@ async fn commands_are_written_decided_and_read_back() {
     );
     assert_eq!(record.requested_at, ts(NOW));
 }
+
+#[tokio::test]
+async fn a_new_command_notifies_the_listener() {
+    let db = fresh().await;
+    let mut notifications = db
+        .command_notifications()
+        .await
+        .unwrap()
+        .expect("Postgres has notifications");
+    db.insert_command(
+        &Command::PauseDag {
+            dag_id: sync(),
+            cancel_runs: false,
+        },
+        "anna",
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), notifications.next())
+        .await
+        .expect("a notification within 10 s")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_burst_of_commands_is_taken_with_its_first_notification() {
+    let db = fresh().await;
+    let mut notifications = db.command_notifications().await.unwrap().unwrap();
+    for _ in 0..3 {
+        db.insert_command(
+            &Command::PauseDag {
+                dag_id: sync(),
+                cancel_runs: false,
+            },
+            "anna",
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    }
+    notifications.next().await.unwrap();
+    // Give the other two notifications time to arrive, then take them without waiting.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        notifications.skip_arrived(),
+    )
+    .await
+    .expect("taking arrived notifications doesn't wait");
+    let nothing_left =
+        tokio::time::timeout(std::time::Duration::from_millis(300), notifications.next()).await;
+    assert!(nothing_left.is_err(), "no notification should be left");
+}

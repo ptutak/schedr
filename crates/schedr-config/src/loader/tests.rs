@@ -235,3 +235,37 @@ fn a_database_url_without_a_password_may_be_in_the_file() {
         Some("postgres://schedr@db/schedr")
     );
 }
+
+#[test]
+fn roles_take_bind_addresses_and_the_masters_url() {
+    let defaults = load(None, &env(&[]), &[]).unwrap();
+    assert_eq!(defaults.master.bind.to_string(), "0.0.0.0");
+    assert_eq!(defaults.webserver.bind.to_string(), "0.0.0.0");
+    assert_eq!(defaults.worker.master_url, None);
+    let vars = env(&[
+        ("SCHEDR_CONFIG__MASTER__BIND", "127.0.0.1"),
+        ("SCHEDR_CONFIG__WEBSERVER__BIND", "::1"),
+        (
+            "SCHEDR_CONFIG__WORKER__MASTER_URL",
+            "http://schedr-master:8070",
+        ),
+    ]);
+    let config = load(None, &vars, &[]).unwrap();
+    assert_eq!(config.master.bind.to_string(), "127.0.0.1");
+    assert_eq!(config.webserver.bind.to_string(), "::1");
+    assert_eq!(
+        config.worker.master_url.as_deref(),
+        Some("http://schedr-master:8070")
+    );
+    let bad = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__MASTER__BIND", "nowhere")]),
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        bad.to_string()
+            .contains("invalid IP address syntax for key \"SCHEDR_CONFIG__MASTER__BIND\""),
+        "{bad}"
+    );
+}

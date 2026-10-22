@@ -118,3 +118,10 @@ async fn payloads_that_dont_read_are_reported_for_rejection() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn sqlite_has_no_command_notifications() {
+    let db = migrated().await;
+    assert!(db.command_notifications().await.unwrap().is_none());
+    assert_eq!(COMMANDS_CHANNEL, "schedr_commands");
+}

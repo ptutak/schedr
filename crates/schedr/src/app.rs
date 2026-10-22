@@ -9,7 +9,7 @@ use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
 use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
 use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
-use crate::interpreter::{Host, apply_local};
+use crate::interpreter::{Host, apply};
 use crate::times::local_zone;
 use crate::user::{Output, run_dags, run_runs};
 
@@ -163,9 +163,13 @@ pub async fn execute(
 ) -> Result<(), AppError> {
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
+        // Boxed: the roles' futures are large, and only one of them ever runs.
         (Command::Standalone, None) => {
-            crate::standalone::command(&local_config(config, env)?, env).await
+            Box::pin(crate::standalone::command(&local_config(config, env)?, env)).await
         }
+        (Command::Master, None) => Box::pin(crate::roles::master(config)).await,
+        (Command::Webserver, None) => Box::pin(crate::roles::webserver(config)).await,
+        (Command::Worker, None) => Box::pin(crate::roles::worker(config, env)).await,
         (
             Command::Dags {
                 client,
@@ -198,6 +202,20 @@ pub async fn execute(
 ///
 /// [`AppError::BadArgument`] if a pyenv shim can't be resolved.
 pub fn local_config(config: &Config, env: &BTreeMap<String, String>) -> Result<Config, AppError> {
+    role_config(config, env, true)
+}
+
+/// The configuration with the built-in `python` interpreter looked for (see
+/// [`crate::interpreter::apply`]): `project` on for the local commands, off for a worker.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if a pyenv shim can't be resolved.
+pub fn role_config(
+    config: &Config,
+    env: &BTreeMap<String, String>,
+    project: bool,
+) -> Result<Config, AppError> {
     let mut config = config.clone();
     let cwd = std::env::current_dir().ok();
     let exe = std::env::current_exe().ok();
@@ -206,7 +224,7 @@ pub fn local_config(config: &Config, env: &BTreeMap<String, String>) -> Result<C
         cwd: cwd.as_deref(),
         exe: exe.as_deref(),
     };
-    apply_local(&mut config, &host).map_err(|e| AppError::BadArgument(e.to_string()))?;
+    apply(&mut config, &host, project).map_err(|e| AppError::BadArgument(e.to_string()))?;
     Ok(config)
 }
 

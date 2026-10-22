@@ -2,9 +2,16 @@
 //!
 //! A command is decided once: `pending` becomes `applied` (with what it produced) or
 //! `rejected` (with a reason), and never changes again.
+//!
+//! On Postgres a new command also sends a notification on [`COMMANDS_CHANNEL`], so the master
+//! picks it up at once ([`Database::command_notifications`]); polling stays the fallback, and
+//! the only way on SQLite (see PROJECT.md, Web UI and CLI).
+
+use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_model::commands::{Command, CommandStatus};
+use sqlx::postgres::PgListener;
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
@@ -12,6 +19,35 @@ use crate::query::{db_time, from_json, from_name, on_pool, parse_time, sql, to_j
 
 #[cfg(test)]
 mod tests;
+
+/// The Postgres notification channel a new command is announced on.
+pub const COMMANDS_CHANNEL: &str = "schedr_commands";
+
+/// Notifications of new commands (Postgres only): a dedicated connection listening on
+/// [`COMMANDS_CHANNEL`].
+#[derive(Debug)]
+pub struct CommandNotifications {
+    listener: PgListener,
+}
+
+impl CommandNotifications {
+    /// Waits for the next notification. A lost connection is re-established (a notification
+    /// sent meanwhile is lost; polling picks the command up).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the connection fails and can't be re-established.
+    pub async fn next(&mut self) -> Result<(), DbError> {
+        self.listener.recv().await?;
+        Ok(())
+    }
+
+    /// Takes the notifications that already arrived, without waiting: one tick handles every
+    /// pending command, so a burst needs one tick, not one per command.
+    pub async fn skip_arrived(&mut self) {
+        while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.listener.recv()).await {}
+    }
+}
 
 /// A pending command, as the master reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +117,36 @@ impl Database {
                 .execute(pool)
                 .await?;
         });
+        if let Self::Postgres(pool) = self {
+            // The command is stored: a failed notification only delays it to the master's
+            // next poll, so it isn't an error (a retried request would store it twice).
+            if let Err(error) = sqlx::query("SELECT pg_notify($1, $2)")
+                .bind(COMMANDS_CHANNEL)
+                .bind(&id)
+                .execute(pool)
+                .await
+            {
+                tracing::warn!(%error, command_id = %id, "command stored, notification failed");
+            }
+        }
         Ok(id)
+    }
+
+    /// Listens for new commands: notifications on Postgres; `None` on SQLite, which has none
+    /// (the master polls).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the listening connection can't be opened.
+    pub async fn command_notifications(&self) -> Result<Option<CommandNotifications>, DbError> {
+        match self {
+            Self::Sqlite(_) => Ok(None),
+            Self::Postgres(pool) => {
+                let mut listener = PgListener::connect_with(pool).await?;
+                listener.listen(COMMANDS_CHANNEL).await?;
+                Ok(Some(CommandNotifications { listener }))
+            }
+        }
     }
 
     /// The pending commands, oldest first.
