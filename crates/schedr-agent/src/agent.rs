@@ -25,9 +25,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
-use schedr_model::runner::{DAG_FILE_MISSING, ParseRequest, ParsedFile};
+use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::parsed_file_to_proto;
 use schedr_proto::pb::master_client::MasterClient;
@@ -42,6 +43,7 @@ use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, run_command, run_python};
+use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
 use crate::status::StopReason;
@@ -142,16 +144,30 @@ impl Executor for ProcessExecutor {
             timeout: spec.timeout(),
             grace: spec.cancel_grace,
         };
+        let seen = SharedSeen::default();
+        let (killed_tx, killed) = oneshot::channel::<()>();
         let stop = async move {
-            match stop.await {
-                Ok(reason) => reason,
-                Err(_) => std::future::pending().await,
+            tokio::select! {
+                Ok(reason) = stop => reason,
+                Ok(()) = killed => StopReason::OomKilled,
+                // Neither will say anything now: the attempt runs on its own.
+                else => std::future::pending().await,
             }
         };
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
-        let spawned = |pid| match process_identity(pid) {
-            Ok(identity) => spawned(identity),
-            Err(error) => tracing::warn!(pid, %error, "can't identify the task's process"),
+        let mut watching = None;
+        let spawned = |pid| {
+            // The task's process leads its own group; watched from its first moment.
+            watching = Some(watch_group(
+                self.setup.memory.clone(),
+                pid,
+                seen.clone(),
+                killed_tx,
+            ));
+            match process_identity(pid) {
+                Ok(identity) => spawned(identity),
+                Err(error) => tracing::warn!(pid, %error, "can't identify the task's process"),
+            }
         };
         let ran = match plan {
             Plan::Python { process, request } => {
@@ -159,10 +175,14 @@ impl Executor for ProcessExecutor {
             }
             Plan::Command(process) => run_command(&process, limits, stop, spawned).await,
         };
-        match ran {
+        drop(watching);
+        let mut finished = match ran {
             Ok(ran) => finished(&spec.attempt_id, &ran),
             Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),
-        }
+        };
+        let seen = *seen.lock().unwrap_or_else(PoisonError::into_inner);
+        with_memory(&mut finished, seen, self.setup.memory.budget);
+        finished
     }
 
     async fn parse(
@@ -191,6 +211,7 @@ impl Executor for ProcessExecutor {
                 log_file: self.setup.log_dir.join(format!("parse-{root}.log")),
                 max_output_size: 64 * 1024,
             },
+            memory: self.setup.memory.clone(),
         };
         let request = ParseRequest {
             root,
@@ -203,6 +224,21 @@ impl Executor for ProcessExecutor {
             .map_err(|e| e.to_string())
     }
 }
+
+/// Adds what the watchdog saw to an attempt's `Finished`: its peak memory, and for one killed
+/// over its budget the error summary saying so.
+pub fn with_memory(finished: &mut pb::Finished, seen: MemorySeen, budget: Option<u64>) {
+    finished.peak_memory_bytes = seen.peak;
+    if let (Some(used), Some(budget)) = (seen.over, budget)
+        && finished.status == i32::from(pb::AttemptStatus::OomKilled)
+    {
+        finished.error_summary_json =
+            ErrorSummary::json(MEMORY_EXCEPTION, &over_budget_message(budget, used)).into_bytes();
+    }
+}
+
+/// The exception named in the error summary of an attempt killed over its memory budget.
+pub const MEMORY_EXCEPTION: &str = "MemoryBudgetExceeded";
 
 /// Why a session with the master ended.
 #[derive(Debug, Clone, PartialEq, Eq)]

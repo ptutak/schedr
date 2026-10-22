@@ -22,6 +22,7 @@ use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
+use schedr_agent::memory::{MIN_BUDGET, MemoryWatch, budget, cgroup_limit, show_size};
 use schedr_agent::retention::{LogRetention, sweep_logs};
 use schedr_api::logs::HttpLogSource;
 use schedr_api::{ApiState, router};
@@ -88,7 +89,8 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
 ///
 /// # Errors
 ///
-/// [`AppError::BadArgument`] if the DAG interpreter isn't defined.
+/// [`AppError::BadArgument`] if the DAG interpreter isn't defined, the memory check interval
+/// is 0 or the memory budget below [`MIN_BUDGET`].
 pub fn agent_settings(
     config: &Config,
     env: &BTreeMap<String, String>,
@@ -110,6 +112,20 @@ pub fn agent_settings(
         .clone()
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
+    if config.worker.memory_check_interval.is_zero() {
+        return Err(AppError::BadArgument(
+            "[worker] memory_check_interval must be longer than 0s (e.g. \"1s\")".to_owned(),
+        ));
+    }
+    if let Some(budget) = config.worker.memory_budget
+        && budget < MIN_BUDGET
+    {
+        return Err(AppError::BadArgument(format!(
+            "[worker] memory_budget {} is too small for any task: give at least {}",
+            show_size(budget),
+            show_size(MIN_BUDGET)
+        )));
+    }
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
@@ -123,6 +139,12 @@ pub fn agent_settings(
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),
             log_dir: data_dir.join("logs").join(file_name(&worker_id)),
+            memory: memory_watch(
+                config,
+                cgroup_limit(Path::new("/proc"), Path::new("/sys/fs/cgroup"))
+                    .ok()
+                    .flatten(),
+            ),
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
@@ -132,6 +154,26 @@ pub fn agent_settings(
         log_endpoint: String::new(),
         worker_id,
     })
+}
+
+/// How the memory watchdog watches tasks: `[worker] memory_budget`, else (`limit` − 10 %) ÷
+/// slots; without either it only measures.
+#[must_use]
+pub fn memory_watch(config: &Config, limit: Option<u64>) -> MemoryWatch {
+    MemoryWatch {
+        budget: budget(config.worker.memory_budget, limit, config.worker.slots),
+        interval: config.worker.memory_check_interval,
+        ..MemoryWatch::default()
+    }
+}
+
+/// What the watchdog does, for the worker's startup line.
+#[must_use]
+pub fn memory_text(watch: &MemoryWatch) -> String {
+    match watch.budget {
+        Some(budget) => format!("memory budget {} per task", show_size(budget)),
+        None => "no memory limit found: task memory is measured, never limited".to_owned(),
+    }
 }
 
 /// The worker's log retention, from the configuration.
@@ -621,9 +663,10 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .map_or(address.port(), |a| a.port());
     agent.log_endpoint = log_endpoint(&config, env, tls.is_some(), port);
     tracing::info!(
-        "schedr worker {}: master {master_url} ({}), data in {}, logs on {}",
+        "schedr worker {}: master {master_url} ({}), {}, data in {}, logs on {}",
         agent.worker_id,
         links_text(tls.as_ref()),
+        memory_text(&agent.setup.memory),
         data_dir.display(),
         agent.log_endpoint
     );

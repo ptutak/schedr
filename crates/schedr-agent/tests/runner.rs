@@ -90,8 +90,17 @@ fn root() -> TempDir {
 }
 
 async fn parse(dir: &Path, per_file: Duration) -> Vec<ParsedFile> {
+    parse_watched(dir, per_file, schedr_agent::memory::MemoryWatch::default()).await
+}
+
+async fn parse_watched(
+    dir: &Path,
+    per_file: Duration,
+    memory: schedr_agent::memory::MemoryWatch,
+) -> Vec<ParsedFile> {
     let mut runner = ProcessParseRunner {
         process: runner("parse", dir, &dir.join("parse.log")),
+        memory,
     };
     let mut files: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
@@ -300,4 +309,34 @@ async fn task_mode_stops_a_task_past_its_timeout_or_when_cancelled() {
     )
     .await;
     assert_eq!(ran.supervised.stopped, Some(StopReason::Cancelled));
+}
+
+#[tokio::test]
+async fn a_file_whose_import_takes_too_much_memory_is_an_import_error_and_parsing_goes_on() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("a_greedy.py"),
+        "import time\nchunks = []\nfor _ in range(40):\n    chunks.append(b'x' * (10 << 20))\n    \
+         time.sleep(0.05)\ntime.sleep(30)\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("b_fine.py"),
+        "from schedr import Dag\nwith Dag('fine'):\n    pass\n",
+    )
+    .unwrap();
+    let memory = schedr_agent::memory::MemoryWatch {
+        budget: Some(100 << 20),
+        interval: Duration::from_millis(100),
+        ..schedr_agent::memory::MemoryWatch::default()
+    };
+    let files = parse_watched(dir.path(), Duration::from_secs(20), memory).await;
+    let error = files[0].error.as_ref().unwrap();
+    assert!(
+        error
+            .message
+            .contains("the runner exceeded memory budget 100 MiB ("),
+        "{error:?}"
+    );
+    assert_eq!(files[1].dags[0].id.as_str(), "fine");
 }

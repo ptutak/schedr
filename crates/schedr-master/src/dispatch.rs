@@ -452,7 +452,9 @@ impl Dispatcher {
                 status,
                 exit_code: finished.exit_code,
                 signal: finished.signal,
-                peak_memory_bytes: Some(finished.peak_memory_bytes),
+                // 0: not measured (a worker without `/proc`, or before 2.8).
+                peak_memory_bytes: (finished.peak_memory_bytes > 0)
+                    .then_some(finished.peak_memory_bytes),
                 duration_ms: finished.duration_ms,
                 error_kind: non_empty(&finished.error_kind),
                 error_summary,

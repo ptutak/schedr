@@ -132,6 +132,25 @@ async fn cancelling_stops_the_process_with_the_given_reason() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_process_over_its_memory_budget_is_killed_at_once() {
+    let mut fake = Fake::new(Some(Termination::Exited(0)));
+    let started = tokio::time::Instant::now();
+    let result = supervise(&mut fake, LIMITS, async { StopReason::OomKilled })
+        .await
+        .unwrap();
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(
+        result,
+        Supervised {
+            termination: Termination::Signaled(9),
+            stopped: Some(StopReason::OomKilled),
+            killed: true
+        }
+    );
+    assert_eq!(*fake.signals.lock().unwrap(), vec![Signal::Kill]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn without_a_timeout_only_a_stop_ends_supervision() {
     let mut fake = Fake::new(Some(Termination::Exited(1)));
     let limits = Limits {

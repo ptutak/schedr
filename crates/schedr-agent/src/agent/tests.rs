@@ -145,6 +145,7 @@ async fn world() -> World {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            memory: crate::memory::MemoryWatch::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -477,6 +478,7 @@ async fn against_script_with(
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            memory: crate::memory::MemoryWatch::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -772,6 +774,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            memory: crate::memory::MemoryWatch::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -962,6 +965,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: settings_dir.path().join("logs"),
+            memory: crate::memory::MemoryWatch::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -993,6 +997,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            memory: crate::memory::MemoryWatch::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -1012,4 +1017,40 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
     assert_eq!(stopped.await, Ok(StopReason::Cancelled));
     assert_eq!(agent.running(), ["a1"], "still running until it reports");
     assert_eq!(agent.free_slots(), 0);
+}
+
+#[test]
+fn with_memory_adds_the_peak_and_says_why_a_task_was_killed() {
+    let mut killed = pb::Finished {
+        attempt_id: "a1".to_owned(),
+        status: pb::AttemptStatus::OomKilled.into(),
+        ..pb::Finished::default()
+    };
+    let seen = crate::memory::MemorySeen {
+        peak: 130 << 20,
+        over: Some(130 << 20),
+    };
+    with_memory(&mut killed, seen, Some(100 << 20));
+    assert_eq!(killed.peak_memory_bytes, 130 << 20);
+    let summary: serde_json::Value = serde_json::from_slice(&killed.error_summary_json).unwrap();
+    assert_eq!(summary["exception"], MEMORY_EXCEPTION);
+    assert_eq!(
+        summary["message"],
+        "exceeded memory budget 100 MiB (130 MiB used)"
+    );
+
+    let mut fine = pb::Finished {
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    };
+    with_memory(
+        &mut fine,
+        crate::memory::MemorySeen {
+            peak: 5 << 20,
+            over: None,
+        },
+        Some(100 << 20),
+    );
+    assert_eq!(fine.peak_memory_bytes, 5 << 20);
+    assert_eq!(fine.error_summary_json, Vec::<u8>::new());
 }

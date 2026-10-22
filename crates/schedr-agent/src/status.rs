@@ -23,7 +23,7 @@ pub enum StopReason {
     Cancelled,
     /// A draining worker's grace period ended.
     Interrupted,
-    /// It exceeded its memory budget (the watchdog, milestone M2).
+    /// It exceeded its memory budget (the watchdog, see [`crate::memory`]).
     OomKilled,
 }
 

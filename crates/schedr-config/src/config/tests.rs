@@ -200,6 +200,8 @@ fn master_webserver_and_worker_defaults() {
             log_address: None,
             log_retention: Duration::from_hours(720),
             log_max_size: None,
+            memory_budget: None,
+            memory_check_interval: Duration::from_secs(1),
         }
     );
     assert_eq!(
@@ -248,6 +250,8 @@ fn reads_the_master_webserver_and_worker_sections() {
         log_address = "w-0.schedr-worker.etl.svc.cluster.local"
         log_retention = "7d"
         log_max_size = "10GiB"
+        memory_budget = "2GiB"
+        memory_check_interval = "500ms"
         "#,
     )
     .unwrap();
@@ -286,6 +290,11 @@ fn reads_the_master_webserver_and_worker_sections() {
     );
     assert_eq!(config.worker.log_retention, Duration::from_hours(168));
     assert_eq!(config.worker.log_max_size, Some(10 << 30));
+    assert_eq!(config.worker.memory_budget, Some(2 << 30));
+    assert_eq!(
+        config.worker.memory_check_interval,
+        Duration::from_millis(500)
+    );
 }
 
 #[test]

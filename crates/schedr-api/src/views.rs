@@ -204,6 +204,9 @@ pub struct AttemptView {
     /// How long it ran, measured by the worker (the timestamps come from the master's wall
     /// clock, so don't subtract them); none while it runs or for attempts ended by the master.
     pub duration_ms: Option<u64>,
+    /// The peak memory of its processes, sampled by the worker (about once a second); none
+    /// when it wasn't measured.
+    pub peak_memory_bytes: Option<u64>,
 }
 
 impl From<&AttemptRecord> for AttemptView {
@@ -223,6 +226,7 @@ impl From<&AttemptRecord> for AttemptView {
             started_at: attempt.started_at,
             ended_at: attempt.ended_at,
             duration_ms: attempt.duration_ms,
+            peak_memory_bytes: attempt.peak_memory_bytes,
         }
     }
 }

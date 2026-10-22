@@ -3,12 +3,12 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.7 done).
+- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.8 done).
 
 ## State (2026-10-22)
 
-- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.7 are done**
-  (2.7 committed, not pushed yet).
+- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.8 are done**
+  (2.7 and 2.8 committed, not pushed yet).
   The M2 commits so far:
 
   | Commit | Step |
@@ -21,12 +21,13 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   | `d207fb9` | 2.4: `schedr tasks cancel` / `retry`, `[master] code_wait`, wait reasons; fixes B5 |
   | `3aea937` | 2.5: only the newest code runs (current hash per root, `root_hashes` table, `CODE_MISMATCH`), rolling upgrades, `dag_file_missing` and "changed after this run started" errors |
   | `6c75475` | 2.6: drain on SIGTERM (`crates/schedr-agent/src/drain.rs`, `[worker] termination_grace_period`, default 30 s) and `schedr workers drain` / `resume` (stored, survives restarts) |
-| (this commit) | 2.7: mTLS (`crates/schedr-tls`, `[tls]`), the worker's log endpoint (`crates/schedr-agent/src/logs.rs`), the webserver's log proxy (`crates/schedr-api/src/logs.rs`), `schedr tasks logs [-f]`, log retention (`retention.rs`), logs in `<data_dir>/logs/<worker ID>` |
+| `e3f8a3b` | 2.7: mTLS (`crates/schedr-tls`, `[tls]`), the worker's log endpoint (`crates/schedr-agent/src/logs.rs`), the webserver's log proxy (`crates/schedr-api/src/logs.rs`), `schedr tasks logs [-f]`, log retention (`retention.rs`), logs in `<data_dir>/logs/<worker ID>` |
+| (this commit) | 2.8: the memory watchdog (`crates/schedr-agent/src/memory.rs`: cgroup v2 limit, PSS per process group, `[worker] memory_budget` / `memory_check_interval`, SIGKILL over budget → `oom_killed`), peak memory in the API; `setrlimit` moved to M4 |
 
 - CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
   once it is pushed (`gh` isn't installed, so the user looks).
-- The last `make check` passed (2.7): 1070 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 72 Rust and 15 Python integration tests; Rust line coverage 87.9 %
+- The last `make check` passed (2.8): 1085 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 74 Rust and 15 Python integration tests; Rust line coverage 87.8 %
   (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
 - **Open bugs: B4 and B6** (`BUGS.md`). Both are role integration tests failing under disk
   load; B6 happened three times, each time on the first `make check` of a step (right after
@@ -37,10 +38,10 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 ## Next steps
 
 1. **Ask about CI** for the pushed commits.
-2. **M2, step 2.8** (PLAN.md): the memory watchdog (budget from `memory.max`, `/proc`
-   sampling, `oom_killed`, optional `setrlimit`). Start by laying out the decisions (see
-   "How to work"), reading PROJECT.md's "Worker memory protection and crash recovery" first.
-3. Then 2.9 (ops port), 2.10 (images and Helm: workers as a StatefulSet with a headless
+2. **M2, step 2.9** (PLAN.md): the ops port on every role (`/healthz`, `/readyz`,
+   `/metrics`, loop-stall detection; also the watchdog's metrics). Start by laying out the
+   decisions (see "How to work"), reading PROJECT.md's "Observability" first.
+3. Then 2.10 (images and Helm: workers as a StatefulSet with a headless
    Service, `log_address` = the pod's DNS name, certificates with both serverAuth and
    clientAuth; the user's cluster runs Istio with `REGISTRY_ONLY`), 2.11 (kill tests on kind),
    2.12 (more wheels).

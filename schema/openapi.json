@@ -68,6 +68,15 @@
               "null"
             ]
           },
+          "peak_memory_bytes": {
+            "description": "The peak memory of its processes, sampled by the worker (about once a second); none\nwhen it wasn't measured.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "started_at": {
             "description": "When the worker started it.",
             "format": "date-time",

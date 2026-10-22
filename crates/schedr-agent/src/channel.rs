@@ -28,6 +28,9 @@ pub enum ChannelError {
     /// Reading or writing the socket failed.
     #[error("runner channel: {0}")]
     Io(#[from] std::io::Error),
+    /// The memory watchdog killed the runner.
+    #[error("the runner {0}")]
+    OverMemory(String),
     /// The runner sent a message that doesn't fit the conversation.
     #[error("expected {expected}, got {got}")]
     Unexpected {

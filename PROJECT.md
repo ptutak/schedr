@@ -1180,6 +1180,47 @@ reserve a lot up front), but fails the allocation inside the task immediately.
 Per-task cgroups are ruled out: they need write access to the cgroup filesystem, which
 OpenShift's restricted security policy doesn't grant.
 
+**How it is built (M2.8),** `crates/schedr-agent/src/memory.rs`:
+
+- **What is measured:** the **PSS** (`/proc/<pid>/smaps_rollup`) of every process in the
+  task's **process group** (what SIGTERM and SIGKILL reach), RSS (`/proc/<pid>/statm`) where
+  PSS can't be read. PSS splits shared pages between the processes sharing them, so a task
+  with many processes isn't counted many times, and the fork server (M2.5) needs it anyway. A
+  process that leaves the group (`setsid`) isn't counted, as it isn't cancelled. Not chosen:
+  RSS (shared libraries counted once per process); the tree by parent PID (the group is what
+  is killed).
+- **The limit:** the smallest cgroup v2 `memory.max` from the agent's own cgroup
+  (`/proc/self/cgroup`) up to the root, so a pod and a host alike. None found (`max`, cgroup
+  v1, macOS): nothing is killed and peak memory is still measured; the worker's startup line
+  says which ("memory budget 1.8 GiB per task" or "no memory limit found: task memory is
+  measured, never limited"). Not chosen: the machine's total memory as a fallback (a laptop
+  would kill tasks for memory it has); cgroup v1 (OpenShift 4.14+ and current Kubernetes use
+  v2).
+- **The budget:** **`[worker] memory_budget`** (a size per task), else (limit − 10 %) ÷
+  slots; sampled every **`[worker] memory_check_interval`** (1 s). The parse runner gets the
+  same budget. A budget below 16 MiB (no Python starts in it) or an interval of 0 is a startup
+  error. Each process is watched **from its spawn until it has ended**: a runner's start and
+  a stopped task's grace period after SIGTERM are covered, and the watch is dropped with the
+  attempt, so a group ID the kernel reuses is never watched. Each watch scans `/proc` on its
+  own (a pod has few processes and a handful of slots); one shared sampler can come if 2.9's
+  metrics show a cost. Not chosen: ÷ (slots + 1) for the parse slot (smaller budgets for a slot
+  mostly idle); a configurable reserve (`memory_budget` covers unusual pods).
+- **Over the budget:** the group gets **SIGKILL at once** (a spike can't wait for a grace
+  period: the kernel would kill everything first), the attempt ends **`oom_killed`** (using a
+  retry) with the error summary `MemoryBudgetExceeded`: "exceeded memory budget 100 MiB (130
+  MiB used)". A parse runner keeps every module it imported, so a file that crosses the
+  budget after others in the same runner is **tried again first in a fresh runner**; only
+  over the budget alone is it an import error ("the runner stopped while importing the file
+  (the runner exceeded memory budget …)"), and parsing goes on with the next file. Not chosen: SIGTERM first, with the cancel grace or a short one.
+- **Peak memory:** the highest sample goes in `Finished.peak_memory_bytes`, is stored with
+  the attempt (0, not measured, as none) and shown in the API's attempts
+  (`peak_memory_bytes`).
+- **`setrlimit` waits for M4,** with per-task budgets in the native API: no DAG can opt in
+  before, and setting it in the child needs `pre_exec`, which is `unsafe` (forbidden here),
+  while `prlimit` from the parent leaves the process unlimited for a moment. The
+  `AssignTask` fields stay. Watchdog metrics (kills, peak memory) come with the ops port
+  (2.9); the watcher host's budget with M4.
+
 ### Worker environment
 
 - **All workers use the same image.** There are no worker pools with different images, so
@@ -4650,7 +4691,9 @@ a real server or talks to Postgres is an integration test.
   two workers and the webserver over mTLS on Postgres, each task's log read through the
   webserver from its worker, a deleted log and a worker gone; a worker whose certificate
   comes from another CA refused; the master's certificates rotated without a restart; in
-  `schedr-tls`, the handshakes, names, refusals and rotation over loopback).
+  `schedr-tls`, the handshakes, names, refusals and rotation over loopback); the memory
+  watchdog (M2.8: a task allocating past its budget killed alone, `oom_killed`, and its retry
+  succeeding with its peak measured; a parse runner over budget, its file an import error).
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an
@@ -4746,7 +4789,7 @@ gRPC, journal) come before breadth of features.
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
-| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; backfill; retention; upgrade rules (`Once` was built in M1) | — |
+| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 

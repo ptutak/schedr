@@ -131,6 +131,8 @@ pub struct WorkerSetup {
     pub pass_env: Vec<String>,
     /// Where task log files go.
     pub log_dir: PathBuf,
+    /// How the memory watchdog watches tasks and parse runners.
+    pub memory: crate::memory::MemoryWatch,
 }
 
 impl WorkerSetup {

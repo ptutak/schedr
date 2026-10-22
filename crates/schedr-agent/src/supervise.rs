@@ -57,7 +57,8 @@ pub struct Supervised {
 }
 
 /// Waits for `process`; on timeout, or when `stop` completes (cancel, drain), sends SIGTERM to
-/// its group, and SIGKILL if it hasn't ended after the grace time.
+/// its group, and SIGKILL if it hasn't ended after the grace time; over its memory budget
+/// (`stop` says [`StopReason::OomKilled`]), SIGKILL at once.
 ///
 /// # Errors
 ///
@@ -80,6 +81,15 @@ pub async fn supervise<P: Process>(
         () = deadline => StopReason::TimedOut,
         reason = stop => reason,
     };
+    if reason == StopReason::OomKilled {
+        // Over its memory budget: a spike can't wait for a grace period.
+        process.signal(Signal::Kill)?;
+        return Ok(Supervised {
+            termination: process.wait().await?,
+            stopped: Some(reason),
+            killed: true,
+        });
+    }
     process.signal(Signal::Term)?;
     let ended = tokio::time::timeout(limits.grace, process.wait()).await;
     let (termination, killed) = if let Ok(termination) = ended {

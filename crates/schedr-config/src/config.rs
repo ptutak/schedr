@@ -357,12 +357,18 @@ pub struct WorkerSection {
     /// Beyond this many bytes of logs the oldest are deleted; no limit when not set.
     #[serde(deserialize_with = "deserialize_optional_size")]
     pub log_max_size: Option<u64>,
+    /// Each task's memory budget; when not set, (the pod's limit − 10 %) ÷ slots.
+    #[serde(deserialize_with = "deserialize_optional_size")]
+    pub memory_budget: Option<u64>,
+    /// How often the watchdog samples each task's memory.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub memory_check_interval: Duration,
 }
 
 impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
     /// (Kubernetes' default), the log endpoint on port 8081 of every interface, logs kept for
-    /// 30 days.
+    /// 30 days, the memory budget from the pod's limit, sampled every second.
     fn default() -> Self {
         Self {
             id: None,
@@ -377,6 +383,8 @@ impl Default for WorkerSection {
             log_address: None,
             log_retention: Duration::from_hours(24 * 30),
             log_max_size: None,
+            memory_budget: None,
+            memory_check_interval: Duration::from_secs(1),
         }
     }
 }

@@ -1277,3 +1277,72 @@ fn the_master_takes_rotated_certificates_without_a_restart() {
         cluster.logs()
     );
 }
+
+/// A task that allocates (and touches) 400 MiB on its first try, then finishes small.
+fn greedy_first_try(marker: &std::path::Path) -> String {
+    format!(
+        r#"
+import os, time
+from datetime import timedelta
+from schedr import Dag, task
+
+@task(retries=1, retry_delay=timedelta(0))
+def greedy() -> str:
+    marker = {marker:?}
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        chunks = []
+        for _ in range(40):
+            chunks.append(b"x" * (10 << 20))
+            time.sleep(0.05)
+        time.sleep(30)
+    return "small"
+
+with Dag("greedy"):
+    greedy()
+"#,
+        marker = marker.display().to_string()
+    )
+}
+
+#[test]
+fn a_task_over_its_memory_budget_is_killed_alone_and_retried() {
+    let mut cluster = Cluster::new(None, "100ms");
+    let marker = cluster.dir.path().join("marker");
+    std::fs::write(cluster.root().join("greedy.py"), greedy_first_try(&marker)).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    cluster.start_with(
+        "worker",
+        &[
+            ("SCHEDR_CONFIG__WORKER__MEMORY_BUDGET", "100MiB"),
+            ("SCHEDR_CONFIG__WORKER__MEMORY_CHECK_INTERVAL", "100ms"),
+        ],
+    );
+    cluster.wait("the worker to say its budget", || {
+        cluster
+            .log_of("worker")
+            .contains("memory budget 100 MiB per task")
+    });
+    let run_id = cluster.trigger("greedy");
+    cluster.wait("the run to succeed", || {
+        cluster.run_state(&run_id) == "success"
+    });
+    let attempts = cluster.attempts(&run_id, "greedy");
+    assert_eq!(attempts.len(), 2, "{attempts:?}");
+    assert_eq!(attempts[0]["status"], "oom_killed");
+    let message = attempts[0]["error_summary"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("exceeded memory budget 100 MiB ("),
+        "{message}"
+    );
+    assert!(attempts[0]["peak_memory_bytes"].as_u64().unwrap() > 100 << 20);
+    assert_eq!(attempts[1]["status"], "success");
+    // Measured, well under the budget.
+    let peak = attempts[1]["peak_memory_bytes"].as_u64().unwrap();
+    assert!(peak > 0 && peak < 100 << 20, "{peak}");
+    // The worker itself is still there: only the task was killed.
+    assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
+}

@@ -10,6 +10,7 @@
 //! [`crate::attempt`], [`crate::parse`] and [`crate::supervise`].
 
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
@@ -17,6 +18,7 @@ use tokio::net::UnixStream;
 
 use crate::attempt::Ran;
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
+use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
 use crate::status::StopReason;
@@ -208,17 +210,34 @@ pub async fn run_command(
 pub struct ProcessParseRunner {
     /// The runner process (interpreter, `-m schedr.runner parse`, environment, log file).
     pub process: ProcessSpec,
+    /// How the memory watchdog watches it (each runner, like a task).
+    pub memory: MemoryWatch,
 }
 
 /// A parse runner that connected and got its request.
 #[derive(Debug)]
 pub struct ProcessParseSession {
     runner: Runner,
+    /// The watchdog, killing the runner's group over its budget (stops when dropped).
+    _watching: Option<GroupWatch>,
+    seen: SharedSeen,
+    budget: Option<u64>,
 }
 
 impl ParseSession for ProcessParseSession {
     async fn next(&mut self) -> Result<RunnerMessage, ChannelError> {
-        read_message(&mut self.runner.stream).await
+        let message = read_message(&mut self.runner.stream).await;
+        let over = self
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .over;
+        match (message, over, self.budget) {
+            (Err(_), Some(used), Some(budget)) => {
+                Err(ChannelError::OverMemory(over_budget_message(budget, used)))
+            }
+            (message, _, _) => message,
+        }
     }
 
     async fn stop(self) {
@@ -230,13 +249,24 @@ impl ParseRunner for ProcessParseRunner {
     type Session = ProcessParseSession;
 
     async fn start(&mut self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
-        let mut runner = start_runner(&self.process, RunnerMode::Parse, |_| {})
-            .await
-            .map_err(|e| match e {
-                LaunchError::Channel(channel) => channel,
-                other => ChannelError::Io(std::io::Error::other(other.to_string())),
-            })?;
+        let seen = SharedSeen::default();
+        let mut watching = None;
+        let mut runner = start_runner(&self.process, RunnerMode::Parse, |pgid| {
+            // Told through `seen`, read when the runner's connection breaks.
+            let (killed, _) = tokio::sync::oneshot::channel();
+            watching = Some(watch_group(self.memory.clone(), pgid, seen.clone(), killed));
+        })
+        .await
+        .map_err(|e| match e {
+            LaunchError::Channel(channel) => channel,
+            other => ChannelError::Io(std::io::Error::other(other.to_string())),
+        })?;
         write_message(&mut runner.stream, &AgentMessage::Parse(request)).await?;
-        Ok(ProcessParseSession { runner })
+        Ok(ProcessParseSession {
+            runner,
+            _watching: watching,
+            seen,
+            budget: self.memory.budget,
+        })
     }
 }

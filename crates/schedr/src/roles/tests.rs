@@ -389,3 +389,47 @@ fn an_open_api_is_warned_about_with_its_address() {
         "{warning}"
     );
 }
+
+#[test]
+fn the_memory_watch_takes_the_configured_budget_or_shares_the_limit() {
+    let mut config = config();
+    let watch = memory_watch(&config, Some(4 << 30));
+    let limit: u64 = 4 << 30;
+    assert_eq!(watch.budget, Some((limit - limit / 100 * 10) / 2));
+    assert_eq!(watch.interval, Duration::from_secs(1));
+    assert_eq!(memory_watch(&config, None).budget, None);
+    config.worker.memory_budget = Some(100 << 20);
+    config.worker.memory_check_interval = Duration::from_millis(200);
+    let watch = memory_watch(&config, None);
+    assert_eq!(
+        (watch.budget, watch.interval),
+        (Some(100 << 20), Duration::from_millis(200))
+    );
+    assert_eq!(memory_text(&watch), "memory budget 100 MiB per task");
+    assert_eq!(
+        memory_text(&MemoryWatch::default()),
+        "no memory limit found: task memory is measured, never limited"
+    );
+}
+
+#[test]
+fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
+    let mut config = config();
+    config.worker.memory_check_interval = Duration::ZERO;
+    let error = agent_settings(&config, &env(&[]), Path::new("/d"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "[worker] memory_check_interval must be longer than 0s (e.g. \"1s\")"
+    );
+    let mut config = self::config();
+    config.worker.memory_budget = Some(1 << 10);
+    let error = agent_settings(&config, &env(&[]), Path::new("/d"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "[worker] memory_budget 1 KiB is too small for any task: give at least 16 MiB"
+    );
+}

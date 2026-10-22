@@ -15,6 +15,7 @@ enum Step {
     Send(RunnerMessage),
     Hang,
     Close,
+    OverMemory,
 }
 
 /// Each started session plays the next script; the requests and stops are recorded.
@@ -36,6 +37,9 @@ impl ParseSession for FakeSession {
         match self.steps.pop_front() {
             Some(Step::Send(message)) => Ok(message),
             Some(Step::Hang) => std::future::pending().await,
+            Some(Step::OverMemory) => Err(ChannelError::OverMemory(
+                "exceeded memory budget 100 MiB (130 MiB used)".to_owned(),
+            )),
             Some(Step::Close) | None => Err(ChannelError::Closed),
         }
     }
@@ -212,6 +216,46 @@ async fn a_runner_that_dies_in_a_file_blames_that_file() {
         "the runner stopped while importing the file (the runner closed the connection)"
     );
     assert_eq!(files[1], ok("b.py", vec![]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_file_over_the_memory_budget_after_others_is_tried_alone_before_it_is_blamed() {
+    let mut runner = FakeRunner::with(vec![
+        // `b.py` crosses the budget with `a.py` still imported...
+        vec![
+            started("a.py"),
+            parsed("a.py", vec![]),
+            started("b.py"),
+            Step::OverMemory,
+        ],
+        // ... is fine in a runner of its own, and `c.py` is over the budget by itself.
+        vec![
+            started("b.py"),
+            parsed("b.py", vec![]),
+            started("c.py"),
+            Step::OverMemory,
+        ],
+        vec![started("c.py"), Step::OverMemory],
+    ]);
+    let files = parse_files(&mut runner, request(&["a.py", "b.py", "c.py"]), PER_FILE)
+        .await
+        .unwrap();
+    assert_eq!(files[0], ok("a.py", vec![]));
+    assert_eq!(files[1], ok("b.py", vec![]));
+    let error = files[2].error.as_ref().unwrap();
+    assert_eq!(
+        error.message,
+        "the runner stopped while importing the file (the runner exceeded memory budget 100 \
+         MiB (130 MiB used))"
+    );
+    assert_eq!(
+        runner.requests,
+        [
+            vec!["a.py", "b.py", "c.py"],
+            vec!["b.py", "c.py"],
+            vec!["c.py"]
+        ]
+    );
 }
 
 #[tokio::test(start_paused = true)]

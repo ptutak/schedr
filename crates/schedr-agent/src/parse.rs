@@ -55,7 +55,8 @@ pub trait ParseRunner: Send {
 }
 
 /// Parses the files of `request`, starting a new runner after each file that times out or
-/// kills its runner.
+/// kills its runner; a file over the memory budget after others in the same runner is tried
+/// again first in a fresh one before it is blamed.
 ///
 /// # Errors
 ///
@@ -78,7 +79,8 @@ pub async fn parse_files<R: ParseRunner>(
         let step = run_session(&mut session, &mut remaining, &mut parsed, per_file).await;
         session.stop().await;
         match step {
-            Ok(()) => {}
+            // Done, or the file goes first in a fresh runner (it alone is then measured).
+            Ok(()) | Err(SessionEnd::FreshRunner) => {}
             Err(SessionEnd::Lost(path, error)) => {
                 remaining.pop_front();
                 parsed.push(ParsedFile {
@@ -97,6 +99,9 @@ pub async fn parse_files<R: ParseRunner>(
 enum SessionEnd {
     /// The file being imported timed out or killed the runner.
     Lost(String, ErrorSummary),
+    /// The runner went over its memory budget while importing a file after others: what the
+    /// earlier imports hold counts too, so the file is tried again first in a fresh runner.
+    FreshRunner,
     /// Nothing can be blamed on a file.
     Failed(ParseError),
 }
@@ -108,11 +113,15 @@ async fn run_session<S: ParseSession>(
     per_file: Duration,
 ) -> Result<(), SessionEnd> {
     let mut current: Option<String> = None;
+    let mut imported = 0;
     loop {
         let message = match tokio::time::timeout(per_file, session.next()).await {
             Ok(Ok(message)) => message,
             Ok(Err(error)) => {
                 return Err(match current {
+                    Some(_) if imported > 0 && matches!(error, ChannelError::OverMemory(_)) => {
+                        SessionEnd::FreshRunner
+                    }
                     Some(path) => SessionEnd::Lost(path, died(&error)),
                     None => SessionEnd::Failed(error.into()),
                 });
@@ -132,6 +141,7 @@ async fn run_session<S: ParseSession>(
             }
             RunnerMessage::FileParsed { path, dags, error } if current.as_ref() == Some(&path) => {
                 current = None;
+                imported += 1;
                 remaining.pop_front();
                 parsed.push(ParsedFile { path, dags, error });
             }

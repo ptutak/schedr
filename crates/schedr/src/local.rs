@@ -170,6 +170,7 @@ pub async fn check_root(
             log_file: log_file.clone(),
             max_output_size: 64 * 1024,
         },
+        memory: schedr_agent::memory::MemoryWatch::default(),
     };
     let request = ParseRequest {
         root: root.name.clone(),

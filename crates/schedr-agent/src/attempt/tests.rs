@@ -77,6 +77,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         ]),
         pass_env: vec![],
         log_dir: dir.path().join("logs"),
+        memory: crate::memory::MemoryWatch::default(),
     };
     (dir, setup)
 }

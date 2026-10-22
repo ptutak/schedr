@@ -26,7 +26,7 @@ use tokio::sync::watch;
 use crate::app::AppError;
 use crate::roles::{
     WorkerLinks, agent_settings, data_dir, listen, lock_journal, log_retention, master_settings,
-    no_auth_warning, run_worker, serve_api, serve_master, stop_on_signal,
+    memory_text, no_auth_warning, run_worker, serve_api, serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -252,6 +252,7 @@ pub async fn command(
                 tracing::warn!("{warning}");
             }
             tracing::info!("{}", banner(listening, &shown));
+            tracing::info!("{}", memory_text(&shown.agent.setup.memory));
         },
         stop,
     )
