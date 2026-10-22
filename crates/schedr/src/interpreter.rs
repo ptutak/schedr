@@ -183,13 +183,14 @@ pub fn pyenv_which(pyenv: &Path, host: &Host<'_>) -> Result<PathBuf, String> {
 }
 
 /// Sets the built-in `python` interpreter for a local command, if `[interpreters]` doesn't
-/// define it, and records how it was found ([`Config::builtin_python`]).
+/// define it and the DAG interpreter is `python`, and records how it was found
+/// ([`Config::builtin_python`]). Another DAG interpreter needs no lookup.
 ///
 /// # Errors
 ///
 /// [`PyenvError`] as for [`discover`].
 pub fn apply_local(config: &mut Config, host: &Host<'_>) -> Result<(), PyenvError> {
-    if config.builtin_python.is_none() {
+    if config.builtin_python.is_none() || config.dags.interpreter != PYTHON {
         return Ok(());
     }
     let found = discover(host, true, pyenv_which)?;

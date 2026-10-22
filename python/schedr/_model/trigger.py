@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from schedr._model.timestamps import format_timestamp
+from schedr._model.timestamps import format_optional_timestamp, format_timestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,8 +50,8 @@ class CronTrigger:
             "expression": self.expression,
             "timezone": self.timezone,
             "catchup": self.catchup,
-            "start": _timestamp_or_none(self.start),
-            "end": _timestamp_or_none(self.end),
+            "start": format_optional_timestamp(self.start),
+            "end": format_optional_timestamp(self.end),
         }
 
 
@@ -92,8 +92,8 @@ class EveryTrigger:
             "kind": "every",
             "interval_ms": self.interval_ms,
             "catchup": self.catchup,
-            "start": _timestamp_or_none(self.start),
-            "end": _timestamp_or_none(self.end),
+            "start": format_optional_timestamp(self.start),
+            "end": format_optional_timestamp(self.end),
         }
 
 
@@ -114,10 +114,6 @@ class OnceTrigger:
             ``{"kind": "once", "at": ...}`` in UTC.
         """
         return {"kind": "once", "at": format_timestamp(self.at)}
-
-
-def _timestamp_or_none(value: datetime | None) -> str | None:
-    return None if value is None else format_timestamp(value)
 
 
 type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger

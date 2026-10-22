@@ -30,6 +30,21 @@ def format_timestamp(moment: datetime) -> str:
     return text + "Z"
 
 
+def format_optional_timestamp(moment: datetime | None) -> str | None:
+    """Formats an optional aware datetime like :func:`format_timestamp`.
+
+    Args:
+        moment: An aware datetime, or ``None``.
+
+    Returns:
+        The moment in UTC with a ``Z`` suffix, or ``None``.
+
+    Raises:
+        ValueError: If ``moment`` is naive.
+    """
+    return None if moment is None else format_timestamp(moment)
+
+
 def parse_moment(value: datetime | date | str, tz: str, name: str) -> datetime:
     """Reads a moment given in DAG code: naive values (and dates) are in the time zone ``tz``.
 

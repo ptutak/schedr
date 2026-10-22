@@ -197,10 +197,11 @@ const RUNNER_OUTPUT_LINES: usize = 20;
 /// Why parsing failed, with what helps fixing it: the interpreter, how it was chosen, the
 /// runner's last output lines, and what the interpreter needs.
 fn runner_failed(error: &str, config: &Config, python: &Path, output: &str) -> String {
-    let how = config
+    let builtin = config
         .builtin_python
         .as_deref()
-        .unwrap_or("configured in [interpreters]");
+        .filter(|_| config.dags.interpreter == "python");
+    let how = builtin.unwrap_or("configured in [interpreters]");
     let mut message = format!(
         "parsing failed: {error}\n  interpreter `{}`: {} ({how})",
         config.dags.interpreter,
@@ -214,10 +215,17 @@ fn runner_failed(error: &str, config: &Config, python: &Path, output: &str) -> S
             message.push_str(line);
         }
     }
+    let choose = if config.dags.interpreter == "python" {
+        "[interpreters] python (SCHEDR_CONFIG__INTERPRETERS__PYTHON)".to_owned()
+    } else {
+        format!(
+            "[interpreters] {}, or [dags] interpreter",
+            config.dags.interpreter
+        )
+    };
     let _ = write!(
         message,
-        "\n  it needs Python 3.14+ with schedr {} installed; choose another with \
-         [interpreters] python (SCHEDR_CONFIG__INTERPRETERS__PYTHON)",
+        "\n  it needs Python 3.14+ with schedr {} installed; choose another with {choose}",
         crate::VERSION
     );
     message

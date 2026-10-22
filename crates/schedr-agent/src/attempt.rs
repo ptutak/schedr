@@ -296,7 +296,7 @@ pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
     let mut message = pb::Finished {
         attempt_id: attempt_id.to_owned(),
         status: attempt_status_to_proto(status).into(),
-        duration_ms: u64::try_from(ran.duration.as_millis()).unwrap_or(u64::MAX),
+        duration_ms: Some(u64::try_from(ran.duration.as_millis()).unwrap_or(u64::MAX)),
         ..pb::Finished::default()
     };
     match termination {

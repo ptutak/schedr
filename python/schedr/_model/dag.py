@@ -11,7 +11,7 @@ from typing import Any
 
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
 from schedr._model.tasks import Task
-from schedr._model.timestamps import format_timestamp
+from schedr._model.timestamps import format_optional_timestamp
 from schedr._model.trigger import NoTrigger, Trigger
 from schedr._model.version import SchedrVersion
 
@@ -148,13 +148,9 @@ class Dag:
             result["tags"] = list(self.tags)
         result |= {
             "trigger": self.trigger.to_json(),
-            "initial_since": _timestamp_or_none(self.initial_since),
+            "initial_since": format_optional_timestamp(self.initial_since),
             "max_active_runs": self.max_active_runs,
             "tasks": [t.to_json() for t in self.tasks],
             "edges": [e.to_json() for e in self.edges],
         }
         return result
-
-
-def _timestamp_or_none(moment: datetime | None) -> str | None:
-    return None if moment is None else format_timestamp(moment)

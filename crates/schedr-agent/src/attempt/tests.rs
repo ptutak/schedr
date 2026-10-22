@@ -295,7 +295,7 @@ fn a_python_task_reports_the_runners_result() {
             message.exit_code,
             message.duration_ms
         ),
-        ("SUCCESS", Some(0), 1500)
+        ("SUCCESS", Some(0), Some(1500))
     );
 
     let error = ErrorSummary {
@@ -378,4 +378,5 @@ fn a_failure_before_starting_is_reported_as_failed() {
     assert_eq!(message.error_kind, RENDER_FAILED);
     let summary: ErrorSummary = serde_json::from_slice(&message.error_summary_json).unwrap();
     assert_eq!(summary.message, "no output of `ghost`");
+    assert_eq!(message.duration_ms, None, "it never ran");
 }

@@ -143,7 +143,8 @@ message Finished {
   // On success: the output as tagged JSON (schedr-model), and its outcome name.
   bytes output_json = 5;
   string outcome = 6;
-  uint64 duration_ms = 7;
+  // How long the process ran (the agent's monotonic clock); absent if it never started.
+  optional uint64 duration_ms = 7;
   uint64 peak_memory_bytes = 8;
   // For failures schedr recognises, e.g. "secret_not_found"; empty otherwise.
   string error_kind = 9;

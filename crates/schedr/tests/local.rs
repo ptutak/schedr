@@ -252,3 +252,21 @@ fn an_unknown_dag_names_the_files_that_didnt_import() {
         "{err}"
     );
 }
+
+#[test]
+fn check_doesnt_wait_for_a_process_a_dag_file_detached() {
+    // A process started in a session of its own outlives the runner's kill and keeps its
+    // output pipes open; `dags check` must finish anyway.
+    let detaching = format!(
+        "import subprocess\nsubprocess.Popen(['sleep', '60'], start_new_session=True)\n{GOOD}"
+    );
+    let local = Local::new(&[("sync.py", detaching.as_str())]);
+    let started = std::time::Instant::now();
+    let (code, out, err) = local.check(&[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "took {:?}",
+        started.elapsed()
+    );
+}

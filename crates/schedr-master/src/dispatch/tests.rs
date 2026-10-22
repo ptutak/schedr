@@ -224,7 +224,7 @@ async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
         .await
         .unwrap();
     let done = pb::Finished {
-        duration_ms: 300,
+        duration_ms: Some(300),
         ..finished(&attempt, pb::AttemptStatus::Success, &json!([1]))
     };
     // The master's wall clock stepped back 4 s between `Started` and `Finished`.

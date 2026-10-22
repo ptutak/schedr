@@ -320,3 +320,29 @@ fn apply_local_replaces_only_the_builtin_python() {
     );
     assert_eq!(configured.builtin_python, None);
 }
+
+#[test]
+fn apply_local_doesnt_look_when_the_dag_interpreter_is_another() {
+    let tmp = TempDir::new().unwrap();
+    // A pyenv shim pyenv can't resolve would fail the lookup, if it ran.
+    let (_, vars) = pyenv_layout(&tmp);
+    let host = Host {
+        env: &vars,
+        cwd: None,
+        exe: None,
+    };
+    let mut config = Config {
+        builtin_python: Some(BUILTIN_PYTHON_ORIGIN.to_owned()),
+        ..Config::default()
+    };
+    config.dags.interpreter = "py314".to_owned();
+    config
+        .interpreters
+        .insert("python".to_owned(), Interpreter::path("python3"));
+    apply_local(&mut config, &host).unwrap();
+    assert_eq!(config.interpreters["python"], Interpreter::path("python3"));
+    assert_eq!(
+        config.builtin_python.as_deref(),
+        Some(BUILTIN_PYTHON_ORIGIN)
+    );
+}

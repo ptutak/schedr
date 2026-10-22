@@ -19,12 +19,16 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    files.
 4. **Run `make check` and `make docs`** (or the project's equivalents) and make sure both
    pass. Never claim something passes without running it; report failures with their output.
-5. **Record the decisions** in `PROJECT.md`, in the section they belong to, with what wasn't
+5. **Run a code review once over the whole step** (the code-review skill, `/code-review`, on
+   everything the step changed, after the checks pass). Fix what it confirms, re-run the
+   checks, and list in the summary what it found and what was fixed or left (with why). A
+   finding outside the step's scope goes to `BUGS.md`.
+6. **Record the decisions** in `PROJECT.md`, in the section they belong to, with what wasn't
    chosen and why.
-6. **Present a short summary and wait:** what was built, the decisions made (so I can
+7. **Present a short summary and wait:** what was built, the decisions made (so I can
    overrule them), anything surprising (new bugs, inconsistencies, coverage close to the
    floor), and the proposed commit.
-7. **Commit only when I say so** ("commit", "accepted, commit and go on"). Never push: I push
+8. **Commit only when I say so** ("commit", "accepted, commit and go on"). Never push: I push
    myself, often without saying so, so don't claim CI hasn't run. To know CI's state, ask me
    (I may not have `gh` installed).
 

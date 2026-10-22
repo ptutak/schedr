@@ -68,7 +68,10 @@ for s in socks:
 print(*(s.getsockname()[1] for s in socks))
 ')
 server=http://127.0.0.1:$http
-run env SCHEDR_DAG_PATH="$work/dags" \
+# Started directly (not through `run`, a function, which `&` would put in a subshell), so
+# $! is the standalone's own PID: `env` execs it.
+env -i PATH=/usr/bin:/bin HOME="$work/home" TZ=UTC \
+    SCHEDR_DAG_PATH="$work/dags" \
     SCHEDR_CONFIG__WEBSERVER__PORT="$http" \
     SCHEDR_CONFIG__MASTER__GRPC_PORT="$grpc" \
     SCHEDR_CONFIG__WORKER__DATA_DIR="$work/data" \
@@ -95,7 +98,8 @@ cli runs trigger sync_customers --for 2026-10-15T01:00:00Z || fail "runs trigger
 state=
 for _ in $(seq 240); do
     state=$(cli runs list sync_customers --for 2026-10-15T01:00:00Z --json |
-        "$python" -c 'import json, sys; runs = json.load(sys.stdin)["runs"]; print(runs[0]["state"] if runs else "")')
+        "$python" -c 'import json, sys; runs = json.load(sys.stdin)["runs"]; print(runs[0]["state"] if runs else "")') ||
+        fail "runs list"
     case $state in
         success) break ;;
         failed | cancelled) fail "the run ended $state" ;;

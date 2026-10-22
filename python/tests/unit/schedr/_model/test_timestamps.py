@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from schedr._model.timestamps import format_timestamp, parse_moment
+from schedr._model.timestamps import format_optional_timestamp, format_timestamp, parse_moment
 
 
 @pytest.mark.parametrize(
@@ -46,3 +46,8 @@ def test_parse_moment_rejects_other_values() -> None:
         parse_moment("soon", "UTC", "start")
     with pytest.raises(TypeError, match="start must be a datetime, a date or an ISO string"):
         parse_moment(3, "UTC", "start")  # type: ignore[arg-type]
+
+
+def test_an_optional_timestamp_is_formatted_or_none() -> None:
+    assert format_optional_timestamp(None) is None
+    assert format_optional_timestamp(datetime(2026, 1, 1, tzinfo=UTC)) == "2026-01-01T00:00:00Z"

@@ -119,12 +119,18 @@ pub async fn start_runner(spec: &ProcessSpec, mode: RunnerMode) -> Result<Runner
     Ok(Runner { process, stream })
 }
 
-/// Stops a runner that failed to start, and waits until everything it printed is in its log
-/// (the caller may show it).
+/// How long a stopped runner's output may take to reach its log. A process it started in a
+/// session of its own outlives the kill and can hold the pipes open; the log is then left
+/// as it is rather than waiting forever.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Stops a runner (one that failed to start, or a finished parse session) and waits until
+/// what it printed is in its log (the caller may show it), for at most
+/// [`OUTPUT_DRAIN_TIMEOUT`].
 async fn abandon(mut process: OsProcess) {
     let _ = process.signal(Signal::Kill);
     let _ = process.wait().await;
-    let _ = process.output().await;
+    let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
 }
 
 /// Runs a Python task: starts the runner, sends the request, and waits for its result while

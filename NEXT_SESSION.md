@@ -44,6 +44,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 
 - One step at a time. At the end of each step:
   - run `make check` **and** `make docs` and confirm both pass;
+  - run the code review once over everything the step changed (the `code-review` skill),
+    fix what it confirms, re-run the checks, and report its findings in the summary;
   - record the decisions in PROJECT.md;
   - present a short summary and wait.
 

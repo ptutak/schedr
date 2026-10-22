@@ -128,3 +128,33 @@ fn an_interpreter_that_cant_run_the_runner_is_named_with_its_output() {
     assert!(err.contains("its output:"), "{err}");
     assert!(err.contains("it needs Python 3.14+ with schedr"), "{err}");
 }
+
+#[test]
+fn another_dag_interpreter_is_named_as_configured() {
+    let dir = project();
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[dags]\ninterpreter = \"py314\"\n\n[interpreters]\npy314 = \"/bin/sh\"\n",
+    )
+    .unwrap();
+    python_wrapper(&dir.path().join(".venv/bin/python3"));
+    let env = [("PATH", "/usr/bin:/bin".to_owned())];
+    let (code, err) = schedr(
+        dir.path(),
+        &env,
+        &["--config", "config.toml", "dags", "check", "etl/sync.py"],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("interpreter `py314`: /bin/sh (configured in [interpreters])"),
+        "{err}"
+    );
+    assert!(
+        err.contains("choose another with [interpreters] py314, or [dags] interpreter"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("project venv"),
+        "no lookup for another interpreter: {err}"
+    );
+}
