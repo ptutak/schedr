@@ -229,6 +229,25 @@ impl Dispatcher {
         self.workers.draining(worker_id);
     }
 
+    /// A worker is drained for maintenance: it gets no new tasks.
+    pub fn drain(&mut self, worker_id: &str) {
+        self.workers.set_drained(worker_id, true);
+    }
+
+    /// A drained worker is resumed: like a new worker, it gives `unschedulable` tasks
+    /// another chance.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails.
+    pub async fn resume(&mut self, worker_id: &str, now: Timestamp) -> Result<(), DispatchError> {
+        self.workers.set_drained(worker_id, false);
+        self.rejections.clear();
+        self.code_missing.clear();
+        self.db.requeue_unschedulable(now).await?;
+        Ok(())
+    }
+
     /// One step of the loop: new runs get their tasks, retries whose delay passed are queued,
     /// assignments with no `Started` are taken back, and ready tasks are assigned.
     ///
@@ -774,6 +793,11 @@ impl Dispatcher {
         let queue = needs.queue;
         let serving: Vec<_> = self.workers.serving(queue).collect();
         if serving.is_empty() {
+            if self.workers.drained_serving(queue) {
+                return format!(
+                    "the workers serving queue `{queue}` are drained (`schedr workers resume`)"
+                );
+            }
             return format!("no active worker serves queue `{queue}`");
         }
         let recent: Vec<_> = serving

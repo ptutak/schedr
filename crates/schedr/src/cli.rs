@@ -392,11 +392,7 @@ impl Command {
             | Self::Worker
             | Self::Webserver
             | Self::Tasks { .. }
-            | Self::Workers {
-                command: WorkersCommand::List,
-                ..
-            } => None,
-            Self::Workers { .. } => Some("M2"),
+            | Self::Workers { .. } => None,
             Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
         }
     }

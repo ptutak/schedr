@@ -17,7 +17,10 @@ CREATE TABLE workers (
     log_endpoint      TEXT NOT NULL,
     registered_at     TEXT NOT NULL,
     last_heartbeat_at TEXT NOT NULL,
-    offline_at        TEXT
+    offline_at        TEXT,
+    -- Drained for maintenance (`schedr workers drain`): no new tasks until resumed, across
+    -- restarts of the worker and the master.
+    drained           INTEGER NOT NULL DEFAULT 0 CHECK (drained IN (0, 1))
 );
 
 CREATE TABLE parse_results (

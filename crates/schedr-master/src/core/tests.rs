@@ -666,3 +666,39 @@ async fn tasks_go_to_the_worker_with_the_newest_code_until_it_leaves() {
         ("w1", "h1")
     );
 }
+
+#[tokio::test]
+async fn a_drained_worker_stays_drained_when_it_registers_again() {
+    let mut core = with_dag().await;
+    core.db.set_worker_drained("w1", true).await.unwrap();
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(1))
+        .await
+        .unwrap();
+    assert!(core.dispatcher().workers().get("w1").unwrap().drained);
+    trigger(&mut core).await;
+    let out = core.tick(later(2)).await.unwrap();
+    assert!(
+        !out.iter()
+            .any(|o| matches!(message(o), master_message::Message::AssignTask(_))),
+        "{out:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_saying_it_drains_hands_its_parse_jobs_over() {
+    let mut core = core().await;
+    core.register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    core.register(&register("w2", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let draining = worker_message::Message::Draining(pb::Draining {});
+    let out = core.handle("w1", draining, ts(NOW)).await.unwrap();
+    let master_message::Message::AssignParse(job) = message(&out[0]) else {
+        panic!("expected AssignParse, got {out:?}")
+    };
+    assert_eq!(out[0].worker_id, "w2");
+    assert_eq!(job.root.as_ref().unwrap().content_hash, "h1");
+}

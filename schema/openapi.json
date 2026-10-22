@@ -470,6 +470,10 @@
       "WorkerView": {
         "description": "A worker in the registry (kept after it is gone, so its logs can be found).",
         "properties": {
+          "drained": {
+            "description": "Drained for maintenance (`schedr workers drain`): no new tasks until resumed.",
+            "type": "boolean"
+          },
           "incarnation_id": {
             "description": "The incarnation of its agent process it last registered with.",
             "type": "string"
@@ -543,7 +547,8 @@
           "protocol_version",
           "log_endpoint",
           "registered_at",
-          "last_heartbeat_at"
+          "last_heartbeat_at",
+          "drained"
         ],
         "type": "object"
       }
@@ -1107,6 +1112,86 @@
           }
         },
         "summary": "Every worker the master has seen, gone ones included.",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/drain": {
+      "post": {
+        "operationId": "drain_worker",
+        "parameters": [
+          {
+            "description": "The worker's ID",
+            "in": "path",
+            "name": "worker_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones\nfinish; kept across restarts until resumed. Applied by the master; poll the command for\nthe decision.",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/resume": {
+      "post": {
+        "operationId": "resume_worker",
+        "parameters": [
+          {
+            "description": "The worker's ID",
+            "in": "path",
+            "name": "worker_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Let a drained worker take tasks again (`schedr workers resume`). Applied by the master;\npoll the command for the decision.",
         "tags": [
           "workers"
         ]

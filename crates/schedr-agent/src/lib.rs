@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod attempt;
 pub mod channel;
+pub mod drain;
 pub mod env;
 pub mod journal;
 pub mod launch;

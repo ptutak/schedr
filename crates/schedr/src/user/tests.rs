@@ -477,19 +477,43 @@ async fn workers_are_listed_as_a_table() {
 }
 
 #[tokio::test]
-async fn draining_comes_later() {
+async fn a_worker_is_drained_and_resumed() {
     let client = world(false).await;
-    let error = run_workers(
-        &WorkersCommand::Drain {
-            worker: "w1".to_owned(),
-        },
-        &client,
-        &text(),
-        &mut Vec::new(),
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("milestone M2"), "{error}");
+    let drain = WorkersCommand::Drain {
+        worker: "w1".to_owned(),
+    };
+    let error = run_workers(&drain, &client, &text(), &mut Vec::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no worker `w1`"), "{error}");
+    client
+        .transport()
+        .db
+        .register_worker(
+            &schedr_db::workers::WorkerRegistration {
+                id: "w1",
+                incarnation: "i1",
+                protocol_version: "1.0",
+                schedr_version: "0.1.0",
+                queues: &[],
+                slots: 2,
+                log_endpoint: "",
+            },
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        workers(&client, drain, &text()).await,
+        "draining w1: no new tasks; 0 running task(s) finishing \
+         (`schedr workers resume w1` to undo)\n"
+    );
+    let listed = workers(&client, WorkersCommand::List, &text()).await;
+    assert!(listed.contains("w1      active (drained)"), "{listed}");
+    let resume = WorkersCommand::Resume {
+        worker: "w1".to_owned(),
+    };
+    assert_eq!(workers(&client, resume, &text()).await, "resumed w1\n");
 }
 
 async fn tasks(client: &Client<InProcess>, command: TasksCommand) -> Result<String, AppError> {

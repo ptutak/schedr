@@ -335,16 +335,14 @@ async fn test_dag(
     local.dags.poll_interval = Duration::from_millis(200);
     local.dags.settle_time = Duration::ZERO;
     let setup = plan(&local, env)?;
-    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(run(
         setup,
         move |listening| {
             let _ = bound.send(listening);
         },
-        async {
-            let _ = stopped.await;
-        },
+        stopped,
     ));
     let result = match addresses.await {
         Ok(listening) => {
@@ -362,7 +360,8 @@ async fn test_dag(
             "the local schedr didn't start".to_owned(),
         )),
     };
-    let _ = stop.send(());
+    // Two requests: whatever still runs (a run that timed out) is interrupted at once.
+    let _ = stop.send(2);
     if let Ok(Err(error)) = server.await {
         tracing::warn!(%error, "local schedr stopped with an error");
     }

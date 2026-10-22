@@ -24,7 +24,7 @@ use tokio::sync::watch;
 use crate::app::AppError;
 use crate::roles::{
     agent_settings, data_dir, listen, lock_journal, master_settings, no_auth_warning, run_worker,
-    serve_api, serve_master, stop_on_signal, until,
+    serve_api, serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -90,7 +90,9 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
     })
 }
 
-/// Runs standalone until `shutdown` completes; `listening` gets the addresses once bound.
+/// Runs standalone until asked to stop (`shutdown` counts the requests): its worker drains
+/// first (a second request interrupts its tasks at once), then the master and the API stop,
+/// so interrupted tasks are recorded; `listening` gets the addresses once bound.
 ///
 /// # Errors
 ///
@@ -98,7 +100,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
 pub async fn run(
     setup: Standalone,
     listening: impl FnOnce(Listening),
-    shutdown: impl Future<Output = ()>,
+    shutdown: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     let io = |what: &str, e: std::io::Error| AppError::BadArgument(format!("{what}: {e}"));
     tokio::fs::create_dir_all(&setup.data_dir)
@@ -117,7 +119,8 @@ pub async fn run(
     };
     listening(addresses);
 
-    let (stop, stopped) = watch::channel(false);
+    // The master and the API stop once the worker has drained.
+    let (stop, stopped) = watch::channel(0);
     // Boxed: the roles' futures are large.
     let master = Box::pin(serve_master(
         db.clone(),
@@ -132,17 +135,17 @@ pub async fn run(
         http,
         stopped.clone(),
     ));
-    let worker = Box::pin(run_worker(
-        setup.agent,
-        setup.parse_file_timeout,
-        format!("http://{}", addresses.grpc),
-        stopped,
-    ));
-    let signal = async move {
-        shutdown.await;
-        let _ = stop.send(true);
-    };
-    let (master, api, (), ()) = tokio::join!(master, api, worker, signal);
+    let worker = Box::pin(async move {
+        run_worker(
+            setup.agent,
+            setup.parse_file_timeout,
+            format!("http://{}", addresses.grpc),
+            shutdown,
+        )
+        .await;
+        let _ = stop.send(1);
+    });
+    let (master, api, ()) = tokio::join!(master, api, worker);
     master?;
     api
 }
@@ -232,7 +235,7 @@ pub async fn command(
             }
             tracing::info!("{}", banner(listening, &shown));
         },
-        until(stop),
+        stop,
     )
     .await
 }

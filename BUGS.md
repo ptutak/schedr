@@ -7,7 +7,7 @@ is logged here and its fix scheduled with the user. Not part of the documentatio
 
 ## B6: role integration tests fail under disk load inside `make check`
 
-- **Seen:** 2026-10-22, twice (M2.4 and M2.5): the first `make check` of a step failed 4–7
+- **Seen:** 2026-10-22, three times (M2.4, M2.5, M2.6): the first `make check` of a step failed 2–7
   `schedr::roles` tests at once, old and new alike ("waited too long for …", a worker found
   `lost` instead of `active`), with Postgres statements taking 3–11 s and SQLite reporting
   "database is locked". `make test-integration` on its own passed right after, twice each

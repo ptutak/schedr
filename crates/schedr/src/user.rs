@@ -12,7 +12,7 @@ use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
 
 use crate::app::AppError;
 use crate::cli::{DagsCommand, RunsCommand, TasksCommand, WorkersCommand};
-use crate::client::{Client, TaskAction, Transport};
+use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short};
 
 #[cfg(test)]
@@ -77,8 +77,7 @@ pub async fn run_dags<T: Transport>(
 ///
 /// # Errors
 ///
-/// [`AppError::Client`] as for [`run_dags`]; [`AppError::NotImplemented`] for `drain` and
-/// `resume`.
+/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason).
 pub async fn run_workers<T: Transport>(
     command: &WorkersCommand,
     client: &Client<T>,
@@ -102,11 +101,30 @@ pub async fn run_workers<T: Transport>(
                 &rows,
             )
         }
-        WorkersCommand::Drain { .. } | WorkersCommand::Resume { .. } => {
-            Err(AppError::NotImplemented {
-                command: "workers",
-                milestone: "M2",
-            })
+        WorkersCommand::Drain { worker } => {
+            let command = client
+                .wait(client.worker_action(worker, WorkerAction::Drain).await?)
+                .await?;
+            let running = command
+                .result
+                .as_ref()
+                .and_then(|r| r["running"].as_u64())
+                .unwrap_or(0);
+            done(
+                out,
+                output,
+                &command,
+                &format!(
+                    "draining {worker}: no new tasks; {running} running task(s) finishing \
+                     (`schedr workers resume {worker}` to undo)"
+                ),
+            )
+        }
+        WorkersCommand::Resume { worker } => {
+            let command = client
+                .wait(client.worker_action(worker, WorkerAction::Resume).await?)
+                .await?;
+            done(out, output, &command, &format!("resumed {worker}"))
         }
     }
 }
@@ -114,7 +132,11 @@ pub async fn run_workers<T: Transport>(
 fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {
     vec![
         worker.worker_id.clone(),
-        worker.state.clone(),
+        if worker.drained {
+            format!("{} (drained)", worker.state)
+        } else {
+            worker.state.clone()
+        },
         format!("{}/{}", worker.running, worker.slots),
         worker.queues.join(","),
         show(worker.last_heartbeat_at, local),

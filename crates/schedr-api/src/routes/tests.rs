@@ -154,6 +154,17 @@ async fn actions_become_pending_commands_by_the_user() {
         "",
     )
     .await;
+    for action in ["drain", "resume"] {
+        let (status, body) = send(
+            &app,
+            Method::POST,
+            &format!("/api/v1/workers/w1/{action}"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["kind"], format!("{action}_worker"));
+    }
     for action in ["cancel", "retry"] {
         let path = format!("/api/v1/runs/{run_id}/tasks/load/{action}");
         let (status, body) = send(&app, Method::POST, &path, "").await;
@@ -192,6 +203,12 @@ async fn actions_become_pending_commands_by_the_user() {
             },
             Command::CancelRun {
                 run_id: run_id.clone()
+            },
+            Command::DrainWorker {
+                worker_id: "w1".to_owned()
+            },
+            Command::ResumeWorker {
+                worker_id: "w1".to_owned()
             },
             Command::CancelTask {
                 run_id: run_id.clone(),
@@ -368,7 +385,7 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             "protocol_version": "1.0", "log_endpoint": "",
             "registered_at": "2026-10-22T08:00:00Z",
             "last_heartbeat_at": "2026-10-22T08:00:00Z",
-            "offline_at": "2026-10-22T08:02:00Z"
+            "offline_at": "2026-10-22T08:02:00Z", "drained": false
         })
     );
 }

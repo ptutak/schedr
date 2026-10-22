@@ -107,3 +107,13 @@ fn a_waiting_job_goes_to_the_next_worker_that_reports_it() {
     assert!(jobs.request(key("h1"), "w3", at(3)).is_some());
     assert_eq!(jobs.expire(at(4)), []);
 }
+
+#[test]
+fn a_waiting_job_goes_to_the_next_worker_that_reports_the_hash() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.wait(key("h1"));
+    jobs.wait(key("h1"));
+    assert_eq!(jobs.len(), 1);
+    let assigned = jobs.request(key("h1"), "w2", at(0)).unwrap();
+    assert_eq!(assigned.worker_id, "w2");
+}

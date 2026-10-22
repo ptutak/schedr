@@ -156,3 +156,25 @@ fn only_workers_with_the_current_code_and_a_recent_enough_version_are_eligible()
     assert_eq!(ids(other_root), Vec::<String>::new());
     assert_eq!(ids(Needs::queue(DEFAULT_QUEUE)), ["w1", "w2", "w3"]);
 }
+
+#[test]
+fn a_drained_worker_gets_nothing_until_resumed_and_a_new_incarnation_starts_undrained() {
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &[], 2);
+    workers.set_drained("w1", true);
+    workers.set_drained("ghost", true);
+    assert_eq!(workers.pick(Needs::queue(DEFAULT_QUEUE), &none()), None);
+    workers.register("w1", "i1", &[], 2);
+    assert!(workers.get("w1").unwrap().drained, "a reconnect keeps it");
+    workers.set_drained("w1", false);
+    assert_eq!(
+        workers.pick(Needs::queue(DEFAULT_QUEUE), &none()),
+        Some("w1")
+    );
+    workers.set_drained("w1", true);
+    workers.register("w1", "i2", &[], 2);
+    assert!(
+        !workers.get("w1").unwrap().drained,
+        "the master applies it again"
+    );
+}

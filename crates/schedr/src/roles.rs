@@ -36,8 +36,8 @@ use crate::app::{AppError, role_config};
 mod tests;
 
 /// Completes once `stop` turns `true`: how every part of a role learns to stop.
-pub async fn until(mut stop: watch::Receiver<bool>) {
-    let _ = stop.wait_for(|stop| *stop).await;
+pub async fn until(mut stop: watch::Receiver<u32>) {
+    let _ = stop.wait_for(|requests| *requests > 0).await;
 }
 
 /// The master's timing, from the configuration.
@@ -121,6 +121,7 @@ pub fn agent_settings(
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
         journal_dir: data_dir.join("journal").join(file_name(&worker_id)),
+        termination_grace_period: config.worker.termination_grace_period,
         worker_id,
     })
 }
@@ -190,7 +191,7 @@ pub async fn serve_master(
     settings: Settings,
     tick: Duration,
     listener: TcpListener,
-    stop: watch::Receiver<bool>,
+    stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     let notifications = match db.command_notifications().await {
         Ok(notifications) => notifications,
@@ -236,7 +237,7 @@ pub async fn serve_api(
     db: Database,
     identity_header: Option<String>,
     listener: TcpListener,
-    stop: watch::Receiver<bool>,
+    stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     axum::serve(listener, router(ApiState::new(db, identity_header)))
         .with_graceful_shutdown(until(stop))
@@ -244,12 +245,13 @@ pub async fn serve_api(
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
 }
 
-/// Runs a worker agent connected to the master at `master_url` until `stop`.
+/// Runs a worker agent connected to the master at `master_url` until it has drained after a
+/// stop request (`stop` counts them; see [`schedr_agent::drain`]).
 pub async fn run_worker(
     agent: AgentSettings,
     parse_file_timeout: Duration,
     master_url: String,
-    stop: watch::Receiver<bool>,
+    stop: watch::Receiver<u32>,
 ) {
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
@@ -262,7 +264,7 @@ pub async fn run_worker(
                 let url = master_url.clone();
                 async move { MasterClient::connect(url).await.map_err(|e| e.to_string()) }
             },
-            until(stop),
+            stop,
         )
         .await;
 }
@@ -349,29 +351,38 @@ pub fn master_host(url: &str) -> Result<String, AppError> {
         .ok_or_else(|| bad("has no host"))
 }
 
-/// A stop channel that turns `true` on Ctrl-C or SIGTERM. The SIGTERM handler is registered
-/// before this returns, so a SIGTERM right after start still stops the role gracefully.
+/// A count of stop requests (Ctrl-C or SIGTERM): the first stops a role (a worker drains), a
+/// second makes a draining worker interrupt its tasks at once. The SIGTERM handler is
+/// registered before this returns, so a SIGTERM right after start still stops the role
+/// gracefully.
 #[must_use]
-pub fn stop_on_signal() -> watch::Receiver<bool> {
-    let (stop, stopped) = watch::channel(false);
+pub fn stop_on_signal() -> watch::Receiver<u32> {
+    let (stop, stopped) = watch::channel(0);
     let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
     tokio::spawn(async move {
-        let terminate = async {
-            match terminate {
-                Ok(mut signal) => {
-                    signal.recv().await;
+        let mut terminate = terminate
+            .map_err(|error| tracing::warn!(%error, "can't watch SIGTERM; Ctrl-C only"))
+            .ok();
+        let mut ctrl_c = true;
+        loop {
+            let sigterm = async {
+                match &mut terminate {
+                    Some(signal) => signal.recv().await,
+                    None => std::future::pending().await,
                 }
-                Err(error) => {
-                    tracing::warn!(%error, "can't watch SIGTERM; Ctrl-C only");
-                    std::future::pending::<()>().await;
+            };
+            tokio::select! {
+                watched = tokio::signal::ctrl_c(), if ctrl_c => {
+                    if let Err(error) = watched {
+                        tracing::warn!(%error, "can't watch Ctrl-C; SIGTERM only");
+                        ctrl_c = false;
+                        continue;
+                    }
                 }
+                Some(()) = sigterm => {}
             }
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            () = terminate => {}
+            stop.send_modify(|requests| *requests += 1);
         }
-        let _ = stop.send(true);
     });
     stopped
 }

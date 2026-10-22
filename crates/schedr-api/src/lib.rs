@@ -39,6 +39,8 @@ pub use state::ApiState;
         routes::retry_task,
         routes::get_command,
         routes::list_workers,
+        routes::drain_worker,
+        routes::resume_worker,
     ),
     tags(
         (name = "dags", description = "DAGs and pausing"),
@@ -86,6 +88,14 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/commands/{command_id}", get(routes::get_command))
         .route("/api/v1/workers", get(routes::list_workers))
+        .route(
+            "/api/v1/workers/{worker_id}/drain",
+            post(routes::drain_worker),
+        )
+        .route(
+            "/api/v1/workers/{worker_id}/resume",
+            post(routes::resume_worker),
+        )
         .route(
             "/api/v1/openapi.json",
             get(|| async { Json(openapi_json()) }),

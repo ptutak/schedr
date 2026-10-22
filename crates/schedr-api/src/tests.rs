@@ -85,6 +85,8 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
             "/api/v1/runs/{run_id}/tasks/{task_id}/cancel",
             "/api/v1/runs/{run_id}/tasks/{task_id}/retry",
             "/api/v1/workers",
+            "/api/v1/workers/{worker_id}/drain",
+            "/api/v1/workers/{worker_id}/resume",
         ]
     );
 }

@@ -55,6 +55,17 @@ pub enum Command {
         /// The task.
         task_id: TaskId,
     },
+    /// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones
+    /// finish; kept across restarts until resumed.
+    DrainWorker {
+        /// The worker.
+        worker_id: String,
+    },
+    /// Let a drained worker take tasks again (`schedr workers resume`).
+    ResumeWorker {
+        /// The worker.
+        worker_id: String,
+    },
 }
 
 impl Command {
@@ -68,6 +79,8 @@ impl Command {
             Self::UnpauseDag { .. } => "unpause_dag",
             Self::CancelTask { .. } => "cancel_task",
             Self::RetryTask { .. } => "retry_task",
+            Self::DrainWorker { .. } => "drain_worker",
+            Self::ResumeWorker { .. } => "resume_worker",
         }
     }
 }

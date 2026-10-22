@@ -12,6 +12,10 @@
 //!   job's hash (otherwise a newer hash was or will be reported).
 //! - **The connection drops:** attempts keep running, and the agent connects again with
 //!   backoff (up to 30 s).
+//! - **Shutdown** (SIGTERM): the agent drains (see [`crate::drain`]): it says `Draining` (again
+//!   after any reconnect), rejects new assignments, gives the running attempts until the
+//!   termination grace period ends, interrupts the rest, and deregisters once the master has
+//!   their results. A second request interrupts at once.
 //! - **The journal** on disk backs `Started` and `Finished` (see [`crate::journal`]): an
 //!   attempt that can't be recorded is rejected, and on start the agent reports the results
 //!   its previous incarnation had and stops the processes it left running.
@@ -28,11 +32,12 @@ use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::parsed_file_to_proto;
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_proto::pb::{self, master_message, worker_message};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{AttemptSpec, NotRun, Plan, WorkerSetup, failed_before_start, finished, plan};
+use crate::drain::{Drain, DrainStep};
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
@@ -84,6 +89,9 @@ pub struct AgentSettings {
     pub settle_time: Duration,
     /// Where the journal is kept (see [`crate::journal`]).
     pub journal_dir: PathBuf,
+    /// How long the running attempts get when the agent is asked to stop (the pod's
+    /// `terminationGracePeriodSeconds`).
+    pub termination_grace_period: Duration,
 }
 
 /// Told the identity of an attempt's process once it is spawned.
@@ -224,7 +232,8 @@ pub struct Agent<E> {
     incarnation: String,
     journal: Journal,
     watchers: BTreeMap<String, RootWatcher>,
-    running: BTreeMap<String, oneshot::Sender<StopReason>>,
+    /// The attempts running, with the way to stop each (taken once it is asked to stop).
+    running: BTreeMap<String, Option<oneshot::Sender<StopReason>>>,
     unacked: BTreeMap<String, pb::Finished>,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
@@ -233,6 +242,10 @@ pub struct Agent<E> {
     heartbeat: Duration,
     /// Whether the master registered this agent in the current session.
     registered: bool,
+    /// Shutdown requests so far (none in a session run without [`Agent::run`]).
+    shutdown: Option<watch::Receiver<u32>>,
+    /// The drain, once shutdown was asked for.
+    drain: Option<Drain>,
 }
 
 impl<E: Executor> Agent<E> {
@@ -260,6 +273,8 @@ impl<E: Executor> Agent<E> {
             done_rx,
             heartbeat: Duration::from_secs(10),
             registered: false,
+            shutdown: None,
+            drain: None,
         }
     }
 
@@ -269,32 +284,27 @@ impl<E: Executor> Agent<E> {
         self.running.keys().cloned().collect()
     }
 
-    /// Runs until `stop` completes: recovers the journal, connects with `connect`, and again
-    /// whenever the connection drops, after a backoff with jitter that doubles up to
-    /// [`MAX_BACKOFF`] and starts from [`FIRST_BACKOFF`] again after a session in which the
-    /// master registered it.
-    pub async fn run<C, F>(&mut self, connect: C, stop: impl Future<Output = ()>)
+    /// Runs until drained after a shutdown request (`shutdown` counts them; see
+    /// [`crate::drain`]): recovers the journal, connects with `connect`, and again whenever
+    /// the connection drops, after a backoff with jitter that doubles up to [`MAX_BACKOFF`] and
+    /// starts from [`FIRST_BACKOFF`] again after a session in which the master registered it.
+    pub async fn run<C, F>(&mut self, connect: C, mut shutdown: watch::Receiver<u32>)
     where
         C: Fn() -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
     {
-        tokio::pin!(stop);
-        tokio::select! {
-            () = &mut stop => return,
-            () = self.recover() => {}
-        }
+        let requested = *shutdown.borrow_and_update();
+        self.shutdown = Some(shutdown);
+        self.recover().await;
+        self.on_shutdown(requested);
         let mut backoff = FIRST_BACKOFF;
         loop {
             self.registered = false;
-            let connected = tokio::select! {
-                () = &mut stop => return,
-                connected = self.offline(connect()) => connected,
+            let Some(connected) = self.offline(connect()).await else {
+                return;
             };
             let end = match connected {
-                Ok(client) => tokio::select! {
-                    () = &mut stop => return,
-                    end = self.session(client) => end,
-                },
+                Ok(client) => self.session(client).await,
                 Err(error) => SessionEnd::Lost(error),
             };
             match end {
@@ -312,24 +322,84 @@ impl<E: Executor> Agent<E> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.subsec_nanos())
                 .wrapping_mul(2_654_435_761);
-            tokio::select! {
-                () = &mut stop => return,
-                () = self.offline(tokio::time::sleep(jittered(backoff, seed))) => {}
+            if self
+                .offline(tokio::time::sleep(jittered(backoff, seed)))
+                .await
+                .is_none()
+            {
+                return;
             }
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     }
 
     /// Waits for `work` without a master: what ends meanwhile is still journalled (results
-    /// are reported in the next `Register`).
-    async fn offline<T>(&mut self, work: impl Future<Output = T>) -> T {
+    /// are reported in the next `Register`), and a drain goes on. `None` once drained.
+    async fn offline<T>(&mut self, work: impl Future<Output = T>) -> Option<T> {
         tokio::pin!(work);
+        let mut tick = tokio::time::interval(DRAIN_TICK);
         loop {
             tokio::select! {
-                out = &mut work => return out,
+                out = &mut work => return Some(out),
                 Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
+                count = next_request(&mut self.shutdown) => {
+                    self.on_shutdown(count);
+                }
+                _ = tick.tick(), if self.drain.is_some() => {
+                    if self.drain_step(false) == DrainStep::Finish {
+                        return None;
+                    }
+                }
             }
         }
+    }
+
+    /// A shutdown request arrived (`count` so far): the first starts the drain, a later one
+    /// interrupts at once. Returns whether the drain just started.
+    fn on_shutdown(&mut self, count: u32) -> bool {
+        let now = Instant::now();
+        if let Some(drain) = &mut self.drain {
+            drain.force(now);
+            tracing::warn!("asked to stop again: interrupting the running tasks");
+            return false;
+        }
+        if count == 0 {
+            return false;
+        }
+        let mut drain = Drain::new(now, self.settings.termination_grace_period);
+        if count > 1 {
+            drain.force(now);
+        }
+        self.drain = Some(drain);
+        tracing::info!(
+            running = self.running.len(),
+            grace = ?self.settings.termination_grace_period,
+            "draining: no new tasks; the running ones get until the grace period ends"
+        );
+        true
+    }
+
+    /// The drain's next step; stops the attempts still running when their time is up.
+    fn drain_step(&mut self, connected: bool) -> DrainStep {
+        let Some(drain) = &mut self.drain else {
+            return DrainStep::Wait;
+        };
+        let step = drain.step(
+            Instant::now(),
+            self.running.len(),
+            self.unacked.len(),
+            connected,
+        );
+        if step == DrainStep::Interrupt {
+            tracing::warn!(
+                running = self.running.len(),
+                "the grace period is ending: interrupting the running tasks"
+            );
+            for stop in self.running.values_mut().filter_map(Option::take) {
+                let _ = stop.send(StopReason::Interrupted);
+            }
+        }
+        step
     }
 
     /// Takes over from a previous incarnation: its unacknowledged results are reported again,
@@ -464,10 +534,35 @@ impl<E: Executor> Agent<E> {
             Ok(response) => response.into_inner(),
             Err(status) => return SessionEnd::Lost(status.to_string()),
         };
+        if self.drain.is_some() {
+            let _ = to_master
+                .send(wrap(worker_message::Message::Draining(pb::Draining {})))
+                .await;
+        }
         let mut heartbeat = tokio::time::interval(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
+        let mut tick = tokio::time::interval(DRAIN_TICK);
         loop {
             tokio::select! {
+                count = next_request(&mut self.shutdown) => {
+                    if self.on_shutdown(count) {
+                        let draining = worker_message::Message::Draining(pb::Draining {});
+                        let _ = to_master.send(wrap(draining)).await;
+                    }
+                }
+                _ = tick.tick(), if self.drain.is_some() => {
+                    if self.drain_step(true) == DrainStep::Finish {
+                        let bye = worker_message::Message::Deregister(pb::Deregister {});
+                        let _ = to_master.send(wrap(bye)).await;
+                        // Our side ends; the master's ends once it has handled everything.
+                        drop(to_master);
+                        let _ = tokio::time::timeout(DEREGISTER_WAIT, async {
+                            while let Ok(Some(_)) = inbound.message().await {}
+                        })
+                        .await;
+                        return SessionEnd::Stopped;
+                    }
+                }
                 message = inbound.message() => match message {
                     Ok(Some(pb::MasterMessage { message: Some(message) })) => {
                         self.on_master(message, &to_master, &mut client, &mut heartbeat).await;
@@ -514,7 +609,12 @@ impl<E: Executor> Agent<E> {
             }
             master_message::Message::AssignParse(job) => self.parse(job),
             master_message::Message::CancelAttempt(cancel) => {
-                if let Some(stop) = self.running.remove(&cancel.attempt_id) {
+                // It stays running (its slot taken) until its process has ended and reported.
+                if let Some(stop) = self
+                    .running
+                    .get_mut(&cancel.attempt_id)
+                    .and_then(Option::take)
+                {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
@@ -542,7 +642,7 @@ impl<E: Executor> Agent<E> {
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
-                if let Some(stop) = self.running.remove(id) {
+                if let Some(stop) = self.running.get_mut(id).and_then(Option::take) {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
@@ -578,13 +678,8 @@ impl<E: Executor> Agent<E> {
             );
             return;
         }
-        if self.free_slots() == 0 {
-            let _ = to_master
-                .send(reject(
-                    pb::RejectReason::NoFreeSlot,
-                    "no free slot".to_owned(),
-                ))
-                .await;
+        if let Some((reason, detail)) = self.cannot_take() {
+            let _ = to_master.send(reject(reason, detail.to_owned())).await;
             return;
         }
         let external = if assign.inputs_external {
@@ -650,7 +745,7 @@ impl<E: Executor> Agent<E> {
             }
             Ok(plan) => {
                 let (stop, stopped) = oneshot::channel();
-                self.running.insert(spec.attempt_id.clone(), stop);
+                self.running.insert(spec.attempt_id.clone(), Some(stop));
                 let _ = to_master.send(started).await;
                 self.launch(spec, plan, stopped);
             }
@@ -685,6 +780,17 @@ impl<E: Executor> Agent<E> {
         {
             self.code_hashes
                 .insert(attempt_id.to_owned(), hash.to_owned());
+        }
+    }
+
+    /// Why this worker takes no new attempt now, if it doesn't: draining, or no free slot.
+    fn cannot_take(&self) -> Option<(pb::RejectReason, &'static str)> {
+        if self.drain.is_some() {
+            Some((pb::RejectReason::Draining, "the worker is draining"))
+        } else if self.free_slots() == 0 {
+            Some((pb::RejectReason::NoFreeSlot, "no free slot"))
+        } else {
+            None
         }
     }
 
@@ -729,6 +835,14 @@ impl<E: Executor> Agent<E> {
         let Some(root) = job.root else {
             return;
         };
+        if self.drain.is_some() {
+            // Sent before the master knew: it gives the job to another worker.
+            tracing::info!(
+                root = root.root.as_str(),
+                "parse job while draining; left to others"
+            );
+            return;
+        }
         let Some(watcher) = self.watchers.get(&root.root) else {
             tracing::warn!(
                 root = root.root.as_str(),
@@ -860,6 +974,9 @@ impl<E: Executor> Agent<E> {
     }
 
     fn free_slots(&self) -> u32 {
+        if self.drain.is_some() {
+            return 0;
+        }
         self.settings
             .slots
             .saturating_sub(u32::try_from(self.running.len()).unwrap_or(u32::MAX))
@@ -890,6 +1007,22 @@ fn root_hash(name: &str, hash: &str) -> pb::RootHash {
         root: name.to_owned(),
         content_hash: hash.to_owned(),
     }
+}
+
+/// How long a deregistered agent waits for the master to end the stream.
+const DEREGISTER_WAIT: Duration = Duration::from_secs(5);
+
+/// How often a drain checks its deadline and whether it is done.
+const DRAIN_TICK: Duration = Duration::from_millis(100);
+
+/// The next change of the shutdown request count; never, without one (or once it is gone).
+async fn next_request(shutdown: &mut Option<watch::Receiver<u32>>) -> u32 {
+    if let Some(requests) = shutdown
+        && requests.changed().await.is_ok()
+    {
+        return *requests.borrow();
+    }
+    std::future::pending().await
 }
 
 const fn wrap(message: worker_message::Message) -> pb::WorkerMessage {

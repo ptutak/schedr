@@ -1014,3 +1014,33 @@ async fn a_worker_on_newer_code_whose_parse_is_on_its_way_gets_the_task() {
         "it checks the hash it reported"
     );
 }
+
+#[tokio::test]
+async fn resuming_a_worker_gives_unschedulable_tasks_another_chance() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    dispatcher.drain("w1");
+    dispatcher.resume("w1", ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_queue_whose_workers_are_drained_says_so() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher.drain("w1");
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("the workers serving queue `default` are drained (`schedr workers resume`)")
+    );
+}

@@ -132,7 +132,7 @@ async fn memory_db() -> Database {
 
 #[tokio::test]
 async fn the_master_and_the_api_serve_until_stopped() {
-    let (stop, stopped) = watch::channel(false);
+    let (stop, stopped) = watch::channel(0);
     let master = serve_master(
         memory_db().await,
         master_settings(&config()),
@@ -148,7 +148,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
     );
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let _ = stop.send(true);
+        let _ = stop.send(1);
     };
     let (master, api, ()) = tokio::join!(master, api, later);
     master.unwrap();
@@ -159,7 +159,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
 async fn a_worker_without_a_reachable_master_stops_when_asked() {
     let tmp = TempDir::new().unwrap();
     let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
-    let (stop, stopped) = watch::channel(false);
+    let (stop, stopped) = watch::channel(0);
     // Boxed, as in standalone: the worker's future is large.
     let worker = Box::pin(run_worker(
         agent,
@@ -169,7 +169,7 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
     ));
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let _ = stop.send(true);
+        let _ = stop.send(1);
     };
     tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(worker, later);
@@ -274,11 +274,11 @@ async fn the_roles_say_what_they_miss() {
 
 #[tokio::test]
 async fn until_completes_once_asked_to_stop() {
-    let (stop, stopped) = watch::channel(false);
+    let (stop, stopped) = watch::channel(0);
     let waiting = tokio::spawn(until(stopped));
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
-    stop.send(true).unwrap();
+    stop.send(1).unwrap();
     tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .unwrap()
@@ -288,7 +288,7 @@ async fn until_completes_once_asked_to_stop() {
 #[tokio::test]
 async fn a_signal_stop_starts_unstopped() {
     // The signal itself is exercised by the integration tests (a real SIGTERM).
-    assert!(!*stop_on_signal().borrow());
+    assert_eq!(*stop_on_signal().borrow(), 0);
 }
 
 #[test]

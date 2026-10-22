@@ -359,6 +359,28 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// `POST /api/v1/workers/{worker}/{action}` (`drain` or `resume`): the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn worker_action(
+        &self,
+        worker_id: &str,
+        action: WorkerAction,
+    ) -> Result<CommandView, ClientError> {
+        let action = match action {
+            WorkerAction::Drain => "drain",
+            WorkerAction::Resume => "resume",
+        };
+        self.call(
+            Method::Post,
+            format!("/api/v1/workers/{}/{action}", path(worker_id)),
+            None,
+        )
+        .await
+    }
+
     /// Reads `command` back until the master decides it.
     ///
     /// # Errors
@@ -431,6 +453,15 @@ fn path(segment: &str) -> String {
         }
     }
     out
+}
+
+/// What `schedr workers drain` / `resume` asks of a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerAction {
+    /// Drain it for maintenance.
+    Drain,
+    /// Let it take tasks again.
+    Resume,
 }
 
 /// What `schedr tasks` asks of a task.

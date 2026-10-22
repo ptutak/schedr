@@ -56,6 +56,33 @@ pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList
     }))
 }
 
+/// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones
+/// finish; kept across restarts until resumed. Applied by the master; poll the command for
+/// the decision.
+#[utoipa::path(post, path = "/api/v1/workers/{worker_id}/drain", tag = "workers",
+    params(("worker_id" = String, Path, description = "The worker's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn drain_worker(
+    State(state): State<ApiState>,
+    Path(worker_id): Path<String>,
+    headers: HeaderMap,
+) -> Accepted {
+    submit(&state, &headers, Command::DrainWorker { worker_id }).await
+}
+
+/// Let a drained worker take tasks again (`schedr workers resume`). Applied by the master;
+/// poll the command for the decision.
+#[utoipa::path(post, path = "/api/v1/workers/{worker_id}/resume", tag = "workers",
+    params(("worker_id" = String, Path, description = "The worker's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn resume_worker(
+    State(state): State<ApiState>,
+    Path(worker_id): Path<String>,
+    headers: HeaderMap,
+) -> Accepted {
+    submit(&state, &headers, Command::ResumeWorker { worker_id }).await
+}
+
 /// One DAG.
 #[utoipa::path(get, path = "/api/v1/dags/{dag_id}", tag = "dags",
     params(("dag_id" = String, Path, description = "The DAG's ID")),

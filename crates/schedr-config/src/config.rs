@@ -337,10 +337,15 @@ pub struct WorkerSection {
     /// The master's gRPC URL, e.g. `http://schedr-master:8070`; required by `schedr worker`
     /// (`schedr standalone` connects to its own master).
     pub master_url: Option<String>,
+    /// How long running tasks get when the worker is asked to stop (SIGTERM): match the
+    /// pod's `terminationGracePeriodSeconds`.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub termination_grace_period: Duration,
 }
 
 impl Default for WorkerSection {
-    /// The host name, 2 slots, the `default` queue, the default data directory.
+    /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
+    /// (Kubernetes' default).
     fn default() -> Self {
         Self {
             id: None,
@@ -348,6 +353,7 @@ impl Default for WorkerSection {
             queues: Vec::new(),
             data_dir: None,
             pass_env: Vec::new(),
+            termination_grace_period: Duration::from_secs(30),
             master_url: None,
         }
     }

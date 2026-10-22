@@ -82,8 +82,8 @@ One Rust binary, four roles:
 - **The REST API has no authentication of its own until M3:** a webserver listening beyond
   loopback warns at startup to keep it behind an authenticating proxy or mesh (the main
   deployment, `auth.mode = "none"` behind Istio), or to bind 127.0.0.1.
-- **SIGTERM or Ctrl-C stops a role** (the server stops accepting, the loop and the agent
-  end), handled from the role's first moment; draining a worker on SIGTERM comes with 2.6.
+- **SIGTERM or Ctrl-C stops a role** (the server stops accepting, the loop ends; a worker
+  drains first, see Worker lifecycle), handled from the role's first moment.
   A master whose gRPC server fails ends with the error, instead of running a loop no worker
   can reach.
 - `standalone` runs the same role functions as the separate commands (one code path).
@@ -774,7 +774,34 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   registered it.
 - **`GET /api/v1/workers`** and **`schedr workers list`** show every worker the master has
   seen, gone ones included: `WORKER STATE RUNNING QUEUES LAST SEEN` (running attempts / slots;
-  `--json` for the API's JSON). `drain` / `resume` come with 2.6.
+  `--json` for the API's JSON); a worker drained for maintenance shows `active (drained)`.
+- **Drain on SIGTERM** (M2.6): the agent sends `Draining` (again after any reconnect),
+  rejects new assignments ("draining", temporary for the master), and gives its running
+  attempts until **`[worker] termination_grace_period`** (default **30 s**, Kubernetes'
+  default; match the pod's `terminationGracePeriodSeconds`) minus a 5 s margin; whatever
+  still runs then is stopped (SIGTERM, SIGKILL after the cancel grace) and ends
+  **`interrupted`**, run again elsewhere without using a retry. Once nothing runs, it waits
+  up to 5 s for the master to acknowledge the last results, sends `Deregister` (the master
+  records it `offline`) and exits 0; without a master it exits at once (the journal keeps
+  the results). A **second SIGTERM or Ctrl-C** interrupts the running attempts at once. A
+  draining worker gets no new parse jobs (one sent before the master knew is left to
+  others), and its unfinished ones go to other workers that reported the same hash. A
+  cancelled attempt keeps its slot until its process has ended and reported, so a drain
+  never ends with a task still running. **`schedr standalone`** drains its worker first, then stops the
+  master and the API, so interrupted tasks are recorded; `schedr dags test` interrupts at
+  once. Not chosen: interrupting at once on the first SIGTERM (every deploy would kill tasks
+  that would finish in seconds); a 600 s default (a pod without the setting is killed at
+  30 s mid-drain: attempts lost, retries used).
+- **Maintenance drain** (`schedr workers drain <w>`, `POST /api/v1/workers/{id}/drain`; M2.6):
+  a command; the worker gets no new tasks or parse jobs, its running tasks **finish
+  normally** (no deadline), and it stays connected and idle (RUNNING shows when it reaches 0)
+  until **`schedr workers resume <w>`**. It is stored in the registry (`drained`) and so
+  **survives restarts of the master and of the worker** until resumed, so a pod restarted
+  during maintenance doesn't take work by itself; tasks that wait for it say "the workers
+  serving queue `q` are drained". Resuming is a change in the set of workers: `unschedulable`
+  tasks get another chance, and hashes it reported while drained get parse jobs. Draining an
+  unknown worker, or resuming one that isn't drained, is refused. Not chosen: a deadline as for SIGTERM (an operator wanting
+  that cancels the tasks or sends SIGTERM); a drain that ends with the worker's incarnation.
 - `schedr master` and `schedr webserver` log the address they actually bound (port 0 binds a
   free port).
 

@@ -65,6 +65,8 @@ pub struct Discovery {
     /// Each root's hashes whose workers may run its tasks: the current one, and newer ones
     /// whose parse is on its way.
     accepted: BTreeMap<String, BTreeSet<String>>,
+    /// Workers that take no parse jobs (draining or drained).
+    no_parse: BTreeSet<String>,
 }
 
 /// A root's current parse.
@@ -89,7 +91,47 @@ impl Discovery {
             switches: BTreeMap::new(),
             parses: BTreeMap::new(),
             accepted: BTreeMap::new(),
+            no_parse: BTreeSet::new(),
         }
+    }
+
+    /// A worker drains (or is drained): it gets no parse jobs, and its unfinished ones go to
+    /// other workers that reported the same hash. Returns those assignments.
+    pub fn stop_parsing(&mut self, worker_id: &str, now: Timestamp) -> Vec<ParseAssignment> {
+        self.no_parse.insert(worker_id.to_owned());
+        self.jobs.worker_lost(worker_id, now)
+    }
+
+    /// A worker takes parse jobs again (resumed, or registered anew): the hashes it reports
+    /// that have no parse yet are requested again. Returns the jobs it gets.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if reading fails.
+    pub async fn allow_parsing(
+        &mut self,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<ParseAssignment>, DbError> {
+        if !self.no_parse.remove(worker_id) {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<ParseKey> = self
+            .reports
+            .get(worker_id)
+            .map(|roots| roots.values().cloned().collect())
+            .unwrap_or_default();
+        let mut jobs = Vec::new();
+        for key in keys {
+            let found = self
+                .db
+                .find_parse(&key.root, &key.content_hash, &key.schedr_version)
+                .await?;
+            if found.is_none() {
+                jobs.extend(self.jobs.request(key, worker_id, now));
+            }
+        }
+        Ok(jobs)
     }
 
     /// Each root's current content hash, the hashes whose workers may run its tasks (the
@@ -201,6 +243,10 @@ impl Discovery {
             .await?;
         Ok(match found {
             Some(_) => None,
+            None if self.no_parse.contains(worker_id) => {
+                self.jobs.wait(key);
+                None
+            }
             None => self.jobs.request(key, worker_id, now),
         })
     }

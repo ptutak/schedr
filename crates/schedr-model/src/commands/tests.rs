@@ -44,6 +44,16 @@ fn sync() -> DagId {
     json!({"kind": "retry_task", "run_id": "r1", "task_id": "load"}),
     "retry_task"
 )]
+#[case(
+    Command::DrainWorker { worker_id: "w1".to_owned() },
+    json!({"kind": "drain_worker", "worker_id": "w1"}),
+    "drain_worker"
+)]
+#[case(
+    Command::ResumeWorker { worker_id: "w1".to_owned() },
+    json!({"kind": "resume_worker", "worker_id": "w1"}),
+    "resume_worker"
+)]
 fn commands_are_tagged_by_kind(
     #[case] command: Command,
     #[case] stored: serde_json::Value,

@@ -33,8 +33,10 @@ impl Executor for Fake {
     ) -> pb::Finished {
         spawned(NO_PROCESS);
         let status = if spec.task.id.as_str() == "wait" {
-            let _ = stop.await;
-            pb::AttemptStatus::Cancelled
+            match stop.await {
+                Ok(StopReason::Interrupted) => pb::AttemptStatus::Interrupted,
+                _ => pb::AttemptStatus::Cancelled,
+            }
         } else {
             pb::AttemptStatus::Success
         };
@@ -97,7 +99,7 @@ struct World {
     db: Database,
     hub: Hub,
     fake: Fake,
-    stop: Option<oneshot::Sender<()>>,
+    stop: watch::Sender<u32>,
     agent: tokio::task::JoinHandle<()>,
 }
 
@@ -147,20 +149,17 @@ async fn world() -> World {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
+        termination_grace_period: Duration::from_secs(30),
     };
     let fake = Fake::default();
     let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
-    let (stop, stopped) = oneshot::channel::<()>();
+    let (stop, stopped) = watch::channel(0);
     let agent = tokio::spawn(async move {
         let connect = move || {
             let client = client.lock().unwrap().take();
             async move { client.ok_or_else(|| "connected once".to_owned()) }
         };
-        agent
-            .run(connect, async {
-                let _ = stopped.await;
-            })
-            .await;
+        agent.run(connect, stopped).await;
     });
     World {
         _dir: dir,
@@ -168,7 +167,7 @@ async fn world() -> World {
         db,
         hub,
         fake,
-        stop: Some(stop),
+        stop,
         agent,
     }
 }
@@ -220,9 +219,13 @@ async fn run_state(db: &Database, dag: &str) -> Option<RunState> {
     runs.first().map(|r| r.state)
 }
 
-async fn shut_down(mut world: World) {
-    let _ = world.stop.take().unwrap().send(());
-    world.agent.await.unwrap();
+/// Asks the agent to stop and waits until it has drained.
+async fn shut_down(world: World) {
+    let _ = world.stop.send(1);
+    tokio::time::timeout(Duration::from_secs(20), world.agent)
+        .await
+        .expect("the agent drains")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -415,6 +418,17 @@ async fn against_script(
     script: Vec<pb::MasterMessage>,
     done: impl Fn(&[pb::WorkerMessage]) -> bool,
 ) -> (Vec<pb::WorkerMessage>, Vec<String>) {
+    against_script_with(slots, start, script, done, |_| {}).await
+}
+
+/// [`against_script`], with `tweak` applied to the agent first.
+async fn against_script_with(
+    slots: u32,
+    start: Start,
+    script: Vec<pb::MasterMessage>,
+    done: impl Fn(&[pb::WorkerMessage]) -> bool,
+    tweak: impl FnOnce(&mut Agent<Fake>),
+) -> (Vec<pb::WorkerMessage>, Vec<String>) {
     let dir = TempDir::new().unwrap();
     let journal = Journal::new(dir.path().join("journal"));
     match start {
@@ -466,14 +480,16 @@ async fn against_script(
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: journal.dir().to_path_buf(),
+        termination_grace_period: Duration::from_secs(30),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
+    tweak(&mut agent);
     let session = tokio::spawn(async move {
         agent.recover().await;
         agent.session(MasterClient::new(channel)).await
     });
-    for _ in 0..500 {
+    for _ in 0..1000 {
         let seen = received.lock().unwrap().clone();
         if done(&seen) {
             session.abort();
@@ -507,19 +523,19 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
                     Ok(pb::RejectReason::DagFileMissing) => "rejected: missing",
                     Ok(pb::RejectReason::DiskNotWritable) => "rejected: disk",
                     Ok(pb::RejectReason::CodeMismatch) => "rejected: code",
+                    Ok(pb::RejectReason::Draining) => "rejected: draining",
                     _ => "rejected",
                 })
             }
             worker_message::Message::Finished(f) => {
-                Some(if f.status == i32::from(pb::AttemptStatus::Success) {
-                    "finished: success"
-                } else {
-                    "finished: failed"
+                Some(match pb::AttemptStatus::try_from(f.status) {
+                    Ok(pb::AttemptStatus::Success) => "finished: success",
+                    Ok(pb::AttemptStatus::Interrupted) => "finished: interrupted",
+                    _ => "finished: failed",
                 })
             }
-            worker_message::Message::Draining(_) | worker_message::Message::Deregister(_) => {
-                Some("leaving")
-            }
+            worker_message::Message::Draining(_) => Some("draining"),
+            worker_message::Message::Deregister(_) => Some("leaving"),
         })
         .collect()
 }
@@ -757,6 +773,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
+        termination_grace_period: Duration::from_secs(30),
     };
     let journal = Journal::new(settings.journal_dir.clone());
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -870,4 +887,123 @@ async fn a_dag_file_missing_from_the_expected_code_fails_the_attempt_at_once() {
         })
         .unwrap();
     assert_eq!(finished.error_kind, DAG_FILE_MISSING);
+}
+
+#[tokio::test]
+async fn a_shutdown_drains_interrupts_what_still_runs_and_deregisters() {
+    let mut waiting = task_json(&json!({"kind": "python"}));
+    waiting["id"] = json!("wait");
+    let script = vec![assign("a1", &waiting, "sync.py", false)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"leaving");
+    let (seen, left) = against_script_with(2, Start::With(vec![]), script, done, |agent| {
+        // No grace: the running attempt is interrupted as soon as the drain starts.
+        agent.settings.termination_grace_period = Duration::ZERO;
+        let (requests, shutdown) = watch::channel(0);
+        agent.shutdown = Some(shutdown);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = requests.send(1);
+            // Kept open until the test ends.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+    })
+    .await;
+    assert_eq!(
+        kinds(&seen),
+        [
+            "register",
+            "started",
+            "draining",
+            "finished: interrupted",
+            "leaving"
+        ]
+    );
+    assert_eq!(left, ["a1"], "unacknowledged, it stays in the journal");
+}
+
+#[tokio::test]
+async fn a_draining_agent_rejects_assignments_and_says_so_again_after_a_reconnect() {
+    let python = task_json(&json!({"kind": "python"}));
+    let script = vec![assign("a1", &python, "sync.py", false)];
+    let (seen, _) = against_script_with(
+        2,
+        Start::With(vec![]),
+        script,
+        |m| kinds(m).len() >= 3,
+        |agent| {
+            agent.drain = Some(Drain::new(Instant::now(), Duration::from_secs(600)));
+            // Something still runs: the drain isn't over.
+            agent.running.insert("other".to_owned(), None);
+        },
+    )
+    .await;
+    assert_eq!(kinds(&seen), ["register", "draining", "rejected: draining"]);
+    let heartbeat = seen.iter().find_map(|m| match m.message.as_ref()? {
+        worker_message::Message::Heartbeat(h) => Some(h.free_slots),
+        _ => None,
+    });
+    assert!(heartbeat.is_none_or(|free| free == 0), "{heartbeat:?}");
+}
+
+#[test]
+fn a_second_shutdown_request_interrupts_at_once() {
+    let settings_dir = TempDir::new().unwrap();
+    let settings = AgentSettings {
+        worker_id: "w1".to_owned(),
+        queues: vec![],
+        slots: 1,
+        setup: WorkerSetup {
+            roots: BTreeMap::new(),
+            python: PathBuf::from("python3"),
+            agent_env: BTreeMap::new(),
+            pass_env: vec![],
+            log_dir: settings_dir.path().join("logs"),
+        },
+        poll_interval: Duration::from_millis(20),
+        settle_time: Duration::ZERO,
+        journal_dir: settings_dir.path().join("journal"),
+        termination_grace_period: Duration::from_secs(600),
+    };
+    let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
+    assert!(!agent.on_shutdown(0));
+    let (stop, stopped) = oneshot::channel();
+    agent.running.insert("a1".to_owned(), Some(stop));
+    assert!(agent.on_shutdown(1));
+    assert_eq!(agent.drain_step(true), DrainStep::Wait, "600 s of grace");
+    assert!(!agent.on_shutdown(2));
+    assert_eq!(agent.drain_step(true), DrainStep::Interrupt);
+    assert_eq!(stopped.blocking_recv(), Ok(StopReason::Interrupted));
+}
+
+#[tokio::test]
+async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
+    let dir = TempDir::new().unwrap();
+    let settings = AgentSettings {
+        worker_id: "w1".to_owned(),
+        queues: vec![],
+        slots: 1,
+        setup: WorkerSetup {
+            roots: BTreeMap::new(),
+            python: PathBuf::from("python3"),
+            agent_env: BTreeMap::new(),
+            pass_env: vec![],
+            log_dir: dir.path().join("logs"),
+        },
+        poll_interval: Duration::from_millis(20),
+        settle_time: Duration::ZERO,
+        journal_dir: dir.path().join("journal"),
+        termination_grace_period: Duration::from_secs(30),
+    };
+    let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
+    let (stop, stopped) = oneshot::channel();
+    agent.running.insert("a1".to_owned(), Some(stop));
+    let (to_master, _outbound) = mpsc::channel(8);
+    let kill = pb::JournalDecision {
+        attempt_id: "a1".to_owned(),
+        decision: pb::AttemptDecision::Kill.into(),
+    };
+    agent.decide(&kill, &to_master).await;
+    assert_eq!(stopped.await, Ok(StopReason::Cancelled));
+    assert_eq!(agent.running(), ["a1"], "still running until it reports");
+    assert_eq!(agent.free_slots(), 0);
 }

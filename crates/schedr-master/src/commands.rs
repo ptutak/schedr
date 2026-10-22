@@ -51,6 +51,8 @@ pub struct Applied {
     pub decided: Vec<Decided>,
     /// Messages for workers (cancelled attempts).
     pub outgoing: Vec<Outgoing>,
+    /// Workers drained (`true`) or resumed (`false`) for maintenance.
+    pub drained: Vec<(String, bool)>,
 }
 
 /// The outcome of one command before it is stored.
@@ -87,7 +89,7 @@ impl Commander {
         let mut applied = Applied::default();
         for pending in self.db.pending_commands().await? {
             let outcome = self
-                .apply(&pending, scheduler, dispatcher, &mut applied.outgoing, now)
+                .apply(&pending, scheduler, dispatcher, &mut applied, now)
                 .await?;
             let (status, reason, result) = match outcome {
                 Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
@@ -111,9 +113,10 @@ impl Commander {
         pending: &PendingCommand,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
-        outgoing: &mut Vec<Outgoing>,
+        applied: &mut Applied,
         now: Timestamp,
     ) -> Result<Outcome, CommandError> {
+        let outgoing = &mut applied.outgoing;
         let command = match &pending.command {
             Ok(command) => command,
             Err(reason) => return Ok(Outcome::Rejected(format!("invalid command: {reason}"))),
@@ -173,6 +176,29 @@ impl Commander {
             Command::RetryTask { run_id, task_id } => {
                 retry_task(dispatcher, run_id, task_id, now).await
             }
+            Command::DrainWorker { worker_id } => {
+                if !self.db.set_worker_drained(worker_id, true).await? {
+                    return Ok(no_worker(worker_id));
+                }
+                dispatcher.drain(worker_id);
+                applied.drained.push((worker_id.clone(), true));
+                let running = dispatcher
+                    .workers()
+                    .get(worker_id)
+                    .map_or(0, |w| w.attempts.len());
+                Ok(Outcome::Applied(json!({"running": running})))
+            }
+            Command::ResumeWorker { worker_id } => match self.db.resume_worker(worker_id).await? {
+                None => Ok(no_worker(worker_id)),
+                Some(false) => Ok(Outcome::Rejected(format!(
+                    "worker `{worker_id}` isn't drained"
+                ))),
+                Some(true) => {
+                    dispatcher.resume(worker_id, now).await?;
+                    applied.drained.push((worker_id.clone(), false));
+                    Ok(Outcome::Applied(json!({})))
+                }
+            },
         }
     }
 }
@@ -257,6 +283,12 @@ async fn cancel(
         Err(DispatchError::Execution(ExecutionError::UnknownRun(_))) => Ok(0),
         Err(error) => Err(error.into()),
     }
+}
+
+fn no_worker(worker_id: &str) -> Outcome {
+    Outcome::Rejected(format!(
+        "no worker `{worker_id}` (`schedr workers list` shows the workers the master has seen)"
+    ))
 }
 
 fn no_dag(dag_id: &DagId) -> Outcome {

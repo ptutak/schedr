@@ -859,3 +859,153 @@ fn the_newest_code_runs_and_a_worker_on_older_code_blocks_nothing() {
     let run = cluster.api_get(&format!("/api/v1/runs/{run_id}")).unwrap();
     assert_eq!(run["code_hashes"].as_array().unwrap().len(), 1, "{run}");
 }
+
+/// A task that runs long on its first try (leaving a marker) and returns at once after, with
+/// no retries: only a run again without using a retry lets the run succeed.
+fn interrupted_first_try(marker: &std::path::Path) -> String {
+    format!(
+        r#"
+import os, time
+from schedr import Dag, task
+
+@task
+def work() -> str:
+    marker = {marker:?}
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        time.sleep(60)
+    return "done"
+
+with Dag("drained"):
+    work()
+"#,
+        marker = marker.display().to_string()
+    )
+}
+
+impl Cluster {
+    /// Sends SIGTERM to a role and waits until it exits; its exit status.
+    fn terminate(&mut self, name: &str) -> std::process::ExitStatus {
+        let role = self.roles.iter_mut().find(|r| r.name == name).unwrap();
+        let pid = role.child.id().to_string();
+        assert!(
+            Command::new("kill")
+                .args(["-TERM", &pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = role.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "{name} didn't stop on SIGTERM");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+#[test]
+fn a_worker_stopped_with_sigterm_drains_and_its_interrupted_task_runs_again_without_a_retry() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.dir.path().join("marker");
+    std::fs::write(
+        cluster.root().join("drained.py"),
+        interrupted_first_try(&marker),
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    let grace = [("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "2s")];
+    cluster.start_as(
+        "worker-2",
+        "worker",
+        &[("SCHEDR_CONFIG__WORKER__ID", "w2"), grace[0]],
+    );
+    cluster.wait("both workers", || {
+        cluster.worker_state("w2").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("drained");
+    cluster.wait("the first try to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    let first = cluster.attempts(&run_id, "work")[0]["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The worker running it is stopped; w1 has the default 30 s grace, w2 2 s.
+    let (role, other) = if first == "w2" {
+        ("worker-2", "w1")
+    } else {
+        ("worker", "w2")
+    };
+    let status = cluster.terminate(role);
+    assert!(status.success(), "{status}\n{}", cluster.logs());
+    cluster.wait("the run to succeed", || {
+        cluster.run_state(&run_id) == "success"
+    });
+    let attempts = cluster.attempts(&run_id, "work");
+    let summary: Vec<(Value, Value)> = attempts
+        .iter()
+        .map(|a| (a["status"].clone(), a["worker_id"].clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (Value::from("interrupted"), Value::from(first.as_str())),
+            (Value::from("success"), Value::from(other)),
+        ],
+        "{}",
+        cluster.logs()
+    );
+    assert_eq!(cluster.worker_state(&first).as_deref(), Some("offline"));
+}
+
+#[test]
+fn a_drained_worker_gets_no_tasks_until_resumed_even_across_a_master_restart() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("pause.py"), "from schedr import Dag, task\n\n@task\ndef pause() -> int:\n    return 1\n\nwith Dag(\"pause\"):\n    pause()\n").unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.start_as("worker-2", "worker", &[("SCHEDR_CONFIG__WORKER__ID", "w2")]);
+    cluster.wait("both workers", || {
+        cluster.worker_state("w2").as_deref() == Some("active")
+    });
+    let (code, out, err) = cluster.cli(&["workers", "drain", "w1"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("draining w1: no new tasks;"), "{out}");
+    let (code, _, err) = cluster.cli(&["workers", "drain", "w9"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("no worker `w9`"), "{err}");
+    cluster.kill("master");
+    cluster.start("master");
+    cluster.wait("w1 to be back, drained", || {
+        cluster.cli_json(&["workers", "list"]).is_some_and(|list| {
+            list["workers"][0]["state"] == "active" && list["workers"][0]["drained"] == true
+        })
+    });
+    for _ in 0..3 {
+        let run_id = cluster.trigger("pause");
+        cluster.wait("the run to succeed", || {
+            cluster.run_state(&run_id) == "success"
+        });
+        assert_eq!(cluster.attempts(&run_id, "pause")[0]["worker_id"], "w2");
+    }
+    let (code, out, err) = cluster.cli(&["workers", "resume", "w1"]);
+    assert_eq!((code, out.as_str()), (0, "resumed w1\n"), "{err}");
+    let (code, _, err) = cluster.cli(&["workers", "resume", "w1"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("worker `w1` isn't drained"), "{err}");
+}

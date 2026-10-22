@@ -119,7 +119,7 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
     configured.webserver.port = 0;
     configured.master.tick_interval = Duration::from_millis(50);
     let setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
-    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();
     let shown = setup.clone();
     let server = tokio::spawn(run(
@@ -127,9 +127,7 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
         move |listening| {
             let _ = bound.send(listening);
         },
-        async {
-            let _ = stopped.await;
-        },
+        stopped,
     ));
     let listening = addresses.await.unwrap();
     assert!(banner(listening, &shown).starts_with("schedr standalone: API on http://127.0.0.1:"));
@@ -141,7 +139,7 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
         .unwrap();
     assert_eq!(body, serde_json::json!({"dags": []}));
     assert!(dir.path().join("data/schedr.db").is_file());
-    stop.send(()).unwrap();
+    stop.send(1).unwrap();
     tokio::time::timeout(Duration::from_secs(10), server)
         .await
         .expect("standalone stops in time")

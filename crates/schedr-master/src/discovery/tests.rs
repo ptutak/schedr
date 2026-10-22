@@ -519,3 +519,46 @@ async fn workers_on_newer_code_whose_parse_is_on_its_way_are_accepted_too() {
         ["h2", "h3"]
     );
 }
+
+#[tokio::test]
+async fn a_draining_worker_takes_no_parse_jobs_and_hands_its_own_over() {
+    let mut discovery = discovery().await;
+    let job = discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    assert_eq!(job.unwrap().worker_id, "w1");
+    discovery
+        .root_reported("w2", key("h1"), now())
+        .await
+        .unwrap();
+    let moved = discovery.stop_parsing("w1", now());
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].worker_id, "w2");
+    // A new hash from the draining worker waits for another worker to report it.
+    assert_eq!(
+        discovery
+            .root_reported("w1", key("h2"), now())
+            .await
+            .unwrap(),
+        None
+    );
+    let job = discovery
+        .root_reported("w2", key("h2"), now())
+        .await
+        .unwrap();
+    assert_eq!(job.unwrap().worker_id, "w2");
+    // Only w1 reports h3 while drained: nobody parses it until w1 is resumed.
+    let job = discovery
+        .root_reported("w1", key("h3"), now())
+        .await
+        .unwrap();
+    assert_eq!(job, None);
+    let jobs = discovery.allow_parsing("w1", now()).await.unwrap();
+    let assigned: Vec<(&str, &str)> = jobs
+        .iter()
+        .map(|j| (j.worker_id.as_str(), j.key.content_hash.as_str()))
+        .collect();
+    assert_eq!(assigned, [("w1", "h3")]);
+    assert_eq!(discovery.allow_parsing("w1", now()).await.unwrap(), []);
+}

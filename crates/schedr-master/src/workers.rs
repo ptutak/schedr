@@ -51,6 +51,8 @@ pub struct Worker {
     pub version: Option<SchedrVersion>,
     /// The content hash it last reported for each root.
     pub roots: BTreeMap<String, String>,
+    /// Drained for maintenance (`schedr workers drain`): no new tasks until resumed.
+    pub drained: bool,
 }
 
 /// What a task needs of a worker.
@@ -152,9 +154,17 @@ impl Workers {
                 last_assigned: None,
                 version: None,
                 roots: BTreeMap::new(),
+                drained: false,
             },
         );
         true
+    }
+
+    /// Drains a worker for maintenance, or resumes it.
+    pub fn set_drained(&mut self, id: &str, drained: bool) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.drained = drained;
+        }
     }
 
     /// Records a worker's schedr version.
@@ -189,11 +199,19 @@ impl Workers {
         self.workers.get(id)
     }
 
-    /// The active workers serving `queue`.
+    /// The active workers serving `queue` (not draining, not drained).
     pub fn serving<'a>(&'a self, queue: &'a str) -> impl Iterator<Item = &'a Worker> + 'a {
         self.workers
             .values()
-            .filter(move |w| w.state == WorkerState::Active && w.serves(queue))
+            .filter(move |w| w.state == WorkerState::Active && !w.drained && w.serves(queue))
+    }
+
+    /// Whether an active worker drained for maintenance serves `queue`.
+    #[must_use]
+    pub fn drained_serving(&self, queue: &str) -> bool {
+        self.workers
+            .values()
+            .any(|w| w.state == WorkerState::Active && w.drained && w.serves(queue))
     }
 
     /// The active workers that can run a task with `needs`: serving its queue, with its code

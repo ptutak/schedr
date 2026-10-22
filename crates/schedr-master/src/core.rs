@@ -281,10 +281,8 @@ impl MasterCore {
                 now,
             )
             .await?;
-        self.dispatcher
-            .set_worker_version(worker_id, register.schedr_version.parse().ok());
+        let mut outgoing = self.report_roots(register, now).await?;
         let mut decisions = Vec::with_capacity(register.journal.len());
-        let mut outgoing = Vec::new();
         for entry in &register.journal {
             let (decision, cancel) = self.journal_decision(worker_id, entry, now).await?;
             decisions.push(pb::JournalDecision {
@@ -293,24 +291,6 @@ impl MasterCore {
             });
             outgoing.extend(cancel);
         }
-        // Its reports replace what it reported before: a root it no longer has stops counting.
-        let keys: Vec<ParseKey> = register
-            .roots
-            .iter()
-            .filter(|root| root.kind == i32::from(pb::RootKind::Dag))
-            .map(|root| {
-                self.dispatcher
-                    .report_root(worker_id, &root.root, &root.content_hash);
-                ParseKey {
-                    root: root.root.clone(),
-                    content_hash: root.content_hash.clone(),
-                    schedr_version: register.schedr_version.clone(),
-                }
-            })
-            .collect();
-        let jobs = self.discovery.registered(worker_id, keys, now).await?;
-        outgoing.extend(jobs.into_iter().map(assign_parse));
-        self.sync_code();
         let registered = pb::Registered {
             timing: Some(pb::Timing {
                 heartbeat_interval_ms: millis(self.settings.heartbeat_interval),
@@ -377,7 +357,8 @@ impl MasterCore {
                 self.db
                     .set_worker_state(worker_id, WorkerState::Draining, now)
                     .await?;
-                Vec::new()
+                let moved = self.discovery.stop_parsing(worker_id, now);
+                moved.into_iter().map(assign_parse).collect()
             }
             worker_message::Message::Deregister(_) => {
                 self.forget(worker_id, WorkerState::Offline, now).await?
@@ -415,6 +396,21 @@ impl MasterCore {
             .apply_pending(&self.scheduler, &mut self.dispatcher, now)
             .await?;
         let mut outgoing = applied.outgoing;
+        for (worker_id, drained) in applied.drained {
+            if drained {
+                let moved = self.discovery.stop_parsing(&worker_id, now);
+                outgoing.extend(moved.into_iter().map(assign_parse));
+            } else if self
+                .dispatcher
+                .workers()
+                .get(&worker_id)
+                .is_none_or(|w| w.state == crate::workers::WorkerState::Active)
+            {
+                // Not if the agent itself is draining (shutting down).
+                let jobs = self.discovery.allow_parsing(&worker_id, now).await?;
+                outgoing.extend(jobs.into_iter().map(assign_parse));
+            }
+        }
         self.scheduler.pass(now).await?;
         outgoing.extend(self.dispatcher.step(now).await?);
         let expired = self.discovery.jobs_mut().expire(now);
@@ -484,6 +480,52 @@ impl MasterCore {
     /// [`CoreError::Dispatch`] if the database fails.
     pub async fn inputs(&self, attempt_id: &str) -> Result<Option<Vec<u8>>, CoreError> {
         Ok(self.dispatcher.attempt_inputs(attempt_id).await?)
+    }
+
+    /// A registered worker's version, maintenance drain and roots: its reports replace what it
+    /// reported before. Returns the parse jobs to send.
+    async fn report_roots(
+        &mut self,
+        register: &pb::Register,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        let worker_id = register.worker_id.as_str();
+        let mut outgoing = Vec::new();
+        self.dispatcher
+            .set_worker_version(worker_id, register.schedr_version.parse().ok());
+        // Drained for maintenance stays drained, whatever restarted (until resumed).
+        if self.db.worker_drained(worker_id).await? {
+            self.dispatcher.drain(worker_id);
+            let moved = self.discovery.stop_parsing(worker_id, now);
+            outgoing.extend(moved.into_iter().map(assign_parse));
+        } else {
+            outgoing.extend(
+                self.discovery
+                    .allow_parsing(worker_id, now)
+                    .await?
+                    .into_iter()
+                    .map(assign_parse),
+            );
+        }
+        // Its reports replace what it reported before: a root it no longer has stops counting.
+        let keys: Vec<ParseKey> = register
+            .roots
+            .iter()
+            .filter(|root| root.kind == i32::from(pb::RootKind::Dag))
+            .map(|root| {
+                self.dispatcher
+                    .report_root(worker_id, &root.root, &root.content_hash);
+                ParseKey {
+                    root: root.root.clone(),
+                    content_hash: root.content_hash.clone(),
+                    schedr_version: register.schedr_version.clone(),
+                }
+            })
+            .collect();
+        let jobs = self.discovery.registered(worker_id, keys, now).await?;
+        outgoing.extend(jobs.into_iter().map(assign_parse));
+        self.sync_code();
+        Ok(outgoing)
     }
 
     async fn root_reported(

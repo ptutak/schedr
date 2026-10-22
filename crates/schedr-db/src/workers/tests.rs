@@ -54,6 +54,7 @@ async fn a_registration_is_recorded_and_listed() {
             last_heartbeat_at: ts("2026-10-22T08:00:00Z"),
             offline_at: None,
             running: 0,
+            drained: false,
         }]
     );
 }
@@ -122,4 +123,34 @@ async fn queues_that_dont_read_are_reported() {
         .unwrap();
     let error = db.workers().await.unwrap_err();
     assert!(error.to_string().contains("workers.queues"), "{error}");
+}
+
+#[tokio::test]
+async fn a_drain_is_kept_until_resumed_even_across_registrations() {
+    let db = migrated().await;
+    assert!(
+        !db.set_worker_drained("w1", true).await.unwrap(),
+        "unknown worker"
+    );
+    assert!(!db.worker_drained("w1").await.unwrap());
+    db.register_worker(
+        &registration("w1", "0190a0a0-0000-7000-8000-000000000001", &[]),
+        ts("2026-10-22T08:00:00Z"),
+    )
+    .await
+    .unwrap();
+    assert!(db.set_worker_drained("w1", true).await.unwrap());
+    db.register_worker(
+        &registration("w1", "0190a0a0-0000-7000-8000-000000000002", &[]),
+        ts("2026-10-22T08:05:00Z"),
+    )
+    .await
+    .unwrap();
+    assert!(db.worker_drained("w1").await.unwrap());
+    assert!(db.workers().await.unwrap()[0].drained);
+    assert_eq!(db.resume_worker("w1").await.unwrap(), Some(true));
+    assert!(!db.worker_drained("w1").await.unwrap());
+    assert_eq!(db.resume_worker("w1").await.unwrap(), Some(false));
+    assert_eq!(db.resume_worker("w9").await.unwrap(), None);
+    db.set_worker_drained("w1", false).await.unwrap();
 }

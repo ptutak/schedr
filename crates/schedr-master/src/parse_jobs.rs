@@ -90,6 +90,16 @@ impl ParseJobs {
         })
     }
 
+    /// A worker that takes no parse jobs (draining) reported a hash with no stored parse: the
+    /// job exists, for the next worker that reports the hash to take.
+    pub fn wait(&mut self, key: ParseKey) {
+        self.jobs.entry(key).or_insert_with(|| Job {
+            id: Uuid::now_v7().to_string(),
+            worker: None,
+            candidates: BTreeSet::new(),
+        });
+    }
+
     /// The parse of `key` was stored (by any worker, under any job): its job is done.
     /// Returns the finished job's ID, if there was one.
     pub fn finish(&mut self, key: &ParseKey) -> Option<String> {

@@ -489,3 +489,73 @@ async fn a_database_failure_leaves_a_task_command_pending() {
     assert!(applied.is_err(), "{applied:?}");
     assert_eq!(world.db.pending_commands().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_worker_is_drained_and_resumed_and_unknown_ones_are_rejected() {
+    let mut world = world().await;
+    world
+        .db
+        .register_worker(
+            &schedr_db::workers::WorkerRegistration {
+                id: "w1",
+                incarnation: "0190a0a0-0000-7000-8000-000000000001",
+                protocol_version: "0.1",
+                schedr_version: "0.1.0",
+                queues: &[],
+                slots: 2,
+                log_endpoint: "",
+            },
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    for command in [
+        Command::ResumeWorker {
+            worker_id: "w1".to_owned(),
+        },
+        Command::DrainWorker {
+            worker_id: "w1".to_owned(),
+        },
+        Command::DrainWorker {
+            worker_id: "w9".to_owned(),
+        },
+    ] {
+        world.ask(&command).await;
+    }
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    let unknown = "no worker `w9` (`schedr workers list` shows the workers the master has seen)";
+    assert_eq!(
+        decided,
+        [
+            rejected("worker `w1` isn't drained"),
+            (CommandStatus::Applied, None, Some(json!({"running": 0}))),
+            rejected(unknown),
+        ]
+    );
+    assert_eq!(applied.drained, [("w1".to_owned(), true)]);
+    assert!(world.dispatcher.workers().get("w1").unwrap().drained);
+    assert!(world.db.worker_drained("w1").await.unwrap());
+
+    world
+        .ask(&Command::ResumeWorker {
+            worker_id: "w1".to_owned(),
+        })
+        .await;
+    world
+        .ask(&Command::ResumeWorker {
+            worker_id: "w9".to_owned(),
+        })
+        .await;
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    assert_eq!(
+        decided,
+        [
+            (CommandStatus::Applied, None, Some(json!({}))),
+            rejected(unknown)
+        ]
+    );
+    assert_eq!(applied.drained, [("w1".to_owned(), false)]);
+    assert!(!world.dispatcher.workers().get("w1").unwrap().drained);
+}

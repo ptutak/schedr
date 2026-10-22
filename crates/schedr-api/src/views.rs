@@ -333,6 +333,8 @@ pub struct WorkerView {
     pub last_heartbeat_at: Timestamp,
     /// When it went offline or was lost.
     pub offline_at: Option<Timestamp>,
+    /// Drained for maintenance (`schedr workers drain`): no new tasks until resumed.
+    pub drained: bool,
 }
 
 impl From<&WorkerRecord> for WorkerView {
@@ -350,6 +352,7 @@ impl From<&WorkerRecord> for WorkerView {
             registered_at: worker.registered_at,
             last_heartbeat_at: worker.last_heartbeat_at,
             offline_at: worker.offline_at,
+            drained: worker.drained,
         }
     }
 }

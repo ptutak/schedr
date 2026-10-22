@@ -169,11 +169,11 @@ fn an_invalid_log_level_is_reported() {
 
 #[test]
 fn commands_of_later_milestones_say_when_they_arrive() {
-    let result = schedr(&["workers", "drain", "w1"], &[], &[]);
+    let result = schedr(&["dag-ctx", "run", "get"], &[], &[]);
     assert_eq!(result.code, 1);
     assert_eq!(
         result.err,
-        "error: `schedr workers` isn't implemented yet (milestone M2)\n"
+        "error: `schedr dag-ctx` isn't implemented yet (milestone M4)\n"
     );
 }
 

@@ -191,6 +191,7 @@ fn master_webserver_and_worker_defaults() {
             data_dir: None,
             pass_env: vec![],
             master_url: None,
+            termination_grace_period: Duration::from_secs(30),
         }
     );
 }
@@ -222,6 +223,7 @@ fn reads_the_master_webserver_and_worker_sections() {
         queues = ["default", "large"]
         data_dir = "/var/lib/schedr"
         pass_env = ["HTTPS_PROXY"]
+        termination_grace_period = "10m"
         "#,
     )
     .unwrap();
@@ -232,6 +234,10 @@ fn reads_the_master_webserver_and_worker_sections() {
     assert_eq!(config.master.lease_timeout, Duration::from_secs(30));
     assert_eq!(config.master.cancel_grace, Duration::from_secs(10));
     assert_eq!(config.master.code_wait, Duration::from_mins(3));
+    assert_eq!(
+        config.worker.termination_grace_period,
+        Duration::from_mins(10)
+    );
     assert_eq!(config.webserver.port, 9080);
     assert_eq!(
         config.webserver.auth.identity_header.as_deref(),

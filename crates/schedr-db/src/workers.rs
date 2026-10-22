@@ -62,6 +62,8 @@ pub struct WorkerRecord {
     pub offline_at: Option<Timestamp>,
     /// Its attempts still running (no end recorded).
     pub running: u32,
+    /// Whether it is drained for maintenance (no new tasks until resumed).
+    pub drained: bool,
 }
 
 type WorkerRow = (
@@ -77,6 +79,7 @@ type WorkerRow = (
     String,
     Option<String>,
     i64,
+    bool,
 );
 
 impl Database {
@@ -158,6 +161,69 @@ impl Database {
         Ok(())
     }
 
+    /// Drains a worker for maintenance, or resumes it; whether it is in the registry.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_worker_drained(
+        &self,
+        worker_id: &str,
+        drained: bool,
+    ) -> Result<bool, DbError> {
+        const DRAINED: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2";
+        let updated = on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, DRAINED))
+                .bind(drained)
+                .bind(worker_id)
+                .execute(pool)
+                .await?
+                .rows_affected()
+        });
+        Ok(updated > 0)
+    }
+
+    /// Resumes a drained worker; whether it was drained (`None` for a worker not in the
+    /// registry).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn resume_worker(&self, worker_id: &str) -> Result<Option<bool>, DbError> {
+        const RESUME: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2 AND drained";
+        const KNOWN: &str = "SELECT 1 FROM workers WHERE worker_id = $1";
+        let (resumed, known) = on_pool!(self, |pool, backend| {
+            let resumed = sqlx::query(sql(backend, RESUME))
+                .bind(false)
+                .bind(worker_id)
+                .execute(pool)
+                .await?
+                .rows_affected();
+            let known: Option<i32> = sqlx::query_scalar(sql(backend, KNOWN))
+                .bind(worker_id)
+                .fetch_optional(pool)
+                .await?;
+            (resumed, known)
+        });
+        Ok(known.map(|_| resumed > 0))
+    }
+
+    /// Whether a worker is drained for maintenance (`false` for one not in the registry).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn worker_drained(&self, worker_id: &str) -> Result<bool, DbError> {
+        const DRAINED: &str = "SELECT drained FROM workers WHERE worker_id = $1";
+        let drained: Option<bool> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, DRAINED))
+                .bind(worker_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(drained.unwrap_or(false))
+    }
+
     /// Every worker in the registry, by ID, with its running attempts counted.
     ///
     /// # Errors
@@ -168,7 +234,7 @@ impl Database {
             w.protocol_version, w.schedr_version, w.queues{text}, w.slots, w.log_endpoint, \
             {ts<}w.registered_at{>ts}, {ts<}w.last_heartbeat_at{>ts}, {ts<}w.offline_at{>ts}, \
             (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.worker_id \
-             AND a.status IS NULL) \
+             AND a.status IS NULL), w.drained \
             FROM workers w ORDER BY w.worker_id";
         let rows: Vec<WorkerRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WORKERS))
@@ -193,6 +259,7 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         heartbeat,
         offline,
         running,
+        drained,
     ) = row;
     Ok(WorkerRecord {
         id,
@@ -207,5 +274,6 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         last_heartbeat_at: parse_time("workers.last_heartbeat_at", &heartbeat)?,
         offline_at: optional_time("workers.offline_at", offline)?,
         running: u32::try_from(running).unwrap_or(0),
+        drained,
     })
 }
