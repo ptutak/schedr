@@ -118,7 +118,8 @@ class Dag:
         self.defaults = defaults or TaskDefaults()
         self.description = description
         self.tags = tuple(tags)
-        self._location = registry.location_for(sys._getframe(1).f_code.co_filename)
+        self._filename = sys._getframe(1).f_code.co_filename
+        self._location = registry.location_for(self._filename)
         self._builder: _build.DagBuilder | None = None
         self.model: DagModel | None = None
 
@@ -169,7 +170,7 @@ class Dag:
             description=self.description,
             tags=self.tags,
         )
-        registry.register(self.model, builder.functions)
+        registry.register(self.model, builder.functions, self._filename)
 
     def _check_since(self, builder: _build.DagBuilder) -> None:
         if self.initial_since is not None or isinstance(self.trigger, Cron | Every):

@@ -35,6 +35,9 @@ class DefinedDag:
 
 _DEFINED: list[DefinedDag] = []
 
+_BY_FILE: dict[tuple[Path, str], DefinedDag] = {}
+"""The latest definition of each DAG by (resolved file, DAG ID); never cleared."""
+
 
 @contextlib.contextmanager
 def parse_root(name: str, path: Path) -> Iterator[None]:
@@ -71,14 +74,38 @@ def location_for(filename: str) -> DagLocation:
     return DagLocation(LOCAL_ROOT, file.name)
 
 
-def register(dag: Dag, functions: Mapping[str, Callable[..., Any]] | None = None) -> None:
+def register(
+    dag: Dag,
+    functions: Mapping[str, Callable[..., Any]] | None = None,
+    filename: str | None = None,
+) -> None:
     """Records a DAG whose ``with Dag(...)`` block finished.
 
     Args:
         dag: The DAG.
         functions: The function of each of its Python tasks, by task ID.
+        filename: The file defining it (``__file__``), remembered for :func:`defined_in`.
     """
-    _DEFINED.append(DefinedDag(dag, dict(functions or {})))
+    entry = DefinedDag(dag, dict(functions or {}))
+    _DEFINED.append(entry)
+    if filename is not None:
+        _BY_FILE[Path(filename).resolve(), dag.id] = entry
+
+
+def defined_in(filename: str | Path, dag_id: str) -> DefinedDag | None:
+    """The latest definition of a DAG in a file, if this process has imported it.
+
+    Unlike :func:`take_entries`, this remembers every DAG defined so far (e.g. by a test
+    importing a DAG file), so its task functions and their types can be found again.
+
+    Args:
+        filename: The DAG file.
+        dag_id: The DAG's ID.
+
+    Returns:
+        The DAG with its task functions, or ``None``.
+    """
+    return _BY_FILE.get((Path(filename).resolve(), dag_id))
 
 
 def take_entries() -> list[DefinedDag]:

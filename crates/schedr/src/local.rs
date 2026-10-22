@@ -18,7 +18,7 @@ use schedr_agent::launch::ProcessParseRunner;
 use schedr_agent::parse::parse_files;
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
-use schedr_api::views::{AttemptList, RunDetail};
+use schedr_api::views::{AttemptList, LocationView, RunDetail};
 use schedr_config::{Config, Root};
 use schedr_db::Database;
 use schedr_master::validate::validate_files;
@@ -367,7 +367,7 @@ async fn drive(
         Duration::from_millis(100),
         Duration::from_secs(60),
     );
-    wait_for_dag(&client, dag).await?;
+    let location = wait_for_dag(&client, dag).await?;
     let command = client.wait(client.trigger(dag, planned_for).await?).await?;
     let run_id = command
         .result
@@ -398,7 +398,7 @@ async fn drive(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    let report = report(&client, &detail, data).await?;
+    let report = report(&client, &detail, location.as_ref(), data).await?;
     if json {
         writeln!(
             out,
@@ -418,7 +418,11 @@ async fn drive(
     }
 }
 
-async fn wait_for_dag(client: &Client<HttpTransport>, dag: &str) -> Result<(), AppError> {
+/// Waits until the local master has stored `dag`; returns the file that defines it.
+async fn wait_for_dag(
+    client: &Client<HttpTransport>,
+    dag: &str,
+) -> Result<Option<LocationView>, AppError> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let dags = client.dags().await?;
@@ -433,7 +437,7 @@ async fn wait_for_dag(client: &Client<HttpTransport>, dag: &str) -> Result<(), A
                     places.join(", ")
                 )));
             }
-            return Ok(());
+            return Ok(found.location.clone());
         }
         if Instant::now() > deadline {
             return Err(AppError::Failed(format!(
@@ -444,10 +448,12 @@ async fn wait_for_dag(client: &Client<HttpTransport>, dag: &str) -> Result<(), A
     }
 }
 
-/// The run's report: the run, and each task's state, output, attempts and log.
+/// The run's report: the run, the file defining the DAG, and each task's state, output,
+/// attempts and log.
 async fn report(
     client: &Client<HttpTransport>,
     detail: &RunDetail,
+    location: Option<&LocationView>,
     data: &Path,
 ) -> Result<Value, AppError> {
     let db = Database::connect(&format!("sqlite://{}", data.join("schedr.db").display())).await?;
@@ -475,7 +481,7 @@ async fn report(
             "log": log,
         }));
     }
-    Ok(json!({"run": detail.run, "tasks": tasks}))
+    Ok(json!({"run": detail.run, "location": location, "tasks": tasks}))
 }
 
 fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {

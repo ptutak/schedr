@@ -7,8 +7,11 @@ import pytest
 
 from schedr._model import DagCtxField, DagCtxRef, OutputRef, Template, TemplateRef
 from schedr._templates import RAW, as_text, check_spec, is_tstring, to_template
-from schedr.context import dag_ctx
+from schedr.context import DagCtxReference
 from schedr.tasks import Output
+
+PLANNED_FOR_REF = DagCtxReference(DagCtxField.PLANNED_FOR)
+"""What ``dag_ctx.run.planned_for`` gives in a DAG body."""
 
 PLANNED_FOR = DagCtxRef(DagCtxField.PLANNED_FOR)
 
@@ -21,14 +24,14 @@ def test_is_tstring() -> None:
 
 def test_text_and_references_become_parts() -> None:
     out = Output[int]("count")
-    template = to_template(t"./notify.sh {dag_ctx.run.planned_for} {out}", "w", shell=False)
+    template = to_template(t"./notify.sh {PLANNED_FOR_REF} {out}", "w", shell=False)
     assert template == Template(
         ["./notify.sh ", TemplateRef(PLANNED_FOR), " ", TemplateRef(OutputRef("count"))]
     )
 
 
 def test_format_specs_are_kept_on_references() -> None:
-    template = to_template(t"day={dag_ctx.run.planned_for:%Y-%m-%d}", "w", shell=False)
+    template = to_template(t"day={PLANNED_FOR_REF:%Y-%m-%d}", "w", shell=False)
     assert template == Template(["day=", TemplateRef(PLANNED_FOR, "%Y-%m-%d")])
     shell = to_template(t"./run.sh {Output[str]('flags'):raw}", "w", shell=True)
     assert shell.parts[1] == TemplateRef(OutputRef("flags"), RAW)
@@ -84,12 +87,12 @@ def test_empty_text_pieces_are_dropped() -> None:
         (lambda: t"{[1, 2]}", TypeError, "is list"),
         (lambda: t"{t'inner'}", TypeError, "nesting isn't supported"),
         (
-            lambda: t"{dag_ctx.run.planned_for!r}",
+            lambda: t"{PLANNED_FOR_REF!r}",
             TypeError,
             "conversions don't apply to references",
         ),
-        (lambda: t"{dag_ctx.run.planned_for:>10}", ValueError, r"unknown format spec `:>10`"),
-        (lambda: t"{dag_ctx.run.planned_for:raw}", ValueError, r"`:raw` only applies to shell"),
+        (lambda: t"{PLANNED_FOR_REF:>10}", ValueError, r"unknown format spec `:>10`"),
+        (lambda: t"{PLANNED_FOR_REF:raw}", ValueError, r"`:raw` only applies to shell"),
         (lambda: t"{'x':raw}", ValueError, r"`:raw` only applies to shell commands"),
     ],
 )

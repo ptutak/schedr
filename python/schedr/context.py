@@ -3,22 +3,30 @@
 In the DAG body, ``dag_ctx.run.planned_for`` is a **reference**, filled in at run time; it
 can be passed to tasks and commands, but not used as a value in the DAG file. Inside a
 running task (while the runner calls its function) the same expression gives the **value**
-(see PROJECT.md, Run parameters and the DAG context). ``dag_ctx.params`` comes with
-milestone M4.
+(see PROJECT.md, Run parameters and the DAG context). Anywhere else it fails ("must be run
+inside a schedr task"); tests set values with ``schedr.testing.task_context(...)``.
+``dag_ctx.params`` comes with milestone M4.
 """
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, Reference
 
 _VALUE_IN_DAG_BODY = (
     "a reference can't be used as a value in the DAG file (it is known only at run time); "
     "pass it to a task, or decide in a task"
+)
+
+_OUTSIDE = (
+    "`dag_ctx` must be run inside a schedr task (it gives references inside `with Dag(...)` "
+    "and values while a task runs); in tests, set values with "
+    "`schedr.testing.task_context(...)`"
 )
 
 
@@ -91,37 +99,43 @@ def running(values: RunValues) -> Iterator[None]:
         _RUNNING.reset(token)
 
 
+def _current(field: DagCtxField, value: Callable[[RunValues], Any]) -> Any:
+    """A field's value inside a running task, its reference in a DAG body, else an error."""
+    values = _RUNNING.get()
+    if values is not None:
+        return value(values)
+    if _build.active() is None:
+        raise RuntimeError(_OUTSIDE)
+    return DagCtxReference(field)
+
+
 class RunContext:
     """``dag_ctx.run``: the run's information.
 
     Each field is a reference in the DAG body and a value inside a running task; for type
     checkers it is ``Any`` (as ``dag_ctx.params`` fields are), since the same expression is
-    used in both places.
+    used in both places. Reading a field anywhere else raises ``RuntimeError``.
     """
 
     @property
     def id(self) -> Any:
         """The run's ID (a UUIDv7)."""
-        values = _RUNNING.get()
-        return DagCtxReference(DagCtxField.RUN_ID) if values is None else values.run_id
+        return _current(DagCtxField.RUN_ID, lambda v: v.run_id)
 
     @property
     def kind(self) -> Any:
         """The run's kind: ``scheduled``, ``manual``, ``backfill``, ``chained`` or ``event``."""
-        values = _RUNNING.get()
-        return DagCtxReference(DagCtxField.RUN_KIND) if values is None else values.kind
+        return _current(DagCtxField.RUN_KIND, lambda v: v.kind)
 
     @property
     def planned_for(self) -> Any:
         """The moment the run is for (a fire time for scheduled runs)."""
-        values = _RUNNING.get()
-        return DagCtxReference(DagCtxField.PLANNED_FOR) if values is None else values.planned_for
+        return _current(DagCtxField.PLANNED_FOR, lambda v: v.planned_for)
 
     @property
     def since(self) -> Any:
         """The start of the run's window, which is ``(since, planned_for]``."""
-        values = _RUNNING.get()
-        return DagCtxReference(DagCtxField.SINCE) if values is None else values.since
+        return _current(DagCtxField.SINCE, lambda v: v.since)
 
 
 class DagContext:
@@ -135,8 +149,7 @@ class DagContext:
     @property
     def dag_id(self) -> Any:
         """The DAG's ID."""
-        values = _RUNNING.get()
-        return DagCtxReference(DagCtxField.DAG_ID) if values is None else values.dag_id
+        return _current(DagCtxField.DAG_ID, lambda v: v.dag_id)
 
     @property
     def params(self) -> None:

@@ -41,8 +41,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --python ${{ matrix.python-version }}
-      - run: uv run ruff format --check python
-      - run: uv run ruff check python
+      - run: uv run ruff format --check python examples
+      - run: uv run ruff check python examples
       - run: uv run mypy
       - run: uv run pytest python/tests/unit --cov --cov-report=term-missing --cov-fail-under=85
 
@@ -76,7 +76,7 @@ jobs:
       - run: uv sync --python 3.14
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - run: cargo nextest run --workspace -E 'kind(test)'
-      - run: uv run pytest python/tests/integration
+      - run: uv run pytest python/tests/integration examples
 
   # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on
   # any warning.

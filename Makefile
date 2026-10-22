@@ -37,16 +37,16 @@ setup:           ## Install dev tools, Python dev deps and pre-commit hooks
 
 fmt:             ## Format Rust and Python code
 	cargo fmt --all
-	uv run ruff format python
-	uv run ruff check --fix python
+	uv run ruff format python examples
+	uv run ruff check --fix python examples
 
 fmt-check:       ## Verify formatting without changing files
 	cargo fmt --all -- --check
-	uv run ruff format --check python
+	uv run ruff format --check python examples
 
 lint:            ## Run clippy, ruff and mypy
 	cargo clippy --workspace --all-targets -- -D warnings
-	uv run ruff check python
+	uv run ruff check python examples
 	uv run mypy
 
 schema:          ## Regenerate the committed files under schema/
@@ -88,7 +88,7 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test)'; \
-	uv run pytest python/tests/integration
+	uv run pytest python/tests/integration examples
 
 check: fmt-check lint schema-check test test-integration   ## Everything CI runs
 

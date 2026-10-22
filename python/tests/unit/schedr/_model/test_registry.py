@@ -4,6 +4,7 @@ from schedr._model.dag import Dag, DagLocation
 from schedr._model.registry import (
     LOCAL_ROOT,
     DefinedDag,
+    defined_in,
     location_for,
     parse_root,
     register,
@@ -50,3 +51,18 @@ def test_take_entries_keeps_the_task_functions() -> None:
     register(dag, {"extract": extract})
     assert take_entries() == [DefinedDag(dag, {"extract": extract})]
     assert take_entries() == []
+
+
+def test_defined_in_remembers_dags_by_file_after_they_are_taken(tmp_path: Path) -> None:
+    def extract() -> None: ...
+
+    first = Dag("a", DagLocation("r", "a.py"))
+    second = Dag("a", DagLocation("r", "a.py"), max_active_runs=2)
+    register(first, {"extract": extract}, str(tmp_path / "a.py"))
+    register(second, {"extract": extract}, str(tmp_path / "a.py"))
+    take_entries()
+    assert defined_in(tmp_path / "x" / ".." / "a.py", "a") == DefinedDag(
+        second, {"extract": extract}
+    )
+    assert defined_in(tmp_path / "a.py", "b") is None
+    assert defined_in(tmp_path / "b.py", "a") is None

@@ -1989,10 +1989,10 @@ with Dag(
         print(f"loading {len(rows)} customers")
         return len(rows)
 
-    rows = extract()            # Output[list[dict[str, str]]]
-    count = load(rows)          # load depends on extract (data flow)
+    rows = extract()  # Output[list[dict[str, str]]]
+    count = load(rows)  # load depends on extract (data flow)
 
-    CommandOperator(            # depends on load: its command uses `count`
+    CommandOperator(  # depends on load: its command uses `count`
         "notify",
         command=t"echo synced {count} customers for {dag_ctx.run.planned_for}",
     )
@@ -3500,6 +3500,18 @@ and no cluster. Four levels, from cheapest to fullest.
 
   Outside a task and outside `task_context`, `dag_ctx` / `cleanup_handle` fail as decided ("must
   be run inside a schedr task").
+  - **How it works (1.15b):** `task_context(planned_for=, since=, dag_id=, run_id=, kind=)` is
+    a context manager setting the same context variable the runner sets while it calls a
+    task; it yields those values. Defaults: `planned_for` now (UTC), `since` = `planned_for`
+    (an empty window, as for a run with nothing to go back to), `dag_id` `test`, a new
+    UUIDv7 as `run_id`, kind `manual`. Times must be aware, `since` not after `planned_for`,
+    `kind` a run kind. `params=` and `secrets=` raise `NotImplementedError` naming milestone
+    M4 (like `dag_ctx.params`); the handle collector comes with handles (M4).
+  - **`dag_ctx` fails everywhere else (1.15b):** a field read outside a running task and
+    outside `with Dag(...)` raises `RuntimeError` ("`dag_ctx` must be run inside a schedr
+    task ...; in tests, set values with `schedr.testing.task_context(...)`"), e.g. a module-
+    level `PLANNED = dag_ctx.run.planned_for` or a plain call of a task reading it. Inside
+    `with Dag(...)` it gives references, while a task runs (or in `task_context`) values.
 - **One whole run: `schedr dags test <dag> [--for <time>] [-p …] [--secret 'path#key=value']
   [--task <id>]`.** One **real run** in standalone mode with a temporary SQLite database: every
   task is its own process, exactly as in production (runner, rendering, quoting, masking,
@@ -3518,7 +3530,9 @@ and no cluster. Four levels, from cheapest to fullest.
     failed attempt's error (`task | try 1 failed (task_failed):` and the traceback), a table
     TASK / STATE / OUTCOME / TRIES / DURATION (of the last attempt), the outputs as JSON and
     the run's state. `--json` gives `{"run", "tasks": [{task_id, state, outcome, try_number,
-    output, attempts, log}]}`. A run not finished within an hour fails the test.
+    output, attempts, log}], "location": {root, path}}` (`location`: the file defining the
+    DAG, used by `run_dag` to decode outputs). A run not finished within an hour fails the
+    test.
   - **Exit codes:** like every CLI command, 0 on success and 1 on any failure (errors found,
     a run that didn't succeed, a bad argument); 2 only for wrong usage from the argument
     parser.
@@ -3544,6 +3558,39 @@ and no cluster. Four levels, from cheapest to fullest.
     `handles`. **Mapped tasks:** `result.tasks["process"][3]`, `len(...)`, `.outputs` (map-index
     order). **Resources:** `result.resources["cluster"]` (value, state, cleanup log). **The
     run:** `state`, `planned_for`, `since`, `params`, the one-line reason of its result.
+  - **How it works (1.15b):** `run_dag(path, dag_id, for_=None)` runs `schedr dags test
+    <dag_id> --path <path> --json [--for ...]` and reads the report into a `RunResult`
+    (`run_id`, `dag_id`, `kind`, `state`, `planned_for`, `since`, `tasks` by ID) of
+    `TaskResult`s (`state`, `outcome`, `try_number`, `output`, `output_json`, `attempts`,
+    `log`) and `Attempt`s (`status`, `exit_code`, `error_kind`, `error` (the summary),
+    `started_at`, `ended_at`, `duration`). A run that ends `failed` or `cancelled` is a
+    result, not an exception (the test asserts on it); `RunDagError` is for a run that
+    couldn't be made or read (no binary; `dags test` failing before a run, e.g. an unknown DAG
+    or a file that doesn't import), with what `schedr` printed.
+    - **The binary:** `$SCHEDR_BIN`, else the `schedr` installed with this Python's `schedr`
+      package (its scripts directory, so binary and package match), else `schedr` on `PATH`;
+      none is an error saying to `pip install schedr` or set `SCHEDR_BIN`.
+    - **The interpreter:** the DAG's Python tasks run with the test's own Python:
+      `[interpreters] python` is set to `sys.executable` through
+      `SCHEDR_CONFIG__INTERPRETERS__PYTHON`, unless the environment already sets it. A test
+      and its DAG see the same packages; a `python3` on `PATH` without `schedr` doesn't get
+      in the way.
+    - **Decoding outputs:** `output` is decoded lazily, by the task's return annotation
+      (a command's output as a `ProcessResult`, an empty task's as `None`). The annotation
+      comes from the DAG as the test process already defined it, when the test imported the
+      DAG file (the registry remembers each DAG's task functions by file), so a dataclass
+      output equals an instance of the class the test imported; otherwise `run_dag` imports
+      the file (as the runner does) and its classes come from that import. A file that no
+      longer imports is a `RunDagError` from `output` (`output_json` still works).
+    - `params=`, `secrets=`, `step=` and `replace=` raise `NotImplementedError` naming
+      milestone M4.
+  - **Examples (1.15b):** `examples/` holds the example DAG of Native API (`sync.py`, kept
+    identical to the one above by a test) and `daily_report.py` (a task reading `dag_ctx`),
+    each with pytest tests using plain calls, `task_context` and `run_dag`. They run with
+    the integration tests (`make test-integration`, CI's `integration` job: they need the
+    binary). Ruff checks them like the package (docstrings on their tasks are left to the
+    author); mypy doesn't: a DAG passes `Output[T]` where a task takes `T`, which needs the
+    mypy plugin that may come later (see Native API: typing of calls).
   - **Step by step:** `with run_dag(..., step=True) as run: for task in run: ...` yields each
     task as it reaches a final state; the master **starts no new task until the test
     continues**, so a test sees each result (and outside state, e.g. "the file is in the
@@ -4069,7 +4116,9 @@ pyproject.toml          # Python package
 python/
   schedr/               # Python API package (typed: py.typed)
   tests/unit/schedr/    # unit tests mirroring the package (see Testing)
-  tests/integration/    # integration tests (later)
+  tests/integration/    # integration tests
+examples/               # example DAGs with their tests (run with the integration tests)
+BUGS.md                 # open bugs (B1, B2, ...), removed when fixed
 Makefile                # setup / fmt / fmt-check / lint / test / check
 .pre-commit-config.yaml
 .github/workflows/ci.yml
@@ -4171,7 +4220,8 @@ a real server or talks to Postgres is an integration test.
   Postgres; the runner as a real process from Python; `schedr standalone` end to end through
   the CLI and the API (data flow into a command, retries and upstream failure, cancelling a
   running task, files added, changed and removed, a conflict, scheduled runs while unpaused,
-  rejections) on SQLite and on Postgres.
+  rejections) on SQLite and on Postgres; `schedr.testing.run_dag` against the binary (failed
+  runs, attempts, decoded outputs) and the `examples/` tests.
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

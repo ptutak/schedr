@@ -208,6 +208,7 @@ fn test_with_json_gives_the_run_and_its_tasks() {
     let report: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(report["run"]["state"], "success");
     assert_eq!(report["run"]["kind"], "manual");
+    assert_eq!(report["location"]["path"], "sync.py");
     let tasks = report["tasks"].as_array().unwrap();
     let ids: Vec<&str> = tasks
         .iter()
