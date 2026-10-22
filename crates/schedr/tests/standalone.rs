@@ -21,12 +21,23 @@ fn python() -> String {
     )
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// The REST API's address from standalone's banner in `log` (`... API on http://ADDR, ...`),
+/// waiting up to a minute for it; `None` if the process logged none. 0.0.0.0 is reached on
+/// 127.0.0.1.
+fn api_from_banner(log: &Path) -> Option<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if let Some(rest) = text.split("API on http://").nth(1) {
+            let address = rest.split(',').next().unwrap();
+            return Some(format!(
+                "http://{}",
+                address.replacen("0.0.0.0:", "127.0.0.1:", 1)
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    None
 }
 
 /// A running `schedr standalone` with its own directory, DAG root and ports.
@@ -50,13 +61,14 @@ impl Standalone {
         for (name, text) in files {
             std::fs::write(root.join(name), text).unwrap();
         }
-        let (grpc, http) = (free_port(), free_port());
+        // Port 0: standalone binds free ports itself and its banner says which (picking free
+        // ports for it races with the tests running in parallel; B3).
         let config = format!(
             "[dags]\npoll_interval = \"200ms\"\nsettle_time = \"0s\"\n\n\
              [interpreters]\npython = \"{python}\"\n\n\
              [worker]\ndata_dir = \"{data}\"\nslots = 4\n\n\
-             [master]\ngrpc_port = {grpc}\ntick_interval = \"100ms\"\n\n\
-             [webserver]\nport = {http}\n",
+             [master]\ngrpc_port = 0\ntick_interval = \"100ms\"\n\n\
+             [webserver]\nport = 0\n",
             python = python(),
             data = dir.path().join("data").display(),
         );
@@ -80,11 +92,14 @@ impl Standalone {
             .stderr(Stdio::from(log))
             .spawn()
             .unwrap();
-        let standalone = Self {
-            dir,
-            child,
-            api: format!("http://127.0.0.1:{http}"),
-        };
+        let log = dir.path().join("standalone.log");
+        let api = api_from_banner(&log).unwrap_or_else(|| {
+            panic!(
+                "standalone logged no banner:\n{}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            )
+        });
+        let standalone = Self { dir, child, api };
         standalone.wait("the API to answer", || {
             standalone.get("/api/v1/dags").is_some()
         });
