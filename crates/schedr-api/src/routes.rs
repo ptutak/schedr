@@ -1,6 +1,6 @@
 //! The `/api/v1` endpoints: reads straight from the database, actions as command rows.
 //!
-//! A handler's errors are its OpenAPI responses (`ErrorBody` with 400 / 404 / 500); the doc
+//! A handler's errors are its OpenAPI responses (`ErrorBody` with 400 / 404 / 503 / 500); the doc
 //! comments are the endpoints' descriptions in the OpenAPI document, so they carry no
 //! `# Errors` sections.
 #![expect(
@@ -14,13 +14,15 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use schedr_model::commands::Command;
+use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, TaskId};
 
 use crate::error::ApiError;
+use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
-    AttemptList, CommandView, DagList, DagView, ErrorBody, PauseRequest, RunDetail, RunList,
-    RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
+    AttemptList, CommandView, DagList, DagView, ErrorBody, LogChunk, LogQuery, PauseRequest,
+    RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
 };
 
 #[cfg(test)]
@@ -267,6 +269,109 @@ pub async fn list_attempts(
     let attempts = state.db.task_attempts(&run_id, &task_id).await?;
     Ok(Json(AttemptList {
         attempts: attempts.iter().map(Into::into).collect(),
+    }))
+}
+
+/// A part of an attempt's log, read from the worker that ran it; read on from `next` to follow
+/// a running task. 404 when the attempt has no log (yet), or the worker no longer has it; 503
+/// when the worker is gone or can't be reached.
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log",
+    tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "The run's ID"),
+        ("task_id" = String, Path, description = "The task's ID"),
+        ("try_number" = u32, Path, description = "The attempt's try number"),
+        LogQuery
+    ),
+    responses(
+        (status = 200, body = LogChunk),
+        (status = 404, body = ErrorBody),
+        (status = 503, body = ErrorBody)
+    ))]
+pub async fn get_log(
+    State(state): State<ApiState>,
+    Path((run_id, task_id, try_number)): Path<(String, String, u32)>,
+    query: Result<Query<LogQuery>, QueryRejection>,
+) -> ApiResult<LogChunk> {
+    let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    known_run(&state, &run_id).await?;
+    let attempt = state
+        .db
+        .task_attempts(&run_id, &task_id)
+        .await?
+        .into_iter()
+        .find(|a| a.try_number == try_number)
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "task `{task_id}` of run `{run_id}` has no try {try_number}"
+            ))
+        })?;
+    let attempt_id = attempt.id;
+    let worker_id = match (attempt.worker_id, attempt.started_at, attempt.status) {
+        (Some(worker_id), Some(_), _) => worker_id,
+        (_, _, None) => {
+            return Err(ApiError::NotFound(format!(
+                "try {try_number} of task `{task_id}` hasn't started yet: no log so far"
+            )));
+        }
+        (_, _, Some(_)) => {
+            return Err(ApiError::NotFound(format!(
+                "try {try_number} of task `{task_id}` never started, so it has no log"
+            )));
+        }
+    };
+    let endpoint = match state.db.worker_log_endpoint(&worker_id).await? {
+        Some((worker_state, _)) if worker_state.is_gone() => {
+            return Err(ApiError::Unavailable(format!(
+                "worker `{worker_id}` is {worker_state}: the log of try {try_number} is \
+                 unavailable"
+            )));
+        }
+        Some((_, endpoint)) if !endpoint.is_empty() => endpoint,
+        _ => {
+            return Err(ApiError::Unavailable(format!(
+                "worker `{worker_id}` has no log endpoint: the log of try {try_number} is \
+                 unavailable"
+            )));
+        }
+    };
+    let from = query.from.unwrap_or(0);
+    let limit = query.limit.unwrap_or(MAX_CHUNK).clamp(MIN_CHUNK, MAX_CHUNK);
+    let answered = |answered: Option<&String>| match answered {
+        Some(other) if *other != worker_id => Err(ApiError::Unavailable(format!(
+            "reached worker `{other}` instead of `{worker_id}` at {endpoint}: its address is \
+             stale; try again shortly"
+        ))),
+        _ => Ok(()),
+    };
+    let log = match state.logs.fetch(&endpoint, &attempt_id, from, limit).await {
+        Ok(log) => log,
+        Err(LogFetchError::Missing { worker_id: other }) => {
+            answered(other.as_ref())?;
+            return Err(ApiError::NotFound(format!(
+                "the log file is unavailable at worker `{worker_id}` (it may have been deleted)"
+            )));
+        }
+        Err(LogFetchError::Unreachable(reason)) => {
+            return Err(ApiError::Unavailable(format!(
+                "worker `{worker_id}` can't be reached at {endpoint}: {reason}"
+            )));
+        }
+    };
+    answered(log.worker_id.as_ref())?;
+    let from = from.min(log.size);
+    let read = u64::try_from(log.bytes.len()).unwrap_or(u64::MAX);
+    let (content, used) = text_of(&log.bytes, log.running || from + read < log.size);
+    Ok(Json(LogChunk {
+        attempt_id,
+        try_number,
+        worker_id,
+        from,
+        next: from + u64::try_from(used).unwrap_or(u64::MAX),
+        size: log.size,
+        running: log.running,
+        content,
     }))
 }
 

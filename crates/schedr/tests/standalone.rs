@@ -66,7 +66,7 @@ impl Standalone {
         let config = format!(
             "[dags]\npoll_interval = \"200ms\"\nsettle_time = \"0s\"\n\n\
              [interpreters]\npython = \"{python}\"\n\n\
-             [worker]\ndata_dir = \"{data}\"\nslots = 4\n\n\
+             [worker]\ndata_dir = \"{data}\"\nslots = 4\nlog_port = 0\n\n\
              [master]\ngrpc_port = 0\ntick_interval = \"100ms\"\n\n\
              [webserver]\nport = 0\n",
             python = python(),
@@ -260,10 +260,13 @@ with Dag("chain"):
     CommandOperator("report", t"echo report {done}")
 "#;
 
+/// Every task log, of every worker (`data/logs/<worker ID>/`).
 fn logs(dir: &Path) -> String {
     let mut text = String::new();
-    for entry in std::fs::read_dir(dir.join("data/logs")).unwrap() {
-        text.push_str(&std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default());
+    for worker in std::fs::read_dir(dir.join("data/logs")).unwrap() {
+        for entry in std::fs::read_dir(worker.unwrap().path()).unwrap() {
+            text.push_str(&std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default());
+        }
     }
     text
 }
@@ -284,6 +287,9 @@ fn a_chain_runs_end_to_end(standalone: &Standalone) {
         ])
     );
     assert!(logs(standalone.dir.path()).contains("report loaded 3"));
+    // The same log through the API, from standalone's worker.
+    let (code, out, err) = standalone.cli(&["tasks", "logs", &run_id, "report", "--try", "1"]);
+    assert_eq!((code, out.as_str()), (0, "report loaded 3\n"), "{err}");
     let (code, out, _) = standalone.cli(&["runs", "list", "chain"]);
     assert_eq!(code, 0);
     assert!(

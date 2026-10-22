@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod dag;
 pub mod ids;
+pub mod logs;
 pub mod runner;
 pub mod schema;
 pub mod states;

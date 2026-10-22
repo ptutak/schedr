@@ -129,6 +129,9 @@ fn interpreter_table_defaults_to_spawn_without_preloading() {
 #[case("[log]\nformat = \"xml\"\n", "unknown variant")]
 #[case("[dags]\nsettle_time = \"soon\"\n", "is not a duration")]
 #[case("[ops]\nport = 70000\n", "port")]
+#[case("[tls]\nmode = \"off\"\n", "unknown variant")]
+#[case("[worker]\nlog_max_size = \"10GB\"\n", "is not a size")]
+#[case("[worker]\nlog_max_size = 10\n", "a size string")]
 fn rejects_invalid_values(#[case] toml: &str, #[case] expected: &str) {
     let err = parse(toml).unwrap_err().to_string();
     assert!(err.contains(expected), "{err}");
@@ -192,6 +195,22 @@ fn master_webserver_and_worker_defaults() {
             pass_env: vec![],
             master_url: None,
             termination_grace_period: Duration::from_secs(30),
+            log_bind: std::net::IpAddr::from([0, 0, 0, 0]),
+            log_port: 8081,
+            log_address: None,
+            log_retention: Duration::from_hours(720),
+            log_max_size: None,
+        }
+    );
+    assert_eq!(
+        config.tls,
+        TlsSection {
+            mode: TlsMode::App,
+            ca: None,
+            cert: None,
+            key: None,
+            worker_name: "schedr-worker".into(),
+            reload_interval: Duration::from_secs(30),
         }
     );
 }
@@ -224,6 +243,11 @@ fn reads_the_master_webserver_and_worker_sections() {
         data_dir = "/var/lib/schedr"
         pass_env = ["HTTPS_PROXY"]
         termination_grace_period = "10m"
+        log_bind = "127.0.0.1"
+        log_port = 9081
+        log_address = "w-0.schedr-worker.etl.svc.cluster.local"
+        log_retention = "7d"
+        log_max_size = "10GiB"
         "#,
     )
     .unwrap();
@@ -251,4 +275,42 @@ fn reads_the_master_webserver_and_worker_sections() {
         Some(PathBuf::from("/var/lib/schedr"))
     );
     assert_eq!(config.worker.pass_env, ["HTTPS_PROXY"]);
+    assert_eq!(
+        config.worker.log_bind,
+        std::net::IpAddr::from([127, 0, 0, 1])
+    );
+    assert_eq!(config.worker.log_port, 9081);
+    assert_eq!(
+        config.worker.log_address.as_deref(),
+        Some("w-0.schedr-worker.etl.svc.cluster.local")
+    );
+    assert_eq!(config.worker.log_retention, Duration::from_hours(168));
+    assert_eq!(config.worker.log_max_size, Some(10 << 30));
+}
+
+#[test]
+fn reads_the_tls_section() {
+    let config = parse(
+        r#"
+        [tls]
+        mode = "mesh"
+        ca = "/etc/schedr/tls/ca.crt"
+        cert = "/etc/schedr/tls/tls.crt"
+        key = "/etc/schedr/tls/tls.key"
+        worker_name = "worker.schedr"
+        reload_interval = "1m"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.tls,
+        TlsSection {
+            mode: TlsMode::Mesh,
+            ca: Some("/etc/schedr/tls/ca.crt".into()),
+            cert: Some("/etc/schedr/tls/tls.crt".into()),
+            key: Some("/etc/schedr/tls/tls.key".into()),
+            worker_name: "worker.schedr".into(),
+            reload_interval: Duration::from_mins(1),
+        }
+    );
 }

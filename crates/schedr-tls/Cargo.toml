@@ -1,0 +1,36 @@
+[package]
+name = "schedr-tls"
+description = "mTLS on schedr's internal links: certificates from files, reloaded when they change."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+# Certificates for tests (a CA and the certificates it signs), used by other crates' tests.
+testing = ["dep:rcgen"]
+
+[dependencies]
+axum.workspace = true
+rcgen = { workspace = true, optional = true }
+hyper-util.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rcgen.workspace = true
+schedr-tls = { workspace = true, features = ["testing"] }
+rstest.workspace = true
+tempfile.workspace = true
+tokio-rustls.workspace = true
+
+[lints]
+workspace = true

@@ -13,7 +13,7 @@ pub mod units;
 
 pub use config::{
     Config, DagsSection, DatabaseSection, Interpreter, LogFormat, LogSection, OpsSection,
-    ScriptsSection, url_has_password,
+    ScriptsSection, TlsMode, TlsSection, url_has_password,
 };
 pub use loader::{ConfigError, load};
 pub use roots::{PathList, Root, RootError};

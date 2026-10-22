@@ -1,7 +1,7 @@
 //! The schedr webserver: REST API and web UI.
 //!
-//! So far the REST API subset the CLI needs (`/api/v1`: DAGs, runs, tasks, attempts,
-//! commands), with version headers and a generated OpenAPI description (see PROJECT.md, Web
+//! So far the REST API subset the CLI needs (`/api/v1`: DAGs, runs, tasks, attempts and their
+//! logs, commands, workers), with version headers and a generated OpenAPI description (see PROJECT.md, Web
 //! UI and CLI). Reads come straight from the database; actions are command rows the master
 //! applies.
 
@@ -10,6 +10,7 @@ use axum::{Json, Router};
 use utoipa::OpenApi;
 
 pub mod error;
+pub mod logs;
 pub mod routes;
 pub mod state;
 pub mod version;
@@ -35,6 +36,7 @@ pub use state::ApiState;
         routes::get_run,
         routes::cancel_run,
         routes::list_attempts,
+        routes::get_log,
         routes::cancel_task,
         routes::retry_task,
         routes::get_command,
@@ -77,6 +79,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/attempts",
             get(routes::list_attempts),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log",
+            get(routes::get_log),
         )
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/cancel",

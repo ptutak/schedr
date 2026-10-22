@@ -74,11 +74,14 @@ One Rust binary, four roles:
   a notification that fails after the command is stored is only logged (the command is
   there; failing the request would make a retry store it twice), and when listening fails
   (the database is down) the master tries again after 30 s.
-- **Plain gRPC until mTLS (2.7):** a master listening beyond loopback, or a worker connecting
-  beyond it, warns at startup that the traffic is unencrypted. Not chosen: refusing
-  non-loopback addresses until 2.7 (the split couldn't be tested across hosts).
-  `[worker] master_url` is checked at startup: an `http://` URL with a host (`https://` comes
-  with mTLS), else a configuration error rather than a worker retrying forever.
+- **mTLS on the internal links (M2.7)**, by `[tls] mode` (see Master–worker protocol): `app`
+  (the default) needs `[tls] ca`, `cert` and `key` on the master, the webserver and every
+  worker, else a startup error naming the key and `mode = "mesh"`; `mesh` sends plain
+  traffic for the mesh to encrypt. `[worker] master_url` is checked at startup: an
+  `https://` URL with a host in `app` mode, `http://` in `mesh` mode, else a configuration
+  error rather than a worker retrying forever. Each role's startup line says which (`(mTLS)`
+  or `(plain: tls mode `mesh`)`). The plain-text warning of M2.1 is gone: plain traffic now
+  means a mesh was declared.
 - **The REST API has no authentication of its own until M3:** a webserver listening beyond
   loopback warns at startup to keep it behind an authenticating proxy or mesh (the main
   deployment, `auth.mode = "none"` behind Istio), or to bind 127.0.0.1.
@@ -180,6 +183,7 @@ tasks share the pod's memory):
   | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
   | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one unfinished task, stopping it if it runs (see Task assignment) |
   | `schedr tasks retry <run id> <task id> [--map-index N]` | retry an `unschedulable` task of an unfinished run |
+  | `schedr tasks logs <run id> <task id> [--try N] [-f]` | an attempt's log (the latest try by default), read from its worker; `--follow` until the attempt ends |
   | `schedr workers list` | the workers and their state, gone ones included |
   | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
  The master's gRPC API stays internal to the workers.
@@ -207,15 +211,17 @@ tasks share the pod's memory):
     optional) and `…/unpause`, `GET …/dags/{dag_id}/runs?for=…&limit=…` (newest first,
     default 50, at most 500), `POST …/dags/{dag_id}/runs` (body `{"planned_for": …}`,
     optional), `GET …/runs/{run_id}` (with its tasks), `POST …/runs/{run_id}/cancel`, `GET
-    …/runs/{run_id}/tasks/{task_id}/attempts`, `GET …/commands/{command_id}`, `GET
-    /api/v1/workers` (M2.2), and the OpenAPI
+    …/runs/{run_id}/tasks/{task_id}/attempts`, `GET
+    …/runs/{run_id}/tasks/{task_id}/attempts/{try}/log?from=&limit=` (M2.7, see Task logs),
+    `GET …/commands/{command_id}`, `GET /api/v1/workers` (M2.2), and the OpenAPI
     description at `GET /api/v1/openapi.json`.
   - **Actions answer `202 Accepted` with the command** (pending); the client polls `GET
     …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
     API itself only checks the request's form (IDs, body); everything else is the master's
     decision, so there is one place for the rules.
   - **Errors are JSON**, `{"error": "…"}`: 400 for a malformed request, 404 for an unknown or
-    removed DAG, run or command, 500 for a database failure (details only in the webserver's
+    removed DAG, run or command, 503 for something the request needs that can't be reached now
+    (a worker holding a log), 500 for a database failure (details only in the webserver's
     log). Times are UTC (RFC 3339); kinds and states are their model names.
   - The user recorded on commands is the `identity_header`'s value, or `anonymous`.
   - **The committed OpenAPI file** is `schema/openapi.json`, generated with the JSON Schemas
@@ -342,11 +348,76 @@ tasks share the pod's memory):
 - Each task attempt records which worker ran it, so its logs can be found.
 - The **webserver proxies** log requests to the worker; the browser never talks to workers
   directly.
-- The worker's log endpoint accepts only **short-lived tokens signed with a shared secret**
-  (with `tls.mode = "app"`; in `mesh` mode none, see Master–worker protocol).
+- **Access to the log endpoint is mTLS only** (`tls.mode = "app"`: a client needs a
+  certificate from schedr's CA; in `mesh` mode the mesh decides, the namespace is trusted).
+  It serves logs only, never actions. Not chosen: short-lived tokens signed with a shared
+  secret on top (the decision before M2.7): every worker would hold the key to check them,
+  so a compromised worker could sign its own and they would add a secret and nothing else;
+  tokens signed with a private key only the webserver holds (Ed25519) are the variant worth
+  having, kept for when the UI's permissions need it (M3).
 - The worker deletes logs **after N days or beyond a size limit** (configurable).
 - When a log can't be fetched (worker offline, file deleted, …), the UI states clearly that
   **the log file is unavailable at this location** (e.g. it may have been deleted).
+
+**How it is built (M2.7):**
+
+- **The worker's endpoint:** `GET /logs/{attempt_id}?from=<byte>&limit=<bytes>` on `[worker]
+  log_bind` : `log_port` (`0.0.0.0:8081`; 0 picks a free port) answers the bytes from `from`,
+  at most 1 MiB, with headers `Schedr-Worker-Id` (who answered), `Schedr-Log-Size` (the size
+  now) and `Schedr-Attempt-Running` (from the journal). An ID that isn't an attempt ID (a
+  UUID) is 400, a log the worker doesn't have is 404, all as JSON errors naming the worker.
+  Reading on from the size returned follows a running task; a live stream (SSE) comes with
+  the UI (M3). Not chosen: SSE now (the UI's job); whole files only (a big log, and no way to
+  follow).
+- **The address** the worker sends in `Register` (`log_endpoint`) is `https://<host>:<port>`
+  (`http://` in `mesh` mode), the host being **`[worker] log_address`**, else the host name.
+  The chart (2.10) runs workers as a StatefulSet with a **headless Service** and sets it to
+  the pod's DNS name (`<pod>.<service>.<namespace>.svc.cluster.local`): a headless Service
+  doesn't balance (the name resolves to that one pod), its pods are in Istio's registry, so
+  the call passes `outboundTrafficPolicy: REGISTRY_ONLY` and gets the mesh's mTLS, and Istio
+  routes HTTP by host name, which a raw pod IP may not match. The address is overwritten at
+  every `Register`, so a pod restarted with a new IP is found again. Not chosen: the pod IP
+  as the default (blocked or unrouted under `REGISTRY_ONLY` without a Service, and Istio's
+  handling of raw IPs varies by version); an address worked out from the connection to the
+  master (wrong behind NAT or a sidecar).
+- **The webserver's proxy:** `GET /api/v1/runs/{run}/tasks/{task}/attempts/{try}/log?from=`
+  finds the attempt's worker by ID and its current `log_endpoint` in the database, reads the
+  part from the worker and answers JSON: `attempt_id`, `try_number`, `worker_id`, `from`,
+  `next` (where the next part starts), `size`, `running` and `content` (UTF-8; a character
+  cut at the end of a part is left for the next one, invalid bytes become U+FFFD). Clients
+  never reach workers. What can go wrong, said plainly:
+
+  | Case | Answer |
+  |---|---|
+  | the try hasn't started, or never did (`assignment_expired`) | 404, "no log so far" / "never started, so it has no log" |
+  | the worker is `offline` or `lost` | 503 at once, without connecting: "worker `w1` is offline: the log of try 1 is unavailable" |
+  | the worker has no endpoint | 503 |
+  | it can't be reached (5 s to connect, 30 s in all) | 503 with the reason |
+  | it has no such file | 404: "the log file is unavailable at worker `w1` (it may have been deleted)" |
+  | **another worker answered** (`Schedr-Worker-Id`: an address now someone else's, a DNS cache after a restart) | 503: "reached worker `w2` instead of `w1` at …: its address is stale; try again shortly" |
+  | the worker's and the webserver's `[tls] mode` differ | 503, saying to give every role the same mode |
+
+  Not chosen for a stale address: relying on the 404 (it would claim the log was deleted);
+  one certificate per worker naming its ID, checked by the webserver (needs per-pod
+  certificates).
+- **Requests to workers never use an HTTP proxy**, whatever `HTTPS_PROXY` says (see
+  Configuration: internal links): a proxy can't reach pod IPs or cluster names, `NO_PROXY`
+  rarely covers them, and in `mesh` mode a request sent to a proxy would skip the mesh's
+  per-destination policy. Through a `CONNECT` tunnel mTLS would still hold end to end, and a
+  proxy that decrypts and re-encrypts can't present a certificate from schedr's CA, so the
+  handshake fails rather than leaking anything; skipping proxies is about working
+  connections, not secrecy. No setting for it. Not chosen: `[tls] use_proxy_env` (a choice
+  nobody should make).
+- **`schedr tasks logs <run> <task> [--try N] [--follow]`** prints the log as it is (the
+  latest try by default; `--json` prints each part as the API's JSON, one per line);
+  `--follow` reads on from `next` every 0.5 s until the attempt ends.
+- **Retention on the worker:** logs older than **`[worker] log_retention`** (default **30
+  days**) are deleted, and beyond **`[worker] log_max_size`** (no limit by default: volume
+  sizes vary too much for a default) the oldest go first. A sweep runs at start and every
+  hour. A log whose attempt is in the journal (running, or its result not yet acknowledged)
+  is never deleted, though it counts towards the size limit (the limit is about the disk).
+  Parse logs (`parse-<root>.log`) follow the same rules. Listing gone workers for as long as
+  their logs are kept (Worker lifecycle) waits for retention on the master (M4).
 
 ### DAG code delivery
 
@@ -637,6 +708,40 @@ SchedrScriptOperator(
   change** (rotation without restart); the same mTLS setup is used for **every internal link**
   (master ↔ worker, webserver → worker logs). There is no webserver → master link (see Web
   UI and CLI: the webserver talks to the master through Postgres).
+- **How it is built (M2.7), crate `schedr-tls`:**
+  - **`[tls]`:** `mode` (`app` / `mesh`), `ca`, `cert`, `key` (PEM files, e.g. from a
+    mounted Secret; the key may be PKCS#8, PKCS#1 or SEC1), `worker_name` (default
+    `schedr-worker`), `reload_interval` (default 30 s). One section for every role: each pod
+    runs one role and mounts its own Secret. Standalone never uses TLS, whatever `[tls]` says
+    (nothing listens beyond localhost but the API). Not chosen: `[master.tls]`,
+    `[worker.tls]`, … (the same keys three times); a third mode `off` (plain traffic is what
+    `mesh` is; it would differ only by a warning).
+  - **What is checked:** one CA, used only by schedr. Servers (the master's gRPC, a worker's
+    log endpoint) require a client certificate signed by it. A worker checks that the
+    master's certificate names the host of `master_url` (a DNS name or an IP address); the
+    webserver checks that a worker's certificate names **`[tls] worker_name`**, whatever
+    address it reached the worker at (pod IPs and pod names change, so a shared certificate
+    can't list them). A certificate used both ways (a worker's) needs both the `serverAuth`
+    and `clientAuth` extended key usages; giving every certificate both is simplest. TLS 1.3
+    only, with rustls and the aws-lc-rs provider (already in the build through reqwest, and
+    it builds for musllinux). Not chosen: one certificate per pod naming its IP (needs
+    per-pod issuance, e.g. the cert-manager CSI driver); checking only that the CA signed it
+    (any schedr certificate could pose as the master); checking that a worker's certificate
+    names its worker ID (worth it only against a compromised worker posing as another).
+  - **Reloading:** the files are read again every `reload_interval` and used once all three
+    read and go together; a broken change (a half-written file, a key of another
+    certificate) keeps the previous material and is logged once. New connections use the new
+    material; open ones go on (the master–worker stream keeps its session). Not chosen:
+    inotify (Kubernetes swaps a symbolic link to update a mounted Secret; the reason DAG roots
+    are polled too); a restart (it would interrupt tasks).
+  - **The handshake is schedr's own,** around tonic and axum (a listener that hands over
+    connections after it; a connector for the worker's channel), because tonic's TLS settings
+    are fixed at startup and couldn't be reloaded. A client that doesn't finish its handshake
+    within 10 s is dropped, and holds up no one. A handshake refused over a certificate is a
+    warning in the server's log (`TLS handshake refused`, with the reason, e.g.
+    `UnknownIssuer`); one that just ends (a TCP probe) only at debug level. In TLS 1.3 the
+    client finishes its side before the server checks its certificate, so a refused worker
+    sees the refusal on its first message, as `master connection lost` with the alert.
 
 ### Worker lifecycle
 
@@ -659,8 +764,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
 **Messages:**
 
 1. **Register** (worker → master), on every connect: worker ID, incarnation ID, protocol and
-   schedr versions, queues, task and watcher slots, log endpoint address (pod IP from the Kubernetes downward
-   API + port), content hashes per DAG/script root, the names of its configured secret
+   schedr versions, queues, task and watcher slots, log endpoint address (`[worker]
+   log_address` and the port: the pod's DNS name through a headless Service in the chart, see
+   Task logs), content hashes per DAG/script root, the names of its configured secret
    storages (see Secret storage), and the journal summary (running attempts, unacknowledged
    results).
 2. **Registered** (master → worker): timing settings (heartbeat interval, lease timeout, cancel
@@ -4406,6 +4512,7 @@ crates/
   schedr-master/        # scheduling loop, DAG validation, commands, gRPC server
   schedr-agent/         # worker agent
   schedr-api/           # webserver: REST API, UI
+  schedr-tls/           # mTLS on the internal links: certificates, reloading, handshakes
   schedr/               # the binary: roles, user CLI, in-task CLI
     src/<module>.rs     # unit tests in src/<module>/tests.rs (see Testing)
     tests/              # integration tests (later)
@@ -4498,6 +4605,8 @@ Rust crates chosen for the implementation (versions pinned when added):
 | shell quoting | own implementation | must match `shlex.quote` exactly |
 | ignore files | `ignore` | gitignore semantics for `.schedrignore`, directory walking with symbolic links |
 | content hashes | `sha2` | SHA-256 of DAG roots |
+| TLS | `rustls` (aws-lc-rs provider, TLS 1.3), `tokio-rustls`; `hyper-util` and `tower` for the gRPC connector | see Master–worker protocol: mTLS (M2.7); rustls locked at 0.23.45, the newest at least two weeks old |
+| test certificates | `rcgen` (dev only, through `schedr-tls`'s `testing` feature) | a CA and its certificates generated in tests |
 
 Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-time `sqlx` macros
 (two backends); `actix-web` (a second async stack). The Python package stays dependency-free.
@@ -4537,7 +4646,11 @@ a real server or talks to Postgres is an integration test.
   applied at once through `LISTEN/NOTIFY`, an unmigrated database refused, SIGTERM); the worker
   lifecycle on Postgres (a worker killed mid-task and started again: its attempt `lost` and
   retried; one that never returns: `lost` and still listed; a running task across a master
-  restart: one attempt, continued; a second worker with the same ID refused).
+  restart: one attempt, continued; a second worker with the same ID refused); mTLS (M2.7:
+  two workers and the webserver over mTLS on Postgres, each task's log read through the
+  webserver from its worker, a deleted log and a worker gone; a worker whose certificate
+  comes from another CA refused; the master's certificates rotated without a restart; in
+  `schedr-tls`, the handshakes, names, refusals and rotation over loopback).
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

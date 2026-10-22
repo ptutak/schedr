@@ -110,3 +110,43 @@ fn deserialize_duration_rejects_bad_strings_and_numbers() {
         "{number}"
     );
 }
+
+#[derive(Debug, Deserialize)]
+struct WithSize {
+    #[serde(default, deserialize_with = "deserialize_optional_size")]
+    limit: Option<u64>,
+}
+
+#[test]
+fn deserialize_optional_size_reads_strings_and_leaves_a_missing_one_out() {
+    let parsed: WithSize = figment::Figment::from(figment::providers::Serialized::defaults(
+        std::collections::BTreeMap::from([("limit", "4MiB")]),
+    ))
+    .extract()
+    .unwrap();
+    assert_eq!(parsed.limit, Some(4 << 20));
+    let missing: WithSize = figment::Figment::new().extract().unwrap();
+    assert_eq!(missing.limit, None);
+}
+
+#[test]
+fn deserialize_optional_size_rejects_bad_strings_and_numbers() {
+    let bad_string = figment::Figment::from(figment::providers::Serialized::defaults(
+        std::collections::BTreeMap::from([("limit", "4MB")]),
+    ))
+    .extract::<WithSize>()
+    .unwrap_err();
+    assert!(
+        bad_string.to_string().contains("`4MB` is not a size"),
+        "{bad_string}"
+    );
+    let number = figment::Figment::from(figment::providers::Serialized::defaults(
+        std::collections::BTreeMap::from([("limit", 30)]),
+    ))
+    .extract::<WithSize>()
+    .unwrap_err();
+    assert!(
+        number.to_string().contains("a size string such as `4MiB`"),
+        "{number}"
+    );
+}

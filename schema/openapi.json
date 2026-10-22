@@ -268,6 +268,62 @@
         ],
         "type": "object"
       },
+      "LogChunk": {
+        "description": "A part of an attempt's log, read from the worker that ran it.",
+        "properties": {
+          "attempt_id": {
+            "description": "The attempt.",
+            "type": "string"
+          },
+          "content": {
+            "description": "The log's text (invalid UTF-8 replaced by `U+FFFD`).",
+            "type": "string"
+          },
+          "from": {
+            "description": "The first byte of `content`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next": {
+            "description": "The byte after `content`: where the next part starts.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "description": "Whether the attempt still runs (its log may grow).",
+            "type": "boolean"
+          },
+          "size": {
+            "description": "The log's size when it was read.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "try_number": {
+            "description": "Its try number.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worker_id": {
+            "description": "The worker it ran on (and that answered).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "try_number",
+          "worker_id",
+          "from",
+          "next",
+          "size",
+          "running",
+          "content"
+        ],
+        "type": "object"
+      },
       "PauseRequest": {
         "additionalProperties": false,
         "description": "Pausing a DAG.",
@@ -994,6 +1050,97 @@
           }
         },
         "summary": "The attempts of a run's task, oldest first.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log": {
+      "get": {
+        "operationId": "get_log",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The attempt's try number",
+            "in": "path",
+            "name": "try_number",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The first byte wanted (0 by default): the `next` of the previous part, to follow a log.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogChunk"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A part of an attempt's log, read from the worker that ran it; read on from `next` to follow\na running task. 404 when the attempt has no log (yet), or the worker no longer has it; 503\nwhen the worker is gone or can't be reached.",
         "tags": [
           "runs"
         ]

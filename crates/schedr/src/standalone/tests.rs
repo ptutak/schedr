@@ -27,7 +27,11 @@ fn the_data_directory_comes_from_the_config_xdg_or_home() {
     let setup = plan(&configured, &env(&[("HOME", "/home/anna")])).unwrap();
     assert_eq!(setup.data_dir, PathBuf::from("/srv/schedr"));
     assert_eq!(setup.database_url, "sqlite:///srv/schedr/schedr.db");
-    assert_eq!(setup.agent.setup.log_dir, PathBuf::from("/srv/schedr/logs"));
+    assert!(
+        setup.agent.setup.log_dir.starts_with("/srv/schedr/logs/"),
+        "{}",
+        setup.agent.setup.log_dir.display()
+    );
 
     let xdg = plan(
         &config(),

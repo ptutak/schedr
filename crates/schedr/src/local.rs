@@ -331,10 +331,12 @@ async fn test_dag(
     local.worker.data_dir = Some(data.clone());
     local.master.grpc_port = 0;
     local.webserver.port = 0;
+    local.worker.log_port = 0;
     local.master.tick_interval = Duration::from_millis(100);
     local.dags.poll_interval = Duration::from_millis(200);
     local.dags.settle_time = Duration::ZERO;
     let setup = plan(&local, env)?;
+    let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(run(
@@ -350,7 +352,7 @@ async fn test_dag(
                 dag,
                 planned_for,
                 &format!("http://{}", listening.http),
-                &data,
+                (&data, &logs),
                 json,
                 out,
             )
@@ -406,7 +408,7 @@ async fn drive(
     dag: &str,
     planned_for: Option<jiff::Timestamp>,
     api: &str,
-    data: &Path,
+    (data, logs): (&Path, &Path),
     json: bool,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
@@ -446,7 +448,7 @@ async fn drive(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    let report = report(&client, &detail, location.as_ref(), data).await?;
+    let report = report(&client, &detail, location.as_ref(), (data, logs)).await?;
     if json {
         writeln!(
             out,
@@ -502,7 +504,7 @@ async fn report(
     client: &Client<HttpTransport>,
     detail: &RunDetail,
     location: Option<&LocationView>,
-    data: &Path,
+    (data, logs): (&Path, &Path),
 ) -> Result<Value, AppError> {
     let db = Database::connect(&format!("sqlite://{}", data.join("schedr.db").display())).await?;
     let outputs = db.run_outputs(&detail.run.run_id).await?;
@@ -511,9 +513,7 @@ async fn report(
         let attempts: AttemptList = client.attempts(&detail.run.run_id, &task.task_id).await?;
         let mut log = String::new();
         for attempt in &attempts.attempts {
-            let file = data
-                .join("logs")
-                .join(format!("{}.log", attempt.attempt_id));
+            let file = logs.join(format!("{}.log", attempt.attempt_id));
             log.push_str(&std::fs::read_to_string(file).unwrap_or_default());
         }
         let output = schedr_model::TaskId::new(task.task_id.clone())

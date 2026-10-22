@@ -64,7 +64,7 @@ pub enum Command {
         #[command(subcommand)]
         command: RunsCommand,
     },
-    /// Cancel or retry single tasks of a run.
+    /// Cancel or retry single tasks of a run, or read their logs.
     Tasks {
         /// How to reach the server.
         #[command(flatten)]
@@ -238,6 +238,20 @@ pub struct TaskTarget {
     pub map_index: Option<u32>,
 }
 
+/// `schedr tasks logs ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct LogsArgs {
+    /// The task.
+    #[command(flatten)]
+    pub target: TaskTarget,
+    /// The attempt's try number (the latest by default).
+    #[arg(long = "try", value_name = "N")]
+    pub try_number: Option<u32>,
+    /// Keep printing the log while the task runs.
+    #[arg(long, short)]
+    pub follow: bool,
+}
+
 /// `schedr tasks ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum TasksCommand {
@@ -245,6 +259,8 @@ pub enum TasksCommand {
     Cancel(TaskTarget),
     /// Retry an `unschedulable` task of an unfinished run.
     Retry(TaskTarget),
+    /// Print an attempt's log, read from the worker that ran it.
+    Logs(LogsArgs),
 }
 
 /// `schedr workers ...`.

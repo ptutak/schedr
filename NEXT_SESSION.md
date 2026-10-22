@@ -3,11 +3,12 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.6 done).
+- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.7 done).
 
 ## State (2026-10-22)
 
-- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.6 are done.**
+- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.7 are done**
+  (2.7 committed, not pushed yet).
   The M2 commits so far:
 
   | Commit | Step |
@@ -20,13 +21,13 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   | `d207fb9` | 2.4: `schedr tasks cancel` / `retry`, `[master] code_wait`, wait reasons; fixes B5 |
   | `3aea937` | 2.5: only the newest code runs (current hash per root, `root_hashes` table, `CODE_MISMATCH`), rolling upgrades, `dag_file_missing` and "changed after this run started" errors |
   | `6c75475` | 2.6: drain on SIGTERM (`crates/schedr-agent/src/drain.rs`, `[worker] termination_grace_period`, default 30 s) and `schedr workers drain` / `resume` (stored, survives restarts) |
+| (this commit) | 2.7: mTLS (`crates/schedr-tls`, `[tls]`), the worker's log endpoint (`crates/schedr-agent/src/logs.rs`), the webserver's log proxy (`crates/schedr-api/src/logs.rs`), `schedr tasks logs [-f]`, log retention (`retention.rs`), logs in `<data_dir>/logs/<worker ID>` |
 
-- **Not pushed yet** at the time of writing: ask the user whether `main` is pushed and how CI
-  went (`gh` isn't installed, so the user looks). The `wheel` and musllinux jobs haven't been
-  reported on since 2.1b.
-- The last `make check` passed: 1021 Rust unit tests, 632 Python unit tests at 99.96 %
-  coverage, 58 Rust and 15 Python integration tests; Rust line coverage 88.6 % (floor 85 %).
-  `make docs` passed.
+- CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
+  once it is pushed (`gh` isn't installed, so the user looks).
+- The last `make check` passed (2.7): 1070 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 72 Rust and 15 Python integration tests; Rust line coverage 87.9 %
+  (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
 - **Open bugs: B4 and B6** (`BUGS.md`). Both are role integration tests failing under disk
   load; B6 happened three times, each time on the first `make check` of a step (right after
   the coverage run), never when the suite runs alone. If `make check` fails that way, run
@@ -36,15 +37,13 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 ## Next steps
 
 1. **Ask about CI** for the pushed commits.
-2. **M2, step 2.7** (PLAN.md): **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates
-   reloaded when the files change), the **worker's log endpoint** (signed tokens) and the
-   webserver's log proxy, log retention on the worker. Start by laying out the decisions for
-   the user (see "How to work"), reading PROJECT.md's mTLS and log sections first
-   (`grep -n "mTLS\|log endpoint" PROJECT.md`). The protocol already carries
-   `Register.log_endpoint` (empty today); `master_host` in `crates/schedr/src/roles.rs`
-   refuses `https://` until mTLS.
-3. Then 2.8 (memory watchdog), 2.9 (ops port), 2.10 (images and Helm), 2.11 (kill tests on
-   kind), 2.12 (more wheels).
+2. **M2, step 2.8** (PLAN.md): the memory watchdog (budget from `memory.max`, `/proc`
+   sampling, `oom_killed`, optional `setrlimit`). Start by laying out the decisions (see
+   "How to work"), reading PROJECT.md's "Worker memory protection and crash recovery" first.
+3. Then 2.9 (ops port), 2.10 (images and Helm: workers as a StatefulSet with a headless
+   Service, `log_address` = the pod's DNS name, certificates with both serverAuth and
+   clientAuth; the user's cluster runs Istio with `REGISTRY_ONLY`), 2.11 (kill tests on kind),
+   2.12 (more wheels).
 
 ## How to work with the user
 
@@ -82,7 +81,9 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - **Integration tests come with every step.** Anything that spawns processes or uses a real
   server, the binary or Postgres counts as integration. They live in `crates/*/tests/`
   (`crates/schedr/tests/roles.rs` has the `Cluster` helper: roles as processes, `start_as`,
-  `terminate`, `kill`, `cli`, `attempts`, `worker_state`), `python/tests/integration/` and
+  `terminate`, `kill`, `cli`, `attempts`, `worker_state`; `Cluster::with_tls` and
+  `start_tls` for mTLS, certificates from `schedr_tls::testing::TestCa`; the cluster's
+  config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
 - **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B7); fix them
@@ -125,12 +126,15 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - **Wheels:** `make smoke` (release build, a few minutes), `make smoke-musl` (musllinux via
   `uvx maturin` + ziglang, smoke-tested on Alpine), or `uv build --wheel` and
   `scripts/smoke-wheel.sh <wheel> <python 3.14>`.
+- **Roles need `[tls]`:** `app` mode (the default) needs `ca`, `cert`, `key`; set
+  `SCHEDR_CONFIG__TLS__MODE=mesh` to run roles by hand without certificates. Standalone never
+  uses TLS. Tests and `dags test` set `[worker] log_port = 0`.
 - **Ports:** 8000 is taken on this machine. `make docs-serve` uses `DOCS_PORT` (default 8765).
   Tests bind port 0 and read the bound address from the logs.
 
 ## Code map, briefly
 
-- `crates/schedr-model`: shared types (`trigger.rs`, `commands.rs` with every command,
+- `crates/schedr-model`: shared types (`logs.rs`: the log endpoint's headers and part sizes; `trigger.rs`, `commands.rs` with every command,
   `runner.rs` with `ErrorSummary` and the error kinds `TASK_NOT_FOUND` / `DAG_FILE_MISSING`,
   `version.rs` with `SchedrVersion`).
 - `crates/schedr-db`: sqlx, SQLite and Postgres, with dialect placeholders `{uuid}`, `{ts}`,
@@ -140,6 +144,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `crates/schedr-agent`: the worker agent.
   - `agent.rs`: the loop (sessions, offline waits, assignments, `Finished`, drain wiring).
   - `journal.rs`: the on-disk journal and orphan stopping; `drain.rs`: the drain's timing.
+  - `logs.rs`: the log endpoint; `retention.rs`: the log sweep.
   - `launch.rs` / `process.rs` / `supervise.rs`: processes; `attempt.rs`: planning;
     `watch.rs` / `scan.rs`: root hashes.
 - `crates/schedr-master`:
@@ -150,9 +155,12 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   - `execution.rs` / `progress.rs`: run state; `commands.rs`: applying commands;
     `service.rs`: the gRPC service (`Hub`); scheduling in `scheduler.rs` and friends.
 - `crates/schedr-api`: the REST `/api/v1` (axum, utoipa → `schema/openapi.json` via
-  `cargo xtask`).
+  `cargo xtask`); `logs.rs`: the log proxy (`LogSource`, `HttpLogSource`).
+- `crates/schedr-tls`: `material.rs` (PEM → rustls configs, the fixed worker name),
+  `reload.rs` (`Tls`, polling the files), `incoming.rs` (the listener doing handshakes, for
+  tonic and axum), `connect.rs` (the worker's channel), `testing.rs` (feature `testing`).
 - `crates/schedr`: the binary.
-  - `roles.rs`: master / webserver / worker roles, `stop_on_signal` (a count of stop requests:
+  - `roles.rs`: master / webserver / worker roles (`role_tls`, `WorkerLinks`, `log_endpoint`), `stop_on_signal` (a count of stop requests:
     the first drains a worker, a second interrupts), `agent_settings`, `lock_journal`.
   - `standalone.rs` (drains its worker before stopping master and API), `cli.rs`, `app.rs`,
     `user.rs` (server commands), `local.rs` (`dags check` / `dags test`), `client.rs`,

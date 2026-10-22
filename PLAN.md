@@ -171,7 +171,7 @@ integration tests, as since 1.15.
 | 2.4 | **Assignment across workers:** queues (the `default` rule), the rejection table (worker-specific → `unschedulable` with each worker's reason; "code not there yet" retried after 35 s, `unschedulable` after `[master] code_wait`, 10 min), wait reasons on queued tasks, `schedr tasks retry`, `schedr tasks cancel` (any unfinished task) | tests with two workers serving different queues; a running task cancelled with its downstream |
 | 2.5 | **Parsing across workers:** one parse per (root, hash, schedr version) by any worker that reported the hash, reassigned after 10 min; **only the newest code runs** (each root's current hash; tasks go only to workers at it, which check it), so workers on older code cause no conflicts; mixed-hash warnings; the rolling-upgrade rule (worker version ≥ the parse's); failures from code that changed under a run say how | tests with two workers on different hashes |
 | 2.6 | **Drain:** SIGTERM and `schedr workers drain` / `resume`; the grace period; interrupted attempts use no retry; a drained worker stays drained across restarts | tests: a SIGTERM-drained worker's interrupted task runs again without a retry; a drained worker gets no tasks across a master restart |
-| 2.7 | **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates reloaded when the files change); the **worker's log endpoint** (signed tokens) and the webserver's log proxy; log retention on the worker | tests with self-signed certificates |
+| 2.7 | **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates reloaded when the files change; crate `schedr-tls`); the **worker's log endpoint** (mTLS only: no tokens) and the webserver's log proxy, `schedr tasks logs [--follow]`; log retention on the worker (age and size) | tests with self-signed certificates |
 | 2.8 | **Memory watchdog:** the budget from `memory.max`, `/proc` sampling, the `oom_killed` status; optional `setrlimit` | an integration test with a task that allocates too much |
 | 2.9 | **Ops port** on every role: `/healthz`, `/readyz`, `/metrics` (Prometheus), loop-stall detection | tests |
 | 2.10 | **Images and Helm chart:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600 and `[worker] termination_grace_period` set to match, probes | the chart installs on kind / k3d |
@@ -184,8 +184,8 @@ integration tests, as since 1.15.
   builds on 2.8 and 2.9.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
-**Status (2026-10-22): steps 2.1–2.6 are done** (the last: 2.6, `6c75475`; the commits are
-listed in `NEXT_SESSION.md`). Next is 2.7. Open bugs B4 and B6 (role integration tests under
+**Status (2026-10-22): steps 2.1–2.7 are done** (the commits are
+listed in `NEXT_SESSION.md`). Next is 2.8. Open bugs B4 and B6 (role integration tests under
 disk load) wait to be scheduled.
 
 ## Testing approach

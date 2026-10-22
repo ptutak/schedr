@@ -1,9 +1,10 @@
 //! `schedr standalone`: every role in one process, on localhost, with SQLite by default (see
 //! PROJECT.md, Master–worker protocol: standalone uses the same gRPC protocol).
 //!
-//! The master's gRPC service, the REST API, the master's loop and one worker agent run side by
-//! side; the agent talks to the master over gRPC on localhost like any worker (no TLS: gRPC
-//! never listens beyond localhost). The database is migrated at start: standalone is for a
+//! The master's gRPC service, the REST API, the master's loop and one worker agent with its log
+//! endpoint run side by side; the agent talks to the master over gRPC on localhost like any
+//! worker, and the API reads logs from the endpoint (no TLS: neither listens beyond
+//! localhost, whatever `[tls]` says). The database is migrated at start: standalone is for a
 //! laptop, where there is no separate `schedr db migrate` step.
 //!
 //! In one pod (for testing on a cluster, see PROJECT.md): `--listen 0.0.0.0` opens the REST
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use schedr_agent::agent::AgentSettings;
+use schedr_agent::retention::LogRetention;
 use schedr_config::Config;
 use schedr_db::Database;
 use schedr_master::core::Settings;
@@ -23,8 +25,8 @@ use tokio::sync::watch;
 
 use crate::app::AppError;
 use crate::roles::{
-    agent_settings, data_dir, listen, lock_journal, master_settings, no_auth_warning, run_worker,
-    serve_api, serve_master, stop_on_signal,
+    WorkerLinks, agent_settings, data_dir, listen, lock_journal, log_retention, master_settings,
+    no_auth_warning, run_worker, serve_api, serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -41,6 +43,10 @@ pub struct Standalone {
     pub grpc: SocketAddr,
     /// The REST API's address.
     pub http: SocketAddr,
+    /// The worker's log endpoint's address.
+    pub logs: SocketAddr,
+    /// What logs the worker keeps.
+    pub retention: LogRetention,
     /// The master's timing.
     pub master: Settings,
     /// How often the master's loop runs.
@@ -60,6 +66,8 @@ pub struct Listening {
     pub grpc: SocketAddr,
     /// The REST API's address.
     pub http: SocketAddr,
+    /// The worker's log endpoint's address.
+    pub logs: SocketAddr,
 }
 
 /// Reads the standalone setup from the configuration and the environment (`env` gives the
@@ -80,6 +88,8 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
     Ok(Standalone {
         grpc: localhost(config.master.grpc_port),
         http: localhost(config.webserver.port),
+        logs: localhost(config.worker.log_port),
+        retention: log_retention(config),
         master: master_settings(config),
         tick: config.master.tick_interval,
         agent: agent_settings(config, env, &data_dir)?,
@@ -113,11 +123,17 @@ pub async fn run(
 
     let grpc = listen(setup.grpc).await?;
     let http = listen(setup.http).await?;
+    let logs = listen(setup.logs).await?;
     let addresses = Listening {
         grpc: grpc.local_addr().map_err(|e| io("gRPC address", e))?,
         http: http.local_addr().map_err(|e| io("HTTP address", e))?,
+        logs: logs
+            .local_addr()
+            .map_err(|e| io("log endpoint address", e))?,
     };
     listening(addresses);
+    let mut agent = setup.agent;
+    agent.log_endpoint = format!("http://{}", addresses.logs);
 
     // The master and the API stop once the worker has drained.
     let (stop, stopped) = watch::channel(0);
@@ -127,22 +143,24 @@ pub async fn run(
         setup.master,
         setup.tick,
         grpc,
+        None,
         stopped.clone(),
     ));
     let api = Box::pin(serve_api(
         db,
         setup.identity_header.clone(),
         http,
+        None,
         stopped.clone(),
     ));
+    let links = WorkerLinks {
+        master_url: format!("http://{}", addresses.grpc),
+        tls: None,
+        log_listener: logs,
+        retention: setup.retention,
+    };
     let worker = Box::pin(async move {
-        run_worker(
-            setup.agent,
-            setup.parse_file_timeout,
-            format!("http://{}", addresses.grpc),
-            shutdown,
-        )
-        .await;
+        run_worker(agent, setup.parse_file_timeout, links, shutdown).await;
         let _ = stop.send(1);
     });
     let (master, api, ()) = tokio::join!(master, api, worker);

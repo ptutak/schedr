@@ -150,6 +150,7 @@ async fn world() -> World {
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
         termination_grace_period: Duration::from_secs(30),
+        log_endpoint: String::new(),
     };
     let fake = Fake::default();
     let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
@@ -481,6 +482,7 @@ async fn against_script_with(
         settle_time: Duration::ZERO,
         journal_dir: journal.dir().to_path_buf(),
         termination_grace_period: Duration::from_secs(30),
+        log_endpoint: "http://w1:8081".to_owned(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
@@ -550,6 +552,7 @@ async fn without_a_free_slot_an_assignment_is_rejected() {
         panic!("expected Register")
     };
     assert_eq!((register.worker_id.as_str(), register.slots), ("w1", 0));
+    assert_eq!(register.log_endpoint, "http://w1:8081");
     assert_eq!(register.roots[0].root, "etl");
     assert!(register.roots[0].content_hash.starts_with("sha256:"));
 }
@@ -774,6 +777,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
         termination_grace_period: Duration::from_secs(30),
+        log_endpoint: String::new(),
     };
     let journal = Journal::new(settings.journal_dir.clone());
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -963,6 +967,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         settle_time: Duration::ZERO,
         journal_dir: settings_dir.path().join("journal"),
         termination_grace_period: Duration::from_secs(600),
+        log_endpoint: String::new(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert!(!agent.on_shutdown(0));
@@ -993,6 +998,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
         termination_grace_period: Duration::from_secs(30),
+        log_endpoint: String::new(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     let (stop, stopped) = oneshot::channel();

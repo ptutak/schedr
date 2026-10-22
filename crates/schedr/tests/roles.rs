@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use schedr_agent::journal::{Journal, JournalRecord};
 use schedr_proto::pb;
+use schedr_tls::testing::TestCa;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -80,6 +81,8 @@ struct Cluster {
     /// The master's port once it listens (kept for a restart) and the URL workers use.
     grpc_port: Option<u16>,
     roles: Vec<Role>,
+    /// The CA of `[tls] mode = "app"`; `mesh` mode without one.
+    ca: Option<TestCa>,
 }
 
 impl Cluster {
@@ -95,10 +98,12 @@ impl Cluster {
         let config = format!(
             "[dags]\npoll_interval = \"200ms\"\nsettle_time = \"0s\"\n\n\
              [interpreters]\npython = \"{python}\"\n\n\
-             [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\n\
+             [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\
+             log_bind = \"127.0.0.1\"\nlog_port = 0\nlog_address = \"127.0.0.1\"\n\n\
              [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
              heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\n\n\
-             [webserver]\nbind = \"127.0.0.1\"\nport = 0\n",
+             [webserver]\nbind = \"127.0.0.1\"\nport = 0\n\n\
+             [tls]\nmode = \"mesh\"\n",
             python = python(),
             data = dir.path().join("data").display(),
         );
@@ -109,7 +114,44 @@ impl Cluster {
             api: String::new(),
             grpc_port: None,
             roles: Vec::new(),
+            ca: None,
         }
+    }
+
+    /// The cluster in `[tls] mode = "app"`: each role started with [`Self::start_tls`] gets a
+    /// certificate from this CA, read again every 200 ms.
+    fn with_tls(database_url: Option<String>) -> Self {
+        let mut cluster = Self::new(database_url, "100ms");
+        std::fs::create_dir_all(cluster.dir.path().join("tls")).unwrap();
+        cluster.ca = Some(TestCa::new("schedr test CA"));
+        cluster
+    }
+
+    /// Starts `role` as `name` with a certificate for `names` from the cluster's CA (or
+    /// `ca`), and more environment variables.
+    fn start_tls(
+        &mut self,
+        name: &'static str,
+        role: &str,
+        names: &[&str],
+        ca: Option<&TestCa>,
+        env: &[(&str, &str)],
+    ) -> schedr_tls::TlsFiles {
+        let ca = ca.or(self.ca.as_ref()).unwrap();
+        let files = ca.write(&self.dir.path().join("tls"), name, names);
+        let (ca_file, cert, key) = (
+            files.ca.display().to_string(),
+            files.cert.display().to_string(),
+            files.key.display().to_string(),
+        );
+        let mut all = vec![
+            ("SCHEDR_CONFIG__TLS__CA", ca_file.as_str()),
+            ("SCHEDR_CONFIG__TLS__CERT", cert.as_str()),
+            ("SCHEDR_CONFIG__TLS__KEY", key.as_str()),
+        ];
+        all.extend_from_slice(env);
+        self.start_as(name, role, &all);
+        files
     }
 
     fn root(&self) -> PathBuf {
@@ -134,12 +176,18 @@ impl Cluster {
             .env("TZ", "UTC")
             .env("SCHEDR_CONFIG__DATABASE__URL", &self.database_url)
             .env("SCHEDR_DAG_PATH", self.root());
+        if self.ca.is_some() {
+            command
+                .env("SCHEDR_CONFIG__TLS__MODE", "app")
+                .env("SCHEDR_CONFIG__TLS__RELOAD_INTERVAL", "200ms");
+        }
         if let Some(port) = self.grpc_port {
+            let scheme = if self.ca.is_some() { "https" } else { "http" };
             command
                 .env("SCHEDR_CONFIG__MASTER__GRPC_PORT", port.to_string())
                 .env(
                     "SCHEDR_CONFIG__WORKER__MASTER_URL",
-                    format!("http://127.0.0.1:{port}"),
+                    format!("{scheme}://127.0.0.1:{port}"),
                 );
         }
         command
@@ -279,7 +327,7 @@ impl Cluster {
             self.cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
                 .is_some_and(|runs| runs["runs"][0]["state"] == "success")
         });
-        let logs = std::fs::read_dir(self.dir.path().join("data/logs"))
+        let logs = std::fs::read_dir(self.dir.path().join("data/logs/w1"))
             .unwrap()
             .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap_or_default())
             .collect::<String>();
@@ -292,6 +340,16 @@ fn three_processes_on_postgres_run_a_dag() {
     let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
     cluster.up();
     cluster.run_chain();
+    // The log comes from the worker, through the webserver.
+    let run_id = cluster
+        .cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
+        .unwrap()["runs"][0]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, out, err) = cluster.cli(&["tasks", "logs", &run_id, "report"]);
+    assert_eq!(code, 0, "{err}\n{}", cluster.logs());
+    assert_eq!(out, "report loaded 3\n");
 }
 
 #[test]
@@ -1008,4 +1066,214 @@ fn a_drained_worker_gets_no_tasks_until_resumed_even_across_a_master_restart() {
     let (code, _, err) = cluster.cli(&["workers", "resume", "w1"]);
     assert_ne!(code, 0);
     assert!(err.contains("worker `w1` isn't drained"), "{err}");
+}
+
+impl Cluster {
+    /// The run of `chain` for 2026-10-15.
+    fn chain_run(&self) -> String {
+        self.cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
+            .unwrap()["runs"][0]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn last_log(&self) -> String {
+        std::fs::read_to_string(&self.roles.last().unwrap().log).unwrap_or_default()
+    }
+
+    fn log_of(&self, name: &str) -> String {
+        let role = self.roles.iter().find(|r| r.name == name).unwrap();
+        std::fs::read_to_string(&role.log).unwrap_or_default()
+    }
+}
+
+impl Cluster {
+    /// Over mTLS: master, webserver and workers `w1` and `w2` (its data in `w2/`), with
+    /// `chain` run for 2026-10-15: its run ID.
+    fn mtls_chain_on_two_workers(&mut self) -> String {
+        let (code, err) = self.schedr(&["db", "migrate"]);
+        assert_eq!(code, 0, "{err}");
+        self.start_tls("master", "master", &["127.0.0.1"], None, &[]);
+        self.start_tls("webserver", "webserver", &["schedr-webserver"], None, &[]);
+        self.start_tls("worker", "worker", &["schedr-worker"], None, &[]);
+        let elsewhere = self.dir.path().join("w2");
+        let elsewhere = elsewhere.to_str().unwrap();
+        self.start_tls(
+            "worker2",
+            "worker",
+            &["schedr-worker"],
+            None,
+            &[
+                ("SCHEDR_CONFIG__WORKER__ID", "w2"),
+                ("SCHEDR_CONFIG__WORKER__DATA_DIR", elsewhere),
+            ],
+        );
+        assert!(self.log_of("master").contains("(mTLS)"), "{}", self.logs());
+        self.wait("both workers", || {
+            self.worker_state("w1").as_deref() == Some("active")
+                && self.worker_state("w2").as_deref() == Some("active")
+        });
+        let workers = self.cli_json(&["workers", "list"]).unwrap();
+        for worker in workers["workers"].as_array().unwrap() {
+            let endpoint = worker["log_endpoint"].as_str().unwrap();
+            assert!(endpoint.starts_with("https://127.0.0.1:"), "{endpoint}");
+        }
+        self.wait("DAG `chain`", || {
+            self.cli_json(&["dags", "list"])
+                .is_some_and(|d| d["dags"][0]["dag_id"] == "chain")
+        });
+        let (code, _, err) = self.cli(&["dags", "unpause", "chain"]);
+        assert_eq!(code, 0, "{err}");
+        let (code, _, err) = self.cli(&["runs", "trigger", "chain", "--for", "2026-10-15"]);
+        assert_eq!(code, 0, "{err}");
+        self.wait("the run to succeed", || {
+            self.cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
+                .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+        });
+        self.chain_run()
+    }
+}
+
+#[test]
+fn over_mtls_two_workers_run_a_dag_and_their_logs_come_through_the_webserver() {
+    let mut cluster = Cluster::with_tls(Some(postgres_database()));
+    let run_id = cluster.mtls_chain_on_two_workers();
+    let elsewhere = cluster.dir.path().join("w2");
+
+    // Every task's log, from whichever worker ran it, is the file on that worker.
+    for task in ["extract", "load", "report"] {
+        let attempt = cluster.attempts(&run_id, task)[0].clone();
+        let worker = attempt["worker_id"].as_str().unwrap();
+        let data = if worker == "w1" {
+            cluster.dir.path().join("data")
+        } else {
+            elsewhere.clone()
+        };
+        let file = data.join(format!(
+            "logs/{worker}/{}.log",
+            attempt["attempt_id"].as_str().unwrap()
+        ));
+        let (code, out, err) = cluster.cli(&["tasks", "logs", &run_id, task]);
+        assert_eq!(code, 0, "{err}\n{}", cluster.logs());
+        assert_eq!(
+            out,
+            std::fs::read_to_string(&file).unwrap(),
+            "{task} on {worker}"
+        );
+    }
+
+    // A deleted log, then a worker gone, say so.
+    let attempt = cluster.attempts(&run_id, "report")[0].clone();
+    let worker = attempt["worker_id"].as_str().unwrap().to_owned();
+    let data = if worker == "w1" {
+        cluster.dir.path().join("data")
+    } else {
+        elsewhere
+    };
+    std::fs::remove_file(data.join(format!(
+        "logs/{worker}/{}.log",
+        attempt["attempt_id"].as_str().unwrap()
+    )))
+    .unwrap();
+    let (code, _, err) = cluster.cli(&["tasks", "logs", &run_id, "report"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains(&format!(
+            "the log file is unavailable at worker `{worker}` (it may have been deleted)"
+        )),
+        "{err}"
+    );
+    let name = if worker == "w1" { "worker" } else { "worker2" };
+    let role = cluster.roles.iter().find(|r| r.name == name).unwrap();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &role.child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    cluster.wait("the worker to go offline", || {
+        cluster.worker_state(&worker).as_deref() == Some("offline")
+    });
+    let (code, _, err) = cluster.cli(&["tasks", "logs", &run_id, "report"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains(&format!(
+            "worker `{worker}` is offline: the log of try 1 is unavailable"
+        )),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_worker_with_a_certificate_from_another_ca_is_refused() {
+    let mut cluster = Cluster::with_tls(Some(postgres_database()));
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start_tls("master", "master", &["127.0.0.1"], None, &[]);
+    cluster.start_tls("webserver", "webserver", &["schedr-webserver"], None, &[]);
+    // Its certificate comes from another CA; it trusts the cluster's.
+    let files = TestCa::new("someone else").write(
+        &cluster.dir.path().join("tls"),
+        "foreign",
+        &["schedr-worker"],
+    );
+    std::fs::write(&files.ca, cluster.ca.as_ref().unwrap().pem()).unwrap();
+    let (ca, cert, key) = (
+        files.ca.display().to_string(),
+        files.cert.display().to_string(),
+        files.key.display().to_string(),
+    );
+    cluster.start_as(
+        "worker",
+        "worker",
+        &[
+            ("SCHEDR_CONFIG__TLS__CA", &ca),
+            ("SCHEDR_CONFIG__TLS__CERT", &cert),
+            ("SCHEDR_CONFIG__TLS__KEY", &key),
+        ],
+    );
+    cluster.wait("the master to refuse the worker's certificate", || {
+        let master = cluster.log_of("master");
+        master.contains("TLS handshake refused") && master.contains("UnknownIssuer")
+    });
+    cluster.wait("the worker to report why", || {
+        cluster.last_log().contains("master connection lost")
+    });
+    assert_eq!(cluster.worker_state("w1"), None);
+}
+
+#[test]
+fn the_master_takes_rotated_certificates_without_a_restart() {
+    let mut cluster = Cluster::with_tls(Some(postgres_database()));
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    // The master starts on the old CA's certificate and trusts both CAs' workers.
+    let old = TestCa::new("old CA");
+    let master = cluster.start_tls("master", "master", &["127.0.0.1"], Some(&old), &[]);
+    let new = cluster.ca.take().unwrap();
+    std::fs::write(&master.ca, format!("{}{}", old.pem(), new.pem())).unwrap();
+    cluster.ca = Some(new);
+    cluster.start_tls("webserver", "webserver", &["schedr-webserver"], None, &[]);
+    // The worker knows only the new CA, so it can't trust the master yet.
+    cluster.start_tls("worker", "worker", &["schedr-worker"], None, &[]);
+    cluster.wait("the worker to fail to connect", || {
+        cluster.last_log().contains("master connection lost")
+    });
+    assert_eq!(cluster.worker_state("w1"), None);
+
+    let issued = cluster.ca.as_ref().unwrap().issue(&["127.0.0.1"]);
+    std::fs::write(&master.key, issued.key).unwrap();
+    std::fs::write(&master.cert, issued.cert).unwrap();
+    cluster.wait("the worker to register", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    assert!(
+        cluster
+            .log_of("master")
+            .contains("TLS certificates changed"),
+        "{}",
+        cluster.logs()
+    );
 }

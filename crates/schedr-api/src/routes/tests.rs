@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Method, Request};
 use http_body_util::BodyExt;
@@ -387,5 +389,250 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             "last_heartbeat_at": "2026-10-22T08:00:00Z",
             "offline_at": "2026-10-22T08:02:00Z", "drained": false
         })
+    );
+}
+
+/// A worker that answers what it is told, and remembers what it was asked.
+#[derive(Debug, Default)]
+struct FakeLogs {
+    answer: std::sync::Mutex<Option<Result<crate::logs::WorkerLog, LogFetchError>>>,
+    asked: std::sync::Mutex<Vec<(String, String, u64, u64)>>,
+}
+
+impl FakeLogs {
+    fn answer(&self, answer: Result<crate::logs::WorkerLog, LogFetchError>) {
+        *self.answer.lock().unwrap() = Some(answer);
+    }
+}
+
+impl crate::logs::LogSource for FakeLogs {
+    fn fetch<'a>(
+        &'a self,
+        endpoint: &'a str,
+        attempt_id: &'a str,
+        from: u64,
+        limit: u64,
+    ) -> crate::logs::LogFuture<'a> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((endpoint.to_owned(), attempt_id.to_owned(), from, limit));
+        let answer = self.answer.lock().unwrap().clone().expect("an answer");
+        Box::pin(async move { answer })
+    }
+}
+
+/// The API with a started attempt of `extract` on worker `w1` (at `endpoint`), reading logs
+/// from a fake: the router, the database, the run, the attempt and the fake.
+async fn with_log(endpoint: &str) -> (axum::Router, Database, String, String, Arc<FakeLogs>) {
+    let (_, db, run_id) = api().await;
+    let queues = vec![];
+    db.register_worker(
+        &schedr_db::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "1.0",
+            schedr_version: "0.1.0",
+            queues: &queues,
+            slots: 2,
+            log_endpoint: endpoint,
+        },
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let fake = Arc::new(FakeLogs::default());
+    let state = ApiState::new(db.clone(), None).with_logs(fake.clone());
+    (router(state), db, run_id, attempt_id, fake)
+}
+
+fn log(worker: &str, size: u64, running: bool, bytes: &[u8]) -> crate::logs::WorkerLog {
+    crate::logs::WorkerLog {
+        worker_id: Some(worker.to_owned()),
+        size,
+        running,
+        bytes: bytes.to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_log_is_read_from_the_worker_that_ran_the_attempt() {
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    assert_eq!(
+        get(&app, &uri).await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": "try 1 of task `extract` hasn't started yet: no log so far"})
+        )
+    );
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    fake.answer(Ok(log("w1", 20, true, b"hello\n")));
+    let (status, body) = get(&app, &uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "attempt_id": attempt_id, "try_number": 1, "worker_id": "w1",
+            "from": 0, "next": 6, "size": 20, "running": true, "content": "hello\n"
+        })
+    );
+    let (_, body) = get(&app, &format!("{uri}?from=6&limit=99999999")).await;
+    assert_eq!((&body["from"], &body["next"]), (&json!(6), &json!(12)));
+    assert_eq!(
+        fake.asked.lock().unwrap().clone(),
+        [
+            (
+                "http://w1:8081".to_owned(),
+                attempt_id.clone(),
+                0,
+                schedr_model::logs::MAX_CHUNK
+            ),
+            (
+                "http://w1:8081".to_owned(),
+                attempt_id,
+                6,
+                schedr_model::logs::MAX_CHUNK
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_character_cut_by_the_limit_waits_for_the_next_part() {
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    // "zażółć": `ż` is two bytes, cut after its first.
+    fake.answer(Ok(log("w1", 10, false, &"zaż".as_bytes()[..3])));
+    let (_, body) = get(
+        &app,
+        &format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log?limit=3"),
+    )
+    .await;
+    assert_eq!((&body["content"], &body["next"]), (&json!("za"), &json!(2)));
+}
+
+#[tokio::test]
+async fn a_log_the_worker_lost_or_cant_serve_says_why() {
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+
+    fake.answer(Err(LogFetchError::Missing {
+        worker_id: Some("w1".to_owned()),
+    }));
+    assert_eq!(
+        get(&app, &uri).await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": "the log file is unavailable at worker `w1` (it may have been deleted)"})
+        )
+    );
+    fake.answer(Err(LogFetchError::Missing {
+        worker_id: Some("w2".to_owned()),
+    }));
+    let stale = json!({"error": "reached worker `w2` instead of `w1` at http://w1:8081: its \
+        address is stale; try again shortly"});
+    assert_eq!(
+        get(&app, &uri).await,
+        (StatusCode::SERVICE_UNAVAILABLE, stale.clone())
+    );
+    fake.answer(Ok(log("w2", 1, false, b"x")));
+    assert_eq!(
+        get(&app, &uri).await,
+        (StatusCode::SERVICE_UNAVAILABLE, stale)
+    );
+    fake.answer(Err(LogFetchError::Unreachable(
+        "connection refused".to_owned(),
+    )));
+    assert_eq!(
+        get(&app, &uri).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "worker `w1` can't be reached at http://w1:8081: connection refused"})
+        )
+    );
+
+    db.set_worker_state("w1", schedr_model::WorkerState::Offline, ts(NOW))
+        .await
+        .unwrap();
+    let asked = fake.asked.lock().unwrap().len();
+    assert_eq!(
+        get(&app, &uri).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "worker `w1` is offline: the log of try 1 is unavailable"})
+        )
+    );
+    assert_eq!(
+        fake.asked.lock().unwrap().len(),
+        asked,
+        "a gone worker isn't asked"
+    );
+}
+
+#[tokio::test]
+async fn an_attempt_without_a_log_or_endpoint_is_named() {
+    let (app, db, run_id, attempt_id, _fake) = with_log("").await;
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts");
+    assert_eq!(
+        get(&app, &format!("{uri}/2/log")).await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": format!("task `extract` of run `{run_id}` has no try 2")})
+        )
+    );
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&app, &format!("{uri}/1/log")).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "worker `w1` has no log endpoint: the log of try 1 is unavailable"})
+        )
+    );
+    let (status, _) = get(&app, &format!("{uri}/1/log?from=start")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = get(
+        &app,
+        &format!("/api/v1/runs/{run_id}/tasks/bad%20id/attempts/1/log"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn an_attempt_that_never_started_has_no_log() {
+    let (app, db, run_id, attempt_id, _fake) = with_log("http://w1:8081").await;
+    db.end_attempt(
+        &attempt_id,
+        &schedr_db::attempts::AttemptEnd::by_master(schedr_model::AttemptStatus::AssignmentExpired),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        get(
+            &app,
+            &format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log")
+        )
+        .await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": "try 1 of task `extract` never started, so it has no log"})
+        )
     );
 }

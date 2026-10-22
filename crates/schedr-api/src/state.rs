@@ -1,9 +1,13 @@
 //! What every request handler shares.
 
+use std::sync::Arc;
+
 use axum::http::HeaderMap;
 use jiff::Timestamp;
 use schedr_db::Database;
 use schedr_model::SchedrVersion;
+
+use crate::logs::{HttpLogSource, LogSource};
 
 #[cfg(test)]
 mod tests;
@@ -25,10 +29,13 @@ pub struct ApiState {
     pub identity_header: Option<String>,
     /// The clock (replaced in tests).
     pub clock: fn() -> Timestamp,
+    /// Where task logs come from (the workers).
+    pub logs: Arc<dyn LogSource>,
 }
 
 impl ApiState {
-    /// State over `db` for this build of schedr, with the system clock.
+    /// State over `db` for this build of schedr, with the system clock, reading logs from
+    /// workers over plain HTTP (see [`Self::with_logs`]).
     #[must_use]
     pub fn new(db: Database, identity_header: Option<String>) -> Self {
         Self {
@@ -37,7 +44,14 @@ impl ApiState {
             version_text: env!("CARGO_PKG_VERSION"),
             identity_header,
             clock: Timestamp::now,
+            logs: Arc::new(HttpLogSource::new(None)),
         }
+    }
+
+    /// This state reading logs from `logs` (over TLS in `app` mode).
+    #[must_use]
+    pub fn with_logs(self, logs: Arc<dyn LogSource>) -> Self {
+        Self { logs, ..self }
     }
 
     /// The user a request comes from: the identity header's value, or `anonymous`.

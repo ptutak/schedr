@@ -17,9 +17,11 @@ schedr-db = { path = "crates/schedr-db" }
 schedr-master = { path = "crates/schedr-master" }
 schedr-agent = { path = "crates/schedr-agent" }
 schedr-api = { path = "crates/schedr-api" }
+schedr-tls = { path = "crates/schedr-tls" }
 
 # Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
 axum = "0.8.9"
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 croner = { version = "4.0.1", default-features = false, features = ["jiff"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
@@ -28,6 +30,7 @@ jiff = { version = "0.2.38", features = ["serde", "tzdb-bundle-always"] }
 prost = "0.14.4"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "system-proxy"] }
 rustix = { version = "1.1.5", features = ["fs", "process"] }
+rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs", "std", "logging"] }
 prost-types = "0.14.4"
 protoc-bin-vendored = "3.3.0"
 schemars = { version = "1.2.3", features = ["jiff02"] }
@@ -36,11 +39,13 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "macros"] }
 thiserror = "2.0.21"
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "signal", "test-util"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
+tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 utoipa = { version = "6.0.0", features = ["jiff_0_2"] }
 uuid = { version = "1.28.0", features = ["v7"] }
@@ -48,13 +53,12 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fm
 
 # Test-only crates (see PROJECT.md, Repository and tooling: Testing).
 http-body-util = "0.1.5"
-hyper-util = { version = "0.1.21", features = ["tokio"] }
 insta = { version = "1.49.0", features = ["json"] }
 pretty_assertions = "1.4.1"
 proptest = "1.12.0"
 rstest = "0.28.0"
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 tempfile = "3.27.0"
-tower = { version = "0.5.3", features = ["util"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

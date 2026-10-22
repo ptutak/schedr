@@ -306,6 +306,40 @@ pub struct RunsQuery {
     pub limit: Option<u32>,
 }
 
+/// Which part of a log to read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct LogQuery {
+    /// The first byte wanted (0 by default): the `next` of the previous part, to follow a log.
+    #[serde(default)]
+    pub from: Option<u64>,
+    /// At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// A part of an attempt's log, read from the worker that ran it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogChunk {
+    /// The attempt.
+    pub attempt_id: String,
+    /// Its try number.
+    pub try_number: u32,
+    /// The worker it ran on (and that answered).
+    pub worker_id: String,
+    /// The first byte of `content`.
+    pub from: u64,
+    /// The byte after `content`: where the next part starts.
+    pub next: u64,
+    /// The log's size when it was read.
+    pub size: u64,
+    /// Whether the attempt still runs (its log may grow).
+    pub running: bool,
+    /// The log's text (invalid UTF-8 replaced by `U+FFFD`).
+    pub content: String,
+}
+
 /// A worker in the registry (kept after it is gone, so its logs can be found).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerView {

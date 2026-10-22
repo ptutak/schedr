@@ -14,6 +14,7 @@ crates/
   schedr-master/    # scheduling loop, DAG validation, commands
   schedr-agent/     # worker agent
   schedr-api/       # webserver: REST API, web UI
+  schedr-tls/       # mTLS on the internal links: certificates, reloading, handshakes
   schedr/           # the binary: roles, user CLI, in-task CLI
     src/<module>.rs         # code
     src/<module>/tests.rs   # its unit tests

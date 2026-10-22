@@ -224,6 +224,27 @@ impl Database {
         Ok(drained.unwrap_or(false))
     }
 
+    /// Where one worker's log endpoint is, and its state (what the webserver needs to read a
+    /// log); `None` for a worker never registered.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the state doesn't read.
+    pub async fn worker_log_endpoint(
+        &self,
+        worker_id: &str,
+    ) -> Result<Option<(WorkerState, String)>, DbError> {
+        const ENDPOINT: &str = "SELECT state, log_endpoint FROM workers WHERE worker_id = $1";
+        let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, ENDPOINT))
+                .bind(worker_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(state, endpoint)| Ok((from_name("workers.state", state)?, endpoint)))
+            .transpose()
+    }
+
     /// Every worker in the registry, by ID, with its running attempts counted.
     ///
     /// # Errors

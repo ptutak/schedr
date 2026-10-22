@@ -154,3 +154,28 @@ async fn a_drain_is_kept_until_resumed_even_across_registrations() {
     assert_eq!(db.resume_worker("w9").await.unwrap(), None);
     db.set_worker_drained("w1", false).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_workers_log_endpoint_is_read_with_its_state() {
+    let db = migrated().await;
+    assert_eq!(db.worker_log_endpoint("w1").await.unwrap(), None);
+    let mut registered = registration("w1", "0190a0a0-0000-7000-8000-000000000001", &[]);
+    registered.log_endpoint = "https://w-0.schedr-worker:8081";
+    db.register_worker(&registered, ts("2026-10-22T08:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.worker_log_endpoint("w1").await.unwrap(),
+        Some((
+            WorkerState::Active,
+            "https://w-0.schedr-worker:8081".to_owned()
+        ))
+    );
+    db.set_worker_state("w1", WorkerState::Lost, ts("2026-10-22T08:02:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.worker_log_endpoint("w1").await.unwrap().unwrap().0,
+        WorkerState::Lost
+    );
+}

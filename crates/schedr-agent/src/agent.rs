@@ -92,6 +92,9 @@ pub struct AgentSettings {
     /// How long the running attempts get when the agent is asked to stop (the pod's
     /// `terminationGracePeriodSeconds`).
     pub termination_grace_period: Duration,
+    /// Where the webserver reaches this worker's log endpoint (e.g.
+    /// `https://w-0.schedr-worker.etl.svc.cluster.local:8081`), sent in `Register`.
+    pub log_endpoint: String,
 }
 
 /// Told the identity of an attempt's process once it is spawned.
@@ -518,7 +521,7 @@ impl<E: Executor> Agent<E> {
             schedr_version: AGENT_VERSION.to_owned(),
             queues: self.settings.queues.clone(),
             slots: self.settings.slots,
-            log_endpoint: String::new(),
+            log_endpoint: self.settings.log_endpoint.clone(),
             roots,
             secret_storages: Vec::new(),
             journal,

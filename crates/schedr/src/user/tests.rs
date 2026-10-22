@@ -70,6 +70,14 @@ impl Transport for InProcess {
 
 /// DAG `sync` (paused, daily at 03:00 UTC) behind the API, and a worker for its tasks.
 async fn world(master_down: bool) -> Client<InProcess> {
+    world_with_logs(master_down, None).await
+}
+
+/// As [`world`], the API reading task logs from `logs`.
+async fn world_with_logs(
+    master_down: bool,
+    logs: Option<std::sync::Arc<dyn schedr_api::logs::LogSource>>,
+) -> Client<InProcess> {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -107,6 +115,9 @@ async fn world(master_down: bool) -> Client<InProcess> {
     db.apply_dag_changes(&[change], ts(NOW)).await.unwrap();
     let mut state = ApiState::new(db.clone(), None);
     state.clock = fixed_now;
+    if let Some(logs) = logs {
+        state = state.with_logs(logs);
+    }
     let mut dispatcher = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE);
     dispatcher
         .register("w1", "i1", &[], 2, ts(NOW))
@@ -570,4 +581,203 @@ async fn a_task_is_cancelled_and_only_an_unschedulable_one_retried() {
         error,
         "`schedr tasks --map-index` isn't implemented yet (milestone M4)"
     );
+}
+
+/// A worker whose log grows: each request gets the next answer.
+#[derive(Debug, Default)]
+struct GrowingLog {
+    answers: std::sync::Mutex<std::collections::VecDeque<schedr_api::logs::WorkerLog>>,
+    asked_from: std::sync::Mutex<Vec<u64>>,
+}
+
+impl schedr_api::logs::LogSource for GrowingLog {
+    fn fetch<'a>(
+        &'a self,
+        _endpoint: &'a str,
+        _attempt_id: &'a str,
+        from: u64,
+        _limit: u64,
+    ) -> schedr_api::logs::LogFuture<'a> {
+        self.asked_from.lock().unwrap().push(from);
+        let answer = self.answers.lock().unwrap().pop_front().expect("an answer");
+        Box::pin(async move { Ok(answer) })
+    }
+}
+
+fn part(size: u64, running: bool, text: &str) -> schedr_api::logs::WorkerLog {
+    schedr_api::logs::WorkerLog {
+        worker_id: Some("w1".to_owned()),
+        size,
+        running,
+        bytes: text.as_bytes().to_vec(),
+    }
+}
+
+/// A run of `sync` whose `extract` started on `w1`, with the log `answers`: the client, the
+/// run and the fake worker.
+async fn running_task(
+    answers: Vec<schedr_api::logs::WorkerLog>,
+) -> (Client<InProcess>, String, std::sync::Arc<GrowingLog>) {
+    let (client, run_id, logs, attempt_id) = assigned_task(answers).await;
+    client
+        .transport()
+        .db
+        .mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    (client, run_id, logs)
+}
+
+/// As [`running_task`], `extract` assigned to `w1` but not started: also its attempt's ID.
+async fn assigned_task(
+    answers: Vec<schedr_api::logs::WorkerLog>,
+) -> (
+    Client<InProcess>,
+    String,
+    std::sync::Arc<GrowingLog>,
+    String,
+) {
+    let logs = std::sync::Arc::new(GrowingLog {
+        answers: std::sync::Mutex::new(answers.into()),
+        ..GrowingLog::default()
+    });
+    let client = world_with_logs(false, Some(logs.clone())).await;
+    runs(&client, trigger(Some("2026-10-15T01:00:00Z")), &text()).await;
+    let db = &client.transport().db;
+    let run_id = db
+        .dag_runs(&schedr_model::DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    let error = tasks(&client, logs_of(&run_id, None, false))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        format!("task `extract` of run `{run_id}` hasn't been tried yet: no log so far")
+    );
+    client
+        .transport()
+        .master
+        .lock()
+        .await
+        .2
+        .step(ts(NOW))
+        .await
+        .unwrap();
+    let queues = vec![];
+    db.register_worker(
+        &schedr_db::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "i1",
+            protocol_version: "0.1",
+            schedr_version: "0.1.0",
+            queues: &queues,
+            slots: 2,
+            log_endpoint: "http://w1:8081",
+        },
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let attempt = db
+        .task_attempts(&run_id, &schedr_model::TaskId::new("extract").unwrap())
+        .await
+        .unwrap()
+        .remove(0);
+    (client, run_id, logs, attempt.id)
+}
+
+#[tokio::test]
+async fn following_waits_for_the_attempt_to_start() {
+    let (client, run_id, logs, attempt_id) = assigned_task(vec![part(3, false, "ok\n")]).await;
+    let db = client.transport().db.clone();
+    let start = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        db.mark_started(&attempt_id, "spawn", ts(NOW))
+            .await
+            .unwrap();
+    };
+    let (out, ()) = tokio::join!(tasks(&client, logs_of(&run_id, None, true)), start);
+    assert_eq!(out.unwrap(), "ok\n");
+    assert_eq!(logs.asked_from.lock().unwrap().clone(), [0]);
+}
+
+fn logs_of(run_id: &str, try_number: Option<u32>, follow: bool) -> TasksCommand {
+    TasksCommand::Logs(crate::cli::LogsArgs {
+        target: target(run_id, None),
+        try_number,
+        follow,
+    })
+}
+
+#[tokio::test]
+async fn a_log_is_printed_as_it_is_and_followed_until_the_task_ends() {
+    let (client, run_id, logs) = running_task(vec![
+        part(6, true, "part1\n"),
+        part(12, true, "part2\n"),
+        part(12, true, ""),
+        part(18, false, "part3\n"),
+    ])
+    .await;
+    assert_eq!(
+        tasks(&client, logs_of(&run_id, None, true)).await.unwrap(),
+        "part1\npart2\npart3\n"
+    );
+    assert_eq!(logs.asked_from.lock().unwrap().clone(), [0, 6, 12, 12]);
+}
+
+#[tokio::test]
+async fn without_follow_a_running_tasks_log_is_printed_so_far() {
+    let (client, run_id, logs) =
+        running_task(vec![part(12, true, "part1\n"), part(12, true, "part2\n")]).await;
+    // The first part is all there is in one request: it stops there.
+    logs.answers.lock().unwrap()[0] = part(6, true, "part1\n");
+    assert_eq!(
+        tasks(&client, logs_of(&run_id, Some(1), false))
+            .await
+            .unwrap(),
+        "part1\n"
+    );
+}
+
+#[tokio::test]
+async fn a_log_in_json_is_one_part_per_line() {
+    let (client, run_id, _logs) = running_task(vec![part(3, false, "ok\n")]).await;
+    let mut out = Vec::new();
+    run_tasks(
+        &logs_of(&run_id, None, false),
+        &client,
+        &json_output(),
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(
+        (&line["content"], &line["next"], &line["worker_id"]),
+        (&json!("ok\n"), &json!(3), &json!("w1"))
+    );
+    let error = tasks(
+        &client,
+        TasksCommand::Logs(crate::cli::LogsArgs {
+            target: target(&run_id, Some(1)),
+            try_number: None,
+            follow: false,
+        }),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        "`schedr tasks --map-index` isn't implemented yet (milestone M4)"
+    );
+    let error = tasks(&client, logs_of(&run_id, Some(7), false))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("has no try 7"), "{error}");
 }

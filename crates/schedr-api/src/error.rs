@@ -19,6 +19,9 @@ pub enum ApiError {
     /// No such DAG, run or command.
     #[error("{0}")]
     NotFound(String),
+    /// Something the request needs can't be reached now (a worker holding a log).
+    #[error("{0}")]
+    Unavailable(String),
     /// The database failed (logged; the client gets a generic message).
     #[error(transparent)]
     Db(#[from] DbError),
@@ -31,6 +34,7 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

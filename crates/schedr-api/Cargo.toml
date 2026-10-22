@@ -10,8 +10,10 @@ authors.workspace = true
 [dependencies]
 axum.workspace = true
 jiff.workspace = true
+reqwest.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true
+schedr-tls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

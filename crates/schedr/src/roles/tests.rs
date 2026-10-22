@@ -64,7 +64,7 @@ fn agent_settings_name_the_worker_and_its_interpreter() {
     assert_eq!(agent.worker_id, "pod-1");
     assert_eq!(agent.slots, 4);
     assert_eq!(agent.setup.python, PathBuf::from("/usr/bin/python3"));
-    assert_eq!(agent.setup.log_dir, PathBuf::from("/d/logs"));
+    assert_eq!(agent.setup.log_dir, PathBuf::from("/d/logs/pod-1"));
     assert_eq!(agent.journal_dir, PathBuf::from("/d/journal/pod-1"));
     for (id, dir) in [
         ("../etl/w 1", "%2E.%2Fetl%2Fw%201"),
@@ -138,12 +138,14 @@ async fn the_master_and_the_api_serve_until_stopped() {
         master_settings(&config()),
         Duration::from_millis(10),
         listen(loopback()).await.unwrap(),
+        None,
         stopped.clone(),
     );
     let api = serve_api(
         memory_db().await,
         None,
         listen(loopback()).await.unwrap(),
+        None,
         stopped,
     );
     let later = async {
@@ -161,12 +163,13 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
     let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
     let (stop, stopped) = watch::channel(0);
     // Boxed, as in standalone: the worker's future is large.
-    let worker = Box::pin(run_worker(
-        agent,
-        Duration::from_secs(1),
-        "http://127.0.0.1:1".to_owned(),
-        stopped,
-    ));
+    let links = WorkerLinks {
+        master_url: "http://127.0.0.1:1".to_owned(),
+        tls: None,
+        log_listener: listen(loopback()).await.unwrap(),
+        retention: log_retention(&config()),
+    };
+    let worker = Box::pin(run_worker(agent, Duration::from_secs(1), links, stopped));
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = stop.send(1);
@@ -204,56 +207,131 @@ async fn a_role_needs_a_database_with_a_usable_schema() {
 }
 
 #[test]
-fn plain_text_is_fine_on_loopback_only() {
-    for host in ["localhost", "LocalHost", "127.0.0.1", "::1", "[::1]"] {
-        assert!(is_loopback(host), "{host}");
-        assert_eq!(plain_text_warning(host), None, "{host}");
-    }
-    for host in ["0.0.0.0", "10.0.0.5", "schedr-master"] {
-        assert!(!is_loopback(host), "{host}");
-        let warning = plain_text_warning(host).unwrap();
+fn the_master_url_has_the_scheme_of_the_tls_mode_and_a_host() {
+    assert_eq!(
+        master_host("https://schedr-master:8070", TlsMode::App).unwrap(),
+        "schedr-master"
+    );
+    assert_eq!(
+        master_host("http://user:pw@127.0.0.1:8070/", TlsMode::Mesh).unwrap(),
+        "127.0.0.1"
+    );
+    assert_eq!(
+        master_host("http://[::1]:8070", TlsMode::Mesh).unwrap(),
+        "[::1]"
+    );
+    for (url, mode, why, example) in [
+        (
+            "schedr-master:8070",
+            TlsMode::Mesh,
+            "needs the http:// scheme",
+            "http://schedr-master:8070",
+        ),
+        (
+            "http://schedr-master:8070",
+            TlsMode::App,
+            "needs the https:// scheme with [tls] mode `app`",
+            "https://schedr-master:8070",
+        ),
+        (
+            "https://schedr-master:8070",
+            TlsMode::Mesh,
+            "needs the http:// scheme with [tls] mode `mesh`",
+            "http://schedr-master:8070",
+        ),
+        ("http://", TlsMode::Mesh, "isn't a URL", "http://"),
+        ("not a url", TlsMode::App, "isn't a URL", "https://"),
+    ] {
+        let error = master_host(url, mode).unwrap_err().to_string();
         assert!(
-            warning.starts_with(&format!("gRPC to {host} is plain text until mTLS")),
-            "{warning}"
+            error.starts_with(&format!("[worker] master_url `{url}` {why}: ")),
+            "{error}"
         );
+        assert!(error.contains(example), "{error}");
     }
 }
 
 #[test]
-fn the_master_url_is_an_http_url_with_a_host() {
+fn the_log_endpoint_is_the_log_address_or_the_host_name() {
+    let mut config = config();
+    let env = env(&[("HOSTNAME", "pod-1")]);
     assert_eq!(
-        master_host("http://schedr-master:8070").unwrap(),
-        "schedr-master"
+        log_endpoint(&config, &env, true, 8081),
+        "https://pod-1:8081"
     );
     assert_eq!(
-        master_host("http://user:pw@127.0.0.1:8070/").unwrap(),
-        "127.0.0.1"
+        log_endpoint(&config, &BTreeMap::new(), false, 8081),
+        "http://localhost:8081"
     );
-    assert_eq!(master_host("http://[::1]:8070").unwrap(), "[::1]");
-    for (url, why) in [
-        ("schedr-master:8070", "needs the http:// scheme"),
-        (
-            "https://schedr-master:8070",
-            "uses https, which comes with mTLS",
+    config.worker.log_address = Some("w-0.schedr-worker.etl.svc.cluster.local".to_owned());
+    assert_eq!(
+        log_endpoint(&config, &env, true, 9000),
+        "https://w-0.schedr-worker.etl.svc.cluster.local:9000"
+    );
+    config.worker.log_address = Some("fd00::7".to_owned());
+    assert_eq!(
+        log_endpoint(&config, &env, false, 8081),
+        "http://[fd00::7]:8081"
+    );
+}
+
+#[test]
+fn log_retention_comes_from_the_config() {
+    let mut config = config();
+    config.worker.log_max_size = Some(1 << 30);
+    assert_eq!(
+        log_retention(&config),
+        LogRetention {
+            max_age: Duration::from_hours(720),
+            max_size: Some(1 << 30),
+        }
+    );
+}
+
+#[test]
+fn app_mode_needs_the_three_files_and_mesh_mode_none() {
+    let mut config = config();
+    let error = role_tls(&config).unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "[tls] mode is `app` (the default), which needs [tls] ca (SCHEDR_CONFIG__TLS__CA); \
+             or set [tls] mode = \"mesh\""
         ),
-        ("http://", "isn't a URL"),
-        ("not a url", "isn't a URL"),
-    ] {
-        let error = master_host(url).unwrap_err().to_string();
-        assert!(
-            error.starts_with(&format!("[worker] master_url `{url}` {why}")),
-            "{error}"
-        );
-    }
+        "{error}"
+    );
+    let dir = TempDir::new().unwrap();
+    let files = schedr_tls::testing::TestCa::new("ca").write(dir.path(), "w", &["schedr-worker"]);
+    config.tls.ca = Some(files.ca.clone());
+    config.tls.cert = Some(files.cert.clone());
+    let error = role_tls(&config).unwrap_err().to_string();
+    assert!(
+        error.contains("needs [tls] key (SCHEDR_CONFIG__TLS__KEY)"),
+        "{error}"
+    );
+    config.tls.key = Some(dir.path().join("missing.key"));
+    let error = role_tls(&config).unwrap_err().to_string();
+    assert!(error.starts_with("can't read [tls] key"), "{error}");
+    config.tls.key = Some(files.key);
+    assert!(role_tls(&config).unwrap().is_some());
+    config.tls.reload_interval = Duration::ZERO;
+    assert_eq!(
+        role_tls(&config).unwrap_err().to_string(),
+        "[tls] reload_interval must be longer than 0s (e.g. \"30s\")"
+    );
+    config.tls.mode = TlsMode::Mesh;
+    assert!(role_tls(&config).unwrap().is_none());
 }
 
 #[tokio::test]
 async fn the_roles_say_what_they_miss() {
-    assert!(matches!(master(&config()).await, Err(AppError::NoDatabase)));
-    assert!(matches!(
-        webserver(&config()).await,
-        Err(AppError::NoDatabase)
-    ));
+    for error in [master(&config()).await, webserver(&config()).await] {
+        let error = error.unwrap_err().to_string();
+        assert!(error.contains("needs [tls] ca"), "{error}");
+    }
+    let mut mesh = config();
+    mesh.tls.mode = TlsMode::Mesh;
+    assert!(matches!(master(&mesh).await, Err(AppError::NoDatabase)));
+    assert!(matches!(webserver(&mesh).await, Err(AppError::NoDatabase)));
     let error = worker(&config(), &env(&[("HOME", "/h")]))
         .await
         .unwrap_err();
@@ -267,9 +345,15 @@ async fn the_roles_say_what_they_miss() {
     bad_url.worker.master_url = Some("schedr-master:8070".to_owned());
     let error = worker(&bad_url, &env(&[("HOME", "/h")])).await.unwrap_err();
     assert!(
-        error.to_string().contains("needs the http:// scheme"),
+        error.to_string().contains("needs the https:// scheme"),
         "{error}"
     );
+    let mut no_certificates = config();
+    no_certificates.worker.master_url = Some("https://schedr-master:8070".to_owned());
+    let error = worker(&no_certificates, &env(&[("HOME", "/h")]))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("needs [tls] ca"), "{error}");
 }
 
 #[tokio::test]

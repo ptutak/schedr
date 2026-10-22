@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+axum.workspace = true
 ignore.workspace = true
 jiff.workspace = true
 prost.workspace = true
@@ -25,6 +26,7 @@ tonic.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+http-body-util.workspace = true
 hyper-util.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true

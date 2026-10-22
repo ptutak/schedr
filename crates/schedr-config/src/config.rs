@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::roots::{PathList, Root};
-use crate::units::deserialize_duration;
+use crate::units::{deserialize_duration, deserialize_optional_size};
 
 #[cfg(test)]
 mod tests;
@@ -45,6 +45,8 @@ pub struct Config {
     pub webserver: WebserverSection,
     /// `[worker]`: this worker's identity, capacity and data directory.
     pub worker: WorkerSection,
+    /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
+    pub tls: TlsSection,
     /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
     #[serde(skip)]
     pub dag_roots: Vec<Root>,
@@ -341,11 +343,26 @@ pub struct WorkerSection {
     /// pod's `terminationGracePeriodSeconds`.
     #[serde(deserialize_with = "deserialize_duration")]
     pub termination_grace_period: Duration,
+    /// The address the log endpoint listens on (all interfaces by default; `schedr
+    /// standalone` always listens on 127.0.0.1).
+    pub log_bind: IpAddr,
+    /// The log endpoint's port (0: a free one).
+    pub log_port: u16,
+    /// The host the webserver reaches the log endpoint at, sent to the master (e.g. the pod's
+    /// DNS name through a headless Service); the host name when not set.
+    pub log_address: Option<String>,
+    /// Task logs older than this are deleted.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub log_retention: Duration,
+    /// Beyond this many bytes of logs the oldest are deleted; no limit when not set.
+    #[serde(deserialize_with = "deserialize_optional_size")]
+    pub log_max_size: Option<u64>,
 }
 
 impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
-    /// (Kubernetes' default).
+    /// (Kubernetes' default), the log endpoint on port 8081 of every interface, logs kept for
+    /// 30 days.
     fn default() -> Self {
         Self {
             id: None,
@@ -355,6 +372,57 @@ impl Default for WorkerSection {
             pass_env: Vec::new(),
             termination_grace_period: Duration::from_secs(30),
             master_url: None,
+            log_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            log_port: 8081,
+            log_address: None,
+            log_retention: Duration::from_hours(24 * 30),
+            log_max_size: None,
+        }
+    }
+}
+
+/// `[tls] mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TlsMode {
+    /// schedr's own mTLS on every internal link.
+    #[default]
+    App,
+    /// Plain traffic: a service mesh (e.g. Istio) provides mTLS between the pods.
+    Mesh,
+}
+
+/// `[tls]`: certificates are PEM files (mounted from Kubernetes Secrets), read again when they
+/// change.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TlsSection {
+    /// Whether schedr does mTLS itself (`app`) or leaves it to a mesh (`mesh`).
+    pub mode: TlsMode,
+    /// The CA certificates peers' certificates must be signed by.
+    pub ca: Option<PathBuf>,
+    /// This role's certificate (chain).
+    pub cert: Option<PathBuf>,
+    /// This role's private key.
+    pub key: Option<PathBuf>,
+    /// The name the webserver expects in workers' certificates, whatever address it reaches
+    /// them at.
+    pub worker_name: String,
+    /// How often the files are read again for a change.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub reload_interval: Duration,
+}
+
+impl Default for TlsSection {
+    /// `app` mode, no files yet, workers named `schedr-worker`, files read every 30 s.
+    fn default() -> Self {
+        Self {
+            mode: TlsMode::App,
+            ca: None,
+            cert: None,
+            key: None,
+            worker_name: "schedr-worker".to_owned(),
+            reload_interval: Duration::from_secs(30),
         }
     }
 }

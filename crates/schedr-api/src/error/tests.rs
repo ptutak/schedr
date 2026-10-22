@@ -23,6 +23,13 @@ async fn errors_are_json_with_their_status() {
             serde_json::json!({"error": "no DAG `x`"})
         )
     );
+    assert_eq!(
+        body(ApiError::Unavailable("worker `w1` is lost".to_owned())).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"error": "worker `w1` is lost"})
+        )
+    );
 }
 
 #[tokio::test]

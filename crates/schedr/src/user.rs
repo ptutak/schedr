@@ -1,4 +1,5 @@
-//! The user CLI's commands over the REST API: `schedr dags ...` and `schedr runs ...`.
+//! The user CLI's commands over the REST API: `schedr dags ...`, `schedr runs ...`, `schedr
+//! tasks ...` and `schedr workers ...`.
 //!
 //! Human output is aligned columns with times in UTC and local time; `--json` prints the API's
 //! JSON (UTC only). Actions wait for the master's decision and print the result, or fail with
@@ -11,7 +12,7 @@ use jiff::tz::TimeZone;
 use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
 
 use crate::app::AppError;
-use crate::cli::{DagsCommand, RunsCommand, TasksCommand, WorkersCommand};
+use crate::cli::{DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand};
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short};
 
@@ -235,6 +236,7 @@ pub async fn run_tasks<T: Transport>(
     let (target, action) = match command {
         TasksCommand::Cancel(target) => (target, TaskAction::Cancel),
         TasksCommand::Retry(target) => (target, TaskAction::Retry),
+        TasksCommand::Logs(args) => return print_log(args, client, output, out).await,
     };
     if target.map_index.is_some() {
         return Err(not_yet("tasks --map-index", "M4"));
@@ -256,6 +258,64 @@ pub async fn run_tasks<T: Transport>(
         (TaskAction::Retry, _) => format!("queued task {task_id} of run {run_id} again"),
     };
     done(out, output, &command, &message)
+}
+
+/// `schedr tasks logs`: the attempt's log as it is, part by part (`--json`: each part as the
+/// API's JSON, one per line); with `--follow`, waiting for the attempt to start and on until
+/// it ends.
+async fn print_log<T: Transport>(
+    args: &LogsArgs,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let target = &args.target;
+    if target.map_index.is_some() {
+        return Err(not_yet("tasks --map-index", "M4"));
+    }
+    let (run_id, task_id) = (target.run_id.as_str(), target.task_id.as_str());
+    let try_number = loop {
+        let attempts = client.attempts(run_id, task_id).await?.attempts;
+        let attempt = match args.try_number {
+            Some(n) => attempts.into_iter().find(|a| a.try_number == n),
+            None => attempts.into_iter().max_by_key(|a| a.try_number),
+        };
+        match (attempt, args.try_number) {
+            // Assigned, not started yet: following waits for it.
+            (Some(a), _) if args.follow && a.started_at.is_none() && a.status.is_none() => {}
+            (Some(a), _) => break a.try_number,
+            // The API says what is missing.
+            (None, Some(n)) => break n,
+            (None, None) if args.follow => {}
+            (None, None) => {
+                return Err(AppError::BadArgument(format!(
+                    "task `{task_id}` of run `{run_id}` hasn't been tried yet: no log so far"
+                )));
+            }
+        }
+        tokio::time::sleep(client.poll()).await;
+    };
+    let mut from = 0;
+    loop {
+        let chunk = client.log(run_id, task_id, try_number, from).await?;
+        if output.json {
+            let line =
+                serde_json::to_string(&chunk).map_err(|e| AppError::BadArgument(e.to_string()))?;
+            writeln!(out, "{line}")?;
+        } else {
+            out.write_all(chunk.content.as_bytes())?;
+        }
+        out.flush()?;
+        let progressed = chunk.next > from;
+        from = chunk.next;
+        if from < chunk.size && progressed {
+            continue;
+        }
+        if !(args.follow && chunk.running) {
+            return Ok(());
+        }
+        tokio::time::sleep(client.poll()).await;
+    }
 }
 
 fn for_time(text: Option<&str>, err: &mut impl Write) -> Result<Option<jiff::Timestamp>, AppError> {

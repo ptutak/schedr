@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AttemptList, CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest, WorkerList,
+    AttemptList, CommandView, DagList, LogChunk, PauseRequest, RunDetail, RunList, TriggerRequest,
+    WorkerList,
 };
 use serde::de::DeserializeOwned;
 
@@ -207,6 +208,11 @@ impl<T: Transport> Client<T> {
         &self.transport
     }
 
+    /// How often it reads again while waiting (a decision, a growing log).
+    pub const fn poll(&self) -> Duration {
+        self.poll
+    }
+
     /// `GET /api/v1/workers`.
     ///
     /// # Errors
@@ -266,6 +272,31 @@ impl<T: Transport> Client<T> {
             Method::Get,
             format!(
                 "/api/v1/runs/{}/tasks/{}/attempts",
+                path(run_id),
+                path(task_id)
+            ),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/runs/{run}/tasks/{task}/attempts/{try}/log?from=...`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails (the worker is gone, the log deleted) or the
+    /// answer doesn't read.
+    pub async fn log(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        try_number: u32,
+        from: u64,
+    ) -> Result<LogChunk, ClientError> {
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log?from={from}",
                 path(run_id),
                 path(task_id)
             ),

@@ -59,6 +59,30 @@ fn records_are_written_replaced_read_back_and_removed() {
 }
 
 #[test]
+fn one_record_is_read_without_changing_anything() {
+    let (_dir, journal) = journal();
+    assert_eq!(journal.record("a1").unwrap(), None);
+    journal.write("a1", &JournalRecord::Running(None)).unwrap();
+    assert_eq!(
+        journal.record("a1").unwrap(),
+        Some(JournalRecord::Running(None))
+    );
+    journal
+        .write("a1", &JournalRecord::Finished(finished("a1")))
+        .unwrap();
+    assert_eq!(
+        journal.record("a1").unwrap(),
+        Some(JournalRecord::Finished(finished("a1")))
+    );
+    fs::write(journal.dir().join("a2.json"), "half").unwrap();
+    assert_eq!(journal.record("a2").unwrap(), None);
+    assert_eq!(
+        journal.record("../a1").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+}
+
+#[test]
 fn recovery_removes_temporary_and_unreadable_files() {
     let (_dir, journal) = journal();
     journal.write("a1", &JournalRecord::Running(None)).unwrap();

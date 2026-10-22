@@ -5,30 +5,35 @@
 //!   (Postgres, or SQLite on one host); it refuses an outdated schema (`schedr db migrate`
 //!   runs first) and picks commands up at once on Postgres (`LISTEN/NOTIFY`), else by polling.
 //! - **webserver:** the REST API on the same database.
-//! - **worker:** the agent, connected to `[worker] master_url`; no database.
+//! - **worker:** the agent, connected to `[worker] master_url`, and its log endpoint (the
+//!   webserver reads task logs from it), with log retention; no database.
 //!
-//! gRPC is plain text until mTLS (M2.7): a master listening beyond loopback, or a worker
-//! connecting beyond it, says so at startup. SIGTERM and Ctrl-C stop a role (draining comes
-//! with M2.6). See PROJECT.md, Architecture: Components and roles.
+//! The internal links (worker → master, webserver → worker logs) use mTLS in `[tls] mode =
+//! "app"` (the default: each role needs `[tls] ca`, `cert` and `key`, read again when they
+//! change) and plain traffic in `mesh` mode, where a service mesh encrypts. SIGTERM and Ctrl-C
+//! stop a role (a worker drains first). See PROJECT.md, Architecture: Components and roles.
 
 use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
 use schedr_agent::journal::Journal;
+use schedr_agent::logs::LogEndpoint;
+use schedr_agent::retention::{LogRetention, sweep_logs};
+use schedr_api::logs::HttpLogSource;
 use schedr_api::{ApiState, router};
-use schedr_config::Config;
+use schedr_config::{Config, TlsMode};
 use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
 use schedr_master::service::Hub;
 use schedr_proto::pb::master_client::MasterClient;
+use schedr_tls::{Protocol, Tls, TlsFiles, incoming};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tokio_stream::wrappers::TcpListenerStream;
 
 use crate::app::{AppError, role_config};
 
@@ -77,8 +82,9 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
 }
 
 /// The worker agent's settings, from the configuration; its journal is
-/// `<data_dir>/journal/<worker ID>` (other bytes than letters, digits, `-`, `_` and `.`, and a
-/// leading `.`, as `%XX`).
+/// `<data_dir>/journal/<worker ID>` and its logs `<data_dir>/logs/<worker ID>` (other bytes
+/// than letters, digits, `-`, `_` and `.`, and a leading `.`, as `%XX`), so workers sharing a
+/// data directory never see each other's (retention, the log endpoint).
 ///
 /// # Errors
 ///
@@ -116,14 +122,95 @@ pub fn agent_settings(
             python,
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),
-            log_dir: data_dir.join("logs"),
+            log_dir: data_dir.join("logs").join(file_name(&worker_id)),
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
         journal_dir: data_dir.join("journal").join(file_name(&worker_id)),
         termination_grace_period: config.worker.termination_grace_period,
+        // Known once the log endpoint listens (see [`log_endpoint`]).
+        log_endpoint: String::new(),
         worker_id,
     })
+}
+
+/// The worker's log retention, from the configuration.
+#[must_use]
+pub const fn log_retention(config: &Config) -> LogRetention {
+    LogRetention {
+        max_age: config.worker.log_retention,
+        max_size: config.worker.log_max_size,
+    }
+}
+
+/// Where the webserver reaches this worker's log endpoint listening on `port`: `[worker]
+/// log_address` (else the host name), over https with TLS.
+#[must_use]
+pub fn log_endpoint(
+    config: &Config,
+    env: &BTreeMap<String, String>,
+    tls: bool,
+    port: u16,
+) -> String {
+    let host = config
+        .worker
+        .log_address
+        .clone()
+        .or_else(|| env.get("HOSTNAME").cloned())
+        .unwrap_or_else(|| "localhost".to_owned());
+    // An IPv6 address goes in brackets.
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://{host}:{port}")
+}
+
+/// The role's TLS material by `[tls]`: none in `mesh` mode; in `app` mode the files, which
+/// must be configured and usable.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when a file isn't configured, or can't be read or used.
+pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
+    if config.tls.mode == TlsMode::Mesh {
+        return Ok(None);
+    }
+    if config.tls.reload_interval.is_zero() {
+        return Err(AppError::BadArgument(
+            "[tls] reload_interval must be longer than 0s (e.g. \"30s\")".to_owned(),
+        ));
+    }
+    let file = |path: &Option<PathBuf>, key: &str| {
+        path.clone().ok_or_else(|| {
+            AppError::BadArgument(format!(
+                "[tls] mode is `app` (the default), which needs [tls] {key} \
+                 (SCHEDR_CONFIG__TLS__{}); or set [tls] mode = \"mesh\" behind a service mesh \
+                 that encrypts the traffic between pods",
+                key.to_uppercase()
+            ))
+        })
+    };
+    let files = TlsFiles {
+        ca: file(&config.tls.ca, "ca")?,
+        cert: file(&config.tls.cert, "cert")?,
+        key: file(&config.tls.key, "key")?,
+    };
+    Tls::load(files, &config.tls.worker_name)
+        .map(Some)
+        .map_err(|e| AppError::BadArgument(e.to_string()))
+}
+
+/// Reads the role's certificates again every `[tls] reload_interval` until `stop`.
+fn watch_tls(tls: Option<&Tls>, config: &Config, stop: &watch::Receiver<u32>) {
+    if let Some(tls) = tls {
+        tokio::spawn(
+            tls.clone()
+                .watch(config.tls.reload_interval, until(stop.clone())),
+        );
+    }
 }
 
 /// `name` as one safe path component, different for different names: bytes other than
@@ -181,7 +268,8 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
         .map_err(|e| AppError::BadArgument(format!("can't listen on {address}: {e}")))
 }
 
-/// Serves the master: its gRPC service on `listener` and its loop, until `stop`.
+/// Serves the master: its gRPC service on `listener` (over mTLS with `tls`) and its loop,
+/// until `stop`.
 ///
 /// # Errors
 ///
@@ -191,8 +279,11 @@ pub async fn serve_master(
     settings: Settings,
     tick: Duration,
     listener: TcpListener,
+    tls: Option<Tls>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
+    let connections = incoming(listener, tls, Protocol::Grpc)
+        .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
     let notifications = match db.command_notifications().await {
         Ok(notifications) => notifications,
         Err(error) => {
@@ -213,7 +304,7 @@ pub async fn serve_master(
     }
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), until(stop.clone()));
+        .serve_with_incoming_shutdown(connections, until(stop.clone()));
     let master_loop = hub.run(tick, notifications, until(stop));
     tokio::pin!(grpc, master_loop);
     // The server ends first only by failing (both end together on `stop`): the role must
@@ -228,7 +319,8 @@ pub async fn serve_master(
     }
 }
 
-/// Serves the REST API on `listener` until `stop`.
+/// Serves the REST API on `listener` until `stop`, reading task logs from workers (over mTLS
+/// with `tls`).
 ///
 /// # Errors
 ///
@@ -237,22 +329,68 @@ pub async fn serve_api(
     db: Database,
     identity_header: Option<String>,
     listener: TcpListener,
+    tls: Option<Tls>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
-    axum::serve(listener, router(ApiState::new(db, identity_header)))
+    let state =
+        ApiState::new(db, identity_header).with_logs(std::sync::Arc::new(HttpLogSource::new(tls)));
+    axum::serve(listener, router(state))
         .with_graceful_shutdown(until(stop))
         .await
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
 }
 
-/// Runs a worker agent connected to the master at `master_url` until it has drained after a
-/// stop request (`stop` counts them; see [`schedr_agent::drain`]).
+/// How a worker reaches the master and serves its logs.
+#[derive(Debug)]
+pub struct WorkerLinks {
+    /// The master's gRPC URL.
+    pub master_url: String,
+    /// The TLS material (`app` mode), for both.
+    pub tls: Option<Tls>,
+    /// Where the log endpoint listens (`agent.log_endpoint` says how it is reached).
+    pub log_listener: TcpListener,
+    /// What logs to keep.
+    pub retention: LogRetention,
+}
+
+/// Runs a worker agent connected to the master until it has drained after a stop request
+/// (`stop` counts them; see [`schedr_agent::drain`]), with its log endpoint and log
+/// retention beside it until then.
 pub async fn run_worker(
     agent: AgentSettings,
     parse_file_timeout: Duration,
-    master_url: String,
+    links: WorkerLinks,
     stop: watch::Receiver<u32>,
 ) {
+    let WorkerLinks {
+        master_url,
+        tls,
+        log_listener,
+        retention,
+    } = links;
+    let endpoint = LogEndpoint {
+        worker_id: agent.worker_id.clone(),
+        log_dir: agent.setup.log_dir.clone(),
+        journal: Journal::new(agent.journal_dir.clone()),
+    };
+    let (done, finished) = watch::channel(0);
+    let logs = match incoming(log_listener, tls.clone(), Protocol::Http) {
+        Ok(connections) => Some(tokio::spawn(
+            axum::serve(connections, schedr_agent::logs::router(endpoint.clone()))
+                .with_graceful_shutdown(until(finished.clone()))
+                .into_future(),
+        )),
+        Err(error) => {
+            tracing::error!(%error, "can't serve task logs");
+            None
+        }
+    };
+    let sweeping = tokio::spawn(sweep_logs(
+        endpoint.log_dir,
+        endpoint.journal,
+        retention,
+        until(finished),
+    ));
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
         parse_file_timeout,
@@ -262,11 +400,24 @@ pub async fn run_worker(
         .run(
             move || {
                 let url = master_url.clone();
-                async move { MasterClient::connect(url).await.map_err(|e| e.to_string()) }
+                let tls = tls.clone();
+                async move {
+                    schedr_tls::channel(&url, tls.as_ref())
+                        .await
+                        .map(MasterClient::new)
+                }
             },
             stop,
         )
         .await;
+    let _ = done.send(1);
+    let _ = sweeping.await;
+    if let Some(Ok(Err(error))) = match logs {
+        Some(logs) => Some(logs.await),
+        None => None,
+    } {
+        tracing::warn!(%error, "the log endpoint failed");
+    }
 }
 
 /// Opens the database of the master or the webserver: `[database] url` is required, SQLite is
@@ -290,28 +441,6 @@ pub async fn open_database(config: &Config, role: &str) -> Result<Database, AppE
     Ok(db)
 }
 
-/// Whether `host` (a name, an IP address, an IPv6 address in brackets) is this machine only.
-#[must_use]
-pub fn is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
-}
-
-/// The warning for plain-text gRPC to or from `host`, unless it is a loopback address.
-#[must_use]
-pub fn plain_text_warning(host: &str) -> Option<String> {
-    (!is_loopback(host)).then(|| {
-        format!(
-            "gRPC to {host} is plain text until mTLS (milestone M2): keep it on a trusted \
-             network"
-        )
-    })
-}
-
 /// The warning for the REST API listening on `address` beyond loopback: it has no
 /// authentication of its own until the UI (M3). `alternative` says how to keep it local.
 #[must_use]
@@ -325,26 +454,33 @@ pub fn no_auth_warning(address: SocketAddr, alternative: &str) -> Option<String>
     })
 }
 
-/// Checks `[worker] master_url` and returns its host: an `http://` URL with a host (plain
-/// text until mTLS, M2.7).
+/// Checks `[worker] master_url` and returns its host: an `https://` URL with a host in `app`
+/// mode (the master's certificate must name the host), an `http://` one in `mesh` mode.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] for anything else, saying what is expected.
-pub fn master_host(url: &str) -> Result<String, AppError> {
+pub fn master_host(url: &str, mode: TlsMode) -> Result<String, AppError> {
+    let (scheme, example, mode_name) = match mode {
+        TlsMode::App => ("https", "https://schedr-master:8070", "app"),
+        TlsMode::Mesh => ("http", "http://schedr-master:8070", "mesh"),
+    };
     let bad = |why: &str| {
         AppError::BadArgument(format!(
-            "[worker] master_url `{url}` {why}: give the master's gRPC URL, e.g. \
-             http://schedr-master:8070"
+            "[worker] master_url `{url}` {why}: give the master's gRPC URL, e.g. {example}"
         ))
     };
     let uri = url
         .parse::<tonic::transport::Uri>()
         .map_err(|_| bad("isn't a URL"))?;
     match uri.scheme_str() {
-        Some("http") => {}
-        Some("https") => return Err(bad("uses https, which comes with mTLS (milestone M2)")),
-        _ => return Err(bad("needs the http:// scheme")),
+        Some(given) if given == scheme => {}
+        Some("http" | "https") => {
+            return Err(bad(&format!(
+                "needs the {scheme}:// scheme with [tls] mode `{mode_name}`"
+            )));
+        }
+        _ => return Err(bad(&format!("needs the {scheme}:// scheme"))),
     }
     uri.host()
         .map(str::to_owned)
@@ -394,22 +530,34 @@ pub fn stop_on_signal() -> watch::Receiver<u32> {
 /// As [`open_database`], [`listen`] and [`serve_master`].
 pub async fn master(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
+    let tls = role_tls(config)?;
     let db = open_database(config, "master").await?;
     let address = SocketAddr::new(config.master.bind, config.master.grpc_port);
     let listener = listen(address).await?;
-    if let Some(warning) = plain_text_warning(&config.master.bind.to_string()) {
-        tracing::warn!("{warning}");
-    }
     let bound = listener.local_addr().unwrap_or(address);
-    tracing::info!("schedr master: gRPC on {bound}");
+    tracing::info!(
+        "schedr master: gRPC on {bound} ({})",
+        links_text(tls.as_ref())
+    );
+    watch_tls(tls.as_ref(), config, &stop);
     serve_master(
         db,
         master_settings(config),
         config.master.tick_interval,
         listener,
+        tls,
         stop,
     )
     .await
+}
+
+/// How a role's internal links are protected, for its startup line.
+fn links_text(tls: Option<&Tls>) -> &'static str {
+    if tls.is_some() {
+        "mTLS"
+    } else {
+        "plain: tls mode `mesh`"
+    }
 }
 
 /// `schedr webserver`: the REST API, until Ctrl-C or SIGTERM.
@@ -419,6 +567,7 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
 /// As [`open_database`], [`listen`] and [`serve_api`].
 pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
+    let tls = role_tls(config)?;
     let db = open_database(config, "webserver").await?;
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
@@ -426,11 +575,16 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     if let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"") {
         tracing::warn!("{warning}");
     }
-    tracing::info!("schedr webserver: API on http://{bound}");
+    tracing::info!(
+        "schedr webserver: API on http://{bound} (worker logs: {})",
+        links_text(tls.as_ref())
+    );
+    watch_tls(tls.as_ref(), config, &stop);
     serve_api(
         db,
         config.webserver.auth.identity_header.clone(),
         listener,
+        tls,
         stop,
     )
     .await
@@ -451,22 +605,35 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
                 .to_owned(),
         )
     })?;
-    let host = master_host(&master_url)?;
+    master_host(&master_url, config.tls.mode)?;
+    let tls = role_tls(config)?;
     let config = role_config(config, env, false)?;
     let data_dir = data_dir(&config, env)?;
     tokio::fs::create_dir_all(&data_dir)
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
-    let agent = agent_settings(&config, env, &data_dir)?;
-    if let Some(warning) = plain_text_warning(&host) {
-        tracing::warn!("{warning}");
-    }
-    tracing::info!(
-        "schedr worker {}: master {master_url}, data in {}",
-        agent.worker_id,
-        data_dir.display()
-    );
+    let mut agent = agent_settings(&config, env, &data_dir)?;
     let _lock = lock_journal(&agent)?;
-    run_worker(agent, config.dags.parse_file_timeout, master_url, stop).await;
+    let address = SocketAddr::new(config.worker.log_bind, config.worker.log_port);
+    let log_listener = listen(address).await?;
+    let port = log_listener
+        .local_addr()
+        .map_or(address.port(), |a| a.port());
+    agent.log_endpoint = log_endpoint(&config, env, tls.is_some(), port);
+    tracing::info!(
+        "schedr worker {}: master {master_url} ({}), data in {}, logs on {}",
+        agent.worker_id,
+        links_text(tls.as_ref()),
+        data_dir.display(),
+        agent.log_endpoint
+    );
+    watch_tls(tls.as_ref(), &config, &stop);
+    let links = WorkerLinks {
+        master_url,
+        tls,
+        log_listener,
+        retention: log_retention(&config),
+    };
+    run_worker(agent, config.dags.parse_file_timeout, links, stop).await;
     Ok(())
 }

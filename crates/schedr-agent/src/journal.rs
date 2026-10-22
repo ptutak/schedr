@@ -180,6 +180,16 @@ impl Journal {
         self.scan(false)
     }
 
+    /// What is recorded for one attempt, changing nothing; `None` when nothing is (or the
+    /// file is being written, or doesn't read).
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for an attempt ID that isn't a safe file name.
+    pub fn record(&self, attempt_id: &str) -> io::Result<Option<JournalRecord>> {
+        Ok(read(&self.path(attempt_id)?, attempt_id).ok())
+    }
+
     fn scan(&self, clean: bool) -> io::Result<Vec<(String, JournalRecord)>> {
         let mut records = Vec::new();
         for entry in fs::read_dir(&self.dir)? {

@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 schedr-config.workspace = true
 schedr-db.workspace = true
+schedr-tls.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -40,6 +41,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+schedr-tls = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 tower.workspace = true

@@ -144,6 +144,35 @@ fn tasks_take_a_run_a_task_and_an_optional_map_index() {
 }
 
 #[test]
+fn tasks_logs_take_a_try_and_follow() {
+    let cli = parse(&["tasks", "logs", "r1", "load", "--try", "2", "-f"]).unwrap();
+    let Command::Tasks { command, .. } = cli.command else {
+        panic!("not tasks")
+    };
+    assert_eq!(
+        command,
+        TasksCommand::Logs(LogsArgs {
+            target: TaskTarget {
+                run_id: "r1".into(),
+                task_id: "load".into(),
+                map_index: None
+            },
+            try_number: Some(2),
+            follow: true,
+        })
+    );
+    let cli = parse(&["tasks", "logs", "r1", "load"]).unwrap();
+    let Command::Tasks {
+        command: TasksCommand::Logs(args),
+        ..
+    } = cli.command
+    else {
+        panic!("not tasks logs")
+    };
+    assert_eq!((args.try_number, args.follow), (None, false));
+}
+
+#[test]
 fn task_ctx_cleanup_add_takes_a_type_and_fields() {
     let cli = parse(&[
         "task-ctx",
