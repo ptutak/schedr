@@ -1,6 +1,7 @@
 # Next session: where things stand
 
-Read this file, `PROJECT.md` and `PLAN.md` before starting.
+Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
+- `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
 - `PLAN.md` holds the milestones and the M1 steps.
 

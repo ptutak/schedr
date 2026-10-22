@@ -11,8 +11,8 @@ use schedr_db::runs::{ActiveDag, NewRun};
 use schedr_db::{Database, DbError};
 use schedr_model::{DagId, RunKind, RunState};
 
-use crate::fire_times::{FireTimes, ScheduleError};
-use crate::planning::{Plan, RunTimes, TriggerError, manual_planned_for, runs_to_start};
+use crate::fire_times::{FireTimes, FireTimesError};
+use crate::planning::{ManualRunError, Plan, RunTimes, manual_planned_for, runs_to_start};
 
 #[cfg(test)]
 mod tests;
@@ -31,15 +31,15 @@ pub enum SchedulerError {
     NotRunnable(DagId),
     /// A manual run's time isn't allowed.
     #[error(transparent)]
-    Trigger(#[from] TriggerError),
-    /// The DAG's stored schedule can't be evaluated (it passed validation with another
-    /// version of the master).
+    ManualRun(#[from] ManualRunError),
+    /// The fire times of the DAG's stored trigger can't be evaluated (it passed validation
+    /// with another version of the master).
     #[error("DAG `{dag_id}`: {error}")]
-    Schedule {
+    FireTimes {
         /// The DAG.
         dag_id: DagId,
         /// Why.
-        error: ScheduleError,
+        error: FireTimesError,
     },
 }
 
@@ -88,10 +88,10 @@ impl Scheduler {
     pub async fn pass(&self, now: Timestamp) -> Result<Pass, SchedulerError> {
         let mut pass = Pass::default();
         for active in self.db.active_dags().await? {
-            let fire_times = match FireTimes::new(&active.dag.schedule, active.dag.start) {
+            let fire_times = match FireTimes::new(&active.dag.trigger, active.dag.start) {
                 Ok(fire_times) => fire_times,
                 Err(error) => {
-                    pass.skipped.push(SchedulerError::Schedule {
+                    pass.skipped.push(SchedulerError::FireTimes {
                         dag_id: active.dag.id.clone(),
                         error,
                     });
@@ -127,8 +127,8 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// [`SchedulerError::NotRunnable`], [`SchedulerError::Trigger`] for a time in the future,
-    /// [`SchedulerError::Schedule`] or [`SchedulerError::Db`].
+    /// [`SchedulerError::NotRunnable`], [`SchedulerError::ManualRun`] for a time in the future,
+    /// [`SchedulerError::FireTimes`] or [`SchedulerError::Db`].
     ///
     /// # Panics
     ///
@@ -149,8 +149,8 @@ impl Scheduler {
             .find(|d| &d.dag.id == dag_id)
             .ok_or_else(|| SchedulerError::NotRunnable(dag_id.clone()))?;
         let fire_times =
-            FireTimes::new(&active.dag.schedule, active.dag.start).map_err(|error| {
-                SchedulerError::Schedule {
+            FireTimes::new(&active.dag.trigger, active.dag.start).map_err(|error| {
+                SchedulerError::FireTimes {
                     dag_id: dag_id.clone(),
                     error,
                 }

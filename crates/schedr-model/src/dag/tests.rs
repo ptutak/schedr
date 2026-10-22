@@ -37,14 +37,14 @@ fn dag() -> Dag {
         },
         description: None,
         tags: vec![],
-        schedule: Schedule::Cron {
+        trigger: Trigger::Cron {
             expression: "0 3 * * *".into(),
             timezone: "UTC".into(),
+            catchup: false,
         },
         start: Some("2026-01-01T00:00:00Z".parse().unwrap()),
         end: None,
         initial_since: None,
-        catchup: false,
         max_active_runs: Some(1),
         tasks: vec![empty_task("a"), empty_task("b"), empty_task("c")],
         edges: vec![
@@ -65,7 +65,7 @@ fn serializes_the_documented_shape() {
         json["location"],
         json!({"root": "etl-repo", "path": "team_a/sync.py"})
     );
-    assert_eq!(json["schedule"]["kind"], "cron");
+    assert_eq!(json["trigger"]["kind"], "cron");
     assert_eq!(json["start"], "2026-01-01T00:00:00Z");
     assert_eq!(json["end"], json!(null));
     assert_eq!(json["max_active_runs"], 1);

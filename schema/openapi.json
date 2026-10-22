@@ -206,19 +206,19 @@
             "description": "Whether the scheduler is stopped for it.",
             "type": "boolean"
           },
-          "schedule": {
-            "description": "Its schedule as in DAG JSON.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "tags": {
             "description": "Its tags.",
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "trigger": {
+            "description": "Its trigger as in DAG JSON.",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [

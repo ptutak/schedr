@@ -7,13 +7,18 @@ fn ts(text: &str) -> Timestamp {
     text.parse().unwrap()
 }
 
-/// A DAG with a daily 03:00 UTC schedule, changed by `changes`.
+/// The daily 03:00 UTC trigger with `catchup` on.
+fn daily_catchup() -> Json {
+    json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true})
+}
+
+/// A DAG with a daily 03:00 UTC trigger, changed by `changes`.
 fn dag(changes: &Json) -> Dag {
     let mut dag = json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
-        "schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC"},
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false},
         "start": "2026-10-01T00:00:00Z", "end": null, "initial_since": null,
-        "catchup": false, "max_active_runs": 1, "tasks": [], "edges": []
+        "max_active_runs": 1, "tasks": [], "edges": []
     });
     for (key, value) in changes.as_object().unwrap() {
         dag[key] = value.clone();
@@ -23,7 +28,7 @@ fn dag(changes: &Json) -> Dag {
 
 /// Runs `check` with the plan of `dag` (first stored on 2026-09-15).
 fn with_plan<T>(dag: &Dag, check: impl FnOnce(&Plan<'_>) -> T) -> T {
-    let fire_times = FireTimes::new(&dag.schedule, dag.start).unwrap();
+    let fire_times = FireTimes::new(&dag.trigger, dag.start).unwrap();
     let plan = Plan {
         dag,
         fire_times: &fire_times,
@@ -72,13 +77,13 @@ fn initial_since_applies_to_the_first_fire_time_only() {
 #[test]
 fn a_once_schedule_uses_initial_since_or_an_empty_window() {
     let once = json!({"kind": "once", "at": "2026-12-24T22:00:00Z"});
-    with_plan(&dag(&json!({"schedule": once, "start": null})), |plan| {
+    with_plan(&dag(&json!({"trigger": once, "start": null})), |plan| {
         assert_eq!(
             plan.fire_time_since(ts("2026-12-24T22:00:00Z")),
             ts("2026-12-24T22:00:00Z")
         );
     });
-    let with_since = dag(&json!({"schedule": once, "initial_since": "2026-12-01T00:00:00Z"}));
+    let with_since = dag(&json!({"trigger": once, "initial_since": "2026-12-01T00:00:00Z"}));
     with_plan(&with_since, |plan| {
         assert_eq!(
             plan.fire_time_since(ts("2026-12-24T22:00:00Z")),
@@ -89,8 +94,8 @@ fn a_once_schedule_uses_initial_since_or_an_empty_window() {
 
 #[test]
 fn windows_around_a_dst_change_cover_the_real_day() {
-    let warsaw = json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw"});
-    with_plan(&dag(&json!({"schedule": warsaw})), |plan| {
+    let warsaw = json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false});
+    with_plan(&dag(&json!({"trigger": warsaw})), |plan| {
         // 2026-10-25 has 25 hours in Warsaw: 03:00 CEST (01:00Z) to 03:00 CET (02:00Z).
         let planned_for = ts("2026-10-26T02:00:00Z");
         let since = plan.fire_time_since(planned_for);
@@ -136,10 +141,10 @@ fn a_manual_run_elsewhere_covers_since_the_nearest_earlier_run() {
 fn a_first_manual_run_without_a_schedule_uses_initial_since_or_an_empty_window() {
     let manual = json!({"kind": "none"});
     let now = ts("2026-10-21T08:00:00Z");
-    with_plan(&dag(&json!({"schedule": manual})), |plan| {
+    with_plan(&dag(&json!({"trigger": manual})), |plan| {
         assert_eq!(plan.manual_times(None, now, None).unwrap().since, now);
     });
-    let with_since = dag(&json!({"schedule": manual, "initial_since": "2026-01-01T00:00:00Z"}));
+    let with_since = dag(&json!({"trigger": manual, "initial_since": "2026-01-01T00:00:00Z"}));
     with_plan(&with_since, |plan| {
         assert_eq!(
             plan.manual_times(None, now, None).unwrap().since,
@@ -197,7 +202,8 @@ fn the_first_run_is_the_most_recent_fire_time_at_or_after_start() {
 
 #[test]
 fn without_start_the_schedule_starts_when_the_dag_was_first_stored() {
-    let no_start = dag(&json!({"start": null, "catchup": true, "max_active_runs": null}));
+    let no_start =
+        dag(&json!({"start": null, "trigger": daily_catchup(), "max_active_runs": null}));
     with_plan(&no_start, |plan| {
         let runs = plan.scheduled_runs(None, 0, ts("2026-09-17T08:00:00Z"));
         let planned: Vec<String> = runs.iter().map(|r| r.planned_for.to_string()).collect();
@@ -214,7 +220,7 @@ fn without_start_the_schedule_starts_when_the_dag_was_first_stored() {
 
 #[test]
 fn with_catchup_every_missed_fire_time_gets_a_run_up_to_the_limit() {
-    let catchup = dag(&json!({"catchup": true, "max_active_runs": 2}));
+    let catchup = dag(&json!({"trigger": daily_catchup(), "max_active_runs": 2}));
     with_plan(&catchup, |plan| {
         let now = ts("2026-10-21T08:00:00Z");
         assert_eq!(
@@ -245,8 +251,8 @@ fn at_the_limit_a_fire_time_is_missed() {
 
 #[test]
 fn without_a_limit_a_pass_creates_a_bounded_number_of_runs() {
-    let hourly = json!({"kind": "every", "interval_ms": 3_600_000});
-    let unlimited = dag(&json!({"schedule": hourly, "catchup": true, "max_active_runs": null}));
+    let hourly = json!({"kind": "every", "interval_ms": 3_600_000, "catchup": true});
+    let unlimited = dag(&json!({"trigger": hourly, "max_active_runs": null}));
     with_plan(&unlimited, |plan| {
         let runs = plan.scheduled_runs(None, 50, ts("2026-12-31T00:00:00Z"));
         assert_eq!(runs.len(), MAX_RUNS_PER_PASS);
@@ -260,8 +266,9 @@ fn without_a_limit_a_pass_creates_a_bounded_number_of_runs() {
 
 #[test]
 fn end_is_the_last_fire_time_scheduled() {
-    let ended =
-        dag(&json!({"end": "2026-10-10T12:00:00Z", "catchup": true, "max_active_runs": null}));
+    let ended = dag(
+        &json!({"end": "2026-10-10T12:00:00Z", "trigger": daily_catchup(), "max_active_runs": null}),
+    );
     with_plan(&ended, |plan| {
         let runs = plan.scheduled_runs(
             Some(ts("2026-10-08T03:00:00Z")),
@@ -290,7 +297,7 @@ fn end_is_the_last_fire_time_scheduled() {
 
 #[test]
 fn no_schedule_creates_no_scheduled_runs() {
-    with_plan(&dag(&json!({"schedule": {"kind": "none"}})), |plan| {
+    with_plan(&dag(&json!({"trigger": {"kind": "none"}})), |plan| {
         assert_eq!(plan.scheduled_runs(None, 0, ts("2026-10-21T00:00:00Z")), []);
     });
 }

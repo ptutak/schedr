@@ -57,8 +57,8 @@ fn file_parsed_carries_typed_dags() {
         "type": "file_parsed", "path": "x.py", "error": null,
         "dags": [{
             "produced_by": "0.1", "id": "x", "location": {"root": "r", "path": "x.py"},
-            "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
-            "catchup": false, "max_active_runs": 1, "tasks": [], "edges": []
+            "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+            "max_active_runs": 1, "tasks": [], "edges": []
         }]
     });
     let RunnerMessage::FileParsed { dags, .. } = serde_json::from_value(json).unwrap() else {

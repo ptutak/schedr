@@ -51,9 +51,9 @@ pub struct DagView {
     pub location: Option<LocationView>,
     /// Every place defining it, while it is in conflict (then it can't run).
     pub conflict: Option<Vec<LocationView>>,
-    /// Its schedule as in DAG JSON.
+    /// Its trigger as in DAG JSON.
     #[schema(value_type = Option<Object>)]
-    pub schedule: Option<serde_json::Value>,
+    pub trigger: Option<serde_json::Value>,
     /// Its description.
     pub description: Option<String>,
     /// Its tags.
@@ -71,7 +71,7 @@ impl From<&StoredDag> for DagView {
                 .conflict
                 .as_ref()
                 .map(|places| places.iter().map(Into::into).collect()),
-            schedule: current.and_then(|d| serde_json::to_value(&d.schedule).ok()),
+            trigger: current.and_then(|d| serde_json::to_value(&d.trigger).ok()),
             description: current.and_then(|d| d.description.clone()),
             tags: current.map(|d| d.tags.clone()).unwrap_or_default(),
         }

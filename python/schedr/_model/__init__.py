@@ -11,13 +11,6 @@ user API: names and signatures may change between versions.
 
 from schedr._model.dag import Dag, DagLocation, Edge, EdgeKind
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
-from schedr._model.schedule import (
-    CronSchedule,
-    EverySchedule,
-    NoSchedule,
-    OnceSchedule,
-    Schedule,
-)
 from schedr._model.tasks import (
     ArgvCommand,
     CommandKind,
@@ -30,6 +23,13 @@ from schedr._model.tasks import (
     TaskSettings,
 )
 from schedr._model.timestamps import format_timestamp, parse_moment
+from schedr._model.trigger import (
+    CronTrigger,
+    EveryTrigger,
+    NoTrigger,
+    OnceTrigger,
+    Trigger,
+)
 from schedr._model.types import (
     DataclassType,
     DictType,
@@ -63,7 +63,7 @@ __all__ = [
     "ArgvCommand",
     "CommandKind",
     "CommandLine",
-    "CronSchedule",
+    "CronTrigger",
     "Dag",
     "DagCtxField",
     "DagCtxRef",
@@ -73,7 +73,7 @@ __all__ = [
     "Edge",
     "EdgeKind",
     "EmptyKind",
-    "EverySchedule",
+    "EveryTrigger",
     "Field",
     "IdError",
     "ListType",
@@ -81,15 +81,14 @@ __all__ = [
     "LiteralType",
     "LiteralValue",
     "MapValue",
-    "NoSchedule",
-    "OnceSchedule",
+    "NoTrigger",
+    "OnceTrigger",
     "OutputRef",
     "PythonKind",
     "RefValue",
     "Reference",
     "ScalarType",
     "SchedrVersion",
-    "Schedule",
     "ShellCommand",
     "Task",
     "TaskKind",
@@ -98,6 +97,7 @@ __all__ = [
     "TemplatePart",
     "TemplateRef",
     "TemplateValue",
+    "Trigger",
     "TupleType",
     "TypeDesc",
     "TypedDictType",

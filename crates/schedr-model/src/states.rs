@@ -23,7 +23,7 @@ pub enum RunKind {
     Backfill,
     /// Created by another DAG's run (`TriggerDagOperator`).
     Chained,
-    /// Created by an event from the DAG's trigger (`When` schedule).
+    /// Created by an event from the DAG's trigger (an event trigger).
     Event,
 }
 

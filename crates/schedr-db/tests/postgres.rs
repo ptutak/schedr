@@ -70,8 +70,8 @@ fn dag() -> Dag {
     };
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
-        "schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw"},
-        "start": null, "end": null, "initial_since": null, "catchup": false,
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false},
+        "start": null, "end": null, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [
             task("extract", json!({})),

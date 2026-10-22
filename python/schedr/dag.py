@@ -16,12 +16,12 @@ from schedr._model import Dag as DagModel
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
-    NoSchedule,
+    NoTrigger,
     parse_moment,
     registry,
     validate_dag_id,
 )
-from schedr.schedules import Cron, Every, Once
+from schedr.triggers import Cron, Every, Once, Trigger
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,17 +63,17 @@ def _moment(value: datetime | date | str | None, tz: str, name: str) -> datetime
 
 
 class Dag:
-    """Defines a DAG: ``with Dag("sync", schedule=Cron("0 3 * * *")): ...``.
+    """Defines a DAG: ``with Dag("sync", trigger=Cron("0 3 * * *")): ...``.
 
     Args:
         dag_id: The DAG's ID (required, explicit).
-        schedule: When the scheduler creates runs; ``None`` for manual runs only.
+        trigger: What starts its runs: ``Cron``, ``Every`` or ``Once``; ``None`` for manual
+            runs only. ``catchup`` is set on the trigger.
         start: The first scheduled run is the first fire time at or after it. A date or a
-            datetime without a time zone is read in the schedule's time zone (UTC for
-            ``Every`` and no schedule).
+            datetime without a time zone is read in the trigger's time zone (UTC for
+            ``Every`` and no trigger).
         end: The last scheduled run is the last fire time at or before it (same zone rule).
         initial_since: ``since`` of the run on the DAG's first fire time (same zone rule).
-        catchup: Whether missed fire times get runs in order (default: only the most recent).
         max_active_runs: At most this many runs at a time (default 1; ``None``: no limit).
         defaults: Defaults for every task.
         description: Shown in the UI.
@@ -81,7 +81,7 @@ class Dag:
 
     Raises:
         IdError: If the DAG ID is invalid.
-        TypeError: For a wrong argument type, e.g. a string schedule.
+        TypeError: For a wrong argument type, e.g. a string trigger.
         ValueError: For a bad date or a non-positive ``max_active_runs``.
     """
 
@@ -89,11 +89,10 @@ class Dag:
         self,
         dag_id: str,
         *,
-        schedule: Cron | Every | None = None,
+        trigger: Trigger | None = None,
         start: datetime | date | str | None = None,
         end: datetime | date | str | None = None,
         initial_since: datetime | date | str | None = None,
-        catchup: bool = False,
         max_active_runs: int | None = 1,
         defaults: TaskDefaults | None = None,
         description: str | None = None,
@@ -101,21 +100,20 @@ class Dag:
     ) -> None:
         """Records the DAG's settings; tasks are added inside the ``with`` block."""
         self.dag_id = validate_dag_id(dag_id)
-        if schedule is not None and not isinstance(schedule, Cron | Every | Once):
+        if trigger is not None and not isinstance(trigger, Trigger):
             raise TypeError(
-                "schedule must be Cron(...), Every(...), Once(...) or None, "
-                f"got {type(schedule).__name__}"
+                "trigger must be Cron(...), Every(...), Once(...) or None, "
+                f"got {type(trigger).__name__}"
             )
         if isinstance(tags, str):
             raise TypeError("tags must be a list of strings, not a string")
-        self.schedule = schedule
-        tz = schedule.tz if isinstance(schedule, Cron | Once) else "UTC"
+        self.trigger = trigger
+        tz = trigger.tz if isinstance(trigger, Cron | Once) else "UTC"
         self.start = _moment(start, tz, "start")
         self.end = _moment(end, tz, "end")
         self.initial_since = _moment(initial_since, tz, "initial_since")
         if max_active_runs is not None and max_active_runs <= 0:
             raise ValueError(f"max_active_runs must be positive or None, got {max_active_runs}")
-        self.catchup = catchup
         self.max_active_runs = max_active_runs
         self.defaults = defaults or TaskDefaults()
         self.description = description
@@ -163,11 +161,10 @@ class Dag:
             location=self._location,
             tasks=list(builder.tasks.values()),
             edges=list(builder.edges),
-            schedule=NoSchedule() if self.schedule is None else self.schedule.to_model(),
+            trigger=NoTrigger() if self.trigger is None else self.trigger.to_model(),
             start=self.start,
             end=self.end,
             initial_since=self.initial_since,
-            catchup=self.catchup,
             max_active_runs=self.max_active_runs,
             description=self.description,
             tags=self.tags,
@@ -175,12 +172,12 @@ class Dag:
         registry.register(self.model, builder.functions)
 
     def _check_since(self, builder: _build.DagBuilder) -> None:
-        if self.initial_since is not None or isinstance(self.schedule, Cron | Every):
+        if self.initial_since is not None or isinstance(self.trigger, Cron | Every):
             return
         since = DagCtxRef(DagCtxField.SINCE)
         for task in builder.tasks.values():
             if since in task.references():
-                what = "no schedule" if self.schedule is None else "a Once schedule"
+                what = "no trigger" if self.trigger is None else "a Once trigger"
                 raise ValueError(
                     f"DAG `{self.dag_id}` has {what}, so its first run has no previous fire "
                     f"time, but task `{task.id}` uses dag_ctx.run.since: set initial_since="

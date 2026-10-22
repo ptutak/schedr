@@ -2,7 +2,7 @@
 //!
 //! The Python API already refuses wrong DAGs at parse time; the master checks again what it
 //! relies on to schedule (it never runs user code, so DAG JSON is its only view of a DAG): the
-//! version that produced it, where it is, its schedule, task IDs, edges, cycles and the
+//! version that produced it, where it is, its trigger, task IDs, edges, cycles and the
 //! references between tasks. A file with an invalid DAG is treated as a file that failed to
 //! import: its DAGs keep their last good version (see PROJECT.md, DAG code delivery).
 
@@ -39,8 +39,8 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             dag.location.root, dag.location.path
         ));
     }
-    if let Err(error) = FireTimes::new(&dag.schedule, dag.start) {
-        problems.push(format!("schedule: {error}"));
+    if let Err(error) = FireTimes::new(&dag.trigger, dag.start) {
+        problems.push(format!("trigger: {error}"));
     }
     if dag.max_active_runs == Some(0) {
         problems.push("max_active_runs must be at least 1".to_owned());

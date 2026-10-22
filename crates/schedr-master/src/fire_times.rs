@@ -1,4 +1,4 @@
-//! Fire times of a DAG's schedule, with schedr's daylight-saving rules.
+//! Fire times of a DAG's time trigger, with schedr's daylight-saving rules.
 //!
 //! A cron expression is matched against **wall-clock times** in its time zone (croner parses
 //! and matches it); each match becomes real moments by these rules (see PROJECT.md, Native API:
@@ -11,12 +11,12 @@
 //!   field (`*/15 * * * *`) it fires at each occurrence.
 //!
 //! `Every` is measured in real time from its anchor (`start`, or the Unix epoch without one);
-//! `Once` has one fire time; no schedule has none.
+//! `Once` has one fire time; no trigger has none.
 
 use jiff::civil::DateTime;
 use jiff::tz::{AmbiguousOffset, TimeZone};
 use jiff::{SignedDuration, Timestamp};
-use schedr_model::Schedule;
+use schedr_model::Trigger;
 
 #[cfg(test)]
 mod tests;
@@ -25,9 +25,9 @@ mod tests;
 /// shift, so the matches of both sides of an overlap are compared.
 const MARGIN: SignedDuration = SignedDuration::from_hours(3);
 
-/// A schedule that can't be evaluated.
+/// A time trigger that can't be evaluated.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ScheduleError {
+pub enum FireTimesError {
     /// The cron expression doesn't parse.
     #[error("cron expression `{expression}`: {reason}")]
     Cron {
@@ -40,14 +40,14 @@ pub enum ScheduleError {
     #[error("unknown time zone `{0}`")]
     TimeZone(String),
     /// An `Every` interval of zero.
-    #[error("the interval of an Every schedule must be positive")]
+    #[error("the interval of an Every trigger must be positive")]
     ZeroInterval,
 }
 
-/// The fire times of a schedule.
+/// The fire times of a time trigger.
 #[derive(Debug, Clone)]
 pub enum FireTimes {
-    /// No schedule: no fire times.
+    /// No trigger: no fire times.
     None,
     /// A cron expression in a time zone.
     Cron(Box<CronTimes>),
@@ -62,7 +62,7 @@ pub enum FireTimes {
     Once(Timestamp),
 }
 
-/// A parsed cron schedule.
+/// A parsed cron trigger.
 #[derive(Debug, Clone)]
 pub struct CronTimes {
     cron: croner::Cron,
@@ -71,28 +71,29 @@ pub struct CronTimes {
 }
 
 impl FireTimes {
-    /// The fire times of `schedule`; an `Every` schedule counts from `start` when given.
+    /// The fire times of `trigger`; an `Every` trigger counts from `start` when given.
     ///
     /// # Errors
     ///
-    /// [`ScheduleError`] for a cron expression that doesn't parse, an unknown time zone or a
+    /// [`FireTimesError`] for a cron expression that doesn't parse, an unknown time zone or a
     /// zero interval.
-    pub fn new(schedule: &Schedule, start: Option<Timestamp>) -> Result<Self, ScheduleError> {
-        match schedule {
-            Schedule::None => Ok(Self::None),
-            Schedule::Once { at } => Ok(Self::Once(*at)),
-            Schedule::Every { interval_ms } => {
+    pub fn new(trigger: &Trigger, start: Option<Timestamp>) -> Result<Self, FireTimesError> {
+        match trigger {
+            Trigger::None => Ok(Self::None),
+            Trigger::Once { at } => Ok(Self::Once(*at)),
+            Trigger::Every { interval_ms, .. } => {
                 if *interval_ms == 0 {
-                    return Err(ScheduleError::ZeroInterval);
+                    return Err(FireTimesError::ZeroInterval);
                 }
                 Ok(Self::Every {
                     anchor: start.unwrap_or(Timestamp::UNIX_EPOCH),
                     interval_ns: i128::from(*interval_ms) * 1_000_000,
                 })
             }
-            Schedule::Cron {
+            Trigger::Cron {
                 expression,
                 timezone,
+                ..
             } => Ok(Self::Cron(Box::new(CronTimes::new(expression, timezone)?))),
         }
     }
@@ -167,16 +168,16 @@ impl CronTimes {
     ///
     /// # Errors
     ///
-    /// [`ScheduleError::Cron`] or [`ScheduleError::TimeZone`].
-    pub fn new(expression: &str, timezone: &str) -> Result<Self, ScheduleError> {
+    /// [`FireTimesError::Cron`] or [`FireTimesError::TimeZone`].
+    pub fn new(expression: &str, timezone: &str) -> Result<Self, FireTimesError> {
         let tz =
-            TimeZone::get(timezone).map_err(|_| ScheduleError::TimeZone(timezone.to_owned()))?;
+            TimeZone::get(timezone).map_err(|_| FireTimesError::TimeZone(timezone.to_owned()))?;
         let cron = croner::parser::CronParser::builder()
             .seconds(croner::parser::Seconds::Optional)
             .year(croner::parser::Year::Disallowed)
             .build()
             .parse(expression.trim())
-            .map_err(|e| ScheduleError::Cron {
+            .map_err(|e| FireTimesError::Cron {
                 expression: expression.to_owned(),
                 reason: e.to_string(),
             })?;

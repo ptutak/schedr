@@ -47,7 +47,7 @@ pub async fn run_dags<T: Transport>(
             }
             write_table(
                 out,
-                &["DAG", "PAUSED", "SCHEDULE", "DEFINED IN"],
+                &["DAG", "PAUSED", "TRIGGER", "DEFINED IN"],
                 &dag_rows(&dags.dags),
             )?;
         }
@@ -198,34 +198,38 @@ fn dag_rows(dags: &[DagView]) -> Vec<Vec<String>> {
             vec![
                 dag.dag_id.clone(),
                 if dag.paused { "yes" } else { "no" }.to_owned(),
-                dag.schedule
-                    .as_ref()
-                    .map_or_else(String::new, schedule_text),
+                dag.trigger.as_ref().map_or_else(String::new, trigger_text),
                 place,
             ]
         })
         .collect()
 }
 
-/// A schedule as people write it: `0 3 * * * (Europe/Warsaw)`, `every 1h`, `once …`, `-`.
-fn schedule_text(schedule: &serde_json::Value) -> String {
-    match schedule["kind"].as_str() {
+/// A trigger as people write it: `0 3 * * * (Europe/Warsaw)`, `every 1h, catchup`,
+/// `once …`, `-`.
+fn trigger_text(trigger: &serde_json::Value) -> String {
+    let text = match trigger["kind"].as_str() {
         Some("cron") => {
-            let expression = schedule["expression"].as_str().unwrap_or_default();
-            match schedule["timezone"].as_str() {
+            let expression = trigger["expression"].as_str().unwrap_or_default();
+            match trigger["timezone"].as_str() {
                 Some("UTC") | None => expression.to_owned(),
                 Some(zone) => format!("{expression} ({zone})"),
             }
         }
         Some("every") => {
-            let ms = schedule["interval_ms"].as_u64().unwrap_or(0);
+            let ms = trigger["interval_ms"].as_u64().unwrap_or(0);
             format!(
                 "every {:#}",
                 jiff::SignedDuration::from_millis(i64::try_from(ms).unwrap_or(i64::MAX))
             )
         }
-        Some("once") => format!("once at {}", schedule["at"].as_str().unwrap_or_default()),
+        Some("once") => format!("once at {}", trigger["at"].as_str().unwrap_or_default()),
         _ => "-".to_owned(),
+    };
+    if trigger["catchup"].as_bool() == Some(true) {
+        format!("{text}, catchup")
+    } else {
+        text
     }
 }
 

@@ -149,7 +149,7 @@ One Rust binary, four roles:
     the server roles,
     and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
     see Testing DAGs).
-  - **Human output** is aligned columns (`DAG PAUSED SCHEDULE DEFINED IN`, `RUN KIND STATE
+  - **Human output** is aligned columns (`DAG PAUSED TRIGGER DEFINED IN`, `RUN KIND STATE
     FOR BY`; a DAG in conflict shows `CONFLICT: N places`), times in UTC and the machine's
     zone (`TZ`, else the system's); **`--json`** prints the API's JSON as it is (UTC only),
     for scripts. **`--for`** takes an RFC 3339 / ISO 8601 date-time with an offset, one
@@ -1823,12 +1823,37 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   naive `datetime`) are read in the **schedule's time zone**, like the cron expression (UTC for
   `Every` and no schedule). An explicit offset wins. (Unlike CLI input, where no offset means
   UTC: this is DAG code, written next to the schedule.)
-- **Schedules are typed objects:** `Cron("0 3 * * *")`, `Every(timedelta(hours=1))`,
-  `Once("2026-12-24T23:00")` (a single fire time), `None` (manual runs only), plus preset
-  constants (`DAILY`, …). The time zone is set per schedule, **default UTC**.
+- **`trigger=`: what starts runs.** One `Dag` parameter, a typed object, for everything that
+  starts runs besides people and other DAGs: a **time trigger**, `Cron("0 3 * * *")`,
+  `Every(timedelta(hours=1))` or `Once("2026-12-24T23:00")` (a single fire time), plus preset
+  constants (`DAILY`, …); an **event trigger**, a `@trigger` function called with its
+  arguments (`trigger=new_files(prefix="s3://in/")`, M4, see Sensors and triggers); or
+  `None` (manual runs only). The time zone is set per time trigger, **default UTC**.
+  - **One base class,** `schedr.Trigger`, which can't be subclassed outside schedr (like the
+    operators): custom triggers are `@trigger` functions.
+  - **`catchup` belongs to the time triggers** that have fire times to miss:
+    `Cron(..., catchup=True)`, `Every(..., catchup=True)`. `Once`, event triggers and `None`
+    have none, so a `catchup` that would mean nothing can't be written. `start`, `end` and
+    `initial_since` stay on `Dag`: they apply to event triggers and manual-only DAGs too.
+  - **Custom triggers are event triggers only.** The master never runs Python, and fire
+    times, `catchup`, backfill and `since` come from fire times it computes, so a calendar
+    written in Python ("business days except holidays") can't be a time trigger. It can be
+    an event trigger yielding events at those times (no catchup, no backfill); a calendar the
+    master understands would be a built-in, data-only time trigger (e.g.
+    `Cron(..., exclude=[...])`), possibly later.
+  - **Options of an event trigger** (`queue=`, `restart_if_idle=`) are set with
+    `.override(...)`, as for tasks: `new_files(prefix="s3://in/").override(queue="io")`.
+  - **Unchanged:** run kinds (`scheduled`, `event`: where a run came from); the `schedr.toml`
+    keys `schedule` / `every` / `once` / `catchup` (flat keys read naturally in TOML, and jobs
+    have no event triggers); the Airflow layer's `schedule=` (Airflow's name, translated).
+  - Not chosen: `schedule=` (the earlier name: it named half of what it took, and event
+    triggers needed a `When(...)` wrapper to fit into it); `when=` (no clash with the other
+    uses of "trigger", `schedr runs trigger`, `TriggerDagOperator`, `triggered_by`, but
+    vaguer). The noun (the DAG's trigger) and the verb (trigger a run) read differently, and
+    `trigger=` pairs with `@trigger`.
   - **`Once`** is the way to run a DAG once at a future time (e.g. a migration tonight at
-    23:00): an ordinary schedule with one fire time, so catchup, `end`, pausing and the UI's
-    "next run" work as for any schedule (it has no previous fire time, so a DAG using `since`
+    23:00): an ordinary time trigger with one fire time, so `end`, pausing and the UI's
+    "next run" work as for any other (it has no previous fire time, so a DAG using `since`
     must set `initial_since`). It is set in the DAG file (reviewed, in git);
     there is no deferred manual trigger (see Runs: manual runs, backfill and pausing).
   - **Daylight-saving changes** (cron schedules in a time zone with DST; e.g. `30 2 * * *` in
@@ -1940,35 +1965,36 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   imported (so an import error). The native API never "accepts and warns"; that applies only to
   the Airflow layer (see Airflow compatibility: Thin translating classes).
 
-Example:
+Example (it runs as written with M1: `schedr dags test sync_customers --path sync.py`; queues
+other than `default` and secrets in `env` come with M2 and M4):
 
 ```python
 from datetime import timedelta
 
-from schedr import Cron, Dag, CommandOperator, TaskDefaults, task
-from schedr import dag_ctx
-from schedr.templates import secrets
+from schedr import CommandOperator, Cron, Dag, TaskDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
-    schedule=Cron("0 3 * * *", tz="Europe/Warsaw"),
+    trigger=Cron("0 3 * * *", tz="Europe/Warsaw"),
     start="2026-01-01",
     defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
 
     @task
-    def extract() -> list[dict[str, str]]: ...
+    def extract() -> list[dict[str, str]]:
+        return [{"id": "1", "name": "Ada"}, {"id": "2", "name": "Grace"}]
 
-    @task(queue="large")
-    def load(rows: list[dict[str, str]]) -> int: ...
+    @task(timeout=timedelta(minutes=10))
+    def load(rows: list[dict[str, str]]) -> int:
+        print(f"loading {len(rows)} customers")
+        return len(rows)
 
     rows = extract()            # Output[list[dict[str, str]]]
     count = load(rows)          # load depends on extract (data flow)
 
     CommandOperator(            # depends on load: its command uses `count`
         "notify",
-        command=t"./notify.sh {dag_ctx.run.planned_for} {count}",
-        env={"TOKEN": t"{secrets['slack/bot#token']}"},
+        command=t"echo synced {count} customers for {dag_ctx.run.planned_for}",
     )
 ```
 
@@ -2150,7 +2176,7 @@ with Dag(
     ```python
     team_a = EmailChannel("team-a", ["a@example.com", "b@example.com"])
 
-    with Dag("etl", schedule=DAILY, notify=[team_a, "ops-slack"]): ...
+    with Dag("etl", trigger=DAILY, notify=[team_a, "ops-slack"]): ...
     ```
 
     - **Objects are DAG channels, strings name server channels.** Passing the object (not its
@@ -2201,7 +2227,7 @@ class ReportParams:
     day: date | None = None
     limits: list[int] = field(default_factory=list)
 
-with Dag("report", schedule=DAILY, params=ReportParams):
+with Dag("report", trigger=DAILY, params=ReportParams):
     ...
 ```
 
@@ -2304,7 +2330,7 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
      master down for the 10-14 and 10-15 fire times, it creates only the 10-15 run when it
      returns (the most recent missed one), covering `(10-14 03:00, 10-15 03:00]`; the period of
      10-14 is never loaded. A user who needs the hole filled says so explicitly:
-     **`catchup=True`** on the DAG (every period gets its own run) or a **manual backfill**
+     **`catchup=True`** on the DAG's trigger (every period gets its own run) or a **manual backfill**
      (whose default picks exactly the fire times without a successful run). The UI marks
      skipped fire times on the DAG's run list. Not chosen: folding missed fire times into the
      next scheduled run's window (a hidden third behaviour besides `catchup=True/False`; windows
@@ -2729,15 +2755,15 @@ what applies to both (the host, its slots, the 30-second rule) is named after th
   `TimedOut` outcome. Downstream tasks run after it, with its value as data.
 - A **trigger** (`@trigger`) **starts runs**: it watches for events (new files in a bucket)
   and **never ends**; each event creates a run. It belongs to the DAG, not to a run: a DAG
-  with a trigger has `schedule=When(...)` instead of a time schedule.
+  with an event trigger has `trigger=new_files(...)` instead of a time trigger.
 
 | | Wait step (inside a run) | Trigger (starts runs) |
 |---|---|---|
 | Full control | `@sensor`: `async def`, returns a value | `@trigger`: async generator, yields events |
 | Poke | `@sensor.poke(every=…)`: returns a value or `NOT_YET` | `@trigger.poke(every=…)`: returns a list of events; empty means nothing happened |
-| Used as | a task in the graph | `Dag(schedule=When(trigger, …))` |
+| Used as | a task in the graph | `Dag(trigger=new_files(…))` |
 
-A plain `def` is a parse error for all four; using a wait step in `When(...)`, or a trigger in
+A plain `def` is a parse error for all four; using a wait step as `trigger=`, or a trigger in
 the graph, is a parse error too.
 
 **Wait steps.**
@@ -2754,7 +2780,7 @@ async def partner_file(day: date) -> Path | NotYet:  # schedr calls it every min
     path = f"s3://in/orders_{day}.csv"
     return Path(path) if await exists(path) else NOT_YET
 
-with Dag("sync_orders", schedule=DAILY):
+with Dag("sync_orders", trigger=DAILY):
     load(partner_file(dag_ctx.run.planned_for.date()))
 ```
 
@@ -2784,7 +2810,7 @@ async def new_files(after: str | None, prefix: str) -> AsyncIterator[Event[Path]
 async def new_files(after: str | None, prefix: str) -> list[Event[Path]]:
     return [Event(key=o.name, data=Path(o.name)) for o in await list_after(prefix, after)]
 
-with Dag("ingest", schedule=When(new_files, prefix="s3://in/")):
+with Dag("ingest", trigger=new_files(prefix="s3://in/")):
     load(dag_ctx.event.data)
 ```
 
@@ -2799,44 +2825,45 @@ with Dag("ingest", schedule=When(new_files, prefix="s3://in/")):
   in its log. Nothing is kept between calls except `after`. A poke that raises creates nothing,
   keeps the bookmark, and shows the error on the trigger's status with a count of consecutive
   failures; the next call comes at the next interval.
-- **Arguments** of a trigger are literals given in `When(...)` (no run exists, so no
-  references).
+- **Arguments** of a trigger are literals given in the call (`new_files(prefix=...)`; no run
+  exists, so no references); `after` is filled in by schedr.
 - **Runs it creates:** kind **`event`**; `dag_ctx.event.key`, `.data`, `.at` (references in
   the DAG body, values at run time, like `dag_ctx.run`); `planned_for` = the event's `at`, or
   when the master received it; `since` = the previous event's `planned_for`.
-- **A schedule and a trigger together are not possible:** a DAG has `schedule=When(...)` or a
-  time schedule. (A periodic catch-up is a second DAG on a schedule; if that needs syncing what
+- **A time trigger and an event trigger together are not possible:** a DAG has one
+  `trigger=`. (A periodic catch-up is a second DAG with a time trigger; if that needs syncing what
   each processed, the job needs another kind of orchestration.)
 - **`max_active_runs`:** events are requests from the outside world, so they **queue** like
   manual runs and are never dropped. Who gets a freed place: scheduled → manual, chained and
   event → backfill. **Back-pressure:** when a DAG has `[triggers] max_queued_events` (default
   1000) queued event runs, the master stops its trigger and starts it again from the bookmark
   when the queue drains: the events wait in the source, not in our database.
-- **Lifecycle:** one instance per `When` DAG in the cluster. It starts when the DAG is
+- **Lifecycle:** one instance per event-triggered DAG in the cluster. It starts when the DAG is
   unpaused and stops when it is paused, removed or in conflict; it starts again from the
   bookmark on unpause and on a new DAG version (new code); `start` / `end` limit when it runs.
   A trigger that **raises** starts again with backoff (often temporary), the error shown on its
   status. A generator that **returns** is an error (triggers must keep yielding): it is stopped
   and not started again until a new DAG version or an explicit restart (UI / CLI).
 - **No timeout for a trigger:** holding its watcher slot while the DAG is live is its job (one
-  slot per unpaused `When` DAG, like the little a schedule costs the master); a timeout would
+  slot per unpaused event-triggered DAG, like the little a time trigger costs the master); a timeout would
   only stop the DAG's runs silently. Stopping at a time is `end`; stopping for now is pausing.
   A trigger that holds the event loop is handled by the 30-second rule like any watcher.
 - **A generator that stalls** (waiting forever on a connection that died without an error:
   no blocking, no error, no events) can't be told from a quiet source, so it gets an optional
-  restart: `When(new_files, ..., restart_if_idle=timedelta(hours=6))` starts it again from
+  restart: `new_files(...).override(restart_if_idle=timedelta(hours=6))` starts it again from
   the bookmark when no event came for that long. Not an error (nothing is lost or repeated):
   counted in the metrics, the last restart shown on the trigger's status. Off by default (only
   the author knows how quiet the source can be); `@trigger.poke` doesn't need it (each call is
   limited to `every`).
-- **Manual runs** of a `When` DAG must bring an event (its tasks read `dag_ctx.event`): **re-run
+- **Manual runs** of an event-triggered DAG must bring an event (its tasks read `dag_ctx.event`): **re-run
   a stored event** (`schedr runs trigger ingest --event <key>`, or "Run again" next to the
   event in the UI), or **supply one** (`--event-key test-1 --event-data '{…}'` or
   `--event-data @file.json`; a JSON field in the UI form). A plain trigger with neither is
   rejected. Either way it is a `manual` run, and it **never writes to `events`** (a supplied
   key there would make the real event a duplicate later). The data is checked as JSON when the
   command is applied, and against `Event[T]` when the task decodes it (`input_mismatch`).
-- Not available for `When` DAGs: `catchup` and backfill (there are no fire times).
+- Not available for event-triggered DAGs: `catchup` (not an argument of an event trigger)
+  and backfill (there are no fire times).
 
 **The watcher host.**
 
@@ -2900,15 +2927,15 @@ create duplicate events).
 - **Wait steps** are attempts: the usual assignment rules (queue, spread by free **watcher
   slots**, rejections, "code not there yet"), and a wait step with no free watcher slot waits
   `queued` with the reason shown.
-- **Triggers:** queue from `When(…, queue=…)`, else the DAG's default queue, else `default`;
+- **Triggers:** queue from `.override(queue=…)`, else the DAG's default queue, else `default`;
   the same spread rule; at most one instance at a time. A trigger with no free watcher slot
   waits, with the reason on its status.
 - **Triggers first:** when a watcher slot frees up, a waiting trigger gets it before queued
-  wait steps. Triggers are few (one per `When` DAG) and keep whole DAGs going; wait steps are
+  wait steps. Triggers are few (one per event-triggered DAG) and keep whole DAGs going; wait steps are
   many and belong to single runs. Triggers stopped by back-pressure free their slots, so wait
   steps can't be locked out for good.
 - **Capacity:** `[watchers] slots` per worker (e.g. 500), separate from task slots; 0 runs
-  none. The `When` DAGs plus the wait steps running at once must fit in the cluster's watcher
+  none. The event-triggered DAGs plus the wait steps running at once must fit in the cluster's watcher
   slots (the metrics show how close it is).
 - **Workers coming and going:** a new worker doesn't take running watchers (no rebalancing in the
   first version; moving triggers would be cheap, from their bookmark, so it may come later).
@@ -2922,8 +2949,8 @@ create duplicate events).
 
 **What it adds elsewhere.**
 
-- **DAG JSON:** task kind `sensor` (`mode`, `every_ms`, timeout), schedule `When` (trigger
-  name, literal arguments, queue, `restart_if_idle`), `dag_ctx` fields `event_key` / `event_data` / `event_at`, the
+- **DAG JSON:** task kind `sensor` (`mode`, `every_ms`, timeout), trigger kind `event`
+  (the trigger's name, literal arguments, queue, `restart_if_idle`), `dag_ctx` fields `event_key` / `event_data` / `event_at`, the
   `Event` type in the type model, the `TimedOut` outcome.
 - **States and storage:** run kind `event`; tables `events` and `triggers` (instance, worker,
   state, bookmark, last error, consecutive failures); error kind `blocked_event_loop`.
@@ -2931,14 +2958,14 @@ create duplicate events).
   `TriggerEvent` / `TriggerEventAck`, `TriggerStopped`; watcher slots in `Register` and
   `Heartbeat`.
 - **Runner:** a fourth mode, `watchers`, long-lived and multiplexed.
-- **Master:** a trigger supervisor next to the scheduler; `When` DAGs get no scheduled runs.
+- **Master:** a trigger supervisor next to the scheduler; event-triggered DAGs get no scheduled runs.
 - **CLI / API / UI:** `runs trigger --event …` / `--event-key` / `--event-data`; a DAG's
   trigger status (running, worker, bookmark, last poke, last error, restart) and its events
   with "Run again".
 - **Testing DAGs:** wait steps run in the test's event loop (a poke until it returns a value);
-  `run_dag(dag, event=Event(...))` for `When` DAGs; `run_trigger(new_files, after=None,
+  `run_dag(dag, event=Event(...))` for event-triggered DAGs; `run_trigger(new_files, after=None,
   take=3)` collects a trigger's first events; `schedr dags test` takes `--event-key` /
-  `--event-data` for `When` DAGs.
+  `--event-data` for event-triggered DAGs.
 - **Airflow layer:** `BaseSensorOperator`, `PythonSensor`, `@task.sensor`, `FileSensor` map
   onto `@sensor.poke` (`poke_interval` → `every`, `timeout` → `timeout`, `soft_fail=True` → the
   `TimedOut` outcome; `mode` is irrelevant: no slot is held either way); a synchronous `poke()`
@@ -3128,7 +3155,7 @@ A resource is created by a **setup** task, used by **users**, and cleaned up onc
 the run, and no scope is computed from the graph (like reference counting).
 
 ```python
-with Dag("etl", schedule=DAILY):
+with Dag("etl", trigger=DAILY):
 
     @resource                              # the setup: creates the resource
     def cluster(size: int) -> ClusterInfo:
@@ -3577,7 +3604,8 @@ primary one.
   | Airflow | Native |
   |---|---|
   | `DAG(dag_id=..., ...)` | `Dag("...", ...)` |
-  | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `"@once"` / `None` | `Cron(...)` / `DAILY` / `Every(...)` / `Once(start_date)` / `None` |
+  | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `"@once"` / `None` | `trigger=Cron(...)` / `DAILY` / `Every(...)` / `Once(start_date)` / `None` |
+  | `catchup=` | `catchup=` on the time trigger (`Cron(..., catchup=...)`) |
   | `start_date=` / `end_date=` | `start=` / `end=` |
   | `max_active_runs=` (default 16, Airflow's `max_active_runs_per_dag`) | `max_active_runs=` (set explicitly to 16 when not given, so migrated DAGs keep Airflow's default) |
   | `tags=`, `description=` | `tags=`, `description=` |
@@ -4223,7 +4251,8 @@ its configuration, not the content.
 - `make check` runs everything CI runs: format check, clippy, ruff, mypy, the Rust tests
   (`cargo nextest`) and pytest, both with the coverage floor.
 - Pre-commit hooks run the same checks on commit.
-- CI: GitHub Actions, one Rust job and a Python version matrix.
+- CI: GitHub Actions, three jobs: `rust` and `python` (unit tests, lints, coverage) and
+  `integration` (integration tests with a Postgres service; see Testing).
 
 ## Roadmap
 

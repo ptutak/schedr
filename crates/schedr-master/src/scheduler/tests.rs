@@ -18,9 +18,9 @@ fn sync() -> DagId {
 fn dag(changes: &Json) -> Dag {
     let mut dag = json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
-        "schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC"},
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false},
         "start": "2026-10-01T00:00:00Z", "end": null, "initial_since": null,
-        "catchup": false, "max_active_runs": 1, "tasks": [], "edges": []
+        "max_active_runs": 1, "tasks": [], "edges": []
     });
     for (key, value) in changes.as_object().unwrap() {
         dag[key] = value.clone();
@@ -116,7 +116,7 @@ async fn a_fire_time_at_the_limit_is_missed_and_the_latest_runs_when_a_place_fre
 #[tokio::test]
 async fn with_catchup_missed_fire_times_run_in_order() {
     let (scheduler, db) =
-        scheduler_with(dag(&json!({"catchup": true, "max_active_runs": 2}))).await;
+        scheduler_with(dag(&json!({"trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true}, "max_active_runs": 2}))).await;
     db.set_paused(&sync(), false).await.unwrap();
     let now = ts("2026-10-04T08:00:00Z");
     assert_eq!(
@@ -206,7 +206,7 @@ async fn triggers_that_cant_run_are_errors() {
         .trigger(&sync(), Some(ts("2026-10-22T00:00:00Z")), "anna", now)
         .await
         .unwrap_err();
-    assert!(matches!(error, SchedulerError::Trigger(_)), "{error}");
+    assert!(matches!(error, SchedulerError::ManualRun(_)), "{error}");
     let other = DagId::new("other").unwrap();
     let error = scheduler
         .trigger(&other, None, "anna", now)
@@ -220,8 +220,8 @@ async fn triggers_that_cant_run_are_errors() {
 
 #[tokio::test]
 async fn a_dag_whose_schedule_cant_be_evaluated_is_skipped() {
-    let broken = json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base"});
-    let (scheduler, db) = scheduler_with(dag(&json!({"schedule": broken}))).await;
+    let broken = json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base", "catchup": false});
+    let (scheduler, db) = scheduler_with(dag(&json!({"trigger": broken}))).await;
     db.set_paused(&sync(), false).await.unwrap();
     let pass = scheduler.pass(ts("2026-10-21T08:00:00Z")).await.unwrap();
     assert_eq!(pass.created, []);
@@ -233,5 +233,5 @@ async fn a_dag_whose_schedule_cant_be_evaluated_is_skipped() {
         .trigger(&sync(), None, "anna", ts("2026-10-21T08:00:00Z"))
         .await
         .unwrap_err();
-    assert!(matches!(error, SchedulerError::Schedule { .. }), "{error}");
+    assert!(matches!(error, SchedulerError::FireTimes { .. }), "{error}");
 }

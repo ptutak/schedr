@@ -8,8 +8,8 @@ use super::*;
 fn dag(id: &str, root: &str, path: &str) -> Dag {
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": id, "location": {"root": root, "path": path},
-        "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
-        "catchup": false, "max_active_runs": 1, "tasks": [], "edges": []
+        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "max_active_runs": 1, "tasks": [], "edges": []
     }))
     .unwrap()
 }

@@ -6,8 +6,8 @@ import pytest
 
 from schedr._model.dag import Dag, DagLocation, Edge, EdgeKind
 from schedr._model.ids import IdError
-from schedr._model.schedule import CronSchedule
 from schedr._model.tasks import CommandKind, EmptyKind, ShellCommand, Task
+from schedr._model.trigger import CronTrigger
 from schedr._model.types import ScalarType
 from schedr._model.values import Template
 from schedr._model.version import SchedrVersion
@@ -27,7 +27,7 @@ def sync_dag(**overrides: object) -> Dag:
         "location": LOCATION,
         "tasks": [empty("a"), empty("b")],
         "edges": [Edge("a", "b", EdgeKind.ORDER)],
-        "schedule": CronSchedule("0 3 * * *", "Europe/Warsaw"),
+        "trigger": CronTrigger("0 3 * * *", "Europe/Warsaw"),
         "start": datetime(2026, 1, 1, tzinfo=UTC),
         "produced_by": SchedrVersion(0, 1),
     }
@@ -42,11 +42,15 @@ def test_a_dag_serializes_to_the_schema(validate: Validate) -> None:
         "produced_by": "0.1",
         "id": "sync",
         "location": {"root": "etl-repo", "path": "team_a/sync.py"},
-        "schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw"},
+        "trigger": {
+            "kind": "cron",
+            "expression": "0 3 * * *",
+            "timezone": "Europe/Warsaw",
+            "catchup": False,
+        },
         "start": "2026-01-01T00:00:00Z",
         "end": None,
         "initial_since": None,
-        "catchup": False,
         "max_active_runs": 1,
         "tasks": [t.to_json() for t in dag.tasks],
         "edges": [{"from": "a", "to": "b", "kind": "order"}],
@@ -71,7 +75,7 @@ def test_a_full_dag_with_commands_validates(validate: Validate) -> None:
         edges=[Edge("a", "notify", EdgeKind.DATA)],
         end=datetime(2026, 12, 31, tzinfo=UTC),
         initial_since=datetime(2020, 1, 1, tzinfo=UTC),
-        catchup=True,
+        trigger=CronTrigger("@daily", catchup=True),
     )
     validate("Dag", dag.to_json())
 

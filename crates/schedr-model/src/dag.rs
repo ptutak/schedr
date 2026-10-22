@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{DagId, TaskId};
-use crate::schedule::Schedule;
 use crate::task::Task;
+use crate::trigger::Trigger;
 use crate::version::SchedrVersion;
 
 #[cfg(test)]
@@ -46,7 +46,7 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
-/// A DAG: its identity, schedule, tasks and dependencies.
+/// A DAG: its identity, trigger, tasks and dependencies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dag {
@@ -62,16 +62,14 @@ pub struct Dag {
     /// Tags shown in the UI and used for filtering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// When the scheduler creates runs.
-    pub schedule: Schedule,
+    /// What starts its runs (besides people and other DAGs).
+    pub trigger: Trigger,
     /// The first scheduled run is the first fire time at or after it.
     pub start: Option<Timestamp>,
     /// The last scheduled run is the last fire time at or before it.
     pub end: Option<Timestamp>,
     /// `since` of the run on the DAG's first fire time (see PROJECT.md, Runs).
     pub initial_since: Option<Timestamp>,
-    /// Whether missed fire times get runs in order (`true`) or only the most recent (`false`).
-    pub catchup: bool,
     /// At most this many runs at a time; `None` for no limit.
     pub max_active_runs: Option<u32>,
     /// The tasks, in declaration order.

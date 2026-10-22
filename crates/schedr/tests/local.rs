@@ -47,7 +47,7 @@ from schedr import Cron, Dag, task
 def nightly() -> None:
     pass
 
-with Dag("bad_cron", schedule=Cron("61 3 * * *")):
+with Dag("bad_cron", trigger=Cron("61 3 * * *")):
     nightly()
 "#;
 

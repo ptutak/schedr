@@ -40,7 +40,7 @@ pub struct RunTimes {
 
 /// A manual run that can't be created.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum TriggerError {
+pub enum ManualRunError {
     /// `--for` is in the future.
     #[error("`--for` must not be in the future ({planned_for} is after now, {now})")]
     InFuture {
@@ -51,7 +51,7 @@ pub enum TriggerError {
     },
 }
 
-/// A DAG's schedule with what its rules need.
+/// A DAG's time trigger with what its rules need.
 #[derive(Debug, Clone)]
 pub struct Plan<'a> {
     /// The DAG.
@@ -91,19 +91,19 @@ impl Plan<'_> {
     ///
     /// # Errors
     ///
-    /// [`TriggerError::InFuture`] if `requested` is after now (beyond [`FOR_TOLERANCE`]).
+    /// [`ManualRunError::InFuture`] if `requested` is after now (beyond [`FOR_TOLERANCE`]).
     pub fn manual_times(
         &self,
         requested: Option<Timestamp>,
         now: Timestamp,
         nearest_earlier: Option<Timestamp>,
-    ) -> Result<RunTimes, TriggerError> {
+    ) -> Result<RunTimes, ManualRunError> {
         let planned_for = manual_planned_for(requested, now);
         if now
             .checked_add(FOR_TOLERANCE)
             .is_ok_and(|limit| planned_for > limit)
         {
-            return Err(TriggerError::InFuture { planned_for, now });
+            return Err(ManualRunError::InFuture { planned_for, now });
         }
         let since = if self.fire_times.is_fire_time(planned_for) {
             self.fire_time_since(planned_for)
@@ -134,7 +134,7 @@ impl Plan<'_> {
         let start = self.effective_start();
         let after = |t: Timestamp| t >= start && last_scheduled.is_none_or(|last| t > last);
         let mut due = Vec::new();
-        if self.dag.catchup {
+        if self.dag.trigger.catchup() {
             let from = match last_scheduled {
                 Some(last) if last >= start => self.fire_times.next_after(last),
                 _ => self.fire_times.next_at_or_after(start),

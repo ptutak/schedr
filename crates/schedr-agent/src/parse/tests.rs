@@ -79,11 +79,10 @@ fn dag(id: &str, path: &str) -> Dag {
         "produced_by": "0.1",
         "id": id,
         "location": {"root": "etl", "path": path},
-        "schedule": {"kind": "none"},
+        "trigger": {"kind": "none"},
         "start": null,
         "end": null,
         "initial_since": null,
-        "catchup": false,
         "max_active_runs": 1,
         "tasks": [],
         "edges": []

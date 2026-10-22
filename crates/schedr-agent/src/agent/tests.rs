@@ -62,8 +62,8 @@ impl Executor for Fake {
                     "dags": [{
                         "produced_by": "0.1", "id": stem,
                         "location": {"root": root, "path": path},
-                        "schedule": {"kind": "none"}, "start": null, "end": null,
-                        "initial_since": null, "catchup": false, "max_active_runs": 1,
+                        "trigger": {"kind": "none"}, "start": null, "end": null,
+                        "initial_since": null, "max_active_runs": 1,
                         "tasks": [{
                             "id": stem, "kind": "python",
                             "settings": {

@@ -10,9 +10,9 @@ from enum import StrEnum
 from typing import Any
 
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
-from schedr._model.schedule import NoSchedule, Schedule
 from schedr._model.tasks import Task
 from schedr._model.timestamps import format_timestamp
+from schedr._model.trigger import NoTrigger, Trigger
 from schedr._model.version import SchedrVersion
 
 
@@ -81,18 +81,17 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class Dag:
-    """A DAG: its identity, schedule, tasks and dependencies.
+    """A DAG: its identity, trigger, tasks and dependencies.
 
     Attributes:
         id: The DAG's ID.
         location: Where it is defined.
         tasks: The tasks, in declaration order.
         edges: The dependencies between them.
-        schedule: When the scheduler creates runs.
+        trigger: What starts its runs (besides people and other DAGs).
         start: The first scheduled run is the first fire time at or after it.
         end: The last scheduled run is the last fire time at or before it.
         initial_since: ``since`` of the run on the DAG's first fire time.
-        catchup: Whether missed fire times get runs in order.
         max_active_runs: At most this many runs at a time; ``None`` for no limit.
         description: Shown in the UI.
         tags: Shown in the UI and used for filtering.
@@ -103,11 +102,10 @@ class Dag:
     location: DagLocation
     tasks: Sequence[Task] = ()
     edges: Sequence[Edge] = ()
-    schedule: Schedule = field(default_factory=NoSchedule)
+    trigger: Trigger = field(default_factory=NoTrigger)
     start: datetime | None = None
     end: datetime | None = None
     initial_since: datetime | None = None
-    catchup: bool = False
     max_active_runs: int | None = 1
     description: str | None = None
     tags: Sequence[str] = ()
@@ -153,11 +151,10 @@ class Dag:
         if self.tags:
             result["tags"] = list(self.tags)
         result |= {
-            "schedule": self.schedule.to_json(),
+            "trigger": self.trigger.to_json(),
             "start": _timestamp_or_none(self.start),
             "end": _timestamp_or_none(self.end),
             "initial_since": _timestamp_or_none(self.initial_since),
-            "catchup": self.catchup,
             "max_active_runs": self.max_active_runs,
             "tasks": [t.to_json() for t in self.tasks],
             "edges": [e.to_json() for e in self.edges],

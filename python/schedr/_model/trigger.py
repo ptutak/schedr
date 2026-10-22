@@ -1,4 +1,4 @@
-"""A DAG's schedule in DAG JSON (``schedr-model``, ``schedule.rs``)."""
+"""A DAG's trigger in DAG JSON (``schedr-model``, ``trigger.rs``)."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,11 +8,11 @@ from schedr._model.timestamps import format_timestamp
 
 
 @dataclass(frozen=True, slots=True)
-class NoSchedule:
-    """No scheduled runs: manual runs only."""
+class NoTrigger:
+    """Nothing starts runs: manual runs only."""
 
     def to_json(self) -> dict[str, Any]:
-        """The schedule as DAG JSON.
+        """The trigger as DAG JSON.
 
         Returns:
             ``{"kind": "none"}``.
@@ -21,35 +21,44 @@ class NoSchedule:
 
 
 @dataclass(frozen=True, slots=True)
-class CronSchedule:
+class CronTrigger:
     """A cron expression evaluated in a time zone.
 
     Attributes:
         expression: 5 or 6 fields, or a preset such as ``@daily``.
         timezone: An IANA time zone name, e.g. ``Europe/Warsaw``.
+        catchup: Whether missed fire times get runs in order.
     """
 
     expression: str
     timezone: str = "UTC"
+    catchup: bool = False
 
     def to_json(self) -> dict[str, Any]:
-        """The schedule as DAG JSON.
+        """The trigger as DAG JSON.
 
         Returns:
-            ``{"kind": "cron", "expression": ..., "timezone": ...}``.
+            ``{"kind": "cron", "expression": ..., "timezone": ..., "catchup": ...}``.
         """
-        return {"kind": "cron", "expression": self.expression, "timezone": self.timezone}
+        return {
+            "kind": "cron",
+            "expression": self.expression,
+            "timezone": self.timezone,
+            "catchup": self.catchup,
+        }
 
 
 @dataclass(frozen=True, slots=True)
-class EverySchedule:
+class EveryTrigger:
     """A fixed interval measured in real time (UTC).
 
     Attributes:
         interval_ms: The interval in milliseconds; must be positive.
+        catchup: Whether missed fire times get runs in order.
     """
 
     interval_ms: int
+    catchup: bool = False
 
     def __post_init__(self) -> None:
         """Checks that the interval is positive.
@@ -61,16 +70,16 @@ class EverySchedule:
             raise ValueError(f"interval must be positive, got {self.interval_ms} ms")
 
     def to_json(self) -> dict[str, Any]:
-        """The schedule as DAG JSON.
+        """The trigger as DAG JSON.
 
         Returns:
-            ``{"kind": "every", "interval_ms": ...}``.
+            ``{"kind": "every", "interval_ms": ..., "catchup": ...}``.
         """
-        return {"kind": "every", "interval_ms": self.interval_ms}
+        return {"kind": "every", "interval_ms": self.interval_ms, "catchup": self.catchup}
 
 
 @dataclass(frozen=True, slots=True)
-class OnceSchedule:
+class OnceTrigger:
     """A single fire time.
 
     Attributes:
@@ -80,7 +89,7 @@ class OnceSchedule:
     at: datetime
 
     def to_json(self) -> dict[str, Any]:
-        """The schedule as DAG JSON.
+        """The trigger as DAG JSON.
 
         Returns:
             ``{"kind": "once", "at": ...}`` in UTC.
@@ -88,5 +97,5 @@ class OnceSchedule:
         return {"kind": "once", "at": format_timestamp(self.at)}
 
 
-type Schedule = NoSchedule | CronSchedule | EverySchedule | OnceSchedule
-"""Any schedule."""
+type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger
+"""Any trigger."""

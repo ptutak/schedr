@@ -88,8 +88,8 @@ fn parse_result() -> pb::ParseResult {
         "path": "sync.py",
         "dags": [{
             "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
-            "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
-            "catchup": false, "max_active_runs": 1,
+            "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+            "max_active_runs": 1,
             "tasks": [{
                 "id": "extract", "kind": "python",
                 "settings": {

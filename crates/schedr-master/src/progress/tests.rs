@@ -29,8 +29,8 @@ fn task(name: &str, kind: &str) -> Json {
 fn dag() -> Dag {
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
-        "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
-        "catchup": false, "max_active_runs": 1,
+        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "max_active_runs": 1,
         "tasks": [
             task("start", "empty"), task("extract", "python"), task("load", "python"),
             task("audit", "python"), task("report", "python")

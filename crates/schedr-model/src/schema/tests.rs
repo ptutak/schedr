@@ -14,7 +14,7 @@ fn dag_schema_describes_a_dag_with_its_definitions() {
         "TypeDesc",
         "Value",
         "Reference",
-        "Schedule",
+        "Trigger",
         "TaskId",
         "DagId",
     ] {
@@ -33,7 +33,7 @@ fn runner_schema_covers_both_directions() {
 }
 
 #[test]
-fn dag_schema_requires_the_identity_and_schedule() {
+fn dag_schema_requires_the_identity_and_trigger() {
     let schema = serde_json::to_value(dag_schema()).unwrap();
     let required: Vec<&str> = schema["required"]
         .as_array()
@@ -41,15 +41,7 @@ fn dag_schema_requires_the_identity_and_schedule() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    for field in [
-        "produced_by",
-        "id",
-        "location",
-        "schedule",
-        "catchup",
-        "tasks",
-        "edges",
-    ] {
+    for field in ["produced_by", "id", "location", "trigger", "tasks", "edges"] {
         assert!(required.contains(&field), "{field} not required");
     }
 }

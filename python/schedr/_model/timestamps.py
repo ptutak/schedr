@@ -35,7 +35,7 @@ def parse_moment(value: datetime | date | str, tz: str, name: str) -> datetime:
 
     Args:
         value: An aware or naive datetime, a date (midnight), or an ISO 8601 string.
-        tz: The IANA time zone of naive values (the schedule's).
+        tz: The IANA time zone of naive values (the trigger's).
         name: The argument's name, for messages.
 
     Returns:

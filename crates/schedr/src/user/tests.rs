@@ -86,8 +86,8 @@ async fn world(master_down: bool) -> Client<InProcess> {
         .unwrap();
     let dag: schedr_model::Dag = serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
-        "schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw"},
-        "start": null, "end": null, "initial_since": null, "catchup": false,
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false},
+        "start": null, "end": null, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [{
             "id": "extract", "kind": "python",
@@ -179,7 +179,7 @@ async fn dags_are_listed_as_a_table() {
     let client = world(false).await;
     assert_eq!(
         dags(&client, DagsCommand::List, &text()).await,
-        "DAG   PAUSED  SCHEDULE                   DEFINED IN\n\
+        "DAG   PAUSED  TRIGGER                    DEFINED IN\n\
          sync  yes     0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
     );
     let listed: serde_json::Value =
@@ -355,20 +355,26 @@ async fn later_features_and_bad_arguments_are_errors() {
 }
 
 #[test]
-fn schedules_are_written_as_people_write_them() {
+fn triggers_are_written_as_people_write_them() {
     assert_eq!(
-        schedule_text(&json!({"kind": "cron", "expression": "@daily", "timezone": "UTC"})),
+        trigger_text(
+            &json!({"kind": "cron", "expression": "@daily", "timezone": "UTC", "catchup": false})
+        ),
         "@daily"
     );
     assert_eq!(
-        schedule_text(&json!({"kind": "every", "interval_ms": 5_400_000})),
+        trigger_text(&json!({"kind": "every", "interval_ms": 5_400_000, "catchup": false})),
         "every 1h 30m"
     );
     assert_eq!(
-        schedule_text(&json!({"kind": "once", "at": "2026-12-24T22:00:00Z"})),
+        trigger_text(&json!({"kind": "every", "interval_ms": 3_600_000, "catchup": true})),
+        "every 1h, catchup"
+    );
+    assert_eq!(
+        trigger_text(&json!({"kind": "once", "at": "2026-12-24T22:00:00Z"})),
         "once at 2026-12-24T22:00:00Z"
     );
-    assert_eq!(schedule_text(&json!({"kind": "none"})), "-");
+    assert_eq!(trigger_text(&json!({"kind": "none"})), "-");
 }
 
 #[test]
@@ -387,7 +393,7 @@ fn a_dag_in_conflict_says_so() {
                 path: "b.py".to_owned(),
             },
         ]),
-        schedule: None,
+        trigger: None,
         description: None,
         tags: vec![],
     };

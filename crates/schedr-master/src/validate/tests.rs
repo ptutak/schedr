@@ -27,8 +27,8 @@ fn edge(from: &str, to: &str, kind: &str) -> Json {
 fn dag_with(changes: &Json) -> Dag {
     let mut dag = json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
-        "schedule": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
-        "catchup": false, "max_active_runs": 1,
+        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "max_active_runs": 1,
         "tasks": [task("extract", &json!({})), task("load", &json!({"rows": output_of("extract")}))],
         "edges": [edge("extract", "load", "data")]
     });
@@ -89,13 +89,13 @@ fn run_limits_and_the_window_are_checked() {
 fn the_schedule_must_be_usable() {
     assert_eq!(
         problems(
-            &json!({"schedule": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base"}})
+            &json!({"trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base", "catchup": false}})
         ),
-        ["schedule: unknown time zone `Mars/Base`"]
+        ["trigger: unknown time zone `Mars/Base`"]
     );
     assert_eq!(
-        problems(&json!({"schedule": {"kind": "every", "interval_ms": 0}})),
-        ["schedule: the interval of an Every schedule must be positive"]
+        problems(&json!({"trigger": {"kind": "every", "interval_ms": 0, "catchup": false}})),
+        ["trigger: the interval of an Every trigger must be positive"]
     );
 }
 

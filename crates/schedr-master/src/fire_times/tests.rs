@@ -10,9 +10,10 @@ fn ts(text: &str) -> Timestamp {
 
 fn cron(expression: &str, timezone: &str) -> FireTimes {
     FireTimes::new(
-        &Schedule::Cron {
+        &Trigger::Cron {
             expression: expression.to_owned(),
             timezone: timezone.to_owned(),
+            catchup: false,
         },
         None,
     )
@@ -175,8 +176,9 @@ fn six_fields_start_with_seconds() {
 
 #[test]
 fn every_counts_from_start_or_the_epoch() {
-    let hourly = Schedule::Every {
+    let hourly = Trigger::Every {
         interval_ms: 3_600_000,
+        catchup: false,
     };
     let from_epoch = FireTimes::new(&hourly, None).unwrap();
     assert_eq!(
@@ -202,8 +204,9 @@ fn every_counts_from_start_or_the_epoch() {
 #[test]
 fn every_ignores_daylight_saving() {
     let six_hours = FireTimes::new(
-        &Schedule::Every {
+        &Trigger::Every {
             interval_ms: 6 * 3_600_000,
+            catchup: false,
         },
         None,
     )
@@ -217,12 +220,12 @@ fn every_ignores_daylight_saving() {
 #[test]
 fn once_has_one_fire_time_and_none_has_none() {
     let at = ts("2026-12-24T22:00:00Z");
-    let once = FireTimes::new(&Schedule::Once { at }, None).unwrap();
+    let once = FireTimes::new(&Trigger::Once { at }, None).unwrap();
     assert_eq!(once.next_after(ts("2026-01-01T00:00:00Z")), Some(at));
     assert_eq!(once.next_after(at), None);
     assert_eq!(once.previous_before(ts("2027-01-01T00:00:00Z")), Some(at));
     assert_eq!(once.previous_before(at), None);
-    let none = FireTimes::new(&Schedule::None, None).unwrap();
+    let none = FireTimes::new(&Trigger::None, None).unwrap();
     assert_eq!(none.next_after(at), None);
     assert_eq!(none.previous_before(at), None);
     assert!(!none.is_fire_time(at));
@@ -255,21 +258,29 @@ fn at_or_after_and_at_or_before_include_the_moment() {
 #[case("61 3 * * *", "UTC", "cron expression `61 3 * * *`: ")]
 #[case("0 3 * * *", "Mars/Base", "unknown time zone `Mars/Base`")]
 fn bad_crons_are_errors(#[case] expression: &str, #[case] tz: &str, #[case] message: &str) {
-    let schedule = Schedule::Cron {
+    let trigger = Trigger::Cron {
         expression: expression.to_owned(),
         timezone: tz.to_owned(),
+        catchup: false,
     };
-    let error = FireTimes::new(&schedule, None).unwrap_err();
+    let error = FireTimes::new(&trigger, None).unwrap_err();
     assert!(error.to_string().starts_with(message), "{error}");
 }
 
 #[test]
 fn a_zero_interval_is_an_error() {
-    let error = FireTimes::new(&Schedule::Every { interval_ms: 0 }, None).unwrap_err();
-    assert_eq!(error, ScheduleError::ZeroInterval);
+    let error = FireTimes::new(
+        &Trigger::Every {
+            interval_ms: 0,
+            catchup: false,
+        },
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, FireTimesError::ZeroInterval);
     assert_eq!(
         error.to_string(),
-        "the interval of an Every schedule must be positive"
+        "the interval of an Every trigger must be positive"
     );
 }
 

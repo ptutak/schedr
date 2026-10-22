@@ -414,7 +414,7 @@ from schedr import Dag, Every, task
 @task
 def tick() -> None: ...
 
-with Dag("ticker", schedule=Every(timedelta(seconds=1))):
+with Dag("ticker", trigger=Every(timedelta(seconds=1))):
     tick()
 "#;
     let standalone = Standalone::start(&[("ticker.py", dag)], None);

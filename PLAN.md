@@ -15,8 +15,9 @@ order**. Milestones: see PROJECT.md, Roadmap.
 
 - Native API core: `Dag`, `@task` (Python tasks), `CommandOperator`, `EmptyOperator`, data flow
   and `>>` / `chain()`, `TaskDefaults` (`retries`, `retry_delay`, `timeout`, `queue`,
-  `max_output_size`), `Cron` / `Every` / `None` / presets, t-strings in commands and task
-  arguments, `dag_ctx.run` (`id`, `kind`, `planned_for`, `since`, `dag_id`).
+  `max_output_size`), `trigger=` with `Cron` / `Every` / `Once` / `None` / presets, t-strings
+  in commands and task arguments, `dag_ctx.run` (`id`, `kind`, `planned_for`, `since`) and
+  `dag_ctx.dag_id`.
 - Outputs: the type model, the three serialization checks, tagged extra types, dataclasses,
   output references with paths, `ProcessResult`, size limits and truncation.
 - Trigger rule `NoneFailed` only; every task has the single outcome `SUCCESS`.
@@ -101,7 +102,7 @@ python/schedr/
   dag.py             # Dag, TaskDefaults
   tasks.py           # @task, Output, output references and paths
   operators.py       # CommandOperator, EmptyOperator
-  schedules.py       # Cron, Every, presets
+  triggers.py        # Trigger, Cron, Every, Once, presets
   context.py         # dag_ctx
   types.py           # the Json type alias, ProcessResult, KiB / MiB
   _serialization/    # type model, parse-time checks, encode / decode (tagged types, dataclasses)
@@ -135,7 +136,6 @@ on, each step brings its own.
 | 1.14 | **`schedr standalone`:** all roles in one process, SQLite, gRPC on localhost | the end-to-end example from PROJECT.md runs |
 | 1.15 | **`dags check`, `dags test`, `schedr.testing`:** plain-function `@task` calls, `task_context`, `run_dag` with per-task inspection (`state`, `output`, `attempts`, `log`, …) | the example DAGs in `examples/` have tests that pass in CI |
 | 1.16 | **Packaging:** maturin wheel with the binary for Linux x86_64 (others in M2), `pip install` + `schedr standalone` smoke test in CI | a wheel built in CI runs the example |
-
 | 1.17 | **Integration tests:** written after 1.14 for 1.4–1.14 (a directory of DAG files through the runner, real processes through the agent, every query on Postgres, the runner as a real process, `schedr standalone` end to end through the CLI and the API, also on Postgres), and with each step since | all pass in CI |
 
 **M1 is done** when a new user can `pip install` the wheel, write the example DAG from
