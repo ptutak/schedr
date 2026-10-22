@@ -282,3 +282,13 @@ fn a_cancelled_upstream_task_cancels_its_downstream_tasks() {
         ])
     );
 }
+
+#[test]
+fn an_attempt_lost_while_cancelling_is_cancelled_otherwise_it_uses_a_retry() {
+    let now = ts("2026-10-21T08:00:00Z");
+    assert_eq!(
+        after_attempt(AttemptStatus::Lost, None, 0, &settings(), true, now),
+        AfterAttempt::Cancelled
+    );
+    assert!(after_attempt(AttemptStatus::Lost, None, 0, &settings(), false, now).uses_retry());
+}

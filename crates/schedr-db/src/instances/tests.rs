@@ -267,3 +267,50 @@ async fn stored_values_that_dont_read_are_errors() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn a_task_cancel_is_recorded_and_an_unschedulable_task_retried() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    let now = ts("2026-10-21T08:00:01Z");
+    db.create_instances(
+        &run_id,
+        &[
+            (id("extract"), TaskInstanceState::Running),
+            (id("load"), TaskInstanceState::Unschedulable),
+        ],
+        now,
+    )
+    .await
+    .unwrap();
+    db.request_task_cancel(&run_id, &id("extract"), now)
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let cancelling: Vec<(&str, bool)> = run
+        .instances
+        .iter()
+        .map(|i| (i.task_id.as_str(), i.cancel_requested))
+        .collect();
+    assert_eq!(cancelling, [("extract", true), ("load", false)]);
+
+    assert!(
+        !db.retry_unschedulable(&run_id, &id("extract"), now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        db.retry_unschedulable(&run_id, &id("load"), now)
+            .await
+            .unwrap()
+    );
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        (run.instances[1].state, run.instances[1].ready_at),
+        (TaskInstanceState::Queued, Some(now))
+    );
+    assert!(
+        !db.retry_unschedulable(&run_id, &id("load"), now)
+            .await
+            .unwrap()
+    );
+}

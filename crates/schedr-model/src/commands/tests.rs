@@ -34,6 +34,16 @@ fn sync() -> DagId {
     json!({"kind": "unpause_dag", "dag_id": "sync"}),
     "unpause_dag"
 )]
+#[case(
+    Command::CancelTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap() },
+    json!({"kind": "cancel_task", "run_id": "r1", "task_id": "load"}),
+    "cancel_task"
+)]
+#[case(
+    Command::RetryTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap() },
+    json!({"kind": "retry_task", "run_id": "r1", "task_id": "load"}),
+    "retry_task"
+)]
 fn commands_are_tagged_by_kind(
     #[case] command: Command,
     #[case] stored: serde_json::Value,

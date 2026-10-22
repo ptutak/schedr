@@ -5,7 +5,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::DagId;
+use crate::ids::{DagId, TaskId};
 
 #[cfg(test)]
 mod tests;
@@ -40,6 +40,21 @@ pub enum Command {
         /// The DAG.
         dag_id: DagId,
     },
+    /// Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at
+    /// once if it hasn't started; the tasks downstream of it are cancelled.
+    CancelTask {
+        /// The run.
+        run_id: String,
+        /// The task.
+        task_id: TaskId,
+    },
+    /// Queue an `unschedulable` task of an unfinished run again (`schedr tasks retry`).
+    RetryTask {
+        /// The run.
+        run_id: String,
+        /// The task.
+        task_id: TaskId,
+    },
 }
 
 impl Command {
@@ -51,6 +66,8 @@ impl Command {
             Self::CancelRun { .. } => "cancel_run",
             Self::PauseDag { .. } => "pause_dag",
             Self::UnpauseDag { .. } => "unpause_dag",
+            Self::CancelTask { .. } => "cancel_task",
+            Self::RetryTask { .. } => "retry_task",
         }
     }
 }

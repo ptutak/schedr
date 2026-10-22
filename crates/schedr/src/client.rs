@@ -332,6 +332,33 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// `POST /api/v1/runs/{run}/tasks/{task}/{action}` (`cancel` or `retry`): the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn task_action(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        action: TaskAction,
+    ) -> Result<CommandView, ClientError> {
+        let action = match action {
+            TaskAction::Cancel => "cancel",
+            TaskAction::Retry => "retry",
+        };
+        self.call(
+            Method::Post,
+            format!(
+                "/api/v1/runs/{}/tasks/{}/{action}",
+                path(run_id),
+                path(task_id)
+            ),
+            None,
+        )
+        .await
+    }
+
     /// Reads `command` back until the master decides it.
     ///
     /// # Errors
@@ -404,4 +431,13 @@ fn path(segment: &str) -> String {
         }
     }
     out
+}
+
+/// What `schedr tasks` asks of a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskAction {
+    /// Cancel it.
+    Cancel,
+    /// Retry it (an `unschedulable` one).
+    Retry,
 }

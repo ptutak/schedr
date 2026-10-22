@@ -421,3 +421,118 @@ async fn cancelling_when_nothing_runs_finishes_the_run() {
     assert_eq!(cancelled.run_result, Some(RunState::Cancelled));
     assert_eq!(run_state(&db, &run_id).await, RunState::Cancelled);
 }
+
+#[tokio::test]
+async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::RunQueued,
+        "no instances yet"
+    );
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::Cancelled(Some(RunState::Cancelled))
+    );
+    assert_eq!(
+        states(&db, &run_id).await,
+        expected(&[
+            ("extract", S::Cancelled),
+            ("load", S::Cancelled),
+            ("start", S::Success)
+        ])
+    );
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::RunFinished(RunState::Cancelled)
+    );
+}
+
+#[tokio::test]
+async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, &id("start"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::AlreadyFinished(S::Success)
+    );
+    start(&db, &run_id, "extract").await;
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::Stopping
+    );
+    assert!(db.run_tasks(&run_id).await.unwrap().unwrap().instances[0].cancel_requested);
+    // An expired assignment would run it again; being cancelled, it is cancelled instead.
+    let recorded = execution
+        .attempt_finished(
+            &run_id,
+            &id("extract"),
+            &ended(AttemptStatus::AssignmentExpired),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recorded.state, Some(S::Cancelled));
+    assert_eq!(recorded.run_result, Some(RunState::Cancelled));
+    assert_eq!(
+        states(&db, &run_id).await,
+        expected(&[
+            ("extract", S::Cancelled),
+            ("load", S::Cancelled),
+            ("start", S::Success)
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_failure_of_a_task_being_cancelled_isnt_retried() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "extract").await;
+    execution
+        .cancel_task(&run_id, &id("extract"), ts(NOW))
+        .await
+        .unwrap();
+    let recorded = execution
+        .attempt_finished(
+            &run_id,
+            &id("extract"),
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recorded.state, Some(S::Failed), "extract has a retry left");
+}
+
+#[tokio::test]
+async fn cancelling_an_unknown_task_is_an_error_and_settling_a_finished_run_does_nothing() {
+    let (execution, _db, run_id) = with_run(chain(), RunState::Running).await;
+    assert!(matches!(
+        execution.cancel_task(&run_id, &id("ghost"), ts(NOW)).await,
+        Err(ExecutionError::UnknownTask { .. })
+    ));
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    assert_eq!(execution.settle(&run_id, ts(NOW)).await.unwrap(), None);
+    db.finish_run(&run_id, RunState::Failed, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(execution.settle(&run_id, ts(NOW)).await.unwrap(), None);
+}

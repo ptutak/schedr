@@ -98,8 +98,9 @@ impl AfterAttempt {
 }
 
 /// Decides what follows an attempt with `status` (and the error kind schedr recognised, if
-/// any), given how many retries the task used before it and whether the run is being
-/// cancelled (then nothing runs again, and a failure stays a failure).
+/// any), given how many retries the task used before it and whether the task or its run is
+/// being cancelled (then nothing runs again, a failure stays a failure, and an attempt lost
+/// with its worker is cancelled).
 #[must_use]
 pub fn after_attempt(
     status: AttemptStatus,
@@ -114,6 +115,10 @@ pub fn after_attempt(
         RetryRule::Never => AfterAttempt::Cancelled,
         RetryRule::RequeueWithoutRetry if cancelling => AfterAttempt::Cancelled,
         RetryRule::RequeueWithoutRetry => AfterAttempt::Requeue,
+        // The worker went while the task was being stopped: stopped, as asked.
+        RetryRule::UsesRetry if cancelling && status == AttemptStatus::Lost => {
+            AfterAttempt::Cancelled
+        }
         RetryRule::UsesRetry => {
             let repeats = error_kind.is_some_and(|kind| NOT_RETRIED_ERRORS.contains(&kind));
             if cancelling || repeats || retries_used >= settings.retries {

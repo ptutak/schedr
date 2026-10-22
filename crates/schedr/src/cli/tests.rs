@@ -211,7 +211,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[case(&["master"], None)]
 #[case(&["worker"], None)]
 #[case(&["webserver"], None)]
-#[case(&["tasks", "retry", "r", "t"], Some("M2"))]
+#[case(&["tasks", "retry", "r", "t"], None)]
 #[case(&["workers", "resume", "w"], Some("M2"))]
 #[case(&["workers", "list"], None)]
 #[case(&["task-ctx", "resource", "get"], Some("M4"))]

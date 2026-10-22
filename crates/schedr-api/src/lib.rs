@@ -35,6 +35,8 @@ pub use state::ApiState;
         routes::get_run,
         routes::cancel_run,
         routes::list_attempts,
+        routes::cancel_task,
+        routes::retry_task,
         routes::get_command,
         routes::list_workers,
     ),
@@ -73,6 +75,14 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/attempts",
             get(routes::list_attempts),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/tasks/{task_id}/cancel",
+            post(routes::cancel_task),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/tasks/{task_id}/retry",
+            post(routes::retry_task),
         )
         .route("/api/v1/commands/{command_id}", get(routes::get_command))
         .route("/api/v1/workers", get(routes::list_workers))

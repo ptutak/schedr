@@ -491,3 +491,59 @@ async fn draining_comes_later() {
     .unwrap_err();
     assert!(error.to_string().contains("milestone M2"), "{error}");
 }
+
+async fn tasks(client: &Client<InProcess>, command: TasksCommand) -> Result<String, AppError> {
+    let mut out = Vec::new();
+    run_tasks(&command, client, &text(), &mut out).await?;
+    Ok(String::from_utf8(out).unwrap())
+}
+
+fn target(run_id: &str, map_index: Option<u32>) -> crate::cli::TaskTarget {
+    crate::cli::TaskTarget {
+        run_id: run_id.to_owned(),
+        task_id: "extract".to_owned(),
+        map_index,
+    }
+}
+
+#[tokio::test]
+async fn a_task_is_cancelled_and_only_an_unschedulable_one_retried() {
+    let client = world(false).await;
+    runs(&client, trigger(Some("2026-10-15T01:00:00Z")), &text()).await;
+    let run_id = client
+        .transport()
+        .db
+        .dag_runs(&schedr_model::DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    let error = tasks(&client, TasksCommand::Cancel(target(&run_id, None)))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("hasn't started its tasks yet"), "{error}");
+
+    let mut master = client.transport().master.lock().await;
+    master.2.step(ts(NOW)).await.unwrap();
+    drop(master);
+    let error = tasks(&client, TasksCommand::Retry(target(&run_id, None)))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is running, not unschedulable"), "{error}");
+    assert_eq!(
+        tasks(&client, TasksCommand::Cancel(target(&run_id, None)))
+            .await
+            .unwrap(),
+        format!("cancelling task extract of run {run_id} (being stopped)\n")
+    );
+    let error = tasks(&client, TasksCommand::Retry(target(&run_id, Some(2))))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "`schedr tasks --map-index` isn't implemented yet (milestone M4)"
+    );
+}

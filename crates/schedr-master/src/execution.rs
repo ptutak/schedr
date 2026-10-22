@@ -67,6 +67,35 @@ pub struct Cancelled {
     pub run_result: Option<RunState>,
 }
 
+/// What cancelling one task did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskCancel {
+    /// It hadn't started: it is `cancelled` now, with the tasks downstream of it; the run's
+    /// result, if it finished now.
+    Cancelled(Option<RunState>),
+    /// It runs: its attempt is to be stopped, and it ends `cancelled` when it reports.
+    Stopping,
+    /// It had already finished, in this state: nothing to do.
+    AlreadyFinished(TaskInstanceState),
+    /// The run had already finished, in this state.
+    RunFinished(RunState),
+    /// The run is queued: its tasks don't exist yet (cancel the run instead).
+    RunQueued,
+}
+
+/// What retrying an `unschedulable` task did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskRetry {
+    /// It is queued again (this task instance).
+    Queued(String),
+    /// It isn't `unschedulable` (it is in this state).
+    NotUnschedulable(TaskInstanceState),
+    /// The run had already finished, in this state.
+    RunFinished(RunState),
+    /// The run's tasks don't exist yet.
+    RunQueued,
+}
+
 /// Runs moved forward in a database.
 #[derive(Debug, Clone)]
 pub struct Execution {
@@ -154,7 +183,7 @@ impl Execution {
             result.error_kind.as_deref(),
             instance.retries_used,
             &task.settings,
-            run.cancel_requested,
+            run.cancel_requested || instance.cancel_requested,
             now,
         );
         let (state, ready_at) = match next {
@@ -238,6 +267,108 @@ impl Execution {
             running,
             run_result,
         })
+    }
+
+    /// Cancels one task of a run: one that hasn't started becomes `cancelled` at once, one
+    /// that runs is marked so that whatever its attempt reports (or a rejection, an expired
+    /// assignment, a lost worker) ends it `cancelled` without a retry, a failure staying a
+    /// failure. The tasks downstream of it are cancelled when it is.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or task, or a database failure.
+    pub async fn cancel_task(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<TaskCancel, ExecutionError> {
+        use TaskInstanceState as S;
+        let run = self.run(run_id).await?;
+        if run.state.is_final() {
+            return Ok(TaskCancel::RunFinished(run.state));
+        }
+        if run.dag.task(task_id).is_none() {
+            return Err(ExecutionError::UnknownTask {
+                run_id: run_id.to_owned(),
+                task_id: task_id.clone(),
+            });
+        }
+        // A run that just started may not have its instances yet either.
+        let Some(state) = run
+            .instances
+            .iter()
+            .find(|i| &i.task_id == task_id)
+            .map(|i| i.state)
+        else {
+            return Ok(TaskCancel::RunQueued);
+        };
+        match state {
+            S::Running | S::CleaningUp => {
+                self.db.request_task_cancel(run_id, task_id, now).await?;
+                Ok(TaskCancel::Stopping)
+            }
+            S::Scheduled | S::Queued | S::UpForRetry | S::Unschedulable => {
+                let first = vec![update(task_id, S::Cancelled)];
+                Ok(TaskCancel::Cancelled(
+                    self.advance(run_id, &run, first, now).await?,
+                ))
+            }
+            S::Success | S::Failed | S::Cancelled | S::Skipped | S::UpstreamFailed => {
+                Ok(TaskCancel::AlreadyFinished(state))
+            }
+        }
+    }
+
+    /// Queues an `unschedulable` task of an unfinished run again (`schedr tasks retry`).
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or task, or a database failure.
+    pub async fn retry_task(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<TaskRetry, ExecutionError> {
+        let run = self.run(run_id).await?;
+        if run.state.is_final() {
+            return Ok(TaskRetry::RunFinished(run.state));
+        }
+        if run.dag.task(task_id).is_none() {
+            return Err(ExecutionError::UnknownTask {
+                run_id: run_id.to_owned(),
+                task_id: task_id.clone(),
+            });
+        }
+        let Some(instance) = run.instances.iter().find(|i| &i.task_id == task_id) else {
+            return Ok(TaskRetry::RunQueued);
+        };
+        if instance.state == TaskInstanceState::Unschedulable
+            && self.db.retry_unschedulable(run_id, task_id, now).await?
+        {
+            return Ok(TaskRetry::Queued(instance.id.clone()));
+        }
+        Ok(TaskRetry::NotUnschedulable(instance.state))
+    }
+
+    /// Moves a run forward after a task's state was changed directly (an assignment of a
+    /// task being cancelled taken back as `cancelled`). Returns the run's result, if it
+    /// finished now.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or a database failure.
+    pub async fn settle(
+        &self,
+        run_id: &str,
+        now: Timestamp,
+    ) -> Result<Option<RunState>, ExecutionError> {
+        let run = self.run(run_id).await?;
+        if run.state.is_final() {
+            return Ok(None);
+        }
+        self.advance(run_id, &run, Vec::new(), now).await
     }
 
     async fn run(&self, run_id: &str) -> Result<RunTasks, ExecutionError> {

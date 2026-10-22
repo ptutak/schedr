@@ -48,6 +48,7 @@ pub fn master_settings(config: &Config) -> Settings {
         lease_timeout: config.master.lease_timeout,
         cancel_grace: config.master.cancel_grace,
         parse_job_timeout: PARSE_JOB_TIMEOUT,
+        code_wait: config.master.code_wait,
     }
 }
 

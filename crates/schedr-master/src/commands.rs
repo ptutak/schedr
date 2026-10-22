@@ -9,12 +9,12 @@
 use jiff::Timestamp;
 use schedr_db::commands::PendingCommand;
 use schedr_db::{Database, DbError};
-use schedr_model::DagId;
 use schedr_model::commands::{Command, CommandStatus};
+use schedr_model::{DagId, TaskId};
 use serde_json::json;
 
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
-use crate::execution::ExecutionError;
+use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
 use crate::scheduler::{Scheduler, SchedulerError};
 
 #[cfg(test)]
@@ -167,8 +167,78 @@ impl Commander {
                 }
                 Ok(Outcome::Applied(json!({})))
             }
+            Command::CancelTask { run_id, task_id } => {
+                cancel_task(dispatcher, run_id, task_id, outgoing, now).await
+            }
+            Command::RetryTask { run_id, task_id } => {
+                retry_task(dispatcher, run_id, task_id, now).await
+            }
         }
     }
+}
+
+/// Cancels one task through the dispatcher (`schedr tasks cancel`).
+async fn cancel_task(
+    dispatcher: &mut Dispatcher,
+    run_id: &str,
+    task_id: &TaskId,
+    outgoing: &mut Vec<Outgoing>,
+    now: Timestamp,
+) -> Result<Outcome, CommandError> {
+    let (cancelled, messages) = match dispatcher.cancel_task(run_id, task_id, now).await {
+        Ok(done) => done,
+        Err(DispatchError::Execution(
+            unknown @ (ExecutionError::UnknownRun(_) | ExecutionError::UnknownTask { .. }),
+        )) => return Ok(Outcome::Rejected(unknown.to_string())),
+        Err(error) => return Err(error.into()),
+    };
+    let stopping = messages.len();
+    outgoing.extend(messages);
+    Ok(match cancelled {
+        TaskCancel::Cancelled(_) => Outcome::Applied(json!({"state": "cancelled"})),
+        TaskCancel::Stopping => {
+            Outcome::Applied(json!({"state": "stopping", "stopping_attempts": stopping}))
+        }
+        TaskCancel::AlreadyFinished(state) => Outcome::Rejected(format!(
+            "task `{task_id}` of run `{run_id}` already finished ({state})"
+        )),
+        TaskCancel::RunFinished(state) => {
+            Outcome::Rejected(format!("run `{run_id}` already finished ({state})"))
+        }
+        TaskCancel::RunQueued => Outcome::Rejected(format!(
+            "run `{run_id}` hasn't started its tasks yet: cancel the run \
+             (`schedr runs cancel`), or try again once it runs"
+        )),
+    })
+}
+
+/// Queues an `unschedulable` task again through the dispatcher (`schedr tasks retry`).
+async fn retry_task(
+    dispatcher: &mut Dispatcher,
+    run_id: &str,
+    task_id: &TaskId,
+    now: Timestamp,
+) -> Result<Outcome, CommandError> {
+    let retried = match dispatcher.retry_task(run_id, task_id, now).await {
+        Ok(retried) => retried,
+        Err(DispatchError::Execution(
+            unknown @ (ExecutionError::UnknownRun(_) | ExecutionError::UnknownTask { .. }),
+        )) => return Ok(Outcome::Rejected(unknown.to_string())),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(match retried {
+        TaskRetry::Queued(_) => Outcome::Applied(json!({"state": "queued"})),
+        TaskRetry::NotUnschedulable(state) => Outcome::Rejected(format!(
+            "task `{task_id}` of run `{run_id}` is {state}, not unschedulable: only an \
+             unschedulable task is retried (a failed one is retried by its `retries`)"
+        )),
+        TaskRetry::RunFinished(state) => Outcome::Rejected(format!(
+            "run `{run_id}` already finished ({state}): trigger a new run"
+        )),
+        TaskRetry::RunQueued => Outcome::Rejected(format!(
+            "run `{run_id}` hasn't started its tasks yet: nothing to retry"
+        )),
+    })
 }
 
 /// Cancels a run through the dispatcher; returns how many attempts are being stopped.

@@ -178,7 +178,7 @@ tasks share the pod's memory):
   | `schedr runs backfill <dag> --from … [--to …] [--all] [-p …]` | a backfill |
   | `schedr runs list <dag> [--for <time>]` | runs, with their IDs |
   | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
-  | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one running task (see Master–worker protocol) |
+  | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one unfinished task, stopping it if it runs (see Task assignment) |
   | `schedr tasks retry <run id> <task id> [--map-index N]` | retry an `unschedulable` task of an unfinished run |
   | `schedr workers list` | the workers and their state, gone ones included |
   | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
@@ -631,6 +631,8 @@ SchedrScriptOperator(
   lost**; **2 slots** per worker.
 - **Cancellation** (UI and CLI): SIGTERM to the task's whole process group, then SIGKILL after
   a configurable timeout. The attempt ends as **cancelled** (not failed) and is **not retried**.
+  A whole run (`schedr runs cancel`) or one task (`schedr tasks cancel`, see Task
+  assignment).
 - **mTLS details:** mTLS replaces any shared token; certificates are **reloaded when the files
   change** (rotation without restart); the same mTLS setup is used for **every internal link**
   (master ↔ worker, webserver → worker logs). There is no webserver → master link (see Web
@@ -828,6 +830,23 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   started becomes `cancelled`. A **queued run** that is cancelled ends `cancelled` at once.
 - **A cancelled task cancels the tasks downstream of it** (they can't run without it, and
   nothing failed).
+- **Cancelling one task** (`schedr tasks cancel`, M2.4) works on any unfinished task: one
+  that hasn't started (scheduled, queued, up for retry, unschedulable) is `cancelled` at once;
+  one that runs is marked (`task_instances.cancel_requested_at`) and gets `CancelAttempt`.
+  Whatever then ends its attempt (the cancel, a rejection, an expired assignment, a lost or
+  restarted worker) ends the task `cancelled` without a retry; a failure meanwhile stays a
+  failure. The same holds while a whole run is being cancelled (an attempt lost then was
+  `failed` before M2.4). The run goes on with its other tasks and ends by the run result
+  rule. Like every action it is a command the master applies. A task of a run whose tasks
+  don't exist yet (a queued run) is refused: cancel the run instead. Not chosen: running
+  tasks only (a queued task couldn't be stopped without cancelling the whole run); turning a
+  queued run's task cancel into a run cancel (surprising).
+- **A rejection of a task being cancelled** (the task, or its whole run) cancels it instead of
+  queueing it again (B5, fixed in M2.4: a cancelled run whose assigned task was rejected
+  stayed `running` for ever, since a cancelled run's tasks are never assigned).
+- **A task that waits says why** (shown with it in `runs get` and the API): "no active worker
+  serves queue `gpu`", "every active worker serving queue `large` rejected it", or "waiting
+  for a free slot on the workers serving queue `large`".
 - **Empty tasks** are completed by the master as soon as they are ready, with outcome
   `SUCCESS` and no output.
 - **Parse jobs** are assigned with `AssignParse` over the stream; the result (DAG JSON, import
@@ -962,16 +981,22 @@ uses up a retry. Reasons and how the master reacts:
   `unschedulable` tasks of a run not yet finished**; it doesn't conflict with "no clear", which
   is about re-running finished runs.
 - **Code not there yet** (e.g. git-sync on that pod hasn't pulled the new commit): retry after
-  roughly the sync interval plus settle time, on any worker. Marked **unschedulable** only if
-  still missing everywhere after a configurable wait.
+  roughly the sync interval plus settle time, workers that haven't said so asked first.
+  Marked **unschedulable** once every eligible worker said so (or rejected it for a
+  worker-specific reason: both count) and the code has been missing for **`[master]
+  code_wait`** (default 10 min), with each worker's detail. Which workers rejected a task is
+  forgotten once it starts somewhere, so a later retry waits afresh. Not chosen: the wait
+  alone (a worker that has the code but was busy would be ignored).
 - **A rejection takes the assignment back:** the attempt isn't kept (it was never a try)
   and the try number goes back; the reason is shown on the task (e.g. "waiting for the code on
   the workers: …", or for `unschedulable` every worker's reason). Which workers rejected a
   task for a worker-specific reason is kept in the master's memory: a master restart, or a
   change in the set of workers (a new worker, or a restarted one), gives the task another
   chance. **Code not there yet** retries after **35 s** (the default poll interval plus the
-  settle time); turning it into `unschedulable` after a longer wait comes with several
-  workers (M2).
+  settle time), and becomes `unschedulable` after the code wait (above).
+- **`schedr tasks retry`** queues an `unschedulable` task of an unfinished run again and
+  forgets which workers rejected it; anything else is refused with what to do instead (a
+  failed task is retried by its `retries`; a finished run needs a new run).
 - A **`Started` for an attempt that was taken back** (no `Started` in time), ended, or
   belongs to another worker is answered with `CancelAttempt`.
 - An **import error** in a DAG file is **not** a rejection: the agent can't detect it without

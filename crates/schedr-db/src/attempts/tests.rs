@@ -115,11 +115,34 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
     );
     assert_eq!(extract.dag, dag());
     assert_eq!(extract.content_hash, "h1");
+    assert_eq!(extract.queued_reason, None);
+    db.set_queued_reason(
+        &extract.instance_id,
+        "no worker serves queue `large`",
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.ready_instances(ts(NOW)).await.unwrap()[0]
+            .queued_reason
+            .as_deref(),
+        Some("no worker serves queue `large`")
+    );
     assert_eq!(
         db.ready_instances(ts("2026-10-21T07:59:59Z"))
             .await
             .unwrap(),
         []
+    );
+    let extract_id = extract.task_id.clone();
+    db.request_task_cancel(&run_id, &extract_id, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.ready_instances(ts(NOW)).await.unwrap(),
+        [],
+        "a task being cancelled isn't ready"
     );
     db.request_cancel(&run_id, ts(NOW)).await.unwrap();
     assert_eq!(db.ready_instances(ts(NOW)).await.unwrap(), []);

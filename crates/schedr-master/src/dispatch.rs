@@ -6,9 +6,12 @@
 //! - **`Started`** means accepted. For an attempt that was taken back or ended, the worker is
 //!   told to kill it.
 //! - **`Rejected`** takes the assignment back (it isn't a try): a temporary reason queues the
-//!   task again at once; "code not there yet" after [`CODE_RETRY_DELAY`]; a worker-specific
-//!   reason leaves that worker out for the task, which becomes `unschedulable` when every
-//!   eligible worker rejected it, until the set of workers changes.
+//!   task again at once; "code not there yet" after [`CODE_RETRY_DELAY`], and `unschedulable`
+//!   once every eligible worker said so and the code has been missing for the code wait; a
+//!   worker-specific reason leaves that worker out for the task, which becomes
+//!   `unschedulable` when every eligible worker rejected it, until the set of workers changes
+//!   or a user retries it. A task being cancelled is `cancelled` instead.
+//! - **A task that waits** shows why: no active worker serves its queue, or no free slot.
 //! - **`Finished`** is stored (the first one counts) and always acknowledged.
 //! - An attempt with no `Started` within [`START_TIMEOUT`] ends `assignment_expired` and the
 //!   task runs again without using a retry; a lost worker's attempts end `lost`.
@@ -28,7 +31,7 @@ use schedr_proto::convert::{
 };
 use schedr_proto::pb;
 
-use crate::execution::{AttemptResult, Execution, ExecutionError};
+use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
 use crate::workers::Workers;
 
 #[cfg(test)]
@@ -40,6 +43,10 @@ pub const START_TIMEOUT: SignedDuration = SignedDuration::from_secs(10);
 /// When a task whose code wasn't on the worker yet is tried again: about the git-sync
 /// interval plus the settle time.
 pub const CODE_RETRY_DELAY: SignedDuration = SignedDuration::from_secs(35);
+
+/// How long a task's code may be missing on every eligible worker before the task is
+/// `unschedulable` (`[master] code_wait`).
+pub const DEFAULT_CODE_WAIT: Duration = Duration::from_mins(10);
 
 /// Inputs up to this size travel inside `AssignTask`; bigger ones are fetched separately.
 pub const INLINE_INPUTS_LIMIT: usize = 4 * 1024 * 1024;
@@ -91,6 +98,16 @@ pub struct Dispatcher {
     cancel_grace: Duration,
     /// Workers that rejected a task instance for a worker-specific reason, with the detail.
     rejections: BTreeMap<String, BTreeMap<String, String>>,
+    /// Task instances whose code a worker didn't have: since when, and which workers said so.
+    code_missing: BTreeMap<String, CodeMissing>,
+    code_wait: SignedDuration,
+}
+
+/// A task's code missing on workers.
+#[derive(Debug, Clone)]
+struct CodeMissing {
+    since: Timestamp,
+    by: BTreeMap<String, String>,
 }
 
 impl Dispatcher {
@@ -103,7 +120,17 @@ impl Dispatcher {
             workers: Workers::new(),
             cancel_grace,
             rejections: BTreeMap::new(),
+            code_missing: BTreeMap::new(),
+            code_wait: SignedDuration::ZERO,
         }
+        .with_code_wait(DEFAULT_CODE_WAIT)
+    }
+
+    /// The dispatcher with another code wait (see [`DEFAULT_CODE_WAIT`]).
+    #[must_use]
+    pub fn with_code_wait(mut self, code_wait: Duration) -> Self {
+        self.code_wait = SignedDuration::try_from(code_wait).unwrap_or(SignedDuration::MAX);
+        self
     }
 
     /// The registered workers.
@@ -128,6 +155,7 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         if self.workers.register(worker_id, incarnation, queues, slots) {
             self.rejections.clear();
+            self.code_missing.clear();
             self.db.requeue_unschedulable(now).await?;
         }
         Ok(())
@@ -194,11 +222,30 @@ impl Dispatcher {
                 .get(&ready.instance_id)
                 .map(|r| r.keys().cloned().collect())
                 .unwrap_or_default();
-            let Some(worker_id) = self
+            let queue = &task.settings.queue;
+            // Workers that didn't have the code yet come last: the others are asked first.
+            let mut without_code = excluded.clone();
+            if let Some(missing) = self.code_missing.get(&ready.instance_id) {
+                without_code.extend(missing.by.keys().cloned());
+            }
+            let picked = self
                 .workers
-                .pick(&task.settings.queue, &excluded)
-                .map(str::to_owned)
-            else {
+                .pick(queue, &without_code)
+                .or_else(|| self.workers.pick(queue, &excluded));
+            let Some(worker_id) = picked.map(str::to_owned) else {
+                let mut serving = self.workers.serving(queue).peekable();
+                let reason = if serving.peek().is_none() {
+                    format!("no active worker serves queue `{queue}`")
+                } else if serving.all(|w| excluded.contains(&w.id)) {
+                    format!("every active worker serving queue `{queue}` rejected it")
+                } else {
+                    format!("waiting for a free slot on the workers serving queue `{queue}`")
+                };
+                if ready.queued_reason.as_deref() != Some(reason.as_str()) {
+                    self.db
+                        .set_queued_reason(&ready.instance_id, &reason, now)
+                        .await?;
+                }
                 continue;
             };
             let Some((attempt_id, try_number)) = self
@@ -251,13 +298,15 @@ impl Dispatcher {
             _ => "spawn",
         };
         let attempt = self.db.attempt(&started.attempt_id).await?;
-        let mine = attempt.as_ref().is_some_and(|a| a.worker_id == worker_id);
-        if mine
+        if let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id)
             && self
                 .db
                 .mark_started(&started.attempt_id, method, now)
                 .await?
         {
+            // It found a worker: who rejected it before doesn't matter any more.
+            self.rejections.remove(&attempt.instance_id);
+            self.code_missing.remove(&attempt.instance_id);
             return Ok(None);
         }
         Ok(Some(cancel(worker_id, &started.attempt_id)))
@@ -285,24 +334,32 @@ impl Dispatcher {
             return Ok(());
         }
         self.workers.release(&attempt.id);
+        let run = self.db.run_tasks(&attempt.run_id).await?;
+        let cancelling = run.as_ref().is_some_and(|run| {
+            run.cancel_requested
+                || run
+                    .instances
+                    .iter()
+                    .any(|i| i.id == attempt.instance_id && i.cancel_requested)
+        });
+        if cancelling {
+            // Never a try, and nothing runs again: the task is cancelled (B5).
+            self.db
+                .undo_assignment(&attempt.id, TaskInstanceState::Cancelled, None, None, now)
+                .await?;
+            self.execution.settle(&attempt.run_id, now).await?;
+            return Ok(());
+        }
+        let queue = run.and_then(|run| {
+            run.dag
+                .task(&attempt.task_id)
+                .map(|t| t.settings.queue.clone())
+        });
+        let queue = queue.as_deref();
         let (state, ready_at, reason) = match reaction {
             RejectReaction::Temporary => (TaskInstanceState::Queued, Some(now), None),
-            RejectReaction::CodeNotThereYet => (
-                TaskInstanceState::Queued,
-                now.checked_add(CODE_RETRY_DELAY).ok(),
-                Some(format!(
-                    "waiting for the code on the workers: {}",
-                    rejected.detail
-                )),
-            ),
-            RejectReaction::WorkerSpecific => {
-                let queue = self.db.run_tasks(&attempt.run_id).await?.and_then(|run| {
-                    run.dag
-                        .task(&attempt.task_id)
-                        .map(|t| t.settings.queue.clone())
-                });
-                self.worker_specific(&attempt, rejected, queue, now)
-            }
+            RejectReaction::CodeNotThereYet => self.not_here(&attempt, rejected, true, queue, now),
+            RejectReaction::WorkerSpecific => self.not_here(&attempt, rejected, false, queue, now),
         };
         self.db
             .undo_assignment(&attempt.id, state, ready_at, reason.as_deref(), now)
@@ -433,6 +490,53 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// Cancels one task of a run (see [`Execution::cancel_task`]); a `CancelAttempt` for its
+    /// attempt if it runs.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] for an unknown run or task, or a database failure.
+    pub async fn cancel_task(
+        &mut self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<(TaskCancel, Vec<Outgoing>), DispatchError> {
+        let cancelled = self.execution.cancel_task(run_id, task_id, now).await?;
+        if cancelled != TaskCancel::Stopping {
+            return Ok((cancelled, Vec::new()));
+        }
+        let stopping = self
+            .db
+            .open_attempts(None)
+            .await?
+            .into_iter()
+            .filter(|a| a.run_id == run_id && &a.task_id == task_id)
+            .map(|a| cancel(&a.worker_id, &a.id))
+            .collect();
+        Ok((cancelled, stopping))
+    }
+
+    /// Queues an `unschedulable` task of an unfinished run again (see
+    /// [`Execution::retry_task`]), forgetting which workers rejected it (`schedr tasks retry`).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] for an unknown run or task, or a database failure.
+    pub async fn retry_task(
+        &mut self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<TaskRetry, DispatchError> {
+        let retried = self.execution.retry_task(run_id, task_id, now).await?;
+        if let TaskRetry::Queued(instance_id) = &retried {
+            self.rejections.remove(instance_id);
+            self.code_missing.remove(instance_id);
+        }
+        Ok(retried)
+    }
+
     /// Cancels a run; returns a `CancelAttempt` for each of its running attempts.
     ///
     /// # Errors
@@ -492,34 +596,76 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// Records a worker-specific rejection; the task is `unschedulable` once every eligible
-    /// worker rejected it.
-    fn worker_specific(
+    /// Records a worker-specific rejection, or that the worker didn't have the code, and
+    /// decides: `unschedulable` once every eligible worker said one or the other, and (if any
+    /// said the code is missing) the code has been missing for the code wait; otherwise
+    /// queued again, after [`CODE_RETRY_DELAY`] when the code was missing.
+    fn not_here(
         &mut self,
         attempt: &StoredAttempt,
         rejected: &pb::Rejected,
-        queue: Option<String>,
+        code: bool,
+        queue: Option<&str>,
         now: Timestamp,
     ) -> (TaskInstanceState, Option<Timestamp>, Option<String>) {
-        let by = self
-            .rejections
-            .entry(attempt.instance_id.clone())
-            .or_default();
-        by.insert(attempt.worker_id.clone(), rejected.detail.clone());
-        let everyone =
-            queue.is_none_or(|queue| self.workers.serving(&queue).all(|w| by.contains_key(&w.id)));
-        if everyone {
-            let reasons: Vec<String> = by.iter().map(|(w, d)| format!("{w}: {d}")).collect();
-            return (
-                TaskInstanceState::Unschedulable,
-                None,
-                Some(format!(
-                    "every eligible worker rejected it ({})",
-                    reasons.join("; ")
-                )),
-            );
+        let instance = &attempt.instance_id;
+        let detail = (attempt.worker_id.clone(), rejected.detail.clone());
+        if code {
+            let missing = self
+                .code_missing
+                .entry(instance.clone())
+                .or_insert_with(|| CodeMissing {
+                    since: now,
+                    by: BTreeMap::new(),
+                });
+            missing.by.insert(detail.0, detail.1);
+        } else {
+            let by = self.rejections.entry(instance.clone()).or_default();
+            by.insert(detail.0, detail.1);
         }
-        (TaskInstanceState::Queued, Some(now), None)
+        let specific = self.rejections.get(instance);
+        let missing = self.code_missing.get(instance);
+        let said = |worker: &str| {
+            specific.is_some_and(|r| r.contains_key(worker))
+                || missing.is_some_and(|m| m.by.contains_key(worker))
+        };
+        let everyone = queue.is_none_or(|queue| self.workers.serving(queue).all(|w| said(&w.id)));
+        let waited = missing.map(|m| now.duration_since(m.since));
+        let code_due = waited.is_none_or(|waited| waited >= self.code_wait);
+        if everyone && code_due {
+            let mut reasons: Vec<String> = specific
+                .into_iter()
+                .flatten()
+                .map(|(w, d)| format!("{w}: {d}"))
+                .collect();
+            reasons.extend(
+                missing
+                    .into_iter()
+                    .flat_map(|m| &m.by)
+                    .map(|(w, d)| format!("{w}: {d}")),
+            );
+            let reason = match (specific, waited) {
+                (None, Some(waited)) => format!(
+                    "the code is missing on every eligible worker after {} min ({})",
+                    waited.as_mins(),
+                    reasons.join("; ")
+                ),
+                _ => format!("every eligible worker rejected it ({})", reasons.join("; ")),
+            };
+            return (TaskInstanceState::Unschedulable, None, Some(reason));
+        }
+        if code {
+            (
+                TaskInstanceState::Queued,
+                now.checked_add(CODE_RETRY_DELAY).ok(),
+                Some(format!(
+                    "waiting for the code on the workers: {}",
+                    rejected.detail
+                )),
+            )
+        } else {
+            (TaskInstanceState::Queued, Some(now), None)
+        }
     }
 
     /// The upstream outputs the task uses, as JSON (`{task_id: output}`).

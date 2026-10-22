@@ -154,6 +154,12 @@ async fn actions_become_pending_commands_by_the_user() {
         "",
     )
     .await;
+    for action in ["cancel", "retry"] {
+        let path = format!("/api/v1/runs/{run_id}/tasks/load/{action}");
+        let (status, body) = send(&app, Method::POST, &path, "").await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["kind"], format!("{action}_task"));
+    }
     let commands: Vec<_> = db
         .pending_commands()
         .await
@@ -184,14 +190,24 @@ async fn actions_become_pending_commands_by_the_user() {
                 dag_id: sync,
                 planned_for: None
             },
-            Command::CancelRun { run_id },
+            Command::CancelRun {
+                run_id: run_id.clone()
+            },
+            Command::CancelTask {
+                run_id: run_id.clone(),
+                task_id: TaskId::new("load").unwrap()
+            },
+            Command::RetryTask {
+                run_id,
+                task_id: TaskId::new("load").unwrap()
+            },
         ]
     );
 }
 
 #[tokio::test]
 async fn bad_bodies_and_ids_are_rejected_before_any_command() {
-    let (app, db, _run) = api().await;
+    let (app, db, run) = api().await;
     let (status, body) = send(&app, Method::POST, "/api/v1/dags/sync/runs", "{not json").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
@@ -210,6 +226,24 @@ async fn bad_bodies_and_ids_are_rejected_before_any_command() {
             json!({"error": "`nope` isn't a run ID"})
         )
     );
+    for action in ["cancel", "retry"] {
+        let (status, _) = send(
+            &app,
+            Method::POST,
+            &format!("/api/v1/runs/nope/tasks/load/{action}"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send(
+            &app,
+            Method::POST,
+            &format!("/api/v1/runs/{run}/tasks/bad%20id/{action}"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
     assert_eq!(
         get(&app, "/api/v1/commands/nope").await,
         (

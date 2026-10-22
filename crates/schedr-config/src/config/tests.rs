@@ -177,6 +177,7 @@ fn master_webserver_and_worker_defaults() {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
+            code_wait: Duration::from_mins(10),
         }
     );
     assert_eq!(config.webserver.port, 8080);
@@ -207,6 +208,7 @@ fn reads_the_master_webserver_and_worker_sections() {
         heartbeat_interval = "5s"
         lease_timeout = "30s"
         cancel_grace = "10s"
+        code_wait = "3m"
 
         [webserver]
         port = 9080
@@ -229,6 +231,7 @@ fn reads_the_master_webserver_and_worker_sections() {
     assert_eq!(config.master.heartbeat_interval, Duration::from_secs(5));
     assert_eq!(config.master.lease_timeout, Duration::from_secs(30));
     assert_eq!(config.master.cancel_grace, Duration::from_secs(10));
+    assert_eq!(config.master.code_wait, Duration::from_mins(3));
     assert_eq!(config.webserver.port, 9080);
     assert_eq!(
         config.webserver.auth.identity_header.as_deref(),

@@ -39,6 +39,8 @@ pub struct ReadyInstance {
     /// The content hash of the code that version was parsed from (the worker reports what it
     /// actually ran).
     pub content_hash: String,
+    /// Why it waits, as shown.
+    pub queued_reason: Option<String>,
 }
 
 /// A stored attempt.
@@ -111,6 +113,7 @@ type ReadyRow = (
     String,
     String,
     String,
+    Option<String>,
 );
 type AttemptRow = (
     String,
@@ -148,12 +151,13 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
-            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, v.dag_json{text}, p.content_hash \
-            FROM task_instances t JOIN runs r ON r.id = t.run_id \
+            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, v.dag_json{text}, p.content_hash, \
+            t.queued_reason FROM task_instances t JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
             WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' \
-            AND r.cancel_requested_at IS NULL ORDER BY t.ready_at, t.id";
+            AND r.cancel_requested_at IS NULL AND t.cancel_requested_at IS NULL \
+            ORDER BY t.ready_at, t.id";
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, READY))
                 .bind(db_time(now))
@@ -422,8 +426,18 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
 }
 
 fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
-    let (instance_id, run_id, task_id, try_number, kind, planned_for, since, json, content_hash) =
-        row;
+    let (
+        instance_id,
+        run_id,
+        task_id,
+        try_number,
+        kind,
+        planned_for,
+        since,
+        json,
+        content_hash,
+        queued_reason,
+    ) = row;
     Ok(ReadyInstance {
         instance_id,
         run_id,
@@ -434,6 +448,7 @@ fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
         since: parse_time("runs.since", &since)?,
         dag: from_json("dag_versions.dag_json", &json)?,
         content_hash,
+        queued_reason,
     })
 }
 

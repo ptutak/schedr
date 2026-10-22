@@ -525,3 +525,304 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
         "worker `w1` restarted while the attempt ran (possibly out of memory)"
     );
 }
+
+async fn reason_of(db: &Database, run_id: &str, task: &str) -> Option<String> {
+    db.run_instances(run_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.task_id == id(task))
+        .and_then(|i| i.queued_reason)
+}
+
+#[tokio::test]
+async fn a_task_that_waits_says_why() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher
+        .register("w1", "i2", &["large".to_owned()], 2, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("no active worker serves queue `default`")
+    );
+    dispatcher
+        .register("w2", "i1", &[], 0, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("waiting for a free slot on the workers serving queue `default`")
+    );
+    dispatcher
+        .register("w2", "i2", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out[0].worker_id, "w2");
+    assert_eq!(reason_of(&db, &run_id, "extract").await, None);
+}
+
+#[tokio::test]
+async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let missing = |a: &str| rejected(a, pb::RejectReason::DagFileMissing, "no team/sync.py");
+    let mut at = 0;
+    for (worker, expected) in [
+        // w2 hasn't said so yet: it is asked next.
+        ("w1", TaskInstanceState::Queued),
+        // Both have, but not for the code wait yet.
+        ("w2", TaskInstanceState::Queued),
+        // Still missing everywhere, 70 s after the first: unschedulable.
+        ("w1", TaskInstanceState::Unschedulable),
+    ] {
+        let out = dispatcher.step(later(at)).await.unwrap();
+        let attempt = out.iter().find(|o| o.worker_id == worker).map_or_else(
+            || panic!("nothing for {worker} at {at} s: {out:?}"),
+            |o| assignment(o).attempt_id.clone(),
+        );
+        dispatcher
+            .rejected(worker, &missing(&attempt), later(at))
+            .await
+            .unwrap();
+        assert_eq!(
+            state_of(&db, &run_id, "extract").await.0,
+            expected,
+            "{at} s"
+        );
+        at += 35;
+    }
+    let reason = reason_of(&db, &run_id, "extract").await.unwrap();
+    assert_eq!(
+        reason,
+        "the code is missing on every eligible worker after 1 min \
+         (w1: no team/sync.py; w2: no team/sync.py)"
+    );
+    assert!(matches!(
+        dispatcher
+            .retry_task(&run_id, &id("extract"), later(at))
+            .await
+            .unwrap(),
+        TaskRetry::Queued(_)
+    ));
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+    assert_eq!(
+        dispatcher
+            .retry_task(&run_id, &id("extract"), later(at))
+            .await
+            .unwrap(),
+        TaskRetry::NotUnschedulable(TaskInstanceState::Queued)
+    );
+    assert_eq!(
+        dispatcher
+            .retry_task(&run_id, &id("load"), later(at))
+            .await
+            .unwrap(),
+        TaskRetry::NotUnschedulable(TaskInstanceState::Scheduled)
+    );
+}
+
+#[tokio::test]
+async fn retrying_needs_a_known_task_of_an_unfinished_run() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    assert_eq!(
+        dispatcher
+            .retry_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskRetry::RunQueued,
+        "no instances yet"
+    );
+    assert!(matches!(
+        dispatcher.retry_task(&run_id, &id("ghost"), ts(NOW)).await,
+        Err(DispatchError::Execution(ExecutionError::UnknownTask { .. }))
+    ));
+    assert!(matches!(
+        dispatcher
+            .retry_task(
+                "0190a3e5-0000-7000-8000-000000000000",
+                &id("extract"),
+                ts(NOW)
+            )
+            .await,
+        Err(DispatchError::Execution(ExecutionError::UnknownRun(_)))
+    ));
+    db.finish_run(&run_id, RunState::Failed, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher
+            .retry_task(&run_id, &id("extract"), ts(NOW))
+            .await
+            .unwrap(),
+        TaskRetry::RunFinished(RunState::Failed)
+    );
+}
+
+#[tokio::test]
+async fn a_running_task_is_cancelled_through_its_worker() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let (cancelled, out) = dispatcher
+        .cancel_task(&run_id, &id("extract"), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(cancelled, TaskCancel::Stopping);
+    assert_eq!(cancelled_attempt(&out[0]), attempt);
+    let done = finished(&attempt, pb::AttemptStatus::Cancelled, &json!(null));
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    assert_eq!(
+        db.run_tasks(&run_id).await.unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+    let (cancelled, out) = dispatcher
+        .cancel_task(&run_id, &id("load"), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        (cancelled, out.len()),
+        (TaskCancel::RunFinished(RunState::Cancelled), 0)
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_assignment_of_a_task_being_cancelled_cancels_it() {
+    for whole_run in [false, true] {
+        let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let attempt = assignment(&out[0]).attempt_id.clone();
+        if whole_run {
+            dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
+        } else {
+            dispatcher
+                .cancel_task(&run_id, &id("extract"), ts(NOW))
+                .await
+                .unwrap();
+        }
+        let busy = rejected(&attempt, pb::RejectReason::NoFreeSlot, "no free slot");
+        dispatcher.rejected("w1", &busy, ts(NOW)).await.unwrap();
+        assert_eq!(
+            state_of(&db, &run_id, "extract").await,
+            (TaskInstanceState::Cancelled, 0),
+            "never a try (whole run: {whole_run})"
+        );
+        assert_eq!(
+            db.run_tasks(&run_id).await.unwrap().unwrap().state,
+            RunState::Cancelled,
+            "B5: the run isn't left running (whole run: {whole_run})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_specific_and_code_rejections_together_make_the_task_unschedulable() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let mut at = 0;
+    for (worker, reason, expected) in [
+        (
+            "w1",
+            pb::RejectReason::InterpreterUndefined,
+            TaskInstanceState::Queued,
+        ),
+        (
+            "w2",
+            pb::RejectReason::DagFileMissing,
+            TaskInstanceState::Queued,
+        ),
+        (
+            "w2",
+            pb::RejectReason::DagFileMissing,
+            TaskInstanceState::Queued,
+        ),
+        (
+            "w2",
+            pb::RejectReason::DagFileMissing,
+            TaskInstanceState::Unschedulable,
+        ),
+    ] {
+        let out = dispatcher.step(later(at)).await.unwrap();
+        assert_eq!(out[0].worker_id, worker, "{at} s");
+        let attempt = assignment(&out[0]).attempt_id.clone();
+        dispatcher
+            .rejected(worker, &rejected(&attempt, reason, "no"), later(at))
+            .await
+            .unwrap();
+        assert_eq!(
+            state_of(&db, &run_id, "extract").await.0,
+            expected,
+            "{at} s"
+        );
+        at += 35;
+    }
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("every eligible worker rejected it (w1: no; w2: no)")
+    );
+}
+
+#[tokio::test]
+async fn a_task_that_started_somewhere_forgets_who_rejected_it() {
+    let (dispatcher, db, run_id) = with_run(dag(1)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    let missing = |a: &str| rejected(a, pb::RejectReason::DagFileMissing, "no team/sync.py");
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let first = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .rejected("w1", &missing(&first), ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(later(35)).await.unwrap();
+    let second = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&second), later(35))
+        .await
+        .unwrap();
+    let failed = finished(&second, pb::AttemptStatus::Failed, &json!(null));
+    dispatcher.finished("w1", &failed, later(36)).await.unwrap();
+    // The retry, long after the first rejection, meets missing code again: a fresh wait.
+    let out = dispatcher.step(later(600)).await.unwrap();
+    let third = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .rejected("w1", &missing(&third), later(600))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_task_every_remaining_worker_rejected_says_so() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    dispatcher.worker_lost("w2", ts(NOW)).await.unwrap();
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("every active worker serving queue `default` rejected it")
+    );
+}

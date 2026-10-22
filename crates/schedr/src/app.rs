@@ -11,7 +11,7 @@ use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
 use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
 use crate::interpreter::{Host, apply};
 use crate::times::local_zone;
-use crate::user::{Output, run_dags, run_runs, run_workers};
+use crate::user::{Output, run_dags, run_runs, run_tasks, run_workers};
 
 #[cfg(test)]
 mod tests;
@@ -196,6 +196,10 @@ pub async fn execute(
         (Command::Runs { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_runs(command, &api, &output, out, err).await
+        }
+        (Command::Tasks { client, command }, None) => {
+            let (api, output) = connect(client, env);
+            run_tasks(command, &api, &output, out).await
         }
         (other, milestone) => Err(AppError::NotImplemented {
             command: other.name(),

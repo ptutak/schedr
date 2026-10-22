@@ -161,10 +161,16 @@ impl Cluster {
 
     /// Starts a role with more environment variables.
     fn start_with(&mut self, name: &'static str, env: &[(&str, &str)]) {
+        self.start_as(name, name, env);
+    }
+
+    /// Starts `role` under the name `name` (its log is `<name>.log`), with more environment
+    /// variables: a second worker, say.
+    fn start_as(&mut self, name: &'static str, role: &str, env: &[(&str, &str)]) {
         let log = self.dir.path().join(format!("{name}.log"));
         let file = std::fs::File::create(&log).unwrap();
         let child = self
-            .command(&[name])
+            .command(&[role])
             .envs(env.iter().copied())
             .stdout(Stdio::from(file.try_clone().unwrap()))
             .stderr(Stdio::from(file))
@@ -644,4 +650,142 @@ fn a_second_worker_with_the_same_id_is_refused() {
         last_log(&cluster).contains("already has a live stream")
     });
     assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
+}
+
+/// `small` (the default queue) → `big` (queue `large`) → `rare` (queue `gpu`), and `pause`,
+/// which sleeps, → `after`.
+const QUEUES: &str = r#"
+import time
+from schedr import Dag, task
+
+@task
+def small() -> int:
+    return 1
+
+@task(queue="large")
+def big(n: int) -> int:
+    return n + 1
+
+@task(queue="gpu")
+def rare(n: int) -> int:
+    return n + 1
+
+with Dag("queues"):
+    rare(big(small()))
+
+@task
+def pause() -> int:
+    time.sleep(60)
+    return 1
+
+@task
+def after(n: int) -> int:
+    return n
+
+with Dag("slow"):
+    after(pause())
+"#;
+
+impl Cluster {
+    fn task(&self, run_id: &str, task: &str) -> Value {
+        let run = self.api_get(&format!("/api/v1/runs/{run_id}")).unwrap();
+        run["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["task_id"] == task)
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    fn run_state(&self, run_id: &str) -> String {
+        self.api_get(&format!("/api/v1/runs/{run_id}"))
+            .map(|r| r["run"]["state"].as_str().unwrap_or_default().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// A worker serving `queues`, as `name` with worker ID `id`.
+    fn start_worker(&mut self, name: &'static str, id: &str, queues: &str) {
+        self.start_as(
+            name,
+            "worker",
+            &[
+                ("SCHEDR_CONFIG__WORKER__ID", id),
+                ("SCHEDR_CONFIG__WORKER__QUEUES", queues),
+            ],
+        );
+    }
+}
+
+#[test]
+fn tasks_go_to_the_workers_serving_their_queue_and_wait_for_one() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("queues.py"), QUEUES).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.start_worker("worker-large", "w2", r#"["large"]"#);
+    cluster.wait("both workers", || {
+        cluster.worker_state("w2").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("queues");
+    cluster.wait("`big` to succeed and `rare` to wait", || {
+        cluster.task(&run_id, "big")["state"] == "success"
+            && cluster.task(&run_id, "rare")["reason"] == "no active worker serves queue `gpu`"
+    });
+    let worker_of = |task: &str| cluster.attempts(&run_id, task)[0]["worker_id"].clone();
+    assert_eq!(worker_of("small"), "w1");
+    assert_eq!(worker_of("big"), "w2");
+    assert_eq!(cluster.task(&run_id, "rare")["state"], "queued");
+
+    cluster.start_worker("worker-gpu", "w3", r#"["gpu"]"#);
+    cluster.wait("the run to succeed", || {
+        cluster.run_state(&run_id) == "success"
+    });
+    assert_eq!(
+        cluster.attempts(&run_id, "rare")[0]["worker_id"],
+        "w3",
+        "{}",
+        cluster.logs()
+    );
+}
+
+#[test]
+fn a_running_task_is_cancelled_with_what_follows_it() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("queues.py"), QUEUES).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    let run_id = cluster.trigger("slow");
+    cluster.wait("`pause` to start", || {
+        cluster
+            .attempts(&run_id, "pause")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    let (code, out, err) = cluster.cli(&["tasks", "retry", &run_id, "pause"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("is running, not unschedulable"), "{err}");
+    let (code, out2, err) = cluster.cli(&["tasks", "cancel", &run_id, "pause"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        out2,
+        format!("cancelling task pause of run {run_id} (being stopped)\n")
+    );
+    cluster.wait("the run to end cancelled", || {
+        cluster.run_state(&run_id) == "cancelled"
+    });
+    assert_eq!(cluster.task(&run_id, "pause")["state"], "cancelled");
+    assert_eq!(cluster.task(&run_id, "after")["state"], "cancelled");
+    assert_eq!(cluster.attempts(&run_id, "pause")[0]["status"], "cancelled");
+    let (code, _, err) = cluster.cli(&["tasks", "cancel", &run_id, "after"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("already finished (cancelled)"), "{err}");
 }

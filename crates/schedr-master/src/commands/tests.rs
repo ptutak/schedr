@@ -1,6 +1,6 @@
 use pretty_assertions::assert_eq;
 use schedr_db::dags::{DagChange, NewParse};
-use schedr_model::{Dag, RunState};
+use schedr_model::{Dag, RunState, TaskId};
 use schedr_proto::pb;
 use serde_json::Value as Json;
 use sqlx::AssertSqlSafe;
@@ -351,4 +351,141 @@ async fn a_payload_that_doesnt_read_is_rejected() {
             .unwrap()
             .starts_with("invalid command: "),
     );
+}
+
+#[tokio::test]
+async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
+    let mut world = world().await;
+    let extract = TaskId::new("extract").unwrap();
+    let ghost = TaskId::new("ghost").unwrap();
+    let unknown_run = "0190a3e5-0000-7000-8000-000000000000".to_owned();
+    world
+        .ask(&Command::TriggerRun {
+            dag_id: sync(),
+            planned_for: None,
+        })
+        .await;
+    let run_id = world.apply().await.decided[0].result.as_ref().unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cancel = |task_id: &TaskId| Command::CancelTask {
+        run_id: run_id.clone(),
+        task_id: task_id.clone(),
+    };
+    let retry = |task_id: &TaskId| Command::RetryTask {
+        run_id: run_id.clone(),
+        task_id: task_id.clone(),
+    };
+    world.ask(&cancel(&extract)).await;
+    world.ask(&cancel(&ghost)).await;
+    world.ask(&retry(&ghost)).await;
+    world
+        .ask(&Command::RetryTask {
+            run_id: unknown_run.clone(),
+            task_id: extract.clone(),
+        })
+        .await;
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    assert_eq!(
+        decided,
+        [
+            rejected(&format!(
+                "run `{run_id}` hasn't started its tasks yet: cancel the run \
+                 (`schedr runs cancel`), or try again once it runs"
+            )),
+            rejected(&format!("run `{run_id}` has no task `ghost`")),
+            rejected(&format!("run `{run_id}` has no task `ghost`")),
+            rejected(&format!("no run `{unknown_run}`")),
+        ]
+    );
+
+    world.dispatcher.step(ts(NOW)).await.unwrap();
+    world.ask(&retry(&extract)).await;
+    world.ask(&cancel(&extract)).await;
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    assert_eq!(
+        decided,
+        [
+            rejected(&format!(
+                "task `extract` of run `{run_id}` is running, not unschedulable: only an \
+                 unschedulable task is retried (a failed one is retried by its `retries`)"
+            )),
+            (
+                CommandStatus::Applied,
+                None,
+                Some(json!({"state": "stopping", "stopping_attempts": 1}))
+            ),
+        ]
+    );
+    assert_eq!(applied.outgoing.len(), 1);
+
+    // The worker rejects it meanwhile: cancelled, and the run with it.
+    let Some(pb::master_message::Message::CancelAttempt(stop)) =
+        &applied.outgoing[0].message.message
+    else {
+        panic!("expected CancelAttempt")
+    };
+    let busy = pb::Rejected {
+        attempt_id: stop.attempt_id.clone(),
+        reason: pb::RejectReason::NoFreeSlot.into(),
+        detail: String::new(),
+    };
+    world
+        .dispatcher
+        .rejected("w1", &busy, ts(NOW))
+        .await
+        .unwrap();
+    world.ask(&cancel(&extract)).await;
+    world.ask(&retry(&extract)).await;
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    assert_eq!(
+        decided,
+        [
+            rejected(&format!("run `{run_id}` already finished (cancelled)")),
+            rejected(&format!(
+                "run `{run_id}` already finished (cancelled): trigger a new run"
+            )),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_database_failure_leaves_a_task_command_pending() {
+    let mut world = world().await;
+    world
+        .ask(&Command::TriggerRun {
+            dag_id: sync(),
+            planned_for: None,
+        })
+        .await;
+    let run_id = world.apply().await.decided[0].result.as_ref().unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    world.dispatcher.step(ts(NOW)).await.unwrap();
+    let Database::Sqlite(pool) = &world.db else {
+        panic!("expected SQLite")
+    };
+    sqlx::query(AssertSqlSafe(
+        "ALTER TABLE dag_versions RENAME TO gone".to_owned(),
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    world
+        .ask(&Command::CancelTask {
+            run_id,
+            task_id: TaskId::new("extract").unwrap(),
+        })
+        .await;
+    let applied = world
+        .commander
+        .apply_pending(&world.scheduler, &mut world.dispatcher, ts(NOW))
+        .await;
+    assert!(applied.is_err(), "{applied:?}");
+    assert_eq!(world.db.pending_commands().await.unwrap().len(), 1);
 }

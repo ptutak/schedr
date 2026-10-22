@@ -35,6 +35,8 @@ pub struct StoredInstance {
     pub retries_used: u32,
     /// When it became (or becomes) ready to run.
     pub ready_at: Option<Timestamp>,
+    /// Whether a user asked to cancel it (`schedr tasks cancel`).
+    pub cancel_requested: bool,
 }
 
 /// A run with its task instances.
@@ -65,7 +67,7 @@ pub struct InstanceUpdate {
     pub used_retry: bool,
 }
 
-type InstanceRow = (String, String, String, i32, i32, Option<String>);
+type InstanceRow = (String, String, String, i32, i32, Option<String>, bool);
 
 impl Database {
     /// Running runs with no task instances yet, oldest first.
@@ -135,7 +137,8 @@ impl Database {
         const RUN: &str = "SELECT r.state, r.cancel_requested_at IS NOT NULL, v.dag_json{text} \
             FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
-            {ts<}ready_at{>ts} FROM task_instances WHERE run_id = $1{uuid} ORDER BY task_id";
+            {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL FROM task_instances \
+            WHERE run_id = $1{uuid} ORDER BY task_id";
         let (run, rows): (Option<(String, bool, String)>, Vec<InstanceRow>) =
             on_pool!(self, |pool, backend| {
                 let run = sqlx::query_as(sql(backend, RUN))
@@ -234,6 +237,80 @@ impl Database {
         Ok(())
     }
 
+    /// Marks a running task as being cancelled (the first request counts).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn request_task_cancel(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const CANCEL: &str = "UPDATE task_instances SET cancel_requested_at = $1{ts} \
+            WHERE run_id = $2{uuid} AND task_id = $3 AND cancel_requested_at IS NULL";
+        on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, CANCEL))
+                .bind(db_time(now))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .execute(pool)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// Queues an `unschedulable` task again (`schedr tasks retry`); whether it was one.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn retry_unschedulable(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        now: Timestamp,
+    ) -> Result<bool, DbError> {
+        const RETRY: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
+            queued_reason = NULL, updated_at = $1{ts} \
+            WHERE run_id = $2{uuid} AND task_id = $3 AND state = 'unschedulable'";
+        let updated = on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, RETRY))
+                .bind(db_time(now))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .execute(pool)
+                .await?
+                .rows_affected()
+        });
+        Ok(updated > 0)
+    }
+
+    /// Sets why a queued task waits (shown with it), if it still waits.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_queued_reason(
+        &self,
+        instance_id: &str,
+        reason: &str,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const REASON: &str = "UPDATE task_instances SET queued_reason = $1, updated_at = $2{ts} \
+            WHERE id = $3{uuid} AND state = 'queued'";
+        on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, REASON))
+                .bind(reason)
+                .bind(db_time(now))
+                .bind(instance_id)
+                .execute(pool)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// The task instances whose retry delay has passed: (run ID, task ID), oldest first.
     ///
     /// # Errors
@@ -311,7 +388,7 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
 }
 
 fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
-    let (id, task_id, state, try_number, retries_used, ready_at) = row;
+    let (id, task_id, state, try_number, retries_used, ready_at, cancel_requested) = row;
     Ok(StoredInstance {
         id,
         task_id: task_id_of(task_id)?,
@@ -321,5 +398,6 @@ fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
         ready_at: ready_at
             .map(|t| parse_time("task_instances.ready_at", &t))
             .transpose()?,
+        cancel_requested,
     })
 }

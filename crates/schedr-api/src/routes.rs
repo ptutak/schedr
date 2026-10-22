@@ -186,6 +186,43 @@ pub async fn cancel_run(
     submit(&state, &headers, Command::CancelRun { run_id }).await
 }
 
+/// Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if
+/// it hasn't started; the tasks downstream of it are cancelled. Applied by the master; poll
+/// the command for the decision.
+#[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/cancel", tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "The run's ID"),
+        ("task_id" = String, Path, description = "The task's ID")
+    ),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn cancel_task(
+    State(state): State<ApiState>,
+    Path((run_id, task_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Accepted {
+    parse_uuid(&run_id, "run")?;
+    let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    submit(&state, &headers, Command::CancelTask { run_id, task_id }).await
+}
+
+/// Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the
+/// master; poll the command for the decision.
+#[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/retry", tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "The run's ID"),
+        ("task_id" = String, Path, description = "The task's ID")
+    ),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn retry_task(
+    State(state): State<ApiState>,
+    Path((run_id, task_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Accepted {
+    parse_uuid(&run_id, "run")?;
+    let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    submit(&state, &headers, Command::RetryTask { run_id, task_id }).await
+}
+
 /// The attempts of a run's task, oldest first.
 #[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/attempts", tag = "runs",
     params(

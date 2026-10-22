@@ -11,8 +11,8 @@ use jiff::tz::TimeZone;
 use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
 
 use crate::app::AppError;
-use crate::cli::{DagsCommand, RunsCommand, WorkersCommand};
-use crate::client::{Client, Transport};
+use crate::cli::{DagsCommand, RunsCommand, TasksCommand, WorkersCommand};
+use crate::client::{Client, TaskAction, Transport};
 use crate::times::{parse_for, show, show_short};
 
 #[cfg(test)]
@@ -196,6 +196,44 @@ pub async fn run_runs<T: Transport>(
         RunsCommand::Backfill { .. } => return Err(not_yet("runs backfill", "M4")),
     }
     Ok(())
+}
+
+/// `schedr tasks cancel` and `retry`: each waits for the master's decision.
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason);
+/// [`AppError::NotImplemented`] for `--map-index`.
+pub async fn run_tasks<T: Transport>(
+    command: &TasksCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let (target, action) = match command {
+        TasksCommand::Cancel(target) => (target, TaskAction::Cancel),
+        TasksCommand::Retry(target) => (target, TaskAction::Retry),
+    };
+    if target.map_index.is_some() {
+        return Err(not_yet("tasks --map-index", "M4"));
+    }
+    let (run_id, task_id) = (&target.run_id, &target.task_id);
+    let command = client
+        .wait(client.task_action(run_id, task_id, action).await?)
+        .await?;
+    let state = command
+        .result
+        .as_ref()
+        .and_then(|r| r["state"].as_str())
+        .unwrap_or_default();
+    let message = match (action, state) {
+        (TaskAction::Cancel, "stopping") => {
+            format!("cancelling task {task_id} of run {run_id} (being stopped)")
+        }
+        (TaskAction::Cancel, _) => format!("cancelled task {task_id} of run {run_id}"),
+        (TaskAction::Retry, _) => format!("queued task {task_id} of run {run_id} again"),
+    };
+    done(out, output, &command, &message)
 }
 
 fn for_time(text: Option<&str>, err: &mut impl Write) -> Result<Option<jiff::Timestamp>, AppError> {

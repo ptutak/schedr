@@ -263,11 +263,15 @@ pub struct MasterSection {
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     #[serde(deserialize_with = "deserialize_duration")]
     pub cancel_grace: Duration,
+    /// How long a task's code may be missing on every eligible worker (git-sync not there
+    /// yet) before the task is `unschedulable`.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub code_wait: Duration,
 }
 
 impl Default for MasterSection {
     /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
-    /// 60 s, 30 s grace.
+    /// 60 s, 30 s grace, 10 min for missing code.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -276,6 +280,7 @@ impl Default for MasterSection {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
+            code_wait: Duration::from_mins(10),
         }
     }
 }

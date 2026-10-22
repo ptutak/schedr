@@ -18,7 +18,9 @@ use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
 
 use crate::commands::{CommandError, Commander};
 use crate::discovery::{Discovery, ParseUpload};
-use crate::dispatch::{DEFAULT_CANCEL_GRACE, DispatchError, Dispatcher, Outgoing};
+use crate::dispatch::{
+    DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
+};
 use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey};
 use crate::scheduler::{Scheduler, SchedulerError};
 
@@ -36,16 +38,20 @@ pub struct Settings {
     pub cancel_grace: Duration,
     /// How long a worker has for a parse job.
     pub parse_job_timeout: Duration,
+    /// How long a task's code may be missing on every eligible worker.
+    pub code_wait: Duration,
 }
 
 impl Default for Settings {
-    /// Heartbeat every 10 s, lost after 60 s, 30 s cancel grace, 10 min per parse job.
+    /// Heartbeat every 10 s, lost after 60 s, 30 s cancel grace, 10 min per parse job, 10 min
+    /// for missing code.
     fn default() -> Self {
         Self {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
             cancel_grace: DEFAULT_CANCEL_GRACE,
             parse_job_timeout: PARSE_JOB_TIMEOUT,
+            code_wait: DEFAULT_CODE_WAIT,
         }
     }
 }
@@ -112,7 +118,8 @@ impl MasterCore {
                 SchedrVersion::current(),
                 ParseJobs::new(settings.parse_job_timeout),
             ),
-            dispatcher: Dispatcher::new(db.clone(), settings.cancel_grace),
+            dispatcher: Dispatcher::new(db.clone(), settings.cancel_grace)
+                .with_code_wait(settings.code_wait),
             scheduler: Scheduler::new(db.clone()),
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),

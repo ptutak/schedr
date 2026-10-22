@@ -986,6 +986,104 @@
         ]
       }
     },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/cancel": {
+      "post": {
+        "operationId": "cancel_task",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if\nit hasn't started; the tasks downstream of it are cancelled. Applied by the master; poll\nthe command for the decision.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/retry": {
+      "post": {
+        "operationId": "retry_task",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the\nmaster; poll the command for the decision.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/workers": {
       "get": {
         "operationId": "list_workers",

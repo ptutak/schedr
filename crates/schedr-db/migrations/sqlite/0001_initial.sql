@@ -100,6 +100,8 @@ CREATE TABLE task_instances (
     retries_used  INTEGER NOT NULL DEFAULT 0 CHECK (retries_used >= 0),
     queued_reason TEXT,
     ready_at      TEXT,
+    -- When a user asked to cancel this task (`schedr tasks cancel`) while it ran.
+    cancel_requested_at TEXT,
     updated_at    TEXT NOT NULL,
     UNIQUE (run_id, task_id, map_index)
 );
