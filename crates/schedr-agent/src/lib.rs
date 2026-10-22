@@ -9,6 +9,7 @@ pub mod agent;
 pub mod attempt;
 pub mod channel;
 pub mod env;
+pub mod journal;
 pub mod launch;
 pub mod output;
 pub mod parse;

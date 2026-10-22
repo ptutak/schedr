@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use schedr_agent::journal::{Journal, JournalRecord};
+use schedr_proto::pb;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -154,10 +156,16 @@ impl Cluster {
     }
 
     fn start(&mut self, name: &'static str) {
+        self.start_with(name, &[]);
+    }
+
+    /// Starts a role with more environment variables.
+    fn start_with(&mut self, name: &'static str, env: &[(&str, &str)]) {
         let log = self.dir.path().join(format!("{name}.log"));
         let file = std::fs::File::create(&log).unwrap();
         let child = self
             .command(&[name])
+            .envs(env.iter().copied())
             .stdout(Stdio::from(file.try_clone().unwrap()))
             .stderr(Stdio::from(file))
             .spawn()
@@ -363,7 +371,8 @@ fn a_role_stops_on_sigterm() {
     }
 }
 
-/// A task that runs long on its first try (leaving a marker) and returns at once after.
+/// A task that runs long on its first try (leaving a marker with its process ID) and returns
+/// at once after.
 fn slow_first_try(marker: &std::path::Path) -> String {
     format!(
         r#"
@@ -375,7 +384,8 @@ from schedr import Dag, task
 def work() -> str:
     marker = {marker:?}
     if not os.path.exists(marker):
-        open(marker, "w").close()
+        with open(marker, "w") as file:
+            file.write(str(os.getpid()))
         time.sleep(15)
     return "done"
 
@@ -441,8 +451,26 @@ fn slow_cluster() -> Cluster {
     cluster
 }
 
+impl Cluster {
+    /// The process ID the first try of `slow` wrote, once it did.
+    fn first_try_pid(&self) -> String {
+        let marker = self.dir.path().join("marker");
+        let mut pid = String::new();
+        self.wait("the first try's process ID", || {
+            pid = std::fs::read_to_string(&marker).unwrap_or_default();
+            !pid.is_empty()
+        });
+        pid
+    }
+
+    /// The worker's journal.
+    fn journal(&self) -> Journal {
+        Journal::new(self.dir.path().join("data/journal/w1"))
+    }
+}
+
 #[test]
-fn a_restarted_worker_loses_its_running_attempt_which_is_retried() {
+fn a_restarted_worker_stops_the_task_it_left_running_whose_attempt_is_lost_and_retried() {
     let mut cluster = slow_cluster();
     let run_id = cluster.trigger("slow");
     cluster.wait("the first attempt to start", || {
@@ -451,8 +479,16 @@ fn a_restarted_worker_loses_its_running_attempt_which_is_retried() {
             .first()
             .is_some_and(|a| !a["started_at"].is_null())
     });
+    let pid = cluster.first_try_pid();
     cluster.kill("worker");
+    assert!(
+        PathBuf::from(format!("/proc/{pid}")).exists(),
+        "the task outlives its agent"
+    );
     cluster.start("worker");
+    cluster.wait("the task the previous agent left to be stopped", || {
+        !PathBuf::from(format!("/proc/{pid}")).exists()
+    });
     cluster.wait("the retry to succeed", || {
         cluster
             .cli_json(&["runs", "list", "slow"])
@@ -464,7 +500,59 @@ fn a_restarted_worker_loses_its_running_attempt_which_is_retried() {
         .map(|a| a["status"].clone())
         .collect();
     assert_eq!(statuses, ["lost", "success"], "{}", cluster.logs());
+    let lost = &cluster.attempts(&run_id, "work")[0];
+    assert_eq!(lost["error_summary"]["exception"], "WorkerRestarted");
     assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
+    assert_eq!(
+        cluster.journal().records().unwrap(),
+        [],
+        "everything acknowledged"
+    );
+}
+
+#[test]
+fn a_result_the_master_didnt_acknowledge_survives_a_worker_restart() {
+    let mut cluster = slow_cluster();
+    let run_id = cluster.trigger("slow");
+    let journal = cluster.journal();
+    let mut recorded = Vec::new();
+    cluster.wait("the first try's process in the journal", || {
+        recorded = journal.records().unwrap_or_default();
+        matches!(recorded.as_slice(), [(_, JournalRecord::Running(Some(_)))])
+    });
+    let [(attempt_id, JournalRecord::Running(Some(process)))] = recorded.as_slice() else {
+        unreachable!()
+    };
+    assert_eq!(process.pgid.to_string(), cluster.first_try_pid());
+    // The agent dies just after the task ended and its result was journalled, before the
+    // master acknowledged it.
+    cluster.kill("worker");
+    let group = rustix::process::Pid::from_raw(process.pgid).unwrap();
+    rustix::process::kill_process_group(group, rustix::process::Signal::KILL).unwrap();
+    let finished = pb::Finished {
+        attempt_id: attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: br#""done""#.to_vec(),
+        ..pb::Finished::default()
+    };
+    journal
+        .write(attempt_id, &JournalRecord::Finished(finished))
+        .unwrap();
+    cluster.start("worker");
+    cluster.wait("the run to succeed", || {
+        cluster
+            .cli_json(&["runs", "list", "slow"])
+            .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+    });
+    let statuses: Vec<Value> = cluster
+        .attempts(&run_id, "work")
+        .iter()
+        .map(|a| a["status"].clone())
+        .collect();
+    assert_eq!(statuses, ["success"], "not lost: {}", cluster.logs());
+    cluster.wait("the result to be acknowledged", || {
+        journal.records().is_ok_and(|records| records.is_empty())
+    });
 }
 
 #[test]
@@ -537,11 +625,23 @@ fn a_running_task_survives_a_master_restart() {
 fn a_second_worker_with_the_same_id_is_refused() {
     let mut cluster = Cluster::new(None, "100ms");
     cluster.up();
+    let last_log = |cluster: &Cluster| {
+        std::fs::read_to_string(&cluster.roles.last().unwrap().log).unwrap_or_default()
+    };
     cluster.start("worker");
-    cluster.wait("the second worker to be refused", || {
-        std::fs::read_to_string(&cluster.roles.last().unwrap().log)
-            .unwrap_or_default()
-            .contains("already has a live stream")
+    cluster.wait("the second worker to be refused its journal", || {
+        last_log(&cluster).contains("another schedr worker `w1` is using")
+    });
+    let elsewhere = cluster.dir.path().join("elsewhere");
+    cluster.start_with(
+        "worker",
+        &[(
+            "SCHEDR_CONFIG__WORKER__DATA_DIR",
+            elsewhere.to_str().unwrap(),
+        )],
+    );
+    cluster.wait("the third worker to be refused by the master", || {
+        last_log(&cluster).contains("already has a live stream")
     });
     assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
 }

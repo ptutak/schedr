@@ -38,6 +38,20 @@ pub struct ErrorSummary {
     pub traceback: String,
 }
 
+impl ErrorSummary {
+    /// The JSON text of a summary schedr itself wrote (no traceback), e.g. when the agent
+    /// lost the runner or the master lost the worker.
+    #[must_use]
+    pub fn json(exception: &str, message: &str) -> String {
+        let summary = Self {
+            exception: exception.to_owned(),
+            message: message.to_owned(),
+            traceback: String::new(),
+        };
+        serde_json::to_string(&summary).unwrap_or_default()
+    }
+}
+
 /// One file of a parse job: the DAGs it defines, or why it couldn't be imported. The agent
 /// builds it from `file_parsed`, uploads it to the master, which stores it as is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

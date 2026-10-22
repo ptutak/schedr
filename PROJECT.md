@@ -730,10 +730,42 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   incarnation than the one the master knows, the attempts it had **started** and doesn't
   report in its journal end **`lost`, each using a retry**: the crash rule (it may have been
   the task's own memory spike; `interrupted`, which uses no retry, stays for draining), and the
-  same outcome as the lease running out, only sooner. Attempts not started yet are left to
-  expire, without using a retry. With the journal on disk (2.3) the new incarnation reports
-  its attempts itself. Not chosen: `interrupted` (a task crashing its container every time
-  would loop for ever).
+  same outcome as the lease running out, only sooner (those end with the error summary
+  `WorkerLost`: "worker `w1` stopped answering while the attempt ran"). Attempts not started yet are left to
+  expire, without using a retry. The ended attempts get the error summary
+  `WorkerRestarted`: "worker `w1` restarted while the attempt ran (possibly out of memory)".
+  With the journal on disk (2.3) the new incarnation reports the results it had, and leaves
+  out the attempts that were running (it stops their processes), so this rule ends those.
+  Not chosen: `interrupted` (a task crashing its container every time would loop for ever).
+- **The journal on disk** (M2.3) is one file per attempt, `<data_dir>/journal/<worker
+  ID>/<attempt_id>.json` (the worker ID with other bytes than letters, digits, `-`, `_` and
+  `.`, and a leading `.`, as `%XX`, so different IDs never share a journal), holding `running` (with the process group's identity once it is
+  spawned) or `finished` (the `Finished` message, protobuf-encoded, as hex). Each write goes
+  to a temporary file, is fsynced, renamed over the old one, and the directory fsynced,
+  **before** the message it backs is sent: `running` before `Started`, `finished` before
+  `Finished`. A file goes on `FinishedAck`, or on an **ack** or **kill** decision. An attempt
+  the journal can't record is rejected with `DISK_NOT_WRITABLE`; a result it can't record
+  is still sent (logged: it is lost if the agent restarts before the ack). What ends while
+  the master is away is journalled at once, not when the agent reconnects. An assignment of
+  an attempt the agent already has is ignored (its file isn't replaced).
+- **On start the agent recovers its journal** before connecting: temporary files are
+  removed (an unreadable file is logged and removed: nothing was sent for it), `finished`
+  results are reported in `Register` and sent again on **continue**, and for each `running`
+  attempt the process group it left is stopped (SIGTERM, then SIGKILL after 10 s, then up to
+  5 s for the group to go, so the retry doesn't start beside it) and the attempt forgotten,
+  so the master ends it `lost` (above). A group that can't be signalled stays in the journal
+  (logged), to be tried again at the next start. A file recovery can't remove is logged; the
+  other records are still reported. The group is identified by its
+  ID and its leader's start time (field 22 of `/proc/<pid>/stat`), so a recycled PID is
+  never signalled; once the leader is gone, or without `/proc`, nothing is stopped.
+- **One agent per journal:** the agent holds an `flock` on `<journal>/.lock`; a second
+  worker with the same ID and data directory exits at once (its recovery would stop the
+  first one's tasks). Workers on one host with their own IDs can share a data directory.
+- Not chosen for the journal: an append-only log (compaction and a torn last line to
+  handle), SQLite on the worker (a dependency and a schema for a handful of records);
+  adopting a task left running by the previous agent (its socket to the old agent is gone,
+  so its result can't arrive) or leaving it running (it would hold memory and run twice
+  with the retry).
 - **The agent reconnects** after a backoff that doubles from 200 ms up to 30 s, **with jitter**
   (between half the backoff and all of it, so workers that lost the master together don't
   return in lockstep), and **starts again from 200 ms** after a session in which the master
@@ -817,9 +849,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   with `runner_failed` (retried). A command's `ProcessResult` is its output on success and its
   error summary on failure. Python tasks run in their root's directory, commands in their DAG
   file's directory; each attempt's log is `<log_dir>/<attempt_id>.log`.
-- **The worker's journal** is in memory in M1 (running attempts and results not yet
-  acknowledged, reported in `Register` after a reconnect); on disk, surviving an agent
-  restart, in M2.
+- **The worker's journal** holds running attempts and results not yet acknowledged,
+  reported in `Register` after a reconnect; in memory in M1, on disk since M2.3, surviving an
+  agent restart (see Worker lifecycle).
 - **Before registering**, the agent waits for each root's first content hash (it settles
   too). A parse job is run only if the root still has the job's hash; a failed parse job is
   logged and left to the job timeout, which gives it to another worker (or this one again).
@@ -960,9 +992,11 @@ and the worker agent. schedr therefore uses both:
   and trigger on it (see Sensors and triggers).
 - **Journal on the worker's disk** of the attempts it is running and of finished results not
   yet acknowledged by the master. If the container dies anyway (memory spike faster than the
-  watchdog, node failure, eviction), the restarted agent reads the journal and reports those
-  attempts as **interrupted: worker restarted (possibly out of memory)**; they are retried per
-  `retries`. Finished results saved on disk are not lost.
+  watchdog, node failure, eviction), the restarted agent reads the journal, stops the task
+  processes left running and doesn't report their attempts: the master ends them **`lost`**
+  with the error summary **`WorkerRestarted`: "worker restarted while the attempt ran
+  (possibly out of memory)"**, each using a retry. Finished results saved on disk are not
+  lost.
 
 Watchdog budget: by default **(pod memory limit − reserve for the agent, about 10 %) ÷ slots**.
 The limit is read from `/sys/fs/cgroup/memory.max` (no privileges needed). Configurable per

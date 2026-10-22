@@ -200,3 +200,17 @@ fn parsed_files_round_trip_as_stored() {
     assert_eq!(file.error.as_ref().unwrap().exception, "ParseTimeout");
     assert_eq!(serde_json::to_value(&file).unwrap(), json);
 }
+
+#[test]
+fn a_summary_schedr_writes_has_no_traceback() {
+    let json = ErrorSummary::json("WorkerLost", "worker `w1` is gone");
+    let summary: ErrorSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        summary,
+        ErrorSummary {
+            exception: "WorkerLost".to_owned(),
+            message: "worker `w1` is gone".to_owned(),
+            traceback: String::new(),
+        }
+    );
+}

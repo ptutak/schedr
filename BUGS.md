@@ -5,4 +5,14 @@ A fixed bug is removed in the commit that fixes it, together with a test that wo
 caught it; git history keeps the record. Finding a bug doesn't mean fixing it at once: it
 is logged here and its fix scheduled with the user. Not part of the documentation site.
 
-No open bugs.
+## B4: `runs trigger` in a roles integration test got no result once
+
+- **Seen:** 2026-10-22, the first `make test-integration` of M2.3:
+  `roles::a_worker_that_never_comes_back_is_lost_and_stays_listed` panicked in
+  `Cluster::trigger` (`crates/schedr/tests/roles.rs`): `cli_json(["runs", "trigger", …])` was
+  `None`, so the CLI exited non-zero, after 34.8 s; the whole run took 35 s instead of the
+  usual 12 s.
+- **Not reproduced** in the two runs right after (53/53 passed each time). Postgres had just
+  been started by podman; `cli_json` doesn't keep the CLI's stderr, so the reason is unknown.
+- **Next:** keep the CLI's stderr in the failure message, then check whether the master
+  applied the command (LISTEN/NOTIFY or the polling fallback) under load.

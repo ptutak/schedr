@@ -138,6 +138,12 @@ async fn collect(
 }
 
 impl OsProcess {
+    /// Its process ID, which is also its process group's ID.
+    #[must_use]
+    pub fn id(&self) -> i32 {
+        self.group.as_raw_nonzero().get()
+    }
+
     /// The captured stdout and stderr, once both pipes are closed.
     ///
     /// # Errors

@@ -323,8 +323,9 @@ pub struct WorkerSection {
     pub slots: u32,
     /// The queues served; none serves `default`.
     pub queues: Vec<String>,
-    /// Where task logs, runner sockets and (in standalone) the SQLite database go;
-    /// `$XDG_DATA_HOME/schedr` (else `~/.local/share/schedr`) when not set.
+    /// Where task logs, the journal (`journal/<id>`; keep it across restarts) and (in
+    /// standalone) the SQLite database go; `$XDG_DATA_HOME/schedr` (else
+    /// `~/.local/share/schedr`) when not set.
     pub data_dir: Option<PathBuf>,
     /// Agent environment variables passed to tasks besides the allow-list.
     pub pass_env: Vec<String>,

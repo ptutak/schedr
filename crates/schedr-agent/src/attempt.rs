@@ -357,12 +357,7 @@ const fn status_or_failed(status: AttemptStatus) -> AttemptStatus {
 }
 
 fn summary(exception: &str, message: &str) -> Vec<u8> {
-    serde_json::to_vec(&ErrorSummary {
-        exception: exception.to_owned(),
-        message: message.to_owned(),
-        traceback: String::new(),
-    })
-    .unwrap_or_default()
+    ErrorSummary::json(exception, message).into_bytes()
 }
 
 fn failed(kind: &str, error: &dyn std::fmt::Display) -> NotRun {

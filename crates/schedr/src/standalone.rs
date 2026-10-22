@@ -23,8 +23,8 @@ use tokio::sync::watch;
 
 use crate::app::AppError;
 use crate::roles::{
-    agent_settings, data_dir, listen, master_settings, no_auth_warning, run_worker, serve_api,
-    serve_master, stop_on_signal, until,
+    agent_settings, data_dir, listen, lock_journal, master_settings, no_auth_warning, run_worker,
+    serve_api, serve_master, stop_on_signal, until,
 };
 
 #[cfg(test)]
@@ -33,7 +33,7 @@ mod tests;
 /// Everything `schedr standalone` runs, read from the configuration.
 #[derive(Debug, Clone)]
 pub struct Standalone {
-    /// Where logs, runner sockets and the SQLite database go.
+    /// Where logs, the worker's journal and the SQLite database go.
     pub data_dir: PathBuf,
     /// The database (`[database] url`, else SQLite in the data directory).
     pub database_url: String,
@@ -105,6 +105,7 @@ pub async fn run(
         .await
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
     let _lock = lock_data_dir(&setup.data_dir)?;
+    let _journal_lock = lock_journal(&setup.agent)?;
     let db = Database::connect(&setup.database_url).await?;
     db.migrate().await?;
 

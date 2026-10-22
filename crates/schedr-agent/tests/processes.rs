@@ -37,6 +37,12 @@ async fn the_exit_code_output_and_log_file_are_kept() {
     let dir = TempDir::new().unwrap();
     let spec = shell(dir.path(), "echo out; echo err >&2; exit 3", 1024);
     let mut process = spawn(&spec).await.unwrap();
+    let pid = rustix::process::Pid::from_raw(process.id()).unwrap();
+    assert_eq!(
+        rustix::process::getpgid(Some(pid)).unwrap(),
+        pid,
+        "it leads a group of its own"
+    );
     let supervised = supervise(&mut process, NO_LIMITS, never()).await.unwrap();
     assert_eq!(supervised.termination, Termination::Exited(3));
     assert_eq!(supervised.stopped, None);

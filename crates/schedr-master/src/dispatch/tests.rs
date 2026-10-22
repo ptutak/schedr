@@ -450,6 +450,10 @@ async fn a_lost_workers_attempts_use_a_retry() {
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::Lost)
     );
+    let shown = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    let summary: ErrorSummary =
+        serde_json::from_str(shown[0].error_summary.as_deref().unwrap()).unwrap();
+    assert_eq!(summary.exception, "WorkerLost");
 }
 
 #[tokio::test]
@@ -477,7 +481,7 @@ async fn cancelling_a_run_cancels_its_running_attempts() {
 
 #[tokio::test]
 async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
-    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let none = BTreeSet::new();
@@ -511,4 +515,13 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     );
     let ended = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(AttemptStatus::Lost));
+    let task = assignment(&out[0]).task_id.clone();
+    let shown = db.task_attempts(&run_id, &id(&task)).await.unwrap();
+    let summary: ErrorSummary =
+        serde_json::from_str(shown[0].error_summary.as_deref().unwrap()).unwrap();
+    assert_eq!(summary.exception, "WorkerRestarted");
+    assert_eq!(
+        summary.message,
+        "worker `w1` restarted while the attempt ran (possibly out of memory)"
+    );
 }

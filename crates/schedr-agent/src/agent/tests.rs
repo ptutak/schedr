@@ -14,7 +14,8 @@ use tonic::transport::{Endpoint, Server};
 use super::*;
 
 /// Parses each file into a DAG named after it, with one Python task; runs tasks at once,
-/// except task `wait`, which waits until it is stopped.
+/// except task `wait`, which waits until it is stopped. Each attempt's "process" is one that
+/// doesn't exist.
 #[derive(Clone, Default)]
 struct Fake {
     parsed: Arc<Mutex<Vec<Vec<String>>>>,
@@ -26,7 +27,9 @@ impl Executor for Fake {
         spec: AttemptSpec,
         _plan: Plan,
         stop: oneshot::Receiver<StopReason>,
+        spawned: Spawned,
     ) -> pb::Finished {
+        spawned(NO_PROCESS);
         let status = if spec.task.id.as_str() == "wait" {
             let _ = stop.await;
             pb::AttemptStatus::Cancelled
@@ -80,6 +83,11 @@ impl Executor for Fake {
             .collect())
     }
 }
+
+const NO_PROCESS: ProcessIdentity = ProcessIdentity {
+    pgid: i32::MAX,
+    start_time: 1,
+};
 
 struct World {
     _dir: TempDir,
@@ -136,6 +144,7 @@ async fn world() -> World {
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
+        journal_dir: dir.path().join("journal"),
     };
     let fake = Fake::default();
     let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
@@ -388,14 +397,32 @@ fn task_json(kind: &serde_json::Value) -> serde_json::Value {
     task
 }
 
-/// Runs an agent with `slots` against a master playing `script`; returns what the agent sent
-/// once `done` holds for it.
+/// The journal an agent starts with.
+enum Start {
+    /// These records (none: a new worker).
+    With(Vec<(&'static str, JournalRecord)>),
+    /// A journal that can't be written.
+    Unwritable,
+}
+
+/// Runs an agent with `slots` and journal `start` against a master playing `script`; returns
+/// what the agent sent once `done` holds for it, and the attempts left in its journal.
 async fn against_script(
     slots: u32,
+    start: Start,
     script: Vec<pb::MasterMessage>,
     done: impl Fn(&[pb::WorkerMessage]) -> bool,
-) -> Vec<pb::WorkerMessage> {
+) -> (Vec<pb::WorkerMessage>, Vec<String>) {
     let dir = TempDir::new().unwrap();
+    let journal = Journal::new(dir.path().join("journal"));
+    match start {
+        Start::With(records) => {
+            for (attempt_id, record) in records {
+                journal.write(attempt_id, &record).unwrap();
+            }
+        }
+        Start::Unwritable => std::fs::write(journal.dir(), "a file").unwrap(),
+    }
     let root = dir.path().join("etl");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("sync.py"), "").unwrap();
@@ -436,15 +463,24 @@ async fn against_script(
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
+        journal_dir: journal.dir().to_path_buf(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
-    let session = tokio::spawn(async move { agent.session(MasterClient::new(channel)).await });
+    let session = tokio::spawn(async move {
+        agent.recover().await;
+        agent.session(MasterClient::new(channel)).await
+    });
     for _ in 0..500 {
         let seen = received.lock().unwrap().clone();
         if done(&seen) {
             session.abort();
-            return seen;
+            let _ = session.await;
+            let left = journal.records().map_or_else(
+                |_| Vec::new(),
+                |records| records.into_iter().map(|(id, _)| id).collect(),
+            );
+            return (seen, left);
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -467,6 +503,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
                     Ok(pb::RejectReason::NoFreeSlot) => "rejected: no slot",
                     Ok(pb::RejectReason::InvalidSpecification) => "rejected: invalid",
                     Ok(pb::RejectReason::DagFileMissing) => "rejected: missing",
+                    Ok(pb::RejectReason::DiskNotWritable) => "rejected: disk",
                     _ => "rejected",
                 })
             }
@@ -488,7 +525,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
 async fn without_a_free_slot_an_assignment_is_rejected() {
     let python = task_json(&json!({"kind": "python"}));
     let script = vec![assign("a1", &python, "sync.py", false)];
-    let seen = against_script(0, script, |m| m.len() >= 2).await;
+    let (seen, _) = against_script(0, Start::With(vec![]), script, |m| m.len() >= 2).await;
     assert_eq!(kinds(&seen), ["register", "rejected: no slot"]);
     let worker_message::Message::Register(register) = seen[0].message.as_ref().unwrap() else {
         panic!("expected Register")
@@ -567,7 +604,7 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
             && m.iter()
                 .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
     };
-    let seen = against_script(2, script, done).await;
+    let (seen, left) = against_script(2, Start::With(vec![]), script, done).await;
     // Results arrive from background work, so only the order of what is sent at once holds.
     let mut sent = kinds(&seen);
     sent.sort_unstable();
@@ -587,6 +624,84 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
         kinds(&seen)[..3],
         ["register", "rejected: invalid", "rejected: missing"]
     );
+    assert!(
+        left.contains(&"a3".to_owned()),
+        "a result is kept until it is acknowledged: {left:?}"
+    );
+}
+
+fn heartbeats(messages: &[pb::WorkerMessage]) -> usize {
+    messages
+        .iter()
+        .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+        .count()
+}
+
+fn success(attempt_id: &str) -> JournalRecord {
+    JournalRecord::Finished(pb::Finished {
+        attempt_id: attempt_id.to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    })
+}
+
+#[tokio::test]
+async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_running() {
+    let start = Start::With(vec![
+        ("old-1", success("old-1")),
+        ("old-2", success("old-2")),
+        ("old-3", JournalRecord::Running(Some(NO_PROCESS))),
+        ("old-4", JournalRecord::Running(None)),
+    ]);
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![
+            pb::JournalDecision {
+                attempt_id: "old-1".to_owned(),
+                decision: pb::AttemptDecision::Ack.into(),
+            },
+            pb::JournalDecision {
+                attempt_id: "old-2".to_owned(),
+                decision: pb::AttemptDecision::Continue.into(),
+            },
+        ],
+    }));
+    // A second heartbeat comes after the decisions were followed (the new heartbeat interval
+    // ticks at once).
+    let done = |m: &[pb::WorkerMessage]| kinds(m).len() >= 2 && heartbeats(m) >= 2;
+    let (seen, left) = against_script(2, start, vec![registered], done).await;
+    assert_eq!(kinds(&seen), ["register", "finished: success"]);
+    let worker_message::Message::Register(register) = seen[0].message.as_ref().unwrap() else {
+        panic!("expected Register")
+    };
+    let finished = i32::from(pb::JournalState::Finished);
+    let journal: Vec<(&str, i32)> = register
+        .journal
+        .iter()
+        .map(|e| (e.attempt_id.as_str(), e.state))
+        .collect();
+    assert_eq!(journal, [("old-1", finished), ("old-2", finished)]);
+    assert_eq!(left, ["old-2"]);
+}
+
+#[tokio::test]
+async fn an_attempt_the_journal_cant_record_is_rejected() {
+    let python = task_json(&json!({"kind": "python"}));
+    let script = vec![assign("a1", &python, "sync.py", false)];
+    let (seen, _) = against_script(2, Start::Unwritable, script, |m| m.len() >= 2).await;
+    assert_eq!(kinds(&seen), ["register", "rejected: disk"]);
+    let Some(worker_message::Message::Rejected(rejected)) = seen[1].message.as_ref() else {
+        panic!("expected Rejected")
+    };
+    assert!(
+        rejected.detail.starts_with("can't write the journal in `"),
+        "{}",
+        rejected.detail
+    );
 }
 
 #[test]
@@ -597,4 +712,92 @@ fn backoffs_have_jitter_between_half_and_all() {
     let middle = jittered(backoff, u32::MAX / 2);
     assert!(middle > Duration::from_millis(7_400) && middle < Duration::from_millis(7_600));
     assert!(FIRST_BACKOFF < MAX_BACKOFF);
+}
+
+#[tokio::test]
+async fn an_attempt_assigned_again_is_ignored() {
+    let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![],
+    }));
+    let echo = task_json(&json!({"kind": "command", "command": {"argv": [[{"text": "true"}]]}}));
+    let script = vec![
+        timing,
+        assign("a1", &echo, "sync.py", false),
+        assign("a1", &echo, "sync.py", false),
+    ];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).len() >= 3 && heartbeats(m) >= 4;
+    let (seen, left) = against_script(2, Start::With(vec![]), script, done).await;
+    assert_eq!(kinds(&seen), ["register", "started", "finished: success"]);
+    assert_eq!(left, ["a1"]);
+}
+
+#[tokio::test]
+async fn what_ends_while_the_master_is_away_is_journalled() {
+    let dir = TempDir::new().unwrap();
+    let settings = AgentSettings {
+        worker_id: "w1".to_owned(),
+        queues: vec![],
+        slots: 1,
+        setup: WorkerSetup {
+            roots: BTreeMap::new(),
+            python: PathBuf::from("python3"),
+            agent_env: BTreeMap::new(),
+            pass_env: vec![],
+            log_dir: dir.path().join("logs"),
+        },
+        poll_interval: Duration::from_millis(20),
+        settle_time: Duration::ZERO,
+        journal_dir: dir.path().join("journal"),
+    };
+    let journal = Journal::new(settings.journal_dir.clone());
+    let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
+    let done = agent.done_tx.clone();
+    done.send(Done::Spawned {
+        attempt_id: "a1".to_owned(),
+        identity: NO_PROCESS,
+    })
+    .unwrap();
+    done.send(Done::Spawned {
+        attempt_id: "a2".to_owned(),
+        identity: NO_PROCESS,
+    })
+    .unwrap();
+    let JournalRecord::Finished(finished) = success("a2") else {
+        unreachable!()
+    };
+    done.send(Done::Parse {
+        job_id: "j1".to_owned(),
+        root: root_hash("etl", "sha256:h"),
+        files: Ok(vec![]),
+    })
+    .unwrap();
+    done.send(Done::Attempt(finished)).unwrap();
+    let expected = [
+        ("a1".to_owned(), JournalRecord::Running(Some(NO_PROCESS))),
+        ("a2".to_owned(), success("a2")),
+    ];
+    let recorded = async {
+        for _ in 0..500 {
+            if journal.records().unwrap_or_default() == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("not journalled: {:?}", journal.records());
+    };
+    agent.offline(recorded).await;
+    let finished = i32::from(pb::JournalState::Finished);
+    assert_eq!(
+        agent.journal_entries(),
+        [pb::JournalEntry {
+            attempt_id: "a2".to_owned(),
+            state: finished,
+        }],
+        "reported in the next `Register`"
+    );
 }

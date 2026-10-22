@@ -71,13 +71,17 @@ pub struct Runner {
 }
 
 /// Starts the runner described by `spec` in `mode`, handing it its end of a new socket pair,
-/// and completes the handshake.
+/// and completes the handshake; `spawned` gets its process ID as soon as it runs.
 ///
 /// # Errors
 ///
 /// [`LaunchError`] if it can't be started, doesn't say hello in time, or is in another mode or
 /// version (it was refused then).
-pub async fn start_runner(spec: &ProcessSpec, mode: RunnerMode) -> Result<Runner, LaunchError> {
+pub async fn start_runner(
+    spec: &ProcessSpec,
+    mode: RunnerMode,
+    spawned: impl FnOnce(i32),
+) -> Result<Runner, LaunchError> {
     let start = |what: &str, source| LaunchError::Start {
         what: what.to_owned(),
         source,
@@ -90,6 +94,7 @@ pub async fn start_runner(spec: &ProcessSpec, mode: RunnerMode) -> Result<Runner
     let process = spawn_passing(&spec, Some(OwnedFd::from(theirs)))
         .await
         .map_err(|e| start("the runner", e))?;
+    spawned(process.id());
     ours.set_nonblocking(true)
         .map_err(|e| start("the runner's socket", e))?;
     let mut stream = UnixStream::from_std(ours).map_err(|e| start("the runner's socket", e))?;
@@ -134,7 +139,7 @@ async fn abandon(mut process: OsProcess) {
 }
 
 /// Runs a Python task: starts the runner, sends the request, and waits for its result while
-/// supervising the process.
+/// supervising the process; `spawned` gets the runner's process ID as soon as it runs.
 ///
 /// # Errors
 ///
@@ -145,12 +150,13 @@ pub async fn run_python(
     request: TaskRequest,
     limits: Limits,
     stop: impl Future<Output = StopReason>,
+    spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
     let Runner {
         mut process,
         mut stream,
-    } = start_runner(process, RunnerMode::Task).await?;
+    } = start_runner(process, RunnerMode::Task, spawned).await?;
     write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
     let result = async {
         let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
@@ -167,7 +173,8 @@ pub async fn run_python(
     })
 }
 
-/// Runs a command process under supervision, keeping the tails of its output.
+/// Runs a command process under supervision, keeping the tails of its output; `spawned` gets
+/// its process ID as soon as it runs.
 ///
 /// # Errors
 ///
@@ -176,12 +183,14 @@ pub async fn run_command(
     spec: &ProcessSpec,
     limits: Limits,
     stop: impl Future<Output = StopReason>,
+    spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
     let mut process = spawn(spec).await.map_err(|source| LaunchError::Start {
         what: spec.program.display().to_string(),
         source,
     })?;
+    spawned(process.id());
     let supervised = supervise(&mut process, limits, stop)
         .await
         .map_err(LaunchError::Supervise)?;
@@ -221,7 +230,7 @@ impl ParseRunner for ProcessParseRunner {
     type Session = ProcessParseSession;
 
     async fn start(&mut self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
-        let mut runner = start_runner(&self.process, RunnerMode::Parse)
+        let mut runner = start_runner(&self.process, RunnerMode::Parse, |_| {})
             .await
             .map_err(|e| match e {
                 LaunchError::Channel(channel) => channel,

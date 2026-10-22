@@ -11,6 +11,9 @@
 //!   job's hash (otherwise a newer hash was or will be reported).
 //! - **The connection drops:** attempts keep running, and the agent connects again with
 //!   backoff (up to 30 s).
+//! - **The journal** on disk backs `Started` and `Finished` (see [`crate::journal`]): an
+//!   attempt that can't be recorded is rejected, and on start the agent reports the results
+//!   its previous incarnation had and stops the processes it left running.
 //!
 //! The work itself goes through an [`Executor`]: processes in production
 //! ([`ProcessExecutor`]), something simpler in tests.
@@ -29,6 +32,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{AttemptSpec, NotRun, Plan, WorkerSetup, failed_before_start, finished, plan};
+use crate::journal::{
+    Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
+};
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, run_command, run_python};
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
@@ -44,6 +50,9 @@ pub const START_FAILED: &str = "start_failed";
 
 /// The longest wait between attempts to reach the master.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// How long a process left running by a previous incarnation has between SIGTERM and SIGKILL.
+pub const ORPHAN_GRACE: Duration = Duration::from_secs(10);
 
 /// The first wait after the master connection drops; it doubles up to [`MAX_BACKOFF`], and
 /// starts again here after a session in which the master registered the worker.
@@ -72,17 +81,23 @@ pub struct AgentSettings {
     pub poll_interval: Duration,
     /// How long a changed root must stay unchanged before it is hashed.
     pub settle_time: Duration,
+    /// Where the journal is kept (see [`crate::journal`]).
+    pub journal_dir: PathBuf,
 }
+
+/// Told the identity of an attempt's process once it is spawned.
+pub type Spawned = Box<dyn FnOnce(ProcessIdentity) + Send>;
 
 /// Runs attempts and parse jobs.
 pub trait Executor: Clone + Send + Sync + 'static {
-    /// Runs a planned attempt until it ends or `stop` says why to stop it; returns its
-    /// `Finished`.
+    /// Runs a planned attempt until it ends or `stop` says why to stop it, telling `spawned`
+    /// its process; returns its `Finished`.
     fn run(
         &self,
         spec: AttemptSpec,
         plan: Plan,
         stop: oneshot::Receiver<StopReason>,
+        spawned: Spawned,
     ) -> impl Future<Output = pb::Finished> + Send;
 
     /// Parses `files` of the root `root` in `dir`.
@@ -109,6 +124,7 @@ impl Executor for ProcessExecutor {
         spec: AttemptSpec,
         plan: Plan,
         stop: oneshot::Receiver<StopReason>,
+        spawned: Spawned,
     ) -> pb::Finished {
         let limits = Limits {
             timeout: spec.timeout(),
@@ -121,9 +137,15 @@ impl Executor for ProcessExecutor {
             }
         };
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
+        let spawned = |pid| match process_identity(pid) {
+            Ok(identity) => spawned(identity),
+            Err(error) => tracing::warn!(pid, %error, "can't identify the task's process"),
+        };
         let ran = match plan {
-            Plan::Python { process, request } => run_python(&process, *request, limits, stop).await,
-            Plan::Command(process) => run_command(&process, limits, stop).await,
+            Plan::Python { process, request } => {
+                run_python(&process, *request, limits, stop, spawned).await
+            }
+            Plan::Command(process) => run_command(&process, limits, stop, spawned).await,
         };
         match ran {
             Ok(ran) => finished(&spec.attempt_id, &ran),
@@ -179,8 +201,12 @@ pub enum SessionEnd {
     Lost(String),
 }
 
-/// Something finished in the background.
+/// Something happened in the background.
 enum Done {
+    Spawned {
+        attempt_id: String,
+        identity: ProcessIdentity,
+    },
     Attempt(pb::Finished),
     Parse {
         job_id: String,
@@ -195,6 +221,7 @@ pub struct Agent<E> {
     settings: AgentSettings,
     executor: E,
     incarnation: String,
+    journal: Journal,
     watchers: BTreeMap<String, RootWatcher>,
     running: BTreeMap<String, oneshot::Sender<StopReason>>,
     unacked: BTreeMap<String, pb::Finished>,
@@ -216,10 +243,12 @@ impl<E: Executor> Agent<E> {
             .map(|(name, dir)| (name.clone(), RootWatcher::new(dir, settings.settle_time)))
             .collect();
         let (done_tx, done_rx) = mpsc::unbounded_channel();
+        let journal = Journal::new(settings.journal_dir.clone());
         Self {
             settings,
             executor,
             incarnation,
+            journal,
             watchers,
             running: BTreeMap::new(),
             unacked: BTreeMap::new(),
@@ -236,32 +265,39 @@ impl<E: Executor> Agent<E> {
         self.running.keys().cloned().collect()
     }
 
-    /// Runs until `stop` completes: connects with `connect`, and again whenever the connection
-    /// drops, after a backoff with jitter that doubles up to [`MAX_BACKOFF`] and starts from
-    /// [`FIRST_BACKOFF`] again after a session in which the master registered it.
+    /// Runs until `stop` completes: recovers the journal, connects with `connect`, and again
+    /// whenever the connection drops, after a backoff with jitter that doubles up to
+    /// [`MAX_BACKOFF`] and starts from [`FIRST_BACKOFF`] again after a session in which the
+    /// master registered it.
     pub async fn run<C, F>(&mut self, connect: C, stop: impl Future<Output = ()>)
     where
         C: Fn() -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
     {
         tokio::pin!(stop);
+        tokio::select! {
+            () = &mut stop => return,
+            () = self.recover() => {}
+        }
         let mut backoff = FIRST_BACKOFF;
         loop {
             self.registered = false;
-            let session = async {
-                match connect().await {
-                    Ok(client) => self.session(client).await,
-                    Err(error) => SessionEnd::Lost(error),
-                }
-            };
-            tokio::select! {
+            let connected = tokio::select! {
                 () = &mut stop => return,
-                end = session => match end {
-                    SessionEnd::Stopped => return,
-                    SessionEnd::Lost(reason) => {
-                        tracing::warn!(reason, "master connection lost; connecting again");
-                    }
+                connected = self.offline(connect()) => connected,
+            };
+            let end = match connected {
+                Ok(client) => tokio::select! {
+                    () = &mut stop => return,
+                    end = self.session(client) => end,
                 },
+                Err(error) => SessionEnd::Lost(error),
+            };
+            match end {
+                SessionEnd::Stopped => return,
+                SessionEnd::Lost(reason) => {
+                    tracing::warn!(reason, "master connection lost; connecting again");
+                }
             }
             if self.registered {
                 backoff = FIRST_BACKOFF;
@@ -274,9 +310,103 @@ impl<E: Executor> Agent<E> {
                 .wrapping_mul(2_654_435_761);
             tokio::select! {
                 () = &mut stop => return,
-                () = tokio::time::sleep(jittered(backoff, seed)) => {}
+                () = self.offline(tokio::time::sleep(jittered(backoff, seed))) => {}
             }
             backoff = (backoff * 2).min(MAX_BACKOFF);
+        }
+    }
+
+    /// Waits for `work` without a master: what ends meanwhile is still journalled (results
+    /// are reported in the next `Register`).
+    async fn offline<T>(&mut self, work: impl Future<Output = T>) -> T {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                out = &mut work => return out,
+                Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
+            }
+        }
+    }
+
+    /// Takes over from a previous incarnation: its unacknowledged results are reported again,
+    /// and the processes it left running are stopped and their attempts forgotten (the master
+    /// ends them `lost`). A journal that can't be read is logged; assignments are then
+    /// rejected until it can be written.
+    pub async fn recover(&mut self) {
+        let journal = self.journal.clone();
+        let records = match tokio::task::spawn_blocking(move || journal.recover()).await {
+            Ok(Ok(records)) => records,
+            Ok(Err(error)) => {
+                tracing::error!(dir = %self.journal.dir().display(), %error, "can't read the journal");
+                return;
+            }
+            Err(error) => {
+                tracing::error!(%error, "reading the journal failed");
+                return;
+            }
+        };
+        let mut orphans = tokio::task::JoinSet::new();
+        for (attempt_id, record) in records {
+            match record {
+                JournalRecord::Finished(finished) => {
+                    self.unacked.insert(attempt_id, finished);
+                }
+                JournalRecord::Running(process) => {
+                    orphans.spawn(async move {
+                        let Some(identity) = process else {
+                            return Some(attempt_id);
+                        };
+                        match stop_orphan(identity, ORPHAN_GRACE).await {
+                            Ok(Orphan::Gone) => {}
+                            Ok(how) => tracing::warn!(
+                                attempt_id,
+                                pgid = identity.pgid,
+                                ?how,
+                                "stopped a task process left by the previous agent"
+                            ),
+                            Err(error) => {
+                                // Kept in the journal: the next start tries again.
+                                tracing::error!(
+                                    attempt_id,
+                                    pgid = identity.pgid,
+                                    %error,
+                                    "can't stop a task process left by the previous agent"
+                                );
+                                return None;
+                            }
+                        }
+                        Some(attempt_id)
+                    });
+                }
+            }
+        }
+        while let Some(stopped) = orphans.join_next().await {
+            if let Ok(Some(attempt_id)) = stopped {
+                self.forget(&attempt_id).await;
+            }
+        }
+    }
+
+    /// Records `record` for an attempt in the journal.
+    async fn record(&self, attempt_id: &str, record: JournalRecord) -> std::io::Result<()> {
+        let journal = self.journal.clone();
+        let attempt_id = attempt_id.to_owned();
+        tokio::task::spawn_blocking(move || journal.write(&attempt_id, &record))
+            .await
+            .map_err(std::io::Error::other)?
+    }
+
+    /// Removes an attempt from the journal; a failure is logged (the file is then reported
+    /// again after a restart, and the master decides on it).
+    async fn forget(&self, attempt_id: &str) {
+        let journal = self.journal.clone();
+        let id = attempt_id.to_owned();
+        let removed = tokio::task::spawn_blocking(move || journal.remove(&id))
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|removed| removed);
+        if let Err(error) = removed {
+            tracing::warn!(attempt_id, %error, "can't remove the attempt from the journal");
         }
     }
 
@@ -306,7 +436,7 @@ impl<E: Executor> Agent<E> {
     pub async fn session(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
         let roots = self.hashes().await;
         let (to_master, outbound) = mpsc::channel::<pb::WorkerMessage>(1024);
-        let journal = self.journal();
+        let journal = self.journal_entries();
         let register = pb::Register {
             worker_id: self.settings.worker_id.clone(),
             incarnation_id: self.incarnation.clone(),
@@ -342,7 +472,9 @@ impl<E: Executor> Agent<E> {
                     Ok(None) => return SessionEnd::Lost("the master ended the stream".to_owned()),
                     Err(status) => return SessionEnd::Lost(status.to_string()),
                 },
-                Some(done) = self.done_rx.recv() => self.on_done(done, &to_master, &mut client).await,
+                Some(done) = self.done_rx.recv() => {
+                    self.on_done(done, Some((&to_master, &mut client))).await;
+                }
                 _ = heartbeat.tick() => {
                     let message = worker_message::Message::Heartbeat(pb::Heartbeat {
                         free_slots: self.free_slots(),
@@ -383,7 +515,9 @@ impl<E: Executor> Agent<E> {
                 }
             }
             master_message::Message::FinishedAck(ack) => {
-                self.unacked.remove(&ack.attempt_id);
+                if self.unacked.remove(&ack.attempt_id).is_some() {
+                    self.forget(&ack.attempt_id).await;
+                }
             }
         }
     }
@@ -396,10 +530,14 @@ impl<E: Executor> Agent<E> {
         let id = &decision.attempt_id;
         match pb::AttemptDecision::try_from(decision.decision) {
             Ok(pb::AttemptDecision::Ack) => {
-                self.unacked.remove(id);
+                if self.unacked.remove(id).is_some() {
+                    self.forget(id).await;
+                }
             }
             Ok(pb::AttemptDecision::Kill) => {
-                self.unacked.remove(id);
+                if self.unacked.remove(id).is_some() {
+                    self.forget(id).await;
+                }
                 if let Some(stop) = self.running.remove(id) {
                     let _ = stop.send(StopReason::Cancelled);
                 }
@@ -426,6 +564,16 @@ impl<E: Executor> Agent<E> {
                 detail,
             }))
         };
+        if self.running.contains_key(&assign.attempt_id)
+            || self.unacked.contains_key(&assign.attempt_id)
+        {
+            // Already started here: its journal entry must not be replaced.
+            tracing::warn!(
+                attempt_id = assign.attempt_id.as_str(),
+                "assignment of an attempt this worker already has; ignored"
+            );
+            return;
+        }
         if self.free_slots() == 0 {
             let _ = to_master
                 .send(reject(
@@ -461,6 +609,20 @@ impl<E: Executor> Agent<E> {
             }
         };
         let planned = plan(&spec, &self.settings.setup);
+        if !matches!(planned, Err(NotRun::Rejected { .. }))
+            && let Err(error) = self
+                .record(&spec.attempt_id, JournalRecord::Running(None))
+                .await
+        {
+            let detail = format!(
+                "can't write the journal in `{}`: {error}; check the worker's data directory",
+                self.journal.dir().display()
+            );
+            let _ = to_master
+                .send(reject(pb::RejectReason::DiskNotWritable, detail))
+                .await;
+            return;
+        }
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
@@ -480,8 +642,16 @@ impl<E: Executor> Agent<E> {
                 let _ = to_master.send(started).await;
                 let executor = self.executor.clone();
                 let done = self.done_tx.clone();
+                let on_spawn = self.done_tx.clone();
+                let attempt_id = spec.attempt_id.clone();
+                let spawned: Spawned = Box::new(move |identity| {
+                    let _ = on_spawn.send(Done::Spawned {
+                        attempt_id,
+                        identity,
+                    });
+                });
                 tokio::spawn(async move {
-                    let finished = executor.run(spec, plan, stopped).await;
+                    let finished = executor.run(spec, plan, stopped, spawned).await;
                     let _ = done.send(Done::Attempt(finished));
                 });
             }
@@ -520,27 +690,59 @@ impl<E: Executor> Agent<E> {
         });
     }
 
+    /// Records what ended, and reports it over `link` (the outbound stream and the client)
+    /// when connected.
     async fn on_done(
         &mut self,
         done: Done,
-        to_master: &mpsc::Sender<pb::WorkerMessage>,
-        client: &mut MasterClient<Channel>,
+        link: Option<(&mpsc::Sender<pb::WorkerMessage>, &mut MasterClient<Channel>)>,
     ) {
         match done {
+            Done::Spawned {
+                attempt_id,
+                identity,
+            } => {
+                if let Err(error) = self
+                    .record(&attempt_id, JournalRecord::Running(Some(identity)))
+                    .await
+                {
+                    tracing::warn!(attempt_id, %error, "can't record the task's process");
+                }
+            }
             Done::Attempt(finished) => {
+                if let Err(error) = self
+                    .record(
+                        &finished.attempt_id,
+                        JournalRecord::Finished(finished.clone()),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        attempt_id = finished.attempt_id.as_str(),
+                        %error,
+                        "can't record the result; it is lost if the agent restarts before the \
+                         master acknowledges it"
+                    );
+                }
                 self.running.remove(&finished.attempt_id);
                 self.unacked
                     .insert(finished.attempt_id.clone(), finished.clone());
-                let _ = to_master
-                    .send(wrap(worker_message::Message::Finished(finished)))
-                    .await;
+                if let Some((to_master, _)) = link {
+                    let _ = to_master
+                        .send(wrap(worker_message::Message::Finished(finished)))
+                        .await;
+                }
             }
             Done::Parse {
                 job_id,
                 root,
                 files,
-            } => match files {
-                Ok(files) => {
+            } => match (files, link) {
+                (Ok(_), None) => tracing::warn!(
+                    root = root.root.as_str(),
+                    "parse result dropped: no master connection (the job is given out again)"
+                ),
+                (Ok(files), Some((_, client))) => {
                     let result = pb::ParseResult {
                         parse_job_id: job_id,
                         worker_id: self.settings.worker_id.clone(),
@@ -552,7 +754,9 @@ impl<E: Executor> Agent<E> {
                         tracing::error!(%status, "parse result not uploaded");
                     }
                 }
-                Err(error) => tracing::error!(root = root.root.as_str(), error, "parse job failed"),
+                (Err(error), _) => {
+                    tracing::error!(root = root.root.as_str(), error, "parse job failed");
+                }
             },
         }
     }
@@ -573,7 +777,7 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    fn journal(&self) -> Vec<pb::JournalEntry> {
+    fn journal_entries(&self) -> Vec<pb::JournalEntry> {
         let running = self.running.keys().map(|id| pb::JournalEntry {
             attempt_id: id.clone(),
             state: pb::JournalState::Running.into(),

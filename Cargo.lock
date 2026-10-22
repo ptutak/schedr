@@ -2402,6 +2402,7 @@ dependencies = [
  "jiff",
  "pretty_assertions",
  "proptest",
+ "prost",
  "prost-types",
  "rstest",
  "rustix",

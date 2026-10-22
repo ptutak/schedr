@@ -198,7 +198,9 @@ async fn run(
             }
         }
     };
-    run_python(&process, request, limits, stop).await.unwrap()
+    run_python(&process, request, limits, stop, |pid| assert!(pid > 1))
+        .await
+        .unwrap()
 }
 
 enum StopAfter {

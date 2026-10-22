@@ -21,6 +21,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
+use schedr_model::runner::ErrorSummary;
 use schedr_model::{AttemptStatus, Reference, TaskId, TaskInstanceState};
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, reject_reaction, run_kind_to_proto,
@@ -380,9 +381,10 @@ impl Dispatcher {
     }
 
     /// A worker's agent restarted (a new incarnation): the attempts it had started and doesn't
-    /// report in its journal end `lost`, each using a retry, as for a lost worker (the crash
-    /// may have been the task's own; see PROJECT.md, Worker lifecycle). Attempts it hadn't
-    /// started yet are left to expire without using a retry. Returns how many ended.
+    /// report in its journal end `lost` with a `WorkerRestarted` error summary, each using a
+    /// retry, as for a lost worker (the crash may have been the task's own; see PROJECT.md,
+    /// Worker lifecycle). Attempts it hadn't started yet are left to expire without using a
+    /// retry. Returns how many ended.
     ///
     /// # Errors
     ///
@@ -396,7 +398,10 @@ impl Dispatcher {
         let mut ended = 0;
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
             if attempt.started && !reported.contains(attempt.id.as_str()) {
-                let end = AttemptEnd::by_master(AttemptStatus::Lost);
+                let end = AttemptEnd {
+                    error_summary: Some(restarted_summary(worker_id)),
+                    ..AttemptEnd::by_master(AttemptStatus::Lost)
+                };
                 self.record(&attempt, &end, &by_master(AttemptStatus::Lost), now)
                     .await?;
                 ended += 1;
@@ -405,7 +410,8 @@ impl Dispatcher {
         Ok(ended)
     }
 
-    /// A worker is lost: its attempts end `lost` (each uses a retry) and it is forgotten.
+    /// A worker is lost: its attempts end `lost` with a `WorkerLost` error summary (each uses
+    /// a retry) and it is forgotten.
     ///
     /// # Errors
     ///
@@ -417,7 +423,10 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         self.workers.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
-            let end = AttemptEnd::by_master(AttemptStatus::Lost);
+            let end = AttemptEnd {
+                error_summary: Some(lost_summary(worker_id)),
+                ..AttemptEnd::by_master(AttemptStatus::Lost)
+            };
             self.record(&attempt, &end, &by_master(AttemptStatus::Lost), now)
                 .await?;
         }
@@ -594,6 +603,26 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
         error_kind: None,
         output: None,
     }
+}
+
+/// The error summary of an attempt that was running when its worker's agent restarted (the
+/// agent doesn't report it again: it may have been killed for using too much memory).
+fn restarted_summary(worker_id: &str) -> String {
+    ErrorSummary::json(
+        "WorkerRestarted",
+        &format!("worker `{worker_id}` restarted while the attempt ran (possibly out of memory)"),
+    )
+}
+
+/// The error summary of an attempt whose worker was lost (no sign of life for the lease).
+fn lost_summary(worker_id: &str) -> String {
+    ErrorSummary::json(
+        "WorkerLost",
+        &format!(
+            "worker `{worker_id}` stopped answering while the attempt ran (its pod or node \
+             gone, or out of memory)"
+        ),
+    )
 }
 
 fn inputs_too_large() -> AttemptEnd {

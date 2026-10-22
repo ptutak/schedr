@@ -65,6 +65,19 @@ fn agent_settings_name_the_worker_and_its_interpreter() {
     assert_eq!(agent.slots, 4);
     assert_eq!(agent.setup.python, PathBuf::from("/usr/bin/python3"));
     assert_eq!(agent.setup.log_dir, PathBuf::from("/d/logs"));
+    assert_eq!(agent.journal_dir, PathBuf::from("/d/journal/pod-1"));
+    for (id, dir) in [
+        ("../etl/w 1", "%2E.%2Fetl%2Fw%201"),
+        ("pod:1", "pod%3A1"),
+        ("pod_1", "pod_1"),
+        ("pod%3A1", "pod%253A1"),
+        ("", "%"),
+    ] {
+        config.worker.id = Some(id.to_owned());
+        let agent = agent_settings(&config, &env(&[]), Path::new("/d")).unwrap();
+        assert_eq!(agent.journal_dir, Path::new("/d/journal").join(dir), "{id}");
+    }
+    config.worker.id = None;
     assert_eq!(
         agent_settings(&config, &env(&[]), Path::new("/d"))
             .unwrap()
@@ -79,6 +92,23 @@ fn agent_settings_name_the_worker_and_its_interpreter() {
             .contains("the DAG interpreter `etl-venv` isn't defined"),
         "{error}"
     );
+}
+
+#[test]
+fn one_agent_holds_a_journal() {
+    let tmp = TempDir::new().unwrap();
+    let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
+    let held = lock_journal(&agent).unwrap();
+    let error = lock_journal(&agent).unwrap_err().to_string();
+    assert!(
+        error.starts_with("another schedr worker `localhost` is using "),
+        "{error}"
+    );
+    drop(held);
+    std::fs::remove_dir_all(tmp.path().join("journal")).unwrap();
+    std::fs::write(tmp.path().join("journal"), "a file").unwrap();
+    let error = lock_journal(&agent).unwrap_err().to_string();
+    assert!(error.starts_with("can't lock the journal in "), "{error}");
 }
 
 #[tokio::test]
@@ -130,12 +160,13 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
     let tmp = TempDir::new().unwrap();
     let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
     let (stop, stopped) = watch::channel(false);
-    let worker = run_worker(
+    // Boxed, as in standalone: the worker's future is large.
+    let worker = Box::pin(run_worker(
         agent,
         Duration::from_secs(1),
         "http://127.0.0.1:1".to_owned(),
         stopped,
-    );
+    ));
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = stop.send(true);

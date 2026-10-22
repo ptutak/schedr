@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
+use schedr_agent::journal::Journal;
 use schedr_api::{ApiState, router};
 use schedr_config::Config;
 use schedr_db::{Backend, Database, redact_password};
@@ -74,7 +75,9 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
         })
 }
 
-/// The worker agent's settings, from the configuration.
+/// The worker agent's settings, from the configuration; its journal is
+/// `<data_dir>/journal/<worker ID>` (other bytes than letters, digits, `-`, `_` and `.`, and a
+/// leading `.`, as `%XX`).
 ///
 /// # Errors
 ///
@@ -101,7 +104,6 @@ pub fn agent_settings(
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
     Ok(AgentSettings {
-        worker_id,
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
         setup: WorkerSetup {
@@ -117,6 +119,52 @@ pub fn agent_settings(
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
+        journal_dir: data_dir.join("journal").join(file_name(&worker_id)),
+        worker_id,
+    })
+}
+
+/// `name` as one safe path component, different for different names: bytes other than
+/// letters, digits, `-`, `_` and `.` become `%XX`, and so does a leading `.`; an empty name is
+/// `%`.
+fn file_name(name: &str) -> String {
+    use std::fmt::Write as _;
+    if name.is_empty() {
+        return "%".to_owned();
+    }
+    let mut safe = String::new();
+    for (i, b) in name.bytes().enumerate() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || (b == b'.' && i > 0) {
+            safe.push(char::from(b));
+        } else {
+            let _ = write!(safe, "%{b:02X}");
+        }
+    }
+    safe
+}
+
+/// Takes the worker's journal lock for as long as the returned file is open: one agent per
+/// worker ID and data directory.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if another agent holds it, or it can't be created.
+pub fn lock_journal(agent: &AgentSettings) -> Result<std::fs::File, AppError> {
+    let dir = &agent.journal_dir;
+    Journal::new(dir.clone()).lock().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::WouldBlock {
+            AppError::BadArgument(format!(
+                "another schedr worker `{}` is using {}: give each worker on this host its own \
+                 [worker] id or data_dir",
+                agent.worker_id,
+                dir.display()
+            ))
+        } else {
+            AppError::BadArgument(format!(
+                "can't lock the journal in {}: {e} (the data directory must be writable)",
+                dir.display()
+            ))
+        }
     })
 }
 
@@ -406,6 +454,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         agent.worker_id,
         data_dir.display()
     );
+    let _lock = lock_journal(&agent)?;
     run_worker(agent, config.dags.parse_file_timeout, master_url, stop).await;
     Ok(())
 }
