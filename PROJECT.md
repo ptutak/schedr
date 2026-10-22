@@ -1471,8 +1471,33 @@ list) and likewise has no Python.
   (the file, e.g. `SCHEDR_CONFIG__OPS__PORT`, `SCHEDR_DAG_PATH`, or a flag). In the file a path
   list is an array; in an environment variable a colon-separated string. Setting an alias and
   its full variable at once (`SCHEDR_DAG_PATH` and `SCHEDR_CONFIG__DAGS__PATH`) is an error.
-- **Built-in interpreter:** if `[interpreters]` doesn't define `python`, it is `python3` (found
-  on `PATH`), so a fresh `pip install schedr` works without configuration.
+- **Built-in interpreter:** if `[interpreters]` doesn't define `python`, schedr looks for a
+  `python3`, so a fresh `pip install schedr` works without configuration, even from a venv
+  that isn't activated (1.16). First match wins:
+  1. **an active virtualenv:** `$VIRTUAL_ENV/bin/python3` (`source .venv/bin/activate`,
+     `pyenv activate`);
+  2. **a project venv:** `.venv/bin/python3`, then `venv/bin/python3`, in the current
+     directory, then its parents (nearest first), as uv and Poetry find a project's venv;
+  3. **next to the binary:** `python3` in the directory of the running `schedr` (symlinks to
+     `schedr` resolved): the venv's own Python for a wheel installed into a venv;
+  4. **`python3` on `PATH`**; when it is a **pyenv shim** (in `$(pyenv root)/shims`), it is
+     resolved **once at startup** with `pyenv which python3`, in the user's environment and
+     directory (`PYENV_VERSION`, `.python-version`), and the real interpreter is used from
+     then on: tasks get a clean environment and run in their root's directory, where the shim
+     could pick another Python, and starting every task through it costs time. A shim pyenv
+     can't resolve is a startup error with pyenv's message.
+
+  Nothing found leaves plain `python3` to the system. The python path is used **as found,
+  never resolved** (a venv's `python3` is a symlink, and only through the venv path does
+  Python know its venv). Steps 1 and 2 depend on the user's shell and directory, so only the
+  **local commands** use them (`standalone`, `dags check`, `dags test`); a `worker` (M2) will
+  use the configuration, step 3 and step 4, so a stray `.venv` in a pod's directory can't
+  change its Python. The interpreter chosen and how is logged at startup, and named in the
+  error when the runner can't start (with the runner's last output lines and what it needs:
+  Python 3.14+ with this version of `schedr`). Not chosen: a `python` fallback (venvs always
+  have `python3`); reading `pyproject.toml` / `uv.lock` (`.venv` covers uv and Poetry);
+  conda (an active environment is on `PATH`, step 4); resolving the venv's python symlink
+  (breaks venvs).
 - Precedence: **command-line flags > environment variables > configuration file**.
 - `SCHEDR_DAG_PATH` is a normal configuration key (`SCHEDR_CONFIG__DAGS__PATH`);
   `SCHEDR_DAG_PATH` is kept as a **short alias**.
@@ -4172,7 +4197,14 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   package later includes a compiled Rust extension (allowed, see Rust/Python integration), it
   goes into the same wheel.
 - **Platform wheels:** Linux x86_64 and aarch64, and macOS (local development; Linux-only
-  features such as the memory watchdog are disabled there).
+  features such as the memory watchdog are disabled there). **In M1 (1.16): Linux x86_64**
+  (manylinux, built by `maturin-action` in CI); aarch64 and macOS come with M2.
+- **Smoke test of the wheel** (`scripts/smoke-wheel.sh`, CI's `wheel` job, `make smoke`
+  locally): PLAN.md's "M1 is done" as a new user does it. The wheel goes into a fresh venv
+  that isn't activated, with only the system's directories on `PATH`; then `schedr dags
+  check` and `schedr dags test` on the example DAG, and `schedr standalone` on free ports
+  with `dags list`, `dags unpause`, `runs trigger --for ...` and `runs list` until that run
+  succeeds. Not part of `make check` (a release build takes minutes).
 - **Container images:**
   - Master/webserver image: the Rust binary only, **no Python at all**.
   - Worker base image: Rust binary + Python 3.14 + the `schedr` package. Users build their own
@@ -4320,8 +4352,9 @@ its configuration, not the content.
 - `make check` runs everything CI runs: format check, clippy, ruff, mypy, the Rust tests
   (`cargo nextest`) and pytest, both with the coverage floor.
 - Pre-commit hooks run the same checks on commit.
-- CI: GitHub Actions, three jobs: `rust` and `python` (unit tests, lints, coverage) and
-  `integration` (integration tests with a Postgres service; see Testing).
+- CI: GitHub Actions: `rust` and `python` (unit tests, lints, coverage), `integration`
+  (integration tests with a Postgres service; see Testing), `docs`, `wheel` (the release
+  wheel and its smoke test, see Packaging and releases) and `sdist`.
 
 ## Roadmap
 

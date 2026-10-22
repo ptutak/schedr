@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke check clean
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -89,6 +89,11 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test)'; \
 	uv run pytest python/tests/integration examples
+
+smoke:           ## Build the release wheel and smoke-test it (install, dags test, standalone run)
+	rm -rf dist
+	uv build --wheel --out-dir dist
+	scripts/smoke-wheel.sh dist/*.whl $$(uv run python -c 'import sys; print(sys.executable)')
 
 check: fmt-check lint schema-check test test-integration   ## Everything CI runs
 

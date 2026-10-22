@@ -50,7 +50,15 @@ pub struct Config {
     /// The script roots, resolved from `scripts.path` and `scripts.roots` when loading.
     #[serde(skip)]
     pub script_roots: Vec<Root>,
+    /// How the `python` interpreter was chosen when `[interpreters]` doesn't define it: set to
+    /// [`BUILTIN_PYTHON_ORIGIN`] when loading, and by the binary when it looks for a better
+    /// one (e.g. `project venv`); `None` when `python` is configured.
+    #[serde(skip)]
+    pub builtin_python: Option<String>,
 }
+
+/// How the built-in `python` interpreter was chosen when nothing looked further.
+pub const BUILTIN_PYTHON_ORIGIN: &str = "built-in default";
 
 /// `[dags]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

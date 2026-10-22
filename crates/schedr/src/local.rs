@@ -10,6 +10,7 @@
 //!   exit 0 if the run succeeded, 1 otherwise.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -177,9 +178,49 @@ pub async fn check_root(
         sys_path: vec![root.dir.to_string_lossy().into_owned()],
     };
     let parsed = parse_files(&mut runner, request, config.dags.parse_file_timeout).await;
+    let output = std::fs::read_to_string(&log_file).unwrap_or_default();
     let _ = std::fs::remove_file(&log_file);
-    let parsed = parsed.map_err(|e| AppError::BadArgument(format!("parsing failed: {e}")))?;
+    let parsed = parsed.map_err(|e| {
+        AppError::BadArgument(runner_failed(
+            &e.to_string(),
+            config,
+            &runner.process.program,
+            &output,
+        ))
+    })?;
     Ok(validate_files(&root.name, parsed, SchedrVersion::current()))
+}
+
+/// How many of the runner's last output lines a failed parse shows.
+const RUNNER_OUTPUT_LINES: usize = 20;
+
+/// Why parsing failed, with what helps fixing it: the interpreter, how it was chosen, the
+/// runner's last output lines, and what the interpreter needs.
+fn runner_failed(error: &str, config: &Config, python: &Path, output: &str) -> String {
+    let how = config
+        .builtin_python
+        .as_deref()
+        .unwrap_or("configured in [interpreters]");
+    let mut message = format!(
+        "parsing failed: {error}\n  interpreter `{}`: {} ({how})",
+        config.dags.interpreter,
+        python.display()
+    );
+    let lines: Vec<&str> = output.lines().collect();
+    if !lines.is_empty() {
+        message.push_str("\n  its output:");
+        for line in &lines[lines.len().saturating_sub(RUNNER_OUTPUT_LINES)..] {
+            message.push_str("\n    ");
+            message.push_str(line);
+        }
+    }
+    let _ = write!(
+        message,
+        "\n  it needs Python 3.14+ with schedr {} installed; choose another with \
+         [interpreters] python (SCHEDR_CONFIG__INTERPRETERS__PYTHON)",
+        crate::VERSION
+    );
+    message
 }
 
 /// One file in `dags check --json`.

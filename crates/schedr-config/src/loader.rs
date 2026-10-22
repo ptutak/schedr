@@ -8,7 +8,8 @@ use figment::value::{Dict, Map};
 use figment::{Figment, Metadata, Profile, Provider};
 
 use crate::config::{
-    BUILTIN_PYTHON, Config, DEFAULT_DAG_INTERPRETER, Interpreter, url_has_password,
+    BUILTIN_PYTHON, BUILTIN_PYTHON_ORIGIN, Config, DEFAULT_DAG_INTERPRETER, Interpreter,
+    url_has_password,
 };
 use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
@@ -102,10 +103,13 @@ pub fn load(
             env: "SCHEDR_CONFIG__DATABASE__URL",
         });
     }
-    config
-        .interpreters
-        .entry(DEFAULT_DAG_INTERPRETER.to_owned())
-        .or_insert_with(|| Interpreter::path(PathBuf::from(BUILTIN_PYTHON)));
+    if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {
+        config.interpreters.insert(
+            DEFAULT_DAG_INTERPRETER.to_owned(),
+            Interpreter::path(PathBuf::from(BUILTIN_PYTHON)),
+        );
+        config.builtin_python = Some(BUILTIN_PYTHON_ORIGIN.to_owned());
+    }
     if !config.interpreters.contains_key(&config.dags.interpreter) {
         let defined: Vec<&str> = config.interpreters.keys().map(String::as_str).collect();
         return Err(ConfigError::UnknownInterpreter {

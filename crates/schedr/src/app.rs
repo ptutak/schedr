@@ -9,6 +9,7 @@ use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
 use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
 use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
+use crate::interpreter::{Host, apply_local};
 use crate::times::local_zone;
 use crate::user::{Output, run_dags, run_runs};
 
@@ -162,14 +163,19 @@ pub async fn execute(
 ) -> Result<(), AppError> {
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
-        (Command::Standalone, None) => crate::standalone::command(config, env).await,
+        (Command::Standalone, None) => {
+            crate::standalone::command(&local_config(config, env)?, env).await
+        }
         (
             Command::Dags {
                 client,
                 command: command @ (DagsCommand::Check { .. } | DagsCommand::Test { .. }),
             },
             None,
-        ) => crate::local::run_local(command, config, env, client.json, out).await,
+        ) => {
+            let config = local_config(config, env)?;
+            crate::local::run_local(command, &config, env, client.json, out).await
+        }
         (Command::Dags { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_dags(command, &api, &output, out).await
@@ -183,6 +189,25 @@ pub async fn execute(
             milestone: milestone.unwrap_or("unknown"),
         }),
     }
+}
+
+/// The configuration of a local command (`standalone`, `dags check`, `dags test`): the built-in
+/// `python` interpreter looked for from here (see [`crate::interpreter`]).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if a pyenv shim can't be resolved.
+pub fn local_config(config: &Config, env: &BTreeMap<String, String>) -> Result<Config, AppError> {
+    let mut config = config.clone();
+    let cwd = std::env::current_dir().ok();
+    let exe = std::env::current_exe().ok();
+    let host = Host {
+        env,
+        cwd: cwd.as_deref(),
+        exe: exe.as_deref(),
+    };
+    apply_local(&mut config, &host).map_err(|e| AppError::BadArgument(e.to_string()))?;
+    Ok(config)
 }
 
 /// The client and output settings of a user CLI command: the server, credentials (the password

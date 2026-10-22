@@ -94,19 +94,11 @@ jobs:
           name: docs-site
           path: site
 
-  # Platform wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md,
-  # Packaging and releases).
-  wheels:
-    name: wheel (${{ matrix.os }}, ${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: linux, runner: ubuntu-latest, target: x86_64 }
-          - { os: linux, runner: ubuntu-24.04-arm, target: aarch64 }
-          - { os: macos, runner: macos-14, target: aarch64 }
-          - { os: macos, runner: macos-14, target: x86_64 }
+  # The wheel: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
+  # releases). Linux x86_64 in M1; aarch64 and macOS come with M2. The smoke test is PLAN.md's
+  # "M1 is done": install, `dags test`, and a run in `schedr standalone` through the CLI.
+  wheel:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -114,20 +106,13 @@ jobs:
           python-version: "3.14"
       - uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: x86_64
           manylinux: auto
           args: --release --out dist
-      - name: Smoke test
-        # Cross-compiled wheels (macOS x86_64 on an arm64 runner) can't run here.
-        if: ${{ !(matrix.os == 'macos' && matrix.target == 'x86_64') }}
-        run: |
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install dist/*.whl
-          /tmp/smoke/bin/schedr --version
-          /tmp/smoke/bin/python -c "import schedr; print(schedr.__version__)"
+      - run: scripts/smoke-wheel.sh dist/*.whl python
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          name: wheel-linux-x86_64
           path: dist/*.whl
 
   sdist:

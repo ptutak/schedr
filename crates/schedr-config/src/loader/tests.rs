@@ -35,6 +35,7 @@ fn no_sources_gives_the_defaults_with_the_builtin_python() {
     let config = load(None, &env(&[]), &[]).unwrap();
     assert_eq!(config.dags.interpreter, "python");
     assert_eq!(config.interpreters["python"], Interpreter::path("python3"));
+    assert_eq!(config.builtin_python.as_deref(), Some("built-in default"));
     assert_eq!(config.dag_roots, Vec::<Root>::new());
     assert_eq!(config.script_roots, Vec::<Root>::new());
     assert_eq!(config.ops.port, 8090);
@@ -95,6 +96,7 @@ fn a_configured_python_replaces_the_builtin_one() {
         config.interpreters["python"],
         Interpreter::path("/usr/bin/python3.14")
     );
+    assert_eq!(config.builtin_python, None);
 }
 
 #[test]
