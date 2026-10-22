@@ -140,9 +140,15 @@ async fn a_runs_instances_and_attempts_are_shown() {
         error_kind: Some("import_failed".to_owned()),
         error_summary: Some("{}".to_owned()),
         duration_ms: Some(1_234),
+        code_hash: Some("sha256:a".to_owned()),
         ..AttemptEnd::by_master(AttemptStatus::Failed)
     };
+    assert_eq!(
+        db.run_code_hashes(&run_id).await.unwrap(),
+        Vec::<String>::new()
+    );
     db.end_attempt(&attempt_id, &end, now).await.unwrap();
+    assert_eq!(db.run_code_hashes(&run_id).await.unwrap(), ["sha256:a"]);
 
     let instances = db.run_instances(&run_id).await.unwrap();
     assert_eq!(instances.len(), 1);

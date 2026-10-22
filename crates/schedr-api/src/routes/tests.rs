@@ -279,6 +279,7 @@ async fn runs_are_listed_and_read_with_their_tasks_and_attempts() {
     assert_eq!(detail["run"]["state"], "running");
     assert_eq!(detail["tasks"][0]["task_id"], "extract");
     assert_eq!(detail["tasks"][0]["state"], "queued");
+    assert_eq!(detail["code_hashes"], json!([]));
 
     let ready = db.ready_instances(ts(NOW)).await.unwrap();
     db.assign_attempt(&ready[0].instance_id, "w1", ts(NOW))

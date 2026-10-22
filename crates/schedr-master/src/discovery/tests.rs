@@ -226,3 +226,296 @@ async fn refreshing_without_changes_stores_nothing() {
     assert_eq!(discovery.refresh(now()).await.unwrap(), []);
     discovery.jobs_mut().worker_lost("w1", now());
 }
+
+fn key_of(hash: &str, version: &str) -> ParseKey {
+    ParseKey {
+        schedr_version: version.to_owned(),
+        ..key(hash)
+    }
+}
+
+fn at(text: &str) -> Timestamp {
+    text.parse().unwrap()
+}
+
+fn code(discovery: &Discovery) -> Vec<(String, String)> {
+    discovery
+        .current_code()
+        .map(|(r, h, _, _)| (r.to_owned(), h.to_owned()))
+        .collect()
+}
+
+fn etl(hash: &str) -> Vec<(String, String)> {
+    vec![("etl".to_owned(), hash.to_owned())]
+}
+
+/// `w1` reports `h1` (parsed at 08:00, DAG `a` in `a.py`), `w2` reports `h2` (parsed at 08:10,
+/// `a` moved to `b.py`).
+async fn two_workers() -> Discovery {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), at("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            at("2026-10-21T08:00:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w2", key("h2"), at("2026-10-21T08:10:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h2", vec![("b.py", vec![dag("a", "b.py", 1)])]),
+            at("2026-10-21T08:10:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+}
+
+#[tokio::test]
+async fn the_newest_code_is_used_and_a_lagging_worker_changes_nothing() {
+    let mut discovery = two_workers().await;
+    assert_eq!(code(&discovery), etl("h2"));
+    let stored = &dags(&discovery).await[0];
+    assert_eq!(
+        stored.conflict, None,
+        "older code on another worker is no conflict"
+    );
+    assert_eq!(stored.current.as_ref().unwrap().dag.location.path, "b.py");
+
+    // w1 reports its older code again (a reconnect): still h2.
+    discovery
+        .root_reported("w1", key("h1"), at("2026-10-21T08:20:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h2"));
+
+    // w2 goes: only h1 is reported now.
+    discovery
+        .worker_gone("w2", at("2026-10-21T08:30:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h1"));
+    // Nobody reports the root any more: it keeps its parse and its DAGs.
+    discovery
+        .worker_gone("w1", at("2026-10-21T08:40:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .worker_gone("w1", at("2026-10-21T08:40:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h1"));
+    assert!(!dags(&discovery).await[0].removed);
+}
+
+#[tokio::test]
+async fn a_restarted_master_decides_the_same_whatever_the_order_of_reports() {
+    let first = two_workers().await;
+    let mut restarted = Discovery::new(
+        first.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    restarted
+        .root_reported("w2", key("h2"), at("2026-10-21T09:00:00Z"))
+        .await
+        .unwrap();
+    restarted
+        .root_reported("w1", key("h1"), at("2026-10-21T09:00:01Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&restarted), etl("h2"));
+}
+
+#[tokio::test]
+async fn after_an_upgrade_the_new_parse_takes_over_once_stored() {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    let old = discovery
+        .parse_uploaded(
+            upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            now(),
+        )
+        .await
+        .unwrap();
+    let job = discovery
+        .root_reported("w2", key_of("h1", "0.2.0"), now())
+        .await
+        .unwrap();
+    assert!(job.is_some(), "a newer version parses the hash again");
+
+    assert_eq!(
+        current_parse(&discovery).await,
+        old,
+        "until the new parse is stored"
+    );
+    let new = discovery
+        .parse_uploaded(
+            ParseUpload {
+                worker_id: "w2".to_owned(),
+                key: key_of("h1", "0.2.0"),
+                ..upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])])
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(current_parse(&discovery).await, new);
+    // Only the old worker left: the parse of its version is used again.
+    discovery.worker_gone("w2", now()).await.unwrap();
+    assert_eq!(current_parse(&discovery).await, old);
+}
+
+async fn current_parse(discovery: &Discovery) -> String {
+    dags(discovery).await[0]
+        .current
+        .as_ref()
+        .unwrap()
+        .parse_id
+        .clone()
+}
+
+#[tokio::test]
+async fn a_revert_is_a_switch_and_makes_the_earlier_code_newest() {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), at("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            at("2026-10-21T08:00:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w1", key("h2"), at("2026-10-21T08:10:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h2", vec![("b.py", vec![dag("a", "b.py", 1)])]),
+            at("2026-10-21T08:10:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w2", key("h2"), at("2026-10-21T08:11:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h2"));
+    // w1 reverts; w2's git-sync is stuck on h2.
+    discovery
+        .root_reported("w1", key("h1"), at("2026-10-21T08:20:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h1"));
+}
+
+#[tokio::test]
+async fn a_worker_registering_again_reports_afresh() {
+    let mut discovery = two_workers().await;
+    assert_eq!(code(&discovery), etl("h2"));
+    // w2 restarts without root `etl`: its h2 stops counting.
+    let jobs = discovery
+        .registered("w2", vec![], at("2026-10-21T09:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(jobs, []);
+    assert_eq!(code(&discovery), etl("h1"));
+}
+
+#[tokio::test]
+async fn a_worker_catching_up_through_older_code_doesnt_roll_it_back() {
+    let mut discovery = discovery().await;
+    let step = |worker: &'static str, hash: &'static str, minute: u32| {
+        let at = at(&format!("2026-10-21T08:{minute:02}:00Z"));
+        (worker, hash, at)
+    };
+    let mut parsed = BTreeSet::new();
+    for (worker, hash, when) in [
+        step("w1", "h0", 0),
+        step("w2", "h0", 1),
+        step("w1", "h1", 10),
+        step("w1", "h2", 20),
+        // w2 polls less often: it reaches h1 after w1 reached h2.
+        step("w2", "h1", 30),
+    ] {
+        discovery
+            .root_reported(worker, key(hash), when)
+            .await
+            .unwrap();
+        if parsed.insert(hash) {
+            discovery
+                .parse_uploaded(
+                    upload(hash, vec![("a.py", vec![dag("a", "a.py", 1)])]),
+                    when,
+                )
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(code(&discovery), etl("h2"));
+}
+
+#[tokio::test]
+async fn a_revert_made_while_disconnected_counts_when_the_worker_registers_again() {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), at("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            at("2026-10-21T08:00:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w1", key("h2"), at("2026-10-21T08:10:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(
+            upload("h2", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            at("2026-10-21T08:10:00Z"),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w2", key("h2"), at("2026-10-21T08:11:00Z"))
+        .await
+        .unwrap();
+    discovery
+        .registered("w1", vec![key("h1")], at("2026-10-21T08:30:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h1"));
+}
+
+#[tokio::test]
+async fn workers_on_newer_code_whose_parse_is_on_its_way_are_accepted_too() {
+    let mut discovery = two_workers().await;
+    discovery
+        .root_reported("w1", key("h3"), at("2026-10-21T08:20:00Z"))
+        .await
+        .unwrap();
+    let (_, current, accepted, _) = discovery.current_code().next().unwrap();
+    assert_eq!(current, "h2");
+    assert_eq!(
+        accepted.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["h2", "h3"]
+    );
+}

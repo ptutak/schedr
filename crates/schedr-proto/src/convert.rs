@@ -177,7 +177,9 @@ pub fn reject_reaction(reason: i32) -> Result<RejectReaction, ConversionError> {
     Ok(match R::try_from(reason).map_err(|_| unknown.clone())? {
         R::Unspecified => return Err(unknown),
         R::NoFreeSlot | R::Draining => RejectReaction::Temporary,
-        R::ScriptReferenceNotFound | R::DagFileMissing => RejectReaction::CodeNotThereYet,
+        R::ScriptReferenceNotFound | R::DagFileMissing | R::CodeMismatch => {
+            RejectReaction::CodeNotThereYet
+        }
         R::InterpreterUndefined
         | R::ScriptRootUnknown
         | R::MemoryBudgetTooLarge

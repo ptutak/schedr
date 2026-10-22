@@ -823,8 +823,21 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   `secret_denied`, `input_mismatch`, `output_not_serializable`, `output_too_large`,
   `inputs_too_large`, `render_failed` (a command's templates can't be filled in from these
   inputs). A secret
-  storage that is down (`secret_unavailable`), an import error and a task no longer in its
-  file (`task_not_found`) are retried: they can pass, or new code can fix them.
+  storage that is down (`secret_unavailable`), an import error, a task no longer in its
+  file (`task_not_found`) and a DAG file gone from the newest code (`dag_file_missing`) are
+  retried: they can pass, or new code can fix them.
+- **Code that changed under a run** (M2.5): a run keeps the DAG version it started with, but
+  workers have only the newest code. A command task still runs (its command travels in
+  `AssignTask`); a Python task whose task or file is gone fails (`task_not_found`, or
+  `dag_file_missing` when the worker has the root at the expected hash but not the file:
+  the file is gone, not on its way, so it fails at once instead of waiting as "code not
+  there yet"). When the DAG changed after the run started, the master puts that first in
+  the error summary: "task `load` was removed from DAG `sync` (`etl:team/sync.py`) after
+  this run started", "DAG `sync` moved from … to …", or "DAG `sync` was removed from …".
+  The task is retried by its `retries` and then fails the run; `schedr tasks cancel` ends it
+  `cancelled` instead. Not chosen (for now): a `removed` task state that counts as skipped,
+  as Airflow has (the run would carry on without data a removed task would have produced;
+  to decide with the UI, M3).
 - **While a run is being cancelled** nothing runs again: an attempt that fails then is not
   retried (the failure counts, and the run ends `failed`), and one interrupted or never
   started becomes `cancelled`. A **queued run** that is cancelled ends `cancelled` at once.
@@ -1385,23 +1398,24 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - **Same ID in two places on one worker** (two files in one folder, two folders, two roots):
   **none of the definitions can run**. The UI shows the DAG as in conflict, with every place
   that defines it.
-- **Different workers define the same ID in different places** (e.g. worker A has it in
-  `a.py`, worker B, not yet synced, still in `b.py`): also a **conflict**, and the DAG can't
-  run, **until every relevant worker** has parsed and reported its code and they all agree on
-  one place. Typical cause: git-sync on some pods hasn't pulled the latest commit yet, so the
-  conflict clears by itself once they catch up.
-- **"Different" means a different place** (root + file). The **same file at different code
-  versions** on different workers is **not** a conflict: tasks run on the latest code and the UI
-  warns about mixed hashes (see Code versions and change detection). Otherwise every code push
-  would block the DAG until all workers have synced.
-- **Relevant workers** are the **`ACTIVE`** workers serving any queue used by the DAG's tasks
-  (queues taken from all reported definitions). `DISCONNECTED`, `LOST` and `OFFLINE` workers
-  don't count, so a dead pod can't block a DAG forever.
+- **Different workers on different code** (e.g. worker A still has the DAG in `a.py`, worker
+  B, already synced, has it in `b.py`): **not a conflict** (M2.5). **Only the newest code
+  runs**: a root's DAGs come from the parse of the newest hash an alive worker reports, and
+  its tasks go only to workers that have the root at that hash (see Code versions and change
+  detection). A worker on older code gets none of the root's tasks until it has synced, so
+  it can't put a DAG in conflict and doesn't block it. Not chosen: the rule before M2.5
+  (a conflict until every relevant worker, those serving the DAG's queues, has parsed the
+  same place), which blocked the whole DAG, no runs, no assignments, during every git-sync
+  lag; and pinning a worker on old code to the runs that started on it until they finish
+  (git-sync replaces its files anyway, a pinned pod is capacity lost for the run's length,
+  and if it dies no worker has that code: runs pinned to their code would need versioned
+  code, e.g. a checkout per git commit, which schedr doesn't keep).
+- **The same file at different code versions** on different workers is not a conflict either;
+  the master logs a warning while workers report different hashes of a root (see Code
+  versions and change detection).
 - **No duplicate parsing.** Workers report a content hash per root; each (root, hash) is
   **parsed once** per schedr version (see Upgrades and compatibility), by any `ACTIVE` worker
-  that reported that hash. The master derives each
-  worker's DAGs from the parse of the hash it reported, so "parsed and reported by every
-  worker" doesn't mean parsing the same code on every pod.
+  that reported that hash.
 - While a DAG is in conflict, **no new runs are created and no tasks are assigned**. In runs
   already in progress, **running attempts finish**; tasks not yet started **wait** until the
   conflict is resolved.
@@ -1410,12 +1424,38 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - **The same ID twice in one file** is a conflict too (both places are the same file).
 - A DAG first seen in conflict is stored **paused** and with no version; it gets one when
   the conflict is resolved.
-- **M1 has a single worker**, so only conflicts within one worker's roots arise; the rules
-  across workers (relevant workers by queue) come with several workers in M2.
+- **Conflicts are decided within the current parse of each root** (and across roots): the
+  same ID in two places there is a conflict, whatever the workers report.
 
 ### Code versions and change detection
 
 - **Tasks run on the latest code** the worker has. schedr does not keep old code versions.
+- **Only the newest code runs** (M2.5). Workers may report different hashes of a root while
+  git-sync catches up. The root's **current** hash is the newest one an alive worker
+  (registered, not lost or deregistered) reports, newest meaning the hash workers **switched
+  to most recently** (table `root_hashes`, so a master restart decides the same). A switch
+  is a worker moving **away from the current hash** (compared with what it reported before,
+  also across a reconnect), so a **revert** to earlier content is newest, while a lagging
+  worker catching up through older revisions, or reporting older code again, changes
+  nothing; a hash never seen before is newest when first reported. A worker that registers
+  again reports its roots afresh (a root it no longer has stops counting). The current
+  hash's parse defines the root's DAGs, and the root's tasks go **only to workers at that
+  hash, or at a newer one whose parse is on its way** (newer code still, so the root's tasks
+  don't stall while it is parsed): `AssignTask` carries the hash the worker reported as
+  `expected_code_hash`, and a worker whose root is at another hash by then rejects the task
+  with `CODE_MISMATCH` ("code not there yet", tried again in 35 s). Until a root has a current parse (its first parse on its
+  way) no hash is sent and nothing is checked. A revert made while the master was down
+  isn't seen as a switch (the master doesn't keep what each worker reported). Not chosen:
+  newest as first parsed most recently (a revert would lose to the code it reverted); any
+  change of a worker's hash as a switch (a lagging worker passing through older revisions
+  would roll the code back). A task waiting for that says
+  so: "waiting for workers serving queue `default` to have the newest code of root `etl`".
+  A root no alive worker reports keeps its current parse. The cost: right after a push, a
+  root's tasks run only on the workers that have synced.
+- **The mixed-code warning:** the master logs a warning when workers report different hashes
+  of a root (once per change of the set), naming the hashes and the workers; and a run whose
+  attempts ran on different code (the root changed during the run) lists its code hashes in
+  the API (`code_hashes`), the attempt recording the hash its worker ran.
 - schedr computes a **content hash** of the DAG code and records it for each task attempt.
   When tasks in the same DAG run used **different content hashes**, schedr shows a **warning**.
 - Changes are detected by **polling on a schedule** (interval set in configuration), not by
@@ -1473,9 +1513,15 @@ then workers) means a new master works with old workers for a while.
     import errors and parse warnings; also for CI.
 - **Rolling upgrade:** a task is assigned only to workers whose version is **at least the
   version of the parse in use** (a DAG parsed by a new runner may use a feature only the new
-  `schedr` package has). Until enough workers are upgraded such tasks wait as `queued`
-  ("waiting: no worker with schedr ≥ 1.5"); old workers keep running tasks of DAGs on older
-  parses, so an upgrade needs no downtime.
+  `schedr` package has), compared as `major.minor`: the run's parse and the parse of the
+  root's current code (the code that actually runs), whichever is newer. Until enough workers are upgraded such
+  tasks wait as `queued` ("no worker with schedr ≥ 1.5 serves queue `default`"); old workers
+  keep running tasks of DAGs on older parses, so an upgrade needs no downtime. Of a hash's
+  parses, the one of the newest schedr version an alive worker reporting the hash has is
+  used: the new parse takes over once stored, and if only old workers are left, theirs is
+  used again. Not chosen: comparing the patch level too (patches add no features); keeping
+  the old parse until most workers are upgraded (new checks arrive late, and "most" needs a
+  threshold).
 - **Other stored data:** the database schema is upgraded by `schedr db migrate` (see State
   storage). Outputs, cleanup handles and resource values (tagged JSON) also change only
   additively within a major version: a new runner must decode what an old one stored, since a

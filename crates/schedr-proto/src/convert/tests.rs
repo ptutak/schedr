@@ -86,6 +86,7 @@ fn unknown_run_kinds_are_errors() {
 #[case(pb::RejectReason::DagFileMissing, RejectReaction::CodeNotThereYet)]
 #[case(pb::RejectReason::MemoryBudgetTooLarge, RejectReaction::WorkerSpecific)]
 #[case(pb::RejectReason::DiskNotWritable, RejectReaction::WorkerSpecific)]
+#[case(pb::RejectReason::CodeMismatch, RejectReaction::CodeNotThereYet)]
 #[case(pb::RejectReason::InvalidSpecification, RejectReaction::WorkerSpecific)]
 fn rejection_reactions_follow_the_rejection_table(
     #[case] reason: pb::RejectReason,

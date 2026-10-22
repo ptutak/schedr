@@ -281,6 +281,8 @@ impl MasterCore {
                 now,
             )
             .await?;
+        self.dispatcher
+            .set_worker_version(worker_id, register.schedr_version.parse().ok());
         let mut decisions = Vec::with_capacity(register.journal.len());
         let mut outgoing = Vec::new();
         for entry in &register.journal {
@@ -291,9 +293,24 @@ impl MasterCore {
             });
             outgoing.extend(cancel);
         }
-        for root in &register.roots {
-            outgoing.extend(self.root_reported(worker_id, root, now).await?);
-        }
+        // Its reports replace what it reported before: a root it no longer has stops counting.
+        let keys: Vec<ParseKey> = register
+            .roots
+            .iter()
+            .filter(|root| root.kind == i32::from(pb::RootKind::Dag))
+            .map(|root| {
+                self.dispatcher
+                    .report_root(worker_id, &root.root, &root.content_hash);
+                ParseKey {
+                    root: root.root.clone(),
+                    content_hash: root.content_hash.clone(),
+                    schedr_version: register.schedr_version.clone(),
+                }
+            })
+            .collect();
+        let jobs = self.discovery.registered(worker_id, keys, now).await?;
+        outgoing.extend(jobs.into_iter().map(assign_parse));
+        self.sync_code();
         let registered = pb::Registered {
             timing: Some(pb::Timing {
                 heartbeat_interval_ms: millis(self.settings.heartbeat_interval),
@@ -456,6 +473,7 @@ impl MasterCore {
                 now,
             )
             .await?;
+        self.sync_code();
         Ok(())
     }
 
@@ -487,7 +505,10 @@ impl MasterCore {
             content_hash: root.content_hash.clone(),
             schedr_version: version,
         };
+        self.dispatcher
+            .report_root(worker_id, &root.root, &root.content_hash);
         let assignment = self.discovery.root_reported(worker_id, key, now).await?;
+        self.sync_code();
         Ok(assignment.into_iter().map(assign_parse).collect())
     }
 
@@ -543,7 +564,16 @@ impl MasterCore {
         self.db.set_worker_state(worker_id, state, now).await?;
         self.dispatcher.worker_lost(worker_id, now).await?;
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);
+        self.discovery.worker_gone(worker_id, now).await?;
+        self.sync_code();
         Ok(moved.into_iter().map(assign_parse).collect())
+    }
+
+    /// Tells the dispatcher each root's current code, as discovery decided it.
+    fn sync_code(&mut self) {
+        for (root, _, accepted, version) in self.discovery.current_code() {
+            self.dispatcher.set_current_code(root, accepted, version);
+        }
     }
 }
 

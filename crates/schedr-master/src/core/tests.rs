@@ -619,3 +619,50 @@ async fn a_registration_that_fails_half_way_leaves_no_live_stream() {
         "the next registration must not be refused"
     );
 }
+
+#[tokio::test]
+async fn tasks_go_to_the_worker_with_the_newest_code_until_it_leaves() {
+    let mut core = with_dag().await;
+    let w1 = core.dispatcher().workers().get("w1").unwrap();
+    assert_eq!(w1.version, Some(SchedrVersion::new(0, 1)));
+    assert_eq!(w1.roots.get("etl").map(String::as_str), Some("h1"));
+    let mut newer = register("w2", "i1", vec![]);
+    newer.roots = vec![root("h2")];
+    let (_, outgoing) = core.register(&newer, later(60)).await.unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    let parsed = pb::ParseResult {
+        worker_id: "w2".to_owned(),
+        root: Some(root("h2")),
+        ..upload(&job.parse_job_id)
+    };
+    core.upload(parsed, later(60)).await.unwrap();
+    trigger(&mut core).await;
+    let out = core.tick(later(60)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    assert_eq!(
+        (
+            out[0].worker_id.as_str(),
+            assign.expected_code_hash.as_str()
+        ),
+        ("w2", "h2")
+    );
+    // w2 leaves (its attempt is lost, no retries left): the next run's task goes to w1, on h1.
+    let bye = worker_message::Message::Deregister(pb::Deregister {});
+    core.handle("w2", bye, later(61)).await.unwrap();
+    trigger(&mut core).await;
+    let out = core.tick(later(62)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    assert_eq!(
+        (
+            out[0].worker_id.as_str(),
+            assign.expected_code_hash.as_str()
+        ),
+        ("w1", "h1")
+    );
+}

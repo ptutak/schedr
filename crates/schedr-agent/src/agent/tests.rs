@@ -11,6 +11,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use tonic::transport::{Endpoint, Server};
 
+use schedr_model::runner::DAG_FILE_MISSING;
+
 use super::*;
 
 /// Parses each file into a DAG named after it, with one Python task; runs tasks at once,
@@ -504,6 +506,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
                     Ok(pb::RejectReason::InvalidSpecification) => "rejected: invalid",
                     Ok(pb::RejectReason::DagFileMissing) => "rejected: missing",
                     Ok(pb::RejectReason::DiskNotWritable) => "rejected: disk",
+                    Ok(pb::RejectReason::CodeMismatch) => "rejected: code",
                     _ => "rejected",
                 })
             }
@@ -628,6 +631,7 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
         left.contains(&"a3".to_owned()),
         "a result is kept until it is acknowledged: {left:?}"
     );
+    assert_results_name_their_code(&seen, 2);
 }
 
 fn heartbeats(messages: &[pb::WorkerMessage]) -> usize {
@@ -800,4 +804,70 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         }],
         "reported in the next `Register`"
     );
+}
+
+#[tokio::test]
+async fn an_assignment_for_other_code_than_the_workers_is_rejected() {
+    let python = task_json(&json!({"kind": "python"}));
+    let mut stale = assign("a1", &python, "sync.py", false);
+    if let Some(master_message::Message::AssignTask(a)) = stale.message.as_mut() {
+        a.expected_code_hash = "sha256:newer".to_owned();
+    }
+    let (seen, _) = against_script(2, Start::With(vec![]), vec![stale], |m| m.len() >= 2).await;
+    assert_eq!(kinds(&seen), ["register", "rejected: code"]);
+    let Some(worker_message::Message::Rejected(rejected)) = seen[1].message.as_ref() else {
+        panic!("expected Rejected")
+    };
+    assert!(
+        rejected.detail.starts_with("root `etl` here is at sha256:")
+            && rejected.detail.ends_with(", the task expects sha256:newer"),
+        "{}",
+        rejected.detail
+    );
+}
+
+/// Each of the `count` results sent names the code it ran with.
+fn assert_results_name_their_code(seen: &[pb::WorkerMessage], count: usize) {
+    let code_hashes: Vec<&str> = seen
+        .iter()
+        .filter_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Finished(f) => Some(f.code_hash.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(code_hashes.len(), count);
+    assert!(
+        code_hashes.iter().all(|h| h.starts_with("sha256:")),
+        "{code_hashes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_dag_file_missing_from_the_expected_code_fails_the_attempt_at_once() {
+    // The content hash depends only on the root's files: a copy of the root has the same.
+    let copy = TempDir::new().unwrap();
+    std::fs::write(copy.path().join("sync.py"), "").unwrap();
+    let mut watcher = RootWatcher::new(copy.path(), Duration::ZERO);
+    let hash = loop {
+        watcher.poll(Instant::now()).unwrap();
+        if let Some(hash) = watcher.hash() {
+            break hash.to_owned();
+        }
+    };
+    let python = task_json(&json!({"kind": "python"}));
+    let mut gone = assign("a1", &python, "gone.py", false);
+    if let Some(master_message::Message::AssignTask(a)) = gone.message.as_mut() {
+        a.expected_code_hash = hash;
+    }
+    let done = |m: &[pb::WorkerMessage]| kinds(m).len() >= 3;
+    let (seen, _) = against_script(2, Start::With(vec![]), vec![gone], done).await;
+    assert_eq!(kinds(&seen), ["register", "started", "finished: failed"]);
+    let finished = seen
+        .iter()
+        .find_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Finished(f) => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.error_kind, DAG_FILE_MISSING);
 }

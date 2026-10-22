@@ -15,6 +15,14 @@ mod tests;
 /// The largest message either side accepts, in bytes (the cap on inputs per task, 64 MiB).
 pub const MAX_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 
+/// The error kind of a task its DAG file no longer defines (the runner's
+/// `task_not_found`).
+pub const TASK_NOT_FOUND: &str = "task_not_found";
+
+/// The error kind of an attempt whose DAG file is missing although the worker has the root at
+/// the hash the master expects (the newest code): the file is gone, not on its way.
+pub const DAG_FILE_MISSING: &str = "dag_file_missing";
+
 /// What the runner was started to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

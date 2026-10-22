@@ -301,3 +301,73 @@ async fn dags_can_be_paused_and_unpaused() {
     assert!(db.stored_dags().await.unwrap()[0].paused);
     assert!(!db.set_paused(&id("nope"), true).await.unwrap());
 }
+
+#[tokio::test]
+async fn the_parses_of_a_hash_are_listed_oldest_first() {
+    let db = migrated().await;
+    assert_eq!(db.parses_of("etl", "h1").await.unwrap(), []);
+    let first = store_parse(&db, "h1", &files()).await;
+    let later: Timestamp = "2026-10-22T08:00:00Z".parse().unwrap();
+    let second = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h1",
+            schedr_version: "0.2.0",
+            worker_id: "w2",
+            parsed_at: later,
+            files: &files(),
+        })
+        .await
+        .unwrap();
+    store_parse(&db, "h2", &files()).await;
+    let parses = db.parses_of("etl", "h1").await.unwrap();
+    assert_eq!(
+        parses,
+        [
+            StoredParse {
+                id: first,
+                schedr_version: "0.1.0".to_owned(),
+                parsed_at: now(),
+            },
+            StoredParse {
+                id: second,
+                schedr_version: "0.2.0".to_owned(),
+                parsed_at: later,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_switch_to_a_hash_makes_it_the_most_recent_and_a_first_report_only_records_it() {
+    let db = migrated().await;
+    let t = |s: &str| -> Timestamp { s.parse().unwrap() };
+    db.record_root_hash("etl", "a", false, t("2026-10-20T00:00:00Z"))
+        .await
+        .unwrap();
+    db.record_root_hash("etl", "b", true, t("2026-10-21T00:00:00Z"))
+        .await
+        .unwrap();
+    db.record_root_hash("etl", "a", false, t("2026-10-22T00:00:00Z"))
+        .await
+        .unwrap();
+    db.record_root_hash("ml", "x", false, t("2026-10-22T00:00:00Z"))
+        .await
+        .unwrap();
+    let switches = db.root_hash_switches("etl").await.unwrap();
+    assert_eq!(
+        switches,
+        BTreeMap::from([
+            ("a".to_owned(), t("2026-10-20T00:00:00Z")),
+            ("b".to_owned(), t("2026-10-21T00:00:00Z")),
+        ])
+    );
+    // A revert: a worker switches back to `a`.
+    db.record_root_hash("etl", "a", true, t("2026-10-23T00:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.root_hash_switches("etl").await.unwrap()["a"],
+        t("2026-10-23T00:00:00Z")
+    );
+}

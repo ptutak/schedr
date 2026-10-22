@@ -163,7 +163,10 @@ async fn a_run_goes_through_assignment_start_and_finish() {
         ts(NOW).as_second()
     );
     assert_eq!(assign.dag_file.as_ref().unwrap().path, "team/sync.py");
-    assert_eq!(assign.expected_code_hash, "h1");
+    assert_eq!(
+        assign.expected_code_hash, "",
+        "no current code known: no check"
+    );
     assert_eq!(assign.inputs_json, b"{}");
     assert!(!assign.inputs_external);
     assert_eq!(assign.cancel_grace_ms, 30_000);
@@ -824,5 +827,190 @@ async fn a_task_every_remaining_worker_rejected_says_so() {
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("every active worker serving queue `default` rejected it")
+    );
+}
+
+#[tokio::test]
+async fn only_workers_with_the_newest_code_get_the_task_and_are_told_its_hash() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher.report_root("w1", "etl", "h1");
+    dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("waiting for workers serving queue `default` to have the newest code of root `etl`")
+    );
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.report_root("w2", "etl", "h2");
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out[0].worker_id, "w2");
+    assert_eq!(assignment(&out[0]).expected_code_hash, "h2");
+}
+
+#[tokio::test]
+async fn a_worker_older_than_the_parse_doesnt_get_the_task() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 0)));
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("no worker with schedr ≥ 0.1 serves queue `default`")
+    );
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 1)));
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(
+        assignment(&out[0]).expected_code_hash,
+        "",
+        "no check while the master knows no current code"
+    );
+}
+
+#[tokio::test]
+async fn the_current_codes_version_counts_too() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 1)));
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher.set_current_code(
+        "etl",
+        &BTreeSet::from(["h2".to_owned()]),
+        Some(SchedrVersion::new(0, 2)),
+    );
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some("no worker with schedr ≥ 0.2 serves queue `default`")
+    );
+}
+
+#[tokio::test]
+async fn no_eligible_worker_left_isnt_everyone_rejecting_it() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher.report_root("w1", "etl", "h1");
+    dispatcher.set_current_code("etl", &BTreeSet::from(["h1".to_owned()]), None);
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    // Meanwhile newer code is current, which w1 hasn't synced: nobody is eligible.
+    dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
+    let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+/// Stores a newer version of DAG `sync` (from parse `h9`) defined as `dag`.
+async fn redefine(db: &Database, dag: Dag) {
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h9",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts(NOW),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let change = DagChange::Define {
+        dag: Box::new(dag),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], ts(NOW)).await.unwrap();
+}
+
+/// Runs `extract`, which fails with `kind` and `summary`, after `change`; returns the stored
+/// error summary.
+async fn gone_after(
+    change: impl AsyncFnOnce(&Database),
+    kind: &str,
+    summary: Option<&str>,
+) -> Option<ErrorSummary> {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    change(&db).await;
+    let failed = pb::Finished {
+        error_kind: kind.to_owned(),
+        error_summary_json: summary.map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+        ..finished(&attempt, pb::AttemptStatus::Failed, &json!(null))
+    };
+    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    db.task_attempts(&run_id, &id("extract")).await.unwrap()[0]
+        .error_summary
+        .as_deref()
+        .map(|s| serde_json::from_str(s).unwrap())
+}
+
+#[tokio::test]
+async fn a_task_or_file_gone_since_the_run_started_is_explained() {
+    let not_found =
+        r#"{"exception": "TaskSetupError", "message": "no task `extract`", "traceback": ""}"#;
+    let removed = async |db: &Database| {
+        let mut newer = dag(0);
+        newer.tasks.retain(|t| t.id.as_str() == "load");
+        newer.edges.clear();
+        redefine(db, newer).await;
+    };
+    let summary = gone_after(removed, "task_not_found", Some(not_found))
+        .await
+        .unwrap();
+    assert_eq!(
+        (summary.exception.as_str(), summary.message.as_str()),
+        (
+            "TaskSetupError",
+            "task `extract` was removed from DAG `sync` (`etl:team/sync.py`) after this run \
+             started: no task `extract`"
+        )
+    );
+
+    let moved = async |db: &Database| {
+        let mut newer = dag(0);
+        newer.location.path = "team/other.py".to_owned();
+        redefine(db, newer).await;
+    };
+    let summary = gone_after(moved, "dag_file_missing", None).await.unwrap();
+    assert_eq!(
+        (summary.exception.as_str(), summary.message.as_str()),
+        (
+            "CodeChanged",
+            "DAG `sync` moved from `etl:team/sync.py` to `etl:team/other.py` after this run \
+             started"
+        )
+    );
+
+    let dropped = async |db: &Database| {
+        let gone = DagChange::Remove {
+            dag_id: DagId::new("sync").unwrap(),
+        };
+        db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
+    };
+    let summary = gone_after(dropped, "dag_file_missing", None).await.unwrap();
+    assert_eq!(
+        summary.message,
+        "DAG `sync` was removed from `etl:team/sync.py` after this run started"
+    );
+
+    let unchanged = async |_: &Database| {};
+    assert_eq!(gone_after(unchanged, "task_not_found", None).await, None);
+    let other_failure = async |db: &Database| redefine(db, dag(0)).await;
+    assert_eq!(gone_after(other_failure, "import_failed", None).await, None);
+}
+
+#[tokio::test]
+async fn a_worker_on_newer_code_whose_parse_is_on_its_way_gets_the_task() {
+    let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    dispatcher.report_root("w1", "etl", "h3");
+    let accepted = BTreeSet::from(["h2".to_owned(), "h3".to_owned()]);
+    dispatcher.set_current_code("etl", &accepted, None);
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(
+        assignment(&out[0]).expected_code_hash,
+        "h3",
+        "it checks the hash it reported"
     );
 }

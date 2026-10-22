@@ -5,10 +5,15 @@
 //! with the most free slots; ties go to the least recently assigned, then the worker ID. A
 //! worker with no queues configured serves the `default` queue. Slots count the attempts
 //! assigned to the worker and not yet finished.
+//!
+//! **Eligible** workers also have the task's root at its current hash (only the newest code
+//! runs) and a schedr version at least that of the parse the task's DAG version came from
+//! (see PROJECT.md, Code versions and change detection, and Upgrades and compatibility).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
+use schedr_model::SchedrVersion;
 
 #[cfg(test)]
 mod tests;
@@ -42,9 +47,53 @@ pub struct Worker {
     pub attempts: BTreeSet<String>,
     /// When it was last given a task.
     pub last_assigned: Option<Timestamp>,
+    /// Its schedr version, when known.
+    pub version: Option<SchedrVersion>,
+    /// The content hash it last reported for each root.
+    pub roots: BTreeMap<String, String>,
+}
+
+/// What a task needs of a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Needs<'a> {
+    /// Its queue.
+    pub queue: &'a str,
+    /// Its root and the hashes the worker must have it at (the root's current code, or newer
+    /// code whose parse is on its way), when known.
+    pub code: Option<(&'a str, &'a BTreeSet<String>)>,
+    /// The lowest schedr version that runs it, when known.
+    pub version: Option<SchedrVersion>,
+}
+
+impl<'a> Needs<'a> {
+    /// Only a worker serving `queue`.
+    #[must_use]
+    pub const fn queue(queue: &'a str) -> Self {
+        Self {
+            queue,
+            code: None,
+            version: None,
+        }
+    }
 }
 
 impl Worker {
+    /// Whether its schedr version runs a task of a parse of `version` (an unknown version on
+    /// either side does).
+    #[must_use]
+    pub fn runs(&self, version: Option<SchedrVersion>) -> bool {
+        match (self.version, version) {
+            (Some(mine), Some(needed)) => mine >= needed,
+            _ => true,
+        }
+    }
+
+    /// Whether it has `root` at one of `hashes` (anything, when no code is asked for).
+    #[must_use]
+    pub fn has_code(&self, code: Option<(&str, &BTreeSet<String>)>) -> bool {
+        code.is_none_or(|(root, hashes)| self.roots.get(root).is_some_and(|h| hashes.contains(h)))
+    }
+
     /// Whether it serves `queue`.
     #[must_use]
     pub fn serves(&self, queue: &str) -> bool {
@@ -87,6 +136,8 @@ impl Workers {
             known.queues = queues;
             known.slots = slots;
             known.state = WorkerState::Active;
+            // It reports its roots again right after.
+            known.roots.clear();
             return false;
         }
         self.workers.insert(
@@ -99,9 +150,25 @@ impl Workers {
                 state: WorkerState::Active,
                 attempts: BTreeSet::new(),
                 last_assigned: None,
+                version: None,
+                roots: BTreeMap::new(),
             },
         );
         true
+    }
+
+    /// Records a worker's schedr version.
+    pub fn set_version(&mut self, id: &str, version: Option<SchedrVersion>) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.version = version;
+        }
+    }
+
+    /// Records the content hash a worker reported for a root.
+    pub fn report_root(&mut self, id: &str, root: &str, hash: &str) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.roots.insert(root.to_owned(), hash.to_owned());
+        }
     }
 
     /// The worker stops taking new tasks.
@@ -129,11 +196,18 @@ impl Workers {
             .filter(move |w| w.state == WorkerState::Active && w.serves(queue))
     }
 
-    /// The worker to give a task of `queue` to, leaving out `excluded`; `None` when no
+    /// The active workers that can run a task with `needs`: serving its queue, with its code
+    /// and a recent enough version.
+    pub fn eligible<'a>(&'a self, needs: Needs<'a>) -> impl Iterator<Item = &'a Worker> + 'a {
+        self.serving(needs.queue)
+            .filter(move |w| w.runs(needs.version) && w.has_code(needs.code))
+    }
+
+    /// The worker to give a task with `needs` to, leaving out `excluded`; `None` when no
     /// eligible worker has a free slot.
     #[must_use]
-    pub fn pick<'a>(&'a self, queue: &'a str, excluded: &BTreeSet<String>) -> Option<&'a str> {
-        self.serving(queue)
+    pub fn pick<'a>(&'a self, needs: Needs<'a>, excluded: &BTreeSet<String>) -> Option<&'a str> {
+        self.eligible(needs)
             .filter(|w| w.free_slots() > 0 && !excluded.contains(&w.id))
             .min_by(|a, b| {
                 b.free_slots()

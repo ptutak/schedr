@@ -116,6 +116,7 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
     assert_eq!(extract.dag, dag());
     assert_eq!(extract.content_hash, "h1");
     assert_eq!(extract.queued_reason, None);
+    assert_eq!(extract.parse_version, "0.1.0");
     db.set_queued_reason(
         &extract.instance_id,
         "no worker serves queue `large`",

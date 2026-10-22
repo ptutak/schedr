@@ -41,6 +41,9 @@ pub struct ReadyInstance {
     pub content_hash: String,
     /// Why it waits, as shown.
     pub queued_reason: Option<String>,
+    /// The schedr version of the parse its DAG version came from: workers older than this
+    /// don't get it.
+    pub parse_version: String,
 }
 
 /// A stored attempt.
@@ -114,6 +117,7 @@ type ReadyRow = (
     String,
     String,
     Option<String>,
+    String,
 );
 type AttemptRow = (
     String,
@@ -152,7 +156,7 @@ impl Database {
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, v.dag_json{text}, p.content_hash, \
-            t.queued_reason FROM task_instances t JOIN runs r ON r.id = t.run_id \
+            t.queued_reason, p.schedr_version FROM task_instances t JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
             WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' \
@@ -437,6 +441,7 @@ fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
         json,
         content_hash,
         queued_reason,
+        parse_version,
     ) = row;
     Ok(ReadyInstance {
         instance_id,
@@ -449,6 +454,7 @@ fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
         dag: from_json("dag_versions.dag_json", &json)?,
         content_hash,
         queued_reason,
+        parse_version,
     })
 }
 

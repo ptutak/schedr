@@ -282,6 +282,13 @@
       "RunDetail": {
         "description": "A run with its tasks.",
         "properties": {
+          "code_hashes": {
+            "description": "The code hashes its attempts ran with, in the order first used. More than one: its\ntasks ran on different code (it changed during the run).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "run": {
             "$ref": "#/components/schemas/RunView",
             "description": "The run."
@@ -296,7 +303,8 @@
         },
         "required": [
           "run",
-          "tasks"
+          "tasks",
+          "code_hashes"
         ],
         "type": "object"
       },

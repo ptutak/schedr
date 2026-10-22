@@ -789,3 +789,73 @@ fn a_running_task_is_cancelled_with_what_follows_it() {
     assert_ne!(code, 0);
     assert!(err.contains("already finished (cancelled)"), "{err}");
 }
+
+/// DAG `moving` in `sync.py`, and in its newer code moved to `moved.py`.
+const MOVING_OLD: &str = "from schedr import Dag, task\n\n@task\ndef step() -> int:\n    return 1\n\nwith Dag(\"moving\"):\n    step()\n";
+const MOVING_NEW: &str = "from schedr import Dag, task\n\n@task\ndef step() -> int:\n    return 2\n\nwith Dag(\"moving\"):\n    step()\n";
+
+impl Cluster {
+    fn dag_view(&self, dag: &str) -> Value {
+        self.cli_json(&["dags", "list"])
+            .and_then(|dags| {
+                dags["dags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|d| d["dag_id"] == dag)
+                    .cloned()
+            })
+            .unwrap_or(Value::Null)
+    }
+}
+
+#[test]
+fn the_newest_code_runs_and_a_worker_on_older_code_blocks_nothing() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    std::fs::write(cluster.root().join("sync.py"), MOVING_OLD).unwrap();
+    let newer = cluster.dir.path().join("dags-newer/etl");
+    std::fs::create_dir_all(&newer).unwrap();
+    std::fs::write(newer.join("moved.py"), MOVING_NEW).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.wait("DAG `moving` in sync.py", || {
+        cluster.dag_view("moving")["location"]["path"] == "sync.py"
+    });
+
+    // w2 has newer code, where the DAG moved to another file: its code is used, no conflict.
+    let newer_path = newer.to_str().unwrap().to_owned();
+    cluster.start_as(
+        "worker-newer",
+        "worker",
+        &[
+            ("SCHEDR_CONFIG__WORKER__ID", "w2"),
+            ("SCHEDR_DAG_PATH", &newer_path),
+        ],
+    );
+    cluster.wait("DAG `moving` in moved.py", || {
+        cluster.dag_view("moving")["location"]["path"] == "moved.py"
+    });
+    assert!(
+        cluster.dag_view("moving")["conflict"].is_null(),
+        "{}",
+        cluster.logs()
+    );
+    let master_log = std::fs::read_to_string(&cluster.roles[0].log).unwrap();
+    assert!(
+        master_log.contains("workers report 2 code versions of the root"),
+        "{master_log}"
+    );
+
+    // Only w2 has the newest code: the task runs there.
+    let run_id = cluster.trigger("moving");
+    cluster.wait("the run to succeed", || {
+        cluster.run_state(&run_id) == "success"
+    });
+    assert_eq!(cluster.attempts(&run_id, "step")[0]["worker_id"], "w2");
+    let run = cluster.api_get(&format!("/api/v1/runs/{run_id}")).unwrap();
+    assert_eq!(run["code_hashes"].as_array().unwrap().len(), 1, "{run}");
+}

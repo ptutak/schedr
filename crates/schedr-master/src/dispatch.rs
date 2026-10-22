@@ -11,7 +11,11 @@
 //!   worker-specific reason leaves that worker out for the task, which becomes
 //!   `unschedulable` when every eligible worker rejected it, until the set of workers changes
 //!   or a user retries it. A task being cancelled is `cancelled` instead.
-//! - **A task that waits** shows why: no active worker serves its queue, or no free slot.
+//! - **Only the newest code runs:** a task goes only to workers that have its root at the
+//!   root's current hash (and sends that hash for the worker to check), with a schedr version
+//!   at least its parse's.
+//! - **A task that waits** shows why: no active worker serves its queue, none is recent
+//!   enough, none has the newest code yet, every one rejected it, or no free slot.
 //! - **`Finished`** is stored (the first one counts) and always acknowledged.
 //! - An attempt with no `Started` within [`START_TIMEOUT`] ends `assignment_expired` and the
 //!   task runs again without using a retry; a lost worker's attempts end `lost`.
@@ -24,15 +28,15 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
-use schedr_model::runner::ErrorSummary;
-use schedr_model::{AttemptStatus, Reference, TaskId, TaskInstanceState};
+use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, TASK_NOT_FOUND};
+use schedr_model::{AttemptStatus, Reference, SchedrVersion, TaskId, TaskInstanceState};
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, reject_reaction, run_kind_to_proto,
 };
 use schedr_proto::pb;
 
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
-use crate::workers::Workers;
+use crate::workers::{Needs, Workers};
 
 #[cfg(test)]
 mod tests;
@@ -47,6 +51,10 @@ pub const CODE_RETRY_DELAY: SignedDuration = SignedDuration::from_secs(35);
 /// How long a task's code may be missing on every eligible worker before the task is
 /// `unschedulable` (`[master] code_wait`).
 pub const DEFAULT_CODE_WAIT: Duration = Duration::from_mins(10);
+
+/// Error kinds of an attempt whose task or DAG file isn't in the code it ran with; when the
+/// DAG changed after the run started, its error summary says how.
+pub const CODE_GONE_ERRORS: [&str; 2] = [TASK_NOT_FOUND, DAG_FILE_MISSING];
 
 /// Inputs up to this size travel inside `AssignTask`; bigger ones are fetched separately.
 pub const INLINE_INPUTS_LIMIT: usize = 4 * 1024 * 1024;
@@ -101,6 +109,10 @@ pub struct Dispatcher {
     /// Task instances whose code a worker didn't have: since when, and which workers said so.
     code_missing: BTreeMap<String, CodeMissing>,
     code_wait: SignedDuration,
+    /// Each root's accepted content hashes (its current code, and newer code whose parse is on
+    /// its way) and the schedr version of its current parse: its tasks go to workers at one of
+    /// those hashes and of at least that version.
+    current_code: BTreeMap<String, (BTreeSet<String>, Option<SchedrVersion>)>,
 }
 
 /// A task's code missing on workers.
@@ -122,6 +134,7 @@ impl Dispatcher {
             rejections: BTreeMap::new(),
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
+            current_code: BTreeMap::new(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -159,6 +172,29 @@ impl Dispatcher {
             self.db.requeue_unschedulable(now).await?;
         }
         Ok(())
+    }
+
+    /// A root's accepted content hashes and its current parse's schedr version (see
+    /// [`crate::discovery`]): its tasks go only to workers that have the root at one of those
+    /// hashes and are of at least that version.
+    pub fn set_current_code(
+        &mut self,
+        root: &str,
+        accepted: &BTreeSet<String>,
+        version: Option<SchedrVersion>,
+    ) {
+        self.current_code
+            .insert(root.to_owned(), (accepted.clone(), version));
+    }
+
+    /// A worker's schedr version: it gets only tasks of parses no newer.
+    pub fn set_worker_version(&mut self, worker_id: &str, version: Option<SchedrVersion>) {
+        self.workers.set_version(worker_id, version);
+    }
+
+    /// A worker reported a root's content hash.
+    pub fn report_root(&mut self, worker_id: &str, root: &str, hash: &str) {
+        self.workers.report_root(worker_id, root, hash);
     }
 
     /// A reconnecting worker still runs `attempt_id`: it keeps its slot.
@@ -222,7 +258,7 @@ impl Dispatcher {
                 .get(&ready.instance_id)
                 .map(|r| r.keys().cloned().collect())
                 .unwrap_or_default();
-            let queue = &task.settings.queue;
+            let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
             // Workers that didn't have the code yet come last: the others are asked first.
             let mut without_code = excluded.clone();
             if let Some(missing) = self.code_missing.get(&ready.instance_id) {
@@ -230,17 +266,10 @@ impl Dispatcher {
             }
             let picked = self
                 .workers
-                .pick(queue, &without_code)
-                .or_else(|| self.workers.pick(queue, &excluded));
+                .pick(needs, &without_code)
+                .or_else(|| self.workers.pick(needs, &excluded));
             let Some(worker_id) = picked.map(str::to_owned) else {
-                let mut serving = self.workers.serving(queue).peekable();
-                let reason = if serving.peek().is_none() {
-                    format!("no active worker serves queue `{queue}`")
-                } else if serving.all(|w| excluded.contains(&w.id)) {
-                    format!("every active worker serving queue `{queue}` rejected it")
-                } else {
-                    format!("waiting for a free slot on the workers serving queue `{queue}`")
-                };
+                let reason = self.why_waiting(needs, &excluded);
                 if ready.queued_reason.as_deref() != Some(reason.as_str()) {
                     self.db
                         .set_queued_reason(&ready.instance_id, &reason, now)
@@ -270,7 +299,7 @@ impl Dispatcher {
                 continue;
             }
             self.workers.reserve(&worker_id, &attempt_id, now);
-            let message = self.assign_message(&ready, &attempt_id, try_number, inputs);
+            let message = self.assign_message(&ready, &worker_id, &attempt_id, try_number, inputs);
             outgoing.push(Outgoing {
                 worker_id,
                 message: pb::MasterMessage {
@@ -350,16 +379,20 @@ impl Dispatcher {
             self.execution.settle(&attempt.run_id, now).await?;
             return Ok(());
         }
-        let queue = run.and_then(|run| {
-            run.dag
-                .task(&attempt.task_id)
-                .map(|t| t.settings.queue.clone())
+        // The workers that could run it: once each has rejected it, it is unschedulable.
+        let eligible: Option<Vec<String>> = run.and_then(|run| {
+            let queue = &run.dag.task(&attempt.task_id)?.settings.queue;
+            let needs = self.needs(&run.dag, queue, &run.parse_version);
+            Some(self.workers.eligible(needs).map(|w| w.id.clone()).collect())
         });
-        let queue = queue.as_deref();
         let (state, ready_at, reason) = match reaction {
             RejectReaction::Temporary => (TaskInstanceState::Queued, Some(now), None),
-            RejectReaction::CodeNotThereYet => self.not_here(&attempt, rejected, true, queue, now),
-            RejectReaction::WorkerSpecific => self.not_here(&attempt, rejected, false, queue, now),
+            RejectReaction::CodeNotThereYet => {
+                self.not_here(&attempt, rejected, true, eligible.as_deref(), now)
+            }
+            RejectReaction::WorkerSpecific => {
+                self.not_here(&attempt, rejected, false, eligible.as_deref(), now)
+            }
         };
         self.db
             .undo_assignment(&attempt.id, state, ready_at, reason.as_deref(), now)
@@ -387,6 +420,15 @@ impl Dispatcher {
             let output = (status == AttemptStatus::Success)
                 .then(|| serde_json::from_slice(&finished.output_json).ok())
                 .flatten();
+            let mut error_summary = (!finished.error_summary_json.is_empty())
+                .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned());
+            // Only for a result not stored yet (a repeated one is dropped anyway).
+            if attempt.status.is_none()
+                && CODE_GONE_ERRORS.contains(&finished.error_kind.as_str())
+                && let Some(context) = self.changed_since(&attempt).await?
+            {
+                error_summary = Some(with_context(error_summary.as_deref(), &context));
+            }
             let end = AttemptEnd {
                 status,
                 exit_code: finished.exit_code,
@@ -394,8 +436,7 @@ impl Dispatcher {
                 peak_memory_bytes: Some(finished.peak_memory_bytes),
                 duration_ms: finished.duration_ms,
                 error_kind: non_empty(&finished.error_kind),
-                error_summary: (!finished.error_summary_json.is_empty())
-                    .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned()),
+                error_summary,
                 code_hash: non_empty(&finished.code_hash),
             };
             let result = AttemptResult {
@@ -605,7 +646,7 @@ impl Dispatcher {
         attempt: &StoredAttempt,
         rejected: &pb::Rejected,
         code: bool,
-        queue: Option<&str>,
+        eligible: Option<&[String]>,
         now: Timestamp,
     ) -> (TaskInstanceState, Option<Timestamp>, Option<String>) {
         let instance = &attempt.instance_id;
@@ -629,7 +670,9 @@ impl Dispatcher {
             specific.is_some_and(|r| r.contains_key(worker))
                 || missing.is_some_and(|m| m.by.contains_key(worker))
         };
-        let everyone = queue.is_none_or(|queue| self.workers.serving(queue).all(|w| said(&w.id)));
+        // No eligible worker at all (none synced yet, say) isn't every one rejecting it.
+        let everyone =
+            eligible.is_none_or(|workers| !workers.is_empty() && workers.iter().all(|w| said(w)));
         let waited = missing.map(|m| now.duration_since(m.since));
         let code_due = waited.is_none_or(|waited| waited >= self.code_wait);
         if everyone && code_due {
@@ -668,6 +711,96 @@ impl Dispatcher {
         }
     }
 
+    /// How the attempt's DAG changed since its run started, if it did: removed, moved to
+    /// another file, or without the attempt's task.
+    async fn changed_since(&self, attempt: &StoredAttempt) -> Result<Option<String>, DbError> {
+        let Some(run) = self.db.run_tasks(&attempt.run_id).await? else {
+            return Ok(None);
+        };
+        let ran = &run.dag;
+        let place = |l: &schedr_model::DagLocation| format!("{}:{}", l.root, l.path);
+        let stored = self.db.stored_dags().await?;
+        let now = stored
+            .iter()
+            .find(|d| d.dag_id == ran.id)
+            .filter(|d| !d.removed)
+            .and_then(|d| d.current.as_ref());
+        let task = &attempt.task_id;
+        Ok(match now {
+            None => Some(format!(
+                "DAG `{}` was removed from `{}` after this run started",
+                ran.id,
+                place(&ran.location)
+            )),
+            Some(now) if now.dag.location != ran.location => Some(format!(
+                "DAG `{}` moved from `{}` to `{}` after this run started",
+                ran.id,
+                place(&ran.location),
+                place(&now.dag.location)
+            )),
+            Some(now) if now.dag.task(task).is_none() => Some(format!(
+                "task `{task}` was removed from DAG `{}` (`{}`) after this run started",
+                ran.id,
+                place(&ran.location)
+            )),
+            Some(_) => None,
+        })
+    }
+
+    /// What a task of `dag` in `queue`, of a parse by schedr `parse_version`, needs of a
+    /// worker.
+    fn needs<'a>(
+        &'a self,
+        dag: &'a schedr_model::Dag,
+        queue: &'a str,
+        parse_version: &str,
+    ) -> Needs<'a> {
+        let root = dag.location.root.as_str();
+        let current = self.current_code.get(root);
+        // The run's parse, and the current code's: the code that runs needs both.
+        let version = parse_version
+            .parse::<SchedrVersion>()
+            .ok()
+            .max(current.and_then(|(_, version)| *version));
+        Needs {
+            queue,
+            code: current.map(|(hashes, _)| (root, hashes)),
+            version,
+        }
+    }
+
+    /// Why no worker could be picked for a task with `needs`.
+    fn why_waiting(&self, needs: Needs<'_>, excluded: &BTreeSet<String>) -> String {
+        let queue = needs.queue;
+        let serving: Vec<_> = self.workers.serving(queue).collect();
+        if serving.is_empty() {
+            return format!("no active worker serves queue `{queue}`");
+        }
+        let recent: Vec<_> = serving
+            .into_iter()
+            .filter(|w| w.runs(needs.version))
+            .collect();
+        if recent.is_empty() {
+            let version = needs.version.map(|v| v.to_string()).unwrap_or_default();
+            return format!("no worker with schedr ≥ {version} serves queue `{queue}`");
+        }
+        let current: Vec<_> = recent
+            .into_iter()
+            .filter(|w| w.has_code(needs.code))
+            .collect();
+        if current.is_empty() {
+            let root = needs.code.map(|(root, _)| root).unwrap_or_default();
+            return format!(
+                "waiting for workers serving queue `{queue}` to have the newest code of root \
+                 `{root}`"
+            );
+        }
+        if current.iter().all(|w| excluded.contains(&w.id)) {
+            return format!("every active worker serving queue `{queue}` rejected it");
+        }
+        format!("waiting for a free slot on the workers serving queue `{queue}`")
+    }
+
     /// The upstream outputs the task uses, as JSON (`{task_id: output}`).
     async fn inputs(
         &self,
@@ -695,6 +828,7 @@ impl Dispatcher {
     fn assign_message(
         &self,
         ready: &ReadyInstance,
+        worker_id: &str,
         attempt_id: &str,
         try_number: u32,
         inputs: Vec<u8>,
@@ -720,7 +854,20 @@ impl Dispatcher {
                 root: ready.dag.location.root.clone(),
                 path: ready.dag.location.path.clone(),
             }),
-            expected_code_hash: ready.content_hash.clone(),
+            // No current code known yet (a parse on its way after a restart): no check.
+            // The hash the worker was picked for (it reported it); none while the root's
+            // current code isn't known yet (a parse on its way after a restart): no check.
+            expected_code_hash: self
+                .current_code
+                .get(&ready.dag.location.root)
+                .and_then(|_| {
+                    self.workers
+                        .get(worker_id)?
+                        .roots
+                        .get(&ready.dag.location.root)
+                })
+                .cloned()
+                .unwrap_or_default(),
             inputs_json: if external { Vec::new() } else { inputs },
             inputs_external: external,
             cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
@@ -769,6 +916,19 @@ fn lost_summary(worker_id: &str) -> String {
              gone, or out of memory)"
         ),
     )
+}
+
+/// An error summary (JSON text) with `context` before its message; a new one (`CodeChanged`)
+/// without, keeping a summary that doesn't read as its text.
+fn with_context(summary: Option<&str>, context: &str) -> String {
+    match summary.map(|s| (s, serde_json::from_str::<ErrorSummary>(s))) {
+        Some((_, Ok(mut summary))) => {
+            summary.message = format!("{context}: {}", summary.message);
+            serde_json::to_string(&summary).unwrap_or_default()
+        }
+        Some((text, Err(_))) => ErrorSummary::json("CodeChanged", &format!("{context}: {text}")),
+        None => ErrorSummary::json("CodeChanged", context),
+    }
 }
 
 fn inputs_too_large() -> AttemptEnd {

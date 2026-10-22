@@ -48,6 +48,8 @@ pub struct RunTasks {
     pub cancel_requested: bool,
     /// The DAG version it runs.
     pub dag: Dag,
+    /// The schedr version of the parse that DAG version came from.
+    pub parse_version: String,
     /// Its task instances, in task ID order.
     pub instances: Vec<StoredInstance>,
 }
@@ -68,6 +70,8 @@ pub struct InstanceUpdate {
 }
 
 type InstanceRow = (String, String, String, i32, i32, Option<String>, bool);
+/// A run's state, whether it is being cancelled, its DAG JSON and its parse's version.
+type RunRow = (String, bool, String, String);
 
 impl Database {
     /// Running runs with no task instances yet, oldest first.
@@ -134,30 +138,31 @@ impl Database {
     ///
     /// [`DbError`] if a query fails or stored data doesn't read.
     pub async fn run_tasks(&self, run_id: &str) -> Result<Option<RunTasks>, DbError> {
-        const RUN: &str = "SELECT r.state, r.cancel_requested_at IS NOT NULL, v.dag_json{text} \
-            FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id WHERE r.id = $1{uuid}";
+        const RUN: &str = "SELECT r.state, r.cancel_requested_at IS NOT NULL, v.dag_json{text}, \
+            p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
+            JOIN parse_results p ON p.id = v.parse_result_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
             {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL FROM task_instances \
             WHERE run_id = $1{uuid} ORDER BY task_id";
-        let (run, rows): (Option<(String, bool, String)>, Vec<InstanceRow>) =
-            on_pool!(self, |pool, backend| {
-                let run = sqlx::query_as(sql(backend, RUN))
-                    .bind(run_id)
-                    .fetch_optional(pool)
-                    .await?;
-                let rows = sqlx::query_as(sql(backend, INSTANCES))
-                    .bind(run_id)
-                    .fetch_all(pool)
-                    .await?;
-                (run, rows)
-            });
-        let Some((state, cancel_requested, json)) = run else {
+        let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
+            let run = sqlx::query_as(sql(backend, RUN))
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await?;
+            let rows = sqlx::query_as(sql(backend, INSTANCES))
+                .bind(run_id)
+                .fetch_all(pool)
+                .await?;
+            (run, rows)
+        });
+        let Some((state, cancel_requested, json, parse_version)) = run else {
             return Ok(None);
         };
         Ok(Some(RunTasks {
             state: from_name("runs.state", state)?,
             cancel_requested,
             dag: from_json("dag_versions.dag_json", &json)?,
+            parse_version,
             instances: rows.into_iter().map(instance).collect::<Result<_, _>>()?,
         }))
     }

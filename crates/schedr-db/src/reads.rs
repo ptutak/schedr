@@ -191,6 +191,26 @@ impl Database {
             .collect()
     }
 
+    /// The code hashes a run's attempts ran with, in the order first used (more than one:
+    /// its tasks ran on different code).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn run_code_hashes(&self, run_id: &str) -> Result<Vec<String>, DbError> {
+        const HASHES: &str = "SELECT a.code_hash FROM attempts a \
+            JOIN task_instances t ON t.id = a.task_instance_id \
+            WHERE t.run_id = $1{uuid} AND a.code_hash IS NOT NULL AND a.code_hash <> '' \
+            GROUP BY a.code_hash ORDER BY MIN(COALESCE(a.started_at, a.assigned_at)), a.code_hash";
+        let hashes = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, HASHES))
+                .bind(run_id)
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(hashes)
+    }
+
     /// The attempts of a run's task, oldest first.
     ///
     /// # Errors

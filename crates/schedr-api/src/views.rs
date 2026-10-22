@@ -172,6 +172,9 @@ pub struct RunDetail {
     pub run: RunView,
     /// Its tasks, in task ID order.
     pub tasks: Vec<TaskView>,
+    /// The code hashes its attempts ran with, in the order first used. More than one: its
+    /// tasks ran on different code (it changed during the run).
+    pub code_hashes: Vec<String>,
 }
 
 /// An attempt of a task.

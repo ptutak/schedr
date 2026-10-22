@@ -30,6 +30,16 @@ CREATE TABLE parse_results (
     UNIQUE (root, content_hash, schedr_version)
 );
 
+-- When workers last switched to each code version of a root (a git-sync, a revert). The
+-- newest code is the one switched to most recently (see PROJECT.md, Code versions and change
+-- detection); kept so a restarted master decides the same.
+CREATE TABLE root_hashes (
+    root          TEXT NOT NULL,
+    content_hash  TEXT NOT NULL,
+    switched_at   TEXT NOT NULL,
+    PRIMARY KEY (root, content_hash)
+);
+
 -- Each file of a parse as the worker reported it (after the master's validation): its DAGs
 -- (a JSON array of DAG JSON) or its import error (exception, message, traceback). The DAG list
 -- is worked out from the current parse of each root (see PROJECT.md, DAG code delivery).

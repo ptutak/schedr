@@ -4,9 +4,10 @@
 //! - **Connecting:** the agent waits for each root's first content hash (it settles too),
 //!   registers with them and with the attempts it still runs or hasn't had acknowledged, then
 //!   follows the master's decisions for those (continue, ack, kill).
-//! - **Assignments:** a free slot, an assignment that reads and the task's code on this worker,
-//!   or a rejection with the reason; then `Started`, the attempt runs, and `Finished` is sent
-//!   until the master acknowledges it.
+//! - **Assignments:** a free slot, an assignment that reads and the task's code on this worker
+//!   at the hash the master expects, or a rejection with the reason; then `Started`, the
+//!   attempt runs, and `Finished` (naming the code it ran) is sent until the master
+//!   acknowledges it.
 //! - **Parse jobs** parse a root's `.py` files and upload the result, if the root still has the
 //!   job's hash (otherwise a newer hash was or will be reported).
 //! - **The connection drops:** attempts keep running, and the agent connects again with
@@ -22,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use schedr_model::runner::{ParseRequest, ParsedFile};
+use schedr_model::runner::{DAG_FILE_MISSING, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::parsed_file_to_proto;
 use schedr_proto::pb::master_client::MasterClient;
@@ -225,6 +226,8 @@ pub struct Agent<E> {
     watchers: BTreeMap<String, RootWatcher>,
     running: BTreeMap<String, oneshot::Sender<StopReason>>,
     unacked: BTreeMap<String, pb::Finished>,
+    /// The content hash of each started attempt's root when it started (sent in `Finished`).
+    code_hashes: BTreeMap<String, String>,
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
     heartbeat: Duration,
@@ -252,6 +255,7 @@ impl<E: Executor> Agent<E> {
             watchers,
             running: BTreeMap::new(),
             unacked: BTreeMap::new(),
+            code_hashes: BTreeMap::new(),
             done_tx,
             done_rx,
             heartbeat: Duration::from_secs(10),
@@ -608,7 +612,13 @@ impl<E: Executor> Agent<E> {
                 return;
             }
         };
-        let planned = plan(&spec, &self.settings.setup);
+        if let Some(detail) = self.code_mismatch(&assign) {
+            let _ = to_master
+                .send(reject(pb::RejectReason::CodeMismatch, detail))
+                .await;
+            return;
+        }
+        let planned = self.plan(&spec, &assign);
         if !matches!(planned, Err(NotRun::Rejected { .. }))
             && let Err(error) = self
                 .record(&spec.attempt_id, JournalRecord::Running(None))
@@ -623,12 +633,14 @@ impl<E: Executor> Agent<E> {
                 .await;
             return;
         }
+        self.remember_code(&assign, &spec.attempt_id);
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
         }));
         match planned {
             Err(NotRun::Rejected { reason, detail }) => {
+                self.code_hashes.remove(&spec.attempt_id);
                 let _ = to_master.send(reject(reason, detail)).await;
             }
             Err(NotRun::Failed { kind, message }) => {
@@ -640,22 +652,77 @@ impl<E: Executor> Agent<E> {
                 let (stop, stopped) = oneshot::channel();
                 self.running.insert(spec.attempt_id.clone(), stop);
                 let _ = to_master.send(started).await;
-                let executor = self.executor.clone();
-                let done = self.done_tx.clone();
-                let on_spawn = self.done_tx.clone();
-                let attempt_id = spec.attempt_id.clone();
-                let spawned: Spawned = Box::new(move |identity| {
-                    let _ = on_spawn.send(Done::Spawned {
-                        attempt_id,
-                        identity,
-                    });
-                });
-                tokio::spawn(async move {
-                    let finished = executor.run(spec, plan, stopped, spawned).await;
-                    let _ = done.send(Done::Attempt(finished));
-                });
+                self.launch(spec, plan, stopped);
             }
         }
+    }
+
+    /// Runs a started attempt in the background; what happens is reported on `done_tx`.
+    fn launch(&self, spec: AttemptSpec, plan: Plan, stopped: oneshot::Receiver<StopReason>) {
+        let executor = self.executor.clone();
+        let done = self.done_tx.clone();
+        let on_spawn = self.done_tx.clone();
+        let attempt_id = spec.attempt_id.clone();
+        let spawned: Spawned = Box::new(move |identity| {
+            let _ = on_spawn.send(Done::Spawned {
+                attempt_id,
+                identity,
+            });
+        });
+        tokio::spawn(async move {
+            let finished = executor.run(spec, plan, stopped, spawned).await;
+            let _ = done.send(Done::Attempt(finished));
+        });
+    }
+
+    /// Notes the hash of the task's root now, for its `Finished`.
+    fn remember_code(&mut self, assign: &pb::AssignTask, attempt_id: &str) {
+        if let Some(hash) = assign
+            .dag_file
+            .as_ref()
+            .and_then(|f| self.watchers.get(&f.root))
+            .and_then(RootWatcher::hash)
+        {
+            self.code_hashes
+                .insert(attempt_id.to_owned(), hash.to_owned());
+        }
+    }
+
+    /// Plans an attempt here; a DAG file missing from the code the master expects fails it
+    /// (the file is gone) instead of rejecting it as "code not there yet".
+    fn plan(&self, spec: &AttemptSpec, assign: &pb::AssignTask) -> Result<Plan, NotRun> {
+        match plan(spec, &self.settings.setup) {
+            Err(NotRun::Rejected {
+                reason: pb::RejectReason::DagFileMissing,
+                detail,
+            }) if self.has_expected_code(assign) => Err(NotRun::Failed {
+                kind: DAG_FILE_MISSING.to_owned(),
+                message: format!("{detail}, in the newest code of its root: the file is gone"),
+            }),
+            planned => planned,
+        }
+    }
+
+    /// Whether the task's root is here at the hash the master expects.
+    fn has_expected_code(&self, assign: &pb::AssignTask) -> bool {
+        let expected = assign.expected_code_hash.as_str();
+        !expected.is_empty()
+            && assign
+                .dag_file
+                .as_ref()
+                .and_then(|f| self.watchers.get(&f.root))
+                .and_then(RootWatcher::hash)
+                == Some(expected)
+    }
+
+    /// Why the task's root here isn't the code the master expects (`None` when it is, or
+    /// when the root isn't here at all: planning rejects that).
+    fn code_mismatch(&self, assign: &pb::AssignTask) -> Option<String> {
+        let root = assign.dag_file.as_ref()?.root.as_str();
+        let here = self.watchers.get(root)?.hash()?;
+        let expected = assign.expected_code_hash.as_str();
+        (!expected.is_empty() && here != expected)
+            .then(|| format!("root `{root}` here is at {here}, the task expects {expected}"))
     }
 
     fn parse(&self, job: pb::AssignParse) {
@@ -709,7 +776,10 @@ impl<E: Executor> Agent<E> {
                     tracing::warn!(attempt_id, %error, "can't record the task's process");
                 }
             }
-            Done::Attempt(finished) => {
+            Done::Attempt(mut finished) => {
+                if let Some(hash) = self.code_hashes.remove(&finished.attempt_id) {
+                    finished.code_hash = hash;
+                }
                 if let Err(error) = self
                     .record(
                         &finished.attempt_id,

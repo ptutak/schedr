@@ -5,6 +5,19 @@ A fixed bug is removed in the commit that fixes it, together with a test that wo
 caught it; git history keeps the record. Finding a bug doesn't mean fixing it at once: it
 is logged here and its fix scheduled with the user. Not part of the documentation site.
 
+## B6: role integration tests fail under disk load inside `make check`
+
+- **Seen:** 2026-10-22, twice (M2.4 and M2.5): the first `make check` of a step failed 4–7
+  `schedr::roles` tests at once, old and new alike ("waited too long for …", a worker found
+  `lost` instead of `active`), with Postgres statements taking 3–11 s and SQLite reporting
+  "database is locked". `make test-integration` on its own passed right after, twice each
+  time, and `make check` passed when run again.
+- **Likely cause:** the integration tests run right after the coverage run and share the
+  disk with it; the role tests' short timings (a 4 s lease, a 1 s heartbeat) don't tolerate
+  multi-second stalls. B4 may be the same thing.
+- **Next:** measure the stalls (WSL2 disk), then decide between longer leases in the role
+  tests, a retry of `cli_json` reads, or running the integration tests apart from coverage.
+
 ## B4: `runs trigger` in a roles integration test got no result once
 
 - **Seen:** 2026-10-22, the first `make test-integration` of M2.3:

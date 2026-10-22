@@ -5,13 +5,15 @@
 //! ([`DagChange`]). Each DAG version belongs to one parse (see PROJECT.md, DAG code delivery
 //! and DAG ID conflicts).
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use schedr_model::runner::ParsedFile;
 use schedr_model::{Dag, DagId, DagLocation};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, on_pool, sql, to_json};
+use crate::query::{db_time, from_json, on_pool, parse_time, sql, to_json};
 
 #[cfg(test)]
 mod tests;
@@ -103,7 +105,100 @@ type DagRow = (
     Option<String>,
 );
 
+/// A stored parse of a (root, content hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredParse {
+    /// Its ID.
+    pub id: String,
+    /// The schedr version of the workers that parsed it.
+    pub schedr_version: String,
+    /// When it was stored.
+    pub parsed_at: Timestamp,
+}
+
 impl Database {
+    /// Records that a worker reported `root` at `hash`: a **switch** (the worker had another
+    /// hash before) makes it the most recent; a first report only records it if unknown.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn record_root_hash(
+        &self,
+        root: &str,
+        content_hash: &str,
+        switched: bool,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const SWITCH: &str = "INSERT INTO root_hashes (root, content_hash, switched_at) \
+            VALUES ($1, $2, $3{ts}) ON CONFLICT (root, content_hash) \
+            DO UPDATE SET switched_at = excluded.switched_at";
+        const SEEN: &str = "INSERT INTO root_hashes (root, content_hash, switched_at) \
+            VALUES ($1, $2, $3{ts}) ON CONFLICT (root, content_hash) DO NOTHING";
+        let query = if switched { SWITCH } else { SEEN };
+        on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, query))
+                .bind(root)
+                .bind(content_hash)
+                .bind(db_time(now))
+                .execute(pool)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// When workers last switched to each recorded hash of `root`.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn root_hash_switches(
+        &self,
+        root: &str,
+    ) -> Result<BTreeMap<String, Timestamp>, DbError> {
+        const SWITCHES: &str = "SELECT content_hash, {ts<}switched_at{>ts} FROM root_hashes \
+            WHERE root = $1";
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, SWITCHES))
+                .bind(root)
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(hash, at)| Ok((hash, parse_time("root_hashes.switched_at", &at)?)))
+            .collect()
+    }
+
+    /// Every stored parse of (root, hash), one per schedr version, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn parses_of(
+        &self,
+        root: &str,
+        content_hash: &str,
+    ) -> Result<Vec<StoredParse>, DbError> {
+        const PARSES: &str = "SELECT id{text}, schedr_version, {ts<}parsed_at{>ts} \
+            FROM parse_results WHERE root = $1 AND content_hash = $2 ORDER BY parsed_at, id";
+        let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, PARSES))
+                .bind(root)
+                .bind(content_hash)
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(id, schedr_version, parsed_at)| {
+                Ok(StoredParse {
+                    id,
+                    schedr_version,
+                    parsed_at: parse_time("parse_results.parsed_at", &parsed_at)?,
+                })
+            })
+            .collect()
+    }
+
     /// The ID of the parse of (root, hash, schedr version), if stored.
     ///
     /// # Errors

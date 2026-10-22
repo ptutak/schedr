@@ -169,6 +169,7 @@ pub async fn get_run(
     Ok(Json(RunDetail {
         run: RunView::from(&run),
         tasks: tasks.iter().map(TaskView::from).collect(),
+        code_hashes: state.db.run_code_hashes(&run_id).await?,
     }))
 }
 

@@ -114,6 +114,9 @@ enum RejectReason {
   REJECT_REASON_MEMORY_BUDGET_TOO_LARGE = 7;
   REJECT_REASON_DISK_NOT_WRITABLE = 8;
   REJECT_REASON_INVALID_SPECIFICATION = 9;
+  // The worker's code of the task's root isn't the hash the master expects (it hasn't synced
+  // yet, or synced past it): "code not there yet".
+  REJECT_REASON_CODE_MISMATCH = 10;
 }
 
 message Rejected {
