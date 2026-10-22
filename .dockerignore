@@ -1,0 +1,3 @@
+# The only build context the images need (examples/kubernetes/Dockerfile) is the wheels.
+*
+!dist/*.whl

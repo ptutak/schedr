@@ -2,13 +2,17 @@
 //! PROJECT.md, Master–worker protocol: standalone uses the same gRPC protocol).
 //!
 //! The master's gRPC service, the REST API, the master's loop and one worker agent run side by
-//! side; the agent talks to the master over gRPC on localhost like any worker (no TLS: nothing
-//! listens beyond localhost). The database is migrated at start: standalone is for a laptop,
-//! where there is no separate `schedr db migrate` step.
+//! side; the agent talks to the master over gRPC on localhost like any worker (no TLS: gRPC
+//! never listens beyond localhost). The database is migrated at start: standalone is for a
+//! laptop, where there is no separate `schedr db migrate` step.
+//!
+//! In one pod (for testing on a cluster, see PROJECT.md): `--listen 0.0.0.0` opens the REST
+//! API to a Service, SIGTERM stops it cleanly, and a lock in the data directory refuses a
+//! second standalone on the same data (two pods on one volume would schedule every run twice).
 
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use schedr_agent::agent::AgentSettings;
@@ -19,7 +23,8 @@ use tokio::sync::watch;
 
 use crate::app::AppError;
 use crate::roles::{
-    agent_settings, data_dir, listen, master_settings, run_worker, serve_api, serve_master,
+    agent_settings, data_dir, listen, master_settings, no_auth_warning, run_worker, serve_api,
+    serve_master, stop_on_signal, until,
 };
 
 #[cfg(test)]
@@ -99,6 +104,7 @@ pub async fn run(
     tokio::fs::create_dir_all(&setup.data_dir)
         .await
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
+    let _lock = lock_data_dir(&setup.data_dir)?;
     let db = Database::connect(&setup.database_url).await?;
     db.migrate().await?;
 
@@ -140,6 +146,53 @@ pub async fn run(
     api
 }
 
+/// The name of the lock file in the data directory.
+pub const LOCK_FILE: &str = "standalone.lock";
+
+/// Takes the data directory's lock for as long as the returned file is open: one standalone
+/// per data directory (and its SQLite database).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if another process holds it, or the file can't be opened.
+pub fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File, AppError> {
+    let path = data_dir.join(LOCK_FILE);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| {
+            let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                ": the data directory must be writable by this user (on Kubernetes, give the \
+                 pod an fsGroup the user belongs to)"
+            } else {
+                ""
+            };
+            AppError::BadArgument(format!("can't open {}: {e}{hint}", path.display()))
+        })?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
+        |errno| {
+            if errno == rustix::io::Errno::WOULDBLOCK {
+                AppError::BadArgument(format!(
+                    "another schedr standalone is using {} (it holds {}): one standalone per \
+                     data directory; on Kubernetes run one replica (a StatefulSet, or a \
+                     Deployment with strategy Recreate)",
+                    data_dir.display(),
+                    path.display()
+                ))
+            } else {
+                AppError::BadArgument(format!(
+                    "can't lock {}: {errno} (a network filesystem? the data directory needs a \
+                     local disk or block storage)",
+                    path.display()
+                ))
+            }
+        },
+    )?;
+    Ok(file)
+}
+
 /// The line standalone prints once it listens.
 #[must_use]
 pub fn banner(listening: Listening, setup: &Standalone) -> String {
@@ -151,20 +204,34 @@ pub fn banner(listening: Listening, setup: &Standalone) -> String {
     )
 }
 
-/// Runs `schedr standalone` until Ctrl-C; the banner goes to the log once it listens.
+/// Runs `schedr standalone` until Ctrl-C or SIGTERM, the REST API on `listen` (127.0.0.1 when
+/// not given); the banner goes to the log once it listens.
 ///
 /// # Errors
 ///
 /// As [`plan`] and [`run`].
-pub async fn command(config: &Config, env: &BTreeMap<String, String>) -> Result<(), AppError> {
-    let setup = plan(config, env)?;
+pub async fn command(
+    config: &Config,
+    env: &BTreeMap<String, String>,
+    listen: Option<IpAddr>,
+) -> Result<(), AppError> {
+    let stop = stop_on_signal();
+    let mut setup = plan(config, env)?;
+    if let Some(address) = listen {
+        setup.http.set_ip(address);
+    }
     let shown = setup.clone();
     run(
         setup,
-        |listening| tracing::info!("{}", banner(listening, &shown)),
-        async {
-            let _ = tokio::signal::ctrl_c().await;
+        |listening| {
+            if let Some(warning) =
+                no_auth_warning(listening.http, "reach it with kubectl port-forward")
+            {
+                tracing::warn!("{warning}");
+            }
+            tracing::info!("{}", banner(listening, &shown));
         },
+        until(stop),
     )
     .await
 }

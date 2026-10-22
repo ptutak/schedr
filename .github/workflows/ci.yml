@@ -94,8 +94,9 @@ jobs:
           name: docs-site
           path: site
 
-  # The wheel: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
-  # releases). Linux x86_64 in M1; aarch64 and macOS come with M2. The smoke test is PLAN.md's
+  # The wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
+  # releases). Linux x86_64 as manylinux (glibc) and musllinux (Alpine, e.g. the standalone
+  # image in examples/kubernetes); aarch64 and macOS come with M2. The smoke test is PLAN.md's
   # "M1 is done": install, `dags test`, and a run in `schedr standalone` through the CLI.
   wheel:
     runs-on: ubuntu-latest
@@ -109,10 +110,20 @@ jobs:
           target: x86_64
           manylinux: auto
           args: --release --out dist
-      - run: scripts/smoke-wheel.sh dist/*.whl python
+      - run: scripts/smoke-wheel.sh dist/*manylinux*.whl python
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-unknown-linux-musl
+          manylinux: musllinux_1_2
+          args: --release --out dist
+      # On Alpine itself, the base of the standalone image (same tag as its Dockerfile).
+      - run: >-
+          docker run --rm -v "$PWD:/repo:ro" docker.io/library/python:3.14.8-alpine3.24
+          sh -c 'apk add --no-cache bash >/dev/null && cd /repo
+          && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-linux-x86_64
+          name: wheels-linux-x86_64
           path: dist/*.whl
 
   sdist:

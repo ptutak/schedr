@@ -33,8 +33,13 @@ pub enum Command {
     Worker,
     /// Run the webserver: web UI and the API used by the UI and CLI.
     Webserver,
-    /// Run every role in one process with SQLite (local development).
-    Standalone,
+    /// Run every role in one process with SQLite (local development, or one pod for testing).
+    Standalone {
+        /// The address the REST API listens on (default 127.0.0.1); e.g. 0.0.0.0 in a pod
+        /// behind a Service. The master's gRPC stays on loopback.
+        #[arg(long, value_name = "ADDRESS")]
+        listen: Option<std::net::IpAddr>,
+    },
     /// Manage the database schema.
     Db {
         /// The database command.
@@ -380,7 +385,7 @@ impl Command {
             Self::Db { .. }
             | Self::Dags { .. }
             | Self::Runs { .. }
-            | Self::Standalone
+            | Self::Standalone { .. }
             | Self::Master
             | Self::Worker
             | Self::Webserver => None,
@@ -396,7 +401,7 @@ impl Command {
             Self::Master => "master",
             Self::Worker => "worker",
             Self::Webserver => "webserver",
-            Self::Standalone => "standalone",
+            Self::Standalone { .. } => "standalone",
             Self::Db { .. } => "db",
             Self::Dags { .. } => "dags",
             Self::Runs { .. } => "runs",

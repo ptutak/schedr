@@ -240,3 +240,37 @@ async fn the_roles_say_what_they_miss() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn until_completes_once_asked_to_stop() {
+    let (stop, stopped) = watch::channel(false);
+    let waiting = tokio::spawn(until(stopped));
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_signal_stop_starts_unstopped() {
+    // The signal itself is exercised by the integration tests (a real SIGTERM).
+    assert!(!*stop_on_signal().borrow());
+}
+
+#[test]
+fn an_open_api_is_warned_about_with_its_address() {
+    assert_eq!(no_auth_warning(loopback(), "x"), None);
+    let open = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let warning = no_auth_warning(open, "bind 127.0.0.1").unwrap();
+    assert!(
+        warning.starts_with("the REST API has no authentication of its own"),
+        "{warning}"
+    );
+    assert!(
+        warning.ends_with("listens on 0.0.0.0:8080: keep it behind an authenticating proxy or mesh, or bind 127.0.0.1"),
+        "{warning}"
+    );
+}

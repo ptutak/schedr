@@ -88,6 +88,42 @@ One Rust binary, four roles:
   can reach.
 - `standalone` runs the same role functions as the separate commands (one code path).
 
+**`standalone` in one pod (M2.1b), for trying schedr on a cluster before the full
+deployment** (`examples/kubernetes/`: a `Dockerfile` and `standalone.yaml`; not for
+production: one process runs every role, a restart restarts master and worker together,
+tasks share the pod's memory):
+
+- **`schedr standalone --listen <address>`** opens the **REST API** beyond loopback (e.g.
+  `0.0.0.0` behind a `ClusterIP` Service), with the no-authentication warning; the master's
+  gRPC stays on 127.0.0.1 (its worker is in the same process). Without it, standalone listens
+  on 127.0.0.1 as on a laptop. Not chosen: honouring `[webserver] bind` in standalone (its
+  `0.0.0.0` default would open every laptop's standalone).
+- **SIGTERM stops standalone cleanly**, as it stops the roles.
+- **One standalone per data directory:** standalone holds an exclusive `flock` on
+  `<data_dir>/standalone.lock` while it runs; a second one on the same data (two pods on one
+  volume during a rolling update, which would schedule every run twice) is refused, saying to
+  run one replica. The manifest uses a `StatefulSet` with `replicas: 1`. Only lock contention
+  says so; another `flock` failure (a filesystem without locks) is reported as it is. The lock
+  covers the data directory and the SQLite file in it, the pod case; two standalones given one
+  Postgres URL and different data directories aren't caught (a developer setup, not the pod).
+- **The volume:** ReadWriteOnce on **block storage**; SQLite's locking (and the `flock`) are
+  unreliable on network filesystems (NFS, CephFS, most ReadWriteMany classes). The pod's
+  **`fsGroup`** makes the mounted volume writable by group 0, which the image's user is in
+  (a mounted volume replaces the image's group-writable directory); OpenShift's SCC sets its
+  own `fsGroup`. A data directory that can't be written says so, naming `fsGroup`.
+- **The image:** `python:3.14.8-alpine3.24` (Alpine 3.24, the latest; Python 3.14.8, the
+  newest at least two weeks old) with the **musllinux** wheel; an arbitrary UID in group 0
+  works (`/var/lib/schedr` group-writable). **`tini` is PID 1** and reaps orphaned processes
+  (a task's child outliving it), which schedr, not being an init, doesn't. A `.dockerignore`
+  keeps the build context to `dist/*.whl`. DAG code from a **git-sync** sidecar
+  (`registry.k8s.io/git-sync/git-sync:v4.7.1`) into a shared `emptyDir`, the root renamed in
+  `[dags.roots]` (git-sync's link is called `current`). Probes are TCP checks on the API port
+  until `/healthz` (2.9).
+- Checked by hand with podman (the image as UID 54321 in group 0 on a volume: the example DAG
+  runs through the CLI, a second container on the volume is refused, SIGTERM stops it in 2 s
+  with exit code 0, the runs survive a restart), and in CI by the musllinux wheel's smoke test
+  on the same Alpine image.
+
 ### Web UI and CLI
 
 - A **web dashboard** is required: live view of what is running, and access to task logs.
@@ -4251,7 +4287,12 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   goes into the same wheel.
 - **Platform wheels:** Linux x86_64 and aarch64, and macOS (local development; Linux-only
   features such as the memory watchdog are disabled there). **In M1 (1.16): Linux x86_64**
-  (manylinux, built by `maturin-action` in CI); aarch64 and macOS come with M2.
+  (manylinux, built by `maturin-action` in CI); aarch64 and macOS come with M2. **M2.1b adds
+  Linux x86_64 musllinux** (Alpine uses musl: a manylinux wheel's binary doesn't run there),
+  smoke-tested in CI inside `python:3.14.8-alpine3.24`; built locally with `make smoke-musl`
+  (maturin 1.15.0 with zig 0.17.0 through `uvx`, and the `x86_64-unknown-linux-musl` target).
+  Both wheels go to `dist/` (their names tell them apart), where the example image takes the
+  musllinux one.
 - **Smoke test of the wheel** (`scripts/smoke-wheel.sh`, CI's `wheel` job, `make smoke`
   locally): PLAN.md's "M1 is done" as a new user does it. The wheel goes into a fresh venv
   that isn't activated, with only the system's directories on `PATH`; then `schedr dags

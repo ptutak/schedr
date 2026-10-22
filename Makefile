@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl check clean
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -91,9 +91,22 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	uv run pytest python/tests/integration examples
 
 smoke:           ## Build the release wheel and smoke-test it (install, dags test, standalone run)
-	rm -rf dist
+	rm -f dist/*manylinux*.whl dist/*linux_x86_64.whl
 	uv build --wheel --out-dir dist
-	scripts/smoke-wheel.sh dist/*.whl $$(uv run python -c 'import sys; print(sys.executable)')
+	scripts/smoke-wheel.sh dist/*-linux_x86_64.whl $$(uv run python -c 'import sys; print(sys.executable)')
+
+# The musllinux wheel (Alpine) is cross-built with zig, and smoke-tested on the image the
+# standalone example uses (examples/kubernetes/Dockerfile).
+MATURIN := uvx --python 3.14 --from 'maturin==1.15.0' --with 'ziglang==0.17.0' maturin
+ALPINE_IMAGE := docker.io/library/python:3.14.8-alpine3.24
+
+smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Alpine
+	rustup target add x86_64-unknown-linux-musl
+	rm -f dist/*musllinux*.whl
+	$(MATURIN) build --release --target x86_64-unknown-linux-musl --zig \
+		--compatibility musllinux_1_2 --out dist
+	$(CONTAINER) run --rm -v "$(CURDIR):/repo:ro,Z" $(ALPINE_IMAGE) sh -c \
+		'apk add --no-cache bash >/dev/null && cd /repo && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
 
 check: fmt-check lint schema-check test test-integration   ## Everything CI runs
 

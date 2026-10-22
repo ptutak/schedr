@@ -148,3 +148,41 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
         .unwrap()
         .unwrap();
 }
+
+#[test]
+fn one_standalone_per_data_directory() {
+    let tmp = TempDir::new().unwrap();
+    let held = lock_data_dir(tmp.path()).unwrap();
+    assert!(tmp.path().join(LOCK_FILE).is_file());
+    let error = lock_data_dir(tmp.path()).unwrap_err().to_string();
+    assert!(
+        error.starts_with(&format!(
+            "another schedr standalone is using {}",
+            tmp.path().display()
+        )),
+        "{error}"
+    );
+    assert!(error.contains("one replica"), "{error}");
+    drop(held);
+    lock_data_dir(tmp.path()).unwrap();
+    let error = lock_data_dir(&tmp.path().join("missing/dir"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("can't open "), "{error}");
+}
+
+#[test]
+fn an_unwritable_data_directory_says_how_to_fix_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = lock_data_dir(tmp.path());
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    if rustix::process::geteuid().is_root() {
+        // Root writes anyway: there is no permission to miss.
+        assert!(result.is_ok());
+    } else {
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("give the pod an fsGroup"), "{error}");
+    }
+}

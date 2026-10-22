@@ -204,6 +204,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[rstest]
 #[case(&["db", "migrate"], None)]
 #[case(&["standalone"], None)]
+#[case(&["standalone", "--listen", "0.0.0.0"], None)]
 #[case(&["dags", "list"], None)]
 #[case(&["runs", "list", "sync"], None)]
 #[case(&["dag-ctx", "run", "get"], Some("M4"))]

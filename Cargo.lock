@@ -2372,6 +2372,7 @@ dependencies = [
  "pretty_assertions",
  "reqwest",
  "rstest",
+ "rustix",
  "schedr-agent",
  "schedr-api",
  "schedr-config",

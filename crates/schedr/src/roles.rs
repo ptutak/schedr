@@ -35,7 +35,7 @@ use crate::app::{AppError, role_config};
 mod tests;
 
 /// Completes once `stop` turns `true`: how every part of a role learns to stop.
-async fn until(mut stop: watch::Receiver<bool>) {
+pub async fn until(mut stop: watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 
@@ -251,6 +251,19 @@ pub fn plain_text_warning(host: &str) -> Option<String> {
     })
 }
 
+/// The warning for the REST API listening on `address` beyond loopback: it has no
+/// authentication of its own until the UI (M3). `alternative` says how to keep it local.
+#[must_use]
+pub fn no_auth_warning(address: SocketAddr, alternative: &str) -> Option<String> {
+    (!address.ip().is_loopback()).then(|| {
+        format!(
+            "the REST API has no authentication of its own (it comes with the UI, milestone \
+             M3) and listens on {address}: keep it behind an authenticating proxy or mesh, or \
+             {alternative}"
+        )
+    })
+}
+
 /// Checks `[worker] master_url` and returns its host: an `http://` URL with a host (plain
 /// text until mTLS, M2.7).
 ///
@@ -279,7 +292,8 @@ pub fn master_host(url: &str) -> Result<String, AppError> {
 
 /// A stop channel that turns `true` on Ctrl-C or SIGTERM. The SIGTERM handler is registered
 /// before this returns, so a SIGTERM right after start still stops the role gracefully.
-fn stop_on_signal() -> watch::Receiver<bool> {
+#[must_use]
+pub fn stop_on_signal() -> watch::Receiver<bool> {
     let (stop, stopped) = watch::channel(false);
     let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
     tokio::spawn(async move {
@@ -337,12 +351,8 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let db = open_database(config, "webserver").await?;
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
-    if !is_loopback(&config.webserver.bind.to_string()) {
-        tracing::warn!(
-            "the REST API has no authentication of its own (it comes with the UI, milestone \
-             M3) and listens on {address}: keep it behind an authenticating proxy or mesh, or \
-             set [webserver] bind = \"127.0.0.1\""
-        );
+    if let Some(warning) = no_auth_warning(address, "set [webserver] bind = \"127.0.0.1\"") {
+        tracing::warn!("{warning}");
     }
     tracing::info!("schedr webserver: API on http://{address}");
     serve_api(

@@ -39,6 +39,11 @@ struct Standalone {
 impl Standalone {
     /// Starts standalone over the DAG files given, on SQLite or the database given.
     fn start(files: &[(&str, &str)], database_url: Option<&str>) -> Self {
+        Self::start_with(files, database_url, &[])
+    }
+
+    /// Starts standalone as [`Self::start`] does, with more `standalone` arguments.
+    fn start_with(files: &[(&str, &str)], database_url: Option<&str>, extra: &[&str]) -> Self {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("dags/etl");
         std::fs::create_dir_all(&root).unwrap();
@@ -67,6 +72,7 @@ impl Standalone {
             .arg("--config")
             .arg(dir.path().join("config.toml"))
             .arg("standalone")
+            .args(extra)
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
             .env("SCHEDR_DAG_PATH", &root)
@@ -471,4 +477,54 @@ fn the_cli_reports_rejections_and_bad_arguments() {
     let (code, _, err) = standalone.cli(&["runs", "list", "chain", "--for", "someday"]);
     assert_eq!(code, 1);
     assert!(err.contains("isn't a date or a date-time"), "{err}");
+}
+
+#[test]
+fn listen_opens_the_api_beyond_loopback() {
+    let standalone = Standalone::start_with(&[("chain.py", CHAIN)], None, &["--listen", "0.0.0.0"]);
+    assert!(standalone.get("/api/v1/dags").is_some());
+    let log = standalone.log();
+    assert!(
+        log.contains("the REST API has no authentication of its own"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_second_standalone_on_the_same_data_is_refused_and_sigterm_stops_the_first() {
+    let mut standalone = Standalone::start(&[("chain.py", CHAIN)], None);
+    let second = Command::new(BINARY)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", standalone.dir.path())
+        .arg("--config")
+        .arg(standalone.dir.path().join("config.toml"))
+        .arg("standalone")
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&second.stderr);
+    assert!(err.contains("another schedr standalone is using"), "{err}");
+
+    let pid = standalone.child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(status) = standalone.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}\n{}", standalone.log());
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "standalone didn't stop on SIGTERM\n{}",
+            standalone.log()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
