@@ -112,6 +112,31 @@ pub enum AttemptStatus {
     AssignmentExpired,
 }
 
+/// A worker's state as the master sees it (see PROJECT.md, Worker lifecycle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerState {
+    /// Connected; takes new tasks.
+    Active,
+    /// Finishing its tasks; takes no new ones.
+    Draining,
+    /// Its stream dropped; its tasks may still run. Active again if it reconnects with the
+    /// same incarnation, lost when its lease runs out.
+    Disconnected,
+    /// It deregistered.
+    Offline,
+    /// No heartbeat within the lease: its attempts ended `lost`.
+    Lost,
+}
+
+impl WorkerState {
+    /// Whether the worker is gone (it is kept listed, so its logs can be found).
+    #[must_use]
+    pub const fn is_gone(self) -> bool {
+        matches!(self, Self::Offline | Self::Lost)
+    }
+}
+
 /// What the master does after an attempt ended with a given status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RetryRule {
@@ -151,4 +176,10 @@ macro_rules! display_as_serialized {
     )+};
 }
 
-display_as_serialized!(RunKind, RunState, TaskInstanceState, AttemptStatus);
+display_as_serialized!(
+    RunKind,
+    RunState,
+    TaskInstanceState,
+    AttemptStatus,
+    WorkerState
+);

@@ -435,3 +435,59 @@ fn a_dag_in_conflict_says_so() {
         ]]
     );
 }
+
+async fn workers(client: &Client<InProcess>, command: WorkersCommand, output: &Output) -> String {
+    let mut out = Vec::new();
+    run_workers(&command, client, output, &mut out)
+        .await
+        .unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[tokio::test]
+async fn workers_are_listed_as_a_table() {
+    let client = world(false).await;
+    let queues = vec!["default".to_owned(), "large".to_owned()];
+    client
+        .transport()
+        .db
+        .register_worker(
+            &schedr_db::workers::WorkerRegistration {
+                id: "w1",
+                incarnation: "i1",
+                protocol_version: "1.0",
+                schedr_version: "0.1.0",
+                queues: &queues,
+                slots: 4,
+                log_endpoint: "",
+            },
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        workers(&client, WorkersCommand::List, &text()).await,
+        "WORKER  STATE   RUNNING  QUEUES         LAST SEEN\n\
+         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST\n"
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&workers(&client, WorkersCommand::List, &json_output()).await)
+            .unwrap();
+    assert_eq!(listed["workers"][0]["state"], "active");
+}
+
+#[tokio::test]
+async fn draining_comes_later() {
+    let client = world(false).await;
+    let error = run_workers(
+        &WorkersCommand::Drain {
+            worker: "w1".to_owned(),
+        },
+        &client,
+        &text(),
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("milestone M2"), "{error}");
+}

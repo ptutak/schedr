@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use schedr_db::commands::CommandRecord;
 use schedr_db::dags::StoredDag;
 use schedr_db::reads::{AttemptRecord, InstanceRecord, RunRecord};
+use schedr_db::workers::WorkerRecord;
 use schedr_model::DagLocation;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -300,4 +301,59 @@ pub struct RunsQuery {
     /// At most this many (default 50, at most 500).
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+/// A worker in the registry (kept after it is gone, so its logs can be found).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerView {
+    /// Its ID.
+    pub worker_id: String,
+    /// `active`, `draining`, `disconnected`, `offline` or `lost`.
+    pub state: String,
+    /// The incarnation of its agent process it last registered with.
+    pub incarnation_id: String,
+    /// The queues it serves.
+    pub queues: Vec<String>,
+    /// Its task slots.
+    pub slots: u32,
+    /// Its attempts still running.
+    pub running: u32,
+    /// Its schedr version.
+    pub schedr_version: String,
+    /// Its protocol version (`major.minor`).
+    pub protocol_version: String,
+    /// Where its log endpoint listens (where a gone worker's logs were served).
+    pub log_endpoint: String,
+    /// When it last registered.
+    pub registered_at: Timestamp,
+    /// The last sign of life the master recorded (at most once per heartbeat interval).
+    pub last_heartbeat_at: Timestamp,
+    /// When it went offline or was lost.
+    pub offline_at: Option<Timestamp>,
+}
+
+impl From<&WorkerRecord> for WorkerView {
+    fn from(worker: &WorkerRecord) -> Self {
+        Self {
+            worker_id: worker.id.clone(),
+            state: worker.state.to_string(),
+            incarnation_id: worker.incarnation.clone(),
+            queues: worker.queues.clone(),
+            slots: worker.slots,
+            running: worker.running,
+            schedr_version: worker.schedr_version.clone(),
+            protocol_version: worker.protocol_version.clone(),
+            log_endpoint: worker.log_endpoint.clone(),
+            registered_at: worker.registered_at,
+            last_heartbeat_at: worker.last_heartbeat_at,
+            offline_at: worker.offline_at,
+        }
+    }
+}
+
+/// The workers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerList {
+    /// Every worker the master has seen, in ID order.
+    pub workers: Vec<WorkerView>,
 }

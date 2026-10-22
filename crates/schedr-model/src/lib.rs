@@ -18,7 +18,7 @@ pub mod version;
 
 pub use dag::{Dag, DagLocation, Edge, EdgeKind};
 pub use ids::{DagId, IdError, TaskId};
-pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState};
+pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
 pub use task::{CommandLine, Task, TaskKind, TaskSettings};
 pub use trigger::Trigger;
 pub use types::{Field, TypeDesc};

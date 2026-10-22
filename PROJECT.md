@@ -180,6 +180,7 @@ tasks share the pod's memory):
   | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
   | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one running task (see Master–worker protocol) |
   | `schedr tasks retry <run id> <task id> [--map-index N]` | retry an `unschedulable` task of an unfinished run |
+  | `schedr workers list` | the workers and their state, gone ones included |
   | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
  The master's gRPC API stays internal to the workers.
   - **REST with JSON**; an **OpenAPI** description is generated from the Rust types, committed
@@ -206,7 +207,8 @@ tasks share the pod's memory):
     optional) and `…/unpause`, `GET …/dags/{dag_id}/runs?for=…&limit=…` (newest first,
     default 50, at most 500), `POST …/dags/{dag_id}/runs` (body `{"planned_for": …}`,
     optional), `GET …/runs/{run_id}` (with its tasks), `POST …/runs/{run_id}/cancel`, `GET
-    …/runs/{run_id}/tasks/{task_id}/attempts`, `GET …/commands/{command_id}`, and the OpenAPI
+    …/runs/{run_id}/tasks/{task_id}/attempts`, `GET …/commands/{command_id}`, `GET
+    /api/v1/workers` (M2.2), and the OpenAPI
     description at `GET /api/v1/openapi.json`.
   - **Actions answer `202 Accepted` with the command** (pending); the client polls `GET
     …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
@@ -709,6 +711,38 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   would restart every worker and kill all running tasks). Workers need no readiness probe.
 - `OFFLINE` and `LOST` workers **stay listed for the same period as log retention**, so old
   logs can still be located (the UI shows them as unavailable).
+
+**How it is built (M2.2):**
+
+- **The worker registry is persisted** in the `workers` table (state, incarnation, versions,
+  queues, slots, registration time, last heartbeat, when it went offline or was lost). The
+  master is its only writer: on `Register`; on every change of state (`draining`,
+  `disconnected` when the stream drops, `offline` on `Deregister`, `lost` past the lease); and
+  the last heartbeat at most once per heartbeat interval while the worker is connected (any
+  message counts as a sign of life). Gone workers stay in the table (deleting them comes with
+  retention).
+- **At start the master reads the registry back:** every worker not gone counts as
+  `disconnected` from that moment, so its lease starts from zero (master downtime doesn't
+  count against workers), and one that never comes back is `lost` after the lease, its
+  attempts with it. Before, attempts of a worker that never returned after a master restart
+  stayed open for ever.
+- **A new incarnation ends what its predecessor left:** when a worker registers with another
+  incarnation than the one the master knows, the attempts it had **started** and doesn't
+  report in its journal end **`lost`, each using a retry**: the crash rule (it may have been
+  the task's own memory spike; `interrupted`, which uses no retry, stays for draining), and the
+  same outcome as the lease running out, only sooner. Attempts not started yet are left to
+  expire, without using a retry. With the journal on disk (2.3) the new incarnation reports
+  its attempts itself. Not chosen: `interrupted` (a task crashing its container every time
+  would loop for ever).
+- **The agent reconnects** after a backoff that doubles from 200 ms up to 30 s, **with jitter**
+  (between half the backoff and all of it, so workers that lost the master together don't
+  return in lockstep), and **starts again from 200 ms** after a session in which the master
+  registered it.
+- **`GET /api/v1/workers`** and **`schedr workers list`** show every worker the master has
+  seen, gone ones included: `WORKER STATE RUNNING QUEUES LAST SEEN` (running attempts / slots;
+  `--json` for the API's JSON). `drain` / `resume` come with 2.6.
+- `schedr master` and `schedr webserver` log the address they actually bound (port 0 binds a
+  free port).
 
 ### Task assignment
 
@@ -4368,7 +4402,10 @@ a real server or talks to Postgres is an integration test.
   rejections) on SQLite and on Postgres; `schedr.testing.run_dag` against the binary (failed
   runs, attempts, decoded outputs) and the `examples/` tests; the roles as separate processes
   (master, webserver and worker running a DAG on Postgres and on one SQLite file, a command
-  applied at once through `LISTEN/NOTIFY`, an unmigrated database refused, SIGTERM).
+  applied at once through `LISTEN/NOTIFY`, an unmigrated database refused, SIGTERM); the worker
+  lifecycle on Postgres (a worker killed mid-task and started again: its attempt `lost` and
+  retried; one that never returns: `lost` and still listed; a running task across a master
+  restart: one attempt, continued; a second worker with the same ID refused).
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

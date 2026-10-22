@@ -8,10 +8,10 @@ use std::io::Write;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use schedr_api::views::{CommandView, DagView, RunView};
+use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
 
 use crate::app::AppError;
-use crate::cli::{DagsCommand, RunsCommand};
+use crate::cli::{DagsCommand, RunsCommand, WorkersCommand};
 use crate::client::{Client, Transport};
 use crate::times::{parse_for, show, show_short};
 
@@ -71,6 +71,54 @@ pub async fn run_dags<T: Transport>(
         }
     }
     Ok(())
+}
+
+/// Runs a `schedr workers` command (`list`; draining comes with M2.6).
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`]; [`AppError::NotImplemented`] for `drain` and
+/// `resume`.
+pub async fn run_workers<T: Transport>(
+    command: &WorkersCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    match command {
+        WorkersCommand::List => {
+            let workers = client.workers().await?;
+            if output.json {
+                return print_json(out, &workers);
+            }
+            let rows: Vec<Vec<String>> = workers
+                .workers
+                .iter()
+                .map(|w| worker_row(w, &output.local))
+                .collect();
+            write_table(
+                out,
+                &["WORKER", "STATE", "RUNNING", "QUEUES", "LAST SEEN"],
+                &rows,
+            )
+        }
+        WorkersCommand::Drain { .. } | WorkersCommand::Resume { .. } => {
+            Err(AppError::NotImplemented {
+                command: "workers",
+                milestone: "M2",
+            })
+        }
+    }
+}
+
+fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {
+    vec![
+        worker.worker_id.clone(),
+        worker.state.clone(),
+        format!("{}/{}", worker.running, worker.slots),
+        worker.queues.join(","),
+        show(worker.last_heartbeat_at, local),
+    ]
 }
 
 /// Runs a `schedr runs` command; warnings (e.g. `--for` read as UTC) go to `err`.

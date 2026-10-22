@@ -296,3 +296,44 @@ async fn a_database_failure_is_a_server_error() {
         )
     );
 }
+
+#[tokio::test]
+async fn workers_are_listed_with_their_state_and_running_attempts() {
+    let (app, db, _) = api().await;
+    let queues = vec!["large".to_owned()];
+    db.register_worker(
+        &schedr_db::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "1.0",
+            schedr_version: "0.1.0",
+            queues: &queues,
+            slots: 4,
+            log_endpoint: "",
+        },
+        ts("2026-10-22T08:00:00Z"),
+    )
+    .await
+    .unwrap();
+    db.set_worker_state(
+        "w1",
+        schedr_model::WorkerState::Lost,
+        ts("2026-10-22T08:02:00Z"),
+    )
+    .await
+    .unwrap();
+    let (status, body) = get(&app, "/api/v1/workers").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["workers"][0],
+        json!({
+            "worker_id": "w1", "state": "lost",
+            "incarnation_id": "0190a0a0-0000-7000-8000-000000000001",
+            "queues": ["large"], "slots": 4, "running": 0, "schedr_version": "0.1.0",
+            "protocol_version": "1.0", "log_endpoint": "",
+            "registered_at": "2026-10-22T08:00:00Z",
+            "last_heartbeat_at": "2026-10-22T08:00:00Z",
+            "offline_at": "2026-10-22T08:02:00Z"
+        })
+    );
+}

@@ -13,6 +13,7 @@ mod query;
 pub mod reads;
 pub mod runs;
 pub mod status;
+pub mod workers;
 
 pub use backend::{Backend, UnsupportedUrl, redact_password};
 pub use database::{Database, DbError};

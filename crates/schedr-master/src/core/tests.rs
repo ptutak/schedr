@@ -272,12 +272,12 @@ async fn incompatible_and_duplicate_registrations_are_refused() {
         error.to_string(),
         "registration refused: worker `w1` already has a live stream"
     );
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     assert!(!core.is_live("w1"));
     core.register(&register("w1", "i2", vec![]), ts(NOW))
         .await
         .unwrap();
-    core.disconnected("ghost");
+    core.disconnected("ghost", ts(NOW)).await.unwrap();
 }
 
 #[tokio::test]
@@ -293,7 +293,7 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
         attempt_id: id.to_owned(),
         state: state.into(),
     };
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     let journal = vec![
         entry(&open, pb::JournalState::Running),
         entry(
@@ -324,7 +324,7 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
         ..pb::Finished::default()
     });
     core.handle("w1", finished, later(6)).await.unwrap();
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     let journal = vec![
         entry(&open, pb::JournalState::Finished),
         entry(&open, pb::JournalState::Running),
@@ -341,7 +341,7 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
             i32::from(pb::AttemptDecision::Kill)
         ]
     );
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     let (registered, _) = core
         .register(
             &register("w2", "i1", vec![entry(&open, pb::JournalState::Running)]),
@@ -368,7 +368,7 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
         start_method: pb::StartMethod::Spawn.into(),
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(60)).await.unwrap();
     assert!(
         core.dispatcher().workers().get("w1").is_some(),
@@ -421,7 +421,7 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
         start_method: pb::StartMethod::Spawn.into(),
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
-    core.disconnected("w1");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
     let runs = core
         .db
         .dag_runs(&DagId::new("sync").unwrap(), None, 1)
@@ -455,4 +455,167 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
         })
         .collect();
     assert_eq!(cancels, [assign.attempt_id.as_str()]);
+}
+
+async fn registry_state(core: &MasterCore, worker: &str) -> (WorkerState, Option<Timestamp>) {
+    let record = core
+        .db
+        .workers()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == worker)
+        .unwrap();
+    (record.state, record.offline_at)
+}
+
+async fn started_attempt(core: &mut MasterCore) -> String {
+    trigger(core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    });
+    core.handle("w1", started, ts(NOW)).await.unwrap();
+    assign.attempt_id.clone()
+}
+
+#[tokio::test]
+async fn the_registry_follows_a_worker_through_its_states_and_keeps_it_when_lost() {
+    let mut core = with_dag().await;
+    assert_eq!(
+        registry_state(&core, "w1").await,
+        (WorkerState::Active, None)
+    );
+    let draining = worker_message::Message::Draining(pb::Draining {});
+    core.handle("w1", draining, later(1)).await.unwrap();
+    assert_eq!(registry_state(&core, "w1").await.0, WorkerState::Draining);
+    core.disconnected("w1", later(2)).await.unwrap();
+    assert_eq!(
+        registry_state(&core, "w1").await.0,
+        WorkerState::Disconnected
+    );
+    core.tick(later(70)).await.unwrap();
+    assert_eq!(
+        registry_state(&core, "w1").await,
+        (WorkerState::Lost, Some(later(70)))
+    );
+}
+
+#[tokio::test]
+async fn a_deregistered_worker_stays_listed_as_offline() {
+    let mut core = with_dag().await;
+    let bye = worker_message::Message::Deregister(pb::Deregister {});
+    core.handle("w1", bye, later(3)).await.unwrap();
+    assert_eq!(
+        registry_state(&core, "w1").await,
+        (WorkerState::Offline, Some(later(3)))
+    );
+}
+
+#[tokio::test]
+async fn signs_of_life_are_written_at_most_once_per_heartbeat_interval() {
+    let mut core = with_dag().await;
+    let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle("w1", heartbeat(), later(5)).await.unwrap();
+    let seen = |core: &MasterCore| {
+        let db = core.db.clone();
+        async move { db.workers().await.unwrap()[0].last_heartbeat_at }
+    };
+    assert_eq!(seen(&core).await, ts(NOW));
+    core.handle("w1", heartbeat(), later(10)).await.unwrap();
+    assert_eq!(seen(&core).await, later(10));
+}
+
+#[tokio::test]
+async fn a_new_incarnation_ends_the_started_attempts_it_doesnt_report() {
+    let mut core = with_dag().await;
+    let attempt = started_attempt(&mut core).await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(5))
+        .await
+        .unwrap();
+    let ended = core.db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
+    assert!(core.is_live("w1"));
+}
+
+#[tokio::test]
+async fn a_reconnect_of_the_same_incarnation_keeps_its_attempts() {
+    let mut core = with_dag().await;
+    let attempt = started_attempt(&mut core).await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i1", vec![]), later(5))
+        .await
+        .unwrap();
+    let open = core.db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(open.status, None);
+}
+
+#[tokio::test]
+async fn a_new_incarnation_leaves_unstarted_attempts_to_expire() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(2))
+        .await
+        .unwrap();
+    let open = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(open.status, None);
+}
+
+#[tokio::test]
+async fn a_restarted_master_restores_workers_and_counts_their_lease_from_its_start() {
+    let mut first = with_dag().await;
+    let attempt = started_attempt(&mut first).await;
+    let db = first.db.clone();
+    let mut restarted = MasterCore::new(db.clone(), Settings::default());
+    assert_eq!(restarted.restore(later(100)).await.unwrap(), 1);
+    assert!(!restarted.is_live("w1"));
+    assert_eq!(
+        registry_state(&restarted, "w1").await.0,
+        WorkerState::Disconnected
+    );
+    restarted.tick(later(160)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    restarted.tick(later(161)).await.unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(schedr_model::AttemptStatus::Lost)
+    );
+    assert_eq!(registry_state(&restarted, "w1").await.0, WorkerState::Lost);
+    let mut again = MasterCore::new(db, Settings::default());
+    assert_eq!(
+        again.restore(later(200)).await.unwrap(),
+        0,
+        "lost workers stay lost"
+    );
+}
+
+#[tokio::test]
+async fn a_registration_that_fails_half_way_leaves_no_live_stream() {
+    let mut core = core().await;
+    let Database::Sqlite(pool) = &core.db else {
+        unreachable!()
+    };
+    sqlx::query("DROP TABLE workers")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        core.register(&register("w1", "i1", vec![]), ts(NOW))
+            .await
+            .is_err()
+    );
+    assert!(
+        !core.is_live("w1"),
+        "the next registration must not be refused"
+    );
 }

@@ -69,6 +69,17 @@ impl Hub {
         MasterServer::new(self.clone())
     }
 
+    /// Reads the worker registry back (see [`MasterCore::restore`]) at the hub's clock, the
+    /// one its lease checks use.
+    ///
+    /// # Errors
+    ///
+    /// The core's failure.
+    pub async fn restore(&self) -> Result<usize, CoreError> {
+        let now = (self.clock)();
+        self.core.lock().await.restore(now).await
+    }
+
     /// One tick of the master's loop, its messages delivered.
     ///
     /// # Errors
@@ -181,7 +192,10 @@ impl Hub {
                 Err(error) => tracing::error!(worker_id, %error, "worker message not handled"),
             }
         }
-        self.core.lock().await.disconnected(&worker_id);
+        let now = (self.clock)();
+        if let Err(error) = self.core.lock().await.disconnected(&worker_id, now).await {
+            tracing::error!(worker_id, %error, "worker disconnect not recorded");
+        }
         let mut streams = self.streams.lock().await;
         if streams
             .get(&worker_id)

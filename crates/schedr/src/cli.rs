@@ -250,6 +250,8 @@ pub enum TasksCommand {
 /// `schedr workers ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum WorkersCommand {
+    /// List the workers the master has seen, with their state (gone ones included).
+    List,
     /// Drain a worker for maintenance: it finishes its tasks and stays idle.
     Drain {
         /// The worker's ID.
@@ -388,7 +390,11 @@ impl Command {
             | Self::Standalone { .. }
             | Self::Master
             | Self::Worker
-            | Self::Webserver => None,
+            | Self::Webserver
+            | Self::Workers {
+                command: WorkersCommand::List,
+                ..
+            } => None,
             Self::Tasks { .. } | Self::Workers { .. } => Some("M2"),
             Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
         }

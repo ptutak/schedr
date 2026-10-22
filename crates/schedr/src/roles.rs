@@ -21,7 +21,7 @@ use schedr_agent::attempt::WorkerSetup;
 use schedr_api::{ApiState, router};
 use schedr_config::Config;
 use schedr_db::{Backend, Database, redact_password};
-use schedr_master::core::{MasterCore, Settings};
+use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
 use schedr_master::service::Hub;
 use schedr_proto::pb::master_client::MasterClient;
@@ -151,6 +151,16 @@ pub async fn serve_master(
         }
     };
     let hub = Hub::new(MasterCore::new(db, settings));
+    let restored = hub.restore().await.map_err(|e| match e {
+        CoreError::Db(db) => AppError::Db(db),
+        other => AppError::BadArgument(format!("can't read the worker registry: {other}")),
+    })?;
+    if restored > 0 {
+        tracing::info!(
+            restored,
+            "workers restored as disconnected; their leases start now"
+        );
+    }
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), until(stop.clone()));
@@ -330,7 +340,8 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
     if let Some(warning) = plain_text_warning(&config.master.bind.to_string()) {
         tracing::warn!("{warning}");
     }
-    tracing::info!("schedr master: gRPC on {address}");
+    let bound = listener.local_addr().unwrap_or(address);
+    tracing::info!("schedr master: gRPC on {bound}");
     serve_master(
         db,
         master_settings(config),
@@ -351,10 +362,11 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let db = open_database(config, "webserver").await?;
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
-    if let Some(warning) = no_auth_warning(address, "set [webserver] bind = \"127.0.0.1\"") {
+    let bound = listener.local_addr().unwrap_or(address);
+    if let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"") {
         tracing::warn!("{warning}");
     }
-    tracing::info!("schedr webserver: API on http://{address}");
+    tracing::info!("schedr webserver: API on http://{bound}");
     serve_api(
         db,
         config.webserver.auth.identity_header.clone(),

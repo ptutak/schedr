@@ -45,6 +45,18 @@ pub const START_FAILED: &str = "start_failed";
 /// The longest wait between attempts to reach the master.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// The first wait after the master connection drops; it doubles up to [`MAX_BACKOFF`], and
+/// starts again here after a session in which the master registered the worker.
+pub const FIRST_BACKOFF: Duration = Duration::from_millis(200);
+
+/// A backoff with jitter: between half of `backoff` and all of it, picked by `seed` (so many
+/// workers losing the master at once don't come back in lockstep).
+#[must_use]
+pub fn jittered(backoff: Duration, seed: u32) -> Duration {
+    let fraction = 0.5 + 0.5 * f64::from(seed) / f64::from(u32::MAX);
+    backoff.mul_f64(fraction)
+}
+
 /// The agent's configuration.
 #[derive(Debug, Clone)]
 pub struct AgentSettings {
@@ -189,6 +201,8 @@ pub struct Agent<E> {
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
     heartbeat: Duration,
+    /// Whether the master registered this agent in the current session.
+    registered: bool,
 }
 
 impl<E: Executor> Agent<E> {
@@ -212,6 +226,7 @@ impl<E: Executor> Agent<E> {
             done_tx,
             done_rx,
             heartbeat: Duration::from_secs(10),
+            registered: false,
         }
     }
 
@@ -221,16 +236,18 @@ impl<E: Executor> Agent<E> {
         self.running.keys().cloned().collect()
     }
 
-    /// Runs until `stop` completes: connects with `connect`, and again with backoff whenever
-    /// the connection drops.
+    /// Runs until `stop` completes: connects with `connect`, and again whenever the connection
+    /// drops, after a backoff with jitter that doubles up to [`MAX_BACKOFF`] and starts from
+    /// [`FIRST_BACKOFF`] again after a session in which the master registered it.
     pub async fn run<C, F>(&mut self, connect: C, stop: impl Future<Output = ()>)
     where
         C: Fn() -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
     {
         tokio::pin!(stop);
-        let mut backoff = Duration::from_millis(200);
+        let mut backoff = FIRST_BACKOFF;
         loop {
+            self.registered = false;
             let session = async {
                 match connect().await {
                     Ok(client) => self.session(client).await,
@@ -246,9 +263,18 @@ impl<E: Executor> Agent<E> {
                     }
                 },
             }
+            if self.registered {
+                backoff = FIRST_BACKOFF;
+            }
+            // The clock's nanoseconds (below 10^9), spread over all of u32 by a
+            // multiplicative hash, so the jitter covers its whole range.
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+                .wrapping_mul(2_654_435_761);
             tokio::select! {
                 () = &mut stop => return,
-                () = tokio::time::sleep(backoff) => {}
+                () = tokio::time::sleep(jittered(backoff, seed)) => {}
             }
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
@@ -338,6 +364,7 @@ impl<E: Executor> Agent<E> {
     ) {
         match message {
             master_message::Message::Registered(registered) => {
+                self.registered = true;
                 if let Some(timing) = registered.timing.filter(|t| t.heartbeat_interval_ms > 0) {
                     self.heartbeat = Duration::from_millis(timing.heartbeat_interval_ms);
                     *heartbeat = tokio::time::interval(self.heartbeat);

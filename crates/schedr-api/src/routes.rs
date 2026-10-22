@@ -20,7 +20,7 @@ use crate::error::ApiError;
 use crate::state::ApiState;
 use crate::views::{
     AttemptList, CommandView, DagList, DagView, ErrorBody, PauseRequest, RunDetail, RunList,
-    RunView, RunsQuery, TaskView, TriggerRequest,
+    RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
 };
 
 #[cfg(test)]
@@ -43,6 +43,16 @@ pub async fn list_dags(State(state): State<ApiState>) -> ApiResult<DagList> {
             .filter(|d| !d.removed)
             .map(DagView::from)
             .collect(),
+    }))
+}
+
+/// Every worker the master has seen, gone ones included.
+#[utoipa::path(get, path = "/api/v1/workers", tag = "workers",
+    responses((status = 200, body = WorkerList)))]
+pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList> {
+    let workers = state.db.workers().await?;
+    Ok(Json(WorkerList {
+        workers: workers.iter().map(WorkerView::from).collect(),
     }))
 }
 

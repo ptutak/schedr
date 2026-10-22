@@ -92,3 +92,19 @@ fn attempt_statuses(#[case] status: AttemptStatus, #[case] name: &str, #[case] r
 fn unknown_state_names_are_rejected() {
     assert!(serde_json::from_value::<RunState>(json!("paused")).is_err());
 }
+
+#[rstest]
+#[case(WorkerState::Active, "active", false)]
+#[case(WorkerState::Draining, "draining", false)]
+#[case(WorkerState::Disconnected, "disconnected", false)]
+#[case(WorkerState::Offline, "offline", true)]
+#[case(WorkerState::Lost, "lost", true)]
+fn worker_states_have_their_schema_names(
+    #[case] state: WorkerState,
+    #[case] name: &str,
+    #[case] gone: bool,
+) {
+    assert_eq!(state.to_string(), name);
+    assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
+    assert_eq!(state.is_gone(), gone);
+}

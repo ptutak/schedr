@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use schedr_model::{AttemptStatus, DagId, RunKind, RunState, TaskId, TaskInstanceState};
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_name, on_pool, parse_time, sql};
+use crate::query::{db_time, from_name, on_pool, optional_time, parse_time, sql};
 
 #[cfg(test)]
 mod tests;
@@ -222,10 +222,6 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
         what: "task_instances.task_id",
         reason: e.to_string(),
     })
-}
-
-fn optional_time(what: &'static str, text: Option<String>) -> Result<Option<Timestamp>, DbError> {
-    text.map(|t| parse_time(what, &t)).transpose()
 }
 
 fn run_record(row: RunRow) -> Result<RunRecord, DbError> {

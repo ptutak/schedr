@@ -474,3 +474,41 @@ async fn cancelling_a_run_cancels_its_running_attempts() {
         RunState::Cancelled
     );
 }
+
+#[tokio::test]
+async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
+    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let none = BTreeSet::new();
+    assert_eq!(
+        dispatcher
+            .incarnation_replaced("w1", &none, ts(NOW))
+            .await
+            .unwrap(),
+        0,
+        "not started: left to expire"
+    );
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let reported = BTreeSet::from([attempt.as_str()]);
+    assert_eq!(
+        dispatcher
+            .incarnation_replaced("w1", &reported, ts(NOW))
+            .await
+            .unwrap(),
+        0,
+        "reported in the journal: kept"
+    );
+    assert_eq!(
+        dispatcher
+            .incarnation_replaced("w1", &none, ts(NOW))
+            .await
+            .unwrap(),
+        1
+    );
+    let ended = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(ended.status, Some(AttemptStatus::Lost));
+}

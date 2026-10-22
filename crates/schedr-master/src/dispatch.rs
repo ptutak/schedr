@@ -379,6 +379,32 @@ impl Dispatcher {
         Ok(expired.len())
     }
 
+    /// A worker's agent restarted (a new incarnation): the attempts it had started and doesn't
+    /// report in its journal end `lost`, each using a retry, as for a lost worker (the crash
+    /// may have been the task's own; see PROJECT.md, Worker lifecycle). Attempts it hadn't
+    /// started yet are left to expire without using a retry. Returns how many ended.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn incarnation_replaced(
+        &mut self,
+        worker_id: &str,
+        reported: &BTreeSet<&str>,
+        now: Timestamp,
+    ) -> Result<usize, DispatchError> {
+        let mut ended = 0;
+        for attempt in self.db.open_attempts(Some(worker_id)).await? {
+            if attempt.started && !reported.contains(attempt.id.as_str()) {
+                let end = AttemptEnd::by_master(AttemptStatus::Lost);
+                self.record(&attempt, &end, &by_master(AttemptStatus::Lost), now)
+                    .await?;
+                ended += 1;
+            }
+        }
+        Ok(ended)
+    }
+
     /// A worker is lost: its attempts end `lost` (each uses a retry) and it is forgotten.
     ///
     /// # Errors

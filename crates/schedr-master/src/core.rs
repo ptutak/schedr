@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use schedr_db::workers::WorkerRegistration;
 use schedr_db::{Database, DbError};
-use schedr_model::SchedrVersion;
+use schedr_model::{SchedrVersion, WorkerState};
 use schedr_proto::convert::parsed_file_from_proto;
 use schedr_proto::pb::{self, master_message, worker_message};
 use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
@@ -83,6 +84,9 @@ struct Connection {
     incarnation: String,
     schedr_version: String,
     last_seen: Timestamp,
+    /// When `last_seen` was last written to the registry (at most once per heartbeat
+    /// interval).
+    persisted: Timestamp,
     live: bool,
 }
 
@@ -129,6 +133,38 @@ impl MasterCore {
         &self.dispatcher
     }
 
+    /// Reads the worker registry back at start: every worker not gone counts as disconnected
+    /// from `now`, so its lease starts from zero (master downtime doesn't count against
+    /// workers) and one that never comes back is lost, its attempts with it. Returns how many
+    /// workers were restored.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Db`] if the database fails.
+    pub async fn restore(&mut self, now: Timestamp) -> Result<usize, CoreError> {
+        let mut restored = 0;
+        for worker in self.db.workers().await? {
+            if worker.state.is_gone() {
+                continue;
+            }
+            self.db
+                .set_worker_state(&worker.id, WorkerState::Disconnected, now)
+                .await?;
+            self.connections.insert(
+                worker.id,
+                Connection {
+                    incarnation: worker.incarnation,
+                    schedr_version: worker.schedr_version,
+                    last_seen: now,
+                    persisted: now,
+                    live: false,
+                },
+            );
+            restored += 1;
+        }
+        Ok(restored)
+    }
+
     /// Whether a worker has a live stream.
     #[must_use]
     pub fn is_live(&self, worker_id: &str) -> bool {
@@ -160,15 +196,75 @@ impl MasterCore {
                 "worker `{worker_id}` already has a live stream"
             )));
         }
+        let accepted = self.accept(register, now).await;
+        if accepted.is_err()
+            && let Some(connection) = self.connections.get_mut(worker_id)
+        {
+            // A registration that failed half-way (the database) leaves no live stream behind:
+            // the worker's next attempt is accepted, or its lease runs out.
+            connection.live = false;
+        }
+        accepted
+    }
+
+    /// Accepts a registration that passed the checks: reconciles a replaced incarnation,
+    /// records the worker, and decides on its journal.
+    async fn accept(
+        &mut self,
+        register: &pb::Register,
+        now: Timestamp,
+    ) -> Result<(pb::Registered, Vec<Outgoing>), CoreError> {
+        let worker_id = register.worker_id.as_str();
+        let replaced = self
+            .connections
+            .get(worker_id)
+            .is_some_and(|known| known.incarnation != register.incarnation_id);
+        if replaced {
+            let reported = register
+                .journal
+                .iter()
+                .map(|entry| entry.attempt_id.as_str())
+                .collect();
+            let ended = self
+                .dispatcher
+                .incarnation_replaced(worker_id, &reported, now)
+                .await?;
+            tracing::warn!(
+                worker_id,
+                ended,
+                "worker restarted (a new incarnation): its unreported attempts are lost \
+                 (possibly out of memory)"
+            );
+        }
         self.connections.insert(
             worker_id.to_owned(),
             Connection {
                 incarnation: register.incarnation_id.clone(),
                 schedr_version: register.schedr_version.clone(),
                 last_seen: now,
+                persisted: now,
                 live: true,
             },
         );
+        let protocol = register
+            .protocol
+            .as_ref()
+            .map(|p| format!("{}.{}", p.major, p.minor))
+            .unwrap_or_default();
+        self.db
+            .register_worker(
+                &WorkerRegistration {
+                    id: worker_id,
+                    incarnation: &register.incarnation_id,
+                    protocol_version: &protocol,
+                    schedr_version: &register.schedr_version,
+                    queues: &register.queues,
+                    slots: register.slots,
+                    log_endpoint: &register.log_endpoint,
+                },
+                now,
+            )
+            .await?;
         self.dispatcher
             .register(
                 worker_id,
@@ -214,8 +310,18 @@ impl MasterCore {
         message: worker_message::Message,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
+        let heartbeat = SignedDuration::try_from(self.settings.heartbeat_interval)
+            .unwrap_or(SignedDuration::MAX);
         if let Some(connection) = self.connections.get_mut(worker_id) {
             connection.last_seen = now;
+            if now.duration_since(connection.persisted) >= heartbeat {
+                connection.persisted = now;
+                // A sign of life in the registry is for people: a failed write mustn't cost
+                // the message it came with (the next interval writes it again).
+                if let Err(error) = self.db.worker_seen(worker_id, now).await {
+                    tracing::warn!(worker_id, %error, "worker's last heartbeat not recorded");
+                }
+            }
         }
         Ok(match message {
             worker_message::Message::Register(_) => {
@@ -244,18 +350,33 @@ impl MasterCore {
             }
             worker_message::Message::Draining(_) => {
                 self.dispatcher.draining(worker_id);
+                self.db
+                    .set_worker_state(worker_id, WorkerState::Draining, now)
+                    .await?;
                 Vec::new()
             }
-            worker_message::Message::Deregister(_) => self.forget(worker_id, now).await?,
+            worker_message::Message::Deregister(_) => {
+                self.forget(worker_id, WorkerState::Offline, now).await?
+            }
         })
     }
 
     /// A worker's stream ended: it may reconnect (same incarnation, tasks still running)
     /// within the lease timeout, or it is lost at the next tick after that.
-    pub fn disconnected(&mut self, worker_id: &str) {
-        if let Some(connection) = self.connections.get_mut(worker_id) {
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Db`] if the registry can't be written.
+    pub async fn disconnected(&mut self, worker_id: &str, now: Timestamp) -> Result<(), CoreError> {
+        if let Some(connection) = self.connections.get_mut(worker_id)
+            && connection.live
+        {
             connection.live = false;
+            self.db
+                .set_worker_state(worker_id, WorkerState::Disconnected, now)
+                .await?;
         }
+        Ok(())
     }
 
     /// One pass of the master's loop: commands, the scheduler, dispatching, parse jobs past
@@ -283,7 +404,7 @@ impl MasterCore {
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
-            outgoing.extend(self.forget(&worker_id, now).await?);
+            outgoing.extend(self.forget(&worker_id, WorkerState::Lost, now).await?);
         }
         Ok(outgoing)
     }
@@ -403,13 +524,16 @@ impl MasterCore {
         })
     }
 
-    /// A worker deregistered or is lost: its attempts end `lost`, its parse jobs move on.
+    /// A worker deregistered (`Offline`) or is lost (`Lost`): its attempts end `lost`, its
+    /// parse jobs move on, and the registry keeps it listed in that state.
     async fn forget(
         &mut self,
         worker_id: &str,
+        state: WorkerState,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
         self.connections.remove(worker_id);
+        self.db.set_worker_state(worker_id, state, now).await?;
         self.dispatcher.worker_lost(worker_id, now).await?;
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);
         Ok(moved.into_iter().map(assign_parse).collect())

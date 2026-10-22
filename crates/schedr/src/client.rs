@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AttemptList, CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest,
+    AttemptList, CommandView, DagList, PauseRequest, RunDetail, RunList, TriggerRequest, WorkerList,
 };
 use serde::de::DeserializeOwned;
 
@@ -205,6 +205,16 @@ impl<T: Transport> Client<T> {
     /// The transport.
     pub const fn transport(&self) -> &T {
         &self.transport
+    }
+
+    /// `GET /api/v1/workers`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn workers(&self) -> Result<WorkerList, ClientError> {
+        self.call(Method::Get, "/api/v1/workers".to_owned(), None)
+            .await
     }
 
     /// `GET /api/v1/dags`.

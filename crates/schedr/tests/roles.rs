@@ -36,14 +36,6 @@ fn python() -> String {
     )
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// A new database of this test's own on the test Postgres server.
 fn postgres_database() -> String {
     let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect(
@@ -81,7 +73,10 @@ impl Drop for Role {
 struct Cluster {
     dir: TempDir,
     database_url: String,
+    /// The REST API, once the webserver listens.
     api: String,
+    /// The master's port once it listens (kept for a restart) and the URL workers use.
+    grpc_port: Option<u16>,
     roles: Vec<Role>,
 }
 
@@ -93,14 +88,15 @@ impl Cluster {
         std::fs::write(root.join("chain.py"), CHAIN).unwrap();
         let database_url = database_url
             .unwrap_or_else(|| format!("sqlite://{}", dir.path().join("schedr.db").display()));
-        let (grpc, http) = (free_port(), free_port());
+        // Port 0: each role binds a free port itself and logs it (picking free ports for it
+        // races with the tests running in parallel).
         let config = format!(
             "[dags]\npoll_interval = \"200ms\"\nsettle_time = \"0s\"\n\n\
              [interpreters]\npython = \"{python}\"\n\n\
-             [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\
-             master_url = \"http://127.0.0.1:{grpc}\"\n\n\
-             [master]\nbind = \"127.0.0.1\"\ngrpc_port = {grpc}\ntick_interval = \"{tick}\"\n\n\
-             [webserver]\nbind = \"127.0.0.1\"\nport = {http}\n",
+             [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\n\
+             [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
+             heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\n\n\
+             [webserver]\nbind = \"127.0.0.1\"\nport = 0\n",
             python = python(),
             data = dir.path().join("data").display(),
         );
@@ -108,7 +104,8 @@ impl Cluster {
         Self {
             dir,
             database_url,
-            api: format!("http://127.0.0.1:{http}"),
+            api: String::new(),
+            grpc_port: None,
             roles: Vec::new(),
         }
     }
@@ -134,11 +131,26 @@ impl Cluster {
             .env("HOME", self.dir.path())
             .env("TZ", "UTC")
             .env("SCHEDR_CONFIG__DATABASE__URL", &self.database_url)
-            .env("SCHEDR_DAG_PATH", self.root())
+            .env("SCHEDR_DAG_PATH", self.root());
+        if let Some(port) = self.grpc_port {
+            command
+                .env("SCHEDR_CONFIG__MASTER__GRPC_PORT", port.to_string())
+                .env(
+                    "SCHEDR_CONFIG__WORKER__MASTER_URL",
+                    format!("http://127.0.0.1:{port}"),
+                );
+        }
+        command
             .arg("--config")
             .arg(self.dir.path().join("config.toml"))
             .args(args);
         command
+    }
+
+    /// Kills a role at once (SIGKILL), as a crash or a lost pod would.
+    fn kill(&mut self, name: &'static str) {
+        let index = self.roles.iter().position(|r| r.name == name).unwrap();
+        drop(self.roles.remove(index));
     }
 
     fn start(&mut self, name: &'static str) {
@@ -150,7 +162,34 @@ impl Cluster {
             .stderr(Stdio::from(file))
             .spawn()
             .unwrap();
-        self.roles.push(Role { name, child, log });
+        self.roles.push(Role {
+            name,
+            child,
+            log: log.clone(),
+        });
+        let bound = |marker: &str| {
+            let mut found = None;
+            self.wait(&format!("`{marker}` in the {name} log"), || {
+                let text = std::fs::read_to_string(&log).unwrap_or_default();
+                found = text.split(marker).nth(1).map(|rest| {
+                    rest.split(|c: char| c == '"' || c.is_whitespace())
+                        .next()
+                        .unwrap()
+                        .to_owned()
+                });
+                found.is_some()
+            });
+            found.unwrap()
+        };
+        match name {
+            "master" => {
+                let address = bound("schedr master: gRPC on ");
+                let port = address.rsplit(':').next().unwrap().parse().unwrap();
+                self.grpc_port = Some(port);
+            }
+            "webserver" => self.api = format!("http://{}", bound("API on http://")),
+            _ => {}
+        }
     }
 
     fn logs(&self) -> String {
@@ -322,4 +361,187 @@ fn a_role_stops_on_sigterm() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// A task that runs long on its first try (leaving a marker) and returns at once after.
+fn slow_first_try(marker: &std::path::Path) -> String {
+    format!(
+        r#"
+import os, time
+from datetime import timedelta
+from schedr import Dag, task
+
+@task(retries=1, retry_delay=timedelta(0))
+def work() -> str:
+    marker = {marker:?}
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        time.sleep(15)
+    return "done"
+
+with Dag("slow"):
+    work()
+"#,
+        marker = marker.display().to_string()
+    )
+}
+
+impl Cluster {
+    fn api_get(&self, path: &str) -> Option<Value> {
+        let output = Command::new("curl")
+            .args(["-sf", &format!("{}{path}", self.api)])
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| serde_json::from_slice(&output.stdout).unwrap())
+    }
+
+    /// Unpauses `dag`, triggers it, and returns the run's ID.
+    fn trigger(&self, dag: &str) -> String {
+        self.wait(&format!("DAG `{dag}`"), || {
+            self.cli_json(&["dags", "list"]).is_some_and(|dags| {
+                dags["dags"]
+                    .as_array()
+                    .is_some_and(|d| d.iter().any(|x| x["dag_id"] == dag))
+            })
+        });
+        let (code, _, err) = self.cli(&["dags", "unpause", dag]);
+        assert_eq!(code, 0, "{err}");
+        let command = self.cli_json(&["runs", "trigger", dag]).unwrap();
+        command["result"]["run_id"].as_str().unwrap().to_owned()
+    }
+
+    fn attempts(&self, run_id: &str, task: &str) -> Vec<Value> {
+        self.api_get(&format!("/api/v1/runs/{run_id}/tasks/{task}/attempts"))
+            .map(|a| a["attempts"].as_array().unwrap().clone())
+            .unwrap_or_default()
+    }
+
+    fn worker_state(&self, worker: &str) -> Option<String> {
+        self.cli_json(&["workers", "list"]).and_then(|list| {
+            list["workers"].as_array().unwrap().iter().find_map(|w| {
+                (w["worker_id"] == worker).then(|| w["state"].as_str().unwrap().to_owned())
+            })
+        })
+    }
+}
+
+fn slow_cluster() -> Cluster {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.dir.path().join("marker");
+    std::fs::write(cluster.root().join("slow.py"), slow_first_try(&marker)).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster
+}
+
+#[test]
+fn a_restarted_worker_loses_its_running_attempt_which_is_retried() {
+    let mut cluster = slow_cluster();
+    let run_id = cluster.trigger("slow");
+    cluster.wait("the first attempt to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    cluster.kill("worker");
+    cluster.start("worker");
+    cluster.wait("the retry to succeed", || {
+        cluster
+            .cli_json(&["runs", "list", "slow"])
+            .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+    });
+    let statuses: Vec<Value> = cluster
+        .attempts(&run_id, "work")
+        .iter()
+        .map(|a| a["status"].clone())
+        .collect();
+    assert_eq!(statuses, ["lost", "success"], "{}", cluster.logs());
+    assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
+}
+
+#[test]
+fn a_worker_that_never_comes_back_is_lost_and_stays_listed() {
+    let mut cluster = slow_cluster();
+    let run_id = cluster.trigger("slow");
+    cluster.wait("the first attempt to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    cluster.kill("worker");
+    cluster.wait("the worker to be lost", || {
+        cluster.worker_state("w1").as_deref() == Some("lost")
+    });
+    cluster.wait("its attempt to end lost", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| a["status"] == "lost")
+    });
+    let (code, out, _) = cluster.cli(&["workers", "list"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("w1") && out.contains("lost"), "{out}");
+}
+
+#[test]
+fn a_running_task_survives_a_master_restart() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(
+        cluster.root().join("pause.py"),
+        "import time\nfrom schedr import Dag, task\n\n@task\ndef pause() -> int:\n    time.sleep(4)\n    return 1\n\nwith Dag(\"pause\"):\n    pause()\n",
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    let run_id = cluster.trigger("pause");
+    cluster.wait("the attempt to start", || {
+        cluster
+            .attempts(&run_id, "pause")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    cluster.kill("master");
+    cluster.start("master");
+    cluster.wait("the run to succeed after the restart", || {
+        cluster
+            .cli_json(&["runs", "list", "pause"])
+            .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+    });
+    let statuses: Vec<Value> = cluster
+        .attempts(&run_id, "pause")
+        .iter()
+        .map(|a| a["status"].clone())
+        .collect();
+    assert_eq!(
+        statuses,
+        ["success"],
+        "one attempt, continued: {}",
+        cluster.logs()
+    );
+}
+
+#[test]
+fn a_second_worker_with_the_same_id_is_refused() {
+    let mut cluster = Cluster::new(None, "100ms");
+    cluster.up();
+    cluster.start("worker");
+    cluster.wait("the second worker to be refused", || {
+        std::fs::read_to_string(&cluster.roles.last().unwrap().log)
+            .unwrap_or_default()
+            .contains("already has a live stream")
+    });
+    assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
 }

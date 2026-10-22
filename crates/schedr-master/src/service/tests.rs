@@ -245,3 +245,13 @@ async fn the_loop_ticks_until_stopped() {
         schedr_model::commands::CommandStatus::Rejected
     );
 }
+
+#[tokio::test]
+async fn restoring_counts_from_the_hubs_clock() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let hub = Hub::with_clock(MasterCore::new(db, Settings::default()), || {
+        "2026-10-22T08:00:00Z".parse().unwrap()
+    });
+    assert_eq!(hub.restore().await.unwrap(), 0);
+}

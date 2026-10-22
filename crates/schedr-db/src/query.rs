@@ -81,6 +81,14 @@ pub(crate) fn parse_time(what: &'static str, text: &str) -> Result<Timestamp, Db
     })
 }
 
+/// Reads an optional stored time (see [`parse_time`]).
+pub(crate) fn optional_time(
+    what: &'static str,
+    text: Option<String>,
+) -> Result<Option<Timestamp>, DbError> {
+    text.map(|t| parse_time(what, &t)).transpose()
+}
+
 /// Stored JSON of model types.
 pub(crate) fn to_json(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).expect("model types always serialize")

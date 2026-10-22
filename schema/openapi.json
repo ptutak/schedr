@@ -442,6 +442,102 @@
           }
         },
         "type": "object"
+      },
+      "WorkerList": {
+        "description": "The workers.",
+        "properties": {
+          "workers": {
+            "description": "Every worker the master has seen, in ID order.",
+            "items": {
+              "$ref": "#/components/schemas/WorkerView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "workers"
+        ],
+        "type": "object"
+      },
+      "WorkerView": {
+        "description": "A worker in the registry (kept after it is gone, so its logs can be found).",
+        "properties": {
+          "incarnation_id": {
+            "description": "The incarnation of its agent process it last registered with.",
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "description": "The last sign of life the master recorded (at most once per heartbeat interval).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "log_endpoint": {
+            "description": "Where its log endpoint listens (where a gone worker's logs were served).",
+            "type": "string"
+          },
+          "offline_at": {
+            "description": "When it went offline or was lost.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol_version": {
+            "description": "Its protocol version (`major.minor`).",
+            "type": "string"
+          },
+          "queues": {
+            "description": "The queues it serves.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "registered_at": {
+            "description": "When it last registered.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "running": {
+            "description": "Its attempts still running.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schedr_version": {
+            "description": "Its schedr version.",
+            "type": "string"
+          },
+          "slots": {
+            "description": "Its task slots.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "description": "`active`, `draining`, `disconnected`, `offline` or `lost`.",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "Its ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "worker_id",
+          "state",
+          "incarnation_id",
+          "queues",
+          "slots",
+          "running",
+          "schedr_version",
+          "protocol_version",
+          "log_endpoint",
+          "registered_at",
+          "last_heartbeat_at"
+        ],
+        "type": "object"
       }
     }
   },
@@ -889,6 +985,26 @@
           "runs"
         ]
       }
+    },
+    "/api/v1/workers": {
+      "get": {
+        "operationId": "list_workers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every worker the master has seen, gone ones included.",
+        "tags": [
+          "workers"
+        ]
+      }
     }
   },
   "tags": [
@@ -903,6 +1019,10 @@
     {
       "description": "Actions and the master's decisions",
       "name": "commands"
+    },
+    {
+      "description": "The worker registry",
+      "name": "workers"
     }
   ]
 }

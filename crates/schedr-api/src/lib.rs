@@ -36,11 +36,13 @@ pub use state::ApiState;
         routes::cancel_run,
         routes::list_attempts,
         routes::get_command,
+        routes::list_workers,
     ),
     tags(
         (name = "dags", description = "DAGs and pausing"),
         (name = "runs", description = "Runs, their tasks and attempts"),
         (name = "commands", description = "Actions and the master's decisions"),
+        (name = "workers", description = "The worker registry"),
     )
 )]
 pub struct ApiDoc;
@@ -73,6 +75,7 @@ pub fn router(state: ApiState) -> Router {
             get(routes::list_attempts),
         )
         .route("/api/v1/commands/{command_id}", get(routes::get_command))
+        .route("/api/v1/workers", get(routes::list_workers))
         .route(
             "/api/v1/openapi.json",
             get(|| async { Json(openapi_json()) }),

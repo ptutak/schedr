@@ -588,3 +588,13 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
         ["register", "rejected: invalid", "rejected: missing"]
     );
 }
+
+#[test]
+fn backoffs_have_jitter_between_half_and_all() {
+    let backoff = Duration::from_secs(10);
+    assert_eq!(jittered(backoff, 0), Duration::from_secs(5));
+    assert_eq!(jittered(backoff, u32::MAX), backoff);
+    let middle = jittered(backoff, u32::MAX / 2);
+    assert!(middle > Duration::from_millis(7_400) && middle < Duration::from_millis(7_600));
+    assert!(FIRST_BACKOFF < MAX_BACKOFF);
+}
