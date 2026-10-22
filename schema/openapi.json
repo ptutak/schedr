@@ -29,6 +29,15 @@
             "description": "Its ID.",
             "type": "string"
           },
+          "duration_ms": {
+            "description": "How long it ran, measured by the worker (the timestamps come from the master's wall\nclock, so don't subtract them); none while it runs or for attempts ended by the master.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ended_at": {
             "description": "When it ended.",
             "format": "date-time",

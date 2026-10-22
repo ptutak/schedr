@@ -117,19 +117,18 @@ async fn a_bad_for_and_an_undefined_interpreter_are_bad_arguments() {
 }
 
 #[test]
-fn durations_come_from_the_last_attempt() {
+fn durations_are_the_last_attempts_as_the_worker_measured_it() {
     let task = json!({"attempts": [
-        {"started_at": "2026-10-21T08:00:00Z", "ended_at": "2026-10-21T08:00:05Z"},
-        {"started_at": "2026-10-21T08:01:00Z", "ended_at": "2026-10-21T08:01:01.5Z"}
+        {"duration_ms": 5_000},
+        {"duration_ms": 1_500}
     ]});
     assert_eq!(duration(&task), "1.5s");
-    let assigned_only = json!({"attempts": [
-        {"started_at": null, "assigned_at": "2026-10-21T08:00:00Z", "ended_at": "2026-10-21T08:00:00.2Z"}
-    ]});
-    assert_eq!(duration(&assigned_only), "0.2s");
+    // The timestamps are the master's wall clock: one that stepped back doesn't matter.
+    let stepped_back = json!({"attempts": [{
+        "started_at": "2026-10-21T08:00:01Z", "ended_at": "2026-10-21T08:00:00.2Z",
+        "duration_ms": 300
+    }]});
+    assert_eq!(duration(&stepped_back), "0.3s");
     assert_eq!(duration(&json!({"attempts": []})), "-");
-    assert_eq!(
-        duration(&json!({"attempts": [{"started_at": "2026-10-21T08:00:00Z", "ended_at": null}]})),
-        "-"
-    );
+    assert_eq!(duration(&json!({"attempts": [{"duration_ms": null}]})), "-");
 }

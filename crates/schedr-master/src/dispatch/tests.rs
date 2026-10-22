@@ -214,6 +214,31 @@ async fn a_run_goes_through_assignment_start_and_finish() {
 }
 
 #[tokio::test]
+async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let later = ts(NOW) + jiff::SignedDuration::from_secs(5);
+    dispatcher
+        .started("w1", &started(&attempt), later)
+        .await
+        .unwrap();
+    let done = pb::Finished {
+        duration_ms: 300,
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!([1]))
+    };
+    // The master's wall clock stepped back 4 s between `Started` and `Finished`.
+    let stepped_back = later - jiff::SignedDuration::from_secs(4);
+    dispatcher
+        .finished("w1", &done, stepped_back)
+        .await
+        .unwrap();
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(attempts[0].duration_ms, Some(300));
+    assert!(attempts[0].ended_at < attempts[0].started_at);
+}
+
+#[tokio::test]
 async fn without_a_free_slot_nothing_is_assigned() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
     dispatcher

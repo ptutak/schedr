@@ -120,6 +120,7 @@ CREATE TABLE attempts (
     exit_code         INTEGER,
     signal            INTEGER,
     peak_memory_bytes INTEGER,
+    duration_ms       INTEGER,
     error_kind        TEXT,
     error_summary     TEXT,
     assigned_at       TEXT NOT NULL,

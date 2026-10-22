@@ -334,6 +334,7 @@ impl Dispatcher {
                 exit_code: finished.exit_code,
                 signal: finished.signal,
                 peak_memory_bytes: Some(finished.peak_memory_bytes),
+                duration_ms: Some(finished.duration_ms),
                 error_kind: non_empty(&finished.error_kind),
                 error_summary: (!finished.error_summary_json.is_empty())
                     .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned()),

@@ -73,6 +73,9 @@ pub struct AttemptEnd {
     pub signal: Option<i32>,
     /// The peak memory of its process tree.
     pub peak_memory_bytes: Option<u64>,
+    /// How long it ran, measured by the worker with a monotonic clock (the start and end
+    /// timestamps come from the master's wall clock, which can step).
+    pub duration_ms: Option<u64>,
     /// The error kind schedr recognised.
     pub error_kind: Option<String>,
     /// The structured error summary, as JSON text.
@@ -90,6 +93,7 @@ impl AttemptEnd {
             exit_code: None,
             signal: None,
             peak_memory_bytes: None,
+            duration_ms: None,
             error_kind: None,
             error_summary: None,
             code_hash: None,
@@ -342,7 +346,7 @@ impl Database {
     ) -> Result<bool, DbError> {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
-            ended_at = $8{ts} WHERE id = $9{uuid} AND status IS NULL";
+            ended_at = $8{ts}, duration_ms = $9 WHERE id = $10{uuid} AND status IS NULL";
         let updated = on_pool!(self, |pool, backend| {
             sqlx::query(sql(backend, END))
                 .bind(end.status.to_string())
@@ -356,6 +360,10 @@ impl Database {
                 .bind(end.error_summary.as_deref())
                 .bind(end.code_hash.as_deref())
                 .bind(db_time(now))
+                .bind(
+                    end.duration_ms
+                        .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX)),
+                )
                 .bind(attempt_id)
                 .execute(pool)
                 .await?

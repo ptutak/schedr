@@ -120,6 +120,7 @@ CREATE TABLE attempts (
     exit_code         INTEGER,
     signal            INTEGER,
     peak_memory_bytes BIGINT,
+    duration_ms       BIGINT,
     error_kind        TEXT,
     error_summary     JSONB,
     assigned_at       TIMESTAMPTZ NOT NULL,

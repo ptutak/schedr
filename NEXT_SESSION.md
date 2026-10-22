@@ -38,7 +38,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 2. **M2, step 2.1** (PLAN.md, M2): `schedr master`, `schedr worker`, `schedr webserver` as
    separate processes on Postgres, commands by `LISTEN/NOTIFY` with polling as the
    fallback. Start by reading how `standalone.rs` wires the roles together today.
-3. Open bugs: B1 (a negative duration in `dags test`; didn't reproduce last time).
+3. Open bugs: none (see `BUGS.md`).
 
 ## How to work with the user
 

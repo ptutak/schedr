@@ -105,8 +105,10 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         assigned_at: ts("2026-10-21T08:00:00Z"),
         started_at: None,
         ended_at: None,
+        duration_ms: Some(1_500),
     });
     assert_eq!(attempt.status.as_deref(), Some("timed_out"));
+    assert_eq!(attempt.duration_ms, Some(1_500));
     assert_eq!(attempt.error_summary, Some(json!({"exception": "Timeout"})));
 
     let command = CommandView::from(&CommandRecord {

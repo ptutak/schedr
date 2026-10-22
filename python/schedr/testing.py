@@ -116,6 +116,9 @@ class Attempt:
         error: The error summary of a failure (``exception``, ``message``, ``traceback``).
         started_at: When the worker started it.
         ended_at: When it ended.
+        duration: How long it ran, measured by the worker (``None`` while it runs, or for an
+            attempt the master ended); not ``ended_at - started_at``, which come from the
+            master's wall clock and can step.
     """
 
     attempt_id: str
@@ -126,13 +129,7 @@ class Attempt:
     error: Mapping[str, str] | None
     started_at: datetime | None
     ended_at: datetime | None
-
-    @property
-    def duration(self) -> timedelta | None:
-        """How long it ran, if it started and ended."""
-        if self.started_at is None or self.ended_at is None:
-            return None
-        return self.ended_at - self.started_at
+    duration: timedelta | None
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> Attempt:
@@ -153,6 +150,9 @@ class Attempt:
             error=data.get("error_summary"),
             started_at=_time(data.get("started_at")),
             ended_at=_time(data.get("ended_at")),
+            duration=None
+            if data.get("duration_ms") is None
+            else timedelta(milliseconds=data["duration_ms"]),
         )
 
 

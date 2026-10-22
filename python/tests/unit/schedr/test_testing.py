@@ -91,6 +91,7 @@ ATTEMPT = {
     "assigned_at": "2026-10-15T03:00:00Z",
     "started_at": "2026-10-15T03:00:01Z",
     "ended_at": "2026-10-15T03:00:03.5Z",
+    "duration_ms": 2_500,
 }
 
 
@@ -102,8 +103,13 @@ def test_attempts_are_read_with_times_and_duration() -> None:
     assert attempt.duration == timedelta(seconds=2.5)
 
 
+def test_the_duration_is_the_workers_not_the_timestamps() -> None:
+    stepped_back = ATTEMPT | {"ended_at": "2026-10-15T03:00:00Z", "duration_ms": 300}
+    assert Attempt.from_json(stepped_back).duration == timedelta(milliseconds=300)
+
+
 def test_an_attempt_that_didnt_end_has_no_duration() -> None:
-    attempt = Attempt.from_json(ATTEMPT | {"status": None, "ended_at": None})
+    attempt = Attempt.from_json(ATTEMPT | {"status": None, "ended_at": None, "duration_ms": None})
     assert attempt.ended_at is None
     assert attempt.duration is None
 

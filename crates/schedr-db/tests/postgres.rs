@@ -363,10 +363,13 @@ async fn attempts_and_outputs_move_a_task_forward() {
     let end = AttemptEnd {
         exit_code: Some(0),
         peak_memory_bytes: Some(5_000_000_000),
+        duration_ms: Some(3_000_000_000),
         code_hash: Some("sha256:h1".to_owned()),
         ..AttemptEnd::by_master(AttemptStatus::Success)
     };
     assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(attempts[0].duration_ms, Some(3_000_000_000));
     db.store_output(&ready[0].instance_id, "SUCCESS", &json!({"rows": 3}))
         .await
         .unwrap();

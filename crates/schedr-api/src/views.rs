@@ -197,6 +197,9 @@ pub struct AttemptView {
     pub started_at: Option<Timestamp>,
     /// When it ended.
     pub ended_at: Option<Timestamp>,
+    /// How long it ran, measured by the worker (the timestamps come from the master's wall
+    /// clock, so don't subtract them); none while it runs or for attempts ended by the master.
+    pub duration_ms: Option<u64>,
 }
 
 impl From<&AttemptRecord> for AttemptView {
@@ -215,6 +218,7 @@ impl From<&AttemptRecord> for AttemptView {
             assigned_at: attempt.assigned_at,
             started_at: attempt.started_at,
             ended_at: attempt.ended_at,
+            duration_ms: attempt.duration_ms,
         }
     }
 }

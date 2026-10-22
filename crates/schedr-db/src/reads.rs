@@ -80,6 +80,8 @@ pub struct AttemptRecord {
     pub started_at: Option<Timestamp>,
     /// When it ended.
     pub ended_at: Option<Timestamp>,
+    /// How long it ran, measured by the worker (see [`crate::attempts::AttemptEnd`]).
+    pub duration_ms: Option<u64>,
 }
 
 type RunRow = (
@@ -108,6 +110,7 @@ type AttemptRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<i64>,
 );
 
 const RUN_COLUMNS_ONE: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
@@ -200,7 +203,7 @@ impl Database {
     ) -> Result<Vec<AttemptRecord>, DbError> {
         const ATTEMPTS: &str = "SELECT a.id{text}, a.try_number, a.worker_id, a.status, \
             a.exit_code, a.error_kind, a.error_summary{text}, {ts<}a.assigned_at{>ts}, \
-            {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts} FROM attempts a \
+            {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts}, a.duration_ms FROM attempts a \
             JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 ORDER BY a.try_number";
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
@@ -257,6 +260,7 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         assigned,
         started,
         ended,
+        duration_ms,
     ) = row;
     Ok(AttemptRecord {
         id,
@@ -271,5 +275,6 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         assigned_at: parse_time("attempts.assigned_at", &assigned)?,
         started_at: optional_time("attempts.started_at", started)?,
         ended_at: optional_time("attempts.ended_at", ended)?,
+        duration_ms: duration_ms.and_then(|ms| u64::try_from(ms).ok()),
     })
 }

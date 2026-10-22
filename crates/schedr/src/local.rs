@@ -597,22 +597,17 @@ fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {
 }
 
 /// How long the task's last attempt ran, e.g. `1.2s`; `-` if it never started.
+/// The last attempt's duration as the worker measured it (the start and end timestamps come
+/// from the master's wall clock, which can step, so they aren't subtracted).
 fn duration(task: &Value) -> String {
-    let Some(last) = task["attempts"].as_array().and_then(|a| a.last()) else {
-        return "-".to_owned();
-    };
-    let time = |field: &str| {
-        last[field]
-            .as_str()
-            .and_then(|t| t.parse::<jiff::Timestamp>().ok())
-    };
-    match (
-        time("started_at").or_else(|| time("assigned_at")),
-        time("ended_at"),
-    ) {
-        (Some(start), Some(end)) => format!("{:.1}s", end.duration_since(start).as_secs_f64()),
-        _ => "-".to_owned(),
-    }
+    task["attempts"]
+        .as_array()
+        .and_then(|a| a.last())
+        .and_then(|last| last["duration_ms"].as_u64())
+        .map_or_else(
+            || "-".to_owned(),
+            |ms| format!("{:.1}s", Duration::from_millis(ms).as_secs_f64()),
+        )
 }
 
 const fn not_yet(command: &'static str, milestone: &'static str) -> AppError {

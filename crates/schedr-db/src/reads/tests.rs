@@ -139,6 +139,7 @@ async fn a_runs_instances_and_attempts_are_shown() {
         exit_code: Some(1),
         error_kind: Some("import_failed".to_owned()),
         error_summary: Some("{}".to_owned()),
+        duration_ms: Some(1_234),
         ..AttemptEnd::by_master(AttemptStatus::Failed)
     };
     db.end_attempt(&attempt_id, &end, now).await.unwrap();
@@ -165,6 +166,7 @@ async fn a_runs_instances_and_attempts_are_shown() {
         (1, Some("w1"), Some(AttemptStatus::Failed))
     );
     assert_eq!(attempt.exit_code, Some(1));
+    assert_eq!(attempt.duration_ms, Some(1_234));
     assert_eq!(attempt.error_kind.as_deref(), Some("import_failed"));
     assert_eq!(attempt.assigned_at, now);
     assert_eq!(attempt.ended_at, Some(now));

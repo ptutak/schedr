@@ -739,6 +739,12 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   on SIGTERM after its timeout still `timed_out`); otherwise an exit code of the task's
   outcomes (default `0`) is `success`, any other exit code or a signal is `failed`. A process
   killed by a signal reports exit code `128 + signal` in its `ProcessResult`, as shells do.
+- **Durations are the worker's:** the agent times each attempt with a monotonic clock and
+  sends it in `Finished`; it is stored with the attempt (`duration_ms`) and is what the API,
+  `dags test` and `run_dag` show. The attempt's `started_at` / `ended_at` are the master's
+  wall clock when it handled `Started` / `Finished` ("when", not "how long"): never
+  subtracted, since a wall clock can step (B1: a negative duration after a WSL2 clock
+  resync).
 - **`Finished` contains:** the attempt status, the exit code or signal, the **(output, outcome)
   pair** on success (see Task results and outcomes; for `command` / `script` tasks the output is a
   `ProcessResult` with stdout and stderr), the duration, the peak memory, and an **error kind** for
