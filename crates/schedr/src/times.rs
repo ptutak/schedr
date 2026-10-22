@@ -74,6 +74,27 @@ pub fn show(at: Timestamp, local: &TimeZone) -> String {
     format!("{text} · {date}{} {}", clock(&here), here.strftime("%Z"))
 }
 
+/// A moment in short form, where space matters: UTC, then the local zone's offset from UTC
+/// at that moment, e.g. `2026-01-01 00:00Z (local:+1h)`, `2026-10-15 01:00Z
+/// (local:-4h)`, `2026-10-15 03:00Z (local:+5h30m)`; no offset part when it is zero.
+#[must_use]
+pub fn show_short(at: Timestamp, local: &TimeZone) -> String {
+    let utc = at.to_zoned(TimeZone::UTC);
+    let text = format!("{} {}Z", utc.strftime("%Y-%m-%d"), clock(&utc));
+    let seconds = local.to_offset(at).seconds();
+    if seconds == 0 {
+        return text;
+    }
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let (hours, minutes) = (seconds.abs() / 3600, seconds.abs() % 3600 / 60);
+    let offset = if minutes == 0 {
+        format!("{hours}h")
+    } else {
+        format!("{hours}h{minutes:02}m")
+    };
+    format!("{text} (local:{sign}{offset})")
+}
+
 /// `HH:MM`, with seconds when they aren't zero.
 fn clock(zoned: &Zoned) -> String {
     if zoned.second() == 0 && zoned.subsec_nanosecond() == 0 {

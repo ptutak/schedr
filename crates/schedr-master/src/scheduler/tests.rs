@@ -18,8 +18,8 @@ fn sync() -> DagId {
 fn dag(changes: &Json) -> Dag {
     let mut dag = json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
-        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false},
-        "start": "2026-10-01T00:00:00Z", "end": null, "initial_since": null,
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false, "start": "2026-10-01T00:00:00Z"},
+        "initial_since": null,
         "max_active_runs": 1, "tasks": [], "edges": []
     });
     for (key, value) in changes.as_object().unwrap() {
@@ -115,8 +115,11 @@ async fn a_fire_time_at_the_limit_is_missed_and_the_latest_runs_when_a_place_fre
 
 #[tokio::test]
 async fn with_catchup_missed_fire_times_run_in_order() {
-    let (scheduler, db) =
-        scheduler_with(dag(&json!({"trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true}, "max_active_runs": 2}))).await;
+    let (scheduler, db) = scheduler_with(dag(&json!({"trigger": {
+            "kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true,
+            "start": "2026-10-01T00:00:00Z"
+        }, "max_active_runs": 2})))
+    .await;
     db.set_paused(&sync(), false).await.unwrap();
     let now = ts("2026-10-04T08:00:00Z");
     assert_eq!(

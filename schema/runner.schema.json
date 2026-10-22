@@ -178,14 +178,6 @@
           },
           "type": "array"
         },
-        "end": {
-          "description": "The last scheduled run is the last fire time at or before it.",
-          "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "id": {
           "$ref": "#/$defs/DagId",
           "description": "The DAG's ID."
@@ -214,14 +206,6 @@
         "produced_by": {
           "$ref": "#/$defs/SchedrVersion",
           "description": "The schedr version whose runner produced this JSON."
-        },
-        "start": {
-          "description": "The first scheduled run is the first fire time at or after it.",
-          "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "tags": {
           "description": "Tags shown in the UI and used for filtering.",
@@ -987,6 +971,15 @@
               "description": "Whether missed fire times get runs in order (`true`) or only the most recent\n(`false`).",
               "type": "boolean"
             },
+            "end": {
+              "default": null,
+              "description": "The last run it creates is for the last fire time at or before it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "expression": {
               "description": "The cron expression.",
               "type": "string"
@@ -994,6 +987,15 @@
             "kind": {
               "const": "cron",
               "type": "string"
+            },
+            "start": {
+              "default": null,
+              "description": "The first run it creates is for the first fire time at or after it; without it,\nthe moment the master first stored the DAG.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "timezone": {
               "description": "An IANA time zone name, e.g. `Europe/Warsaw`; `UTC` by default in the Python API.",
@@ -1016,8 +1018,17 @@
               "description": "Whether missed fire times get runs in order (`true`) or only the most recent\n(`false`).",
               "type": "boolean"
             },
+            "end": {
+              "default": null,
+              "description": "The last run it creates is for the last fire time at or before it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "interval_ms": {
-              "description": "The interval in milliseconds.",
+              "description": "The interval in milliseconds; fire times are whole intervals from `start`, or from\nthe Unix epoch without one.",
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
@@ -1025,6 +1036,15 @@
             "kind": {
               "const": "every",
               "type": "string"
+            },
+            "start": {
+              "default": null,
+              "description": "The first run it creates is for the first fire time at or after it; without it,\nthe moment the master first stored the DAG.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

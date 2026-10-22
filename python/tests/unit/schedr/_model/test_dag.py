@@ -27,8 +27,9 @@ def sync_dag(**overrides: object) -> Dag:
         "location": LOCATION,
         "tasks": [empty("a"), empty("b")],
         "edges": [Edge("a", "b", EdgeKind.ORDER)],
-        "trigger": CronTrigger("0 3 * * *", "Europe/Warsaw"),
-        "start": datetime(2026, 1, 1, tzinfo=UTC),
+        "trigger": CronTrigger(
+            "0 3 * * *", "Europe/Warsaw", start=datetime(2026, 1, 1, tzinfo=UTC)
+        ),
         "produced_by": SchedrVersion(0, 1),
     }
     fields.update(overrides)
@@ -47,9 +48,9 @@ def test_a_dag_serializes_to_the_schema(validate: Validate) -> None:
             "expression": "0 3 * * *",
             "timezone": "Europe/Warsaw",
             "catchup": False,
+            "start": "2026-01-01T00:00:00Z",
+            "end": None,
         },
-        "start": "2026-01-01T00:00:00Z",
-        "end": None,
         "initial_since": None,
         "max_active_runs": 1,
         "tasks": [t.to_json() for t in dag.tasks],
@@ -73,9 +74,8 @@ def test_a_full_dag_with_commands_validates(validate: Validate) -> None:
     dag = sync_dag(
         tasks=[empty("a"), notify],
         edges=[Edge("a", "notify", EdgeKind.DATA)],
-        end=datetime(2026, 12, 31, tzinfo=UTC),
         initial_since=datetime(2020, 1, 1, tzinfo=UTC),
-        trigger=CronTrigger("@daily", catchup=True),
+        trigger=CronTrigger("@daily", catchup=True, end=datetime(2026, 12, 31, tzinfo=UTC)),
     )
     validate("Dag", dag.to_json())
 
@@ -106,7 +106,7 @@ def test_rejects_a_non_positive_max_active_runs(limit: int) -> None:
 
 
 def test_rejects_naive_timestamps_when_serializing() -> None:
-    dag = sync_dag(start=datetime(2026, 1, 1))
+    dag = sync_dag(initial_since=datetime(2026, 1, 1))
     with pytest.raises(ValueError, match="naive datetime"):
         dag.to_json()
 

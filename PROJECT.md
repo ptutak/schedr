@@ -150,9 +150,15 @@ One Rust binary, four roles:
     and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
     see Testing DAGs).
   - **Human output** is aligned columns (`DAG PAUSED TRIGGER DEFINED IN`, `RUN KIND STATE
-    FOR BY`; a DAG in conflict shows `CONFLICT: N places`), times in UTC and the machine's
-    zone (`TZ`, else the system's); **`--json`** prints the API's JSON as it is (UTC only),
-    for scripts. **`--for`** takes an RFC 3339 / ISO 8601 date-time with an offset, one
+    FOR BY`; a DAG in conflict shows `CONFLICT: N places`; `TRIGGER` shows the trigger as
+    written, then `catchup` and its window as a range, either end open, e.g. `0 3 * * *
+    (Europe/Warsaw), 2025-12-31 23:00Z (local:+1h)..2026-06-30 22:00Z (local:+2h)` or
+    `@daily, ..2026-12-31 00:00Z`: in that column times are short, UTC with the local zone's
+    offset at that moment, marked `local`, instead of the local time, so the column stays
+    readable; not chosen for the range: `-` (clashes with dates, negative offsets and the
+    `-` placeholder), `→`, `[a, b]`, ISO 8601's `/`), times in UTC and the machine's zone
+    (`TZ`, else the system's); **`--json`** prints the API's JSON as it is (UTC only), for
+    scripts. **`--for`** takes an RFC 3339 / ISO 8601 date-time with an offset, one
     without (UTC, with the warning on stderr), or a date (midnight UTC).
   - The CLI only **sends** credentials, it never validates them: a bearer token (`--token` /
     `SCHEDR_TOKEN`, e.g. a Keycloak token required by an Istio ingress) or basic credentials
@@ -1819,10 +1825,10 @@ User code can never change scheduling behaviour (skips, branching, retries) from
 - **`@task` functions declare each parameter**: `*args` / `**kwargs` are a parse error
   (arguments are stored by name). Async functions are a parse error until M4 (see Async
   task functions); sensors and triggers are always async (see Sensors and triggers).
-- **`start`, `end`, `initial_since` without a time zone** (`start="2026-01-01"`, a `date`, a
-  naive `datetime`) are read in the **schedule's time zone**, like the cron expression (UTC for
-  `Every` and no schedule). An explicit offset wins. (Unlike CLI input, where no offset means
-  UTC: this is DAG code, written next to the schedule.)
+- **`start`, `end` (on the trigger) and `initial_since` (on `Dag`) without a time zone**
+  (`start="2026-01-01"`, a `date`, a naive `datetime`) are read in the **trigger's time zone**,
+  like the cron expression (UTC for `Every` and no trigger). An explicit offset wins. (Unlike
+  CLI input, where no offset means UTC: this is DAG code, written next to the trigger.)
 - **`trigger=`: what starts runs.** One `Dag` parameter, a typed object, for everything that
   starts runs besides people and other DAGs: a **time trigger**, `Cron("0 3 * * *")`,
   `Every(timedelta(hours=1))` or `Once("2026-12-24T23:00")` (a single fire time), plus preset
@@ -1833,26 +1839,40 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     operators): custom triggers are `@trigger` functions.
   - **`catchup` belongs to the time triggers** that have fire times to miss:
     `Cron(..., catchup=True)`, `Every(..., catchup=True)`. `Once`, event triggers and `None`
-    have none, so a `catchup` that would mean nothing can't be written. `start`, `end` and
-    `initial_since` stay on `Dag`: they apply to event triggers and manual-only DAGs too.
+    have none, so a `catchup` that would mean nothing can't be written.
+  - **`start` and `end` belong to the trigger too:** `Cron(..., start=..., end=...)`,
+    `Every(..., start=..., end=...)`, and for event triggers `.override(start=..., end=...)`
+    (M4). They only limit the runs the trigger creates (manual runs and backfills ignore
+    them), naive values are read in the trigger's time zone, and `Every` counts its fire
+    times from `start`, so they are part of the trigger. `None` and `Once` have no window,
+    so a `start` / `end` that would mean nothing can't be written. Presets take them with
+    `.override(...)`, which every trigger has: `trigger=DAILY.override(start="2026-01-01")`.
+    The master checks `start` not after `end` as before; the Python API checks it at parse
+    time too.
+  - **`initial_since` stays on `Dag`:** it sets the window of the DAG's first run, which
+    matters for manual-only DAGs and `Once` too, so it is about runs, not the trigger.
+  - Not chosen for `start` / `end`: keeping them on `Dag` as "the DAG's active period"
+    (familiar from Airflow, but allows combinations that mean nothing, and ties `Dag`'s
+    arguments to the trigger's time zone).
   - **Custom triggers are event triggers only.** The master never runs Python, and fire
     times, `catchup`, backfill and `since` come from fire times it computes, so a calendar
     written in Python ("business days except holidays") can't be a time trigger. It can be
     an event trigger yielding events at those times (no catchup, no backfill); a calendar the
     master understands would be a built-in, data-only time trigger (e.g.
     `Cron(..., exclude=[...])`), possibly later.
-  - **Options of an event trigger** (`queue=`, `restart_if_idle=`) are set with
-    `.override(...)`, as for tasks: `new_files(prefix="s3://in/").override(queue="io")`.
+  - **Options of an event trigger** (`queue=`, `restart_if_idle=`, `start=`, `end=`) are set
+    with `.override(...)`, as for tasks: `new_files(prefix="s3://in/").override(queue="io")`.
   - **Unchanged:** run kinds (`scheduled`, `event`: where a run came from); the `schedr.toml`
-    keys `schedule` / `every` / `once` / `catchup` (flat keys read naturally in TOML, and jobs
-    have no event triggers); the Airflow layer's `schedule=` (Airflow's name, translated).
+    keys `schedule` / `every` / `once` / `catchup` / `start` / `end` (flat keys read naturally
+    in TOML, and jobs have no event triggers); the Airflow layer's `schedule=` (Airflow's
+    name, translated).
   - Not chosen: `schedule=` (the earlier name: it named half of what it took, and event
     triggers needed a `When(...)` wrapper to fit into it); `when=` (no clash with the other
     uses of "trigger", `schedr runs trigger`, `TriggerDagOperator`, `triggered_by`, but
     vaguer). The noun (the DAG's trigger) and the verb (trigger a run) read differently, and
     `trigger=` pairs with `@trigger`.
   - **`Once`** is the way to run a DAG once at a future time (e.g. a migration tonight at
-    23:00): an ordinary time trigger with one fire time, so `end`, pausing and the UI's
+    23:00): an ordinary time trigger with one fire time, so pausing and the UI's
     "next run" work as for any other (it has no previous fire time, so a DAG using `since`
     must set `initial_since`). It is set in the DAG file (reviewed, in git);
     there is no deferred manual trigger (see Runs: manual runs, backfill and pausing).
@@ -1894,7 +1914,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   creates at most **100** runs per DAG (a `catchup` backlog with no limit continues in the
   next pass).
 - **`end`** (optional, mirror of `start`): the **last scheduled run** is the last fire time **at
-  or before `end`** (in the schedule's time zone). After it the DAG stays listed with its
+  or before `end`** (in the trigger's time zone). After it the DAG stays listed with its
   history, but no new scheduled runs are created; the UI shows it as "ended". Manual runs are
   still allowed: **`start` and `end` apply only to runs of kind `scheduled`**; manual and
   backfill runs may be for any time, before `start` or after `end` (see Runs: manual runs,
@@ -1975,8 +1995,7 @@ from schedr import CommandOperator, Cron, Dag, TaskDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
-    trigger=Cron("0 3 * * *", tz="Europe/Warsaw"),
-    start="2026-01-01",
+    trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
     defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
 
@@ -2840,7 +2859,7 @@ with Dag("ingest", trigger=new_files(prefix="s3://in/")):
   when the queue drains: the events wait in the source, not in our database.
 - **Lifecycle:** one instance per event-triggered DAG in the cluster. It starts when the DAG is
   unpaused and stops when it is paused, removed or in conflict; it starts again from the
-  bookmark on unpause and on a new DAG version (new code); `start` / `end` limit when it runs.
+  bookmark on unpause and on a new DAG version (new code); `start` / `end` (set with `.override(...)`) limit when it runs.
   A trigger that **raises** starts again with backoff (often temporary), the error shown on its
   status. A generator that **returns** is an error (triggers must keep yielding): it is stopped
   and not started again until a new DAG version or an explicit restart (UI / CLI).
@@ -3653,7 +3672,7 @@ primary one.
   | `DAG(dag_id=..., ...)` | `Dag("...", ...)` |
   | `schedule="0 3 * * *"` / `"@daily"` / `timedelta(...)` / `"@once"` / `None` | `trigger=Cron(...)` / `DAILY` / `Every(...)` / `Once(start_date)` / `None` |
   | `catchup=` | `catchup=` on the time trigger (`Cron(..., catchup=...)`) |
-  | `start_date=` / `end_date=` | `start=` / `end=` |
+  | `start_date=` / `end_date=` | `start=` / `end=` on the time trigger (`Cron(..., start=...)`) |
   | `max_active_runs=` (default 16, Airflow's `max_active_runs_per_dag`) | `max_active_runs=` (set explicitly to 16 when not given, so migrated DAGs keep Airflow's default) |
   | `tags=`, `description=` | `tags=`, `description=` |
   | `max_active_tasks=` (default 16, `max_active_tasks_per_dag`) | `max_active_tasks=` (set explicitly to 16 when not given) |

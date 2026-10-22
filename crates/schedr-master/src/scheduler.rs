@@ -88,7 +88,7 @@ impl Scheduler {
     pub async fn pass(&self, now: Timestamp) -> Result<Pass, SchedulerError> {
         let mut pass = Pass::default();
         for active in self.db.active_dags().await? {
-            let fire_times = match FireTimes::new(&active.dag.trigger, active.dag.start) {
+            let fire_times = match FireTimes::new(&active.dag.trigger) {
                 Ok(fire_times) => fire_times,
                 Err(error) => {
                     pass.skipped.push(SchedulerError::FireTimes {
@@ -149,11 +149,9 @@ impl Scheduler {
             .find(|d| &d.dag.id == dag_id)
             .ok_or_else(|| SchedulerError::NotRunnable(dag_id.clone()))?;
         let fire_times =
-            FireTimes::new(&active.dag.trigger, active.dag.start).map_err(|error| {
-                SchedulerError::FireTimes {
-                    dag_id: dag_id.clone(),
-                    error,
-                }
+            FireTimes::new(&active.dag.trigger).map_err(|error| SchedulerError::FireTimes {
+                dag_id: dag_id.clone(),
+                error,
             })?;
         let plan = Plan {
             dag: &active.dag,

@@ -71,17 +71,19 @@ pub struct CronTimes {
 }
 
 impl FireTimes {
-    /// The fire times of `trigger`; an `Every` trigger counts from `start` when given.
+    /// The fire times of `trigger`; an `Every` trigger counts from its `start` when given.
     ///
     /// # Errors
     ///
     /// [`FireTimesError`] for a cron expression that doesn't parse, an unknown time zone or a
     /// zero interval.
-    pub fn new(trigger: &Trigger, start: Option<Timestamp>) -> Result<Self, FireTimesError> {
+    pub fn new(trigger: &Trigger) -> Result<Self, FireTimesError> {
         match trigger {
             Trigger::None => Ok(Self::None),
             Trigger::Once { at } => Ok(Self::Once(*at)),
-            Trigger::Every { interval_ms, .. } => {
+            Trigger::Every {
+                interval_ms, start, ..
+            } => {
                 if *interval_ms == 0 {
                     return Err(FireTimesError::ZeroInterval);
                 }

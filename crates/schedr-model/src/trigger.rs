@@ -25,14 +25,29 @@ pub enum Trigger {
         /// Whether missed fire times get runs in order (`true`) or only the most recent
         /// (`false`).
         catchup: bool,
+        /// The first run it creates is for the first fire time at or after it; without it,
+        /// the moment the master first stored the DAG.
+        #[serde(default)]
+        start: Option<Timestamp>,
+        /// The last run it creates is for the last fire time at or before it.
+        #[serde(default)]
+        end: Option<Timestamp>,
     },
     /// A fixed interval measured in real time (UTC), unaffected by daylight saving.
     Every {
-        /// The interval in milliseconds.
+        /// The interval in milliseconds; fire times are whole intervals from `start`, or from
+        /// the Unix epoch without one.
         interval_ms: u64,
         /// Whether missed fire times get runs in order (`true`) or only the most recent
         /// (`false`).
         catchup: bool,
+        /// The first run it creates is for the first fire time at or after it; without it,
+        /// the moment the master first stored the DAG.
+        #[serde(default)]
+        start: Option<Timestamp>,
+        /// The last run it creates is for the last fire time at or before it.
+        #[serde(default)]
+        end: Option<Timestamp>,
     },
     /// A single fire time (it has no previous fire time).
     Once {
@@ -55,6 +70,25 @@ impl Trigger {
         match self {
             Self::Cron { catchup, .. } | Self::Every { catchup, .. } => *catchup,
             Self::None | Self::Once { .. } => false,
+        }
+    }
+
+    /// Where the runs it creates start (see the `start` fields); `None` for triggers without
+    /// one.
+    #[must_use]
+    pub const fn start(&self) -> Option<Timestamp> {
+        match self {
+            Self::Cron { start, .. } | Self::Every { start, .. } => *start,
+            Self::None | Self::Once { .. } => None,
+        }
+    }
+
+    /// Where the runs it creates end (see the `end` fields); `None` for triggers without one.
+    #[must_use]
+    pub const fn end(&self) -> Option<Timestamp> {
+        match self {
+            Self::Cron { end, .. } | Self::Every { end, .. } => *end,
+            Self::None | Self::Once { .. } => None,
         }
     }
 }

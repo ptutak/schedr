@@ -39,7 +39,7 @@ fn dag(retries: u32) -> Dag {
     let rows = json!({"rows": {"ref": {"kind": "output", "task": "extract"}}});
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
-        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({}), retries), task("load", &rows, 0)],
         "edges": [{"from": "extract", "to": "load", "kind": "data"}]

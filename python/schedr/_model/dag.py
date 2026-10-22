@@ -89,8 +89,6 @@ class Dag:
         tasks: The tasks, in declaration order.
         edges: The dependencies between them.
         trigger: What starts its runs (besides people and other DAGs).
-        start: The first scheduled run is the first fire time at or after it.
-        end: The last scheduled run is the last fire time at or before it.
         initial_since: ``since`` of the run on the DAG's first fire time.
         max_active_runs: At most this many runs at a time; ``None`` for no limit.
         description: Shown in the UI.
@@ -103,8 +101,6 @@ class Dag:
     tasks: Sequence[Task] = ()
     edges: Sequence[Edge] = ()
     trigger: Trigger = field(default_factory=NoTrigger)
-    start: datetime | None = None
-    end: datetime | None = None
     initial_since: datetime | None = None
     max_active_runs: int | None = 1
     description: str | None = None
@@ -152,8 +148,6 @@ class Dag:
             result["tags"] = list(self.tags)
         result |= {
             "trigger": self.trigger.to_json(),
-            "start": _timestamp_or_none(self.start),
-            "end": _timestamp_or_none(self.end),
             "initial_since": _timestamp_or_none(self.initial_since),
             "max_active_runs": self.max_active_runs,
             "tasks": [t.to_json() for t in self.tasks],

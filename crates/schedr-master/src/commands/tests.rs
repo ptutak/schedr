@@ -21,8 +21,8 @@ fn sync() -> DagId {
 fn dag() -> Dag {
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
-        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false},
-        "start": "2026-10-01T00:00:00Z", "end": null, "initial_since": null,
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false, "start": "2026-10-01T00:00:00Z"},
+        "initial_since": null,
         "max_active_runs": 1,
         "tasks": [{
             "id": "extract", "kind": "python",

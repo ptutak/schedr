@@ -27,7 +27,7 @@ fn edge(from: &str, to: &str, kind: &str) -> Json {
 fn dag_with(changes: &Json) -> Dag {
     let mut dag = json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
-        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({})), task("load", &json!({"rows": output_of("extract")}))],
         "edges": [edge("extract", "load", "data")]
@@ -69,6 +69,12 @@ fn the_location_must_be_the_file_parsed() {
     );
 }
 
+/// A daily trigger running from `start` to `end`.
+fn daily(start: &str, end: &str) -> Json {
+    json!({"kind": "cron", "expression": "@daily", "timezone": "UTC", "catchup": false,
+           "start": start, "end": end})
+}
+
 #[test]
 fn run_limits_and_the_window_are_checked() {
     assert_eq!(
@@ -76,17 +82,17 @@ fn run_limits_and_the_window_are_checked() {
         ["max_active_runs must be at least 1"]
     );
     assert_eq!(
-        problems(&json!({"start": "2026-02-01T00:00:00Z", "end": "2026-01-01T00:00:00Z"})),
+        problems(&json!({"trigger": daily("2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z")})),
         ["start (2026-02-01T00:00:00Z) is after end (2026-01-01T00:00:00Z)"]
     );
     assert_eq!(
-        problems(&json!({"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"})),
+        problems(&json!({"trigger": daily("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z")})),
         Vec::<String>::new()
     );
 }
 
 #[test]
-fn the_schedule_must_be_usable() {
+fn the_trigger_must_be_usable() {
     assert_eq!(
         problems(
             &json!({"trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Mars/Base", "catchup": false}})

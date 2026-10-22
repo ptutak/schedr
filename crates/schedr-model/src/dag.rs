@@ -64,10 +64,6 @@ pub struct Dag {
     pub tags: Vec<String>,
     /// What starts its runs (besides people and other DAGs).
     pub trigger: Trigger,
-    /// The first scheduled run is the first fire time at or after it.
-    pub start: Option<Timestamp>,
-    /// The last scheduled run is the last fire time at or before it.
-    pub end: Option<Timestamp>,
     /// `since` of the run on the DAG's first fire time (see PROJECT.md, Runs).
     pub initial_since: Option<Timestamp>,
     /// At most this many runs at a time; `None` for no limit.

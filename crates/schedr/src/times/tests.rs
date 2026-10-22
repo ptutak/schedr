@@ -71,6 +71,37 @@ fn times_are_shown_in_utc_and_local() {
 }
 
 #[test]
+fn short_times_are_utc_with_the_local_offset() {
+    let warsaw = TimeZone::get("Europe/Warsaw").unwrap();
+    assert_eq!(
+        show_short(ts("2025-12-31T23:00:00Z"), &warsaw),
+        "2025-12-31 23:00Z (local:+1h)"
+    );
+    assert_eq!(
+        show_short(ts("2026-06-30T22:00:00Z"), &warsaw),
+        "2026-06-30 22:00Z (local:+2h)"
+    );
+    assert_eq!(
+        show_short(
+            ts("2026-10-15T01:00:00Z"),
+            &TimeZone::get("America/New_York").unwrap()
+        ),
+        "2026-10-15 01:00Z (local:-4h)"
+    );
+    assert_eq!(
+        show_short(
+            ts("2026-10-15T03:00:15Z"),
+            &TimeZone::get("Asia/Kolkata").unwrap()
+        ),
+        "2026-10-15 03:00:15Z (local:+5h30m)"
+    );
+    assert_eq!(
+        show_short(ts("2026-10-15T03:00:00Z"), &TimeZone::UTC),
+        "2026-10-15 03:00Z"
+    );
+}
+
+#[test]
 fn the_local_zone_comes_from_tz_or_the_system() {
     assert_eq!(
         local_zone(Some("Europe/Warsaw")).iana_name(),

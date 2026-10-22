@@ -15,8 +15,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
     let dag: schedr_model::Dag = serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "description": "Daily sync", "tags": ["team-a"],
-        "trigger": {"kind": "every", "interval_ms": 60_000, "catchup": false}, "start": null, "end": null,
-        "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []
+        "trigger": {"kind": "every", "interval_ms": 60_000, "catchup": false}, "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []
     }))
     .unwrap();
     let stored = StoredDag {
@@ -35,7 +34,10 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
         json!({
             "dag_id": "sync", "paused": true,
             "location": {"root": "etl", "path": "a.py"}, "conflict": null,
-            "trigger": {"kind": "every", "interval_ms": 60_000, "catchup": false},
+            "trigger": {
+                "kind": "every", "interval_ms": 60_000, "catchup": false,
+                "start": null, "end": null
+            },
             "description": "Daily sync", "tags": ["team-a"]
         })
     );

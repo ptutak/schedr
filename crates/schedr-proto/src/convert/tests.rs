@@ -112,7 +112,7 @@ fn parsed_file() -> ParsedFile {
         "path": "team/sync.py",
         "dags": [{
             "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
-            "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+            "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 1, "tasks": [], "edges": []
         }],
         "error": null

@@ -9,14 +9,13 @@ fn ts(text: &str) -> Timestamp {
 }
 
 fn cron(expression: &str, timezone: &str) -> FireTimes {
-    FireTimes::new(
-        &Trigger::Cron {
-            expression: expression.to_owned(),
-            timezone: timezone.to_owned(),
-            catchup: false,
-        },
-        None,
-    )
+    FireTimes::new(&Trigger::Cron {
+        expression: expression.to_owned(),
+        timezone: timezone.to_owned(),
+        catchup: false,
+        start: None,
+        end: None,
+    })
     .unwrap()
 }
 
@@ -179,13 +178,21 @@ fn every_counts_from_start_or_the_epoch() {
     let hourly = Trigger::Every {
         interval_ms: 3_600_000,
         catchup: false,
+        start: None,
+        end: None,
     };
-    let from_epoch = FireTimes::new(&hourly, None).unwrap();
+    let from_epoch = FireTimes::new(&hourly).unwrap();
     assert_eq!(
         forward(&from_epoch, "2026-10-15T03:20:00Z", 2),
         ["2026-10-15T04:00:00Z", "2026-10-15T05:00:00Z"]
     );
-    let from_start = FireTimes::new(&hourly, Some(ts("2026-10-01T00:15:00Z"))).unwrap();
+    let from_start = FireTimes::new(&Trigger::Every {
+        interval_ms: 3_600_000,
+        catchup: false,
+        start: Some(ts("2026-10-01T00:15:00Z")),
+        end: None,
+    })
+    .unwrap();
     assert_eq!(
         forward(&from_start, "2026-10-15T03:15:00Z", 1),
         ["2026-10-15T04:15:00Z"]
@@ -194,7 +201,7 @@ fn every_counts_from_start_or_the_epoch() {
         backward(&from_start, "2026-10-15T03:15:00Z", 1),
         ["2026-10-15T02:15:00Z"]
     );
-    // Before the anchor too: fire times before `start` are fire times of the schedule.
+    // Before the anchor too: fire times before `start` are fire times of the trigger.
     assert_eq!(
         backward(&from_start, "2026-10-01T00:15:00Z", 1),
         ["2026-09-30T23:15:00Z"]
@@ -203,13 +210,12 @@ fn every_counts_from_start_or_the_epoch() {
 
 #[test]
 fn every_ignores_daylight_saving() {
-    let six_hours = FireTimes::new(
-        &Trigger::Every {
-            interval_ms: 6 * 3_600_000,
-            catchup: false,
-        },
-        None,
-    )
+    let six_hours = FireTimes::new(&Trigger::Every {
+        interval_ms: 6 * 3_600_000,
+        catchup: false,
+        start: None,
+        end: None,
+    })
     .unwrap();
     assert_eq!(
         forward(&six_hours, "2026-10-24T23:00:00Z", 2),
@@ -220,12 +226,12 @@ fn every_ignores_daylight_saving() {
 #[test]
 fn once_has_one_fire_time_and_none_has_none() {
     let at = ts("2026-12-24T22:00:00Z");
-    let once = FireTimes::new(&Trigger::Once { at }, None).unwrap();
+    let once = FireTimes::new(&Trigger::Once { at }).unwrap();
     assert_eq!(once.next_after(ts("2026-01-01T00:00:00Z")), Some(at));
     assert_eq!(once.next_after(at), None);
     assert_eq!(once.previous_before(ts("2027-01-01T00:00:00Z")), Some(at));
     assert_eq!(once.previous_before(at), None);
-    let none = FireTimes::new(&Trigger::None, None).unwrap();
+    let none = FireTimes::new(&Trigger::None).unwrap();
     assert_eq!(none.next_after(at), None);
     assert_eq!(none.previous_before(at), None);
     assert!(!none.is_fire_time(at));
@@ -262,20 +268,21 @@ fn bad_crons_are_errors(#[case] expression: &str, #[case] tz: &str, #[case] mess
         expression: expression.to_owned(),
         timezone: tz.to_owned(),
         catchup: false,
+        start: None,
+        end: None,
     };
-    let error = FireTimes::new(&trigger, None).unwrap_err();
+    let error = FireTimes::new(&trigger).unwrap_err();
     assert!(error.to_string().starts_with(message), "{error}");
 }
 
 #[test]
 fn a_zero_interval_is_an_error() {
-    let error = FireTimes::new(
-        &Trigger::Every {
-            interval_ms: 0,
-            catchup: false,
-        },
-        None,
-    )
+    let error = FireTimes::new(&Trigger::Every {
+        interval_ms: 0,
+        catchup: false,
+        start: None,
+        end: None,
+    })
     .unwrap_err();
     assert_eq!(error, FireTimesError::ZeroInterval);
     assert_eq!(

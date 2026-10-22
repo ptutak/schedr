@@ -6,13 +6,14 @@
 
 use std::io::Write;
 
+use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use schedr_api::views::{CommandView, DagView, RunView};
 
 use crate::app::AppError;
 use crate::cli::{DagsCommand, RunsCommand};
 use crate::client::{Client, Transport};
-use crate::times::{parse_for, show};
+use crate::times::{parse_for, show, show_short};
 
 #[cfg(test)]
 mod tests;
@@ -48,7 +49,7 @@ pub async fn run_dags<T: Transport>(
             write_table(
                 out,
                 &["DAG", "PAUSED", "TRIGGER", "DEFINED IN"],
-                &dag_rows(&dags.dags),
+                &dag_rows(&dags.dags, &output.local),
             )?;
         }
         DagsCommand::Pause { dag } => {
@@ -184,7 +185,7 @@ const fn not_yet(command: &'static str, milestone: &'static str) -> AppError {
     AppError::NotImplemented { command, milestone }
 }
 
-fn dag_rows(dags: &[DagView]) -> Vec<Vec<String>> {
+fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
     dags.iter()
         .map(|dag| {
             let place = dag.conflict.as_ref().map_or_else(
@@ -198,7 +199,9 @@ fn dag_rows(dags: &[DagView]) -> Vec<Vec<String>> {
             vec![
                 dag.dag_id.clone(),
                 if dag.paused { "yes" } else { "no" }.to_owned(),
-                dag.trigger.as_ref().map_or_else(String::new, trigger_text),
+                dag.trigger
+                    .as_ref()
+                    .map_or_else(String::new, |t| trigger_text(t, local)),
                 place,
             ]
         })
@@ -206,8 +209,16 @@ fn dag_rows(dags: &[DagView]) -> Vec<Vec<String>> {
 }
 
 /// A trigger as people write it: `0 3 * * * (Europe/Warsaw)`, `every 1h, catchup`,
-/// `once …`, `-`.
-fn trigger_text(trigger: &serde_json::Value) -> String {
+/// `@daily, 2025-12-31 23:00Z (local:+1h)..` (its window, either end open), `once at …`,
+/// `-`; times in UTC with
+/// `local`'s offset.
+fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
+    let time = |key: &str| {
+        trigger[key]
+            .as_str()
+            .and_then(|text| text.parse::<Timestamp>().ok())
+            .map(|at| show_short(at, local))
+    };
     let text = match trigger["kind"].as_str() {
         Some("cron") => {
             let expression = trigger["expression"].as_str().unwrap_or_default();
@@ -223,14 +234,22 @@ fn trigger_text(trigger: &serde_json::Value) -> String {
                 jiff::SignedDuration::from_millis(i64::try_from(ms).unwrap_or(i64::MAX))
             )
         }
-        Some("once") => format!("once at {}", trigger["at"].as_str().unwrap_or_default()),
+        Some("once") => format!("once at {}", time("at").unwrap_or_default()),
         _ => "-".to_owned(),
     };
+    let mut parts = vec![text];
     if trigger["catchup"].as_bool() == Some(true) {
-        format!("{text}, catchup")
-    } else {
-        text
+        parts.push("catchup".to_owned());
     }
+    match (time("start"), time("end")) {
+        (None, None) => {}
+        (start, end) => parts.push(format!(
+            "{}..{}",
+            start.unwrap_or_default(),
+            end.unwrap_or_default()
+        )),
+    }
+    parts.join(", ")
 }
 
 fn run_row(run: &RunView, local: &TimeZone) -> Vec<String> {

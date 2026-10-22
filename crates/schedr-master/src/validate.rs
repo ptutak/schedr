@@ -39,13 +39,13 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             dag.location.root, dag.location.path
         ));
     }
-    if let Err(error) = FireTimes::new(&dag.trigger, dag.start) {
+    if let Err(error) = FireTimes::new(&dag.trigger) {
         problems.push(format!("trigger: {error}"));
     }
     if dag.max_active_runs == Some(0) {
         problems.push("max_active_runs must be at least 1".to_owned());
     }
-    if let (Some(start), Some(end)) = (dag.start, dag.end)
+    if let (Some(start), Some(end)) = (dag.trigger.start(), dag.trigger.end())
         && start > end
     {
         problems.push(format!("start ({start}) is after end ({end})"));

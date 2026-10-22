@@ -45,12 +45,12 @@ def test_defaults_without_a_trigger() -> None:
         pass
     model = only_dag()
     assert model.trigger == NoTrigger()
-    assert (model.start, model.end, model.initial_since) == (None, None, None)
+    assert model.initial_since is None
     assert model.max_active_runs == 1
 
 
 @pytest.mark.parametrize(
-    ("start", "expected"),
+    ("since", "expected"),
     [
         ("2026-01-01", datetime(2025, 12, 31, 23, tzinfo=UTC)),
         (date(2026, 1, 1), datetime(2025, 12, 31, 23, tzinfo=UTC)),
@@ -59,26 +59,28 @@ def test_defaults_without_a_trigger() -> None:
         ("2026-01-01T00:00+02:00", datetime(2025, 12, 31, 22, tzinfo=UTC)),
     ],
 )
-def test_naive_moments_are_in_the_triggers_time_zone(start: object, expected: datetime) -> None:
-    with Dag("d", trigger=Cron("0 3 * * *", tz="Europe/Warsaw"), start=start):  # type: ignore[arg-type]
+def test_a_naive_initial_since_is_in_the_triggers_time_zone(
+    since: object, expected: datetime
+) -> None:
+    with Dag("d", trigger=Cron("0 3 * * *", tz="Europe/Warsaw"), initial_since=since):  # type: ignore[arg-type]
         pass
-    assert only_dag().start == expected
+    assert only_dag().initial_since == expected
 
 
-def test_naive_moments_are_utc_without_a_cron_trigger() -> None:
-    with Dag("d", trigger=Every(timedelta(hours=1)), end="2026-01-01", initial_since="2020-01-01"):
+def test_a_naive_initial_since_is_utc_without_a_cron_trigger() -> None:
+    with Dag("d", trigger=Every(timedelta(hours=1)), initial_since="2020-01-01"):
+        pass
+    assert only_dag().initial_since == datetime(2020, 1, 1, tzinfo=UTC)
+    with Dag("e", initial_since="2020-01-01"):
+        pass
+    assert only_dag().initial_since == datetime(2020, 1, 1, tzinfo=UTC)
+
+
+def test_a_naive_initial_since_follows_a_once_triggers_zone() -> None:
+    with Dag("d", trigger=Once("2026-12-24T23:00", tz="Europe/Warsaw"), initial_since="2026-12-01"):
         pass
     model = only_dag()
-    assert model.end == datetime(2026, 1, 1, tzinfo=UTC)
-    assert model.initial_since == datetime(2020, 1, 1, tzinfo=UTC)
-    assert model.start is None
-
-
-def test_naive_moments_follow_a_once_triggers_zone() -> None:
-    with Dag("d", trigger=Once("2026-12-24T23:00", tz="Europe/Warsaw"), end="2026-12-25"):
-        pass
-    model = only_dag()
-    assert model.end == datetime(2026, 12, 24, 23, tzinfo=UTC)
+    assert model.initial_since == datetime(2026, 11, 30, 23, tzinfo=UTC)
     assert model.to_json()["trigger"] == {"kind": "once", "at": "2026-12-24T22:00:00Z"}
 
 
@@ -102,18 +104,27 @@ def test_since_without_a_previous_fire_time_needs_initial_since(
     assert [d.id for d in registry.take_defined()] == ["d", "e", "f"]
 
 
-def test_bad_moments_are_rejected() -> None:
-    with pytest.raises(ValueError, match="start: `soon` is not an ISO 8601"):
-        Dag("d", start="soon")
-    with pytest.raises(TypeError, match="start must be a datetime, a date or an ISO string"):
-        Dag("d", start=5)  # type: ignore[arg-type]
+def test_a_bad_initial_since_is_rejected() -> None:
+    with pytest.raises(ValueError, match="initial_since: `soon` is not an ISO 8601"):
+        Dag("d", initial_since="soon")
+    with pytest.raises(TypeError, match="initial_since must be a datetime, a date or an ISO"):
+        Dag("d", initial_since=5)  # type: ignore[arg-type]
 
 
-def test_aware_moments_keep_their_instant() -> None:
-    start = datetime(2026, 1, 1, 5, tzinfo=timezone(timedelta(hours=5)))
-    with Dag("d", start=start):
+def test_an_aware_initial_since_keeps_its_instant() -> None:
+    since = datetime(2026, 1, 1, 5, tzinfo=timezone(timedelta(hours=5)))
+    with Dag("d", initial_since=since):
         pass
-    assert only_dag().to_json()["start"] == "2026-01-01T00:00:00Z"
+    assert only_dag().to_json()["initial_since"] == "2026-01-01T00:00:00Z"
+
+
+def test_start_and_end_are_set_on_the_trigger() -> None:
+    with pytest.raises(TypeError):
+        Dag("d", start="2026-01-01")  # type: ignore[call-arg]
+    with Dag("d", trigger=Cron("@daily", start="2026-01-01", end="2026-12-31")):
+        pass
+    trigger = only_dag().to_json()["trigger"]
+    assert (trigger["start"], trigger["end"]) == ("2026-01-01T00:00:00Z", "2026-12-31T00:00:00Z")
 
 
 @pytest.mark.parametrize(

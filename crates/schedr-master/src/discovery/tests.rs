@@ -32,7 +32,7 @@ fn key(hash: &str) -> ParseKey {
 fn dag(id: &str, path: &str, max_active_runs: u32) -> Dag {
     serde_json::from_value(json!({
         "produced_by": "0.1", "id": id, "location": {"root": "etl", "path": path},
-        "trigger": {"kind": "none"}, "start": null, "end": null, "initial_since": null,
+        "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": max_active_runs, "tasks": [], "edges": []
     }))
     .unwrap()

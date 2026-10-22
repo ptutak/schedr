@@ -58,7 +58,7 @@ class TaskDefaults:
 
 
 def _moment(value: datetime | date | str | None, tz: str, name: str) -> datetime | None:
-    """Reads ``start`` / ``end`` / ``initial_since``: naive values are in ``tz``."""
+    """Reads ``initial_since``: naive values are in ``tz``."""
     return None if value is None else parse_moment(value, tz, name)
 
 
@@ -68,12 +68,10 @@ class Dag:
     Args:
         dag_id: The DAG's ID (required, explicit).
         trigger: What starts its runs: ``Cron``, ``Every`` or ``Once``; ``None`` for manual
-            runs only. ``catchup`` is set on the trigger.
-        start: The first scheduled run is the first fire time at or after it. A date or a
-            datetime without a time zone is read in the trigger's time zone (UTC for
-            ``Every`` and no trigger).
-        end: The last scheduled run is the last fire time at or before it (same zone rule).
-        initial_since: ``since`` of the run on the DAG's first fire time (same zone rule).
+            runs only. ``catchup``, ``start`` and ``end`` are set on the trigger.
+        initial_since: ``since`` of the run on the DAG's first fire time (or of its first
+            run without one). A date or a datetime without a time zone is read in the
+            trigger's time zone (UTC for ``Every`` and no trigger).
         max_active_runs: At most this many runs at a time (default 1; ``None``: no limit).
         defaults: Defaults for every task.
         description: Shown in the UI.
@@ -90,8 +88,6 @@ class Dag:
         dag_id: str,
         *,
         trigger: Trigger | None = None,
-        start: datetime | date | str | None = None,
-        end: datetime | date | str | None = None,
         initial_since: datetime | date | str | None = None,
         max_active_runs: int | None = 1,
         defaults: TaskDefaults | None = None,
@@ -109,8 +105,6 @@ class Dag:
             raise TypeError("tags must be a list of strings, not a string")
         self.trigger = trigger
         tz = trigger.tz if isinstance(trigger, Cron | Once) else "UTC"
-        self.start = _moment(start, tz, "start")
-        self.end = _moment(end, tz, "end")
         self.initial_since = _moment(initial_since, tz, "initial_since")
         if max_active_runs is not None and max_active_runs <= 0:
             raise ValueError(f"max_active_runs must be positive or None, got {max_active_runs}")
@@ -163,8 +157,6 @@ class Dag:
             tasks=list(builder.tasks.values()),
             edges=list(builder.edges),
             trigger=NoTrigger() if self.trigger is None else self.trigger.to_model(),
-            start=self.start,
-            end=self.end,
             initial_since=self.initial_since,
             max_active_runs=self.max_active_runs,
             description=self.description,

@@ -66,7 +66,7 @@ impl Plan<'_> {
     /// The moment scheduled runs start from: `start`, or when the DAG was first stored.
     #[must_use]
     pub fn effective_start(&self) -> Timestamp {
-        self.dag.start.unwrap_or(self.first_seen)
+        self.dag.trigger.start().unwrap_or(self.first_seen)
     }
 
     /// The window of a run on a fire time: one schedule period.
@@ -130,7 +130,7 @@ impl Plan<'_> {
         if free == 0 {
             return Vec::new();
         }
-        let upper = self.dag.end.map_or(now, |end| end.min(now));
+        let upper = self.dag.trigger.end().map_or(now, |end| end.min(now));
         let start = self.effective_start();
         let after = |t: Timestamp| t >= start && last_scheduled.is_none_or(|last| t > last);
         let mut due = Vec::new();
