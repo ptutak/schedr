@@ -206,7 +206,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[case(&["standalone"], None)]
 #[case(&["dags", "list"], None)]
 #[case(&["runs", "list", "sync"], None)]
-#[case(&["dag-ctx", "run", "get"], Some("M1"))]
+#[case(&["dag-ctx", "run", "get"], Some("M4"))]
 #[case(&["master"], Some("M2"))]
 #[case(&["worker"], Some("M2"))]
 #[case(&["webserver"], Some("M2"))]

@@ -1,4 +1,4 @@
-# schedr: M0 / M1 implementation plan
+# schedr: implementation plan (M0, M1, M2)
 
 Draft. The design is in PROJECT.md; this file only says **what to build first and in which
 order**. Milestones: see PROJECT.md, Roadmap.
@@ -7,7 +7,9 @@ order**. Milestones: see PROJECT.md, Roadmap.
   the CLI skeleton. Nothing runs yet; everything is tested.
 - **M1. Standalone runs a native DAG:** `schedr standalone` on a laptop parses a native DAG,
   schedules it, runs its tasks as processes and reports the result; `schedr dags test` and
-  `schedr.testing.run_dag` work.
+  `schedr.testing.run_dag` work. **Done.**
+- **M2. Distributed:** separate roles on Postgres, workers that come and go, mTLS, the memory
+  watchdog, the ops port, images and a Helm chart; survives killing the master or a worker.
 
 ## Scope of M1
 
@@ -44,11 +46,14 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - SQLite only at run time; the schema and migrations exist for Postgres too and are tested in
   CI.
 
-**Out (later milestones):** async task functions, sensors and triggers (M4), outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping,
-`schedr.toml` and scripts, cleanup and resources, secrets and connections, params, notifications,
-`TriggerDagOperator`, `Once`, concurrency limits other than `max_active_runs`, backfill,
-retention, the journal, the memory watchdog, mTLS, separate roles and Postgres at run time (M2),
-the web UI (M3), `run_dag(step=True)` and `replace=` (M4), anything Airflow (M5).
+**Out (later milestones):** async task functions, sensors and triggers (M4), outcomes and
+`.on(...)`, `AllSucceeded`, `@branch`, groups, mapping, `schedr.toml` and scripts, cleanup and
+resources, secrets and connections, params, notifications, `TriggerDagOperator`, concurrency
+limits other than `max_active_runs`, backfill, retention, the in-task CLI (`schedr task-ctx`,
+`schedr dag-ctx`; command tasks read their run information from `SCHEDR_*` variables) (M4);
+the journal on disk, the memory watchdog, mTLS, separate roles and Postgres at run time (M2);
+the web UI (M3); `run_dag(step=True)` and `replace=` (M4); anything Airflow (M5). (`Once` was
+built in M1.)
 
 ## Workspace layout
 
@@ -142,6 +147,41 @@ on, each step brings its own.
 PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
 DAG, trigger a run with `schedr runs trigger --for ...`, and see it succeed with
 `schedr runs list`.
+
+**Status (2026-10-22): M1 is done.** Steps 1.1–1.17 are committed (the last: 1.16, `df309b8`).
+The paragraph above is checked automatically by `scripts/smoke-wheel.sh` (CI's `wheel` job,
+`make smoke`): the release wheel installed into a fresh venv, `dags check`, `dags test` on the
+example DAG, then `schedr standalone` with `dags unpause`, `runs trigger --for ...` and `runs
+list` until the run succeeds. Open bugs are in `BUGS.md`.
+
+## M2: Distributed
+
+**Goal (PROJECT.md, Roadmap):** schedr runs on OpenShift with 2 workers and survives killing
+the master or a worker. M1 built the pieces in single-worker form (the gRPC protocol and
+`Register`, the worker registry with spread, change detection and hashing, the journal in
+memory); M2 splits the roles and makes every failure path real. Each step brings unit and
+integration tests, as since 1.15.
+
+| # | Work | Done when |
+|---|---|---|
+| 2.1 | **Separate roles:** `schedr master`, `schedr worker`, `schedr webserver` as their own processes (from `standalone`'s parts); Postgres at run time; commands picked up by `LISTEN/NOTIFY`, polling as the fallback; refuse an outdated schema | the three processes and Postgres on a laptop run the example DAG |
+| 2.2 | **Worker lifecycle:** incarnation IDs, heartbeats, the 60 s lease, `DISCONNECTED` / `LOST`, reconnect with backoff and jitter, the lease clock restarting after a master restart, the journal decisions (continue / kill / ack) in `Registered`, refusals | integration tests: a worker dropped and reconnected; a lost worker's attempts retried |
+| 2.3 | **Journal on disk:** running attempts and unacknowledged results survive an agent restart; interrupted attempts reported as such | `kill -9` of the agent, restart: its attempts reported interrupted and retried, finished results not lost |
+| 2.4 | **Assignment across workers:** queues (the `default` rule), the rejection table (worker-specific → `unschedulable` with each worker's reason; "code not there yet" after 35 s), `schedr tasks retry`, `schedr tasks cancel` | tests with two workers serving different queues |
+| 2.5 | **Parsing across workers:** one parse per (root, hash, schedr version) by any worker that reported the hash, reassigned after 10 min; conflicts decided by the relevant workers (queues); mixed-hash warnings; the rolling-upgrade rule (worker version ≥ the parse's) | tests with two workers on different hashes |
+| 2.6 | **Drain:** SIGTERM and `schedr workers drain` / `resume`; the grace period; interrupted attempts use no retry | tests |
+| 2.7 | **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates reloaded when the files change); the **worker's log endpoint** (signed tokens) and the webserver's log proxy; log retention on the worker | tests with self-signed certificates |
+| 2.8 | **Memory watchdog:** the budget from `memory.max`, `/proc` sampling, the `oom_killed` status; optional `setrlimit` | an integration test with a task that allocates too much |
+| 2.9 | **Ops port** on every role: `/healthz`, `/readyz`, `/metrics` (Prometheus), loop-stall detection | tests |
+| 2.10 | **Images and Helm chart:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600, probes | the chart installs on kind / k3d |
+| 2.11 | **Kill tests** (M2's "done when"): on kind / k3d with 2 workers, kill the master, then a worker, during runs; on OpenShift by hand | runs finish; retries as the rules say |
+| 2.12 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |
+
+- **Order:** 2.1–2.3 first: separate processes and what survives their deaths are the
+  architectural risk. 2.7 includes the log endpoint because a distributed run's logs are on
+  the worker (the UI showing them is M3). Auth modes stay in M3. The fork server (M2.5)
+  builds on 2.8 and 2.9.
+- Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
 ## Testing approach
 

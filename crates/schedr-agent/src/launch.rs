@@ -93,19 +93,38 @@ pub async fn start_runner(spec: &ProcessSpec, mode: RunnerMode) -> Result<Runner
     ours.set_nonblocking(true)
         .map_err(|e| start("the runner's socket", e))?;
     let mut stream = UnixStream::from_std(ours).map_err(|e| start("the runner's socket", e))?;
-    let said = tokio::time::timeout(
+    match tokio::time::timeout(
         RUNNER_START_TIMEOUT,
         accept_runner(&mut stream, AGENT_VERSION),
     )
     .await
-    .map_err(|_| LaunchError::NoHello(RUNNER_START_TIMEOUT))??;
-    if said != mode {
-        return Err(LaunchError::WrongMode {
-            expected: mode,
-            got: said,
-        });
+    {
+        Ok(Ok(said)) if said == mode => {}
+        Ok(Ok(said)) => {
+            abandon(process).await;
+            return Err(LaunchError::WrongMode {
+                expected: mode,
+                got: said,
+            });
+        }
+        Ok(Err(error)) => {
+            abandon(process).await;
+            return Err(error.into());
+        }
+        Err(_) => {
+            abandon(process).await;
+            return Err(LaunchError::NoHello(RUNNER_START_TIMEOUT));
+        }
     }
     Ok(Runner { process, stream })
+}
+
+/// Stops a runner that failed to start, and waits until everything it printed is in its log
+/// (the caller may show it).
+async fn abandon(mut process: OsProcess) {
+    let _ = process.signal(Signal::Kill);
+    let _ = process.wait().await;
+    let _ = process.output().await;
 }
 
 /// Runs a Python task: starts the runner, sends the request, and waits for its result while
@@ -187,9 +206,8 @@ impl ParseSession for ProcessParseSession {
         read_message(&mut self.runner.stream).await
     }
 
-    async fn stop(mut self) {
-        let _ = self.runner.process.signal(Signal::Kill);
-        let _ = self.runner.process.wait().await;
+    async fn stop(self) {
+        abandon(self.runner.process).await;
     }
 }
 

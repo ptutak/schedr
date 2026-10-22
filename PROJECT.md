@@ -1108,6 +1108,14 @@ channel, `SCHEDR_AGENT_FD`, each call on a connection of its own; see Rust/Pytho
 integration), for `command` / `script` tasks, their cleanups and resource setups.
 Python tasks use the Python API instead.
 
+**Milestone M4, all of it,** `dag-ctx run get` included: it needs the per-call connections
+(a channel for command tasks, new socket-pair ends over `SCM_RIGHTS`) that `task-ctx` and
+`dag-ctx params` need. Until then a command task reads its run information from the
+`SCHEDR_*` variables, which hold the same values. Not chosen: `dag-ctx run get` earlier,
+reading those variables itself (two ways to the same data, and its behaviour would change
+when the agent serves it); building the connections earlier for it alone. (It was labelled
+M1 since the M0 command skeleton, before the channel was designed; M1 never included it.)
+
 - **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs) and
   the server roles and commands (`schedr master`, `schedr worker`, `schedr db migrate`), and
   **`schedr dag-ctx`** for the run's context (see Run parameters and the DAG context). Outside a

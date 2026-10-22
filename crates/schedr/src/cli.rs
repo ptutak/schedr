@@ -383,11 +383,7 @@ impl Command {
             | Self::Webserver
             | Self::Tasks { .. }
             | Self::Workers { .. } => Some("M2"),
-            Self::TaskCtx { .. } => Some("M4"),
-            Self::DagCtx { command } => match command {
-                DagCtxCommand::Run { .. } => Some("M1"),
-                DagCtxCommand::Params { .. } => Some("M4"),
-            },
+            Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
         }
     }
 
