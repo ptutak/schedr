@@ -21,6 +21,9 @@ pub enum UnitError {
     /// Not a size such as `512B`, `64KiB` or `4MiB`.
     #[error("`{0}` is not a size (use e.g. `512B`, `64KiB`, `4MiB`, `1GiB`)")]
     Size(String),
+    /// Not a memory reserve: a percentage up to 90 % or a size.
+    #[error("`{0}` is not a memory reserve (use e.g. `25%`, at most `90%`, or a size like `1GiB`)")]
+    Reserve(String),
 }
 
 /// Parses a duration: one or more `<number><unit>` parts with units `ms`, `s`, `m`, `h`, `d`,
@@ -236,6 +239,67 @@ impl JsonSchema for SizeText {
             "type": "string",
             "format": "size",
             "description": "A size such as `512B`, `64KiB`, `4MiB` or `1GiB`."
+        })
+    }
+}
+
+/// `[worker] memory_reserve`: the part of the pod's memory limit kept out of task budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryReserve {
+    /// A percentage of the limit (`25%`).
+    Percent(u8),
+    /// A size (`1GiB`).
+    Size(u64),
+}
+
+/// Parses a memory reserve: `<n>%` with `n` at most 90, or a size (see [`parse_size`]).
+///
+/// # Errors
+///
+/// Returns [`UnitError::Reserve`] for anything else.
+pub fn parse_reserve(s: &str) -> Result<MemoryReserve, UnitError> {
+    let error = || UnitError::Reserve(s.to_owned());
+    match s.strip_suffix('%') {
+        Some(number) => match number.parse::<u8>() {
+            Ok(percent) if percent <= 90 => Ok(MemoryReserve::Percent(percent)),
+            _ => Err(error()),
+        },
+        None => parse_size(s).map(MemoryReserve::Size).map_err(|_| error()),
+    }
+}
+
+/// Writes a memory reserve as [`parse_reserve`] reads it.
+#[must_use]
+pub fn format_reserve(reserve: MemoryReserve) -> String {
+    match reserve {
+        MemoryReserve::Percent(percent) => format!("{percent}%"),
+        MemoryReserve::Size(bytes) => format_size(bytes),
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MemoryReserve {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        parse_reserve(&text).map_err(de::Error::custom)
+    }
+}
+
+impl serde::Serialize for MemoryReserve {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format_reserve(*self))
+    }
+}
+
+impl JsonSchema for MemoryReserve {
+    fn schema_name() -> Cow<'static, str> {
+        "MemoryReserve".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "format": "reserve",
+            "description": "A percentage of the pod's memory limit (`25%`, at most `90%`) or a size (`1GiB`)."
         })
     }
 }

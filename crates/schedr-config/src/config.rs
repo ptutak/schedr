@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::roots::{PathList, Root};
 use crate::units::{
-    DurationText, SizeText, deserialize_duration, deserialize_optional_size, serialize_duration,
-    serialize_optional_size,
+    DurationText, MemoryReserve, SizeText, deserialize_duration, deserialize_optional_size,
+    serialize_duration, serialize_optional_size,
 };
 
 #[cfg(test)]
@@ -251,8 +251,9 @@ pub struct DatabaseSection {
     /// secrets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// The longest a query (or waiting for a connection) may take; shorter than `[ops]
-    /// loop_stall_timeout`, so one hung query doesn't look like a stuck loop.
+    /// The longest a query (or waiting for a connection) may take; a write's transaction, a
+    /// few of these. Shorter than `[ops] loop_stall_timeout`, so one hung query doesn't look
+    /// like a stuck loop, and at most a third of `[master] lease_period`.
     #[serde(
         deserialize_with = "deserialize_duration",
         serialize_with = "serialize_duration"
@@ -262,11 +263,11 @@ pub struct DatabaseSection {
 }
 
 impl Default for DatabaseSection {
-    /// No URL, queries limited to 30 s.
+    /// No URL, queries limited to 10 s.
     fn default() -> Self {
         Self {
             url: None,
-            query_timeout: Duration::from_secs(30),
+            query_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -358,11 +359,21 @@ pub struct MasterSection {
     )]
     #[schemars(with = "DurationText")]
     pub code_wait: Duration,
+    /// How long the master's lease lasts (one master per database: a second one waits as a
+    /// standby, and takes over at most this long after the first dies); renewed every third
+    /// of it. At least three `[database] query_timeout`s, shorter than `[ops]
+    /// loop_stall_timeout`.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub lease_period: Duration,
 }
 
 impl Default for MasterSection {
     /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
-    /// 60 s, 30 s grace, 10 min for missing code.
+    /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -372,6 +383,7 @@ impl Default for MasterSection {
             lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
+            lease_period: Duration::from_secs(30),
         }
     }
 }
@@ -493,6 +505,12 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "Option<SizeText>")]
     pub memory_budget: Option<u64>,
+    /// The part of the pod's memory limit kept out of task budgets (for schedr's own process):
+    /// a percentage (`25%`) or a size (`1GiB`); when not set, 10 % for `schedr worker` and 25 %
+    /// for `schedr standalone` (whose process also runs the master and the API). Not used when
+    /// `memory_budget` is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_reserve: Option<MemoryReserve>,
     /// How often the watchdog samples each task's memory.
     #[serde(
         deserialize_with = "deserialize_duration",
@@ -524,6 +542,7 @@ impl Default for WorkerSection {
             log_retention: Duration::from_hours(24 * 30),
             log_max_size: None,
             memory_budget: None,
+            memory_reserve: None,
             memory_check_interval: Duration::from_secs(1),
         }
     }

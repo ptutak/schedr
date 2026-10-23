@@ -39,6 +39,11 @@ pub enum Command {
         /// behind a Service. The master's gRPC stays on loopback.
         #[arg(long, value_name = "ADDRESS")]
         listen: Option<std::net::IpAddr>,
+        /// Migrate the database at start (as `schedr db migrate` does) instead of refusing a
+        /// schema that isn't up to date: for a laptop. In production, migrate as a step of its
+        /// own (the Helm chart's init container).
+        #[arg(long)]
+        migrate: bool,
     },
     /// Manage the database schema.
     Db {
@@ -99,8 +104,14 @@ pub enum Command {
 /// `schedr db ...`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum DbCommand {
-    /// Apply the migrations not applied yet.
-    Migrate,
+    /// Apply the migrations not applied yet, holding the master's lease (refused while a
+    /// master holds it).
+    Migrate {
+        /// Wait until no master holds the lease (one stopped, or dead and its lease expiring)
+        /// instead of refusing.
+        #[arg(long)]
+        wait: bool,
+    },
     /// Show whether the schema fits this version of schedr.
     Status,
 }

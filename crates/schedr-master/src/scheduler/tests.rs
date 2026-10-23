@@ -56,7 +56,7 @@ async fn scheduler_with(dag: Dag) -> (Scheduler, Database) {
 
 /// Runs test SQL; the statements are fixed strings written in this file, so they are safe.
 async fn execute(db: &Database, query: &str) {
-    let Database::Sqlite(pool) = db else {
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     sqlx::query(AssertSqlSafe(query.to_owned()))

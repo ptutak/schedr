@@ -1,0 +1,2 @@
+# Your DAGs' libraries, built into your image (see Dockerfile next to this file).
+pyyaml==6.0.2

@@ -13,22 +13,95 @@ use crate::backend::Backend;
 use crate::database::DbError;
 
 /// Runs `$body` with `$pool` bound to the pool and `$backend` to its [`Backend`], once per
-/// backend (the queries are the same text, typed per driver).
+/// backend (the queries are the same text, typed per driver), within the database's query
+/// limit: past it, the enclosing function returns [`DbError::QueryTimeout`] (the query is
+/// cut off here, whatever pooler is between; see PROJECT.md, production path). For reads:
+/// writes go through [`in_tx`].
 macro_rules! on_pool {
-    ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {
-        match $db {
-            $crate::database::Database::Sqlite($pool) => {
-                let $backend = $crate::backend::Backend::Sqlite;
-                $body
-            }
-            $crate::database::Database::Postgres($pool) => {
-                let $backend = $crate::backend::Backend::Postgres;
-                $body
-            }
-        }
-    };
+    ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {{
+        let db: &$crate::database::Database = $db;
+        let run = async {
+            Ok::<_, $crate::database::DbError>(match db.pool() {
+                $crate::database::Pool::Sqlite($pool) => {
+                    let $backend = $crate::backend::Backend::Sqlite;
+                    $body
+                }
+                $crate::database::Pool::Postgres($pool) => {
+                    let $backend = $crate::backend::Backend::Postgres;
+                    $body
+                }
+            })
+        };
+        db.limited(db.query_timeout(), run).await?
+    }};
 }
 pub(crate) use on_pool;
+
+/// How many query limits a write's transaction may take in all, by default: its statements
+/// are each limited by Postgres itself (and SQLite's busy timeout); this bounds the whole,
+/// waits for a connection and the network included.
+pub(crate) const WRITE_LIMITS: u32 = 2;
+
+/// As [`WRITE_LIMITS`], for a write of many statements (a parse's files, a code version's
+/// DAG changes).
+pub(crate) const BATCH_LIMITS: u32 = 6;
+
+/// Runs `$body` in a transaction, `$tx` bound to it and `$backend` to its [`Backend`]: the
+/// database's writes. A master's are fenced first (see [`Database::fenced`]); on Postgres
+/// each statement is limited by the query limit in Postgres too (`statement_timeout` for this
+/// transaction only, so it holds through any pooler, and a statement cut off stops there
+/// instead of running on); the whole by `$limits` query limits ([`WRITE_LIMITS`] if not
+/// given). The transaction commits when `$body` ends without an error.
+///
+/// On Postgres the transaction's start, its limit and the fence are one message to the
+/// server ([`Database::begin_postgres`]), so a write costs one round trip more than its own
+/// statements (the `COMMIT`). A connection whose start failed may be left in an aborted
+/// transaction, so it is closed rather than given back to the pool.
+///
+/// [`Database::fenced`]: crate::database::Database::fenced
+macro_rules! in_tx {
+    ($db:expr, |$tx:ident, $backend:ident| $body:expr) => {
+        $crate::query::in_tx!($db, $crate::query::WRITE_LIMITS, |$tx, $backend| $body)
+    };
+    ($db:expr, $limits:expr, |$tx:ident, $backend:ident| $body:expr) => {{
+        let db: &$crate::database::Database = $db;
+        let run = async {
+            Ok::<_, $crate::database::DbError>(match db.pool() {
+                $crate::database::Pool::Sqlite(pool) => {
+                    let $backend = $crate::backend::Backend::Sqlite;
+                    let mut $tx = pool.begin().await?;
+                    db.check_fence_sqlite(&mut *$tx).await?;
+                    let done = $body;
+                    $tx.commit().await?;
+                    done
+                }
+                $crate::database::Pool::Postgres(pool) => {
+                    let $backend = $crate::backend::Backend::Postgres;
+                    let mut conn = pool.acquire().await?;
+                    let (begun, failed) =
+                        match sqlx::Connection::begin_with(&mut *conn, db.begin_postgres()).await {
+                            Ok(tx) => (Some(tx), None),
+                            Err(error) => (None, Some(error)),
+                        };
+                    if let Some(error) = failed {
+                        // Ends the borrow of `conn` before it is marked.
+                        drop(begun);
+                        conn.close_on_drop();
+                        return Err($crate::database::DbError::from_begin(error));
+                    }
+                    let Some(mut $tx) = begun else {
+                        unreachable!("a failed start returned above")
+                    };
+                    let done = $body;
+                    $tx.commit().await?;
+                    done
+                }
+            })
+        };
+        db.limited(db.query_timeout() * $limits, run).await?
+    }};
+}
+pub(crate) use in_tx;
 
 #[cfg(test)]
 mod tests;

@@ -15,12 +15,13 @@ use schedr_db::{Database, DbError};
 use schedr_model::beat::Beat;
 use schedr_proto::pb::master_server::{Master, MasterServer};
 use schedr_proto::pb::{self, master_message, worker_message};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::core::{Arrivals, CoreError, MasterCore};
 use crate::dispatch::Outgoing;
+use crate::lease::{Leadership, Renewal};
 use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
 
 #[cfg(test)]
@@ -48,7 +49,15 @@ pub struct Hub {
     refresh_limit: Duration,
     /// When each worker's latest message arrived (the core's).
     arrivals: Arrivals,
+    /// Whether this master leads (holds the lease, see [`crate::lease`]): worker messages,
+    /// registrations and uploads wait while it doesn't.
+    leading: Arc<watch::Sender<bool>>,
 }
+
+/// Another master took the lease over: this one's view is stale, and it must end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("another master took the lease over: this one stops (restarted, it waits as a standby)")]
+pub struct LeaseLost;
 
 impl Hub {
     /// A hub over `core`, with the system clock.
@@ -66,6 +75,7 @@ impl Hub {
             metrics: core.metrics().clone(),
             db: core.db().clone(),
             arrivals: core.arrivals(),
+            leading: Arc::new(watch::Sender::new(true)),
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             clock,
@@ -85,6 +95,28 @@ impl Hub {
     #[must_use]
     pub fn beat(&self) -> Beat {
         self.beat.clone()
+    }
+
+    /// Records whether this master leads, telling the waiting worker messages and the log
+    /// when that changes.
+    fn set_leading(&self, leads: bool) {
+        let changed = self.leading.send_if_modified(|leading| {
+            let changed = *leading != leads;
+            *leading = leads;
+            changed
+        });
+        self.metrics.leading.set(i64::from(leads));
+        if changed && leads {
+            tracing::info!("the master's lease is renewed: leading again");
+        } else if changed {
+            tracing::warn!("the master's lease isn't renewed in time: pausing until it is");
+        }
+    }
+
+    /// Waits until this master leads (at once when it does).
+    async fn while_leading(&self) {
+        let mut leading = self.leading.subscribe();
+        let _ = leading.wait_for(|leads| *leads).await;
     }
 
     /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
@@ -140,9 +172,39 @@ impl Hub {
     pub async fn run(
         &self,
         interval: Duration,
-        mut notifications: Option<CommandNotifications>,
+        notifications: Option<CommandNotifications>,
         stop: impl Future<Output = ()>,
     ) {
+        let _ = self.run_with(interval, notifications, None, stop).await;
+    }
+
+    /// As [`Self::run`], leading by `leadership`'s lease (see [`crate::lease`]): renewed every
+    /// third of its period by a task of its own (a long round doesn't hold renewals up); while
+    /// it isn't fresh enough the master pauses (no rounds, worker messages wait) and resumes
+    /// once renewed; it is given up when `stop` completes. The hub's core must write through
+    /// [`Leadership::fenced_db`].
+    ///
+    /// # Errors
+    ///
+    /// [`LeaseLost`] when another master took it over.
+    pub async fn run_leading(
+        &self,
+        interval: Duration,
+        notifications: Option<CommandNotifications>,
+        leadership: Leadership,
+        stop: impl Future<Output = ()>,
+    ) -> Result<(), LeaseLost> {
+        self.run_with(interval, notifications, Some(leadership), stop)
+            .await
+    }
+
+    async fn run_with(
+        &self,
+        interval: Duration,
+        mut notifications: Option<CommandNotifications>,
+        leadership: Option<Leadership>,
+        stop: impl Future<Output = ()>,
+    ) -> Result<(), LeaseLost> {
         enum Wake {
             Stop,
             Tick,
@@ -150,7 +212,14 @@ impl Hub {
             NotificationsFailed(DbError),
             Alive,
             Refresh,
+            LeaseLost,
         }
+        let (release, released) = tokio::sync::oneshot::channel();
+        let mut keeper = leadership.map(|leadership| {
+            self.set_leading(leadership.leads(std::time::Instant::now()));
+            let hub = self.clone();
+            tokio::spawn(async move { hub.keep_leading(leadership, released).await })
+        });
         let mut ticks = tokio::time::interval(interval);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut alive = tokio::time::interval(ALIVE_INTERVAL);
@@ -168,11 +237,25 @@ impl Hub {
                 },
                 _ = alive.tick() => Wake::Alive,
                 _ = refresh.tick() => Wake::Refresh,
+                _ = async { keeper.as_mut().expect("guarded").await }, if keeper.is_some() => {
+                    Wake::LeaseLost
+                }
             };
             self.beat.beat();
+            let leads = *self.leading.borrow();
             match wake {
-                Wake::Stop => return,
+                Wake::Stop => {
+                    let _ = release.send(());
+                    if let Some(keeper) = keeper {
+                        // It gives the lease up.
+                        let _ = keeper.await;
+                    }
+                    return Ok(());
+                }
+                Wake::LeaseLost => return Err(LeaseLost),
                 Wake::Alive => continue,
+                // Paused: no rounds until the lease is renewed.
+                Wake::Tick | Wake::Command if !leads => continue,
                 Wake::Refresh => {
                     self.refresh_gauges().await;
                     continue;
@@ -202,6 +285,40 @@ impl Hub {
             self.metrics
                 .tick_duration
                 .observe(started.elapsed().as_secs_f64());
+        }
+    }
+
+    /// Renews `leadership` every third of its period, pausing the master when its last
+    /// renewal is no longer recent enough and resuming it when renewed, until another master
+    /// took the lease over (returned then) or `give_up` (the lease given up, a standby takes
+    /// over at once).
+    async fn keep_leading(
+        &self,
+        mut leadership: Leadership,
+        mut give_up: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let mut renew = tokio::time::interval(leadership.period() / 3);
+        renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        renew.reset();
+        loop {
+            let until = tokio::time::Instant::from_std(leadership.until());
+            let leading = *self.leading.borrow();
+            tokio::select! {
+                biased;
+                _ = &mut give_up => {
+                    leadership.release().await;
+                    return;
+                }
+                _ = renew.tick() => {
+                    if leadership.renew(std::time::Instant::now()).await == Renewal::TakenOver {
+                        self.set_leading(false);
+                        tracing::error!("{LeaseLost}");
+                        return;
+                    }
+                }
+                () = tokio::time::sleep_until(until), if leading => {}
+            }
+            self.set_leading(leadership.leads(std::time::Instant::now()));
         }
     }
 
@@ -238,6 +355,8 @@ impl Hub {
             queue,
         ));
         while let Some(message) = queued.recv().await {
+            // Not while paused: another master may be leading.
+            self.while_leading().await;
             let handled = self
                 .core
                 .lock()
@@ -316,6 +435,8 @@ impl Master for Hub {
         // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
         // a stall).
         self.arrivals.arrived(&register.worker_id, (self.clock)());
+        // Not while paused: another master may be leading.
+        self.while_leading().await;
         let registered = self
             .core
             .lock()
@@ -350,6 +471,7 @@ impl Master for Hub {
         &self,
         request: Request<pb::ParseResult>,
     ) -> Result<Response<pb::ParseResultAck>, Status> {
+        self.while_leading().await;
         let uploaded = self
             .core
             .lock()

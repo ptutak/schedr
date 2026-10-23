@@ -157,7 +157,7 @@ fn reads_the_database_url() {
         Config::default().database,
         DatabaseSection {
             url: None,
-            query_timeout: Duration::from_secs(30)
+            query_timeout: Duration::from_secs(10)
         }
     );
     let config =
@@ -192,6 +192,7 @@ fn master_webserver_and_worker_defaults() {
             lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
+            lease_period: Duration::from_secs(30),
         }
     );
     assert_eq!(config.webserver.port, 8080);
@@ -214,6 +215,7 @@ fn master_webserver_and_worker_defaults() {
             log_retention: Duration::from_hours(720),
             log_max_size: None,
             memory_budget: None,
+            memory_reserve: None,
             memory_check_interval: Duration::from_secs(1),
         }
     );

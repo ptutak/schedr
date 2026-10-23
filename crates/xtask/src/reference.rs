@@ -79,6 +79,7 @@ pub fn type_text(root: &Value, schema: &Value) -> String {
         Some("Duration") => return "duration".to_owned(),
         Some("Size") => return "size".to_owned(),
         Some("PathList") => return "paths".to_owned(),
+        Some("MemoryReserve") => return "percentage or size".to_owned(),
         _ => {}
     }
     let any_of = schema

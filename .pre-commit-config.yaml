@@ -8,6 +8,8 @@ repos:
       - id: check-yaml
         # Kubernetes manifests hold several documents.
         args: [--allow-multiple-documents]
+        # Helm templates aren't YAML until rendered (`make chart-check` renders and checks them).
+        exclude: ^charts/[^/]+/templates/
       - id: check-merge-conflict
 
   - repo: local

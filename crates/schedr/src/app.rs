@@ -129,14 +129,19 @@ pub async fn run_db(
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
-    let db = Database::connect(url).await?;
     match command {
-        DbCommand::Migrate => {
-            db.migrate().await?;
+        DbCommand::Migrate { wait } => {
+            crate::roles::migrate_leased(
+                url,
+                config.database.query_timeout,
+                config.master.lease_period,
+                wait,
+            )
+            .await?;
             writeln!(out, "migrated {}: schema up to date", redact_password(url))?;
         }
         DbCommand::Status => {
-            let status = db.schema_status().await?;
+            let status = Database::connect(url).await?.schema_status().await?;
             writeln!(
                 out,
                 "{}: {}",
@@ -164,11 +169,12 @@ pub async fn execute(
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
         // Boxed: the roles' futures are large, and only one of them ever runs.
-        (Command::Standalone { listen }, None) => {
+        (Command::Standalone { listen, migrate }, None) => {
             Box::pin(crate::standalone::command(
                 &local_config(config, env)?,
                 env,
                 *listen,
+                *migrate,
             ))
             .await
         }

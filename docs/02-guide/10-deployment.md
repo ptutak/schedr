@@ -19,7 +19,9 @@ every key.
 
 - **Postgres** is the database for anything spread over several hosts. Run
   `schedr db migrate` before starting the master and the webserver; both refuse a schema that
-  doesn't match their version. SQLite works for roles on one host with a local disk.
+  doesn't match their version. It holds the master's lease while it migrates, so it is
+  refused while a master runs (`--wait` waits for the lease instead). SQLite works for roles
+  on one host with a local disk.
 - **Upgrade the master first**, then the webservers and workers (see
   [Parsing and code versions](06-parsing.md#upgrades)).
 - **Workers' `terminationGracePeriodSeconds`** should match `[worker]
@@ -30,26 +32,52 @@ every key.
 - **Memory:** a worker pod's memory limit is split between its slots (see
   [Workers](05-workers.md#memory)); size the pod for its slots.
 
-A Helm chart for this layout comes with step 2.11; one for standalone in one pod, on SQLite
-or Postgres, comes first, with step 2.10.
+A Helm chart for this layout comes with step 2.11.
 
-## One pod: `schedr standalone`
+## One pod: `schedr standalone`, the production start
 
-To try schedr on a cluster before the full deployment, `examples/kubernetes/` runs
-`schedr standalone` in one pod. Its `Dockerfile` builds the image from the musllinux wheel on
-Alpine, with `tini` as PID 1. `standalone.yaml` sets up a StatefulSet with one replica, a
-Service for the REST API, probes on the ops port, a volume for the data directory, and a
-git-sync sidecar for the DAG code.
+Production starts with **standalone in one pod**: first on SQLite, then on Postgres, and the
+separate roles only if the load needs them (a full switch: the history stays in Postgres).
 
-- `--listen 0.0.0.0` opens the REST API and the ops port beyond localhost; the master's gRPC
-  and the log endpoint stay on localhost.
-- **One replica only.** A lock in the data directory refuses a second standalone on the same
-  data (two would schedule every run twice).
-- The volume must be block storage (ReadWriteOnce): SQLite's locks aren't reliable on network
-  filesystems.
-- Not for production: one process runs every role, so a restart restarts the master and the
-  worker together, and tasks share the pod's memory.
+**The image.** `images/schedr/Dockerfile` builds the base image (`make image`): Alpine with
+Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
+for OpenShift's arbitrary UID. Your DAGs' libraries go in an image of your own built `FROM` it:
+`examples/kubernetes/Dockerfile` does it in two stages, compiling in a builder stage what has
+no musl wheel, so no compiler ends up in your image.
 
-On a laptop, `schedr standalone` alone runs everything on localhost, with SQLite in the data
-directory (`[worker] data_dir`, else `~/.local/share/schedr`), and migrates the database at
+**The chart.** `charts/schedr/` with `mode: standalone`:
+
+- one replica (a StatefulSet) with a ReadWriteOnce volume on block storage for the data
+  directory (task logs, the worker's journal, and on SQLite the database);
+- `database.existingSecret`: a Secret with a Postgres URL; without it, SQLite on the volume.
+  Any connection pooler can sit in between;
+- an **init container** migrates the schema (`schedr db migrate --wait`) before schedr
+  starts: an install or upgrade migrates once, and a failed migration shows as a failed init
+  container. schedr itself doesn't migrate (no `--migrate`), and refuses a schema that isn't
+  up to date;
+- the pod's `fsGroup` is 0, so the volume is writable by the image's group, except on
+  OpenShift (found by its API), which sets its own;
+- `terminationGracePeriodSeconds` (600) is passed to schedr as `[worker]
+  termination_grace_period`, so a drain always fits the pod's grace period;
+- probes on the ops port, a Service with ports named for Istio (`http-api`, `http-ops`), an
+  optional git-sync sidecar for the DAGs, an optional `ServiceMonitor`;
+- more settings as `config` (`WORKER__SLOTS: "4"` becomes `SCHEDR_CONFIG__WORKER__SLOTS`).
+
+What to know:
+
+- **One master per database:** a second pod during a rollout waits as a standby (see [The
+  master](04-master.md#one-master-per-database-the-lease)); on SQLite the volume lets only
+  one pod in anyway. If the master part fails (another took its lease over), the whole pod's
+  process exits and Kubernetes restarts it.
+- **Memory:** the pod's limit is shared by tasks and schedr itself; task budgets are (limit −
+  25 %) ÷ slots in standalone (`[worker] memory_reserve` to change it). schedr's own process
+  used about 20–25 MiB in measurements.
+- **Upgrades restart every role at once:** running tasks get the grace period, then are
+  interrupted and run again.
+- **The REST API has no authentication** until the UI: keep the Service internal.
+- `scripts/kind-standalone.sh` installs the chart on a local kind cluster, on SQLite and on
+  Postgres, and runs a DAG.
+
+On a laptop, `schedr standalone --migrate` runs everything on localhost, with SQLite in the
+data directory (`[worker] data_dir`, else `~/.local/share/schedr`), migrating the database at
 start.

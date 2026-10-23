@@ -102,6 +102,28 @@ fn db_migrate_and_status_work_against_the_configured_database() {
 }
 
 #[test]
+fn db_migrate_refuses_while_a_master_holds_the_lease() {
+    // Migrating under a running master (or a second migration) is ruled out by the master's
+    // lease, which works through any pooler (sqlx's own migration lock doesn't).
+    let dir = tempfile::TempDir::new().unwrap();
+    let url = format!("sqlite://{}", dir.path().join("schedr.db").display());
+    let env = [("SCHEDR_CONFIG__DATABASE__URL", url.as_str())];
+    assert_eq!(schedr(&["db", "migrate"], &env, &[]).code, 0);
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let db = schedr_db::Database::connect(&url).await.unwrap();
+        let period = std::time::Duration::from_secs(3600);
+        assert!(db.take_lease("master", period).await.unwrap().is_some());
+    });
+    let result = schedr(&["db", "migrate"], &env, &[]);
+    assert_eq!(result.code, 1, "{}", result.out);
+    assert!(
+        result.err.contains("a master holds the database's lease"),
+        "{}",
+        result.err
+    );
+}
+
+#[test]
 fn db_without_a_database_url_fails_clearly() {
     let result = schedr(&["db", "migrate"], &[], &[]);
     assert_eq!(result.code, 1);

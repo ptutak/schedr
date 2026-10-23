@@ -122,7 +122,9 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
     configured.master.grpc_port = 0;
     configured.webserver.port = 0;
     configured.master.tick_interval = Duration::from_millis(50);
-    let setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
+    let mut setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
+    assert!(!setup.migrate, "migrating is asked for (`--migrate`)");
+    setup.migrate = true;
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();
     let shown = setup.clone();

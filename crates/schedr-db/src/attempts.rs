@@ -12,7 +12,7 @@ use schedr_model::{AttemptStatus, Dag, RunKind, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, on_pool, parse_time, sql};
+use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql};
 
 #[cfg(test)]
 mod tests;
@@ -192,8 +192,7 @@ impl Database {
             VALUES ($1{uuid}, $2{uuid}, $3, $4, $5{ts})";
         let id = Uuid::now_v7().to_string();
         let now = db_time(now);
-        let try_number: Option<i32> = on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        let try_number: Option<i32> = in_tx!(self, |tx, backend| {
             let claimed = sqlx::query(sql(backend, CLAIM))
                 .bind(&now)
                 .bind(instance_id)
@@ -213,7 +212,6 @@ impl Database {
                     .bind(&now)
                     .execute(&mut *tx)
                     .await?;
-                tx.commit().await?;
                 Some(try_number)
             } else {
                 None
@@ -242,8 +240,7 @@ impl Database {
             WHERE id = (SELECT task_instance_id FROM attempts WHERE id = $5{uuid}) \
             AND state = 'running'";
         const DELETE: &str = "DELETE FROM attempts WHERE id = $1{uuid} AND status IS NULL";
-        on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, RESET))
                 .bind(state.to_string())
                 .bind(ready_at.map(db_time))
@@ -256,7 +253,6 @@ impl Database {
                 .bind(attempt_id)
                 .execute(&mut *tx)
                 .await?;
-            tx.commit().await?;
         });
         Ok(())
     }
@@ -328,12 +324,12 @@ impl Database {
     ) -> Result<bool, DbError> {
         const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
             start_method = $2 WHERE id = $3{uuid} AND status IS NULL";
-        let updated = on_pool!(self, |pool, backend| {
+        let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, START))
                 .bind(db_time(now))
                 .bind(start_method)
                 .bind(attempt_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -355,7 +351,7 @@ impl Database {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
             ended_at = $8{ts}, duration_ms = $9 WHERE id = $10{uuid} AND status IS NULL";
-        let updated = on_pool!(self, |pool, backend| {
+        let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, END))
                 .bind(end.status.to_string())
                 .bind(end.exit_code)
@@ -373,7 +369,7 @@ impl Database {
                         .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX)),
                 )
                 .bind(attempt_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -411,10 +407,10 @@ impl Database {
     pub async fn requeue_unschedulable(&self, now: Timestamp) -> Result<u64, DbError> {
         const REQUEUE: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
             queued_reason = NULL, updated_at = $1{ts} WHERE state = 'unschedulable'";
-        let updated = on_pool!(self, |pool, backend| {
+        let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, REQUEUE))
                 .bind(db_time(now))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });

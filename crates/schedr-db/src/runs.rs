@@ -9,7 +9,7 @@ use schedr_model::{Dag, DagId, RunKind, RunState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, on_pool, parse_time, sql};
+use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql};
 
 #[cfg(test)]
 mod tests;
@@ -87,7 +87,7 @@ impl Database {
             VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}) \
             ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
-        let inserted = on_pool!(self, |pool, backend| {
+        let inserted = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, INSERT))
                 .bind(id)
                 .bind(run.dag_id.as_str())
@@ -99,7 +99,7 @@ impl Database {
                 .bind(db_time(run.triggered_at))
                 .bind(run.triggered_by)
                 .bind(started_at)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -215,11 +215,11 @@ impl Database {
     pub async fn start_run(&self, run_id: &str, now: Timestamp) -> Result<(), DbError> {
         const START: &str = "UPDATE runs SET state = 'running', started_at = $1{ts} \
             WHERE id = $2{uuid} AND state = 'queued'";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, START))
                 .bind(db_time(now))
                 .bind(run_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())

@@ -15,9 +15,9 @@ async fn migrated() -> Database {
 }
 
 fn pool(db: &Database) -> &SqlitePool {
-    match db {
-        Database::Sqlite(pool) => pool,
-        Database::Postgres(_) => panic!("expected SQLite"),
+    match db.pool() {
+        crate::database::Pool::Sqlite(pool) => pool,
+        crate::database::Pool::Postgres(_) => panic!("expected SQLite"),
     }
 }
 
@@ -73,7 +73,7 @@ async fn waiting_for_a_connection_is_limited_by_the_query_timeout() {
     let db = Database::connect_with_timeout(MEMORY, Duration::from_millis(100))
         .await
         .unwrap();
-    let Database::Sqlite(pool) = &db else {
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     let _held = pool.acquire().await.unwrap();
@@ -81,7 +81,7 @@ async fn waiting_for_a_connection_is_limited_by_the_query_timeout() {
     let error = db.state_counts().await.unwrap_err();
     assert!(matches!(error, DbError::Sqlx(_)), "{error:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
-    assert_eq!(DEFAULT_QUERY_TIMEOUT, Duration::from_secs(30));
+    assert_eq!(DEFAULT_QUERY_TIMEOUT, Duration::from_secs(10));
 }
 
 #[tokio::test]
@@ -308,4 +308,13 @@ async fn commands_start_pending() {
 fn errors_from_sqlx_are_wrapped_with_context() {
     let err = DbError::from(sqlx::Error::RowNotFound);
     assert!(err.to_string().starts_with("database error: "), "{err}");
+}
+
+#[test]
+fn a_failed_start_is_a_database_error_unless_the_fence_refused_it() {
+    // The fence's refusal (SR001) is read on Postgres: tests/postgres.rs.
+    assert!(matches!(
+        DbError::from_begin(sqlx::Error::PoolTimedOut),
+        DbError::Sqlx(sqlx::Error::PoolTimedOut)
+    ));
 }

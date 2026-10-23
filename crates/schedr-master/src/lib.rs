@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod dispatch;
 pub mod execution;
 pub mod fire_times;
+pub mod lease;
 pub mod metrics;
 pub mod parse_jobs;
 pub mod planning;

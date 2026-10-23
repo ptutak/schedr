@@ -25,18 +25,21 @@ use schedr_agent::attempt::WorkerSetup;
 use schedr_agent::drain::DrainPeriods;
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
-use schedr_agent::memory::{MIN_BUDGET, MemoryWatch, budget, cgroup_limit, show_size};
+use schedr_agent::memory::{
+    MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, budget, cgroup_limit, show_size,
+};
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::{LogRetention, sweep_logs};
 use schedr_api::logs::HttpLogSource;
 use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
-use schedr_config::{Config, TlsMode};
+use schedr_config::{Config, MemoryReserve, TlsMode};
 use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
+use schedr_master::lease::{Leadership, Renewal};
 use schedr_master::metrics::MasterMetrics;
 use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
-use schedr_master::service::Hub;
+use schedr_master::service::{Hub, LeaseLost};
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_tls::{Protocol, Tls, TlsFiles, incoming};
 use tokio::net::TcpListener;
@@ -91,16 +94,18 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
 /// The worker agent's settings, from the configuration; its journal is
 /// `<data_dir>/journal/<worker ID>` and its logs `<data_dir>/logs/<worker ID>` (other bytes
 /// than letters, digits, `-`, `_` and `.`, and a leading `.`, as `%XX`), so workers sharing a
-/// data directory never see each other's (retention, the log endpoint).
+/// data directory never see each other's (retention, the log endpoint). Without `[worker]
+/// memory_reserve`, the task budgets leave `default_reserve` of the pod's limit out.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] if the DAG interpreter isn't defined, the memory check interval
-/// is 0 or the memory budget below [`MIN_BUDGET`].
+/// is 0, or the memory budget (set, or what the reserve leaves) below [`MIN_BUDGET`].
 pub fn agent_settings(
     config: &Config,
     env: &BTreeMap<String, String>,
     data_dir: &Path,
+    default_reserve: Reserve,
 ) -> Result<AgentSettings, AppError> {
     let python = config
         .interpreters
@@ -132,6 +137,22 @@ pub fn agent_settings(
             show_size(MIN_BUDGET)
         )));
     }
+    let limit = cgroup_limit(Path::new("/proc"), Path::new("/sys/fs/cgroup"))
+        .ok()
+        .flatten();
+    let memory = memory_watch(config, limit, default_reserve);
+    if config.worker.memory_budget.is_none()
+        && let Some(budget) = memory.budget
+        && budget < MIN_BUDGET
+    {
+        return Err(AppError::BadArgument(format!(
+            "[worker] memory_reserve leaves {} per task of the pod's {} limit: give at least {} \
+             (a smaller reserve, fewer slots, or more memory)",
+            show_size(budget),
+            show_size(limit.unwrap_or_default()),
+            show_size(MIN_BUDGET)
+        )));
+    }
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
@@ -145,12 +166,7 @@ pub fn agent_settings(
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),
             log_dir: data_dir.join("logs").join(file_name(&worker_id)),
-            memory: memory_watch(
-                config,
-                cgroup_limit(Path::new("/proc"), Path::new("/sys/fs/cgroup"))
-                    .ok()
-                    .flatten(),
-            ),
+            memory,
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
@@ -166,12 +182,25 @@ pub fn agent_settings(
     })
 }
 
-/// How the memory watchdog watches tasks: `[worker] memory_budget`, else (`limit` − 10 %) ÷
-/// slots; without either it only measures.
+/// How the memory watchdog watches tasks: `[worker] memory_budget`, else (`limit` − the
+/// reserve) ÷ slots, the reserve `[worker] memory_reserve` or `default_reserve`; without a
+/// budget or a limit it only measures.
 #[must_use]
-pub fn memory_watch(config: &Config, limit: Option<u64>) -> MemoryWatch {
+pub fn memory_watch(config: &Config, limit: Option<u64>, default_reserve: Reserve) -> MemoryWatch {
+    let reserve = config
+        .worker
+        .memory_reserve
+        .map_or(default_reserve, |reserve| match reserve {
+            MemoryReserve::Percent(percent) => Reserve::Percent(percent),
+            MemoryReserve::Size(bytes) => Reserve::Bytes(bytes),
+        });
     MemoryWatch {
-        budget: budget(config.worker.memory_budget, limit, config.worker.slots),
+        budget: budget(
+            config.worker.memory_budget,
+            limit,
+            config.worker.slots,
+            reserve,
+        ),
         interval: config.worker.memory_check_interval,
         ..MemoryWatch::default()
     }
@@ -321,20 +350,34 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
 }
 
 /// Serves the master: its gRPC service on `listener` (over mTLS with `tls`) and its loop,
-/// until `stop`.
+/// until `stop`, once `leadership` has taken the lease (a standby waits there).
 ///
 /// # Errors
 ///
-/// [`AppError`] if the gRPC server fails.
+/// [`AppError`] if the gRPC server fails, the lease can't be taken, or another master took it
+/// over.
+#[expect(clippy::too_many_arguments, reason = "the parts of one role, named")]
 pub async fn serve_master(
     db: Database,
     settings: Settings,
     tick: Duration,
     listener: TcpListener,
     tls: Option<Tls>,
+    leadership: impl Future<Output = Leadership>,
     observed: Observed<'_, MasterMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
+    // Nothing of the master's before the lease: a standby waits here, its readiness
+    // "starting".
+    let leadership = tokio::select! {
+        taken = leadership => taken,
+        () = until(stop.clone()) => return Ok(()),
+    };
+    tracing::info!(
+        epoch = leadership.epoch(),
+        holder = leadership.holder(),
+        "schedr master: leading (the lease is this master's)"
+    );
     let connections = incoming(listener, tls, Protocol::Grpc)
         .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
     let notifications = match db.command_notifications().await {
@@ -344,8 +387,10 @@ pub async fn serve_master(
             None
         }
     };
-    let hub = Hub::new(MasterCore::new(db, settings).with_metrics(observed.metrics))
-        .with_refresh_limit(observed.health.stall() / 2);
+    // Its writes through the lease: refused once another master took it over.
+    let hub =
+        Hub::new(MasterCore::new(leadership.fenced_db(), settings).with_metrics(observed.metrics))
+            .with_refresh_limit(observed.health.stall() / 2);
     observed.health.watch_loop("scheduling loop", hub.beat());
     let restored = hub.restore().await.map_err(|e| match e {
         CoreError::Db(db) => AppError::Db(db),
@@ -361,7 +406,7 @@ pub async fn serve_master(
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
         .serve_with_incoming_shutdown(connections, until(stop.clone()));
-    let master_loop = hub.run(tick, notifications, until(stop));
+    let master_loop = hub.run_leading(tick, notifications, leadership, until(stop));
     tokio::pin!(grpc, master_loop);
     // The server ends first only by failing (both end together on `stop`): the role must
     // then end too, not go on with a loop no worker can reach.
@@ -369,7 +414,8 @@ pub async fn serve_master(
         result = &mut grpc => {
             result.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
         }
-        () = &mut master_loop => {
+        ended = &mut master_loop => {
+            ended.map_err(|lost| AppError::BadArgument(lost.to_string()))?;
             grpc.await.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
         }
     }
@@ -601,6 +647,93 @@ pub fn stop_on_signal() -> watch::Receiver<u32> {
     stopped
 }
 
+/// Waits for the master's lease (see [`Leadership::take`]) as a new incarnation of the master
+/// of `role`, logging once that it waits as a standby.
+pub async fn take_lease(db: Database, period: Duration, role: &'static str) -> Leadership {
+    let holder = uuid::Uuid::now_v7().to_string();
+    Leadership::take(db, holder, period, move || {
+        tracing::info!("schedr {role}: another master holds the lease; waiting as a standby");
+    })
+    .await
+}
+
+/// `schedr db migrate`: migrates the database at `url` holding the master's lease, so no master
+/// runs on the schema meanwhile and no other migration runs at once (sqlx's own lock is a
+/// session lock, which a pooler in transaction mode doesn't keep). Refused while a master
+/// holds it, unless `wait`.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when a master holds the lease (and not `wait`), else as
+/// [`migrate_holding`].
+pub async fn migrate_leased(
+    url: &str,
+    query_timeout: Duration,
+    period: Duration,
+    wait: bool,
+) -> Result<(), AppError> {
+    let db = Database::connect_with_timeout(url, query_timeout).await?;
+    let unlimited = unlimited(url, &db).await?;
+    let holder = format!("migrate-{}", uuid::Uuid::now_v7());
+    let lead = if wait {
+        Leadership::take(db, holder, period, || {
+            tracing::info!("a master holds the database's lease; waiting for it");
+        })
+        .await
+    } else {
+        Leadership::try_take(db, holder, period)
+            .await?
+            .ok_or_else(|| {
+                AppError::BadArgument(
+                    "a master holds the database's lease: stop it first, or wait for it with \
+                 `schedr db migrate --wait`"
+                        .to_owned(),
+                )
+            })?
+    };
+    let lead = migrate_holding(lead, &unlimited).await?;
+    lead.release().await;
+    Ok(())
+}
+
+/// The database at `url` without a query limit, for a migration (a long one must finish);
+/// `limited` itself in memory, where another connection would be another database.
+///
+/// # Errors
+///
+/// [`AppError::Db`] if it can't be connected to.
+pub async fn unlimited(url: &str, limited: &Database) -> Result<Database, AppError> {
+    if url.contains(":memory:") {
+        Ok(limited.clone())
+    } else {
+        Ok(Database::connect(url).await?)
+    }
+}
+
+/// Migrates `db` (see [`unlimited`]) while holding `lead`, renewing it as the migration runs.
+///
+/// # Errors
+///
+/// [`AppError::Db`] if the migration fails, [`AppError::BadArgument`] if another master took
+/// the lease over meanwhile.
+pub async fn migrate_holding(mut lead: Leadership, db: &Database) -> Result<Leadership, AppError> {
+    let migration = db.migrate_as_lease_holder();
+    tokio::pin!(migration);
+    loop {
+        tokio::select! {
+            migrated = &mut migration => {
+                migrated?;
+                return Ok(lead);
+            }
+            () = tokio::time::sleep(lead.period() / 3) => {
+                if lead.renew(std::time::Instant::now()).await == Renewal::TakenOver {
+                    return Err(AppError::BadArgument(LeaseLost.to_string()));
+                }
+            }
+        }
+    }
+}
+
 /// `schedr master`: the gRPC service and the loop, until Ctrl-C or SIGTERM.
 ///
 /// # Errors
@@ -625,36 +758,54 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
         links_text(tls.as_ref())
     );
     watch_tls(tls.as_ref(), config, &stop);
-    serve_master(
+    let leadership = take_lease(db.clone(), config.master.lease_period, "master");
+    // Boxed: the role's future is large.
+    Box::pin(serve_master(
         db,
         master_settings(config),
         config.master.tick_interval,
         listener,
         tls,
+        leadership,
         Observed {
             metrics,
             health: &health,
             ready,
         },
         stop,
-    )
+    ))
     .await
 }
 
-/// Checks that `[database] query_timeout` is shorter than `[ops] loop_stall_timeout`, so one
-/// hung query doesn't look like a stuck loop.
+/// Checks that `[database] query_timeout` and `[master] lease_period` are shorter than `[ops]
+/// loop_stall_timeout`, so one hung query doesn't look like a stuck loop, and a stuck master
+/// doesn't lead past its restart.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] when it isn't.
 pub fn check_timeouts(config: &Config) -> Result<(), AppError> {
-    // Below 1 ms it would be 0 for Postgres: no limit at all.
+    // Below 1 ms every query would be cut off at once.
     if config.database.query_timeout >= config.ops.loop_stall_timeout
         || config.database.query_timeout.as_millis() == 0
     {
         return Err(AppError::BadArgument(format!(
             "[database] query_timeout ({} s) must be at least 1 ms and shorter than [ops] \
              loop_stall_timeout ({} s)",
+            config.database.query_timeout.as_secs_f64(),
+            config.ops.loop_stall_timeout.as_secs_f64()
+        )));
+    }
+    // A paused master keeps its loop beating, but a lease longer than the stall limit would
+    // leave a stuck one leading past its restart. A renewal (limited by the query limit) must
+    // fit a third of it, and leading stops a query limit before it ends.
+    if config.master.lease_period >= config.ops.loop_stall_timeout
+        || config.master.lease_period < config.database.query_timeout * 3
+    {
+        return Err(AppError::BadArgument(format!(
+            "[master] lease_period ({} s) must be at least three [database] query_timeout \
+             ({} s) and shorter than [ops] loop_stall_timeout ({} s)",
+            config.master.lease_period.as_secs_f64(),
             config.database.query_timeout.as_secs_f64(),
             config.ops.loop_stall_timeout.as_secs_f64()
         )));
@@ -772,7 +923,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     tokio::fs::create_dir_all(&data_dir)
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
-    let mut agent = agent_settings(&config, env, &data_dir)?;
+    let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
     let _lock = lock_journal(&agent)?;
     let address = SocketAddr::new(config.worker.log_bind, config.worker.log_port);
     let log_listener = listen(address).await?;

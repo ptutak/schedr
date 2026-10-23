@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "schedr.fullname" . }}
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "schedr.labels" . | nindent 6 }}
+  endpoints:
+    - port: http-ops
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

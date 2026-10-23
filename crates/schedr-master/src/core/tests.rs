@@ -602,7 +602,7 @@ async fn a_restarted_master_restores_workers_and_counts_their_lease_from_its_sta
 #[tokio::test]
 async fn a_registration_that_fails_half_way_leaves_no_live_stream() {
     let mut core = core().await;
-    let Database::Sqlite(pool) = &core.db else {
+    let schedr_db::database::Pool::Sqlite(pool) = core.db.pool() else {
         unreachable!()
     };
     sqlx::query("DROP TABLE workers")

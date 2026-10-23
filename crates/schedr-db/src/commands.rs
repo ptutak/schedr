@@ -14,8 +14,8 @@ use schedr_model::commands::{Command, CommandStatus};
 use sqlx::postgres::PgListener;
 use uuid::Uuid;
 
-use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, on_pool, parse_time, sql, to_json};
+use crate::database::{Database, DbError, Pool};
+use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json};
 
 #[cfg(test)]
 mod tests;
@@ -111,17 +111,17 @@ impl Database {
         const INSERT: &str = "INSERT INTO commands (id, kind, payload, requested_by, requested_at) \
             VALUES ($1{uuid}, $2, $3{json}, $4, $5{ts})";
         let id = Uuid::now_v7().to_string();
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(command.kind())
                 .bind(to_json(command))
                 .bind(requested_by)
                 .bind(db_time(now))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
-        if let Self::Postgres(pool) = self {
+        if let Pool::Postgres(pool) = self.pool() {
             // The command is stored: a failed notification only delays it to the master's
             // next poll, so it isn't an error (a retried request would store it twice).
             if let Err(error) = sqlx::query("SELECT pg_notify($1, $2)")
@@ -143,9 +143,9 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the listening connection can't be opened.
     pub async fn command_notifications(&self) -> Result<Option<CommandNotifications>, DbError> {
-        match self {
-            Self::Sqlite(_) => Ok(None),
-            Self::Postgres(pool) => {
+        match self.pool() {
+            Pool::Sqlite(_) => Ok(None),
+            Pool::Postgres(pool) => {
                 let mut listener = PgListener::connect_with(pool).await?;
                 listener.listen(COMMANDS_CHANNEL).await?;
                 Ok(Some(CommandNotifications { listener }))
@@ -190,11 +190,11 @@ impl Database {
     pub async fn mark_applying(&self, id: &str, now: Timestamp) -> Result<(), DbError> {
         const MARK: &str = "UPDATE commands SET applying_at = $1{ts} \
             WHERE id = $2{uuid} AND status = 'pending'";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, MARK))
                 .bind(db_time(now))
                 .bind(id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -217,7 +217,7 @@ impl Database {
     ) -> Result<bool, DbError> {
         const DECIDE: &str = "UPDATE commands SET status = $1, reason = $2, result = $3{json}, \
             decided_at = $4{ts} WHERE id = $5{uuid} AND status = 'pending'";
-        let decided = on_pool!(self, |pool, backend| {
+        let decided = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, DECIDE))
                 .bind(
                     serde_json::to_value(status)
@@ -228,7 +228,7 @@ impl Database {
                 .bind(result.map(to_json))
                 .bind(db_time(now))
                 .bind(id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });

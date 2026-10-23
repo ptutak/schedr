@@ -84,7 +84,7 @@ impl Standalone {
         let child = command
             .arg("--config")
             .arg(dir.path().join("config.toml"))
-            .arg("standalone")
+            .args(["standalone", "--migrate"])
             .args(extra)
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
@@ -574,4 +574,77 @@ fn a_second_standalone_on_the_same_data_is_refused_and_sigterm_stops_the_first()
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+#[test]
+fn standalone_ends_when_its_master_is_taken_over() {
+    // The master's failure ends the whole process (the pod restarts and waits as a standby),
+    // instead of an API and a worker going on with no master.
+    let mut standalone = Standalone::start(&[("chain.py", CHAIN)], None);
+    standalone.wait("the master to lead", || {
+        standalone.log().contains("\"holder\":\"")
+    });
+    let log = standalone.log();
+    let holder = log.split("\"holder\":\"").nth(1).unwrap();
+    let holder = holder.split('"').next().unwrap().to_owned();
+    let url = format!(
+        "sqlite://{}",
+        standalone.dir.path().join("data/schedr.db").display()
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let db = schedr_db::Database::connect(&url).await.unwrap();
+        db.release_lease(&holder).await.unwrap();
+        let taken = db
+            .take_lease("intruder", Duration::from_secs(3600))
+            .await
+            .unwrap();
+        assert!(taken.is_some(), "{}", standalone.log());
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = standalone.child.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(1), "{}", standalone.log());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "standalone went on without its master\n{}",
+            standalone.log()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        standalone.log().contains("took the lease over"),
+        "{}",
+        standalone.log()
+    );
+}
+
+#[test]
+fn without_migrate_a_database_not_migrated_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let config = format!(
+        "[interpreters]\npython = \"{}\"\n\n[worker]\ndata_dir = \"{}\"\n",
+        python(),
+        dir.path().join("data").display()
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let output = Command::new(BINARY)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .arg("--config")
+        .arg(dir.path().join("config.toml"))
+        .args(["standalone"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{err}");
+    assert!(
+        err.contains(
+            "uninitialized: run `schedr db migrate`, or start standalone with `--migrate`"
+        ),
+        "{err}"
+    );
 }

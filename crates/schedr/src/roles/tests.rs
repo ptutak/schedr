@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
 
 use pretty_assertions::assert_eq;
+use schedr_agent::memory::STANDALONE_RESERVE;
 use schedr_config::config::Interpreter;
 use schedr_db::DbError;
 use tempfile::TempDir;
@@ -62,7 +63,13 @@ fn the_data_directory_is_configured_or_under_xdg_or_home() {
 fn agent_settings_name_the_worker_and_its_interpreter() {
     let mut config = config();
     config.worker.slots = 4;
-    let agent = agent_settings(&config, &env(&[("HOSTNAME", "pod-1")]), Path::new("/d")).unwrap();
+    let agent = agent_settings(
+        &config,
+        &env(&[("HOSTNAME", "pod-1")]),
+        Path::new("/d"),
+        WORKER_RESERVE,
+    )
+    .unwrap();
     assert_eq!(agent.worker_id, "pod-1");
     assert_eq!(agent.slots, 4);
     assert_eq!(agent.setup.python, PathBuf::from("/usr/bin/python3"));
@@ -76,18 +83,18 @@ fn agent_settings_name_the_worker_and_its_interpreter() {
         ("", "%"),
     ] {
         config.worker.id = Some(id.to_owned());
-        let agent = agent_settings(&config, &env(&[]), Path::new("/d")).unwrap();
+        let agent = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE).unwrap();
         assert_eq!(agent.journal_dir, Path::new("/d/journal").join(dir), "{id}");
     }
     config.worker.id = None;
     assert_eq!(
-        agent_settings(&config, &env(&[]), Path::new("/d"))
+        agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE)
             .unwrap()
             .worker_id,
         "localhost"
     );
     config.dags.interpreter = "etl-venv".to_owned();
-    let error = agent_settings(&config, &env(&[]), Path::new("/d")).unwrap_err();
+    let error = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE).unwrap_err();
     assert!(
         error
             .to_string()
@@ -99,7 +106,7 @@ fn agent_settings_name_the_worker_and_its_interpreter() {
 #[test]
 fn one_agent_holds_a_journal() {
     let tmp = TempDir::new().unwrap();
-    let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
+    let agent = agent_settings(&config(), &env(&[]), tmp.path(), WORKER_RESERVE).unwrap();
     let held = lock_journal(&agent).unwrap();
     let error = lock_journal(&agent).unwrap_err().to_string();
     assert!(
@@ -136,12 +143,14 @@ async fn memory_db() -> Database {
 async fn the_master_and_the_api_serve_until_stopped() {
     let (stop, stopped) = watch::channel(0);
     let health = Health::new(Duration::from_secs(120));
+    let db = memory_db().await;
     let master = serve_master(
-        memory_db().await,
+        db.clone(),
         master_settings(&config()),
         Duration::from_millis(10),
         listen(loopback()).await.unwrap(),
         None,
+        take_lease(db, Duration::from_secs(15), "master"),
         Observed {
             metrics: MasterMetrics::default(),
             health: &health,
@@ -176,7 +185,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
 #[tokio::test]
 async fn a_worker_without_a_reachable_master_stops_when_asked() {
     let tmp = TempDir::new().unwrap();
-    let agent = agent_settings(&config(), &env(&[]), tmp.path()).unwrap();
+    let agent = agent_settings(&config(), &env(&[]), tmp.path(), WORKER_RESERVE).unwrap();
     let (stop, stopped) = watch::channel(0);
     // Boxed, as in standalone: the worker's future is large.
     let links = WorkerLinks {
@@ -352,13 +361,19 @@ fn app_mode_needs_the_three_files_and_mesh_mode_none() {
 
 #[tokio::test]
 async fn the_roles_say_what_they_miss() {
-    for error in [master(&config()).await, webserver(&config()).await] {
+    for error in [
+        Box::pin(master(&config())).await,
+        webserver(&config()).await,
+    ] {
         let error = error.unwrap_err().to_string();
         assert!(error.contains("needs [tls] ca"), "{error}");
     }
     let mut mesh = config();
     mesh.tls.mode = TlsMode::Mesh;
-    assert!(matches!(master(&mesh).await, Err(AppError::NoDatabase)));
+    assert!(matches!(
+        Box::pin(master(&mesh)).await,
+        Err(AppError::NoDatabase)
+    ));
     assert!(matches!(webserver(&mesh).await, Err(AppError::NoDatabase)));
     let error = worker(&config(), &env(&[("HOME", "/h")]))
         .await
@@ -421,14 +436,24 @@ fn an_open_api_is_warned_about_with_its_address() {
 #[test]
 fn the_memory_watch_takes_the_configured_budget_or_shares_the_limit() {
     let mut config = config();
-    let watch = memory_watch(&config, Some(4 << 30));
+    let watch = memory_watch(&config, Some(4 << 30), WORKER_RESERVE);
     let limit: u64 = 4 << 30;
     assert_eq!(watch.budget, Some((limit - limit / 100 * 10) / 2));
     assert_eq!(watch.interval, Duration::from_secs(1));
-    assert_eq!(memory_watch(&config, None).budget, None);
+    assert_eq!(memory_watch(&config, None, WORKER_RESERVE).budget, None);
+    // Standalone keeps a quarter for its master and API; `memory_reserve` overrides either.
+    let standalone = memory_watch(&config, Some(limit), STANDALONE_RESERVE);
+    assert_eq!(standalone.budget, Some((limit - limit / 100 * 25) / 2));
+    config.worker.memory_reserve = Some(MemoryReserve::Size(1 << 30));
+    let reserved = memory_watch(&config, Some(limit), STANDALONE_RESERVE);
+    assert_eq!(reserved.budget, Some((limit - (1 << 30)) / 2));
+    config.worker.memory_reserve = Some(MemoryReserve::Percent(50));
+    let half = memory_watch(&config, Some(limit), WORKER_RESERVE);
+    assert_eq!(half.budget, Some((limit - limit / 100 * 50) / 2));
+    config.worker.memory_reserve = None;
     config.worker.memory_budget = Some(100 << 20);
     config.worker.memory_check_interval = Duration::from_millis(200);
-    let watch = memory_watch(&config, None);
+    let watch = memory_watch(&config, None, WORKER_RESERVE);
     assert_eq!(
         (watch.budget, watch.interval),
         (Some(100 << 20), Duration::from_millis(200))
@@ -444,7 +469,7 @@ fn the_memory_watch_takes_the_configured_budget_or_shares_the_limit() {
 fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
     let mut config = config();
     config.worker.memory_check_interval = Duration::ZERO;
-    let error = agent_settings(&config, &env(&[]), Path::new("/d"))
+    let error = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE)
         .unwrap_err()
         .to_string();
     assert_eq!(
@@ -453,7 +478,7 @@ fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
     );
     let mut config = self::config();
     config.worker.memory_budget = Some(1 << 10);
-    let error = agent_settings(&config, &env(&[]), Path::new("/d"))
+    let error = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE)
         .unwrap_err()
         .to_string();
     assert_eq!(
@@ -476,6 +501,30 @@ fn the_query_timeout_must_be_shorter_than_the_loop_stall_timeout() {
     assert!(check_timeouts(&config).is_err());
     config.database.query_timeout = Duration::from_micros(500);
     assert!(check_timeouts(&config).is_err());
+}
+
+#[test]
+fn the_lease_period_must_be_shorter_than_the_loop_stall_timeout() {
+    let mut config = config();
+    config.master.lease_period = Duration::from_mins(2);
+    assert_eq!(
+        check_timeouts(&config).unwrap_err().to_string(),
+        "[master] lease_period (120 s) must be at least three [database] query_timeout (10 s) \
+         and shorter than [ops] loop_stall_timeout (120 s)"
+    );
+    config.master.lease_period = Duration::from_secs(30);
+    assert!(check_timeouts(&config).is_ok());
+}
+
+#[test]
+fn the_lease_period_must_fit_three_query_timeouts() {
+    // A renewal, limited by the query limit, must fit a third of the period.
+    let mut config = config();
+    config.master.lease_period = Duration::from_secs(29);
+    assert!(check_timeouts(&config).is_err());
+    config.database.query_timeout = Duration::from_millis(300);
+    config.master.lease_period = Duration::from_millis(900);
+    assert!(check_timeouts(&config).is_ok());
 }
 
 #[tokio::test]

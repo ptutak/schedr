@@ -154,7 +154,8 @@ impl Cluster {
              [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\
              log_bind = \"127.0.0.1\"\nlog_port = 0\nlog_address = \"127.0.0.1\"\n\n\
              [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
-             heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\n\n\
+             heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\nlease_period = \"15s\"\n\n\
+             [database]\nquery_timeout = \"5s\"\n\n\
              [webserver]\nbind = \"127.0.0.1\"\nport = 0\n\n\
              [ops]\nbind = \"127.0.0.1\"\nport = 0\n\n\
              [tls]\nmode = \"mesh\"\n",
@@ -1535,7 +1536,10 @@ fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
     cluster.start_as(
         "waiting-master",
         "master",
-        &[("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "20s")],
+        &[
+            ("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "20s"),
+            ("SCHEDR_CONFIG__MASTER__LEASE_PERIOD", "60s"),
+        ],
     );
     assert_eq!(
         cluster.ops_get("waiting-master", "/healthz"),
@@ -1703,4 +1707,54 @@ fn a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_perio
         .map(|a| a["status"].clone())
         .collect();
     assert_eq!(statuses, ["cancelled"], "{}", cluster.logs());
+}
+
+#[test]
+fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
+    // One master per database (2.10): the lease, renewed by one statement, works through any
+    // pooler; a second master waits, and takes over once the first's lease expires.
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    let lease = [
+        ("SCHEDR_CONFIG__MASTER__LEASE_PERIOD", "3s"),
+        ("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "1s"),
+    ];
+    cluster.start_with("master", &lease);
+    cluster.start("webserver");
+    cluster.wait("the first master to lead", || {
+        cluster.ops_get("master", "/readyz") == (200, "ok\n".to_owned())
+    });
+    // A command is decided: some master leads.
+    let decided = |cluster: &Cluster| {
+        let (code, _, err) = cluster.cli(&["workers", "drain", "ghost"]);
+        code != 0 && err.contains("rejected")
+    };
+    assert!(decided(&cluster), "{}", cluster.logs());
+    // Its own port (the cluster gives a master the first one's, for restarts).
+    cluster.start_as(
+        "master-2",
+        "master",
+        &[
+            lease[0],
+            lease[1],
+            ("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0"),
+        ],
+    );
+    let standby_log = cluster.dir.path().join("master-2.log");
+    cluster.wait("the second master to wait as a standby", || {
+        std::fs::read_to_string(&standby_log).is_ok_and(|log| log.contains("waiting as a standby"))
+    });
+    assert_eq!(
+        cluster.ops_get("master-2", "/readyz"),
+        (503, "starting: master\n".to_owned())
+    );
+    // The first dies without giving its lease up: the second takes over once it expires.
+    cluster.kill("master");
+    cluster.wait("the second master to lead", || {
+        cluster.ops_get("master-2", "/readyz") == (200, "ok\n".to_owned())
+    });
+    assert!(decided(&cluster), "{}", cluster.logs());
+    let (_, metrics) = cluster.ops_get("master-2", "/metrics");
+    assert!(metrics.contains("schedr_master_leading 1"), "{metrics}");
 }

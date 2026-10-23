@@ -92,7 +92,8 @@ One Rust binary, four roles:
 - `standalone` runs the same role functions as the separate commands (one code path).
 
 **`standalone` in one pod (M2.1b), for trying schedr on a cluster before the full
-deployment** (`examples/kubernetes/`: a `Dockerfile` and `standalone.yaml`; one process runs
+deployment** (since 2.10 the chart's standalone mode, `charts/schedr/`, replacing M2.1b's
+`examples/kubernetes/standalone.yaml`; one process runs
 every role, a restart restarts master and worker together, tasks share the pod's memory;
 since 2026-10-23 also a production path, below):
 
@@ -141,13 +142,14 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   Not chosen: detecting the pool mode at start and adapting (two behaviours to keep right);
   requiring session pooling or a direct connection (production's setup isn't known).
 - **One master per database: a lease row,** `master_lease` (holder: the master's
-  incarnation; a takeover counter; an expiry by the **database's** clock), taken and renewed
-  every 5 s for 15 s with one `UPDATE … WHERE expired OR mine`; a second master **waits as a
-  standby**, retrying until the lease expires (readiness "starting: master"). A master that
-  can't renew **stops scheduling by itself** before its lease could expire (its own
-  monotonic clock, with a margin), so two never schedule at once. The same on SQLite, so
-  standalone's path is one. The takeover counter can later be checked on writes (a stale
-  master refused outright). The data directory's lock stays for SQLite's volume. Not chosen:
+  incarnation; a takeover counter; an expiry by the **database's** clock), taken with one
+  `INSERT … ON CONFLICT … WHERE expired OR mine` and renewed every 10 s for 30 s (since the
+  2.10 review; 5 s for 15 s before); a second master **waits as a standby**, retrying until
+  the lease expires (readiness "starting: master"). A master that can't renew **pauses by
+  itself** before its lease could expire (its own monotonic clock), and **every write of the
+  master is fenced by the database** (below), so two never both change it. The same on
+  SQLite, so standalone's path is one. The data directory's lock stays for SQLite's volume.
+  Not chosen:
   a session advisory lock (not tied to its master behind transaction pooling; the decision
   before PgBouncer came up); the advisory lock on a separate direct connection (needs a
   route production may not offer); a transaction-level lock held in one open transaction
@@ -156,19 +158,30 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   relying on `replicas: 1` (one mistake means every run twice). After a crash a standby
   takes over within 15 s, not at once: irrelevant for one pod.
 - **Query time limit enforced by schedr,** around every query in `schedr-db`'s common path
-  (`[database] query_timeout`), replacing 2.9's `SET statement_timeout` on each connection
-  (in transaction pooling it lands on a connection other clients then get): a query over it
-  is a database error, which a round survives since B7. A server-side `statement_timeout`
-  (set by the DBA, e.g. per role) is recommended so Postgres stops the work too; without it
-  a query cut off here may run on there until it ends.
+  (`[database] query_timeout`, 10 s since the 2.10 review, 30 s before), replacing 2.9's
+  `SET statement_timeout` on each connection (in transaction pooling it lands on a
+  connection other clients then get): a query over it is a database error, which a round
+  survives since B7. Each write runs in a transaction whose statements Postgres limits too
+  (`set_config('statement_timeout', …, true)`: this transaction only, so pooler-safe), so a
+  statement cut off stops there; the whole transaction gets a few limits (2; 6 for a parse's
+  files and a code version's DAG changes). Reads are cut off by schedr only; a server-side
+  `statement_timeout` (by the DBA) stops them in Postgres too. On SQLite, `busy_timeout`
+  limits each wait for a lock; a statement cut off runs on in sqlx's thread until it ends
+  (`sqlite3_interrupt` would need `unsafe`).
 - **sqlx's statement cache off** on Postgres: queries use unnamed statements, which every
   pooler and version passes; Postgres plans each query again (small, simple queries).
 - **Commands: polling is the guarantee** (every round, 1 s); `LISTEN` stays a speed-up that
   may do nothing behind transaction pooling.
-- **Migrations run by the lease holder** (standalone at start, or a `schedr db migrate` Job
-  taking the lease first; the chart can turn standalone's off), with sqlx's own migration
-  lock (a session advisory lock) off. Not chosen: a separate step always (one more part for
-  one pod).
+- **Migrations run by the lease holder,** with sqlx's own migration lock (a session advisory
+  lock) off: **`schedr db migrate` takes the lease** (refused while a master or another
+  migration holds it; `--wait` waits for it), and **`schedr standalone` migrates only with
+  `--migrate`** (a laptop); without it a schema not up to date is refused. The chart migrates
+  in an init container (`schedr db migrate --wait`), so an upgrade migrates once, as a step
+  of its own, and waits out a dead master's lease (changed after the 2.10 review: standalone
+  migrated at start; the CLI took sqlx's lock, so the two didn't see each other). Not chosen:
+  migrating by default with `--no-migrate` to turn it off (production would still migrate on
+  start unless someone remembers the flag); never migrating in standalone (a laptop always
+  needs two commands).
 - **SQLite to Postgres: start fresh** (phase 1 is a test; DAGs are parsed again, only run
   history stays behind in the SQLite file). Not chosen: a `schedr db copy` (every table
   copied with its types, kept right as the schema changes).
@@ -185,6 +198,113 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   chosen: keeping 10 % and requiring `memory_budget` (a forgotten setting means the whole
   pod killed); a reserve following schedr's measured memory (budgets changing while tasks
   run).
+- **How it is built (M2.10), decided before coding:**
+  - **Losing the lease** (no renewal in time: a database outage, a split): the master
+    **pauses** (no rounds, worker messages wait in their queues); the same lease regained, it
+    resumes; the takeover counter moved on (another master took over), its view is stale and
+    it **exits** (restarted, it is a standby). Not chosen: always exiting (in standalone a few
+    seconds of database trouble would kill every running task).
+  - **A standby standalone:** the master part waits for the lease (`/readyz` "starting:
+    master"), the API serves (commands are stored and applied once it leads), its worker
+    retries its connection. Not chosen: the whole process waiting (the API down meanwhile).
+  - **`[master] lease_period`** (30 s), renewed every third of it by a task of its own (a
+    long round doesn't hold renewals up); the master leads until the period less one query
+    limit after a renewal began (a query begun while leading ends before the lease can
+    expire); at least three `[database] query_timeout`s (a renewal fits a third) and shorter
+    than `[ops] loop_stall_timeout`, else a startup error. Defaults 10 s / 30 s (option A after
+    the review): a standby takes over within 30 s of a crash. Not chosen: 30 s / 90 s (a
+    takeover up to 90 s); fixed constants.
+  - **The query limit:** one timeout around every query in `schedr-db`'s common path,
+    `DbError::QueryTimeout`; SQLite's `busy_timeout` stays (a file setting, not session
+    state). Not chosen: a timeout per master round (which query was slow is lost).
+  - **`[worker] memory_reserve`:** a percentage (`"25%"`, at most 90 %) or a size
+    (`"1GiB"`); unset, 10 % for `schedr worker` and 25 % for standalone. A reserve leaving
+    less than 16 MiB per task is a startup error. **Measured** (a release build, standalone
+    with two example DAGs): schedr's own process 19.6 MiB idle, 23.8 MiB at its peak during
+    12 runs; 25 % of even a 512 MiB pod (128 MiB) covers that and the parse runner (outside
+    the slots), so the default stays. Not chosen: a percentage only.
+  - **The image: Alpine** (`python:3.14.8-alpine3.24`, the musllinux wheel), for security
+    (a smaller system: fewer packages to patch), the user's choice. DAG libraries: pip takes
+    `musllinux` wheels where they exist (numpy, pandas and most drivers have them); for the
+    rest the users' Dockerfile builds in **two stages**, a builder (the same Alpine with
+    `build-base` and the `-dev` packages) running `pip wheel -r requirements.txt`, and the
+    final image installing only those wheels and their runtime libraries (`apk`), with no
+    compiler in it. A library that can't build on musl shows when the image is built. Not
+    chosen: Debian slim (glibc, every manylinux wheel, but a larger system).
+  - **Images:** a `schedr` base image (`images/schedr/Dockerfile`, `make image`: the
+    binary, Python, the package, `tini`, a group-0-writable data directory; 108 MB); users
+    write `FROM schedr:<version>` and add their libraries (`examples/kubernetes/Dockerfile`,
+    two stages; checked: `pyyaml` compiled in the builder, imported in the final image, no
+    compiler in it). CI builds it and smoke-tests it (`scripts/smoke-image.sh`: an arbitrary
+    UID in group 0, ready, leading, the CLI answering, SIGTERM stopping it with exit 0);
+    pushing to a registry comes with releases. Not chosen: installing libraries when the pod
+    starts.
+  - **The chart:** `charts/schedr/` (checked by `make chart-check` and CI's `chart` job:
+    `helm lint`, `helm template` with its main combinations of values; Helm 4.3.0 in CI),
+    `mode: standalone` (`distributed` in 2.11): the image,
+    `database.existingSecret` (a Postgres URL; without it SQLite on the volume),
+    `persistence` (ReadWriteOnce), `resources`, `terminationGracePeriodSeconds` mirrored into
+    `[worker] termination_grace_period`, an optional git-sync sidecar, an optional
+    `ServiceMonitor`, extra `SCHEDR_CONFIG__*` variables; one replica (StatefulSet), probes
+    on the ops port, no fixed `runAsUser` (OpenShift), Service ports named for Istio. Not
+    chosen: plain manifests.
+  - **Tests:** the lease in unit tests (SQLite) and integration tests (Postgres: a second
+    master waits and takes over; pause and resume across an injected outage); the chart with
+    `helm lint` and `helm template` in `make check` and CI, and `scripts/kind-standalone.sh`
+    (a local kind cluster, an explicit `--context`, run with the user's go-ahead) installing
+    it on SQLite and on Postgres and running a DAG.
+- **After the 2.10 code review (2026-10-23):**
+  - **The database fences the master's writes** (`Database::fenced`, `in_tx!`): each write
+    runs in a transaction that first checks the lease is still the master's (holder and
+    takeover counter), on Postgres `FOR KEY SHARE`, which a takeover's `FOR UPDATE` waits
+    for and a renewal (no key change) doesn't; a write after a takeover is
+    `DbError::NotLeading`. Reads aren't fenced. Accepted first was a check by the master's own
+    clock before each query, with the rule above; while building it, a write the master sends
+    while leading can still reach Postgres after its lease expired (held in a pooler's queue
+    or the network), which no clock on the master's side rules out, so the check moved into
+    the database (the clock rule stays, for pausing in time). **Cost, measured** on a local
+    Postgres in a container (the commit's flush included in each write): a one-statement
+    write 3.7 ms before, 8.2 ms in a transaction with the statement limit, 12.1 ms fenced;
+    about 4 round trips more per write (begin, the limit, the check, commit), and sqlx's ping
+    when a pooled connection is taken.
+  - **A write's start is one message on Postgres** (decided by the user after the measure,
+    option A): `BEGIN`, the statement limit and the fence sent together (`begin_with`; the
+    fence a `DO` block reading the lease from `set_config('schedr.holder'/'schedr.epoch', …,
+    true)` and raising SQLSTATE `SR001`, read as `DbError::NotLeading`; values written in as
+    `E'…'` literals, since a message of several statements takes no parameters), and no ping
+    before each use (`test_before_acquire(false)`: a dead pooled connection fails one query,
+    the next round retries). A connection whose start failed is closed, not given back
+    (it would stay in an aborted transaction: a reproducing test, failing without the close
+    with `25P02`). A fenced write is one round trip more than before (the `COMMIT`).
+    Measured in one run, same machine: one statement 2.7 ms (pinged pool) / 2.6 ms (not);
+    a transaction with the limit 4.9 ms; fenced 6.5 ms; the previous fenced write (separate
+    round trips, pinged) 8.1 ms. The commit's flush dominates locally (round trips there
+    0.15-0.3 ms); the fence's check and row lock cost about 0.3 ms in Postgres (pgbench,
+    within its noise); on a network with a real round trip the saving is three per write.
+    Not chosen: B, the fence inside each statement (`WITH … FOR KEY SHARE … WHERE EXISTS`,
+    autocommit) with the limit set per role (`ALTER ROLE … SET statement_timeout`): no
+    extra round trip for one-statement writes, but about 30 statements rewritten, a refusal
+    read as "0 rows" next to genuine no-ops, an install step, one limit for every write (a
+    possible later addition for the hottest writes); C, one transaction per round step:
+    fewer round trips in rounds, none saved on worker messages (the busiest path), a step
+    all or nothing, messages only after its commit (reworking B7's delivery), the lease row
+    and, on SQLite, the write lock held for a whole step; D, triggers refusing a write of an
+    old takeover counter: no extra round trip and enforced by the database for every path,
+    but a counter column on every table and every statement, deletes needing a transaction
+    setting anyway, tables written by the API too (`commands`) needing an exception, a check
+    per row, and triggers in two dialects; E, leaving it.
+  - **A renewal extends only the master's own lease** (`renew_lease`: holder and takeover
+    counter), never taking it back after a takeover (a dead holder would block every master
+    for a period); a takeover on Postgres locks the row first. Every lease statement is
+    limited by the query limit; `Leadership::take` retries everything (the table too) and
+    `try_take` is one try.
+  - **Standalone ends when its master fails** (taken over, or failing at start): the worker
+    gets two stop requests (its tasks interrupted at once: no master to report to), the API
+    stops after it, and the process exits 1; restarted, it waits as a standby.
+  - **The chart's `fsGroup`:** 0 unless set, except on OpenShift (found by
+    `security.openshift.io/v1`), which assigns its own and refuses 0. Not chosen: an
+    `openshift` value (one more thing to set right).
+  - Left: `0001` edited in place (allowed before the first release).
 - **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
   chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
 
@@ -759,7 +879,7 @@ SchedrScriptOperator(
   - **`schedr standalone`** runs the master's gRPC service (`[master] grpc_port`, 8070), the
     REST API (`[webserver] port`, 8080), the master's loop (`[master] tick_interval`, 1 s)
     and one worker agent in one process, all on `127.0.0.1`; Ctrl-C stops them together.
-  - **It migrates the database at start** (a laptop has no separate `schedr db migrate`
+  - **It migrates the database at start with `--migrate`** (2.10; before, always: a laptop has no separate `schedr db migrate`
     step) and, without `[database] url`, uses **SQLite in the data directory**
     (`<data_dir>/schedr.db`).
   - **The data directory** (task logs, the SQLite file) is `[worker] data_dir`, else

@@ -207,3 +207,37 @@ fn duration_and_size_schemas_are_strings_with_a_format() {
     let size = schemars::schema_for!(SizeText);
     assert_eq!(size.get("format"), Some(&serde_json::json!("size")));
 }
+
+#[rstest]
+#[case("25%", MemoryReserve::Percent(25))]
+#[case("0%", MemoryReserve::Percent(0))]
+#[case("90%", MemoryReserve::Percent(90))]
+#[case("1GiB", MemoryReserve::Size(1 << 30))]
+fn reads_and_writes_memory_reserves(#[case] text: &str, #[case] reserve: MemoryReserve) {
+    assert_eq!(parse_reserve(text), Ok(reserve));
+    assert_eq!(format_reserve(reserve), text);
+    let written = serde_json::to_value(reserve).unwrap();
+    assert_eq!(written, serde_json::json!(text));
+    assert_eq!(
+        serde_json::from_value::<MemoryReserve>(written).unwrap(),
+        reserve
+    );
+}
+
+#[rstest]
+#[case("91%")]
+#[case("-5%")]
+#[case("25")]
+#[case("lots")]
+fn rejects_malformed_memory_reserves(#[case] text: &str) {
+    assert_eq!(
+        parse_reserve(text),
+        Err(UnitError::Reserve(text.to_owned()))
+    );
+}
+
+#[test]
+fn a_memory_reserve_schema_is_a_string_with_a_format() {
+    let schema = schemars::schema_for!(MemoryReserve);
+    assert_eq!(schema.get("format"), Some(&serde_json::json!("reserve")));
+}

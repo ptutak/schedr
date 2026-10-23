@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl image chart-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -115,9 +115,31 @@ smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Al
 	$(CONTAINER) run --rm -v "$(CURDIR):/repo:ro,Z" $(ALPINE_IMAGE) sh -c \
 		'apk add --no-cache bash >/dev/null && cd /repo && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
 
+IMAGE ?= schedr:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+
+image: smoke-musl ## Build the base image from the musllinux wheel and smoke-test it
+	$(CONTAINER) build -f images/schedr/Dockerfile -t $(IMAGE) .
+	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)
+
+chart-check:     ## Lint the Helm chart and render it with its main combinations of values
+	helm lint charts/schedr
+	helm template t charts/schedr >/dev/null
+	helm template t charts/schedr --set database.existingSecret=pg >/dev/null
+	helm template t charts/schedr --set gitSync.enabled=true \
+		--set gitSync.repo=https://example.com/dags.git >/dev/null
+	helm template t charts/schedr --set serviceMonitor.enabled=true >/dev/null
+	! helm template t charts/schedr --set mode=distributed >/dev/null 2>&1
+	: "the data volume writable: fsGroup 0, except on OpenShift, which sets its own"
+	helm template t charts/schedr | grep -q 'fsGroup: 0'
+	! helm template t charts/schedr --api-versions security.openshift.io/v1 | grep -q fsGroup
+	helm template t charts/schedr --set podSecurityContext.fsGroup=2000 | grep -q 'fsGroup: 2000'
+	: "the schema migrated by an init container, holding the lease; schedr itself doesn't"
+	helm template t charts/schedr | grep -q 'args: \["db", "migrate", "--wait"\]'
+	! helm template t charts/schedr | grep -q -- '--migrate'
+
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
-	@$(MAKE) --no-print-directory fmt-check lint schema-check test test-integration
+	@$(MAKE) --no-print-directory fmt-check lint schema-check chart-check test test-integration
 
 target-size:     ## Clean target/ when it holds more than TARGET_MAX_GIB (default 50)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \

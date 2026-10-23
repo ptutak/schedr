@@ -104,6 +104,12 @@ const COMMAND_LATENCY: MetricDoc = MetricDoc {
     labels: &[],
     help: "How long commands waited for the master's decision",
 };
+const LEADING: MetricDoc = MetricDoc {
+    name: "master_leading",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "1 while this master holds the lease and schedules, 0 while it waits or is paused",
+};
 const WORKERS: MetricDoc = MetricDoc {
     name: "workers",
     kind: MetricKind::Gauge,
@@ -127,6 +133,7 @@ pub const METRICS: &[MetricDoc] = &[
     COMMANDS,
     COMMAND_LATENCY,
     WORKERS,
+    LEADING,
 ];
 
 /// A state (of runs, tasks or workers) and, for runs, their kind.
@@ -208,6 +215,8 @@ pub struct MasterMetrics {
     pub command_latency: Histogram,
     /// Workers in the registry, by state.
     pub workers: Family<StateLabels, Gauge>,
+    /// 1 while this master leads (holds the lease), 0 while it waits or is paused.
+    pub leading: Gauge,
     /// The label sets the gauges have had: one that is gone reads 0 rather than vanishing.
     seen: Arc<Mutex<Seen>>,
 }
@@ -240,6 +249,7 @@ impl Default for MasterMetrics {
             // 10 ms to about 2 min.
             command_latency: Histogram::new(exponential_buckets(0.01, 2.0, 14)),
             workers: Family::default(),
+            leading: Gauge::default(),
             seen: Arc::default(),
         }
     }
@@ -296,6 +306,7 @@ impl MasterMetrics {
             self.command_latency.clone(),
         );
         r.register(WORKERS.name, WORKERS.help, self.workers.clone());
+        r.register(LEADING.name, LEADING.help, self.leading.clone());
     }
 
     /// Sets the gauges taken from the database.

@@ -87,9 +87,13 @@ fn describes_every_schema_status(#[case] status: SchemaStatus, #[case] expected:
 #[tokio::test]
 async fn run_db_migrate_reports_the_redacted_url() {
     let mut out = Vec::new();
-    run_db(DbCommand::Migrate, &memory_config(), &mut out)
-        .await
-        .unwrap();
+    run_db(
+        DbCommand::Migrate { wait: false },
+        &memory_config(),
+        &mut out,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "migrated sqlite::memory:: schema up to date\n"
@@ -146,9 +150,13 @@ impl io::Write for Broken {
 
 #[tokio::test]
 async fn output_errors_are_reported() {
-    let err = run_db(DbCommand::Migrate, &memory_config(), &mut Broken)
-        .await
-        .unwrap_err();
+    let err = run_db(
+        DbCommand::Migrate { wait: false },
+        &memory_config(),
+        &mut Broken,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, AppError::Output(_)), "{err:?}");
     assert_eq!(err.to_string(), "can't write output: broken pipe");
     assert!(Broken.flush().is_ok());

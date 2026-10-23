@@ -1,34 +1,29 @@
-# schedr standalone in one container, for trying schedr on a cluster before the full
-# deployment (see PROJECT.md, "standalone in one pod"). Not for production: one process runs
-# every role, on SQLite.
+# Your image: the schedr base image plus your DAGs' libraries (see PROJECT.md, Components and
+# roles: production path). Build the base first (`make image`), then from this directory:
+#   podman build --build-arg SCHEDR=schedr:0.1.0 -t my-schedr:1 .
 #
-# Alpine uses musl, so it needs the musllinux wheel: `make smoke-musl` builds it into dist/
-# (CI's `wheel` job builds it too). From the repository root:
-#   podman build -f examples/kubernetes/Dockerfile -t schedr-standalone .
-# (.dockerignore keeps the build context to the wheels in dist/.)
-FROM docker.io/library/python:3.14.8-alpine3.24
+# The base is Alpine (musl). pip takes `musllinux` wheels where a library publishes them (numpy,
+# pandas and most drivers do); for the rest, the builder stage compiles wheels, and the final
+# image installs only those wheels, with no compiler in it. A library that can't build on musl
+# shows here, when the image is built: pin a version that has a musl wheel, take it from apk, or
+# choose another library.
+ARG SCHEDR=schedr:0.1.0
 
-# tini as PID 1 reaps orphaned processes (a task's child that outlives it), which schedr, not
-# being an init, wouldn't.
-RUN apk add --no-cache tini
+# The builder: the same Alpine, with compilers and headers. Add the -dev packages a library
+# needs (e.g. postgresql-dev for psycopg's C build, libffi-dev for cffi).
+FROM ${SCHEDR} AS builder
+USER root
+RUN apk add --no-cache build-base
+COPY requirements.txt /tmp/requirements.txt
+RUN pip wheel --no-cache-dir --disable-pip-version-check --wheel-dir /wheels -r /tmp/requirements.txt
 
-# The worker runs DAG tasks with this Python (found next to the schedr binary): install your
-# DAGs' libraries in this image as well.
-COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
-RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore /tmp/schedr-*.whl \
-    && rm /tmp/schedr-*.whl
-
-# OpenShift runs containers under an arbitrary UID in group 0: the data directory (the SQLite
-# database, task logs, the standalone lock) must be writable by group 0.
-RUN mkdir -p /var/lib/schedr \
-    && chgrp -R 0 /var/lib/schedr \
-    && chmod -R g=u /var/lib/schedr
-ENV HOME=/var/lib/schedr \
-    SCHEDR_CONFIG__WORKER__DATA_DIR=/var/lib/schedr
+# The image: the base, and the built wheels.
+FROM ${SCHEDR}
+USER root
+# The runtime libraries the built wheels link against, if any (e.g. libstdc++, libpq).
+# RUN apk add --no-cache libstdc++
+COPY --from=builder /wheels /tmp/wheels
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore --no-index \
+        --find-links /tmp/wheels /tmp/wheels/*.whl \
+    && rm -rf /tmp/wheels
 USER 1001
-
-# The REST API (no authentication of its own until the UI, milestone M3: keep the Service
-# internal, or behind an authenticating proxy or mesh).
-EXPOSE 8080
-ENTRYPOINT ["/sbin/tini", "--", "schedr"]
-CMD ["standalone", "--listen", "0.0.0.0"]

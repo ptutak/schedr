@@ -13,7 +13,7 @@ use schedr_model::{Dag, DagId, DagLocation};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, on_pool, parse_time, sql, to_json};
+use crate::query::{BATCH_LIMITS, db_time, from_json, in_tx, on_pool, parse_time, sql, to_json};
 
 #[cfg(test)]
 mod tests;
@@ -136,12 +136,12 @@ impl Database {
         const SEEN: &str = "INSERT INTO root_hashes (root, content_hash, switched_at) \
             VALUES ($1, $2, $3{ts}) ON CONFLICT (root, content_hash) DO NOTHING";
         let query = if switched { SWITCH } else { SEEN };
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, query))
                 .bind(root)
                 .bind(content_hash)
                 .bind(db_time(now))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -237,8 +237,7 @@ impl Database {
         const FILE: &str = "INSERT INTO parse_files (parse_result_id, path, dags, error) \
             VALUES ($1{uuid}, $2, $3{json}, $4{json})";
         let id = Uuid::now_v7().to_string();
-        let inserted = on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             let done = sqlx::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(parse.root)
@@ -260,7 +259,6 @@ impl Database {
                         .await?;
                 }
             }
-            tx.commit().await?;
             inserted
         });
         if inserted {
@@ -324,11 +322,11 @@ impl Database {
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn set_paused(&self, dag_id: &DagId, paused: bool) -> Result<bool, DbError> {
         const PAUSE: &str = "UPDATE dags SET paused = $1 WHERE dag_id = $2";
-        let changed = on_pool!(self, |pool, backend| {
+        let changed = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, PAUSE))
                 .bind(paused)
                 .bind(dag_id.as_str())
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -359,8 +357,7 @@ impl Database {
         const REMOVE: &str =
             "UPDATE dags SET removed_at = $1{ts}, conflict = NULL WHERE dag_id = $2";
         let now = db_time(now);
-        on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for change in changes {
                 match change {
                     DagChange::Define {
@@ -414,7 +411,6 @@ impl Database {
                     }
                 }
             }
-            tx.commit().await?;
         });
         Ok(())
     }

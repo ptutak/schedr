@@ -1,0 +1,88 @@
+# schedr's chart. Only `mode: standalone` so far: every role (master, API, worker) in one pod.
+mode: standalone
+
+image:
+  # Your image, built FROM the schedr base image with your DAGs' libraries
+  # (examples/kubernetes/Dockerfile).
+  repository: schedr
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+database:
+  # A Secret holding a Postgres URL (with its password: never in values). Without one, SQLite
+  # in the data directory, on the pod's volume. Any connection pooler (PgBouncer in either
+  # mode) works in between.
+  existingSecret: ""
+  secretKey: url
+
+persistence:
+  # The data directory: the SQLite database (without Postgres), task logs, the worker's
+  # journal. ReadWriteOnce on block storage, never a network filesystem (NFS, CephFS): SQLite's
+  # locks aren't reliable there.
+  size: 10Gi
+  storageClass: ""
+
+# How long running tasks get when the pod is stopped (an upgrade, a node drain); passed to
+# schedr as [worker] termination_grace_period, so the two always match.
+terminationGracePeriodSeconds: 600
+
+# Every task runs in this container: size its memory for the tasks. Task budgets are (the
+# limit − 25 %) ÷ slots (see config below to change slots or memory_reserve).
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    memory: 2Gi
+
+# Where the DAG files are in the container.
+dagsPath: /dags/current
+# The DAG root's name in references and the UI (otherwise the path's last part).
+dagsRoot: dags
+
+gitSync:
+  # A sidecar keeping a git repository's DAGs in `dagsPath` (its `current` link).
+  enabled: false
+  image: registry.k8s.io/git-sync/git-sync:v4.7.1
+  repo: ""
+  ref: main
+  period: 30s
+  # Extra environment for git-sync (e.g. GITSYNC_USERNAME / GITSYNC_PASSWORD from a Secret).
+  env: []
+
+# More schedr configuration, as SCHEDR_CONFIG__<SECTION>__<KEY> variables without the prefix
+# (see the configuration reference), e.g. WORKER__SLOTS: "4", WORKER__MEMORY_RESERVE: "1GiB".
+config: {}
+# Extra environment entries for schedr's container.
+env: []
+
+service:
+  type: ClusterIP
+  # The REST API: no authentication of its own until the UI (milestone M3): keep it internal,
+  # or behind an authenticating proxy or mesh.
+  apiPort: 8080
+  # /healthz, /readyz, /metrics (plain HTTP; nothing else is served there).
+  opsPort: 8090
+
+serviceMonitor:
+  # A Prometheus Operator ServiceMonitor for /metrics.
+  enabled: false
+  interval: 30s
+  labels: {}
+
+podAnnotations: {}
+podLabels: {}
+# Without an fsGroup here, the chart sets `fsGroup: 0` (the volume writable by the image's
+# group), except on OpenShift (found by its security.openshift.io API), which sets the UID and
+# fsGroup itself.
+podSecurityContext: {}
+securityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+nodeSelector: {}
+tolerations: []
+affinity: {}

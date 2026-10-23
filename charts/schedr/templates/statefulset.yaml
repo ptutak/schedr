@@ -1,0 +1,165 @@
+{{- include "schedr.checkMode" . -}}
+# schedr standalone: every role in one pod. Exactly one replica: on SQLite a second pod can't
+# share the volume; on Postgres a second master would wait as a standby (the master's lease),
+# so a rollout overlap is harmless, but there is nothing to gain from more.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "schedr.fullname" . }}
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "schedr.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "schedr.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "schedr.selector" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* The data volume writable by the image's group (0); OpenShift sets its own. */}}
+      {{- $podSecurity := deepCopy (.Values.podSecurityContext | default dict) }}
+      {{- if not (or (hasKey $podSecurity "fsGroup") (.Capabilities.APIVersions.Has "security.openshift.io/v1")) }}
+      {{- $_ := set $podSecurity "fsGroup" 0 }}
+      {{- end }}
+      {{- with $podSecurity }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # The schema migrated as a step of its own, before schedr starts (which refuses one
+        # not up to date). Holding the master's lease: `--wait` waits out the lease of a
+        # master that died.
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["db", "migrate", "--wait"]
+          env:
+            {{- include "schedr.databaseEnv" . | trim | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/schedr
+      containers:
+        - name: schedr
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["standalone", "--listen", "0.0.0.0"]
+          env:
+            - name: SCHEDR_DAG_PATH
+              value: {{ .Values.dagsPath | quote }}
+            {{- if .Values.dagsRoot }}
+            - name: SCHEDR_CONFIG__DAGS__ROOTS__{{ .Values.dagsRoot | upper | replace "-" "_" }}
+              value: {{ .Values.dagsPath | quote }}
+            {{- end }}
+            - name: SCHEDR_CONFIG__WORKER__DATA_DIR
+              value: /var/lib/schedr
+            # The pod's grace period, so the drain fits it.
+            - name: SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD
+              value: "{{ .Values.terminationGracePeriodSeconds }}s"
+            - name: SCHEDR_CONFIG__OPS__PORT
+              value: {{ .Values.service.opsPort | quote }}
+            - name: SCHEDR_CONFIG__WEBSERVER__PORT
+              value: {{ .Values.service.apiPort | quote }}
+            {{- include "schedr.databaseEnv" . | trim | nindent 12 }}
+          ports:
+            - name: http-api
+              containerPort: {{ .Values.service.apiPort }}
+            - name: http-ops
+              containerPort: {{ .Values.service.opsPort }}
+          # Ready once every part has started (a standby master waits: not ready).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http-ops
+            periodSeconds: 10
+          # Fails only when the scheduling loop or the worker agent is stuck, never because
+          # the database or anything else is down.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ops
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/schedr
+            {{- if .Values.gitSync.enabled }}
+            - name: dags
+              mountPath: {{ dir .Values.dagsPath }}
+              readOnly: true
+            {{- end }}
+        {{- if .Values.gitSync.enabled }}
+        - name: git-sync
+          image: {{ .Values.gitSync.image }}
+          args:
+            - --repo={{ required "gitSync.repo is required with gitSync.enabled" .Values.gitSync.repo }}
+            - --ref={{ .Values.gitSync.ref }}
+            - --root={{ dir .Values.dagsPath }}
+            - --link={{ base .Values.dagsPath }}
+            - --period={{ .Values.gitSync.period }}
+          {{- with .Values.gitSync.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: dags
+              mountPath: {{ dir .Values.dagsPath }}
+        {{- end }}
+      {{- if .Values.gitSync.enabled }}
+      volumes:
+        - name: dags
+          emptyDir: {}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

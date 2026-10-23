@@ -10,7 +10,7 @@ use schedr_model::WorkerState;
 
 use crate::database::{Database, DbError};
 use crate::query::{
-    db_time, from_json, from_name, on_pool, optional_time, parse_time, sql, to_json,
+    db_time, from_json, from_name, in_tx, on_pool, optional_time, parse_time, sql, to_json,
 };
 
 #[cfg(test)]
@@ -103,7 +103,7 @@ impl Database {
             slots = excluded.slots, log_endpoint = excluded.log_endpoint, \
             registered_at = excluded.registered_at, \
             last_heartbeat_at = excluded.last_heartbeat_at, offline_at = NULL";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, UPSERT))
                 .bind(worker.id)
                 .bind(worker.incarnation)
@@ -113,7 +113,7 @@ impl Database {
                 .bind(i32::try_from(worker.slots).unwrap_or(i32::MAX))
                 .bind(worker.log_endpoint)
                 .bind(db_time(now))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -126,11 +126,11 @@ impl Database {
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn worker_seen(&self, worker_id: &str, now: Timestamp) -> Result<(), DbError> {
         const SEEN: &str = "UPDATE workers SET last_heartbeat_at = $1{ts} WHERE worker_id = $2";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SEEN))
                 .bind(db_time(now))
                 .bind(worker_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -149,13 +149,13 @@ impl Database {
     ) -> Result<(), DbError> {
         const STATE: &str = "UPDATE workers SET state = $1, \
             offline_at = CASE WHEN $2 THEN $3{ts} ELSE offline_at END WHERE worker_id = $4";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, STATE))
                 .bind(state.to_string())
                 .bind(state.is_gone())
                 .bind(db_time(now))
                 .bind(worker_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -172,11 +172,11 @@ impl Database {
         drained: bool,
     ) -> Result<bool, DbError> {
         const DRAINED: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2";
-        let updated = on_pool!(self, |pool, backend| {
+        let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, DRAINED))
                 .bind(drained)
                 .bind(worker_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -192,16 +192,16 @@ impl Database {
     pub async fn resume_worker(&self, worker_id: &str) -> Result<Option<bool>, DbError> {
         const RESUME: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2 AND drained";
         const KNOWN: &str = "SELECT 1 FROM workers WHERE worker_id = $1";
-        let (resumed, known) = on_pool!(self, |pool, backend| {
+        let (resumed, known) = in_tx!(self, |tx, backend| {
             let resumed = sqlx::query(sql(backend, RESUME))
                 .bind(false)
                 .bind(worker_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
             let known: Option<i32> = sqlx::query_scalar(sql(backend, KNOWN))
                 .bind(worker_id)
-                .fetch_optional(pool)
+                .fetch_optional(&mut *tx)
                 .await?;
             (resumed, known)
         });

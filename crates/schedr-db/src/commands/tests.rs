@@ -93,7 +93,7 @@ async fn payloads_that_dont_read_are_reported_for_rejection() {
         .insert_command(&pause(), "anna", ts("2026-10-21T08:00:00Z"))
         .await
         .unwrap();
-    let Database::Sqlite(pool) = &db else {
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     sqlx::query(AssertSqlSafe(

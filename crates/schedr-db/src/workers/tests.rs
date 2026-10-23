@@ -114,7 +114,7 @@ async fn queues_that_dont_read_are_reported() {
     )
     .await
     .unwrap();
-    let Database::Sqlite(pool) = &db else {
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
         unreachable!()
     };
     sqlx::query("UPDATE workers SET queues = 'not json'")

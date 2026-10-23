@@ -190,7 +190,7 @@ async fn stored_values_that_dont_read_are_errors() {
     )
     .await
     .unwrap();
-    let Database::Sqlite(pool) = &db else {
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     for (statement, what) in [

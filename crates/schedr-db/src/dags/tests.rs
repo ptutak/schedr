@@ -12,9 +12,9 @@ async fn migrated() -> Database {
 }
 
 fn pool(db: &Database) -> &SqlitePool {
-    match db {
-        Database::Sqlite(pool) => pool,
-        Database::Postgres(_) => panic!("expected SQLite"),
+    match db.pool() {
+        crate::database::Pool::Sqlite(pool) => pool,
+        crate::database::Pool::Postgres(_) => panic!("expected SQLite"),
     }
 }
 

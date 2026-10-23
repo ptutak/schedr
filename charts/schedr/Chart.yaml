@@ -1,0 +1,9 @@
+apiVersion: v2
+name: schedr
+description: >-
+  schedr, a job scheduler for Python scripts, Bash and DAGs. mode standalone: every role in one
+  pod, on SQLite (its volume) or Postgres (see PROJECT.md, Components and roles: production
+  path); mode distributed comes with step 2.11.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

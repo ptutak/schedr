@@ -66,6 +66,10 @@ fn types_read_as_words() {
     assert_eq!(t(json!({"$ref": "#/$defs/Size"})), "size");
     assert_eq!(t(json!({"$ref": "#/$defs/PathList"})), "paths");
     assert_eq!(
+        t(json!({"anyOf": [{"$ref": "#/$defs/MemoryReserve"}, {"type": "null"}]})),
+        "percentage or size"
+    );
+    assert_eq!(
         t(json!({"$ref": "#/$defs/Format"})),
         "one of `auto`, `json`"
     );

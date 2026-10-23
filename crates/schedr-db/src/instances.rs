@@ -6,7 +6,7 @@ use schedr_model::{Dag, RunState, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, on_pool, parse_time, sql, to_json};
+use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json};
 
 #[cfg(test)]
 mod tests;
@@ -113,8 +113,7 @@ impl Database {
             (id, run_id, task_id, state, ready_at, updated_at) \
             VALUES ($1{uuid}, $2{uuid}, $3, $4, $5{ts}, $6{ts})";
         let now_text = db_time(now);
-        on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        in_tx!(self, |tx, backend| {
             for (task_id, state) in states {
                 let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
                 sqlx::query(sql(backend, CREATE))
@@ -127,7 +126,6 @@ impl Database {
                     .execute(&mut *tx)
                     .await?;
             }
-            tx.commit().await?;
         });
         Ok(())
     }
@@ -182,8 +180,7 @@ impl Database {
             outcome = $3, retries_used = retries_used + $4, updated_at = $5{ts} \
             WHERE run_id = $6{uuid} AND task_id = $7";
         let now = db_time(now);
-        on_pool!(self, |pool, backend| {
-            let mut tx = pool.begin().await?;
+        in_tx!(self, |tx, backend| {
             for update in updates {
                 sqlx::query(sql(backend, UPDATE))
                     .bind(update.state.to_string())
@@ -196,7 +193,6 @@ impl Database {
                     .execute(&mut *tx)
                     .await?;
             }
-            tx.commit().await?;
         });
         Ok(())
     }
@@ -213,12 +209,12 @@ impl Database {
         now: Timestamp,
     ) -> Result<(), DbError> {
         const FINISH: &str = "UPDATE runs SET state = $1, ended_at = $2{ts} WHERE id = $3{uuid}";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, FINISH))
                 .bind(state.to_string())
                 .bind(db_time(now))
                 .bind(run_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -232,11 +228,11 @@ impl Database {
     pub async fn request_cancel(&self, run_id: &str, now: Timestamp) -> Result<(), DbError> {
         const CANCEL: &str = "UPDATE runs SET cancel_requested_at = $1{ts} \
             WHERE id = $2{uuid} AND cancel_requested_at IS NULL";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, CANCEL))
                 .bind(db_time(now))
                 .bind(run_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -255,12 +251,12 @@ impl Database {
     ) -> Result<(), DbError> {
         const CANCEL: &str = "UPDATE task_instances SET cancel_requested_at = $1{ts} \
             WHERE run_id = $2{uuid} AND task_id = $3 AND cancel_requested_at IS NULL";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, CANCEL))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -280,12 +276,12 @@ impl Database {
         const RETRY: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
             queued_reason = NULL, updated_at = $1{ts} \
             WHERE run_id = $2{uuid} AND task_id = $3 AND state = 'unschedulable'";
-        let updated = on_pool!(self, |pool, backend| {
+        let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, RETRY))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
@@ -305,12 +301,12 @@ impl Database {
     ) -> Result<(), DbError> {
         const REASON: &str = "UPDATE task_instances SET queued_reason = $1, updated_at = $2{ts} \
             WHERE id = $3{uuid} AND state = 'queued'";
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, REASON))
                 .bind(reason)
                 .bind(db_time(now))
                 .bind(instance_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())
@@ -351,13 +347,13 @@ impl Database {
             SET outcome = excluded.outcome, value = excluded.value, size_bytes = excluded.size_bytes";
         let text = to_json(value);
         let size = i64::try_from(text.len()).unwrap_or(i64::MAX);
-        on_pool!(self, |pool, backend| {
+        in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, OUTPUT))
                 .bind(instance_id)
                 .bind(outcome)
                 .bind(&text)
                 .bind(size)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         });
         Ok(())

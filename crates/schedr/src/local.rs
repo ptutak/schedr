@@ -338,7 +338,9 @@ async fn test_dag(
     local.master.tick_interval = Duration::from_millis(100);
     local.dags.poll_interval = Duration::from_millis(200);
     local.dags.settle_time = Duration::ZERO;
-    let setup = plan(&local, env)?;
+    let mut setup = plan(&local, env)?;
+    // A database of its own, created here.
+    setup.migrate = true;
     let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();

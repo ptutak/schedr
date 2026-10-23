@@ -103,10 +103,20 @@ fn without_a_limit_or_cgroup_v2_there_is_none() {
 
 #[test]
 fn the_budget_is_configured_or_the_limit_less_a_tenth_by_slot() {
-    assert_eq!(budget(Some(512 << 20), Some(8 << 30), 2), Some(512 << 20));
-    assert_eq!(budget(None, Some(1000), 2), Some(450));
-    assert_eq!(budget(None, Some(1000), 0), Some(900));
-    assert_eq!(budget(None, None, 2), None);
+    assert_eq!(
+        budget(Some(512 << 20), Some(8 << 30), 2, WORKER_RESERVE),
+        Some(512 << 20)
+    );
+    assert_eq!(budget(None, Some(1000), 2, WORKER_RESERVE), Some(450));
+    assert_eq!(budget(None, Some(1000), 0, WORKER_RESERVE), Some(900));
+    assert_eq!(budget(None, None, 2, WORKER_RESERVE), None);
+    // Standalone keeps a quarter; a reserve can be a size; it never goes below zero.
+    assert_eq!(budget(None, Some(4000), 2, STANDALONE_RESERVE), Some(1500));
+    assert_eq!(
+        budget(None, Some(4000), 2, Reserve::Bytes(1000)),
+        Some(1500)
+    );
+    assert_eq!(budget(None, Some(4000), 2, Reserve::Bytes(9000)), Some(0));
 }
 
 #[test]

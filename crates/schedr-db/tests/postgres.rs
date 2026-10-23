@@ -29,6 +29,14 @@ const NOW: &str = "2026-10-21T08:00:00.250Z";
 
 /// A migrated database of this test's own on the test server.
 async fn fresh() -> Database {
+    let db = Database::connect(&fresh_url().await).await.unwrap();
+    assert_eq!(db.backend(), Backend::Postgres);
+    db.migrate().await.unwrap();
+    db
+}
+
+/// A new, empty database of this test's own on the test server: its URL.
+async fn fresh_url() -> String {
     let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect(
         "SCHEDR_TEST_POSTGRES_URL: an administrative Postgres URL (`make test-integration` starts \
          a server and sets it)",
@@ -41,12 +49,7 @@ async fn fresh() -> Database {
         .unwrap();
     pool.close().await;
     let (server, _) = admin.rsplit_once('/').unwrap();
-    let db = Database::connect(&format!("{server}/{name}"))
-        .await
-        .unwrap();
-    assert_eq!(db.backend(), Backend::Postgres);
-    db.migrate().await.unwrap();
-    db
+    format!("{server}/{name}")
 }
 
 fn sync() -> DagId {
@@ -560,20 +563,33 @@ async fn a_burst_of_commands_is_taken_with_its_first_notification() {
 }
 
 #[tokio::test]
-async fn a_query_past_the_query_timeout_is_stopped() {
-    let url = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect("SCHEDR_TEST_POSTGRES_URL");
-    // The limit covers waiting for a connection too: long enough for one to open under load.
-    let db = Database::connect_with_timeout(&url, std::time::Duration::from_secs(2))
+async fn a_query_past_the_query_timeout_is_cut_off_by_schedr() {
+    // No `SET statement_timeout` on the connection (it doesn't hold behind a pooler in
+    // transaction mode): schedr itself cuts a query off at the limit.
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let limited = Database::connect_with_timeout(&url, std::time::Duration::from_secs(1))
         .await
         .unwrap();
-    let Database::Postgres(pool) = &db else {
-        panic!("expected Postgres")
+    assert_eq!(limited.query_timeout(), std::time::Duration::from_secs(1));
+    // Another session holds the table: the query waits, and is cut off.
+    let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
+        unreachable!()
     };
-    let error = sqlx::query("SELECT pg_sleep(30)")
-        .execute(pool)
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE commands IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
         .await
-        .unwrap_err();
-    assert!(error.to_string().contains("statement timeout"), "{error}");
+        .unwrap();
+    let started = std::time::Instant::now();
+    let error = limited.pending_commands().await.unwrap_err();
+    assert!(
+        matches!(error, schedr_db::DbError::QueryTimeout(_)),
+        "{error}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    holder.rollback().await.unwrap();
 }
 
 #[tokio::test]
@@ -582,5 +598,134 @@ async fn states_are_counted_on_postgres() {
     assert_eq!(
         db.state_counts().await.unwrap(),
         schedr_db::reads::StateCounts::default()
+    );
+}
+
+#[tokio::test]
+async fn the_lease_has_one_holder_by_the_databases_clock_on_postgres() {
+    let db = fresh().await;
+    db.create_lease_table().await.unwrap();
+    let period = std::time::Duration::from_millis(500);
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));
+    assert_eq!(db.take_lease("b", period).await.unwrap(), None);
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert_eq!(db.take_lease("b", period).await.unwrap(), Some(2));
+    db.release_lease("b").await.unwrap();
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(3));
+    // The lease holder migrates without the migrator's session lock.
+    db.migrate_as_lease_holder().await.unwrap();
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(3));
+}
+
+#[tokio::test]
+async fn a_lease_statement_past_the_query_timeout_is_cut_off_too() {
+    // A renewal stuck on the database must not keep the master believing it leads.
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let limited = Database::connect_with_timeout(&url, std::time::Duration::from_secs(1))
+        .await
+        .unwrap();
+    let mut holder = admin_pool(&db).begin().await.unwrap();
+    sqlx::query("LOCK TABLE master_lease IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let period = std::time::Duration::from_secs(30);
+    let taken = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        limited.take_lease("a", period),
+    )
+    .await
+    .expect("the lease statement is cut off at the query limit");
+    assert!(
+        matches!(taken, Err(schedr_db::DbError::QueryTimeout(_))),
+        "{taken:?}"
+    );
+    holder.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_write_past_the_query_timeout_is_stopped_by_postgres_too() {
+    // Cut off by schedr only, the statement would go on waiting in Postgres, holding its
+    // connection (and, once it runs, its locks).
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let limited = Database::connect_with_timeout(&url, std::time::Duration::from_secs(1))
+        .await
+        .unwrap();
+    let mut holder = admin_pool(&db).begin().await.unwrap();
+    sqlx::query("LOCK TABLE workers IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let error = limited.worker_seen("w1", ts(NOW)).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            schedr_db::DbError::QueryTimeout(_) | schedr_db::DbError::Sqlx(_)
+        ),
+        "{error}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Nothing of the cut-off write waits on the lock any more.
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_locks WHERE NOT granted AND relation = 'workers'::regclass",
+    )
+    .fetch_one(&mut *holder)
+    .await
+    .unwrap();
+    assert_eq!(waiting, 0);
+    holder.rollback().await.unwrap();
+}
+
+/// The pool of a Postgres database (for statements of the tests' own).
+fn admin_pool(db: &Database) -> &sqlx::PgPool {
+    let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
+        unreachable!()
+    };
+    pool
+}
+
+#[tokio::test]
+async fn a_fenced_write_is_refused_once_taken_over_and_its_connection_stays_usable() {
+    let db = fresh().await;
+    let period = std::time::Duration::from_millis(300);
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));
+    let fenced = db.fenced("a", 1);
+    fenced.worker_seen("w1", ts(NOW)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(db.take_lease("b", period).await.unwrap(), Some(2));
+    // More refusals than the pool has connections: each one's connection goes back to it.
+    for _ in 0..20 {
+        let refused = fenced.worker_seen("w1", ts(NOW)).await;
+        assert!(
+            matches!(refused, Err(schedr_db::DbError::NotLeading)),
+            "{refused:?}"
+        );
+    }
+    let leading = db.fenced("b", 2);
+    for _ in 0..20 {
+        leading.worker_seen("w1", ts(NOW)).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_holder_named_with_quotes_and_dollars_is_fenced_as_written() {
+    // The fence's values are written into the transaction's start as literals.
+    let db = fresh().await;
+    let holder = r"it's \ $fence$ '; DROP TABLE workers; --";
+    let period = std::time::Duration::from_secs(30);
+    assert_eq!(db.take_lease(holder, period).await.unwrap(), Some(1));
+    db.fenced(holder, 1)
+        .worker_seen("w1", ts(NOW))
+        .await
+        .unwrap();
+    let other = db.fenced("it's", 1).worker_seen("w1", ts(NOW)).await;
+    assert!(
+        matches!(other, Err(schedr_db::DbError::NotLeading)),
+        "{other:?}"
     );
 }

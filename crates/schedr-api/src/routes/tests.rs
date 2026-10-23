@@ -338,7 +338,7 @@ async fn runs_are_listed_and_read_with_their_tasks_and_attempts() {
 #[tokio::test]
 async fn a_database_failure_is_a_server_error() {
     let (app, db, _run) = api().await;
-    let Database::Sqlite(pool) = &db else {
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     pool.close().await;

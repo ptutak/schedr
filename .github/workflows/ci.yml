@@ -121,10 +121,23 @@ jobs:
           docker run --rm -v "$PWD:/repo:ro" docker.io/library/python:3.14.8-alpine3.24
           sh -c 'apk add --no-cache bash >/dev/null && cd /repo
           && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
+      # The base image from that wheel, run as a pod would (pushed to a registry with releases).
+      - run: docker build -f images/schedr/Dockerfile -t schedr:ci .
+      - run: scripts/smoke-image.sh docker schedr:ci
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
           path: dist/*.whl
+
+  # The Helm chart: lint and render it (see `make chart-check`).
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.0
+      - run: make chart-check
 
   sdist:
     runs-on: ubuntu-latest

@@ -32,8 +32,22 @@ mod tests;
 /// The smallest `[worker] memory_budget` accepted: below it no Python process starts.
 pub const MIN_BUDGET: u64 = 16 << 20;
 
-/// The share of the pod's limit kept for the agent itself.
-pub const AGENT_RESERVE_PERCENT: u64 = 10;
+/// The part of the pod's memory limit kept out of the task budgets: for schedr's own process
+/// (the agent, and in standalone the master and the API too).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reserve {
+    /// A percentage of the limit.
+    Percent(u8),
+    /// A fixed number of bytes.
+    Bytes(u64),
+}
+
+/// The reserve of `schedr worker` when `[worker] memory_reserve` isn't set.
+pub const WORKER_RESERVE: Reserve = Reserve::Percent(10);
+
+/// The reserve of `schedr standalone` (its process also runs the master and the API) when
+/// `[worker] memory_reserve` isn't set.
+pub const STANDALONE_RESERVE: Reserve = Reserve::Percent(25);
 
 /// How the watchdog watches.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,13 +110,22 @@ pub fn cgroup_limit(proc_root: &Path, cgroup_root: &Path) -> io::Result<Option<u
     }
 }
 
-/// Each task's budget: `configured`, else (`limit` − 10 %) ÷ `slots`; `None` without either.
+/// Each task's budget: `configured`, else (`limit` − `reserve`) ÷ `slots`; `None` without
+/// either.
 #[must_use]
-pub fn budget(configured: Option<u64>, limit: Option<u64>, slots: u32) -> Option<u64> {
+pub fn budget(
+    configured: Option<u64>,
+    limit: Option<u64>,
+    slots: u32,
+    reserve: Reserve,
+) -> Option<u64> {
     configured.or_else(|| {
         let limit = limit?;
-        let usable = limit - limit / 100 * AGENT_RESERVE_PERCENT;
-        Some(usable / u64::from(slots.max(1)))
+        let kept = match reserve {
+            Reserve::Percent(percent) => limit / 100 * u64::from(percent),
+            Reserve::Bytes(bytes) => bytes,
+        };
+        Some(limit.saturating_sub(kept) / u64::from(slots.max(1)))
     })
 }
 

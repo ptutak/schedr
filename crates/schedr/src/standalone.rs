@@ -4,8 +4,10 @@
 //! The master's gRPC service, the REST API, the master's loop and one worker agent with its log
 //! endpoint run side by side; the agent talks to the master over gRPC on localhost like any
 //! worker, and the API reads logs from the endpoint (no TLS: neither listens beyond
-//! localhost, whatever `[tls]` says). The database is migrated at start: standalone is for a
-//! laptop, where there is no separate `schedr db migrate` step.
+//! localhost, whatever `[tls]` says). `--migrate` migrates the database at start (a laptop);
+//! without it, a schema that isn't up to date is refused (production migrates as a step of its
+//! own, `schedr db migrate`). When the master fails (another took the lease over), the whole
+//! process ends, its tasks interrupted: restarted, it waits as a standby.
 //!
 //! In one pod (for testing on a cluster, see PROJECT.md): `--listen 0.0.0.0` opens the REST
 //! API to a Service, SIGTERM stops it cleanly, and a lock in the data directory refuses a
@@ -18,21 +20,23 @@ use std::time::Duration;
 
 use prometheus_client::registry::Registry;
 use schedr_agent::agent::AgentSettings;
+use schedr_agent::memory::STANDALONE_RESERVE;
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::LogRetention;
 use schedr_api::metrics::ApiMetrics;
 use schedr_config::Config;
 use schedr_db::Database;
 use schedr_master::core::Settings;
+use schedr_master::lease::Leadership;
 use schedr_master::metrics::MasterMetrics;
 use tokio::sync::watch;
 
-use crate::app::AppError;
+use crate::app::{AppError, describe_status};
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
     Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, listen, lock_journal,
-    log_retention, master_settings, memory_text, no_auth_warning, run_worker, serve_api,
-    serve_master, stop_on_signal,
+    log_retention, master_settings, memory_text, migrate_holding, no_auth_warning, run_worker,
+    serve_api, serve_master, stop_on_signal, take_lease, unlimited, until,
 };
 
 #[cfg(test)]
@@ -57,6 +61,8 @@ pub struct Standalone {
     pub loop_stall_timeout: Duration,
     /// The longest a database query may take.
     pub query_timeout: Duration,
+    /// The master's lease (one master per database).
+    pub lease_period: Duration,
     /// What logs the worker keeps.
     pub retention: LogRetention,
     /// The master's timing.
@@ -69,6 +75,8 @@ pub struct Standalone {
     pub parse_file_timeout: Duration,
     /// The header naming the user on commands.
     pub identity_header: Option<String>,
+    /// Whether to migrate the database at start (`--migrate`).
+    pub migrate: bool,
 }
 
 /// The addresses standalone listens on, once it does.
@@ -107,12 +115,14 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         ops: localhost(config.ops.port),
         loop_stall_timeout: config.ops.loop_stall_timeout,
         query_timeout: config.database.query_timeout,
+        lease_period: config.master.lease_period,
         retention: log_retention(config),
         master: master_settings(config),
         tick: config.master.tick_interval,
-        agent: agent_settings(config, env, &data_dir)?,
+        agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         parse_file_timeout: config.dags.parse_file_timeout,
         identity_header: config.webserver.auth.identity_header.clone(),
+        migrate: false,
         database_url,
         data_dir,
     })
@@ -120,11 +130,13 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
 
 /// Runs standalone until asked to stop (`shutdown` counts the requests): its worker drains
 /// first (a second request interrupts its tasks at once), then the master and the API stop,
-/// so interrupted tasks are recorded; `listening` gets the addresses once bound.
+/// so interrupted tasks are recorded; `listening` gets the addresses once bound. A failing
+/// master ends it too, its worker's tasks interrupted at once (nothing can record them).
 ///
 /// # Errors
 ///
-/// [`AppError`] if the data directory, the database or a port can't be set up.
+/// [`AppError`] if the data directory, the database or a port can't be set up, the schema
+/// isn't up to date (without `migrate`), or the master fails.
 pub async fn run(
     setup: Standalone,
     listening: impl FnOnce(Listening),
@@ -156,54 +168,50 @@ pub async fn run(
     let (stop, stopped) = watch::channel(0);
     // One ops port for every part.
     let health = Health::new(setup.loop_stall_timeout);
-    let (master_metrics, api_metrics, agent_metrics) = (
-        MasterMetrics::default(),
-        ApiMetrics::default(),
-        AgentMetrics::default(),
-    );
-    let mut registry = Registry::default();
-    let schedr = registry.sub_registry_with_prefix("schedr");
-    master_metrics.register(schedr);
-    api_metrics.register(schedr);
-    agent_metrics.register(schedr);
-    let master_observed = Observed {
-        metrics: master_metrics,
-        health: &health,
-        ready: health.starting("master"),
-    };
-    let api_observed = Observed {
-        metrics: api_metrics,
-        health: &health,
-        ready: health.starting("webserver"),
-    };
-    let agent_observed = Observed {
-        metrics: agent_metrics,
-        health: &health,
-        ready: health.starting("worker"),
-    };
+    let (registry, master_observed, api_observed, agent_observed) = observed(&health);
 
     let ops_server = tokio::spawn(serve_ops(
         ops,
         Ops::new(registry, health.clone()),
         stopped.clone(),
     ));
-    // The ops port answers (`/readyz`: starting) while the database is migrated, without a
-    // statement time limit (a long migration must finish), and then opened with one.
-    Database::connect(&setup.database_url)
-        .await?
-        .migrate()
-        .await?;
+    // The ops port answers (`/readyz`: starting) meanwhile. One master per database: an
+    // up-to-date schema lets the API and the worker start while the master waits for the
+    // lease (a standby); with `--migrate`, one to migrate is migrated by the lease's holder.
     let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout).await?;
+    let leading = lead(
+        &db,
+        &setup.database_url,
+        (setup.lease_period, setup.migrate),
+        shutdown.clone(),
+    );
+    let Some(leadership) = leading.await? else {
+        return Ok(());
+    };
+    // The worker's stop requests: the signals', and the master's failure (two at once: its
+    // tasks interrupted, nothing could record them).
+    let (request, requests) = watch::channel(0);
+    let forwarding = tokio::spawn(forward_requests(shutdown, request.clone()));
     // Boxed: the roles' futures are large.
-    let master = Box::pin(serve_master(
-        db.clone(),
-        setup.master,
-        setup.tick,
-        grpc,
-        None,
-        master_observed,
-        stopped.clone(),
-    ));
+    let master_db = db.clone();
+    let master = Box::pin(async {
+        let served = Box::pin(serve_master(
+            master_db,
+            setup.master,
+            setup.tick,
+            grpc,
+            None,
+            leadership,
+            master_observed,
+            stopped.clone(),
+        ))
+        .await;
+        if let Err(error) = &served {
+            tracing::error!(%error, "the master failed: standalone stops");
+            request.send_modify(|requests| *requests = (*requests).max(2));
+        }
+        served
+    });
     let api = Box::pin(serve_api(
         db,
         setup.identity_header.clone(),
@@ -224,17 +232,112 @@ pub async fn run(
             setup.parse_file_timeout,
             links,
             agent_observed,
-            shutdown,
+            requests,
         )
         .await;
         let _ = stop.send(1);
     });
     let (master, api, ()) = tokio::join!(master, api, worker);
+    forwarding.abort();
     if let Ok(Err(error)) = ops_server.await {
         tracing::warn!(%error, "the ops port failed");
     }
     master?;
     api
+}
+
+/// The ops port's registry with every part's metrics, and what each part reports to it.
+fn observed(
+    health: &Health,
+) -> (
+    Registry,
+    Observed<'_, MasterMetrics>,
+    Observed<'_, ApiMetrics>,
+    Observed<'_, AgentMetrics>,
+) {
+    let (master_metrics, api_metrics, agent_metrics) = (
+        MasterMetrics::default(),
+        ApiMetrics::default(),
+        AgentMetrics::default(),
+    );
+    let mut registry = Registry::default();
+    let schedr = registry.sub_registry_with_prefix("schedr");
+    master_metrics.register(schedr);
+    api_metrics.register(schedr);
+    agent_metrics.register(schedr);
+    let part = |name| health.starting(name);
+    (
+        registry,
+        Observed {
+            metrics: master_metrics,
+            health,
+            ready: part("master"),
+        },
+        Observed {
+            metrics: api_metrics,
+            health,
+            ready: part("webserver"),
+        },
+        Observed {
+            metrics: agent_metrics,
+            health,
+            ready: part("worker"),
+        },
+    )
+}
+
+/// The master's lease, being taken (see [`take_lease`]).
+type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Leadership> + Send>>;
+
+/// The master's lease, being taken while the API and the worker start when the schema is
+/// usable; else, with `--migrate`, taken now (a standby waits) and the schema migrated by its
+/// holder. `None` when a shutdown is asked for while waiting.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for a schema to migrate without `--migrate`, as
+/// [`migrate_holding`], or [`AppError::Db`] if the schema can't be read.
+async fn lead(
+    db: &Database,
+    url: &str,
+    (period, migrate): (Duration, bool),
+    shutdown: watch::Receiver<u32>,
+) -> Result<Option<LeaseFuture>, AppError> {
+    let status = db.schema_status().await?;
+    if status.is_usable() {
+        return Ok(Some(Box::pin(take_lease(db.clone(), period, "standalone"))));
+    }
+    if !migrate {
+        return Err(AppError::BadArgument(format!(
+            "the database schema is {}, or start standalone with `--migrate`",
+            describe_status(&status)
+        )));
+    }
+    let lease = take_lease(db.clone(), period, "standalone");
+    let Some(lead) = until_stopped(lease, shutdown).await else {
+        return Ok(None);
+    };
+    let lead = migrate_holding(lead, &unlimited(url, db).await?).await?;
+    Ok(Some(Box::pin(std::future::ready(lead))))
+}
+
+/// `work`'s output, or `None` once a shutdown is asked for.
+async fn until_stopped<T>(work: impl Future<Output = T>, stop: watch::Receiver<u32>) -> Option<T> {
+    tokio::select! {
+        done = work => Some(done),
+        () = until(stop) => None,
+    }
+}
+
+/// Passes the stop requests counted by `from` on to `to` (never lowering its count).
+async fn forward_requests(mut from: watch::Receiver<u32>, to: watch::Sender<u32>) {
+    loop {
+        let requests = *from.borrow_and_update();
+        to.send_modify(|count| *count = (*count).max(requests));
+        if from.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 /// The name of the lock file in the data directory.
@@ -306,9 +409,11 @@ pub async fn command(
     config: &Config,
     env: &BTreeMap<String, String>,
     listen: Option<IpAddr>,
+    migrate: bool,
 ) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let mut setup = plan(config, env)?;
+    setup.migrate = migrate;
     if let Some(address) = listen {
         // Probes and scrapes come from outside the pod too.
         setup.http.set_ip(address);

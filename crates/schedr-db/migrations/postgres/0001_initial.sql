@@ -168,3 +168,13 @@ CREATE TABLE commands (
 );
 
 CREATE INDEX commands_pending ON commands (requested_at) WHERE status = 'pending';
+
+-- The master's lease: one master per database (see PROJECT.md, Components and roles:
+-- production path). Also created before the migrations (`Database::create_lease_table`), so
+-- a master holds it while it migrates.
+CREATE TABLE IF NOT EXISTS master_lease (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    holder     TEXT NOT NULL,
+    epoch      INTEGER NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);

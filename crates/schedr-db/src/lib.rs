@@ -9,6 +9,7 @@ pub mod commands;
 pub mod dags;
 pub mod database;
 pub mod instances;
+pub mod lease;
 mod query;
 pub mod reads;
 pub mod runs;
@@ -16,6 +17,6 @@ pub mod status;
 pub mod workers;
 
 pub use backend::{Backend, UnsupportedUrl, redact_password};
-pub use database::{Database, DbError};
+pub use database::{Database, DbError, Pool};
 pub use query::db_time;
 pub use status::SchemaStatus;

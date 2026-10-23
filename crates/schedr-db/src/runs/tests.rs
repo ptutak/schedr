@@ -219,7 +219,7 @@ async fn stored_values_that_dont_read_are_errors() {
     ))
     .await
     .unwrap();
-    let crate::Database::Sqlite(pool) = &db else {
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
     sqlx::query("UPDATE runs SET triggered_at = 'yesterday'")

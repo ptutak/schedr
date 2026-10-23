@@ -195,7 +195,7 @@ async fn a_trigger_creates_a_manual_run_by_the_requesting_user() {
         world.db.run_tasks(&run_id).await.unwrap().unwrap().state,
         RunState::Running
     );
-    let Database::Sqlite(pool) = &world.db else {
+    let schedr_db::database::Pool::Sqlite(pool) = world.db.pool() else {
         panic!("expected SQLite")
     };
     let by: String = sqlx::query_scalar(AssertSqlSafe("SELECT triggered_by FROM runs".to_owned()))
@@ -333,7 +333,7 @@ async fn pausing_with_cancel_cancels_the_runs_in_progress() {
 async fn a_payload_that_doesnt_read_is_rejected() {
     let mut world = world().await;
     let id = world.ask(&Command::UnpauseDag { dag_id: sync() }).await;
-    let Database::Sqlite(pool) = &world.db else {
+    let schedr_db::database::Pool::Sqlite(pool) = world.db.pool() else {
         panic!("expected SQLite")
     };
     sqlx::query(AssertSqlSafe(
@@ -467,7 +467,7 @@ async fn a_database_failure_leaves_a_task_command_pending() {
         .unwrap()
         .to_owned();
     world.dispatcher.step(ts(NOW)).await.unwrap();
-    let Database::Sqlite(pool) = &world.db else {
+    let schedr_db::database::Pool::Sqlite(pool) = world.db.pool() else {
         panic!("expected SQLite")
     };
     sqlx::query(AssertSqlSafe(

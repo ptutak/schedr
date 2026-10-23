@@ -1,0 +1,19 @@
+{{- include "schedr.checkMode" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "schedr.fullname" . }}
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "schedr.selector" . | nindent 4 }}
+  # Named for Istio's protocol detection.
+  ports:
+    - name: http-api
+      port: {{ .Values.service.apiPort }}
+      targetPort: http-api
+    - name: http-ops
+      port: {{ .Values.service.opsPort }}
+      targetPort: http-ops
