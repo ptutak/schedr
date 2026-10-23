@@ -18,7 +18,7 @@ The names used across the documentation, the API and the logs.
 **Parse job**
 : The master's request to one worker to import every DAG file of a root at one content hash
   and send back the DAGs as data (DAG JSON). The master has no Python, so it never reads DAG
-  files itself. See [Parsing and code versions](parsing.md).
+  files itself. See [Parsing and code versions](06-parsing.md).
 
 **Run** (DAG run)
 : One execution of a DAG, for one moment (`planned_for`). Its kind says who created it
@@ -45,7 +45,7 @@ The names used across the documentation, the API and the logs.
 
 **Round** (tick)
 : One pass of the master's scheduling loop: commands, the scheduler, dispatching, parse-job
-  timeouts, lost workers. See [The master](master.md).
+  timeouts, lost workers. See [The master](04-master.md).
 
 **Worker ID** and **incarnation**
 : The worker ID is stable across restarts (by default the host name, which is the pod name in
@@ -76,4 +76,4 @@ The names used across the documentation, the API and the logs.
 
 **Current code**
 : For each root, the content hash the newest code has. Only workers at that hash (or newer)
-  get the root's tasks. See [Parsing and code versions](parsing.md).
+  get the root's tasks. See [Parsing and code versions](06-parsing.md).

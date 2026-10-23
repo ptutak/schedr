@@ -174,10 +174,11 @@ integration tests, as since 1.15.
 | 2.7 | **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates reloaded when the files change; crate `schedr-tls`); the **worker's log endpoint** (mTLS only: no tokens) and the webserver's log proxy, `schedr tasks logs [--follow]`; log retention on the worker (age and size) | tests with self-signed certificates |
 | 2.8 | **Memory watchdog:** the budget from `memory.max`, `/proc` sampling (PSS per process group), the `oom_killed` status, peak memory in the API; `setrlimit` moved to M4 with per-task budgets | an integration test with a task that allocates too much |
 | 2.9 | **Ops port** on every role: `/healthz`, `/readyz`, `/metrics` (Prometheus, `prometheus-client`), loop-stall detection, `[database] query_timeout` | tests |
-| 2.9b | **Documentation of the system as built:** the guide (`docs/guide/`: overview, glossary, life of a run, the master's rounds, workers, parsing, failures, network, observability, deployment; Mermaid diagrams), reference pages generated from the code (configuration from its JSON Schema, CLI from clap, REST API from OpenAPI, metrics from a list per role checked against a scrape); every later step updates the guide | `make docs` builds it without warnings; unit tests for the generators |
-| 2.10 | **Images and Helm chart:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600 and `[worker] termination_grace_period` set to match, probes | the chart installs on kind / k3d |
-| 2.11 | **Kill tests** (M2's "done when"): on kind / k3d with 2 workers, kill the master, then a worker, during runs; on OpenShift by hand | runs finish; retries as the rules say |
-| 2.12 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |
+| 2.9b | **Documentation of the system as built:** the guide (`docs/02-guide/`: overview, glossary, life of a run, the master's rounds, workers, parsing, failures, network, observability, deployment; Mermaid diagrams), reference pages generated from the code (configuration from its JSON Schema, CLI from clap, REST API from OpenAPI, metrics from a list per role checked against a scrape); every later step updates the guide | `make docs` builds it without warnings; unit tests for the generators |
+| 2.10 | **Standalone for production** (see PROJECT.md, Components and roles: production path): the master's Postgres advisory lock (a second master waits as a standby; standalone and `schedr master`); standalone's migrations under it, switchable off for a `schedr db migrate` Job; `[worker] memory_reserve` (10 % worker, 25 % standalone, measured); an image with the DAGs' libraries on top of schedr's; a Helm chart with a standalone mode (one pod, SQLite on a volume or Postgres from a Secret, probes, `terminationGracePeriodSeconds` matched) | tests: a second master waits and takes over; the chart's standalone mode installs on kind / k3d, on SQLite and on Postgres |
+| 2.11 | **Images and Helm chart, distributed:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600 and `[worker] termination_grace_period` set to match, probes | the chart installs on kind / k3d |
+| 2.12 | **Kill tests** (M2's "done when"): on kind / k3d with 2 workers, kill the master, then a worker, during runs; on OpenShift by hand; standalone's pod killed during runs | runs finish; retries as the rules say |
+| 2.13 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |
 
 - **Order:** 2.1–2.3 first: separate processes and what survives their deaths are the
   architectural risk. 2.7 includes the log endpoint because a distributed run's logs are on
@@ -186,10 +187,11 @@ integration tests, as since 1.15.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
 **Status (2026-10-23): steps 2.1–2.9b are done** (the commits are
-listed in `NEXT_SESSION.md`). Next is 2.10. B6 (role integration tests under disk load) is
-fixed; open bugs B4 (likely B6, unproven) and B9 (a drain can't shorten a stop under way)
-wait; B7 (a command applied twice, undelivered cancels)
-and B8 (a drained task outliving the pod) are fixed.
+listed in `NEXT_SESSION.md`). Next is 2.10, standalone for production (added 2026-10-23;
+the distributed chart moved to 2.11). B6 (role integration tests under disk load) is
+fixed; open bug B4 (likely B6, unproven) waits; B7 (a command applied twice, undelivered
+cancels), B8 (a drained task outliving the pod) and B9 (a drain couldn't shorten a stop
+under way) are fixed.
 
 ## Testing approach
 

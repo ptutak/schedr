@@ -6,44 +6,44 @@ A job scheduler written in Rust that runs Python scripts, Bash processes and Pyt
 :maxdepth: 1
 :caption: Overview
 
-_generated/overview
+_generated/01-overview
 ```
 
 ```{toctree}
 :maxdepth: 2
 :caption: How schedr works
 
-guide/index
+02-guide/index
 ```
 
 ```{toctree}
 :maxdepth: 1
 :caption: Reference
 
-_generated/reference/configuration
-_generated/reference/cli
-_generated/reference/rest-api
-_generated/reference/metrics
+_generated/03-reference/01-configuration
+_generated/03-reference/02-cli
+_generated/03-reference/03-rest-api
+_generated/03-reference/04-metrics
 ```
 
 ```{toctree}
 :maxdepth: 1
 :caption: Design
 
-design
+04-design/index
 ```
 
 ```{toctree}
 :maxdepth: 1
 :caption: Plan
 
-_generated/plan
+_generated/05-plan
 ```
 
 ```{toctree}
 :maxdepth: 1
 :caption: API
 
-python-api
-_generated/rust-api
+_generated/06-api/01-python
+_generated/06-api/02-rust
 ```

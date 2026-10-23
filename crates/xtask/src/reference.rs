@@ -560,7 +560,8 @@ fn schema_section(page: &mut String, root: &Value, name: &str, schema: &Value) {
 }
 
 /// The reference pages, with paths relative to the repository root (under
-/// [`crate::docs::DOCS_GENERATED_DIR`]`/reference`).
+/// [`crate::docs::DOCS_GENERATED_DIR`]`/`[`crate::docs::REFERENCE_DIR`]), numbered in the
+/// site's order.
 #[must_use]
 pub fn reference_sources(
     config_schema: &Value,
@@ -568,12 +569,13 @@ pub fn reference_sources(
     metrics: &[MetricGroup<'_>],
     openapi: &Value,
 ) -> Vec<crate::GeneratedFile> {
-    let dir = std::path::Path::new(crate::docs::DOCS_GENERATED_DIR).join("reference");
+    let dir =
+        std::path::Path::new(crate::docs::DOCS_GENERATED_DIR).join(crate::docs::REFERENCE_DIR);
     [
-        ("configuration.md", config_page(config_schema)),
-        ("cli.md", cli_page(cli)),
-        ("metrics.md", metrics_page(metrics)),
-        ("rest-api.md", rest_page(openapi)),
+        ("01-configuration.md", config_page(config_schema)),
+        ("02-cli.md", cli_page(cli)),
+        ("03-rest-api.md", rest_page(openapi)),
+        ("04-metrics.md", metrics_page(metrics)),
     ]
     .into_iter()
     .map(|(name, contents)| crate::GeneratedFile {

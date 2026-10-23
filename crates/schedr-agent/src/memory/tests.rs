@@ -4,6 +4,8 @@ use tempfile::TempDir;
 use prometheus_client::metrics::counter::Counter;
 
 use super::*;
+use crate::status::StopReason;
+use crate::supervise::Stops;
 
 /// A fake `/proc` with processes `(pid, pgid, smaps_rollup Pss in kB or none, statm resident
 /// pages)`.
@@ -190,17 +192,24 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
         proc_root: proc.path().to_path_buf(),
     };
     let seen = SharedSeen::default();
-    let (killed_tx, killed) = oneshot::channel();
+    let (killed_tx, mut killed) = Stops::new();
     let kills = Counter::default();
     let _watching = watch_group(watch.clone(), pgid, seen.clone(), killed_tx, kills.clone());
-    tokio::time::timeout(Duration::from_secs(5), killed)
+    let reason = tokio::time::timeout(Duration::from_secs(5), killed.next_reason())
         .await
-        .unwrap()
         .unwrap();
+    assert_eq!(reason, StopReason::OomKilled);
     assert_eq!(seen.lock().unwrap().over, Some(3000 * 1024));
+    // Told before the kill, which is counted right after it.
+    for _ in 0..100 {
+        if kills.get() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert_eq!(kills.get(), 1);
 
-    let (quiet_tx, quiet) = oneshot::channel();
+    let (quiet_tx, mut quiet) = Stops::new();
     let watching = watch_group(
         MemoryWatch {
             budget: None,
@@ -212,6 +221,7 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
         Counter::default(),
     );
     drop(watching);
-    // Dropped: the sender goes with the aborted task, nothing is ever sent.
-    assert!(quiet.await.is_err());
+    // Dropped: the task is aborted, nothing is ever sent.
+    let nothing = tokio::time::timeout(Duration::from_millis(50), quiet.next_reason()).await;
+    assert!(nothing.is_err());
 }

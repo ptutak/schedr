@@ -22,8 +22,7 @@ use crate::channel::{ChannelError, accept_runner, read_message, write_message};
 use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
-use crate::status::StopReason;
-use crate::supervise::{Limits, Process, Signal, supervise};
+use crate::supervise::{Limits, Process, Signal, Stops, supervise};
 
 /// The environment variable with the runner's descriptor of its socket to the agent.
 pub const FD_ENV: &str = "SCHEDR_AGENT_FD";
@@ -152,7 +151,7 @@ pub async fn run_python(
     process: &ProcessSpec,
     request: TaskRequest,
     limits: Limits,
-    stop: impl Future<Output = StopReason>,
+    stop: Stops,
     spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
@@ -185,7 +184,7 @@ pub async fn run_python(
 pub async fn run_command(
     spec: &ProcessSpec,
     limits: Limits,
-    stop: impl Future<Output = StopReason>,
+    stop: Stops,
     spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
@@ -255,13 +254,13 @@ impl ParseRunner for ProcessParseRunner {
         let seen = SharedSeen::default();
         let mut watching = None;
         let mut runner = start_runner(&self.process, RunnerMode::Parse, |pgid| {
-            // Told through `seen`, read when the runner's connection breaks.
-            let (killed, _) = tokio::sync::oneshot::channel();
+            // Told through `seen`, read when the runner's connection breaks (no one listens to
+            // its reason).
             watching = Some(watch_group(
                 self.memory.clone(),
                 pgid,
                 seen.clone(),
-                killed,
+                Stops::new().0,
                 self.kills.clone(),
             ));
         })

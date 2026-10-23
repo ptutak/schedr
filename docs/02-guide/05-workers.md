@@ -49,7 +49,8 @@ was registered, the backoff starts from 200 ms again.
 4. **While it runs:** the memory watchdog samples the group's memory, and `execution_timeout`,
    a cancel or a drain can stop it. Stopping is SIGTERM to the group, then SIGKILL after
    `[master] cancel_grace` (30 s), or after `[worker] drain_terminate_period` (3 s) when a
-   drain's time is up (see Draining below). The reason the agent stopped it is the attempt's status
+   drain's time is up (see Draining below), also for a task already being stopped then: its
+   SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
 5. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`.

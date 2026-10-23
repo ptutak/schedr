@@ -92,9 +92,9 @@ One Rust binary, four roles:
 - `standalone` runs the same role functions as the separate commands (one code path).
 
 **`standalone` in one pod (M2.1b), for trying schedr on a cluster before the full
-deployment** (`examples/kubernetes/`: a `Dockerfile` and `standalone.yaml`; not for
-production: one process runs every role, a restart restarts master and worker together,
-tasks share the pod's memory):
+deployment** (`examples/kubernetes/`: a `Dockerfile` and `standalone.yaml`; one process runs
+every role, a restart restarts master and worker together, tasks share the pod's memory;
+since 2026-10-23 also a production path, below):
 
 - **`schedr standalone --listen <address>`** opens the **REST API** beyond loopback (e.g.
   `0.0.0.0` behind a `ClusterIP` Service), with the no-authentication warning; the master's
@@ -126,6 +126,52 @@ tasks share the pod's memory):
   runs through the CLI, a second container on the volume is refused, SIGTERM stops it in 2 s
   with exit code 0, the runs survive a restart), and in CI by the musllinux wheel's smoke test
   on the same Alpine image.
+
+**Production path (decided 2026-10-23, step 2.10): standalone in one pod first, then the
+full split.** Production starts with standalone in one pod, **first on SQLite** (a test:
+its state on the pod's volume), **then on Postgres** (the real persistence), and moves to
+the separate roles only if the load needs it. Its trade-offs are stated rather than
+blockers: a restart restarts every role (an upgrade drains, `termination_grace_period`),
+tasks share the pod's memory (the watchdog's budgets, below), and the REST API has no
+authentication until M3 (a ClusterIP Service behind Istio or an authenticating proxy).
+
+- **One master per database (Postgres):** the master (standalone's, and `schedr master`)
+  takes a **Postgres advisory lock** at start, held by a session of its own; a second one
+  **waits as a standby** (readiness "starting: master") and takes over when the first stops,
+  since a dead session frees the lock at once. The data directory's lock covers SQLite only
+  (one volume); on Postgres, two pods with volumes of their own (a rollout overlap, `replicas:
+  2` by mistake) would schedule every run twice. Not chosen: refusing to start (a rollout
+  overlap would crash-loop the new pod); relying on `replicas: 1`.
+- **Migrations:** standalone keeps migrating at start, under that lock; the chart can turn it
+  off and run `schedr db migrate` as a Job (once other roles share the database). Not
+  chosen: a separate step always (one more part for one pod).
+- **SQLite to Postgres: start fresh** (phase 1 is a test; DAGs are parsed again, only run
+  history stays behind in the SQLite file). Not chosen: a `schedr db copy` (every table
+  copied with its types, kept right as the schema changes).
+- **To the separate roles: a full switch,** standalone replaced by `schedr master`,
+  `webserver` and `worker` on the same Postgres, so the history stays; a short downtime is
+  acceptable. Not chosen: standalone accepting extra worker pods (its gRPC beyond localhost
+  with `[tls]`) for a gradual move.
+- **Memory reserve: `[worker] memory_reserve`**, the part of the pod's limit not given to
+  task budgets: **10 % for `schedr worker`, 25 % for standalone** (whose process also runs
+  the master and the API), default measured in 2.10 (`process_resident_memory_bytes`, idle
+  and busy); budget = (limit − reserve) ÷ slots unless `memory_budget` is set. Too small, and
+  tasks under their budgets together exceed the limit: the kernel kills the whole pod (every
+  task `lost`, retries used); too large, and tasks are killed earlier than needed. Not
+  chosen: keeping 10 % and requiring `memory_budget` (a forgotten setting means the whole
+  pod killed); a reserve following schedr's measured memory (budgets changing while tasks
+  run).
+- **Open for 2.10: PgBouncer** (raised 2026-10-23; the user wants it supported). In
+  transaction pooling a session-level advisory lock isn't tied to the master that took it,
+  so the lock above doesn't hold there; the proposal is a **lease row** in the database
+  (taken and renewed by one statement, the database's clock, a standby retrying; works
+  through any pooler and on SQLite) instead of the advisory lock. Three things schedr does
+  already break in transaction pooling too: `SET statement_timeout` on connect (2.9), `LISTEN`
+  for commands (polling still applies them), and sqlx's prepared statements (PgBouncer 1.21+
+  with `max_prepared_statements`, or the cache off). Waiting for which pool mode production
+  uses.
+- **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
+  chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
 
 ### Web UI and CLI
 
@@ -396,7 +442,7 @@ tasks share the pod's memory):
   follow).
 - **The address** the worker sends in `Register` (`log_endpoint`) is `https://<host>:<port>`
   (`http://` in `mesh` mode), the host being **`[worker] log_address`**, else the host name.
-  The chart (2.10) runs workers as a StatefulSet with a **headless Service** and sets it to
+  The chart (2.11) runs workers as a StatefulSet with a **headless Service** and sets it to
   the pod's DNS name (`<pod>.<service>.<namespace>.svc.cluster.local`): a headless Service
   doesn't balance (the name resolves to that one pod), its pods are in Istio's registry, so
   the call passes `outboundTrafficPolicy: REGISTRY_ONLY` and gets the mesh's mTLS, and Istio
@@ -932,6 +978,18 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   others), and its unfinished ones go to other workers that reported the same hash. A
   cancelled attempt keeps its slot until its process has ended and reported, so a drain
   never ends with a task still running.
+  **B9, fixed 2026-10-23:** an attempt already being stopped when the drain's time is up
+  (cancelled, or past its `execution_timeout`, on the 30 s cancel grace) kept that grace,
+  since its stop signal was one-shot and used: the worker outlived the pod's deadline and
+  never deregistered. A stop now **escalates**: the reasons come through one channel per
+  attempt (`supervise::Stops`, which the memory watchdog sends to as well, before its SIGKILL,
+  and which the supervisor reads first), the first decides the status and sends SIGTERM, and
+  while the grace runs a drain's interrupt brings SIGKILL to at most `drain_terminate_period`
+  from then (the memory watchdog to now); a repeated cancel changes nothing, and a memory
+  kill during a cancel's grace leaves the attempt `cancelled` (never retried, as it should). Not chosen:
+  SIGKILLing every group still running at the drain's deadline from the agent (two places
+  signalling one process); the shorter grace only for stops begun during a drain (misses a
+  cancel just before it).
   **B8, fixed 2026-10-23:** the interrupt used the master's cancel grace (30 s) before
   SIGKILL, so a task ignoring SIGTERM outlived the pod (killed at the grace period), its
   attempt ended `lost` and used a retry (a task with `retries = 0` failed its run). The two
@@ -1920,7 +1978,9 @@ list) and likewise has no Python.
   journal is recovered).
 - **Query time limits:** **`[database] query_timeout`** (30 s) is Postgres's
   `statement_timeout` (set with `SET` on each new connection, which poolers such as PgBouncer
-  accept, unlike the `options` startup parameter), the pool's wait for a connection and
+  accept, unlike the `options` startup parameter; **but only in session pooling**: in
+  transaction pooling the `SET` lands on a server connection other clients then get, see
+  the PgBouncer question for 2.10 below), the pool's wait for a connection and
   SQLite's busy timeout; it must be at least 1 ms (Postgres reads 0 as no limit) and shorter
   than `loop_stall_timeout`, else a startup error (standalone too). Migrations (`schedr db
   migrate`, standalone's start) run without it: a long migration must finish. A database
@@ -4669,7 +4729,7 @@ crates/
     tests/              # integration tests (later)
   xtask/                # development tasks: `cargo xtask schema [--check]`, `docs-sources`
 schema/                 # generated, committed: JSON Schemas, OpenAPI
-docs/                   # documentation: conf.py, index pages, guide/ (written by hand)
+docs/                   # documentation: conf.py, index pages, 02-guide/ (written by hand)
 pyproject.toml          # Python package
 python/
   schedr/               # Python API package (typed: py.typed)
@@ -4870,7 +4930,24 @@ its configuration, not the content.
 - **Sections:** Overview (`README.md`), **How schedr works** (the guide, below), **Reference**
   (generated, below), **Design** (`PROJECT.md`, one page per chapter), Plan (`PLAN.md`),
   **Python API** (from docstrings), **Rust API** (from `rustdoc`).
-- **The guide (M2.9b), `docs/guide/`, written by hand and committed:** how the running system
+- **Files are numbered in the site's order** (2026-10-23), so a directory listing reads like
+  the site: each section has its number (1 Overview, 2 How schedr works, 3 Reference, 4
+  Design, 5 Plan, 6 API); a section of several pages is a folder (`docs/02-guide/`,
+  `_generated/03-reference/`), a single page a file (`_generated/05-plan.md`), and pages in
+  a folder are numbered too (`02-guide/04-master.md`), two digits so 10 follows 09. The
+  hand-written pages (`docs/`) and the generated ones (`docs/_generated/`, by
+  `cargo xtask docs-sources`) share the numbers; a section's index page stays `index.md`. A
+  page that gets pages of its own becomes a folder (`05-workers/index.md`,
+  `05-workers/01-journal.md`: 5.1). Not chosen: dotted numbers in file names (`5.1-journal.md`:
+  dots trouble links and anchors); numbering only the guide (the other sections' files stay
+  out of order).
+- **`make docs` builds from scratch:** it empties `site/`, and with it Sphinx's cached
+  environment (`site/.doctrees`). After a page was renamed, that cache still listed the old
+  name, so autosummary generated nothing for the moved Python API page (a warning, so a
+  failed build), and the old HTML stayed in `site/`. Costs nothing: xtask rewrites every
+  generated page on each build anyway. The Python API page is generated by xtask
+  (`_generated/06-api/01-python.md`), so autosummary's module pages land next to it.
+- **The guide (M2.9b), `docs/02-guide/`, written by hand and committed:** how the running system
   works as built, not as planned: overview of the roles and links, glossary, the life of a
   run, the master (its rounds, step by step, and what it handles between them), workers
   (the agent's loop, the journal, memory, draining, logs), parsing and code versions, state
@@ -4882,7 +4959,7 @@ its configuration, not the content.
   only (no one place showing how the parts fit); one `ARCHITECTURE.md` split at build time (a
   second very long file); reviewing the guide only per milestone (it drifts in between).
 - **The reference (M2.9b), generated at build time by `cargo xtask docs-sources`** into
-  `docs/_generated/reference/`, so it can't go stale:
+  `docs/_generated/03-reference/`, so it can't go stale:
   - **Configuration:** from the configuration's JSON Schema (`schedr_config::config_schema`:
     `JsonSchema` and `Serialize` derived on every section, so doc comments and defaults come
     with it; durations and sizes are written back as they are read, `2m`, `4MiB`, checked by a

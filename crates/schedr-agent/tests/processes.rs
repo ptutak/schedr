@@ -9,7 +9,7 @@ use pretty_assertions::assert_eq;
 use schedr_agent::output::process_result;
 use schedr_agent::process::{ProcessSpec, spawn};
 use schedr_agent::status::{StopReason, Termination};
-use schedr_agent::supervise::{Limits, supervise};
+use schedr_agent::supervise::{Limits, Stops, supervise};
 use tempfile::TempDir;
 
 fn shell(dir: &Path, script: &str, max_output_size: usize) -> ProcessSpec {
@@ -29,8 +29,9 @@ const NO_LIMITS: Limits = Limits {
     interrupt_grace: Duration::from_secs(5),
 };
 
-fn never() -> impl Future<Output = StopReason> {
-    std::future::pending()
+/// No reason to stop, ever.
+fn never() -> Stops {
+    Stops::new().1
 }
 
 #[tokio::test]
@@ -111,7 +112,8 @@ async fn the_whole_process_group_is_stopped() {
         .unwrap()
         .trim()
         .to_owned();
-    let stop = async { StopReason::Cancelled };
+    let (sender, stop) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
     let supervised = supervise(&mut process, NO_LIMITS, stop).await.unwrap();
     assert_eq!(supervised.stopped, Some(StopReason::Cancelled));
     for _ in 0..100 {

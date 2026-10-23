@@ -2,9 +2,10 @@
 
 The pages from repository files (README, PLAN, the PROJECT.md chapters, the Rust crate list)
 and the reference pages from the code (configuration, CLI, metrics, REST API) are generated
-into ``_generated/`` by ``cargo xtask docs-sources`` (``make docs``); the guide (``guide/``) is
-written by hand. Only this file and the index pages here are specific to Sphinx (see
-PROJECT.md, Repository and tooling: Documentation).
+into ``_generated/`` by ``cargo xtask docs-sources`` (``make docs``); the guide (``02-guide/``)
+is written by hand. Files are numbered by the site's sections, in both trees. Only this file
+and the index pages here are specific to Sphinx (see PROJECT.md, Repository and tooling:
+Documentation).
 """
 
 from importlib.metadata import version as _version

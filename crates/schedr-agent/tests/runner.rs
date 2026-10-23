@@ -14,7 +14,7 @@ use schedr_agent::launch::{ProcessParseRunner, run_python};
 use schedr_agent::parse::{RUNNER_DIED_EXCEPTION, TIMEOUT_EXCEPTION, parse_files};
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::status::StopReason;
-use schedr_agent::supervise::Limits;
+use schedr_agent::supervise::{Limits, Stops};
 use schedr_model::runner::{
     DagFile, ParseRequest, ParsedFile, RunInfo, RunnerMessage, TaskRequest,
 };
@@ -199,15 +199,14 @@ async fn run(
     stop: StopAfter,
 ) -> schedr_agent::attempt::Ran {
     let process = runner("task", dir, &dir.join("task.log"));
-    let stop = async move {
-        match stop {
-            StopAfter::Never => std::future::pending().await,
-            StopAfter::Cancel(after) => {
-                tokio::time::sleep(after).await;
-                StopReason::Cancelled
-            }
-        }
-    };
+    let (sender, stops) = Stops::new();
+    if let StopAfter::Cancel(after) = stop {
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = sender.send(StopReason::Cancelled);
+        });
+    }
+    let stop = stops;
     run_python(&process, request, limits, stop, |pid| assert!(pid > 1))
         .await
         .unwrap()

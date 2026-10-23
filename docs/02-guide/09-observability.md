@@ -29,7 +29,7 @@ its Service helps nobody.
 ## Metrics
 
 `/metrics` serves Prometheus metrics in the OpenMetrics text format. The
-[metrics reference](../_generated/reference/metrics.md) lists every metric, generated from
+[metrics reference](../_generated/03-reference/04-metrics.md) lists every metric, generated from
 the code. Roughly:
 
 - **master:** round durations (`schedr_master_tick_duration_seconds`), runs, tasks and workers
@@ -50,4 +50,4 @@ Labels are bounded (states, kinds, reasons, `dag_id`), never a run, task or atte
 Each role logs to stdout. `[log] format` is `auto` (JSON when stdout isn't a terminal, as in a
 pod; readable text in a terminal), `json` or `text`. `[log] level` takes `RUST_LOG`-style
 filters. These are separate from **task logs**, which are files on the worker (see
-[Workers](workers.md)).
+[Workers](05-workers.md)).

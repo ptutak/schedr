@@ -5,20 +5,6 @@ A fixed bug is removed in the commit that fixes it, together with a test that re
 it: shown failing before the fix and passing after; git history keeps the record. Finding a bug doesn't mean fixing it at once: it
 is logged here and its fix scheduled with the user. Not part of the documentation site.
 
-## B9: a drain can't shorten a stop already under way
-
-- **Seen:** 2026-10-23, in the review of the B8 fix (by reading the code, not in a run).
-- **What:** a drain whose time is up interrupts the running attempts through their stop
-  channel, used once. An attempt already being stopped (cancelled by the master, or past its
-  `execution_timeout`) has used it, keeps the cancel grace (30 s) before SIGKILL, and can
-  outlive the pod's deadline: the drain doesn't finish, the worker isn't deregistered (the
-  master marks it lost later), and a timed-out task ends `lost` rather than `timed_out` (a
-  cancelled one still ends `cancelled`). Both use a retry or none as before, so the effect is
-  mostly the missed deregistration.
-- **Next:** let a stop escalate (a second reason shortens the grace to
-  `drain_terminate_period`), with a test: a task ignoring SIGTERM, cancelled just before the
-  drain's time is up.
-
 ## B4: `runs trigger` in a roles integration test got no result once
 
 - **Seen:** 2026-10-22, the first `make test-integration` of M2.3:

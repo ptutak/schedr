@@ -44,7 +44,7 @@ The CLI then reads the command back every 0.5 s, for up to 30 s, until the maste
 
 ## 2. The master wakes up
 
-The master's loop runs a [round](master.md) every `[master] tick_interval` (1 s), and at
+The master's loop runs a [round](04-master.md) every `[master] tick_interval` (1 s), and at
 once when a notification arrives. On SQLite there are no notifications, so the command waits
 for the next round.
 
@@ -107,4 +107,4 @@ after its last retry, `cancelled` if a user cancelled it and nothing failed, oth
 `success`.
 
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
-it from the worker that ran the attempt (see [Workers](workers.md)).
+it from the worker that ran the attempt (see [Workers](05-workers.md)).

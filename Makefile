@@ -59,11 +59,11 @@ schema:          ## Regenerate the committed files under schema/
 schema-check:    ## Fail if the files under schema/ are out of date
 	cargo xtask schema --check
 
-docs:            ## Build the documentation site into site/ (fails on any warning)
+docs:            ## Build the documentation site into site/ (from scratch; fails on any warning)
 	cargo xtask docs-sources
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude xtask
+	rm -rf site
 	uv run --group docs sphinx-build -W --keep-going -q -b html docs site
-	rm -rf site/rust
 	cp -r target/doc site/rust
 
 docs-serve: docs ## Build the docs and serve them at http://localhost:$(DOCS_PORT)

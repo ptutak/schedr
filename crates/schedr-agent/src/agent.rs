@@ -35,7 +35,7 @@ use schedr_proto::convert::attempt_status_from_proto;
 use schedr_proto::convert::parsed_file_to_proto;
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_proto::pb::{self, master_message, worker_message};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
@@ -50,7 +50,7 @@ use crate::metrics::AgentMetrics;
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
 use crate::status::StopReason;
-use crate::supervise::Limits;
+use crate::supervise::{Limits, StopSender, Stops};
 use crate::watch::{Poll, RootWatcher};
 
 #[cfg(test)]
@@ -107,13 +107,14 @@ pub type Spawned = Box<dyn FnOnce(ProcessIdentity) + Send>;
 
 /// Runs attempts and parse jobs.
 pub trait Executor: Clone + Send + Sync + 'static {
-    /// Runs a planned attempt until it ends or `stop` says why to stop it, telling `spawned`
-    /// its process; returns its `Finished`.
+    /// Runs a planned attempt until it ends or `stop` says why to stop it (a later reason
+    /// may hurry a stop under way, see [`crate::supervise::supervise`]), telling `spawned` its
+    /// process; returns its `Finished`.
     fn run(
         &self,
         spec: AttemptSpec,
         plan: Plan,
-        stop: oneshot::Receiver<StopReason>,
+        stop: Stops,
         spawned: Spawned,
     ) -> impl Future<Output = pb::Finished> + Send;
 
@@ -144,7 +145,7 @@ impl Executor for ProcessExecutor {
         &self,
         spec: AttemptSpec,
         plan: Plan,
-        stop: oneshot::Receiver<StopReason>,
+        stop: Stops,
         spawned: Spawned,
     ) -> pb::Finished {
         let limits = Limits {
@@ -153,15 +154,8 @@ impl Executor for ProcessExecutor {
             interrupt_grace: self.drain_terminate_period,
         };
         let seen = SharedSeen::default();
-        let (killed_tx, killed) = oneshot::channel::<()>();
-        let stop = async move {
-            tokio::select! {
-                Ok(reason) = stop => reason,
-                Ok(()) = killed => StopReason::OomKilled,
-                // Neither will say anything now: the attempt runs on its own.
-                else => std::future::pending().await,
-            }
-        };
+        // The watchdog's kill is one more reason to stop, in the same channel.
+        let oom = stop.sender();
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let mut watching = None;
         let spawned = |pid| {
@@ -170,7 +164,7 @@ impl Executor for ProcessExecutor {
                 self.setup.memory.clone(),
                 pid,
                 seen.clone(),
-                killed_tx,
+                oom,
                 self.metrics.watchdog_kills.clone(),
             ));
             match process_identity(pid) {
@@ -285,7 +279,7 @@ pub struct Agent<E> {
     journal: Journal,
     watchers: BTreeMap<String, RootWatcher>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
-    running: BTreeMap<String, Option<oneshot::Sender<StopReason>>>,
+    running: BTreeMap<String, StopSender>,
     unacked: BTreeMap<String, pb::Finished>,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
@@ -479,7 +473,9 @@ impl<E: Executor> Agent<E> {
                 running = self.running.len(),
                 "the grace period is ending: interrupting the running tasks"
             );
-            for stop in self.running.values_mut().filter_map(Option::take) {
+            // Also to attempts already being stopped (cancelled, timed out): their SIGKILL
+            // comes no later than the drain's (B9).
+            for stop in self.running.values() {
                 let _ = stop.send(StopReason::Interrupted);
             }
         }
@@ -698,12 +694,9 @@ impl<E: Executor> Agent<E> {
             }
             master_message::Message::AssignParse(job) => self.parse(job),
             master_message::Message::CancelAttempt(cancel) => {
-                // It stays running (its slot taken) until its process has ended and reported.
-                if let Some(stop) = self
-                    .running
-                    .get_mut(&cancel.attempt_id)
-                    .and_then(Option::take)
-                {
+                // It stays running (its slot taken) until its process has ended and reported;
+                // a repeated cancel changes nothing.
+                if let Some(stop) = self.running.get(&cancel.attempt_id) {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
@@ -731,7 +724,7 @@ impl<E: Executor> Agent<E> {
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
-                if let Some(stop) = self.running.get_mut(id).and_then(Option::take) {
+                if let Some(stop) = self.running.get(id) {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
@@ -825,8 +818,8 @@ impl<E: Executor> Agent<E> {
                 let _ = self.done_tx.send(Done::Attempt(failed));
             }
             Ok(plan) => {
-                let (stop, stopped) = oneshot::channel();
-                self.running.insert(spec.attempt_id.clone(), Some(stop));
+                let (stop, stopped) = Stops::new();
+                self.running.insert(spec.attempt_id.clone(), stop);
                 let _ = to_master.send(started);
                 self.launch(spec, plan, stopped);
             }
@@ -834,7 +827,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Runs a started attempt in the background; what happens is reported on `done_tx`.
-    fn launch(&self, spec: AttemptSpec, plan: Plan, stopped: oneshot::Receiver<StopReason>) {
+    fn launch(&self, spec: AttemptSpec, plan: Plan, stopped: Stops) {
         let executor = self.executor.clone();
         let done = self.done_tx.clone();
         let on_spawn = self.done_tx.clone();

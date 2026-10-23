@@ -29,13 +29,13 @@ impl Executor for Fake {
         &self,
         spec: AttemptSpec,
         _plan: Plan,
-        stop: oneshot::Receiver<StopReason>,
+        mut stop: Stops,
         spawned: Spawned,
     ) -> pb::Finished {
         spawned(NO_PROCESS);
         let status = if spec.task.id.as_str() == "wait" {
-            match stop.await {
-                Ok(StopReason::Interrupted) => pb::AttemptStatus::Interrupted,
+            match stop.next_reason().await {
+                StopReason::Interrupted => pb::AttemptStatus::Interrupted,
                 _ => pb::AttemptStatus::Cancelled,
             }
         } else {
@@ -956,7 +956,7 @@ async fn a_draining_agent_rejects_assignments_and_says_so_again_after_a_reconnec
                 },
             ));
             // Something still runs: the drain isn't over.
-            agent.running.insert("other".to_owned(), None);
+            agent.running.insert("other".to_owned(), Stops::new().0);
         },
     )
     .await;
@@ -994,13 +994,19 @@ fn a_second_shutdown_request_interrupts_at_once() {
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert!(!agent.on_shutdown(0));
-    let (stop, stopped) = oneshot::channel();
-    agent.running.insert("a1".to_owned(), Some(stop));
+    let (stop, mut stopped) = Stops::new();
+    agent.running.insert("a1".to_owned(), stop);
     assert!(agent.on_shutdown(1));
     assert_eq!(agent.drain_step(true), DrainStep::Wait, "600 s of grace");
     assert!(!agent.on_shutdown(2));
     assert_eq!(agent.drain_step(true), DrainStep::Interrupt);
-    assert_eq!(stopped.blocking_recv(), Ok(StopReason::Interrupted));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    assert_eq!(
+        runtime.block_on(stopped.next_reason()),
+        StopReason::Interrupted
+    );
 }
 
 #[tokio::test]
@@ -1028,15 +1034,15 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         log_endpoint: String::new(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
-    let (stop, stopped) = oneshot::channel();
-    agent.running.insert("a1".to_owned(), Some(stop));
+    let (stop, mut stopped) = Stops::new();
+    agent.running.insert("a1".to_owned(), stop);
     let (to_master, _outbound) = mpsc::unbounded_channel();
     let kill = pb::JournalDecision {
         attempt_id: "a1".to_owned(),
         decision: pb::AttemptDecision::Kill.into(),
     };
     agent.decide(&kill, &to_master).await;
-    assert_eq!(stopped.await, Ok(StopReason::Cancelled));
+    assert_eq!(stopped.next_reason().await, StopReason::Cancelled);
     assert_eq!(agent.running(), ["a1"], "still running until it reports");
     assert_eq!(agent.free_slots(), 0);
 }

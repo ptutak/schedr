@@ -6,7 +6,7 @@ Every role reads the same configuration: one TOML file (`--config`, else
 `SCHEDR_CONFIG_FILE`, else `/etc/schedr/config.toml`) and environment variables mirroring
 it, e.g. `SCHEDR_CONFIG__MASTER__GRPC_PORT` for `[master] grpc_port`. Flags win over the
 environment, which wins over the file. Unknown keys are an error. Each role uses only its own
-sections. The [configuration reference](../_generated/reference/configuration.md) lists
+sections. The [configuration reference](../_generated/03-reference/01-configuration.md) lists
 every key.
 
 ## The roles in a cluster
@@ -21,16 +21,17 @@ every key.
   `schedr db migrate` before starting the master and the webserver; both refuse a schema that
   doesn't match their version. SQLite works for roles on one host with a local disk.
 - **Upgrade the master first**, then the webservers and workers (see
-  [Parsing and code versions](parsing.md#upgrades)).
+  [Parsing and code versions](06-parsing.md#upgrades)).
 - **Workers' `terminationGracePeriodSeconds`** should match `[worker]
   termination_grace_period`, so a draining worker has the time it expects.
 - **Probes** go to the ops port: liveness on `/healthz` for every role, readiness on `/readyz`
   for the master and the webserver. Workers need no readiness probe: nothing connects to them
   through a Service.
 - **Memory:** a worker pod's memory limit is split between its slots (see
-  [Workers](workers.md#memory)); size the pod for its slots.
+  [Workers](05-workers.md#memory)); size the pod for its slots.
 
-A Helm chart for this layout comes with step 2.10.
+A Helm chart for this layout comes with step 2.11; one for standalone in one pod, on SQLite
+or Postgres, comes first, with step 2.10.
 
 ## One pod: `schedr standalone`
 

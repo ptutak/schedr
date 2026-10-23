@@ -5,7 +5,7 @@ runs in its own pods; on a laptop `schedr standalone` runs them all in one proce
 
 | Role | What it does | Runs user code? | State |
 |---|---|---|---|
-| `schedr master` | Decides everything: when runs start, which worker runs which task, what a failure means. Its scheduling loop works in [rounds](master.md). | Never | Reads and writes the database |
+| `schedr master` | Decides everything: when runs start, which worker runs which task, what a failure means. Its scheduling loop works in [rounds](04-master.md). | Never | Reads and writes the database |
 | `schedr worker` | A Rust agent that runs tasks and parses DAG files, each in a Python or shell subprocess. Keeps task logs on its disk. | Yes, in subprocesses | A journal on its own disk; no database |
 | `schedr webserver` | The REST API that the CLI uses (later the web UI). Reads state from the database; turns actions into **commands** for the master. | Never | Reads the database, writes only commands |
 | `schedr standalone` | All three in one process, on localhost, with SQLite by default. For a laptop, or one pod to try schedr on a cluster. | Yes | SQLite file in the data directory |
@@ -45,12 +45,12 @@ flowchart LR
 | Ops (`/healthz`, `/readyz`, `/metrics`) | every role | 8090 | kubelet probes, Prometheus |
 
 The gRPC port and the log endpoint use mTLS unless a service mesh provides it (see
-[Network and security](network.md)). The ops port is plain HTTP and serves no data (see
-[Observability](observability.md)).
+[Network and security](08-network.md)). The ops port is plain HTTP and serves no data (see
+[Observability](09-observability.md)).
 
 ## Where to go next
 
-- [Life of a run](life-of-a-run.md) follows one run through every part.
-- [The master](master.md) explains the scheduling loop and its rounds.
-- [Workers](workers.md) covers what a worker does with a task, and how it survives restarts.
-- [State and failures](failures.md) says what happens when any part stops.
+- [Life of a run](03-life-of-a-run.md) follows one run through every part.
+- [The master](04-master.md) explains the scheduling loop and its rounds.
+- [Workers](05-workers.md) covers what a worker does with a task, and how it survives restarts.
+- [State and failures](07-failures.md) says what happens when any part stops.

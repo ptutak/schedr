@@ -47,7 +47,7 @@ examples/               # runnable examples, with their tests
 scripts/                # shell scripts used by CI and make (e.g. a package smoke test)
 schema/                 # generated, committed (JSON Schema, OpenAPI, ...)
 testdata/               # fixtures shared between languages
-docs/                   # documentation sources (conf, index pages, guide/); output goes to site/
+docs/                   # documentation sources (conf, index pages, the guide); output goes to site/
 ```
 
 A Python-only project drops the Rust parts (and vice versa); everything else stays.
@@ -160,7 +160,7 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
 - Long Markdown documents (e.g. `PROJECT.md`) stay one file in the repository; a small
   generator splits them into pages at build time.
 - **Three kinds of pages:**
-  - **The guide** (`docs/guide/`, written by hand, committed): how the running system works
+  - **The guide** (e.g. `docs/02-guide/`, written by hand, committed): how the running system works
     (components, the flow of a request, loops, failure handling, deployment), as built, not
     as planned. It describes, and links to the design log for the reasons. Updated in the same
     step as the code it describes.
@@ -169,6 +169,10 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
     parser), the API (from its OpenAPI description), the metrics (from a list per component
     that the code registers from, checked by a test against a scrape).
   - **The design log and plan** (`PROJECT.md`, `PLAN.md`), split into pages at build time.
+- **Files numbered in the site's order:** each section gets its number (a folder when it has
+  several pages, `docs/02-guide/`; a file when one, `05-plan.md`), and the pages in a folder
+  too (`02-guide/04-master.md`, two digits); generated pages use the same numbers. A page
+  with pages of its own becomes a folder (`05-workers/01-journal.md`, read as 5.1).
 - **Diagrams in Mermaid**, written as plain ```` ```mermaid ```` fences so GitHub draws them too
   (`sphinxcontrib-mermaid`, with `myst_fence_as_directive`; mermaid.js pinned).
 - CI builds the docs and **fails on warnings** (a broken reference, a missing docstring, a

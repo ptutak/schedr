@@ -58,7 +58,7 @@ Every query has a time limit (`[database] query_timeout`, 30 s), enforced by the
 a slow query ends with an error rather than holding the round. Only a database that stops
 answering altogether (a network partition) can hold a round. The loop then stops beating, and
 liveness fails after `[ops] loop_stall_timeout` (2 min). Kubernetes restarts the master,
-which reads its state back (see [State and failures](failures.md)).
+which reads its state back (see [State and failures](07-failures.md)).
 
 ## Between rounds: messages from workers
 
@@ -98,6 +98,6 @@ Then the master listens for workers and starts its loop, and `/readyz` turns rea
 ## Gauges
 
 Every 15 s the loop also counts runs, tasks and workers by state with one read-only query, for
-`/metrics` (see [Observability](observability.md)). Unlike a round, this refresh only reads,
+`/metrics` (see [Observability](09-observability.md)). Unlike a round, this refresh only reads,
 so it has a time limit of its own (half of `loop_stall_timeout`). If it runs out, the gauges
 keep their previous values.

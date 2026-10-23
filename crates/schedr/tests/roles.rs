@@ -1548,8 +1548,8 @@ fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
     drop(silent);
 }
 
-/// A DAG whose task ignores SIGTERM on its first try (it stops only for SIGKILL) and succeeds
-/// on the next.
+/// A DAG whose task ignores SIGTERM on its first try (it stops only for SIGKILL), noting each
+/// one in `<marker>.term`, and succeeds on the next.
 fn ignores_sigterm_first_try(marker: &std::path::Path) -> String {
     format!(
         r#"
@@ -1560,8 +1560,9 @@ from schedr import Dag, task
 def work() -> str:
     marker = {marker:?}
     if not os.path.exists(marker):
+        # The handler first: `marker` says the task now ignores SIGTERM.
+        signal.signal(signal.SIGTERM, lambda *_: open(marker + ".term", "w").close())
         open(marker, "w").close()
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         time.sleep(120)
     return "done"
 
@@ -1648,4 +1649,58 @@ impl Cluster {
         }
         None
     }
+}
+
+#[test]
+fn a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period() {
+    // B9: a task already being stopped (here cancelled, so on the master's 30 s cancel grace)
+    // when the drain's time is up kept that grace: the worker outlived the pod's deadline and
+    // never deregistered.
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.dir.path().join("marker");
+    std::fs::write(
+        cluster.root().join("stubborn.py"),
+        ignores_sigterm_first_try(&marker),
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    let grace = Duration::from_secs(8);
+    cluster.start_with(
+        "worker",
+        &[("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "8s")],
+    );
+    let run_id = cluster.trigger("stubborn");
+    cluster.wait("the first try to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    // The task is cancelled once it ignores SIGTERM (`started` comes before the runner reaches
+    // the task's code), then the pod is asked to stop once the cancel's SIGTERM has reached
+    // it, so the cancel's grace is running.
+    cluster.wait("the task to ignore SIGTERM", || marker.exists());
+    let (code, out, err) = cluster.cli(&["tasks", "cancel", &run_id, "work"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let terminated = cluster.dir.path().join("marker.term");
+    cluster.wait("the cancel's SIGTERM to reach the task", || {
+        terminated.exists()
+    });
+    let exited = cluster.terminate_within("worker", grace);
+    assert!(
+        exited.is_some_and(|s| s.success()),
+        "the worker didn't stop within the grace period: {exited:?}\n{}",
+        cluster.logs()
+    );
+    assert_eq!(cluster.worker_state("w1").as_deref(), Some("offline"));
+    let statuses: Vec<Value> = cluster
+        .attempts(&run_id, "work")
+        .iter()
+        .map(|a| a["status"].clone())
+        .collect();
+    assert_eq!(statuses, ["cancelled"], "{}", cluster.logs());
 }

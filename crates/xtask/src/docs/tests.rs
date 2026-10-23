@@ -120,7 +120,7 @@ fn rust_api_page_links_each_crate() {
     ]);
     assert!(page.starts_with("# Rust API\n"));
     assert!(page.contains(
-        "<li><a href=\"../rust/schedr_bin/index.html\"><code>schedr</code></a>: The binary.</li>"
+        "<li><a href=\"../../rust/schedr_bin/index.html\"><code>schedr</code></a>: The binary.</li>"
     ));
     assert!(page.contains("Model &lt;DAG JSON&gt; &amp; states."));
     assert!(page.contains("```{raw} html\n<ul>\n"));
@@ -139,17 +139,18 @@ fn docs_sources_contains_every_page() {
     assert_eq!(
         paths,
         [
-            "docs/_generated/overview.md",
-            "docs/_generated/plan.md",
-            "docs/_generated/rust-api.md",
-            "docs/_generated/design/00-schedr-project-decisions.md",
-            "docs/_generated/design/01-goal.md",
-            "docs/_generated/design/02-architecture.md",
+            "docs/_generated/01-overview.md",
+            "docs/_generated/05-plan.md",
+            "docs/_generated/06-api/01-python.md",
+            "docs/_generated/06-api/02-rust.md",
+            "docs/_generated/04-design/00-schedr-project-decisions.md",
+            "docs/_generated/04-design/01-goal.md",
+            "docs/_generated/04-design/02-architecture.md",
         ]
     );
     assert_eq!(files[0].contents, "# readme\n");
     assert_eq!(files[1].contents, "# plan\n");
-    assert!(files[4].contents.starts_with("# Goal\n"));
+    assert!(files[5].contents.starts_with("# Goal\n"));
 }
 
 const METADATA: &str = r#"{"packages": [

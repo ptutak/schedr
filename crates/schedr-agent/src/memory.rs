@@ -21,8 +21,10 @@ use std::time::Duration;
 
 use prometheus_client::metrics::counter::Counter;
 use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+use crate::status::StopReason;
+use crate::supervise::StopSender;
 
 #[cfg(test)]
 mod tests;
@@ -198,25 +200,26 @@ impl Drop for GroupWatch {
 }
 
 /// Watches group `pgid` (recording in `seen`) from now until the returned watch is dropped:
-/// over the budget it kills the group at once (SIGKILL), counts it in `kills` and tells
-/// `killed`. Started as soon
-/// as the process is, it covers a runner's start and a stopped task's grace period too.
+/// over the budget it tells `stop` ([`StopReason::OomKilled`]), kills the group at once
+/// (SIGKILL) and counts it in `kills`. The reason goes first, so the supervisor has it before
+/// the process's end. Started as soon as the process is, it covers a runner's start and a
+/// stopped task's grace period too.
 #[must_use]
 pub fn watch_group(
     watch: MemoryWatch,
     pgid: i32,
     seen: SharedSeen,
-    killed: oneshot::Sender<()>,
+    stop: StopSender,
     kills: Counter,
 ) -> GroupWatch {
     let task = tokio::spawn(async move {
         over_budget(&watch, pgid, &seen).await;
+        let _ = stop.send(StopReason::OomKilled);
         if let Some(group) = Pid::from_raw(pgid) {
             // A group that is gone already is fine.
             let _ = kill_process_group(group, Signal::KILL);
         }
         kills.inc();
-        let _ = killed.send(());
     });
     GroupWatch { task }
 }
