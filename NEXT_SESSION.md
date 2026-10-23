@@ -61,11 +61,11 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 ## Next steps
 
 1. **Ask about CI** for the pushed commits.
-2. **M2, step 2.10, standalone for production** (first: ask which PgBouncer pool mode
-   production uses; the master's lock is likely a lease row instead of an advisory lock, see
-   PROJECT.md, production path: open for 2.10) (PLAN.md; decisions in PROJECT.md, Components
-   and roles: production path): the master's advisory lock with a standby, migrations under
-   it, `[worker] memory_reserve`, the image with DAG libraries, the chart's standalone mode.
+2. **M2, step 2.10, standalone for production** (PLAN.md; decisions in PROJECT.md,
+   Components and roles: production path): pooler-proof (a `master_lease` row with a
+   standby, the query limit in schedr instead of `SET`, statement cache off, polling as the
+   guarantee, migrations by the lease holder), `[worker] memory_reserve`, the image with DAG
+   libraries, the chart's standalone mode.
 3. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
    `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
    (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.

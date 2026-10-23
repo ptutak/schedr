@@ -135,16 +135,40 @@ blockers: a restart restarts every role (an upgrade drains, `termination_grace_p
 tasks share the pod's memory (the watchdog's budgets, below), and the REST API has no
 authentication until M3 (a ClusterIP Service behind Istio or an authenticating proxy).
 
-- **One master per database (Postgres):** the master (standalone's, and `schedr master`)
-  takes a **Postgres advisory lock** at start, held by a session of its own; a second one
-  **waits as a standby** (readiness "starting: master") and takes over when the first stops,
-  since a dead session frees the lock at once. The data directory's lock covers SQLite only
-  (one volume); on Postgres, two pods with volumes of their own (a rollout overlap, `replicas:
-  2` by mistake) would schedule every run twice. Not chosen: refusing to start (a rollout
-  overlap would crash-loop the new pod); relying on `replicas: 1`.
-- **Migrations:** standalone keeps migrating at start, under that lock; the chart can turn it
-  off and run `schedr db migrate` as a Job (once other roles share the database). Not
-  chosen: a separate step always (one more part for one pod).
+- **Works through any connection pooler** (decided 2026-10-23; the user wants PgBouncer
+  supported without knowing its mode): schedr uses no session state on Postgres, so a direct
+  connection, PgBouncer in session pooling and in transaction pooling all behave the same.
+  Not chosen: detecting the pool mode at start and adapting (two behaviours to keep right);
+  requiring session pooling or a direct connection (production's setup isn't known).
+- **One master per database: a lease row,** `master_lease` (holder: the master's
+  incarnation; a takeover counter; an expiry by the **database's** clock), taken and renewed
+  every 5 s for 15 s with one `UPDATE … WHERE expired OR mine`; a second master **waits as a
+  standby**, retrying until the lease expires (readiness "starting: master"). A master that
+  can't renew **stops scheduling by itself** before its lease could expire (its own
+  monotonic clock, with a margin), so two never schedule at once. The same on SQLite, so
+  standalone's path is one. The takeover counter can later be checked on writes (a stale
+  master refused outright). The data directory's lock stays for SQLite's volume. Not chosen:
+  a session advisory lock (not tied to its master behind transaction pooling; the decision
+  before PgBouncer came up); the advisory lock on a separate direct connection (needs a
+  route production may not offer); a transaction-level lock held in one open transaction
+  (pins a pooled connection, killed by `idle_in_transaction_session_timeout`); a Kubernetes
+  Lease (API access, Kubernetes only, doesn't stop two environments on one database);
+  relying on `replicas: 1` (one mistake means every run twice). After a crash a standby
+  takes over within 15 s, not at once: irrelevant for one pod.
+- **Query time limit enforced by schedr,** around every query in `schedr-db`'s common path
+  (`[database] query_timeout`), replacing 2.9's `SET statement_timeout` on each connection
+  (in transaction pooling it lands on a connection other clients then get): a query over it
+  is a database error, which a round survives since B7. A server-side `statement_timeout`
+  (set by the DBA, e.g. per role) is recommended so Postgres stops the work too; without it
+  a query cut off here may run on there until it ends.
+- **sqlx's statement cache off** on Postgres: queries use unnamed statements, which every
+  pooler and version passes; Postgres plans each query again (small, simple queries).
+- **Commands: polling is the guarantee** (every round, 1 s); `LISTEN` stays a speed-up that
+  may do nothing behind transaction pooling.
+- **Migrations run by the lease holder** (standalone at start, or a `schedr db migrate` Job
+  taking the lease first; the chart can turn standalone's off), with sqlx's own migration
+  lock (a session advisory lock) off. Not chosen: a separate step always (one more part for
+  one pod).
 - **SQLite to Postgres: start fresh** (phase 1 is a test; DAGs are parsed again, only run
   history stays behind in the SQLite file). Not chosen: a `schedr db copy` (every table
   copied with its types, kept right as the schema changes).
@@ -161,15 +185,6 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   chosen: keeping 10 % and requiring `memory_budget` (a forgotten setting means the whole
   pod killed); a reserve following schedr's measured memory (budgets changing while tasks
   run).
-- **Open for 2.10: PgBouncer** (raised 2026-10-23; the user wants it supported). In
-  transaction pooling a session-level advisory lock isn't tied to the master that took it,
-  so the lock above doesn't hold there; the proposal is a **lease row** in the database
-  (taken and renewed by one statement, the database's clock, a standby retrying; works
-  through any pooler and on SQLite) instead of the advisory lock. Three things schedr does
-  already break in transaction pooling too: `SET statement_timeout` on connect (2.9), `LISTEN`
-  for commands (polling still applies them), and sqlx's prepared statements (PgBouncer 1.21+
-  with `max_prepared_statements`, or the cache off). Waiting for which pool mode production
-  uses.
 - **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
   chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
 
@@ -1979,8 +1994,9 @@ list) and likewise has no Python.
 - **Query time limits:** **`[database] query_timeout`** (30 s) is Postgres's
   `statement_timeout` (set with `SET` on each new connection, which poolers such as PgBouncer
   accept, unlike the `options` startup parameter; **but only in session pooling**: in
-  transaction pooling the `SET` lands on a server connection other clients then get, see
-  the PgBouncer question for 2.10 below), the pool's wait for a connection and
+  transaction pooling the `SET` lands on a server connection other clients then get;
+  replaced in 2.10 by a limit schedr enforces itself, see Components and roles: production
+  path), the pool's wait for a connection and
   SQLite's busy timeout; it must be at least 1 ms (Postgres reads 0 as no limit) and shorter
   than `loop_stall_timeout`, else a startup error (standalone too). Migrations (`schedr db
   migrate`, standalone's start) run without it: a long migration must finish. A database
