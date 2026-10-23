@@ -105,6 +105,9 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
 
   CI runs `cargo clippy --workspace --all-targets -- -D warnings`; `rustfmt` with
   `max_width = 100`. Docs: `RUSTDOCFLAGS="-D warnings"`, broken intra-doc links are errors.
+- **Debug builds keep line tables only** (`[profile.dev] debug = "line-tables-only"`):
+  backtraces keep functions and `file:line`, builds write about half as much (binaries a
+  third of the size); `CARGO_PROFILE_DEV_DEBUG=full` when a debugger is needed.
 - **Unit tests next to the code, in their own file:** `src/foo.rs` ends with
   `#[cfg(test)] mod tests;` and the tests live in `src/foo/tests.rs` (the crate root's in
   `src/tests.rs`). They can reach `pub(crate)` items; `tests/` can't.
@@ -176,7 +179,13 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
 Targets with `## help` comments: `help`, `setup` (dev tools, dependencies, pre-commit hooks),
 `fmt`, `fmt-check`, `lint`, `schema` / `schema-check` (generated files), `test` (unit tests
 with coverage, per language: `test-rust`, `test-python`), `test-integration`, `docs`,
-`docs-serve`, `smoke` (package smoke test), `check` (everything CI runs), `clean`.
+`docs-serve`, `smoke` (package smoke test), `check` (everything CI runs), `clean`, and
+`target-size` (`check` runs it first: cleans the build directory once it holds more than a
+set size, 50 GiB here, since Cargo never deletes old artifacts).
+
+- **Integration tests start on a quiet disk:** build the test binaries, `sync`, then start
+  the database and the tests. A rebuild leaves gigabytes unflushed, and a database's fsyncs
+  wait behind them for seconds (seen as flaky timing tests).
 
 ## Pre-commit
 

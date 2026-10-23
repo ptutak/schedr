@@ -53,7 +53,8 @@ The names used across the documentation, the API and the logs.
   master whether a worker reconnected (tasks still running) or restarted (its tasks are gone).
 
 **Lease**
-: How long a worker may stay silent (`[master] lease_timeout`, 60 s) before the master
+: How long a worker may stay silent (`[master] lease_timeout`, 60 s, counted from when its
+  latest message arrived, or from the master's start after a restart) before the master
   declares it `lost` and ends its attempts. Heartbeats renew it.
 
 **Journal**

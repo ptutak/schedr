@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::core::{CoreError, MasterCore};
+use crate::core::{Arrivals, CoreError, MasterCore};
 use crate::dispatch::Outgoing;
 use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
 
@@ -46,6 +46,8 @@ pub struct Hub {
     db: Database,
     /// The longest a gauge refresh may take before it is abandoned.
     refresh_limit: Duration,
+    /// When each worker's latest message arrived (the core's).
+    arrivals: Arrivals,
 }
 
 impl Hub {
@@ -63,6 +65,7 @@ impl Hub {
             refresh_limit: DEFAULT_REFRESH_LIMIT,
             metrics: core.metrics().clone(),
             db: core.db().clone(),
+            arrivals: core.arrivals(),
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             clock,
@@ -221,20 +224,19 @@ impl Hub {
         self,
         worker_id: String,
         stream: Outbound,
-        mut inbound: Streaming<pb::WorkerMessage>,
+        inbound: Streaming<pb::WorkerMessage>,
     ) {
-        loop {
-            let message = match inbound.message().await {
-                Ok(Some(pb::WorkerMessage {
-                    message: Some(message),
-                })) => message,
-                Ok(Some(pb::WorkerMessage { message: None })) => continue,
-                Ok(None) => break,
-                Err(status) => {
-                    tracing::warn!(worker_id, %status, "worker stream failed");
-                    break;
-                }
-            };
+        // Read apart from handling: while the master is stuck behind its lock, the worker's
+        // messages still arrive, are recorded and wait in order (B6).
+        let (queue, mut queued) = mpsc::unbounded_channel();
+        let reader = tokio::spawn(read_stream(
+            worker_id.clone(),
+            inbound,
+            self.arrivals.clone(),
+            self.clock,
+            queue,
+        ));
+        while let Some(message) = queued.recv().await {
             let handled = self
                 .core
                 .lock()
@@ -246,6 +248,9 @@ impl Hub {
                 Err(error) => tracing::error!(worker_id, %error, "worker message not handled"),
             }
         }
+        if let Err(error) = reader.await {
+            tracing::error!(worker_id, %error, "worker stream reader failed");
+        }
         let now = (self.clock)();
         if let Err(error) = self.core.lock().await.disconnected(&worker_id, now).await {
             tracing::error!(worker_id, %error, "worker disconnect not recorded");
@@ -256,6 +261,34 @@ impl Hub {
             .is_some_and(|s| s.same_channel(&stream))
         {
             streams.remove(&worker_id);
+        }
+    }
+}
+
+/// Reads a worker's stream until it ends: records when each message arrived and queues it
+/// for handling.
+async fn read_stream(
+    worker_id: String,
+    mut inbound: Streaming<pb::WorkerMessage>,
+    arrivals: Arrivals,
+    clock: fn() -> Timestamp,
+    queue: mpsc::UnboundedSender<worker_message::Message>,
+) {
+    loop {
+        match inbound.message().await {
+            Ok(Some(message)) => {
+                arrivals.arrived(&worker_id, clock());
+                if let Some(message) = message.message
+                    && queue.send(message).is_err()
+                {
+                    return;
+                }
+            }
+            Ok(None) => return,
+            Err(status) => {
+                tracing::warn!(worker_id, %status, "worker stream failed");
+                return;
+            }
         }
     }
 }
@@ -279,6 +312,9 @@ impl Master for Hub {
                 "the first message must be `Register`",
             ));
         };
+        // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
+        // a stall).
+        self.arrivals.arrived(&register.worker_id, (self.clock)());
         let registered = self
             .core
             .lock()

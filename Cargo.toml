@@ -72,3 +72,10 @@ broken_intra_doc_links = "deny"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+# Debug builds (and test builds, which inherit them) keep only line tables: backtraces still
+# name functions and `file:line`, but debuggers see no locals; set
+# CARGO_PROFILE_DEV_DEBUG=full for a debugging session (see PROJECT.md, Repository and
+# tooling: Rust).
+[profile.dev]
+debug = "line-tables-only"

@@ -186,8 +186,8 @@ integration tests, as since 1.15.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
 **Status (2026-10-23): steps 2.1–2.9b are done** (the commits are
-listed in `NEXT_SESSION.md`). Next is 2.10. Open bugs B4 and B6 (role integration tests under
-disk load), B7 (a command applied twice, undelivered cancels) and B8 (a drained task
+listed in `NEXT_SESSION.md`). Next is 2.10. B6 (role integration tests under disk load) is
+fixed; open bugs B4 (likely B6, unproven), B7 (a command applied twice, undelivered cancels) and B8 (a drained task
 outliving the pod) wait to be scheduled.
 
 ## Testing approach

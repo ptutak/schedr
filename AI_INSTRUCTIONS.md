@@ -62,8 +62,10 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 - A bug found while working on something else goes into `BUGS.md` (B-number, found, symptom,
   repro, suspect or cause, plan) and into the step's summary. **Don't fix it on the spot**
   unless it blocks the step; I schedule fixes.
-- When you fix one, remove its entry in the same commit and add a test that would have
-  caught it.
+- When you fix one, **start with a test that reproduces it**: run it on the unfixed code and
+  show it failing, then fix, then show the same test passing. Remove the entry in the fixing
+  commit. Only if the bug can't be simulated in a test, say why and how the fix is checked
+  instead.
 
 ## Commits
 

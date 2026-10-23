@@ -19,9 +19,14 @@ fn fixed_now() -> Timestamp {
 
 /// A hub over a fresh database, served over an in-memory connection, and a client to it.
 async fn connected() -> (Hub, Database, MasterClient<Channel>) {
+    connected_with(fixed_now).await
+}
+
+/// As [`connected`], with `clock`.
+async fn connected_with(clock: fn() -> Timestamp) -> (Hub, Database, MasterClient<Channel>) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
-    let hub = Hub::with_clock(MasterCore::new(db.clone(), Settings::default()), fixed_now);
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), Settings::default()), clock);
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     let service = hub.service();
     tokio::spawn(async move {
@@ -301,4 +306,160 @@ async fn a_refresh_past_its_limit_is_abandoned_and_the_loop_goes_on() {
         schedr_model::commands::CommandStatus::Rejected
     );
     assert_eq!(DEFAULT_REFRESH_LIMIT, Duration::from_secs(30));
+}
+
+/// Seconds after [`fixed_now`] that [`moving_now`] reads: one clock for the whole test binary,
+/// so the tests that move it each set it before use (nextest runs each test in a process of
+/// its own; `cargo test` threads would share it).
+static MOVED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn moving_now() -> Timestamp {
+    let moved = MOVED.load(std::sync::atomic::Ordering::SeqCst);
+    fixed_now() + jiff::SignedDuration::from_secs(moved)
+}
+
+fn move_to(seconds: i64) {
+    MOVED.store(seconds, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn a_stalled_master_doesnt_declare_a_worker_lost_whose_heartbeats_kept_arriving() {
+    // B6: the lease counted from the last message the master *handled*, so heartbeats that
+    // arrived while it was stuck in a slow write (its lock held) didn't count, and the round
+    // waiting for the lock declared a live worker lost.
+    move_to(0);
+    let (hub, db, mut client) = connected_with(moving_now).await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // The master is stuck: something holds its lock, and a round waits for it.
+    let stuck = hub.core().lock_owned().await;
+    let round = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.tick().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Meanwhile the worker's heartbeats arrive, well within the 60 s lease of each other.
+    let heartbeat = || wrap(worker_message::Message::Heartbeat(pb::Heartbeat::default()));
+    for at in [30, 59] {
+        move_to(at);
+        to_master.send(heartbeat()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // The stall ends 61 s after the worker registered; the round runs first.
+    move_to(61);
+    drop(stuck);
+    round.await.unwrap().unwrap();
+    assert!(
+        hub.core().lock().await.is_live("w1"),
+        "the worker was declared lost"
+    );
+    let workers = db.workers().await.unwrap();
+    assert_eq!(workers[0].state, schedr_model::WorkerState::Active);
+}
+
+#[tokio::test]
+async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives() {
+    // B6, the reconnect: a worker whose connection dropped registers again within its lease
+    // while the master is stuck; its `Register` waits for the lock behind a round, which must
+    // count it as a sign of life rather than declare the worker lost.
+    move_to(0);
+    let (hub, db, mut client) = connected_with(moving_now).await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    // The worker runs an attempt…
+    client.upload_parse_result(parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", moving_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    to_master
+        .send(wrap(worker_message::Message::Started(pb::Started {
+            attempt_id: assign.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        })))
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if db
+            .attempt(&assign.attempt_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .started
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // …and its connection drops.
+    drop(to_master);
+    drop(stream);
+    for _ in 0..100 {
+        if !hub.core().lock().await.is_live("w1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The master is stuck, a round waits for it, and the worker comes back 50 s later with
+    // its attempt still running.
+    let stuck = hub.core().lock_owned().await;
+    let round = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.tick().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    move_to(50);
+    let mut again = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
+        register.journal = vec![pb::JournalEntry {
+            attempt_id: assign.attempt_id.clone(),
+            state: pb::JournalState::Running.into(),
+        }];
+    }
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(again).await.unwrap();
+    let reconnect = tokio::spawn({
+        let mut client = client.clone();
+        async move { client.control(ReceiverStream::new(outbound)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The stall ends 61 s after the worker was last heard before it reconnected.
+    move_to(61);
+    drop(stuck);
+    round.await.unwrap().unwrap();
+    reconnect.await.unwrap().unwrap();
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        attempt.status, None,
+        "the attempt was ended: the worker was declared lost"
+    );
 }

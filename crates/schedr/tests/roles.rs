@@ -5,6 +5,7 @@
 //! Needs `SCHEDR_TEST_PYTHON` (a Python with `schedr` installed) and
 //! `SCHEDR_TEST_POSTGRES_URL`; `make test-integration` sets both.
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -85,6 +86,56 @@ struct Cluster {
     ca: Option<TestCa>,
     /// Each role's ops address, by name, once it listens.
     ops: Vec<(&'static str, String)>,
+    /// CLI calls that failed or were slow, for failure messages (B4, B6).
+    cli_trouble: RefCell<Vec<String>>,
+    /// The system's I/O stall counters when the cluster was made (B6).
+    io_at_start: Option<IoStall>,
+}
+
+/// A CLI call slower than this is listed in failure messages.
+const SLOW_CLI: Duration = Duration::from_secs(2);
+
+/// How many failed or slow CLI calls failure messages show (the latest).
+const CLI_TROUBLE_KEPT: usize = 20;
+
+/// Time the system's tasks spent stalled on I/O (`/proc/pressure/io`, Linux): `some` (at least
+/// one task stalled) and `full` (all non-idle tasks stalled), in microseconds since boot.
+#[derive(Debug, Clone, Copy)]
+struct IoStall {
+    some: u64,
+    full: u64,
+}
+
+impl IoStall {
+    fn now() -> Option<Self> {
+        let text = std::fs::read_to_string("/proc/pressure/io").ok()?;
+        let total = |kind: &str| -> Option<u64> {
+            text.lines()
+                .find(|l| l.starts_with(kind))?
+                .split_whitespace()
+                .find_map(|f| f.strip_prefix("total="))?
+                .parse()
+                .ok()
+        };
+        Some(Self {
+            some: total("some")?,
+            full: total("full")?,
+        })
+    }
+
+    /// What has stalled since `self`, for a failure message.
+    fn since(self) -> String {
+        Self::now().map_or_else(
+            || "I/O stall: unknown (no /proc/pressure/io)".to_owned(),
+            |now| {
+                format!(
+                    "I/O stall since the cluster started (whole system): some {} ms, full {} ms",
+                    now.some.saturating_sub(self.some) / 1000,
+                    now.full.saturating_sub(self.full) / 1000
+                )
+            },
+        )
+    }
 }
 
 impl Cluster {
@@ -119,6 +170,8 @@ impl Cluster {
             roles: Vec::new(),
             ca: None,
             ops: Vec::new(),
+            cli_trouble: RefCell::default(),
+            io_at_start: IoStall::now(),
         }
     }
 
@@ -274,12 +327,24 @@ impl Cluster {
             let log = std::fs::read_to_string(&role.log).unwrap_or_default();
             let _ = write!(text, "--- {} ---\n{log}", role.name);
         }
+        let trouble = self.cli_trouble.borrow();
+        if !trouble.is_empty() {
+            let _ = write!(
+                text,
+                "--- CLI calls that failed or were slow ---\n{}\n",
+                trouble.join("\n")
+            );
+        }
+        if let Some(start) = self.io_at_start {
+            let _ = writeln!(text, "--- {} ---", start.since());
+        }
         text
     }
 
     /// The CLI against the webserver: exit code, stdout, stderr.
     fn cli(&self, args: &[&str]) -> (i32, String, String) {
         let (group, rest) = args.split_first().unwrap();
+        let started = Instant::now();
         let output = Command::new(BINARY)
             .arg(group)
             .args(["--server", &self.api])
@@ -287,10 +352,26 @@ impl Cluster {
             .env("TZ", "UTC")
             .output()
             .unwrap();
+        let took = started.elapsed();
+        let code = output.status.code().unwrap_or(-1);
+        let err = String::from_utf8_lossy(&output.stderr).into_owned();
+        if code != 0 || took > SLOW_CLI {
+            let mut trouble = self.cli_trouble.borrow_mut();
+            // Waits poll the CLI while a role starts: the latest calls are the telling ones.
+            if trouble.len() == CLI_TROUBLE_KEPT {
+                trouble.remove(0);
+            }
+            trouble.push(format!(
+                "schedr {} -> exit {code} after {} ms: {}",
+                args.join(" "),
+                took.as_millis(),
+                err.trim()
+            ));
+        }
         (
-            output.status.code().unwrap_or(-1),
+            code,
             String::from_utf8_lossy(&output.stdout).into_owned(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
+            err,
         )
     }
 
@@ -496,7 +577,9 @@ impl Cluster {
         });
         let (code, _, err) = self.cli(&["dags", "unpause", dag]);
         assert_eq!(code, 0, "{err}");
-        let command = self.cli_json(&["runs", "trigger", dag]).unwrap();
+        let command = self
+            .cli_json(&["runs", "trigger", dag])
+            .unwrap_or_else(|| panic!("`runs trigger {dag}` failed\n{}", self.logs()));
         command["result"]["run_id"].as_str().unwrap().to_owned()
     }
 

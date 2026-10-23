@@ -6,6 +6,7 @@
 //! this core, so everything here is tested without a network.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
@@ -97,6 +98,39 @@ struct Connection {
     live: bool,
 }
 
+/// When each worker's latest message arrived (cheap to clone; clones share it). Its stream's
+/// reader records it as the message is read, before the message waits for the master's lock,
+/// and the lease counts from it: a master stuck in a slow write doesn't count against workers
+/// whose messages keep arriving (B6).
+#[derive(Debug, Clone, Default)]
+pub struct Arrivals(Arc<std::sync::Mutex<BTreeMap<String, Timestamp>>>);
+
+impl Arrivals {
+    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Timestamp>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A message from `worker_id` arrived `at`.
+    pub fn arrived(&self, worker_id: &str, at: Timestamp) {
+        let mut map = self.map();
+        let last = map.entry(worker_id.to_owned()).or_insert(at);
+        *last = (*last).max(at);
+    }
+
+    /// When the latest message from `worker_id` arrived, if one has since it was forgotten.
+    #[must_use]
+    pub fn last(&self, worker_id: &str) -> Option<Timestamp> {
+        self.map().get(worker_id).copied()
+    }
+
+    /// Forgets `worker_id` (it is gone).
+    pub fn forget(&self, worker_id: &str) {
+        self.map().remove(worker_id);
+    }
+}
+
 /// The master's state between messages.
 #[derive(Debug)]
 pub struct MasterCore {
@@ -107,6 +141,7 @@ pub struct MasterCore {
     scheduler: Scheduler,
     commander: Commander,
     connections: BTreeMap<String, Connection>,
+    arrivals: Arrivals,
     metrics: MasterMetrics,
 }
 
@@ -125,6 +160,7 @@ impl MasterCore {
             scheduler: Scheduler::new(db.clone()),
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),
+            arrivals: Arrivals::default(),
             metrics: MasterMetrics::default(),
             settings,
             db,
@@ -165,6 +201,12 @@ impl MasterCore {
     #[must_use]
     pub const fn dispatcher(&self) -> &Dispatcher {
         &self.dispatcher
+    }
+
+    /// When each worker's latest message arrived, for the streams' readers to record.
+    #[must_use]
+    pub fn arrivals(&self) -> Arrivals {
+        self.arrivals.clone()
     }
 
     /// Reads the worker registry back at start: every worker not gone counts as disconnected
@@ -447,7 +489,14 @@ impl MasterCore {
         let lost: Vec<String> = self
             .connections
             .iter()
-            .filter(|(_, c)| now.duration_since(c.last_seen) > lease)
+            .filter(|(id, c)| {
+                // The later of its last handled message and its last arrived one.
+                let seen = self
+                    .arrivals
+                    .last(id)
+                    .map_or(c.last_seen, |a| a.max(c.last_seen));
+                now.duration_since(seen) > lease
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
@@ -630,6 +679,7 @@ impl MasterCore {
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
         self.connections.remove(worker_id);
+        self.arrivals.forget(worker_id);
         self.db.set_worker_state(worker_id, state, now).await?;
         self.dispatcher.worker_lost(worker_id, now).await?;
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);

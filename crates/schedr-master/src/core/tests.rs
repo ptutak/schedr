@@ -702,3 +702,19 @@ async fn a_worker_saying_it_drains_hands_its_parse_jobs_over() {
     assert_eq!(out[0].worker_id, "w2");
     assert_eq!(job.root.as_ref().unwrap().content_hash, "h1");
 }
+
+#[test]
+fn arrivals_keep_the_latest_per_worker_until_forgotten() {
+    let arrivals = Arrivals::default();
+    let at = |s: &str| -> Timestamp { s.parse().unwrap() };
+    assert_eq!(arrivals.last("w1"), None);
+    arrivals.arrived("w1", at("2026-10-23T08:00:10Z"));
+    // A message read later can't carry an earlier time back.
+    arrivals.arrived("w1", at("2026-10-23T08:00:05Z"));
+    arrivals.clone().arrived("w2", at("2026-10-23T08:00:20Z"));
+    assert_eq!(arrivals.last("w1"), Some(at("2026-10-23T08:00:10Z")));
+    assert_eq!(arrivals.last("w2"), Some(at("2026-10-23T08:00:20Z")));
+    arrivals.forget("w1");
+    assert_eq!(arrivals.last("w1"), None);
+    assert_eq!(arrivals.last("w2"), Some(at("2026-10-23T08:00:20Z")));
+}

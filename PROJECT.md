@@ -812,6 +812,17 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   `catchup=False` only the **most recent** missed run is created.
 - **Master downtime doesn't count against workers**: after the master starts, every worker's
   lease clock starts again from zero.
+- **Nor does a stalled master** (B6, fixed 2026-10-23): the lease counts from when a worker's
+  latest message **arrived**, not from when the master handled it. Each worker's stream is
+  read by a task of its own, which records the arrival (`Arrivals`, outside the master's lock)
+  and queues the message; messages are handled in order under the lock as before; a
+  reconnecting worker's `Register` is recorded as it arrives too. Before, one
+  slow database write holding the lock left the next messages unread, and the round that
+  got the lock first declared live workers `lost` (seen with 7–8 s Postgres stalls against
+  the tests' 4 s lease). Not chosen: stamping the arrival without a reader of its own (the
+  messages behind the first stay unread, so only one counts); restarting every lease after a
+  stall, as after a master restart (a worker that really died during it would get a fresh
+  lease too); longer leases in the tests (hides it).
 - A worker that was declared `LOST` and comes back is told to **kill** the attempts it still
   runs (they were already failed and retried).
 - The worker's **liveness probe** (`/healthz` on the ops port, see Observability) checks only
@@ -4639,6 +4650,16 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 - `rustfmt` (max width 100).
 - `clippy` with `all` and `pedantic` lint groups at warn; CI fails on any warning (`-D warnings`).
 - `unsafe_code = "forbid"`, `missing_docs = "warn"`.
+- **Debug and test builds keep only line tables** (`[profile.dev] debug =
+  "line-tables-only"`, 2026-10-23): panics and backtraces still show functions and
+  `file:line`, and coverage doesn't use debug info; debuggers see no locals or types
+  (`CARGO_PROFILE_DEV_DEBUG=full` for a debugging session). Measured on the integration test
+  binaries: a clean build 149 s instead of 191 s and 3.4 GB instead of 6.5 GB (`roles` 33 MiB
+  instead of 103 MiB); a rebuild after a change to `schedr-model` 11 s instead of 17 s,
+  writing 1.5 GiB instead of 3 GiB, and the `sync` after it 1 s instead of 9 s (see Workflow:
+  `make test-integration`). Not chosen: full debug info (no debugger has been used here so
+  far); none for dependencies only (a smaller saving: every test binary links all of
+  schedr's crates).
 
 ### Python
 
@@ -4871,6 +4892,19 @@ its configuration, not the content.
 
 - `make check` runs everything CI runs: format check, clippy, ruff, mypy, the Rust tests
   (`cargo nextest`) and pytest, both with the coverage floor.
+- **`make check` first cleans `target/` when it holds more than `TARGET_MAX_GIB`** (50 by
+  default; `make target-size`): Cargo never deletes old artifacts, and every change of a
+  dependency, feature or flag leaves a copy of everything above it (107 GiB by M2.9b). 50,
+  not 30: one clean and a few builds already make 21 GiB (dev, coverage, docs), so 30 would
+  clean and rebuild everything every few steps.
+  Not chosen: cleaning on a schedule or by hand only (forgotten); `cargo-sweep` (a tool to
+  install, for the same effect).
+- **`make test-integration` builds the test binaries, runs `sync`, then starts Postgres and
+  the tests** (B6): a rebuild writes about 3 GiB, 1 GiB of it still unflushed when the build
+  ends, and Postgres's fsyncs on the same (WSL2) disk waited behind it for 7–8 s. Not chosen:
+  Postgres with `fsync=off` (the SQLite tests and the worker's journal fsync on the same disk;
+  and it isn't how Postgres runs in production). Smaller debug info (see Rust) halves what a
+  rebuild leaves to flush, but doesn't replace the `sync`.
 - Pre-commit hooks run the same checks on commit.
 - CI: GitHub Actions: `rust` and `python` (unit tests, lints, coverage), `integration`
   (integration tests with a Postgres service; see Testing), `docs`, `wheel` (the release

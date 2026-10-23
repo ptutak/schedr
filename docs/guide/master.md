@@ -61,17 +61,25 @@ for applying and deciding, and resending pending cancels every round.
 
 ## Between rounds: messages from workers
 
-Messages from workers are handled as they arrive, each under the same lock:
+Messages from workers are handled as they arrive, each under the same lock (in order for
+each worker; messages from different workers take the lock in turn):
 
 | Message | What the master does |
 |---|---|
 | `Register` | Checks the protocol version, takes over from a dead earlier stream, decides about each attempt the worker reports (continue, kill or acknowledge), and answers `Registered` with the timing settings. |
-| `Heartbeat` | Renews the lease. Any message renews it; the registry's "last seen" is written at most once per heartbeat interval. |
+| `Heartbeat` | Nothing more: any message renews the lease when it arrives (below). The registry's "last seen" is written at most once per heartbeat interval. |
 | `CodeVersionChanged` | Records the root's new hash, which can make it the current code and create a parse job. |
 | `Started` | Marks the task `running`. |
 | `Rejected` | Puts the task back to wait, or tries another worker, depending on the reason. A rejection never uses a retry. |
 | `Finished` | Stores the result once, moves the run forward (downstream tasks become ready), finishes the run when every task has, and answers `FinishedAck`. |
 | `Draining`, `Deregister` | Stops assigning to the worker; records it `draining`, then `offline`. |
+
+**The lease counts from when a message arrives, not when it is handled.** Each worker's stream
+is read by a task of its own, which records the arrival time and queues the message; messages
+are then handled in order, under the lock. A reconnecting worker's `Register` counts as it
+arrives too. So while the master is stuck in a slow database
+write, the heartbeats of its workers still count, and a round that runs after the stall
+doesn't declare live workers lost.
 
 Parse results arrive as separate unary calls (`UploadParseResult`). So do large task inputs,
 which workers fetch with `FetchInputs`.

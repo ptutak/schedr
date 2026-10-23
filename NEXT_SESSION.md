@@ -29,18 +29,24 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 
 - CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
   once it is pushed (`gh` isn't installed, so the user looks).
-- The last `make check` passed (2.9b): 1135 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 78 Rust and 15 Python integration tests; Rust line coverage 88.5 %
+- The last `make check` passed (B6 fix): 1138 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 78 Rust and 15 Python integration tests; Rust line coverage 88.6 %
   (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
-- **Open bugs: B4, B6, B7 and B8** (`BUGS.md`). B4 and B6 are role integration tests failing
-  under disk load; B6 happened four times, each time on the first `make check` of a step (right after
-  the coverage run), never when the suite runs alone. If `make check` fails that way, run
-  `make test-integration` alone; if it passes, rerun `make check`, note the occurrence in B6,
-  and go on. B7 (found in the 2.9 review): a command applied twice if the master stops
-  between applying it and recording the decision, and undelivered cancels (also when a
-  round fails) not sent again until the worker reconnects. B8 (found in the 2.9b review): a
-  drained task that ignores SIGTERM is killed only after `cancel_grace`, after the pod's
-  deadline, and ends `lost`. Their fixes wait for the user to schedule them.
+- **Open bugs: B4, B7 and B8** (`BUGS.md`). B4 (a role test's `runs trigger` got no result
+  once, 2026-10-22) is most likely B6 but unproven: if it happens again, its failure message
+  now has the CLI's stderr. B7 (found in the 2.9 review): a command applied
+  twice if the master stops between applying it and recording the decision, and undelivered
+  cancels (also when a round fails) not sent again until the worker reconnects. B8 (found in
+  the 2.9b review): a drained task that ignores SIGTERM is killed only after `cancel_grace`,
+  after the pod's deadline, and ends `lost`. Their fixes wait for the user to schedule them.
+- **B6 is fixed (2026-10-23):** the role tests failed after a
+  rebuild because the build's unflushed writes stalled Postgres for 7–8 s, and the master
+  counted its own stall against workers' leases. Now the lease counts from when a message
+  arrives (`Arrivals`), `make test-integration` builds, `sync`s and then tests, and `make
+  check` cleans `target/` over 50 GiB (`make target-size`); debug builds keep line tables
+  only (`CARGO_PROFILE_DEV_DEBUG=full` when a debugger is needed), so the `sync` after a
+  rebuild takes about 6 s. If role tests fail again, the
+  failure message now lists the failed or slow CLI calls and the I/O stall: read those first.
 
 ## Next steps
 

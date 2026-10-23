@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl check clean
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -26,6 +26,10 @@ CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo do
 
 # Port for make docs-serve; override with e.g. `make docs-serve DOCS_PORT=9000`.
 DOCS_PORT ?= 8765
+# `make check` cleans target/ first (before anything builds, even with -j) when it holds more
+# than this (Cargo never deletes old
+# artifacts: every dependency or feature change leaves a copy of everything above it).
+TARGET_MAX_GIB ?= 50
 LLVM_COV_IGNORE := '(^|/)(tests|main)\.rs$$'
 
 setup:           ## Install dev tools, Python dev deps and pre-commit hooks
@@ -77,6 +81,9 @@ test: test-rust test-python  ## Run all unit tests
 
 test-integration: ## Run integration tests (real processes, the binary, Postgres in Docker)
 	@set -e; \
+	cargo nextest run --workspace -E 'kind(test)' --no-run; \
+	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
+	sync; \
 	name=schedr-test-pg-$$$$; \
 	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
 		$(POSTGRES_IMAGE) >/dev/null; \
@@ -108,7 +115,16 @@ smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Al
 	$(CONTAINER) run --rm -v "$(CURDIR):/repo:ro,Z" $(ALPINE_IMAGE) sh -c \
 		'apk add --no-cache bash >/dev/null && cd /repo && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
 
-check: fmt-check lint schema-check test test-integration   ## Everything CI runs
+check:           ## Everything CI runs
+	@$(MAKE) --no-print-directory target-size
+	@$(MAKE) --no-print-directory fmt-check lint schema-check test test-integration
+
+target-size:     ## Clean target/ when it holds more than TARGET_MAX_GIB (default 50)
+	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \
+	if [ "$${size:-0}" -gt $(TARGET_MAX_GIB) ]; then \
+		echo "target/ holds $$size GiB, over TARGET_MAX_GIB = $(TARGET_MAX_GIB): cargo clean"; \
+		cargo clean; \
+	fi
 
 clean:           ## Remove build artifacts
 	cargo clean
