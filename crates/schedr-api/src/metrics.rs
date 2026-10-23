@@ -9,11 +9,28 @@ use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
+use schedr_model::metric_doc::{MetricDoc, MetricKind};
 
 use crate::state::ApiState;
 
 #[cfg(test)]
 mod tests;
+
+const HTTP_REQUESTS: MetricDoc = MetricDoc {
+    name: "http_requests",
+    kind: MetricKind::Counter,
+    labels: &["route", "status"],
+    help: "Requests to the REST API, by route template and status",
+};
+const LOG_PROXY_ERRORS: MetricDoc = MetricDoc {
+    name: "log_proxy_errors",
+    kind: MetricKind::Counter,
+    labels: &["kind"],
+    help: "Logs the webserver couldn't read from a worker, by why",
+};
+
+/// The webserver's metrics, as registered (under `schedr_`).
+pub const METRICS: &[MetricDoc] = &[HTTP_REQUESTS, LOG_PROXY_ERRORS];
 
 /// A request's route template and its answer's status.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -41,16 +58,18 @@ pub struct ApiMetrics {
 }
 
 impl ApiMetrics {
-    /// Registers every metric in `registry` (names get the `schedr_` prefix there).
+    /// Registers every metric in `registry` (names get the `schedr_` prefix there), as
+    /// [`METRICS`] describes them.
     pub fn register(&self, registry: &mut Registry) {
-        registry.register(
-            "http_requests",
-            "Requests to the REST API, by route template and status",
+        let r = registry;
+        r.register(
+            HTTP_REQUESTS.name,
+            HTTP_REQUESTS.help,
             self.requests.clone(),
         );
-        registry.register(
-            "log_proxy_errors",
-            "Logs the webserver couldn't read from a worker, by why",
+        r.register(
+            LOG_PROXY_ERRORS.name,
+            LOG_PROXY_ERRORS.help,
             self.log_errors.clone(),
         );
     }

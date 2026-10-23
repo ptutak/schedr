@@ -8,10 +8,14 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::roots::{PathList, Root};
-use crate::units::{deserialize_duration, deserialize_optional_size};
+use crate::units::{
+    DurationText, SizeText, deserialize_duration, deserialize_optional_size, serialize_duration,
+    serialize_optional_size,
+};
 
 #[cfg(test)]
 mod tests;
@@ -24,7 +28,7 @@ pub const DEFAULT_DAG_INTERPRETER: &str = "python";
 pub const BUILTIN_PYTHON: &str = "python3";
 
 /// The whole configuration, after loading and validation.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// `[dags]`: where DAG files are and how they are parsed.
@@ -32,6 +36,7 @@ pub struct Config {
     /// `[scripts]`: where plain scripts are.
     pub scripts: ScriptsSection,
     /// `[interpreters]`: interpreter names and their executables.
+    #[schemars(with = "BTreeMap<String, InterpreterRepr>")]
     pub interpreters: BTreeMap<String, Interpreter>,
     /// `[log]`: schedr's own logs.
     pub log: LogSection,
@@ -60,11 +65,18 @@ pub struct Config {
     pub builtin_python: Option<String>,
 }
 
+/// The JSON Schema of the configuration file: every key with its doc comment, type and
+/// default (the configuration reference in the documentation is generated from it).
+#[must_use]
+pub fn config_schema() -> schemars::Schema {
+    schemars::schema_for!(Config)
+}
+
 /// How the built-in `python` interpreter was chosen when nothing looked further.
 pub const BUILTIN_PYTHON_ORIGIN: &str = "built-in default";
 
 /// `[dags]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DagsSection {
     /// The DAG directories (`SCHEDR_DAG_PATH`).
@@ -74,13 +86,25 @@ pub struct DagsSection {
     /// The `[interpreters]` entry used for parsing and for Python tasks.
     pub interpreter: String,
     /// How often the roots are scanned for changes.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub poll_interval: Duration,
     /// How long a root must stay unchanged before its new content hash is computed.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub settle_time: Duration,
     /// How long one DAG file may take to import before the agent stops its runner.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub parse_file_timeout: Duration,
 }
 
@@ -100,7 +124,7 @@ impl Default for DagsSection {
 }
 
 /// `[scripts]`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScriptsSection {
     /// The script directories (`SCHEDR_SCRIPT_PATH`).
@@ -110,8 +134,8 @@ pub struct ScriptsSection {
 }
 
 /// An `[interpreters]` entry: a plain path, or a table with fork server settings.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(from = "InterpreterRepr")]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(from = "InterpreterRepr", into = "InterpreterRepr")]
 pub struct Interpreter {
     /// The executable.
     pub path: PathBuf,
@@ -134,7 +158,7 @@ impl Interpreter {
 }
 
 /// How an interpreter is written in TOML.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 enum InterpreterRepr {
     /// `python = "/usr/bin/python3"`.
@@ -144,14 +168,32 @@ enum InterpreterRepr {
 }
 
 /// The table form of an interpreter.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct InterpreterTable {
+    /// The executable.
     path: PathBuf,
+    /// Whether Python tasks start from a fork server (M2.5; off by default).
     #[serde(default)]
     fork_server: bool,
+    /// The libraries the fork server preloads.
     #[serde(default)]
     preload: Vec<String>,
+}
+
+impl From<Interpreter> for InterpreterRepr {
+    /// The plain path when that says it all, else the table.
+    fn from(interpreter: Interpreter) -> Self {
+        if !interpreter.fork_server && interpreter.preload.is_empty() {
+            Self::Path(interpreter.path)
+        } else {
+            Self::Table(InterpreterTable {
+                path: interpreter.path,
+                fork_server: interpreter.fork_server,
+                preload: interpreter.preload,
+            })
+        }
+    }
 }
 
 impl From<InterpreterRepr> for Interpreter {
@@ -168,7 +210,7 @@ impl From<InterpreterRepr> for Interpreter {
 }
 
 /// `[log] format`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     /// JSON when stdout isn't a terminal, readable text when it is.
@@ -181,7 +223,7 @@ pub enum LogFormat {
 }
 
 /// `[log]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogSection {
     /// The output format.
@@ -201,16 +243,21 @@ impl Default for LogSection {
 }
 
 /// `[database]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseSection {
     /// The connection URL (`sqlite:...` or `postgres://...`). A URL with a password must come
     /// from `SCHEDR_CONFIG__DATABASE__URL`, never the file (see PROJECT.md, Configuration:
     /// secrets).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// The longest a query (or waiting for a connection) may take; shorter than `[ops]
     /// loop_stall_timeout`, so one hung query doesn't look like a stuck loop.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub query_timeout: Duration,
 }
 
@@ -237,7 +284,7 @@ pub fn url_has_password(url: &str) -> bool {
 }
 
 /// `[ops]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpsSection {
     /// The address the ops port listens on (all interfaces by default; `schedr standalone`
@@ -247,7 +294,11 @@ pub struct OpsSection {
     pub port: u16,
     /// The master's liveness fails when its scheduling loop hasn't started an iteration for
     /// this long.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub loop_stall_timeout: Duration,
 }
 
@@ -263,7 +314,7 @@ impl Default for OpsSection {
 }
 
 /// `[master]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct MasterSection {
     /// The address `schedr master` listens on (all interfaces by default; `schedr standalone`
@@ -272,20 +323,40 @@ pub struct MasterSection {
     /// The gRPC port workers connect to.
     pub grpc_port: u16,
     /// How often the master's loop runs (scheduler, commands, dispatching).
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub tick_interval: Duration,
     /// How often workers send `Heartbeat` (the master's setting, sent to every worker).
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub heartbeat_interval: Duration,
     /// A worker silent for this long is lost.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub lease_timeout: Duration,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub cancel_grace: Duration,
     /// How long a task's code may be missing on every eligible worker (git-sync not there
     /// yet) before the task is `unschedulable`.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub code_wait: Duration,
 }
 
@@ -306,7 +377,7 @@ impl Default for MasterSection {
 }
 
 /// `[webserver]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebserverSection {
     /// The address `schedr webserver` listens on (all interfaces by default; `schedr
@@ -314,7 +385,7 @@ pub struct WebserverSection {
     pub bind: IpAddr,
     /// The HTTP port of the REST API (and later the UI).
     pub port: u16,
-    /// `[webserver.auth]`.
+    /// `[webserver.auth]`: who the user is.
     pub auth: WebserverAuthSection,
 }
 
@@ -329,20 +400,23 @@ impl Default for WebserverSection {
     }
 }
 
-/// `[webserver.auth]` (only the identity so far; the modes come with the UI, milestone M3).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+/// `[webserver.auth]`: who the user is (only the identity so far; the modes come with the UI,
+/// milestone M3).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebserverAuthSection {
     /// The header naming the user, recorded on commands (e.g. `x-forwarded-user`); never used
     /// to allow or deny anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_header: Option<String>,
 }
 
 /// `[worker]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkerSection {
     /// The worker's ID, stable across restarts; the host name when not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Task slots.
     pub slots: u32,
@@ -351,15 +425,22 @@ pub struct WorkerSection {
     /// Where task logs, the journal (`journal/<id>`; keep it across restarts) and (in
     /// standalone) the SQLite database go; `$XDG_DATA_HOME/schedr` (else
     /// `~/.local/share/schedr`) when not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<PathBuf>,
     /// Agent environment variables passed to tasks besides the allow-list.
     pub pass_env: Vec<String>,
-    /// The master's gRPC URL, e.g. `http://schedr-master:8070`; required by `schedr worker`
+    /// The master's gRPC URL, e.g. `https://schedr-master:8070` (`http://` with `[tls] mode =
+    /// "mesh"`); required by `schedr worker`
     /// (`schedr standalone` connects to its own master).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub master_url: Option<String>,
     /// How long running tasks get when the worker is asked to stop (SIGTERM): match the
     /// pod's `terminationGracePeriodSeconds`.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub termination_grace_period: Duration,
     /// The address the log endpoint listens on (all interfaces by default; `schedr
     /// standalone` always listens on 127.0.0.1).
@@ -368,18 +449,37 @@ pub struct WorkerSection {
     pub log_port: u16,
     /// The host the webserver reaches the log endpoint at, sent to the master (e.g. the pod's
     /// DNS name through a headless Service); the host name when not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_address: Option<String>,
     /// Task logs older than this are deleted.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub log_retention: Duration,
     /// Beyond this many bytes of logs the oldest are deleted; no limit when not set.
-    #[serde(deserialize_with = "deserialize_optional_size")]
+    #[serde(
+        deserialize_with = "deserialize_optional_size",
+        serialize_with = "serialize_optional_size",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<SizeText>")]
     pub log_max_size: Option<u64>,
     /// Each task's memory budget; when not set, (the pod's limit − 10 %) ÷ slots.
-    #[serde(deserialize_with = "deserialize_optional_size")]
+    #[serde(
+        deserialize_with = "deserialize_optional_size",
+        serialize_with = "serialize_optional_size",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<SizeText>")]
     pub memory_budget: Option<u64>,
     /// How often the watchdog samples each task's memory.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub memory_check_interval: Duration,
 }
 
@@ -408,7 +508,7 @@ impl Default for WorkerSection {
 }
 
 /// `[tls] mode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TlsMode {
     /// schedr's own mTLS on every internal link.
@@ -420,22 +520,29 @@ pub enum TlsMode {
 
 /// `[tls]`: certificates are PEM files (mounted from Kubernetes Secrets), read again when they
 /// change.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct TlsSection {
     /// Whether schedr does mTLS itself (`app`) or leaves it to a mesh (`mesh`).
     pub mode: TlsMode,
     /// The CA certificates peers' certificates must be signed by.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ca: Option<PathBuf>,
     /// This role's certificate (chain).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cert: Option<PathBuf>,
     /// This role's private key.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<PathBuf>,
     /// The name the webserver expects in workers' certificates, whatever address it reaches
     /// them at.
     pub worker_name: String,
     /// How often the files are read again for a change.
-    #[serde(deserialize_with = "deserialize_duration")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
     pub reload_interval: Duration,
 }
 

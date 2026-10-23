@@ -90,8 +90,24 @@ pub enum RootError {
 
 /// A list of directories, written as an array in TOML or as a `PATH`-style colon-separated
 /// string (`/git/dags/a:/git/dags/b`) in environment variables.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct PathList(pub Vec<PathBuf>);
+
+impl schemars::JsonSchema for PathList {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PathList".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "anyOf": [
+                {"type": "array", "items": {"type": "string"}},
+                {"type": "string"}
+            ],
+            "description": "Directories: an array, or a colon-separated string as in `PATH`."
+        })
+    }
+}
 
 impl PathList {
     /// Splits a `PATH`-style string; empty entries (`a::b`, a trailing `:`) are skipped.

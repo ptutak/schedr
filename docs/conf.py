@@ -1,9 +1,10 @@
 """Sphinx configuration for the schedr documentation site.
 
 The pages from repository files (README, PLAN, the PROJECT.md chapters, the Rust crate list)
-are generated into ``_generated/`` by ``cargo xtask docs-sources`` (``make docs``); only this
-file and the index pages here are specific to Sphinx (see PROJECT.md, Repository and tooling:
-Documentation).
+and the reference pages from the code (configuration, CLI, metrics, REST API) are generated
+into ``_generated/`` by ``cargo xtask docs-sources`` (``make docs``); the guide (``guide/``) is
+written by hand. Only this file and the index pages here are specific to Sphinx (see
+PROJECT.md, Repository and tooling: Documentation).
 """
 
 from importlib.metadata import version as _version
@@ -18,6 +19,7 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
+    "sphinxcontrib.mermaid",
 ]
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -26,7 +28,12 @@ templates_path = ["_templates"]
 
 # Markdown (MyST): anchors for headings so pages can link to sections.
 myst_heading_anchors = 3
-myst_enable_extensions = ["colon_fence"]
+myst_enable_extensions = ["colon_fence", "deflist"]
+
+# Diagrams: plain ```mermaid fences (as GitHub draws them) become the mermaid directive. The
+# browser loads this mermaid.js version from a CDN.
+myst_fence_as_directive = ["mermaid"]
+mermaid_version = "12.1.0"
 
 # Python API: generated from Google-style docstrings and type hints.
 autosummary_generate = True

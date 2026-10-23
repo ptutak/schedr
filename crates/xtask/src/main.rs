@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::CommandFactory as _;
 use xtask::docs::{DOCS_GENERATED_DIR, crates_from_metadata, docs_sources};
+use xtask::reference::{MetricGroup, reference_sources};
 use xtask::{Command, GeneratedFile, parse_args, schema_files, stale_files, stale_message};
 
 fn main() -> ExitCode {
@@ -60,9 +62,44 @@ fn main() -> ExitCode {
                 &crates,
             );
             write_files(&root, &files);
+            write_files(&root, &references());
             ExitCode::SUCCESS
         }
     }
+}
+
+/// The reference pages, from the code.
+fn references() -> Vec<GeneratedFile> {
+    let schema = serde_json::to_value(schedr_config::config_schema()).expect("a schema serializes");
+    let schedr = Some("schedr");
+    let metrics = [
+        MetricGroup {
+            role: "Master",
+            prefix: schedr,
+            metrics: schedr_master::metrics::METRICS,
+        },
+        MetricGroup {
+            role: "Worker",
+            prefix: schedr,
+            metrics: schedr_agent::metrics::METRICS,
+        },
+        MetricGroup {
+            role: "Webserver",
+            prefix: schedr,
+            metrics: schedr_api::metrics::METRICS,
+        },
+        MetricGroup {
+            role: "Every role",
+            prefix: None,
+            metrics: schedr_bin::ops::PROCESS_METRICS,
+        },
+    ];
+    reference_sources(
+        &schema,
+        &schedr_bin::cli::Cli::command(),
+        &metrics,
+        &schedr_api::openapi_json(),
+    )
 }
 
 /// Writes generated files under the repository root, creating directories as needed.

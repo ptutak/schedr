@@ -10,6 +10,23 @@ _generated/overview
 ```
 
 ```{toctree}
+:maxdepth: 2
+:caption: How schedr works
+
+guide/index
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Reference
+
+_generated/reference/configuration
+_generated/reference/cli
+_generated/reference/rest-api
+_generated/reference/metrics
+```
+
+```{toctree}
 :maxdepth: 1
 :caption: Design
 

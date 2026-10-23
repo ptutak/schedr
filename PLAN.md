@@ -174,6 +174,7 @@ integration tests, as since 1.15.
 | 2.7 | **mTLS** (`tls.mode = "app"` / `"mesh"`, certificates reloaded when the files change; crate `schedr-tls`); the **worker's log endpoint** (mTLS only: no tokens) and the webserver's log proxy, `schedr tasks logs [--follow]`; log retention on the worker (age and size) | tests with self-signed certificates |
 | 2.8 | **Memory watchdog:** the budget from `memory.max`, `/proc` sampling (PSS per process group), the `oom_killed` status, peak memory in the API; `setrlimit` moved to M4 with per-task budgets | an integration test with a task that allocates too much |
 | 2.9 | **Ops port** on every role: `/healthz`, `/readyz`, `/metrics` (Prometheus, `prometheus-client`), loop-stall detection, `[database] query_timeout` | tests |
+| 2.9b | **Documentation of the system as built:** the guide (`docs/guide/`: overview, glossary, life of a run, the master's rounds, workers, parsing, failures, network, observability, deployment; Mermaid diagrams), reference pages generated from the code (configuration from its JSON Schema, CLI from clap, REST API from OpenAPI, metrics from a list per role checked against a scrape); every later step updates the guide | `make docs` builds it without warnings; unit tests for the generators |
 | 2.10 | **Images and Helm chart:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600 and `[worker] termination_grace_period` set to match, probes | the chart installs on kind / k3d |
 | 2.11 | **Kill tests** (M2's "done when"): on kind / k3d with 2 workers, kill the master, then a worker, during runs; on OpenShift by hand | runs finish; retries as the rules say |
 | 2.12 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |
@@ -184,9 +185,10 @@ integration tests, as since 1.15.
   builds on 2.8 and 2.9.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
-**Status (2026-10-22): steps 2.1–2.9 are done** (the commits are
+**Status (2026-10-23): steps 2.1–2.9b are done** (the commits are
 listed in `NEXT_SESSION.md`). Next is 2.10. Open bugs B4 and B6 (role integration tests under
-disk load) and B7 (a command applied twice) wait to be scheduled.
+disk load), B7 (a command applied twice, undelivered cancels) and B8 (a drained task
+outliving the pod) wait to be scheduled.
 
 ## Testing approach
 

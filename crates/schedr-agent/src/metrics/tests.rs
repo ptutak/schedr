@@ -1,5 +1,7 @@
+use pretty_assertions::assert_eq;
 use prometheus_client::encoding::text::encode;
 use schedr_model::AttemptStatus;
+use schedr_model::metric_doc::scrape_mismatches;
 
 use super::*;
 
@@ -24,4 +26,9 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
     ] {
         assert!(out.contains(name), "{name}\n{out}");
     }
+    assert_eq!(
+        scrape_mismatches(&out, Some("schedr"), METRICS),
+        Vec::<String>::new(),
+        "{out}"
+    );
 }

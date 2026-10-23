@@ -9,10 +9,12 @@ authors.workspace = true
 
 [dependencies]
 figment.workspace = true
+schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 pretty_assertions.workspace = true
 rstest.workspace = true
 

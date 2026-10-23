@@ -13,9 +13,9 @@ pub mod units;
 
 pub use config::{
     Config, DagsSection, DatabaseSection, Interpreter, LogFormat, LogSection, OpsSection,
-    ScriptsSection, TlsMode, TlsSection, url_has_password,
+    ScriptsSection, TlsMode, TlsSection, config_schema, url_has_password,
 };
 pub use loader::{ConfigError, load};
 pub use roots::{PathList, Root, RootError};
 pub use sources::{ConfigFile, FileSource, Override, SourceError, config_file};
-pub use units::{UnitError, parse_duration, parse_size};
+pub use units::{UnitError, format_duration, format_size, parse_duration, parse_size};

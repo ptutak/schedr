@@ -150,3 +150,60 @@ fn deserialize_optional_size_rejects_bad_strings_and_numbers() {
         "{number}"
     );
 }
+
+#[rstest]
+#[case(0, "0s")]
+#[case(500, "500ms")]
+#[case(30_000, "30s")]
+#[case(120_000, "2m")]
+#[case(5_400_000, "1h30m")]
+#[case(2_592_000_000, "30d")]
+#[case(93_784_005, "1d2h3m4s5ms")]
+fn formats_durations_as_they_are_read(#[case] ms: u64, #[case] text: &str) {
+    let duration = Duration::from_millis(ms);
+    assert_eq!(format_duration(duration), text);
+    assert_eq!(parse_duration(text), Ok(duration));
+}
+
+#[rstest]
+#[case(0, "0B")]
+#[case(512, "512B")]
+#[case(1536, "1536B")]
+#[case(65_536, "64KiB")]
+#[case(4 << 20, "4MiB")]
+#[case(3 << 30, "3GiB")]
+fn formats_sizes_as_they_are_read(#[case] bytes: u64, #[case] text: &str) {
+    assert_eq!(format_size(bytes), text);
+    assert_eq!(parse_size(text), Ok(bytes));
+}
+
+#[test]
+fn serializes_durations_and_optional_sizes_as_text() {
+    #[derive(serde::Serialize)]
+    struct Units {
+        #[serde(serialize_with = "serialize_duration")]
+        every: Duration,
+        #[serde(serialize_with = "serialize_optional_size")]
+        limit: Option<u64>,
+        #[serde(serialize_with = "serialize_optional_size")]
+        none: Option<u64>,
+    }
+    let units = Units {
+        every: Duration::from_secs(90),
+        limit: Some(4 << 20),
+        none: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&units).unwrap(),
+        serde_json::json!({"every": "1m30s", "limit": "4MiB", "none": null})
+    );
+}
+
+#[test]
+fn duration_and_size_schemas_are_strings_with_a_format() {
+    let duration = schemars::schema_for!(DurationText);
+    assert_eq!(duration.get("format"), Some(&serde_json::json!("duration")));
+    assert_eq!(duration.get("type"), Some(&serde_json::json!("string")));
+    let size = schemars::schema_for!(SizeText);
+    assert_eq!(size.get("format"), Some(&serde_json::json!("size")));
+}

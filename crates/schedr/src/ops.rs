@@ -27,6 +27,7 @@ use prometheus_client::metrics::gauge::ConstGauge;
 use prometheus_client::metrics::info::Info;
 use prometheus_client::registry::Registry;
 use schedr_model::beat::Beat;
+use schedr_model::metric_doc::{MetricDoc, MetricKind};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -39,6 +40,41 @@ mod tests;
 
 /// The content type of `/metrics`.
 pub const METRICS_CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
+
+const RESIDENT_MEMORY: MetricDoc = MetricDoc {
+    name: "process_resident_memory_bytes",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "Resident memory of this process",
+};
+const CPU: MetricDoc = MetricDoc {
+    name: "process_cpu_seconds",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "CPU time this process used, user and system",
+};
+const OPEN_FDS: MetricDoc = MetricDoc {
+    name: "process_open_fds",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "File descriptors this process has open",
+};
+const START_TIME: MetricDoc = MetricDoc {
+    name: "process_start_time_seconds",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "When this process started, in seconds since the Unix epoch",
+};
+const BUILD: MetricDoc = MetricDoc {
+    name: "schedr_build",
+    kind: MetricKind::Info,
+    labels: &["version"],
+    help: "The schedr version running",
+};
+
+/// The metrics every role serves besides its own, as registered (without a prefix): the
+/// process's and the build's.
+pub const PROCESS_METRICS: &[MetricDoc] = &[RESIDENT_MEMORY, CPU, OPEN_FDS, START_TIME, BUILD];
 
 /// What the health endpoints check (cheap to clone; clones share it).
 #[derive(Debug, Clone)]
@@ -143,8 +179,8 @@ impl Ops {
     pub fn new(mut registry: Registry, health: Health) -> Self {
         registry.register_collector(Box::new(ProcessMetrics));
         registry.register(
-            "schedr_build",
-            "The schedr version running",
+            BUILD.name,
+            BUILD.help,
             Info::new(vec![("version".to_owned(), VERSION.to_owned())]),
         );
         Self {
@@ -285,6 +321,11 @@ pub fn parse_stats(
     })
 }
 
+/// Help text ending as `Registry::register` ends it.
+fn help(doc: MetricDoc) -> String {
+    format!("{}.", doc.help)
+}
+
 impl Collector for ProcessMetrics {
     fn encode(&self, mut encoder: DescriptorEncoder) -> Result<(), std::fmt::Error> {
         let Some(stats) = process_stats() else {
@@ -292,29 +333,24 @@ impl Collector for ProcessMetrics {
         };
         let resident = ConstGauge::new(i64::try_from(stats.resident_bytes).unwrap_or(i64::MAX));
         resident.encode(encoder.encode_descriptor(
-            "process_resident_memory_bytes",
-            "Resident memory of this process",
+            RESIDENT_MEMORY.name,
+            &help(RESIDENT_MEMORY),
             None,
             resident.metric_type(),
         )?)?;
         let cpu = ConstCounter::new(stats.cpu_seconds);
-        cpu.encode(encoder.encode_descriptor(
-            "process_cpu_seconds",
-            "CPU time this process used, user and system",
-            None,
-            cpu.metric_type(),
-        )?)?;
+        cpu.encode(encoder.encode_descriptor(CPU.name, &help(CPU), None, cpu.metric_type())?)?;
         let fds = ConstGauge::new(i64::try_from(stats.open_fds).unwrap_or(i64::MAX));
         fds.encode(encoder.encode_descriptor(
-            "process_open_fds",
-            "File descriptors this process has open",
+            OPEN_FDS.name,
+            &help(OPEN_FDS),
             None,
             fds.metric_type(),
         )?)?;
         let start = ConstGauge::new(stats.start_time_seconds);
         start.encode(encoder.encode_descriptor(
-            "process_start_time_seconds",
-            "When this process started, in seconds since the Unix epoch",
+            START_TIME.name,
+            &help(START_TIME),
             None,
             start.metric_type(),
         )?)?;

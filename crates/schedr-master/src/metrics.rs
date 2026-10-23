@@ -18,12 +18,116 @@ use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
 use schedr_db::reads::StateCounts;
+use schedr_model::metric_doc::{MetricDoc, MetricKind};
 
 #[cfg(test)]
 mod tests;
 
 /// How often the gauges taken from the database are refreshed.
 pub const GAUGE_REFRESH: Duration = Duration::from_secs(15);
+
+const TICK_DURATION: MetricDoc = MetricDoc {
+    name: "master_tick_duration_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long each tick of the master's loop took",
+};
+const RUNS: MetricDoc = MetricDoc {
+    name: "runs",
+    kind: MetricKind::Gauge,
+    labels: &["state", "kind"],
+    help: "Runs by state and kind",
+};
+const RUNS_FINISHED: MetricDoc = MetricDoc {
+    name: "runs_finished",
+    kind: MetricKind::Counter,
+    labels: &["dag_id", "result"],
+    help: "Runs finished, by DAG and result",
+};
+const TASKS: MetricDoc = MetricDoc {
+    name: "tasks",
+    kind: MetricKind::Gauge,
+    labels: &["state"],
+    help: "Task instances of unfinished runs, by state",
+};
+const TASKS_WAITING: MetricDoc = MetricDoc {
+    name: "tasks_waiting",
+    kind: MetricKind::Gauge,
+    labels: &["reason"],
+    help: "Ready tasks no worker could take at the last assignment pass, by reason",
+};
+const ASSIGNMENTS: MetricDoc = MetricDoc {
+    name: "assignments",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Attempts assigned to workers",
+};
+const REJECTIONS: MetricDoc = MetricDoc {
+    name: "rejections",
+    kind: MetricKind::Counter,
+    labels: &["reason"],
+    help: "Assignments workers rejected, by reason",
+};
+const ATTEMPTS_ENDED: MetricDoc = MetricDoc {
+    name: "attempts_ended",
+    kind: MetricKind::Counter,
+    labels: &["status"],
+    help: "Attempts ended, by status",
+};
+const PARSE_JOBS_STARTED: MetricDoc = MetricDoc {
+    name: "parse_jobs_started",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Parse jobs created",
+};
+const PARSE_JOBS_FINISHED: MetricDoc = MetricDoc {
+    name: "parse_jobs_finished",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Parse jobs finished",
+};
+const PARSE_DURATION: MetricDoc = MetricDoc {
+    name: "parse_duration_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long parse jobs took, from creation to the stored parse",
+};
+const COMMANDS: MetricDoc = MetricDoc {
+    name: "commands",
+    kind: MetricKind::Counter,
+    labels: &["kind", "decision"],
+    help: "Commands decided, by kind and decision",
+};
+const COMMAND_LATENCY: MetricDoc = MetricDoc {
+    name: "command_latency_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long commands waited for the master's decision",
+};
+const WORKERS: MetricDoc = MetricDoc {
+    name: "workers",
+    kind: MetricKind::Gauge,
+    labels: &["state"],
+    help: "Workers in the registry, by state",
+};
+
+/// The master's metrics, as registered (under `schedr_`).
+pub const METRICS: &[MetricDoc] = &[
+    TICK_DURATION,
+    RUNS,
+    RUNS_FINISHED,
+    TASKS,
+    TASKS_WAITING,
+    ASSIGNMENTS,
+    REJECTIONS,
+    ATTEMPTS_ENDED,
+    PARSE_JOBS_STARTED,
+    PARSE_JOBS_FINISHED,
+    PARSE_DURATION,
+    COMMANDS,
+    COMMAND_LATENCY,
+    WORKERS,
+];
 
 /// A state (of runs, tasks or workers) and, for runs, their kind.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -142,75 +246,56 @@ impl Default for MasterMetrics {
 }
 
 impl MasterMetrics {
-    /// Registers every metric in `registry` (names get the `schedr_` prefix there).
+    /// Registers every metric in `registry` (names get the `schedr_` prefix there), as
+    /// [`METRICS`] describes them.
     pub fn register(&self, registry: &mut Registry) {
         let r = registry;
         r.register(
-            "master_tick_duration_seconds",
-            "How long each tick of the master's loop took",
+            TICK_DURATION.name,
+            TICK_DURATION.help,
             self.tick_duration.clone(),
         );
-        r.register("runs", "Runs by state and kind", self.runs.clone());
+        r.register(RUNS.name, RUNS.help, self.runs.clone());
         r.register(
-            "runs_finished",
-            "Runs finished, by DAG and result",
+            RUNS_FINISHED.name,
+            RUNS_FINISHED.help,
             self.runs_finished.clone(),
         );
+        r.register(TASKS.name, TASKS.help, self.tasks.clone());
         r.register(
-            "tasks",
-            "Task instances of unfinished runs, by state",
-            self.tasks.clone(),
-        );
-        r.register(
-            "tasks_waiting",
-            "Ready tasks no worker could take at the last assignment pass, by reason",
+            TASKS_WAITING.name,
+            TASKS_WAITING.help,
             self.tasks_waiting.clone(),
         );
+        r.register(ASSIGNMENTS.name, ASSIGNMENTS.help, self.assignments.clone());
+        r.register(REJECTIONS.name, REJECTIONS.help, self.rejections.clone());
         r.register(
-            "assignments",
-            "Attempts assigned to workers",
-            self.assignments.clone(),
-        );
-        r.register(
-            "rejections",
-            "Assignments workers rejected, by reason",
-            self.rejections.clone(),
-        );
-        r.register(
-            "attempts_ended",
-            "Attempts ended, by status",
+            ATTEMPTS_ENDED.name,
+            ATTEMPTS_ENDED.help,
             self.attempts_ended.clone(),
         );
         r.register(
-            "parse_jobs_started",
-            "Parse jobs created",
+            PARSE_JOBS_STARTED.name,
+            PARSE_JOBS_STARTED.help,
             self.parse_jobs_started.clone(),
         );
         r.register(
-            "parse_jobs_finished",
-            "Parse jobs finished",
+            PARSE_JOBS_FINISHED.name,
+            PARSE_JOBS_FINISHED.help,
             self.parse_jobs_finished.clone(),
         );
         r.register(
-            "parse_duration_seconds",
-            "How long parse jobs took, from creation to the stored parse",
+            PARSE_DURATION.name,
+            PARSE_DURATION.help,
             self.parse_duration.clone(),
         );
+        r.register(COMMANDS.name, COMMANDS.help, self.commands.clone());
         r.register(
-            "commands",
-            "Commands decided, by kind and decision",
-            self.commands.clone(),
-        );
-        r.register(
-            "command_latency_seconds",
-            "How long commands waited for the master's decision",
+            COMMAND_LATENCY.name,
+            COMMAND_LATENCY.help,
             self.command_latency.clone(),
         );
-        r.register(
-            "workers",
-            "Workers in the registry, by state",
-            self.workers.clone(),
-        );
+        r.register(WORKERS.name, WORKERS.help, self.workers.clone());
     }
 
     /// Sets the gauges taken from the database.

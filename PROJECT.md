@@ -4617,8 +4617,9 @@ crates/
   schedr/               # the binary: roles, user CLI, in-task CLI
     src/<module>.rs     # unit tests in src/<module>/tests.rs (see Testing)
     tests/              # integration tests (later)
-  xtask/                # development tasks: `cargo xtask schema [--check]`
+  xtask/                # development tasks: `cargo xtask schema [--check]`, `docs-sources`
 schema/                 # generated, committed: JSON Schemas, OpenAPI
+docs/                   # documentation: conf.py, index pages, guide/ (written by hand)
 pyproject.toml          # Python package
 python/
   schedr/               # Python API package (typed: py.typed)
@@ -4806,9 +4807,43 @@ a real server or talks to Postgres is an integration test.
 can be rebuilt at any time, and changing the documentation engine later means changing only
 its configuration, not the content.
 
-- **Sections:** Overview (`README.md`), **Design** (`PROJECT.md`, one page per chapter), Plan
-  (`PLAN.md`), **Python API** (from docstrings), **Rust API** (from `rustdoc`); later, user
-  guides from a `docs/` folder.
+- **Sections:** Overview (`README.md`), **How schedr works** (the guide, below), **Reference**
+  (generated, below), **Design** (`PROJECT.md`, one page per chapter), Plan (`PLAN.md`),
+  **Python API** (from docstrings), **Rust API** (from `rustdoc`).
+- **The guide (M2.9b), `docs/guide/`, written by hand and committed:** how the running system
+  works as built, not as planned: overview of the roles and links, glossary, the life of a
+  run, the master (its rounds, step by step, and what it handles between them), workers
+  (the agent's loop, the journal, memory, draining, logs), parsing and code versions, state
+  and failures (what happens when each part stops), network and security, observability,
+  deployment. It describes and links to the design log for the reasons; known limits are
+  stated (e.g. B7). **Every step updates the pages it changes** (`AI_INSTRUCTIONS.md`), and
+  the end-of-step code review checks the guide against the diff. Not chosen: more text in
+  `PROJECT.md` (it mixes "how" with "why" in an already long file); rustdoc module comments
+  only (no one place showing how the parts fit); one `ARCHITECTURE.md` split at build time (a
+  second very long file); reviewing the guide only per milestone (it drifts in between).
+- **The reference (M2.9b), generated at build time by `cargo xtask docs-sources`** into
+  `docs/_generated/reference/`, so it can't go stale:
+  - **Configuration:** from the configuration's JSON Schema (`schedr_config::config_schema`:
+    `JsonSchema` and `Serialize` derived on every section, so doc comments and defaults come
+    with it; durations and sizes are written back as they are read, `2m`, `4MiB`, checked by a
+    round-trip test): every key with its type, default, environment variable and doc comment.
+  - **Command line:** from clap's command tree (every visible command, its usage and
+    arguments; clap's `help` subcommands left out).
+  - **REST API:** from the OpenAPI description (`schema/openapi.json`): operations with their
+    parameters and answers, then the schemas. Rendered as Markdown by xtask, no Sphinx
+    extension.
+  - **Metrics:** from a list per role (`METRICS` in the master's, the agent's and the API's
+    `metrics.rs`, `PROCESS_METRICS` in `ops.rs`; type `schedr_model::metric_doc::MetricDoc`).
+    `register` takes each name and help text from it, and a unit test per role compares a
+    scrape with it (`scrape_mismatches`: types, help, labels, nothing undocumented).
+  - Not chosen: a Sphinx extension per kind (`sphinxcontrib-openapi`, `sphinx-click`-like
+    tools: more dependencies, and none covers the configuration or metrics); writing the
+    values into the guide by hand (they drift); building metric docs by scraping filled
+    registries (needs sample label values per family in production code).
+- **Diagrams: Mermaid**, as plain ```` ```mermaid ```` fences that GitHub draws too
+  (`sphinxcontrib-mermaid` 2.1.1, `myst_fence_as_directive`; the browser loads mermaid.js
+  12.1.0, pinned in `conf.py`, from jsDelivr). Not chosen: Graphviz (needs `dot` in CI;
+  GitHub doesn't draw it); ASCII art (hard to keep readable).
 - **`PROJECT.md` stays one file in the repository.** The split into chapters is generated at
   build time by `cargo xtask docs-sources` (which generates every page taken from repository
   files: the chapters, the README, the plan, the list of crates): one Markdown file per `##`
@@ -4817,7 +4852,7 @@ its configuration, not the content.
 - **Engine: Sphinx** with **MyST** (Markdown pages as they are), **Furo** (theme),
   **autodoc** + **autosummary** (the Python API from docstrings and type hints, every module
   found recursively) and **napoleon** (Google style). Committed in `docs/`: only `conf.py`,
-  the index pages and the autosummary template. The documentation tools are a
+  the index pages, the guide and the autosummary template. The documentation tools are a
   dev-only dependency group; the `schedr` package stays dependency-free.
 - **Rust API: `rustdoc`** (`cargo doc --workspace --no-deps`), copied into the site under
   `rust/` and linked from its navigation.

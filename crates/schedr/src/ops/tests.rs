@@ -102,6 +102,17 @@ async fn metrics_hold_the_roles_the_process_and_the_build() {
 }
 
 #[test]
+fn the_process_and_build_metrics_are_registered_as_documented() {
+    let ops = Ops::new(Registry::default(), Health::new(Duration::from_secs(1)));
+    let text = ops.metrics_text();
+    assert_eq!(
+        schedr_model::metric_doc::scrape_mismatches(&text, None, PROCESS_METRICS),
+        Vec::<String>::new(),
+        "{text}"
+    );
+}
+
+#[test]
 fn process_stats_are_read_from_proc() {
     let stat = "42 (schedr (worker)) S 1 42 42 0 -1 4194304 1 0 0 0 250 50 0 0 20 0 9 0 1000 \
                 123 456";

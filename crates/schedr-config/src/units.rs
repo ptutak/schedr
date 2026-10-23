@@ -1,8 +1,12 @@
 //! Durations (`"30s"`, `"5m"`, `"1h30m"`) and sizes (`"4MiB"`) in configuration values.
 
+use std::borrow::Cow;
 use std::fmt;
+use std::fmt::Write as _;
 use std::time::Duration;
 
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::Serializer;
 use serde::de::{self, Deserializer, Visitor};
 
 #[cfg(test)]
@@ -138,4 +142,100 @@ pub fn deserialize_optional_size<'de, D: Deserializer<'de>>(d: D) -> Result<Opti
     }
 
     d.deserialize_str(SizeVisitor)
+}
+
+/// Writes a duration as [`parse_duration`] reads it, in the largest units that are exact
+/// (`2m`, not `120s`; `1h30m`; `0s` for zero).
+#[must_use]
+pub fn format_duration(duration: Duration) -> String {
+    const UNITS: [(&str, u128); 5] = [
+        ("d", 86_400_000),
+        ("h", 3_600_000),
+        ("m", 60_000),
+        ("s", 1_000),
+        ("ms", 1),
+    ];
+    let mut rest = duration.as_millis();
+    if rest == 0 {
+        return "0s".to_owned();
+    }
+    let mut text = String::new();
+    for (name, ms) in UNITS {
+        if rest >= ms {
+            let _ = write!(text, "{}{name}", rest / ms);
+            rest %= ms;
+        }
+    }
+    text
+}
+
+/// Writes a size as [`parse_size`] reads it, in the largest unit that is exact (`4MiB`, not
+/// `4096KiB`).
+#[must_use]
+pub fn format_size(bytes: u64) -> String {
+    const UNITS: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
+    UNITS
+        .iter()
+        .find(|(_, factor)| bytes != 0 && bytes.is_multiple_of(*factor))
+        .map_or_else(
+            || format!("{bytes}B"),
+            |(name, factor)| format!("{}{name}", bytes / factor),
+        )
+}
+
+/// A serde `serialize_with` helper for duration fields (see [`format_duration`]).
+///
+/// # Errors
+///
+/// The serializer's.
+pub fn serialize_duration<S: Serializer>(duration: &Duration, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format_duration(*duration))
+}
+
+/// A serde `serialize_with` helper for optional size fields (see [`format_size`]).
+///
+/// # Errors
+///
+/// The serializer's.
+pub fn serialize_optional_size<S: Serializer>(size: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+    match size {
+        Some(bytes) => s.serialize_some(&format_size(*bytes)),
+        None => s.serialize_none(),
+    }
+}
+
+/// The JSON Schema of a duration field: a string with format `duration`.
+#[derive(Debug)]
+pub struct DurationText;
+
+impl JsonSchema for DurationText {
+    fn schema_name() -> Cow<'static, str> {
+        "Duration".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "format": "duration",
+            "description": "A duration such as `500ms`, `30s`, `5m`, `1h30m` or `2d`."
+        })
+    }
+}
+
+/// The JSON Schema of a size field: a string with format `size`.
+#[derive(Debug)]
+pub struct SizeText;
+
+impl JsonSchema for SizeText {
+    fn schema_name() -> Cow<'static, str> {
+        "Size".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "format": "size",
+            "description": "A size such as `512B`, `64KiB`, `4MiB` or `1GiB`."
+        })
+    }
 }

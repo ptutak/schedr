@@ -749,7 +749,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     let master_url = config.worker.master_url.clone().ok_or_else(|| {
         AppError::BadArgument(
             "no master to connect to: set [worker] master_url \
-             (SCHEDR_CONFIG__WORKER__MASTER_URL), e.g. http://schedr-master:8070"
+             (SCHEDR_CONFIG__WORKER__MASTER_URL), e.g. https://schedr-master:8070"
                 .to_owned(),
         )
     })?;

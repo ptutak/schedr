@@ -334,3 +334,60 @@ fn reads_the_tls_section() {
         }
     );
 }
+
+#[test]
+fn the_defaults_serialize_to_what_reads_back_as_the_defaults() {
+    let written = serde_json::to_value(Config::default()).unwrap();
+    assert_eq!(written["master"]["tick_interval"], "1s");
+    assert_eq!(written["worker"]["log_retention"], "30d");
+    // Unset options are left out, as in a file that doesn't set them.
+    assert_eq!(written["database"].get("url"), None);
+    let read: Config = serde_json::from_value(written).unwrap();
+    assert_eq!(read, Config::default());
+}
+
+#[test]
+fn a_full_configuration_reads_back_as_itself() {
+    let config = parse(
+        r#"
+        [interpreters]
+        python = "/usr/bin/python3"
+        etl = { path = "/opt/etl/bin/python", fork_server = true, preload = ["pandas"] }
+        [worker]
+        id = "w1"
+        memory_budget = "512MiB"
+        log_max_size = "10GiB"
+        [tls]
+        mode = "mesh"
+        "#,
+    )
+    .unwrap();
+    let written = serde_json::to_value(&config).unwrap();
+    assert_eq!(written["interpreters"]["python"], "/usr/bin/python3");
+    assert_eq!(written["interpreters"]["etl"]["fork_server"], true);
+    assert_eq!(written["worker"]["memory_budget"], "512MiB");
+    let read: Config = serde_json::from_value(written).unwrap();
+    assert_eq!(read, config);
+}
+
+#[test]
+fn the_schema_documents_every_key_with_its_default() {
+    let schema = serde_json::to_value(config_schema()).unwrap();
+    let ops = &schema["$defs"]["OpsSection"]["properties"];
+    assert_eq!(ops["port"]["default"], 8090);
+    assert_eq!(ops["loop_stall_timeout"]["default"], "2m");
+    assert_eq!(ops["loop_stall_timeout"]["$ref"], "#/$defs/Duration");
+    assert!(
+        ops["bind"]["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("The address the ops port listens on"),
+        "{ops}"
+    );
+    // Fields filled in when loading aren't keys.
+    assert_eq!(schema["properties"].get("dag_roots"), None);
+    assert_eq!(
+        schema["$defs"]["PathList"]["anyOf"][1]["type"],
+        serde_json::json!("string")
+    );
+}

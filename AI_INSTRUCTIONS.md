@@ -16,13 +16,17 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 2. **Ask when there is a real choice** (see Decisions); otherwise pick the sensible default,
    say which, and go on.
 3. **Do the whole step:** code, unit tests, integration tests, docs and docstrings, generated
-   files.
+   files. **Update the guide** (the hand-written pages on how the system works, see
+   `AI_SETUP.md`, Documentation) wherever the step changes what they describe: a page that
+   says something the code no longer does is a bug. Reference pages generated from the code
+   need no edits, but a new setting, command, endpoint or metric needs its doc comment.
 4. **Run `make check` and `make docs`** (or the project's equivalents) and make sure both
    pass. Never claim something passes without running it; report failures with their output.
 5. **Run a code review once over the whole step** (the code-review skill, `/code-review`, on
-   everything the step changed, after the checks pass). Fix what it confirms, re-run the
-   checks, and list in the summary what it found and what was fixed or left (with why). A
-   finding outside the step's scope goes to `BUGS.md`.
+   everything the step changed, after the checks pass). It also checks that the guide matches
+   the change. Fix what it confirms, re-run the checks, and list in the summary what it found
+   and what was fixed or left (with why). A finding outside the step's scope goes to
+   `BUGS.md`.
 6. **Record the decisions** in `PROJECT.md`, in the section they belong to, with what wasn't
    chosen and why.
 7. **Present a short summary and wait:** what was built, the decisions made (so I can

@@ -1,4 +1,6 @@
+use pretty_assertions::assert_eq;
 use prometheus_client::encoding::text::encode;
+use schedr_model::metric_doc::scrape_mismatches;
 use schedr_model::{AttemptStatus, RunState};
 
 use super::*;
@@ -12,7 +14,7 @@ fn text(metrics: &MasterMetrics) -> String {
 }
 
 #[test]
-fn every_metric_is_registered_with_its_prefix() {
+fn every_metric_is_registered_as_documented() {
     // A label family shows once it has a member.
     let metrics = MasterMetrics::default();
     metrics.set_counts(&StateCounts {
@@ -37,24 +39,11 @@ fn every_metric_is_registered_with_its_prefix() {
         })
         .inc();
     let out = text(&metrics);
-    for name in [
-        "schedr_master_tick_duration_seconds",
-        "schedr_runs",
-        "schedr_runs_finished",
-        "schedr_tasks",
-        "schedr_tasks_waiting",
-        "schedr_assignments",
-        "schedr_rejections",
-        "schedr_attempts_ended",
-        "schedr_parse_jobs_started",
-        "schedr_parse_jobs_finished",
-        "schedr_parse_duration_seconds",
-        "schedr_commands",
-        "schedr_command_latency_seconds",
-        "schedr_workers",
-    ] {
-        assert!(out.contains(&format!("# TYPE {name} ")), "{name}\n{out}");
-    }
+    assert_eq!(
+        scrape_mismatches(&out, Some("schedr"), METRICS),
+        Vec::<String>::new(),
+        "{out}"
+    );
 }
 
 #[test]

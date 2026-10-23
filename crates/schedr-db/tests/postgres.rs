@@ -562,13 +562,14 @@ async fn a_burst_of_commands_is_taken_with_its_first_notification() {
 #[tokio::test]
 async fn a_query_past_the_query_timeout_is_stopped() {
     let url = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect("SCHEDR_TEST_POSTGRES_URL");
-    let db = Database::connect_with_timeout(&url, std::time::Duration::from_millis(300))
+    // The limit covers waiting for a connection too: long enough for one to open under load.
+    let db = Database::connect_with_timeout(&url, std::time::Duration::from_secs(2))
         .await
         .unwrap();
     let Database::Postgres(pool) = &db else {
         panic!("expected Postgres")
     };
-    let error = sqlx::query("SELECT pg_sleep(5)")
+    let error = sqlx::query("SELECT pg_sleep(30)")
         .execute(pool)
         .await
         .unwrap_err();

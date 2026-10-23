@@ -10,6 +10,7 @@ license = "MIT"
 authors = ["Piotr Tutak <piotr.tutak@amartus.com>"]
 
 [workspace.dependencies]
+schedr = { path = "crates/schedr" }
 schedr-model = { path = "crates/schedr-model" }
 schedr-proto = { path = "crates/schedr-proto" }
 schedr-config = { path = "crates/schedr-config" }

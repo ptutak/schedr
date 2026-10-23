@@ -47,7 +47,7 @@ examples/               # runnable examples, with their tests
 scripts/                # shell scripts used by CI and make (e.g. a package smoke test)
 schema/                 # generated, committed (JSON Schema, OpenAPI, ...)
 testdata/               # fixtures shared between languages
-docs/                   # documentation sources (conf, index pages); output goes to site/
+docs/                   # documentation sources (conf, index pages, guide/); output goes to site/
 ```
 
 A Python-only project drops the Rust parts (and vice versa); everything else stays.
@@ -156,6 +156,18 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
   + **napoleon** (the Python API from docstrings); **rustdoc** copied under `rust/`.
 - Long Markdown documents (e.g. `PROJECT.md`) stay one file in the repository; a small
   generator splits them into pages at build time.
+- **Three kinds of pages:**
+  - **The guide** (`docs/guide/`, written by hand, committed): how the running system works
+    (components, the flow of a request, loops, failure handling, deployment), as built, not
+    as planned. It describes, and links to the design log for the reasons. Updated in the same
+    step as the code it describes.
+  - **The reference**, generated from the code at build time so it can't go stale: the
+    configuration (from its JSON Schema, doc comments included), the CLI (from the argument
+    parser), the API (from its OpenAPI description), the metrics (from a list per component
+    that the code registers from, checked by a test against a scrape).
+  - **The design log and plan** (`PROJECT.md`, `PLAN.md`), split into pages at build time.
+- **Diagrams in Mermaid**, written as plain ```` ```mermaid ```` fences so GitHub draws them too
+  (`sphinxcontrib-mermaid`, with `myst_fence_as_directive`; mermaid.js pinned).
 - CI builds the docs and **fails on warnings** (a broken reference, a missing docstring, a
   page not in the navigation).
 

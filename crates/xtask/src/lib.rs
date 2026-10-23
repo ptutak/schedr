@@ -1,12 +1,14 @@
 //! Development tasks for the schedr repository: generating the committed files under
 //! `schema/` (JSON Schemas and the REST API's OpenAPI description) and checking that they are up to date (see PROJECT.md, Rust/Python integration:
-//! shared model and schemas), and generating the documentation sources (see [`docs`]).
+//! shared model and schemas), and generating the documentation sources (see [`docs`] and
+//! [`reference`]).
 //!
 //! The logic here is pure; `main.rs` does the reading and writing.
 
 use std::path::{Path, PathBuf};
 
 pub mod docs;
+pub mod reference;
 
 #[cfg(test)]
 mod tests;
