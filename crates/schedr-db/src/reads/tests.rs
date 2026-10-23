@@ -228,3 +228,45 @@ async fn stored_values_that_dont_read_are_errors() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn states_are_counted_for_the_masters_gauges() {
+    let (db, version) = with_dag().await;
+    assert_eq!(db.state_counts().await.unwrap(), StateCounts::default());
+    let running = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    add_run(&db, &version, "2026-10-14T03:00:00Z", RunState::Success).await;
+    let done = add_run(&db, &version, "2026-10-13T03:00:00Z", RunState::Success).await;
+    let now = ts("2026-10-15T03:00:01Z");
+    db.create_instances(&running, &[(extract(), TaskInstanceState::Queued)], now)
+        .await
+        .unwrap();
+    // A finished run's tasks don't count.
+    db.create_instances(&done, &[(extract(), TaskInstanceState::Success)], now)
+        .await
+        .unwrap();
+    db.register_worker(
+        &crate::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "1.0",
+            schedr_version: "0.1.0",
+            queues: &[],
+            slots: 2,
+            log_endpoint: "",
+        },
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.state_counts().await.unwrap(),
+        StateCounts {
+            runs: vec![
+                ("running".to_owned(), "manual".to_owned(), 1),
+                ("success".to_owned(), "manual".to_owned(), 2),
+            ],
+            tasks: vec![("queued".to_owned(), 1)],
+            workers: vec![("active".to_owned(), 1)],
+        }
+    );
+}

@@ -68,7 +68,8 @@ impl Standalone {
              [interpreters]\npython = \"{python}\"\n\n\
              [worker]\ndata_dir = \"{data}\"\nslots = 4\nlog_port = 0\n\n\
              [master]\ngrpc_port = 0\ntick_interval = \"100ms\"\n\n\
-             [webserver]\nport = 0\n",
+             [webserver]\nport = 0\n\n\
+             [ops]\nport = 0\n",
             python = python(),
             data = dir.path().join("data").display(),
         );
@@ -509,6 +510,31 @@ fn listen_opens_the_api_beyond_loopback() {
         log.contains("the REST API has no authentication of its own"),
         "{log}"
     );
+    // The ops port listens there too (probes come from outside the pod), for every part.
+    let ops = log
+        .split("ops on http://")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap()
+        .replacen("0.0.0.0:", "127.0.0.1:", 1);
+    assert!(log.contains("ops on http://0.0.0.0:"), "{log}");
+    let get = |path: &str| {
+        let output = Command::new("curl")
+            .args(["-s", &format!("http://{ops}{path}")])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    standalone.wait("standalone to be ready", || get("/readyz") == "ok\n");
+    assert_eq!(get("/healthz"), "ok\n");
+    let metrics = get("/metrics");
+    for name in [
+        "schedr_master_tick_duration_seconds",
+        "schedr_worker_slots 4",
+        "schedr_http_requests_total{route=\"/api/v1/dags\"",
+    ] {
+        assert!(metrics.contains(name), "{name}\n{metrics}");
+    }
 }
 
 #[test]

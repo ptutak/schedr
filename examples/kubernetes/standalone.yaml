@@ -78,14 +78,20 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          # A TCP check until the ops port's /healthz and /readyz (milestone M2).
+            # /healthz, /readyz and /metrics (plain HTTP; nothing else is served there).
+            - name: ops
+              containerPort: 8090
           readinessProbe:
-            tcpSocket:
-              port: http
+            httpGet:
+              path: /readyz
+              port: ops
             periodSeconds: 10
+          # Fails only when the scheduling loop or the worker agent is stuck, never because
+          # something else is down.
           livenessProbe:
-            tcpSocket:
-              port: http
+            httpGet:
+              path: /healthz
+              port: ops
             initialDelaySeconds: 30
             periodSeconds: 20
           resources:

@@ -179,7 +179,14 @@ fn commands_of_later_milestones_say_when_they_arrive() {
 
 #[test]
 fn the_master_without_a_database_says_how_to_set_one() {
-    let result = schedr(&["master"], &[("SCHEDR_CONFIG__TLS__MODE", "mesh")], &[]);
+    let result = schedr(
+        &["master"],
+        &[
+            ("SCHEDR_CONFIG__TLS__MODE", "mesh"),
+            ("SCHEDR_CONFIG__OPS__PORT", "0"),
+        ],
+        &[],
+    );
     assert_eq!(result.code, 1);
     assert!(
         result.err.contains("SCHEDR_CONFIG__DATABASE__URL"),

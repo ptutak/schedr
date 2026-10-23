@@ -323,6 +323,7 @@ pub async fn get_log(
     };
     let endpoint = match state.db.worker_log_endpoint(&worker_id).await? {
         Some((worker_state, _)) if worker_state.is_gone() => {
+            state.metrics.log_error("worker_gone");
             return Err(ApiError::Unavailable(format!(
                 "worker `{worker_id}` is {worker_state}: the log of try {try_number} is \
                  unavailable"
@@ -330,6 +331,7 @@ pub async fn get_log(
         }
         Some((_, endpoint)) if !endpoint.is_empty() => endpoint,
         _ => {
+            state.metrics.log_error("no_endpoint");
             return Err(ApiError::Unavailable(format!(
                 "worker `{worker_id}` has no log endpoint: the log of try {try_number} is \
                  unavailable"
@@ -339,21 +341,26 @@ pub async fn get_log(
     let from = query.from.unwrap_or(0);
     let limit = query.limit.unwrap_or(MAX_CHUNK).clamp(MIN_CHUNK, MAX_CHUNK);
     let answered = |answered: Option<&String>| match answered {
-        Some(other) if *other != worker_id => Err(ApiError::Unavailable(format!(
-            "reached worker `{other}` instead of `{worker_id}` at {endpoint}: its address is \
-             stale; try again shortly"
-        ))),
+        Some(other) if *other != worker_id => Err({
+            state.metrics.log_error("stale_address");
+            ApiError::Unavailable(format!(
+                "reached worker `{other}` instead of `{worker_id}` at {endpoint}: its address \
+                 is stale; try again shortly"
+            ))
+        }),
         _ => Ok(()),
     };
     let log = match state.logs.fetch(&endpoint, &attempt_id, from, limit).await {
         Ok(log) => log,
         Err(LogFetchError::Missing { worker_id: other }) => {
             answered(other.as_ref())?;
+            state.metrics.log_error("missing");
             return Err(ApiError::NotFound(format!(
                 "the log file is unavailable at worker `{worker_id}` (it may have been deleted)"
             )));
         }
         Err(LogFetchError::Unreachable(reason)) => {
+            state.metrics.log_error("unreachable");
             return Err(ApiError::Unavailable(format!(
                 "worker `{worker_id}` can't be reached at {endpoint}: {reason}"
             )));

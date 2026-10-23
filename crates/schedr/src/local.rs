@@ -171,6 +171,7 @@ pub async fn check_root(
             max_output_size: 64 * 1024,
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
+        kills: prometheus_client::metrics::counter::Counter::default(),
     };
     let request = ParseRequest {
         root: root.name.clone(),
@@ -333,6 +334,7 @@ async fn test_dag(
     local.master.grpc_port = 0;
     local.webserver.port = 0;
     local.worker.log_port = 0;
+    local.ops.port = 0;
     local.master.tick_interval = Duration::from_millis(100);
     local.dags.poll_interval = Duration::from_millis(200);
     local.dags.settle_time = Duration::ZERO;

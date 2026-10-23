@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::journal::Journal;
+use crate::metrics::AgentMetrics;
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +36,8 @@ pub struct Swept {
     pub files: u64,
     /// Their bytes.
     pub bytes: u64,
+    /// The bytes of logs left.
+    pub kept: u64,
 }
 
 struct LogFile {
@@ -114,14 +117,17 @@ pub fn sweep(
             }
         }
     }
+    swept.kept = total;
     Ok(swept)
 }
 
-/// Sweeps now and every [`SWEEP_INTERVAL`] until `stop` completes.
+/// Sweeps now and every [`SWEEP_INTERVAL`] until `stop` completes, recording the bytes kept
+/// and deleted in `metrics`.
 pub async fn sweep_logs(
     log_dir: PathBuf,
     journal: Journal,
     retention: LogRetention,
+    metrics: AgentMetrics,
     stop: impl Future<Output = ()>,
 ) {
     tokio::pin!(stop);
@@ -137,6 +143,12 @@ pub async fn sweep_logs(
             sweep(&dir, &journal, retention, SystemTime::now())
         })
         .await;
+        if let Ok(Ok(swept)) = &swept {
+            metrics
+                .log_bytes
+                .set(i64::try_from(swept.kept).unwrap_or(i64::MAX));
+            metrics.log_swept_bytes.inc_by(swept.bytes);
+        }
         match swept {
             Ok(Ok(swept)) if swept.files > 0 => tracing::info!(
                 files = swept.files,

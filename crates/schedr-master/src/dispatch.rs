@@ -36,6 +36,7 @@ use schedr_proto::convert::{
 use schedr_proto::pb;
 
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
+use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::workers::{Needs, Workers};
 
 #[cfg(test)]
@@ -113,6 +114,7 @@ pub struct Dispatcher {
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
     /// those hashes and of at least that version.
     current_code: BTreeMap<String, (BTreeSet<String>, Option<SchedrVersion>)>,
+    metrics: MasterMetrics,
 }
 
 /// A task's code missing on workers.
@@ -135,8 +137,16 @@ impl Dispatcher {
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
+            metrics: MasterMetrics::default(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
+    }
+
+    /// Counts assignments, rejections, ended attempts, waiting tasks and finished runs in
+    /// `metrics`.
+    pub fn set_metrics(&mut self, metrics: MasterMetrics) {
+        self.execution.set_metrics(metrics.clone());
+        self.metrics = metrics;
     }
 
     /// The dispatcher with another code wait (see [`DEFAULT_CODE_WAIT`]).
@@ -268,6 +278,7 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn assign(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, DispatchError> {
         let mut outgoing = Vec::new();
+        let mut waiting: BTreeMap<&'static str, i64> = BTreeMap::new();
         for ready in self.db.ready_instances(now).await? {
             let Some(task) = ready.dag.task(&ready.task_id) else {
                 continue;
@@ -288,7 +299,8 @@ impl Dispatcher {
                 .pick(needs, &without_code)
                 .or_else(|| self.workers.pick(needs, &excluded));
             let Some(worker_id) = picked.map(str::to_owned) else {
-                let reason = self.why_waiting(needs, &excluded);
+                let (why, reason) = self.why_waiting(needs, &excluded);
+                *waiting.entry(why).or_default() += 1;
                 if ready.queued_reason.as_deref() != Some(reason.as_str()) {
                     self.db
                         .set_queued_reason(&ready.instance_id, &reason, now)
@@ -318,6 +330,7 @@ impl Dispatcher {
                 continue;
             }
             self.workers.reserve(&worker_id, &attempt_id, now);
+            self.metrics.assignments.inc();
             let message = self.assign_message(&ready, &worker_id, &attempt_id, try_number, inputs);
             outgoing.push(Outgoing {
                 worker_id,
@@ -326,6 +339,8 @@ impl Dispatcher {
                 },
             });
         }
+        let waiting: Vec<(&'static str, i64)> = waiting.into_iter().collect();
+        self.metrics.set_waiting(&waiting);
         Ok(outgoing)
     }
 
@@ -381,6 +396,14 @@ impl Dispatcher {
         if attempt.worker_id != worker_id || attempt.status.is_some() || attempt.started {
             return Ok(());
         }
+        let reason = pb::RejectReason::try_from(rejected.reason)
+            .map_or("unknown", |r| r.as_str_name())
+            .trim_start_matches("REJECT_REASON_")
+            .to_lowercase();
+        self.metrics
+            .rejections
+            .get_or_create(&ReasonLabels { reason })
+            .inc();
         self.workers.release(&attempt.id);
         let run = self.db.run_tasks(&attempt.run_id).await?;
         let cancelling = run.as_ref().is_some_and(|run| {
@@ -630,6 +653,7 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         self.workers.release(&attempt.id);
         if self.db.end_attempt(&attempt.id, end, now).await? {
+            self.metrics.attempt_ended(&end.status);
             self.execution
                 .attempt_finished(&attempt.run_id, &attempt.task_id, result, now)
                 .await?;
@@ -651,6 +675,7 @@ impl Dispatcher {
             output: None,
         };
         if self.db.end_attempt(attempt_id, &end, now).await? {
+            self.metrics.attempt_ended(&end.status);
             self.execution
                 .attempt_finished(run_id, task_id, &result, now)
                 .await?;
@@ -790,17 +815,24 @@ impl Dispatcher {
         }
     }
 
-    /// Why no worker could be picked for a task with `needs`.
-    fn why_waiting(&self, needs: Needs<'_>, excluded: &BTreeSet<String>) -> String {
+    /// Why no worker could be picked for a task with `needs`: the kind of reason (a metric's
+    /// label) and the reason shown with the task.
+    fn why_waiting(&self, needs: Needs<'_>, excluded: &BTreeSet<String>) -> (&'static str, String) {
         let queue = needs.queue;
         let serving: Vec<_> = self.workers.serving(queue).collect();
         if serving.is_empty() {
             if self.workers.drained_serving(queue) {
-                return format!(
-                    "the workers serving queue `{queue}` are drained (`schedr workers resume`)"
+                return (
+                    "drained",
+                    format!(
+                        "the workers serving queue `{queue}` are drained (`schedr workers resume`)"
+                    ),
                 );
             }
-            return format!("no active worker serves queue `{queue}`");
+            return (
+                "no_worker",
+                format!("no active worker serves queue `{queue}`"),
+            );
         }
         let recent: Vec<_> = serving
             .into_iter()
@@ -808,7 +840,10 @@ impl Dispatcher {
             .collect();
         if recent.is_empty() {
             let version = needs.version.map(|v| v.to_string()).unwrap_or_default();
-            return format!("no worker with schedr ≥ {version} serves queue `{queue}`");
+            return (
+                "schedr_version",
+                format!("no worker with schedr ≥ {version} serves queue `{queue}`"),
+            );
         }
         let current: Vec<_> = recent
             .into_iter()
@@ -816,15 +851,24 @@ impl Dispatcher {
             .collect();
         if current.is_empty() {
             let root = needs.code.map(|(root, _)| root).unwrap_or_default();
-            return format!(
-                "waiting for workers serving queue `{queue}` to have the newest code of root \
-                 `{root}`"
+            return (
+                "newest_code",
+                format!(
+                    "waiting for workers serving queue `{queue}` to have the newest code of \
+                     root `{root}`"
+                ),
             );
         }
         if current.iter().all(|w| excluded.contains(&w.id)) {
-            return format!("every active worker serving queue `{queue}` rejected it");
+            return (
+                "rejected",
+                format!("every active worker serving queue `{queue}` rejected it"),
+            );
         }
-        format!("waiting for a free slot on the workers serving queue `{queue}`")
+        (
+            "no_slot",
+            format!("waiting for a free slot on the workers serving queue `{queue}`"),
+        )
     }
 
     /// The upstream outputs the task uses, as JSON (`{task_id: output}`).

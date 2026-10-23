@@ -58,7 +58,8 @@ fn logs_past_their_age_go_unless_the_journal_has_their_attempt() {
         swept,
         Swept {
             files: 2,
-            bytes: 20
+            bytes: 20,
+            kept: 20
         }
     );
     assert_eq!(left(&dir), ["new.log", "notes.txt", "running.log"]);
@@ -83,7 +84,8 @@ fn over_the_size_limit_the_oldest_go_first() {
         swept,
         Swept {
             files: 2,
-            bytes: 200
+            bytes: 200,
+            kept: 200
         }
     );
     assert_eq!(left(&dir), ["a.log", "d.log"]);
@@ -129,12 +131,18 @@ async fn sweep_logs_sweeps_at_once_and_stops() {
         max_age: DAY,
         max_size: None,
     };
+    let metrics = crate::metrics::AgentMetrics::default();
     sweep_logs(
         dir.path().join("logs"),
         journal,
         retention,
+        metrics.clone(),
         tokio::time::sleep(Duration::from_millis(300)),
     )
     .await;
     assert_eq!(left(&dir), ["new.log"]);
+    assert_eq!(
+        (metrics.log_bytes.get(), metrics.log_swept_bytes.get()),
+        (10, 10)
+    );
 }

@@ -21,6 +21,7 @@ use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
     DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
 };
+use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey};
 use crate::scheduler::{Scheduler, SchedulerError};
 
@@ -106,6 +107,7 @@ pub struct MasterCore {
     scheduler: Scheduler,
     commander: Commander,
     connections: BTreeMap<String, Connection>,
+    metrics: MasterMetrics,
 }
 
 impl MasterCore {
@@ -123,9 +125,34 @@ impl MasterCore {
             scheduler: Scheduler::new(db.clone()),
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),
+            metrics: MasterMetrics::default(),
             settings,
             db,
         }
+        // One set shared by every part, replaced by the caller's to register them.
+        .with_metrics(MasterMetrics::default())
+    }
+
+    /// The master recording its metrics in `metrics` (registered by the caller).
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: MasterMetrics) -> Self {
+        self.dispatcher.set_metrics(metrics.clone());
+        self.discovery.set_metrics(metrics.clone());
+        self.commander.set_metrics(metrics.clone());
+        self.metrics = metrics;
+        self
+    }
+
+    /// Its metrics.
+    #[must_use]
+    pub const fn metrics(&self) -> &MasterMetrics {
+        &self.metrics
+    }
+
+    /// Its database.
+    #[must_use]
+    pub const fn db(&self) -> &Database {
+        &self.db
     }
 
     /// The master's timing.

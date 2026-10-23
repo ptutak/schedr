@@ -237,6 +237,9 @@ async fn the_loop_ticks_until_stopped() {
         .insert_command(&pause, "anna", fixed_now())
         .await
         .unwrap();
+    let mut registry = prometheus_client::registry::Registry::default();
+    hub.metrics.register(&mut registry);
+    assert_eq!(hub.beat().since(std::time::Instant::now()), None);
     let stop = tokio::time::sleep(Duration::from_millis(100));
     hub.run(Duration::from_millis(10), None, stop).await;
     let decided = db.command(&id).await.unwrap().unwrap();
@@ -244,6 +247,16 @@ async fn the_loop_ticks_until_stopped() {
         decided.status,
         schedr_model::commands::CommandStatus::Rejected
     );
+    // The loop beat, timed its ticks, counted the decision and refreshed the gauges.
+    assert!(hub.beat().since(std::time::Instant::now()).unwrap() < Duration::from_secs(1));
+    let mut text = String::new();
+    prometheus_client::encoding::text::encode(&mut text, &registry).unwrap();
+    assert!(text.contains("tick_duration_seconds_count "), "{text}");
+    assert!(
+        text.contains("commands_total{kind=\"unpause_dag\",decision=\"rejected\"} 1"),
+        "{text}"
+    );
+    assert!(text.contains("command_latency_seconds_count 1"), "{text}");
 }
 
 #[tokio::test]
@@ -254,4 +267,38 @@ async fn restoring_counts_from_the_hubs_clock() {
         "2026-10-22T08:00:00Z".parse().unwrap()
     });
     assert_eq!(hub.restore().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_refresh_past_its_limit_is_abandoned_and_the_loop_goes_on() {
+    // A file: an abandoned query closes its connection, and a new in-memory one would be an
+    // empty database.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = Database::connect(&format!("sqlite://{}", dir.path().join("s.db").display()))
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), Settings::default()), fixed_now)
+        .with_refresh_limit(Duration::ZERO);
+    let pause = schedr_model::commands::Command::UnpauseDag {
+        dag_id: DagId::new("ghost").unwrap(),
+    };
+    let id = db
+        .insert_command(&pause, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.refresh_gauges().await;
+    hub.run(
+        Duration::from_millis(10),
+        None,
+        tokio::time::sleep(Duration::from_millis(100)),
+    )
+    .await;
+    // Ticks are never abandoned: the command was decided.
+    let decided = db.command(&id).await.unwrap().unwrap();
+    assert_eq!(
+        decided.status,
+        schedr_model::commands::CommandStatus::Rejected
+    );
+    assert_eq!(DEFAULT_REFRESH_LIMIT, Duration::from_secs(30));
 }

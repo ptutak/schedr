@@ -32,6 +32,7 @@ fn defaults_match_the_documented_values() {
     assert_eq!(
         config.ops,
         OpsSection {
+            bind: std::net::IpAddr::from([0, 0, 0, 0]),
             port: 8090,
             loop_stall_timeout: Duration::from_secs(120)
         }
@@ -152,7 +153,17 @@ fn reads_the_database_url() {
         config.database.url.as_deref(),
         Some("sqlite:///var/lib/schedr/schedr.db")
     );
-    assert_eq!(Config::default().database, DatabaseSection { url: None });
+    assert_eq!(
+        Config::default().database,
+        DatabaseSection {
+            url: None,
+            query_timeout: Duration::from_secs(30)
+        }
+    );
+    let config =
+        parse("[database]\nquery_timeout = \"10s\"\n[ops]\nbind = \"127.0.0.1\"\n").unwrap();
+    assert_eq!(config.database.query_timeout, Duration::from_secs(10));
+    assert_eq!(config.ops.bind, std::net::IpAddr::from([127, 0, 0, 1]));
 }
 
 #[rstest]

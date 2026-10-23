@@ -3,12 +3,12 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.8 done).
+- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.9 done).
 
 ## State (2026-10-22)
 
-- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.8 are done**
-  (2.7 and 2.8 committed, not pushed yet).
+- Branch `main`; the user pushes it to GitHub. **M1 is done; M2 steps 2.1 to 2.9 are done**
+  (2.8 and 2.9 committed, not pushed yet).
   The M2 commits so far:
 
   | Commit | Step |
@@ -22,29 +22,32 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   | `3aea937` | 2.5: only the newest code runs (current hash per root, `root_hashes` table, `CODE_MISMATCH`), rolling upgrades, `dag_file_missing` and "changed after this run started" errors |
   | `6c75475` | 2.6: drain on SIGTERM (`crates/schedr-agent/src/drain.rs`, `[worker] termination_grace_period`, default 30 s) and `schedr workers drain` / `resume` (stored, survives restarts) |
 | `e3f8a3b` | 2.7: mTLS (`crates/schedr-tls`, `[tls]`), the worker's log endpoint (`crates/schedr-agent/src/logs.rs`), the webserver's log proxy (`crates/schedr-api/src/logs.rs`), `schedr tasks logs [-f]`, log retention (`retention.rs`), logs in `<data_dir>/logs/<worker ID>` |
-| (this commit) | 2.8: the memory watchdog (`crates/schedr-agent/src/memory.rs`: cgroup v2 limit, PSS per process group, `[worker] memory_budget` / `memory_check_interval`, SIGKILL over budget → `oom_killed`), peak memory in the API; `setrlimit` moved to M4 |
+| `64a43dc` | 2.8: the memory watchdog (`crates/schedr-agent/src/memory.rs`: cgroup v2 limit, PSS per process group, `[worker] memory_budget` / `memory_check_interval`, SIGKILL over budget → `oom_killed`), peak memory in the API; `setrlimit` moved to M4 |
+| the `M2.9` commit | 2.9: the ops port (`crates/schedr/src/ops.rs`: `/healthz` from loop beats, `/readyz` per part, `/metrics`), metrics with `prometheus-client` (`metrics.rs` in master, agent, api), `[ops] bind`, `[database] query_timeout` |
 
 - CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
   once it is pushed (`gh` isn't installed, so the user looks).
-- The last `make check` passed (2.8): 1085 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 74 Rust and 15 Python integration tests; Rust line coverage 87.8 %
+- The last `make check` passed (2.9): 1103 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 78 Rust and 15 Python integration tests; Rust line coverage 88.1 %
   (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
-- **Open bugs: B4 and B6** (`BUGS.md`). Both are role integration tests failing under disk
-  load; B6 happened three times, each time on the first `make check` of a step (right after
+- **Open bugs: B4, B6 and B7** (`BUGS.md`). B4 and B6 are role integration tests failing
+  under disk load; B6 happened four times, each time on the first `make check` of a step (right after
   the coverage run), never when the suite runs alone. If `make check` fails that way, run
   `make test-integration` alone; if it passes, rerun `make check`, note the occurrence in B6,
-  and go on. Its fix waits for the user to schedule it.
+  and go on. B7 (found in the 2.9 review): a command applied twice if the master stops
+  between applying it and recording the decision. Their fixes wait for the user to schedule
+  them.
 
 ## Next steps
 
 1. **Ask about CI** for the pushed commits.
-2. **M2, step 2.9** (PLAN.md): the ops port on every role (`/healthz`, `/readyz`,
-   `/metrics`, loop-stall detection; also the watchdog's metrics). Start by laying out the
-   decisions (see "How to work"), reading PROJECT.md's "Observability" first.
-3. Then 2.10 (images and Helm: workers as a StatefulSet with a headless
-   Service, `log_address` = the pod's DNS name, certificates with both serverAuth and
-   clientAuth; the user's cluster runs Istio with `REGISTRY_ONLY`), 2.11 (kill tests on kind),
-   2.12 (more wheels).
+2. **M2, step 2.10** (PLAN.md): images and the Helm chart (probes on the ops port 8090:
+   `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
+   (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.
+   Details already decided for it: workers as a StatefulSet with a headless Service,
+   `log_address` = the pod's DNS name, certificates with both serverAuth and clientAuth; the
+   user's cluster runs Istio with `REGISTRY_ONLY`.
+3. Then 2.11 (kill tests on kind), 2.12 (more wheels).
 
 ## How to work with the user
 
@@ -87,7 +90,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B7); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B8); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -127,6 +130,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - **Wheels:** `make smoke` (release build, a few minutes), `make smoke-musl` (musllinux via
   `uvx maturin` + ziglang, smoke-tested on Alpine), or `uv build --wheel` and
   `scripts/smoke-wheel.sh <wheel> <python 3.14>`.
+- **Every role opens the ops port** (`[ops] port`, 8090): tests set it to 0, like the other
+  ports, and read `ops on http://…` from the log.
 - **Roles need `[tls]`:** `app` mode (the default) needs `ca`, `cert`, `key`; set
   `SCHEDR_CONFIG__TLS__MODE=mesh` to run roles by hand without certificates. Standalone never
   uses TLS. Tests and `dags test` set `[worker] log_port = 0`.
@@ -170,3 +175,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+(schedr-3.14.8) ptutak@AMARTUS0039:~/Git/schedr$ claude
+
+Resume this session with:
+claude --resume bac0830e-0f25-4451-abe5-ef2e52b49830

@@ -120,8 +120,8 @@ tasks share the pod's memory):
   (a task's child outliving it), which schedr, not being an init, doesn't. A `.dockerignore`
   keeps the build context to `dist/*.whl`. DAG code from a **git-sync** sidecar
   (`registry.k8s.io/git-sync/git-sync:v4.7.1`) into a shared `emptyDir`, the root renamed in
-  `[dags.roots]` (git-sync's link is called `current`). Probes are TCP checks on the API port
-  until `/healthz` (2.9).
+  `[dags.roots]` (git-sync's link is called `current`). Probes use the ops port (8090):
+  `/readyz` and `/healthz` (2.9).
 - Checked by hand with podman (the image as UID 54321 in group 0 on a volume: the example DAG
   runs through the CLI, a second container on the volume is refused, SIGTERM stops it in 2 s
   with exit code 0, the runs survive a restart), and in CI by the musllinux wheel's smoke test
@@ -1848,6 +1848,66 @@ list) and likewise has no Python.
   - **Labels:** `dag_id` on run-level metrics (bounded, useful for alerts); **never** `task_id`,
     `run_id`, `attempt_id` (unbounded; per-task detail is in the database and the UI).
   - OpenTelemetry (OTLP push, traces of a run across master and workers): possibly later.
+
+**How it is built (M2.9):**
+
+- **The ops server** is a few axum routes on the role's own runtime (no process, thread or
+  dependency of its own), on **`[ops] bind`** (default `0.0.0.0`) : `port`, started **first**
+  in every role, before the database, so `/readyz` answers 503 while the role starts. Port 0
+  picks a free port; the address is logged (`schedr master: ops on http://…`).
+  **Standalone** runs one ops port for all its parts, on its `--listen` address (else
+  127.0.0.1), so a standalone pod can be probed; it listens before the database is
+  migrated. Bodies are plain text: `ok`, or why
+  ("the scheduling loop hasn't turned for 150 s (limit 120 s)", "starting: master").
+- **Liveness** watches loops: the master's scheduling loop and the worker agent's event
+  loop each **beat** on a monotonic clock (a wall clock that steps never makes a loop look
+  stuck) at every turn and at least every 5 s while they wait, never while a turn is stuck
+  (the agent's messages to the master go through an unbounded channel, so a master that
+  stops reading never blocks its loop);
+  `/healthz` fails once a loop hasn't turned for `[ops] loop_stall_timeout`. A loop not
+  started yet counts as starting, so alive. The webserver has no loop: it is alive while it
+  answers. **Readiness**: each part (master, webserver, worker) says when it has started (the
+  master after its schema check, registry restore and gRPC listening; the worker after its
+  journal is recovered).
+- **Query time limits:** **`[database] query_timeout`** (30 s) is Postgres's
+  `statement_timeout` (set with `SET` on each new connection, which poolers such as PgBouncer
+  accept, unlike the `options` startup parameter), the pool's wait for a connection and
+  SQLite's busy timeout; it must be at least 1 ms (Postgres reads 0 as no limit) and shorter
+  than `loop_stall_timeout`, else a startup error (standalone too). Migrations (`schedr db
+  migrate`, standalone's start) run without it: a long migration must finish. A database
+  that answers (with errors, or by cancelling slow statements) or refuses connections keeps
+  every tick short, so liveness doesn't fail for it. A server that goes **silent** mid-query
+  (a network partition) leaves the query with no limit on this side (sqlx has no TCP
+  keepalive setting): the loop stops beating, liveness fails after `loop_stall_timeout`, and
+  **the restart is the recovery** (workers keep running, and master downtime doesn't count
+  against their leases). Not chosen: abandoning a tick after a time limit (a tick cut between
+  applying a command and recording its decision applies it twice, and one cut before
+  delivering a cancel leaves the task running, see B7; a restart reads everything back
+  instead). The gauge refresh only reads, so it is abandoned after half of
+  `loop_stall_timeout`.
+- **Metrics** with **`prometheus-client`** (Prometheus's own Rust client; 2 small new crates
+  in the build): each crate has its metrics (`MasterMetrics`, `AgentMetrics`, `ApiMetrics`)
+  registered in the process's registry under `schedr_`. Counters and histograms are updated
+  where things happen; the gauges that need the database (runs, tasks and workers by state)
+  are refreshed by the master's loop every 15 s with one query of `GROUP BY`s (a state seen
+  before and now empty reads 0 rather than vanishing); log disk usage
+  comes from the hourly retention sweep. **A scrape reads only the registry**: never the
+  database, never the master's lock. Not chosen: hand-written exposition (zero crates, but
+  ~250 lines of format code for no measurable saving: both are an atomic per update and tens
+  of KiB in all); `metrics` + `metrics-exporter-prometheus` (a global recorder, string labels,
+  ~8 crates); OpenTelemetry (the heaviest; for traces, if ever); the `prometheus` crate
+  (stale, global registry); querying the database at scrape time.
+
+  | Role | Metrics |
+  |---|---|
+  | master | `schedr_master_tick_duration_seconds` (histogram), `schedr_runs{state,kind}`, `schedr_runs_finished_total{dag_id,result}`, `schedr_tasks{state}` (unfinished runs; `unschedulable` among them), `schedr_tasks_waiting{reason}` (`no_worker`, `drained`, `schedr_version`, `newest_code`, `rejected`, `no_slot`, at the last assignment pass), `schedr_assignments_total`, `schedr_rejections_total{reason}`, `schedr_attempts_ended_total{status}`, `schedr_parse_jobs_started_total`, `schedr_parse_jobs_finished_total`, `schedr_parse_duration_seconds`, `schedr_commands_total{kind,decision}`, `schedr_command_latency_seconds`, `schedr_workers{state}` |
+  | worker | `schedr_worker_slots`, `schedr_worker_slots_used`, `schedr_worker_attempts_total{status}`, `schedr_worker_watchdog_kills_total`, `schedr_worker_journal_records`, `schedr_worker_log_bytes`, `schedr_worker_log_swept_bytes_total` |
+  | webserver | `schedr_http_requests_total{route,status}` (the route template, never a raw path; `unmatched` for no route; requests the version check refuses included), `schedr_log_proxy_errors_total{kind}` (`missing`, `stale_address`, `unreachable`, `worker_gone`, `no_endpoint`) |
+  | every role | `process_resident_memory_bytes`, `process_cpu_seconds_total`, `process_open_fds`, `process_start_time_seconds` (from `/proc/self` at the scrape), `schedr_build_info{version}` |
+
+  Trimmed for now: a request duration histogram (until the UI), a peak memory histogram (the
+  peak is on every attempt in the API); the metrics of features not built yet (triggers, SSE,
+  secrets, notifications, the watcher host) come with them.
 - **schedr's own logs** go to stdout/stderr (collected by Kubernetes), separate from task logs
   (files on the worker, see Task logs).
   - `[log] format = "auto" | "json" | "text"`: `auto` writes JSON when stdout isn't a terminal
@@ -4646,6 +4706,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | shell quoting | own implementation | must match `shlex.quote` exactly |
 | ignore files | `ignore` | gitignore semantics for `.schedrignore`, directory walking with symbolic links |
 | content hashes | `sha2` | SHA-256 of DAG roots |
+| metrics | `prometheus-client` | Prometheus's own client: a registry per process, typed label sets; see Observability (M2.9) |
 | TLS | `rustls` (aws-lc-rs provider, TLS 1.3), `tokio-rustls`; `hyper-util` and `tower` for the gRPC connector | see Master–worker protocol: mTLS (M2.7); rustls locked at 0.23.45, the newest at least two weeks old |
 | test certificates | `rcgen` (dev only, through `schedr-tls`'s `testing` feature) | a CA and its certificates generated in tests |
 
@@ -4693,7 +4754,10 @@ a real server or talks to Postgres is an integration test.
   comes from another CA refused; the master's certificates rotated without a restart; in
   `schedr-tls`, the handshakes, names, refusals and rotation over loopback); the memory
   watchdog (M2.8: a task allocating past its budget killed alone, `oom_killed`, and its retry
-  succeeding with its peak measured; a parse runner over budget, its file an import error).
+  succeeding with its peak measured; a parse runner over budget, its file an import error);
+  the ops port (M2.9: every role's `/healthz`, `/readyz` and `/metrics` after a run, a master
+  waiting for an unanswering database alive but not ready, standalone's single ops port; a
+  Postgres query past `query_timeout` stopped).
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an

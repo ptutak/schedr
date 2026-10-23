@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+prometheus-client.workspace = true
 croner.workspace = true
 jiff.workspace = true
 prost-types.workspace = true
@@ -23,6 +24,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 hyper-util.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true

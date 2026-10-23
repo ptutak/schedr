@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use schedr_db::instances::{InstanceUpdate, RunTasks};
 use schedr_db::{Database, DbError};
-use schedr_model::{AttemptStatus, RunState, TaskId, TaskInstanceState};
+use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState};
 
+use crate::metrics::MasterMetrics;
 use crate::progress::{AfterAttempt, RunProgress, after_attempt};
 
 #[cfg(test)]
@@ -100,13 +101,35 @@ pub enum TaskRetry {
 #[derive(Debug, Clone)]
 pub struct Execution {
     db: Database,
+    metrics: MasterMetrics,
 }
 
 impl Execution {
     /// Execution over `db`.
     #[must_use]
-    pub const fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database) -> Self {
+        Self {
+            db,
+            metrics: MasterMetrics::default(),
+        }
+    }
+
+    /// Counts finished runs in `metrics`.
+    pub fn set_metrics(&mut self, metrics: MasterMetrics) {
+        self.metrics = metrics;
+    }
+
+    /// Finishes run `run_id` of `dag` with `result`, and counts it.
+    async fn finish(
+        &self,
+        run_id: &str,
+        dag: &DagId,
+        result: RunState,
+        now: Timestamp,
+    ) -> Result<(), ExecutionError> {
+        self.db.finish_run(run_id, result, now).await?;
+        self.metrics.run_finished(dag.as_str(), &result);
+        Ok(())
     }
 
     /// Creates the task instances of runs that started: empty tasks are completed, tasks with
@@ -135,7 +158,7 @@ impl Execution {
                 .update_instances(&run.run_id, &outcomes, now)
                 .await?;
             if let Some(result) = progress.result() {
-                self.db.finish_run(&run.run_id, result, now).await?;
+                self.finish(&run.run_id, &run.dag.id, result, now).await?;
             }
             prepared.push(run.run_id);
         }
@@ -249,7 +272,8 @@ impl Execution {
         }
         self.db.request_cancel(run_id, now).await?;
         if run.state == RunState::Queued {
-            self.db.finish_run(run_id, RunState::Cancelled, now).await?;
+            self.finish(run_id, &run.dag.id, RunState::Cancelled, now)
+                .await?;
             return Ok(Cancelled {
                 running: Vec::new(),
                 run_result: Some(RunState::Cancelled),
@@ -261,7 +285,7 @@ impl Execution {
         self.db.update_instances(run_id, &updates, now).await?;
         let run_result = progress.result();
         if let Some(result) = run_result {
-            self.db.finish_run(run_id, result, now).await?;
+            self.finish(run_id, &run.dag.id, result, now).await?;
         }
         Ok(Cancelled {
             running,
@@ -402,7 +426,7 @@ impl Execution {
         self.db.update_instances(run_id, &updates, now).await?;
         let result = progress.result();
         if let Some(result) = result {
-            self.db.finish_run(run_id, result, now).await?;
+            self.finish(run_id, &run.dag.id, result, now).await?;
         }
         Ok(result)
     }

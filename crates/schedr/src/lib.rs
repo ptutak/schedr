@@ -17,6 +17,7 @@ pub mod client;
 pub mod interpreter;
 pub mod local;
 pub mod logging;
+pub mod ops;
 pub mod roles;
 pub mod standalone;
 pub mod times;

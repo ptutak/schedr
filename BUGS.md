@@ -5,9 +5,24 @@ A fixed bug is removed in the commit that fixes it, together with a test that wo
 caught it; git history keeps the record. Finding a bug doesn't mean fixing it at once: it
 is logged here and its fix scheduled with the user. Not part of the documentation site.
 
+## B7: a command can be applied twice when its decision isn't stored
+
+- **Seen:** 2026-10-23, in the M2.9 review (by reading the code, not in a run).
+- **What:** the master applies a command (e.g. `trigger_run` inserts the run) and then marks
+  it decided (`decide_command`) in a separate statement. If the master crashes, or the
+  database fails, between the two, the command is still `pending` and the next tick applies
+  it again: a second manual run, a second cancel. Likewise a tick that ends between storing a
+  cancel (`cancel_requested_at`) and delivering `CancelAttempt` leaves the task running until
+  its worker reconnects.
+- **Next:** apply and decide in one transaction (the scheduler's and dispatcher's writes
+  inside it), and resend the `CancelAttempt` of tasks marked for cancel on every tick (not
+  only on reconnect). M2.9 decided not to abandon slow ticks partly because of this.
+
 ## B6: role integration tests fail under disk load inside `make check`
 
-- **Seen:** 2026-10-22, three times (M2.4, M2.5, M2.6): the first `make check` of a step failed 2–7
+- **Seen:** 2026-10-22, three times (M2.4, M2.5, M2.6), and 2026-10-23 once (M2.9: 4 tests,
+  "slow statement" warnings, a worker `lost` under a 4 s lease; all 78 passed in the next
+  `make check`): the first `make check` of a step failed 2–7
   `schedr::roles` tests at once, old and new alike ("waited too long for …", a worker found
   `lost` instead of `active`), with Postgres statements taking 3–11 s and SQLite reporting
   "database is locked". `make test-integration` on its own passed right after, twice each

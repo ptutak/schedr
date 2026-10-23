@@ -15,6 +15,7 @@ use serde_json::json;
 
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
 use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
+use crate::metrics::{CommandLabels, MasterMetrics};
 use crate::scheduler::{Scheduler, SchedulerError};
 
 #[cfg(test)]
@@ -65,13 +66,22 @@ enum Outcome {
 #[derive(Debug, Clone)]
 pub struct Commander {
     db: Database,
+    metrics: MasterMetrics,
 }
 
 impl Commander {
     /// A commander over `db`.
     #[must_use]
-    pub const fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database) -> Self {
+        Self {
+            db,
+            metrics: MasterMetrics::default(),
+        }
+    }
+
+    /// Counts decisions and their latency in `metrics`.
+    pub fn set_metrics(&mut self, metrics: MasterMetrics) {
+        self.metrics = metrics;
     }
 
     /// Applies every pending command, oldest first.
@@ -98,6 +108,7 @@ impl Commander {
             self.db
                 .decide_command(&pending.id, status, reason.as_deref(), result.as_ref(), now)
                 .await?;
+            self.count(&pending, status, now);
             applied.decided.push(Decided {
                 id: pending.id,
                 status,
@@ -106,6 +117,24 @@ impl Commander {
             });
         }
         Ok(applied)
+    }
+
+    fn count(&self, pending: &PendingCommand, status: CommandStatus, now: Timestamp) {
+        let kind = pending.command.as_ref().map_or("unreadable", Command::kind);
+        self.metrics
+            .commands
+            .get_or_create(&CommandLabels {
+                kind: kind.to_owned(),
+                decision: match status {
+                    CommandStatus::Applied => "applied",
+                    CommandStatus::Rejected => "rejected",
+                    CommandStatus::Pending => "pending",
+                }
+                .to_owned(),
+            })
+            .inc();
+        let waited = now.duration_since(pending.requested_at).as_secs_f64();
+        self.metrics.command_latency.observe(waited.max(0.0));
     }
 
     async fn apply(

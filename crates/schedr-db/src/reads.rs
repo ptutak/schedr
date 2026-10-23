@@ -12,6 +12,17 @@ use crate::query::{db_time, from_name, on_pool, optional_time, parse_time, sql};
 #[cfg(test)]
 mod tests;
 
+/// How many runs, tasks and workers are in each state (the master's gauges).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StateCounts {
+    /// Runs by state and kind: `(state, kind, count)`.
+    pub runs: Vec<(String, String, i64)>,
+    /// Task instances of unfinished runs, by state.
+    pub tasks: Vec<(String, i64)>,
+    /// Workers in the registry, by state.
+    pub workers: Vec<(String, i64)>,
+}
+
 /// The most runs one list returns.
 pub const MAX_RUNS: u32 = 500;
 
@@ -212,6 +223,35 @@ impl Database {
                 .await?
         });
         Ok(hashes)
+    }
+
+    /// How many runs (by state and kind), task instances of unfinished runs and workers (by
+    /// state) there are.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a query fails.
+    pub async fn state_counts(&self) -> Result<StateCounts, DbError> {
+        const RUNS: &str =
+            "SELECT state, kind, COUNT(*) FROM runs GROUP BY state, kind ORDER BY state, kind";
+        const TASKS: &str = "SELECT t.state, COUNT(*) FROM task_instances t \
+            JOIN runs r ON r.id = t.run_id WHERE r.state IN ('queued', 'running') \
+            GROUP BY t.state ORDER BY t.state";
+        const WORKERS: &str = "SELECT state, COUNT(*) FROM workers GROUP BY state ORDER BY state";
+        let (runs, tasks, workers) = on_pool!(self, |pool, backend| {
+            (
+                sqlx::query_as(sql(backend, RUNS)).fetch_all(pool).await?,
+                sqlx::query_as(sql(backend, TASKS)).fetch_all(pool).await?,
+                sqlx::query_as(sql(backend, WORKERS))
+                    .fetch_all(pool)
+                    .await?,
+            )
+        });
+        Ok(StateCounts {
+            runs,
+            tasks,
+            workers,
+        })
     }
 
     /// The attempts of a run's task, oldest first.

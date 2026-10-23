@@ -11,6 +11,7 @@ use utoipa::OpenApi;
 
 pub mod error;
 pub mod logs;
+pub mod metrics;
 pub mod routes;
 pub mod state;
 pub mod version;
@@ -109,6 +110,11 @@ pub fn router(state: ApiState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             version::versions,
+        ))
+        // Outside the version check, so the requests it refuses are counted too.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            metrics::count_requests,
         ))
         .with_state(state)
 }

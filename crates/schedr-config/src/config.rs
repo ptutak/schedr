@@ -201,13 +201,27 @@ impl Default for LogSection {
 }
 
 /// `[database]`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseSection {
     /// The connection URL (`sqlite:...` or `postgres://...`). A URL with a password must come
     /// from `SCHEDR_CONFIG__DATABASE__URL`, never the file (see PROJECT.md, Configuration:
     /// secrets).
     pub url: Option<String>,
+    /// The longest a query (or waiting for a connection) may take; shorter than `[ops]
+    /// loop_stall_timeout`, so one hung query doesn't look like a stuck loop.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub query_timeout: Duration,
+}
+
+impl Default for DatabaseSection {
+    /// No URL, queries limited to 30 s.
+    fn default() -> Self {
+        Self {
+            url: None,
+            query_timeout: Duration::from_secs(30),
+        }
+    }
 }
 
 /// Whether a URL has a password in its user-info part (`scheme://user:password@host`).
@@ -226,6 +240,9 @@ pub fn url_has_password(url: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpsSection {
+    /// The address the ops port listens on (all interfaces by default; `schedr standalone`
+    /// uses its `--listen` address, else 127.0.0.1).
+    pub bind: IpAddr,
     /// The plain-HTTP port for `/healthz`, `/readyz` and `/metrics`.
     pub port: u16,
     /// The master's liveness fails when its scheduling loop hasn't started an iteration for
@@ -235,9 +252,10 @@ pub struct OpsSection {
 }
 
 impl Default for OpsSection {
-    /// Port 8090 and a 2 minute loop stall timeout.
+    /// Port 8090 of every interface and a 2 minute loop stall timeout.
     fn default() -> Self {
         Self {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8090,
             loop_stall_timeout: Duration::from_secs(120),
         }

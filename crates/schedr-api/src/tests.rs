@@ -91,3 +91,31 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
         ]
     );
 }
+
+#[tokio::test]
+async fn requests_are_counted_by_route_template_and_status() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let metrics = metrics::ApiMetrics::default();
+    let app = router(ApiState::new(db, None).with_metrics(metrics.clone()));
+    call(&app, "/api/v1/dags", None).await;
+    call(&app, "/api/v1/dags/ghost", None).await;
+    call(&app, "/api/v1/dags/other", None).await;
+    let count = |route: &str, status: u16| {
+        metrics
+            .requests
+            .get_or_create(&metrics::RequestLabels {
+                route: route.to_owned(),
+                status,
+            })
+            .get()
+    };
+    assert_eq!(count("/api/v1/dags", 200), 1);
+    // By template: the IDs in paths never become labels.
+    assert_eq!(count("/api/v1/dags/{dag_id}", 404), 2);
+    // A client of another major version is refused, and counted.
+    call(&app, "/api/v1/dags", Some("99.0.0")).await;
+    assert_eq!(count("/api/v1/dags", 400), 1);
+    call(&app, "/nowhere", None).await;
+    assert_eq!(count("unmatched", 404), 1);
+}

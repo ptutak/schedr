@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+prometheus-client.workspace = true
 axum.workspace = true
 jiff.workspace = true
 reqwest.workspace = true

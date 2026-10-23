@@ -27,6 +27,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
 ignore = "0.4.33"
 jiff = { version = "0.2.38", features = ["serde", "tzdb-bundle-always"] }
+prometheus-client = "0.25.1"
 prost = "0.14.4"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "system-proxy"] }
 rustix = { version = "1.1.5", features = ["fs", "param", "process"] }

@@ -27,6 +27,7 @@ use schedr_model::SchedrVersion;
 use schedr_model::runner::ParsedFile;
 
 use crate::catalog::{self, Source};
+use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{ParseAssignment, ParseJobs, ParseKey};
 use crate::validate::validate_files;
 
@@ -78,6 +79,11 @@ struct Current {
 }
 
 impl Discovery {
+    /// Counts parse jobs in `metrics`.
+    pub fn set_metrics(&mut self, metrics: MasterMetrics) {
+        self.jobs.set_metrics(metrics);
+    }
+
     /// Discovery over a database, checking DAG JSON for a master of version `master`.
     #[must_use]
     pub const fn new(db: Database, master: SchedrVersion, jobs: ParseJobs) -> Self {

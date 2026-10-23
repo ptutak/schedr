@@ -44,6 +44,7 @@ async fn commands_wait_as_pending_oldest_first() {
     assert_eq!(ids, [first.as_str(), second.as_str()]);
     assert_eq!(pending[1].command, Ok(pause()));
     assert_eq!(pending[1].requested_by, "anna");
+    assert_eq!(pending[0].requested_at, ts("2026-10-21T08:00:00Z"));
     let record = db.command(&second).await.unwrap().unwrap();
     assert_eq!(
         (record.kind.as_str(), record.status, record.decided_at),

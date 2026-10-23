@@ -58,6 +58,8 @@ pub struct PendingCommand {
     pub command: Result<Command, String>,
     /// Who asked for it.
     pub requested_by: String,
+    /// When.
+    pub requested_at: Timestamp,
 }
 
 /// A command row, as the CLI and the UI read it.
@@ -155,21 +157,24 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the query fails.
     pub async fn pending_commands(&self) -> Result<Vec<PendingCommand>, DbError> {
-        const PENDING: &str = "SELECT id{text}, payload{text}, requested_by FROM commands \
-            WHERE status = 'pending' ORDER BY requested_at, id";
-        let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
+        const PENDING: &str = "SELECT id{text}, payload{text}, requested_by, \
+            {ts<}requested_at{>ts} FROM commands WHERE status = 'pending' \
+            ORDER BY requested_at, id";
+        let rows: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, PENDING))
                 .fetch_all(pool)
                 .await?
         });
-        Ok(rows
-            .into_iter()
-            .map(|(id, payload, requested_by)| PendingCommand {
-                id,
-                command: serde_json::from_str(&payload).map_err(|e| e.to_string()),
-                requested_by,
+        rows.into_iter()
+            .map(|(id, payload, requested_by, requested_at)| {
+                Ok(PendingCommand {
+                    id,
+                    command: serde_json::from_str(&payload).map_err(|e| e.to_string()),
+                    requested_by,
+                    requested_at: parse_time("commands.requested_at", &requested_at)?,
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// Decides a pending command: `applied` with its result, or `rejected` with a reason.

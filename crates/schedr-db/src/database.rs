@@ -1,9 +1,10 @@
 //! A connection pool to the schedr database, and schema migration and checks.
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use sqlx::migrate::MigrateError;
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use crate::backend::{Backend, UnsupportedUrl};
@@ -11,6 +12,9 @@ use crate::status::SchemaStatus;
 
 #[cfg(test)]
 mod tests;
+
+/// The longest a query may take by default (`[database] query_timeout`).
+pub const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Why a database operation failed.
 #[derive(Debug, thiserror::Error)]
@@ -60,19 +64,57 @@ impl Database {
     /// Returns [`DbError::UnsupportedUrl`] for an unknown scheme, or [`DbError::Sqlx`] if the
     /// URL is malformed or the connection fails.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
+        Self::open(url, None).await
+    }
+
+    /// Connects to the database at `url`, no query (or wait for a connection) taking longer
+    /// than `query_timeout`: Postgres's `statement_timeout` (set on each new connection, which
+    /// connection poolers such as `PgBouncer` accept), SQLite's busy timeout. The roles use it;
+    /// migrations don't (a long migration must finish).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`].
+    pub async fn connect_with_timeout(url: &str, query_timeout: Duration) -> Result<Self, DbError> {
+        Self::open(url, Some(query_timeout)).await
+    }
+
+    async fn open(url: &str, query_timeout: Option<Duration>) -> Result<Self, DbError> {
+        // Without a limit, sqlx's default wait for a connection.
+        let acquire = query_timeout.unwrap_or(Duration::from_secs(30));
         match Backend::from_url(url)? {
             Backend::Sqlite => {
-                let options = SqliteConnectOptions::from_str(url)?
+                let mut options = SqliteConnectOptions::from_str(url)?
                     .create_if_missing(true)
                     .foreign_keys(true);
+                if let Some(timeout) = query_timeout {
+                    options = options.busy_timeout(timeout);
+                }
                 let max_connections = if url.contains(":memory:") { 1 } else { 8 };
                 let pool = SqlitePoolOptions::new()
                     .max_connections(max_connections)
+                    .acquire_timeout(acquire)
                     .connect_with(options)
                     .await?;
                 Ok(Self::Sqlite(pool))
             }
-            Backend::Postgres => Ok(Self::Postgres(PgPoolOptions::new().connect(url).await?)),
+            Backend::Postgres => {
+                let mut pool = PgPoolOptions::new().acquire_timeout(acquire);
+                if let Some(timeout) = query_timeout {
+                    let set = format!("SET statement_timeout = {}", timeout.as_millis());
+                    pool = pool.after_connect(move |connection, _| {
+                        let set = set.clone();
+                        Box::pin(async move {
+                            sqlx::Executor::execute(connection, sqlx::AssertSqlSafe(set))
+                                .await
+                                .map(|_| ())
+                        })
+                    });
+                }
+                Ok(Self::Postgres(
+                    pool.connect_with(PgConnectOptions::from_str(url)?).await?,
+                ))
+            }
         }
     }
 

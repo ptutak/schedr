@@ -13,6 +13,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
+use prometheus_client::metrics::counter::Counter;
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
 use tokio::net::UnixStream;
 
@@ -212,6 +213,8 @@ pub struct ProcessParseRunner {
     pub process: ProcessSpec,
     /// How the memory watchdog watches it (each runner, like a task).
     pub memory: MemoryWatch,
+    /// Where the watchdog's kills are counted.
+    pub kills: Counter,
 }
 
 /// A parse runner that connected and got its request.
@@ -254,7 +257,13 @@ impl ParseRunner for ProcessParseRunner {
         let mut runner = start_runner(&self.process, RunnerMode::Parse, |pgid| {
             // Told through `seen`, read when the runner's connection breaks.
             let (killed, _) = tokio::sync::oneshot::channel();
-            watching = Some(watch_group(self.memory.clone(), pgid, seen.clone(), killed));
+            watching = Some(watch_group(
+                self.memory.clone(),
+                pgid,
+                seen.clone(),
+                killed,
+                self.kills.clone(),
+            ));
         })
         .await
         .map_err(|e| match e {

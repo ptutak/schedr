@@ -558,3 +558,28 @@ async fn a_burst_of_commands_is_taken_with_its_first_notification() {
         tokio::time::timeout(std::time::Duration::from_millis(300), notifications.next()).await;
     assert!(nothing_left.is_err(), "no notification should be left");
 }
+
+#[tokio::test]
+async fn a_query_past_the_query_timeout_is_stopped() {
+    let url = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect("SCHEDR_TEST_POSTGRES_URL");
+    let db = Database::connect_with_timeout(&url, std::time::Duration::from_millis(300))
+        .await
+        .unwrap();
+    let Database::Postgres(pool) = &db else {
+        panic!("expected Postgres")
+    };
+    let error = sqlx::query("SELECT pg_sleep(5)")
+        .execute(pool)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("statement timeout"), "{error}");
+}
+
+#[tokio::test]
+async fn states_are_counted_on_postgres() {
+    let db = fresh().await;
+    assert_eq!(
+        db.state_counts().await.unwrap(),
+        schedr_db::reads::StateCounts::default()
+    );
+}

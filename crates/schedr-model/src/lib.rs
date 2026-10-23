@@ -4,6 +4,7 @@
 //! PROJECT.md, Rust/Python integration: shared model and schemas). The Python package writes
 //! DAG JSON by hand-written code that is validated against the schema generated from here.
 
+pub mod beat;
 pub mod commands;
 pub mod dag;
 pub mod ids;

@@ -18,17 +18,22 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::ops::{Health, Ops, Starting, ops_line, serve_ops};
+use prometheus_client::registry::Registry;
 use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
 use schedr_agent::memory::{MIN_BUDGET, MemoryWatch, budget, cgroup_limit, show_size};
+use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::{LogRetention, sweep_logs};
 use schedr_api::logs::HttpLogSource;
+use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
 use schedr_config::{Config, TlsMode};
 use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
+use schedr_master::metrics::MasterMetrics;
 use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
 use schedr_master::service::Hub;
 use schedr_proto::pb::master_client::MasterClient;
@@ -322,6 +327,7 @@ pub async fn serve_master(
     tick: Duration,
     listener: TcpListener,
     tls: Option<Tls>,
+    observed: Observed<'_, MasterMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     let connections = incoming(listener, tls, Protocol::Grpc)
@@ -333,7 +339,9 @@ pub async fn serve_master(
             None
         }
     };
-    let hub = Hub::new(MasterCore::new(db, settings));
+    let hub = Hub::new(MasterCore::new(db, settings).with_metrics(observed.metrics))
+        .with_refresh_limit(observed.health.stall() / 2);
+    observed.health.watch_loop("scheduling loop", hub.beat());
     let restored = hub.restore().await.map_err(|e| match e {
         CoreError::Db(db) => AppError::Db(db),
         other => AppError::BadArgument(format!("can't read the worker registry: {other}")),
@@ -344,6 +352,7 @@ pub async fn serve_master(
             "workers restored as disconnected; their leases start now"
         );
     }
+    observed.ready.ready();
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
         .serve_with_incoming_shutdown(connections, until(stop.clone()));
@@ -372,14 +381,29 @@ pub async fn serve_api(
     identity_header: Option<String>,
     listener: TcpListener,
     tls: Option<Tls>,
+    observed: Observed<'_, ApiMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
-    let state =
-        ApiState::new(db, identity_header).with_logs(std::sync::Arc::new(HttpLogSource::new(tls)));
+    let state = ApiState::new(db, identity_header)
+        .with_logs(std::sync::Arc::new(HttpLogSource::new(tls)))
+        .with_metrics(observed.metrics);
+    observed.ready.ready();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(until(stop))
         .await
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
+}
+
+/// How a part of a role is observed: its metrics (registered by the caller), the health it
+/// reports its loops to, and the readiness it sets once started.
+#[derive(Debug)]
+pub struct Observed<'a, M> {
+    /// The part's metrics.
+    pub metrics: M,
+    /// The role's health.
+    pub health: &'a Health,
+    /// The part's readiness.
+    pub ready: Starting,
 }
 
 /// How a worker reaches the master and serves its logs.
@@ -402,6 +426,7 @@ pub async fn run_worker(
     agent: AgentSettings,
     parse_file_timeout: Duration,
     links: WorkerLinks,
+    observed: Observed<'_, AgentMetrics>,
     stop: watch::Receiver<u32>,
 ) {
     let WorkerLinks {
@@ -431,13 +456,18 @@ pub async fn run_worker(
         endpoint.log_dir,
         endpoint.journal,
         retention,
+        observed.metrics.clone(),
         until(finished),
     ));
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
         parse_file_timeout,
+        metrics: observed.metrics.clone(),
     };
-    let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string());
+    let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string())
+        .with_metrics(observed.metrics);
+    observed.health.watch_loop("worker agent", agent.beat());
+    observed.ready.ready();
     agent
         .run(
             move || {
@@ -471,7 +501,7 @@ pub async fn run_worker(
 /// schema is outdated.
 pub async fn open_database(config: &Config, role: &str) -> Result<Database, AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
-    let db = Database::connect(url).await?;
+    let db = Database::connect_with_timeout(url, config.database.query_timeout).await?;
     if db.backend() == Backend::Sqlite {
         tracing::warn!(
             "schedr {role} on SQLite: every role must run on this host, on a local disk; \
@@ -573,6 +603,13 @@ pub fn stop_on_signal() -> watch::Receiver<u32> {
 pub async fn master(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
+    check_timeouts(config)?;
+    let health = Health::new(config.ops.loop_stall_timeout);
+    let ready = health.starting("master");
+    let metrics = MasterMetrics::default();
+    let mut registry = Registry::default();
+    metrics.register(registry.sub_registry_with_prefix("schedr"));
+    start_ops(config, "master", Ops::new(registry, health.clone()), &stop).await?;
     let db = open_database(config, "master").await?;
     let address = SocketAddr::new(config.master.bind, config.master.grpc_port);
     let listener = listen(address).await?;
@@ -588,9 +625,60 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
         config.master.tick_interval,
         listener,
         tls,
+        Observed {
+            metrics,
+            health: &health,
+            ready,
+        },
         stop,
     )
     .await
+}
+
+/// Checks that `[database] query_timeout` is shorter than `[ops] loop_stall_timeout`, so one
+/// hung query doesn't look like a stuck loop.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when it isn't.
+pub fn check_timeouts(config: &Config) -> Result<(), AppError> {
+    // Below 1 ms it would be 0 for Postgres: no limit at all.
+    if config.database.query_timeout >= config.ops.loop_stall_timeout
+        || config.database.query_timeout.as_millis() == 0
+    {
+        return Err(AppError::BadArgument(format!(
+            "[database] query_timeout ({} s) must be at least 1 ms and shorter than [ops] \
+             loop_stall_timeout ({} s)",
+            config.database.query_timeout.as_secs_f64(),
+            config.ops.loop_stall_timeout.as_secs_f64()
+        )));
+    }
+    Ok(())
+}
+
+/// Binds the ops port (`[ops] bind` : `port`) and serves `ops` there until `stop`, logging
+/// the address as `schedr <role>: ops on http://<address>`.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if the address can't be bound.
+pub async fn start_ops(
+    config: &Config,
+    role: &str,
+    ops: Ops,
+    stop: &watch::Receiver<u32>,
+) -> Result<SocketAddr, AppError> {
+    let address = SocketAddr::new(config.ops.bind, config.ops.port);
+    let listener = listen(address).await?;
+    let bound = listener.local_addr().unwrap_or(address);
+    tracing::info!("schedr {role}: {}", ops_line(bound));
+    let stop = stop.clone();
+    tokio::spawn(async move {
+        if let Err(error) = serve_ops(listener, ops, stop).await {
+            tracing::error!(%error, "the ops port failed");
+        }
+    });
+    Ok(bound)
 }
 
 /// How a role's internal links are protected, for its startup line.
@@ -610,6 +698,19 @@ fn links_text(tls: Option<&Tls>) -> &'static str {
 pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
+    check_timeouts(config)?;
+    let health = Health::new(config.ops.loop_stall_timeout);
+    let ready = health.starting("webserver");
+    let metrics = ApiMetrics::default();
+    let mut registry = Registry::default();
+    metrics.register(registry.sub_registry_with_prefix("schedr"));
+    start_ops(
+        config,
+        "webserver",
+        Ops::new(registry, health.clone()),
+        &stop,
+    )
+    .await?;
     let db = open_database(config, "webserver").await?;
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
@@ -627,6 +728,11 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         config.webserver.auth.identity_header.clone(),
         listener,
         tls,
+        Observed {
+            metrics,
+            health: &health,
+            ready,
+        },
         stop,
     )
     .await
@@ -649,6 +755,12 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     })?;
     master_host(&master_url, config.tls.mode)?;
     let tls = role_tls(config)?;
+    let health = Health::new(config.ops.loop_stall_timeout);
+    let ready = health.starting("worker");
+    let metrics = AgentMetrics::default();
+    let mut registry = Registry::default();
+    metrics.register(registry.sub_registry_with_prefix("schedr"));
+    start_ops(config, "worker", Ops::new(registry, health.clone()), &stop).await?;
     let config = role_config(config, env, false)?;
     let data_dir = data_dir(&config, env)?;
     tokio::fs::create_dir_all(&data_dir)
@@ -677,6 +789,11 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         log_listener,
         retention: log_retention(&config),
     };
-    run_worker(agent, config.dags.parse_file_timeout, links, stop).await;
+    let observed = Observed {
+        metrics,
+        health: &health,
+        ready,
+    };
+    run_worker(agent, config.dags.parse_file_timeout, links, observed, stop).await;
     Ok(())
 }

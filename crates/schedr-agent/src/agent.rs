@@ -28,13 +28,15 @@ use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
+use schedr_model::beat::Beat;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
+use schedr_proto::convert::attempt_status_from_proto;
 use schedr_proto::convert::parsed_file_to_proto;
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_proto::pb::{self, master_message, worker_message};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{AttemptSpec, NotRun, Plan, WorkerSetup, failed_before_start, finished, plan};
@@ -44,6 +46,7 @@ use crate::journal::{
 };
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, run_command, run_python};
 use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
+use crate::metrics::AgentMetrics;
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
 use crate::status::StopReason;
@@ -130,6 +133,8 @@ pub struct ProcessExecutor {
     pub setup: WorkerSetup,
     /// How long one file may take to import.
     pub parse_file_timeout: Duration,
+    /// Where the watchdog's kills are counted.
+    pub metrics: AgentMetrics,
 }
 
 impl Executor for ProcessExecutor {
@@ -163,6 +168,7 @@ impl Executor for ProcessExecutor {
                 pid,
                 seen.clone(),
                 killed_tx,
+                self.metrics.watchdog_kills.clone(),
             ));
             match process_identity(pid) {
                 Ok(identity) => spawned(identity),
@@ -212,6 +218,7 @@ impl Executor for ProcessExecutor {
                 max_output_size: 64 * 1024,
             },
             memory: self.setup.memory.clone(),
+            kills: self.metrics.watchdog_kills.clone(),
         };
         let request = ParseRequest {
             root,
@@ -236,6 +243,9 @@ pub fn with_memory(finished: &mut pb::Finished, seen: MemorySeen, budget: Option
             ErrorSummary::json(MEMORY_EXCEPTION, &over_budget_message(budget, used)).into_bytes();
     }
 }
+
+/// How often the agent's loop beats at least (liveness, see [`Agent::beat`]).
+pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The exception named in the error summary of an attempt killed over its memory budget.
 pub const MEMORY_EXCEPTION: &str = "MemoryBudgetExceeded";
@@ -285,6 +295,9 @@ pub struct Agent<E> {
     shutdown: Option<watch::Receiver<u32>>,
     /// The drain, once shutdown was asked for.
     drain: Option<Drain>,
+    /// When the agent's event loop last turned (the worker's liveness).
+    beat: Beat,
+    metrics: AgentMetrics,
 }
 
 impl<E: Executor> Agent<E> {
@@ -314,7 +327,34 @@ impl<E: Executor> Agent<E> {
             registered: false,
             shutdown: None,
             drain: None,
+            beat: Beat::default(),
+            metrics: AgentMetrics::default(),
         }
+        .with_metrics(AgentMetrics::default())
+    }
+
+    /// The agent recording its metrics in `metrics` (registered by the caller).
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: AgentMetrics) -> Self {
+        metrics.slots.set(i64::from(self.settings.slots));
+        self.metrics = metrics;
+        self
+    }
+
+    /// When the agent's event loop last turned: at least every [`ALIVE_INTERVAL`] whether or
+    /// not the master is reachable (it is the agent's own health).
+    #[must_use]
+    pub fn beat(&self) -> Beat {
+        self.beat.clone()
+    }
+
+    /// The loop is alive: beat, and update the gauges of slots and the journal.
+    fn alive(&self) {
+        self.beat.beat();
+        let running = i64::try_from(self.running.len()).unwrap_or(i64::MAX);
+        let unacked = i64::try_from(self.unacked.len()).unwrap_or(i64::MAX);
+        self.metrics.slots_used.set(running);
+        self.metrics.journal_records.set(running + unacked);
     }
 
     /// The attempts running now.
@@ -377,8 +417,10 @@ impl<E: Executor> Agent<E> {
     async fn offline<T>(&mut self, work: impl Future<Output = T>) -> Option<T> {
         tokio::pin!(work);
         let mut tick = tokio::time::interval(DRAIN_TICK);
+        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
         loop {
             tokio::select! {
+                _ = alive.tick() => self.alive(),
                 out = &mut work => return Some(out),
                 Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
                 count = next_request(&mut self.shutdown) => {
@@ -548,7 +590,9 @@ impl<E: Executor> Agent<E> {
     /// One session with the master: register, then handle messages until the connection ends.
     pub async fn session(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
         let roots = self.hashes().await;
-        let (to_master, outbound) = mpsc::channel::<pb::WorkerMessage>(1024);
+        // Unbounded: the loop never waits on the master (its liveness is the agent's own); the
+        // messages are few and small (heartbeats, results, reports).
+        let (to_master, outbound) = mpsc::unbounded_channel::<pb::WorkerMessage>();
         let journal = self.journal_entries();
         let register = pb::Register {
             worker_id: self.settings.worker_id.clone(),
@@ -564,35 +608,33 @@ impl<E: Executor> Agent<E> {
         };
         if to_master
             .send(wrap(worker_message::Message::Register(register)))
-            .await
             .is_err()
         {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
-        let mut inbound = match client.control(ReceiverStream::new(outbound)).await {
+        let mut inbound = match client.control(UnboundedReceiverStream::new(outbound)).await {
             Ok(response) => response.into_inner(),
             Err(status) => return SessionEnd::Lost(status.to_string()),
         };
         if self.drain.is_some() {
-            let _ = to_master
-                .send(wrap(worker_message::Message::Draining(pb::Draining {})))
-                .await;
+            let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
         }
         let mut heartbeat = tokio::time::interval(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
         let mut tick = tokio::time::interval(DRAIN_TICK);
+        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
         loop {
             tokio::select! {
                 count = next_request(&mut self.shutdown) => {
                     if self.on_shutdown(count) {
                         let draining = worker_message::Message::Draining(pb::Draining {});
-                        let _ = to_master.send(wrap(draining)).await;
+                        let _ = to_master.send(wrap(draining));
                     }
                 }
                 _ = tick.tick(), if self.drain.is_some() => {
                     if self.drain_step(true) == DrainStep::Finish {
                         let bye = worker_message::Message::Deregister(pb::Deregister {});
-                        let _ = to_master.send(wrap(bye)).await;
+                        let _ = to_master.send(wrap(bye));
                         // Our side ends; the master's ends once it has handled everything.
                         drop(to_master);
                         let _ = tokio::time::timeout(DEREGISTER_WAIT, async {
@@ -618,9 +660,10 @@ impl<E: Executor> Agent<E> {
                         free_slots: self.free_slots(),
                         running_attempt_ids: self.running(),
                     });
-                    let _ = to_master.send(wrap(message)).await;
+                    let _ = to_master.send(wrap(message));
                 }
-                _ = watch.tick() => self.watch(&to_master).await,
+                _ = watch.tick() => self.watch(&to_master),
+                _ = alive.tick() => self.alive(),
             }
         }
     }
@@ -628,7 +671,7 @@ impl<E: Executor> Agent<E> {
     async fn on_master(
         &mut self,
         message: master_message::Message,
-        to_master: &mpsc::Sender<pb::WorkerMessage>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
         client: &mut MasterClient<Channel>,
         heartbeat: &mut tokio::time::Interval,
     ) {
@@ -668,7 +711,7 @@ impl<E: Executor> Agent<E> {
     async fn decide(
         &mut self,
         decision: &pb::JournalDecision,
-        to_master: &mpsc::Sender<pb::WorkerMessage>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
     ) {
         let id = &decision.attempt_id;
         match pb::AttemptDecision::try_from(decision.decision) {
@@ -688,7 +731,7 @@ impl<E: Executor> Agent<E> {
             _ => {
                 if let Some(finished) = self.unacked.get(id) {
                     let message = worker_message::Message::Finished(finished.clone());
-                    let _ = to_master.send(wrap(message)).await;
+                    let _ = to_master.send(wrap(message));
                 }
             }
         }
@@ -697,7 +740,7 @@ impl<E: Executor> Agent<E> {
     async fn assign(
         &mut self,
         assign: pb::AssignTask,
-        to_master: &mpsc::Sender<pb::WorkerMessage>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
         client: &mut MasterClient<Channel>,
     ) {
         let reject = |reason: pb::RejectReason, detail: String| {
@@ -718,16 +761,14 @@ impl<E: Executor> Agent<E> {
             return;
         }
         if let Some((reason, detail)) = self.cannot_take() {
-            let _ = to_master.send(reject(reason, detail.to_owned())).await;
+            let _ = to_master.send(reject(reason, detail.to_owned()));
             return;
         }
         let external = if assign.inputs_external {
             match fetch_inputs(client, &assign.attempt_id).await {
                 Ok(bytes) => Some(bytes),
                 Err(error) => {
-                    let _ = to_master
-                        .send(reject(pb::RejectReason::InvalidSpecification, error))
-                        .await;
+                    let _ = to_master.send(reject(pb::RejectReason::InvalidSpecification, error));
                     return;
                 }
             }
@@ -737,19 +778,15 @@ impl<E: Executor> Agent<E> {
         let spec = match AttemptSpec::from_assign(&assign, external.as_deref()) {
             Ok(spec) => spec,
             Err(error) => {
-                let _ = to_master
-                    .send(reject(
-                        pb::RejectReason::InvalidSpecification,
-                        error.to_string(),
-                    ))
-                    .await;
+                let _ = to_master.send(reject(
+                    pb::RejectReason::InvalidSpecification,
+                    error.to_string(),
+                ));
                 return;
             }
         };
         if let Some(detail) = self.code_mismatch(&assign) {
-            let _ = to_master
-                .send(reject(pb::RejectReason::CodeMismatch, detail))
-                .await;
+            let _ = to_master.send(reject(pb::RejectReason::CodeMismatch, detail));
             return;
         }
         let planned = self.plan(&spec, &assign);
@@ -762,9 +799,7 @@ impl<E: Executor> Agent<E> {
                 "can't write the journal in `{}`: {error}; check the worker's data directory",
                 self.journal.dir().display()
             );
-            let _ = to_master
-                .send(reject(pb::RejectReason::DiskNotWritable, detail))
-                .await;
+            let _ = to_master.send(reject(pb::RejectReason::DiskNotWritable, detail));
             return;
         }
         self.remember_code(&assign, &spec.attempt_id);
@@ -775,17 +810,17 @@ impl<E: Executor> Agent<E> {
         match planned {
             Err(NotRun::Rejected { reason, detail }) => {
                 self.code_hashes.remove(&spec.attempt_id);
-                let _ = to_master.send(reject(reason, detail)).await;
+                let _ = to_master.send(reject(reason, detail));
             }
             Err(NotRun::Failed { kind, message }) => {
-                let _ = to_master.send(started).await;
+                let _ = to_master.send(started);
                 let failed = failed_before_start(&spec.attempt_id, &kind, &message);
                 let _ = self.done_tx.send(Done::Attempt(failed));
             }
             Ok(plan) => {
                 let (stop, stopped) = oneshot::channel();
                 self.running.insert(spec.attempt_id.clone(), Some(stop));
-                let _ = to_master.send(started).await;
+                let _ = to_master.send(started);
                 self.launch(spec, plan, stopped);
             }
         }
@@ -915,7 +950,10 @@ impl<E: Executor> Agent<E> {
     async fn on_done(
         &mut self,
         done: Done,
-        link: Option<(&mpsc::Sender<pb::WorkerMessage>, &mut MasterClient<Channel>)>,
+        link: Option<(
+            &mpsc::UnboundedSender<pb::WorkerMessage>,
+            &mut MasterClient<Channel>,
+        )>,
     ) {
         match done {
             Done::Spawned {
@@ -930,6 +968,9 @@ impl<E: Executor> Agent<E> {
                 }
             }
             Done::Attempt(mut finished) => {
+                let status = attempt_status_from_proto(finished.status)
+                    .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
+                self.metrics.attempt_ended(&status);
                 if let Some(hash) = self.code_hashes.remove(&finished.attempt_id) {
                     finished.code_hash = hash;
                 }
@@ -951,9 +992,7 @@ impl<E: Executor> Agent<E> {
                 self.unacked
                     .insert(finished.attempt_id.clone(), finished.clone());
                 if let Some((to_master, _)) = link {
-                    let _ = to_master
-                        .send(wrap(worker_message::Message::Finished(finished)))
-                        .await;
+                    let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
                 }
             }
             Done::Parse {
@@ -984,7 +1023,7 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    async fn watch(&mut self, to_master: &mpsc::Sender<pb::WorkerMessage>) {
+    fn watch(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
         for (name, watcher) in &mut self.watchers {
             match watcher.poll(Instant::now()) {
                 Ok(Poll::Changed { hash, .. }) => {
@@ -992,7 +1031,7 @@ impl<E: Executor> Agent<E> {
                         worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
                             root: Some(root_hash(name, &hash)),
                         });
-                    let _ = to_master.send(wrap(changed)).await;
+                    let _ = to_master.send(wrap(changed));
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(root = name.as_str(), %error, "can't scan DAG root"),

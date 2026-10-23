@@ -1,6 +1,8 @@
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use prometheus_client::metrics::counter::Counter;
+
 use super::*;
 
 /// A fake `/proc` with processes `(pid, pgid, smaps_rollup Pss in kB or none, statm resident
@@ -189,12 +191,14 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
     };
     let seen = SharedSeen::default();
     let (killed_tx, killed) = oneshot::channel();
-    let _watching = watch_group(watch.clone(), pgid, seen.clone(), killed_tx);
+    let kills = Counter::default();
+    let _watching = watch_group(watch.clone(), pgid, seen.clone(), killed_tx, kills.clone());
     tokio::time::timeout(Duration::from_secs(5), killed)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(seen.lock().unwrap().over, Some(3000 * 1024));
+    assert_eq!(kills.get(), 1);
 
     let (quiet_tx, quiet) = oneshot::channel();
     let watching = watch_group(
@@ -205,6 +209,7 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
         pgid,
         SharedSeen::default(),
         quiet_tx,
+        Counter::default(),
     );
     drop(watching);
     // Dropped: the sender goes with the aborted task, nothing is ever sent.

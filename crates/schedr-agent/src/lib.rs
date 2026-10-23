@@ -14,6 +14,7 @@ pub mod journal;
 pub mod launch;
 pub mod logs;
 pub mod memory;
+pub mod metrics;
 pub mod output;
 pub mod parse;
 pub mod process;

@@ -7,10 +7,12 @@
 //! PROJECT.md, DAG ID conflicts: no duplicate parsing).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use uuid::Uuid;
+
+use crate::metrics::MasterMetrics;
 
 #[cfg(test)]
 mod tests;
@@ -46,6 +48,8 @@ struct Job {
     id: String,
     worker: Option<(String, Timestamp)>,
     candidates: BTreeSet<String>,
+    /// When it was created (for its duration).
+    created: Instant,
 }
 
 /// The parse jobs not finished yet.
@@ -53,16 +57,23 @@ struct Job {
 pub struct ParseJobs {
     timeout: Duration,
     jobs: BTreeMap<ParseKey, Job>,
+    metrics: MasterMetrics,
 }
 
 impl ParseJobs {
     /// No jobs, with the given job timeout.
     #[must_use]
-    pub const fn new(timeout: Duration) -> Self {
+    pub fn new(timeout: Duration) -> Self {
         Self {
             timeout,
             jobs: BTreeMap::new(),
+            metrics: MasterMetrics::default(),
         }
+    }
+
+    /// Counts jobs and their durations in `metrics`.
+    pub fn set_metrics(&mut self, metrics: MasterMetrics) {
+        self.metrics = metrics;
     }
 
     /// A worker reported a hash with no stored parse: the job is created and given to it,
@@ -73,11 +84,11 @@ impl ParseJobs {
         worker_id: &str,
         now: Timestamp,
     ) -> Option<ParseAssignment> {
-        let job = self.jobs.entry(key.clone()).or_insert_with(|| Job {
-            id: Uuid::now_v7().to_string(),
-            worker: None,
-            candidates: BTreeSet::new(),
-        });
+        let metrics = &self.metrics;
+        let job = self
+            .jobs
+            .entry(key.clone())
+            .or_insert_with(|| new_job(metrics));
         job.candidates.insert(worker_id.to_owned());
         if job.worker.is_some() {
             return None;
@@ -93,17 +104,19 @@ impl ParseJobs {
     /// A worker that takes no parse jobs (draining) reported a hash with no stored parse: the
     /// job exists, for the next worker that reports the hash to take.
     pub fn wait(&mut self, key: ParseKey) {
-        self.jobs.entry(key).or_insert_with(|| Job {
-            id: Uuid::now_v7().to_string(),
-            worker: None,
-            candidates: BTreeSet::new(),
-        });
+        let metrics = &self.metrics;
+        self.jobs.entry(key).or_insert_with(|| new_job(metrics));
     }
 
     /// The parse of `key` was stored (by any worker, under any job): its job is done.
     /// Returns the finished job's ID, if there was one.
     pub fn finish(&mut self, key: &ParseKey) -> Option<String> {
-        self.jobs.remove(key).map(|job| job.id)
+        let job = self.jobs.remove(key)?;
+        self.metrics.parse_jobs_finished.inc();
+        self.metrics
+            .parse_duration
+            .observe(job.created.elapsed().as_secs_f64());
+        Some(job.id)
     }
 
     /// A worker is gone: it is no longer a candidate, and its jobs go to other candidates
@@ -168,5 +181,16 @@ fn assign(key: &ParseKey, job: &mut Job, worker: String, now: Timestamp) -> Pars
         job_id: job.id.clone(),
         worker_id: worker,
         key: key.clone(),
+    }
+}
+
+/// A new job, counted in `metrics`.
+fn new_job(metrics: &MasterMetrics) -> Job {
+    metrics.parse_jobs_started.inc();
+    Job {
+        id: Uuid::now_v7().to_string(),
+        worker: None,
+        candidates: BTreeSet::new(),
+        created: Instant::now(),
     }
 }

@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use schedr_db::DbError;
 use schedr_db::commands::CommandNotifications;
+use schedr_db::{Database, DbError};
+use schedr_model::beat::Beat;
 use schedr_proto::pb::master_server::{Master, MasterServer};
 use schedr_proto::pb::{self, master_message, worker_message};
 use tokio::sync::{Mutex, mpsc};
@@ -20,6 +21,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::core::{CoreError, MasterCore};
 use crate::dispatch::Outgoing;
+use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
 
 #[cfg(test)]
 mod tests;
@@ -38,6 +40,12 @@ pub struct Hub {
     core: Arc<Mutex<MasterCore>>,
     streams: Arc<Mutex<BTreeMap<String, Outbound>>>,
     clock: fn() -> Timestamp,
+    /// When the loop last turned (the master's liveness).
+    beat: Beat,
+    metrics: MasterMetrics,
+    db: Database,
+    /// The longest a gauge refresh may take before it is abandoned.
+    refresh_limit: Duration,
 }
 
 impl Hub {
@@ -51,9 +59,38 @@ impl Hub {
     #[must_use]
     pub fn with_clock(core: MasterCore, clock: fn() -> Timestamp) -> Self {
         Self {
+            beat: Beat::default(),
+            refresh_limit: DEFAULT_REFRESH_LIMIT,
+            metrics: core.metrics().clone(),
+            db: core.db().clone(),
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             clock,
+        }
+    }
+
+    /// The hub abandoning a gauge refresh that takes longer than `limit` (it only reads, so
+    /// abandoning it is safe; a tick is never abandoned: see PROJECT.md, Observability).
+    #[must_use]
+    pub const fn with_refresh_limit(mut self, limit: Duration) -> Self {
+        self.refresh_limit = limit;
+        self
+    }
+
+    /// When the loop last turned: every tick, and at least every [`ALIVE_INTERVAL`] while it
+    /// waits, never while a tick is stuck.
+    #[must_use]
+    pub fn beat(&self) -> Beat {
+        self.beat.clone()
+    }
+
+    /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
+    /// their last values).
+    pub async fn refresh_gauges(&self) {
+        match tokio::time::timeout(self.refresh_limit, self.db.state_counts()).await {
+            Ok(Ok(counts)) => self.metrics.set_counts(&counts),
+            Ok(Err(error)) => tracing::warn!(%error, "can't count runs, tasks and workers"),
+            Err(_) => tracing::warn!("counting runs, tasks and workers took too long; abandoned"),
         }
     }
 
@@ -107,9 +144,14 @@ impl Hub {
             Tick,
             Command,
             NotificationsFailed(DbError),
+            Alive,
+            Refresh,
         }
         let mut ticks = tokio::time::interval(interval);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
+        let mut refresh = tokio::time::interval(GAUGE_REFRESH);
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut paused_until: Option<tokio::time::Instant> = None;
         tokio::pin!(stop);
         loop {
@@ -120,9 +162,17 @@ impl Hub {
                     Ok(()) => Wake::Command,
                     Err(error) => Wake::NotificationsFailed(error),
                 },
+                _ = alive.tick() => Wake::Alive,
+                _ = refresh.tick() => Wake::Refresh,
             };
+            self.beat.beat();
             match wake {
                 Wake::Stop => return,
+                Wake::Alive => continue,
+                Wake::Refresh => {
+                    self.refresh_gauges().await;
+                    continue;
+                }
                 Wake::Command => {
                     paused_until = None;
                     if let Some(notifications) = notifications.as_mut() {
@@ -141,9 +191,13 @@ impl Hub {
                 }
                 Wake::Tick => {}
             }
+            let started = std::time::Instant::now();
             if let Err(error) = self.tick().await {
                 tracing::error!(%error, "master tick failed");
             }
+            self.metrics
+                .tick_duration
+                .observe(started.elapsed().as_secs_f64());
         }
     }
 
@@ -299,6 +353,12 @@ impl Master for Hub {
 
 /// How long the master waits before listening again after notifications failed.
 pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);
+
+/// The longest a gauge refresh may take unless set otherwise.
+pub const DEFAULT_REFRESH_LIMIT: Duration = Duration::from_secs(30);
+
+/// How often the loop beats while it waits between ticks (liveness, see [`Hub::beat`]).
+pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The next command notification, not before `paused_until`; never, without notifications.
 async fn next_command(

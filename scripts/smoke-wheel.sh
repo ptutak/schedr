@@ -69,6 +69,7 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TZ=UTC \
     SCHEDR_CONFIG__WEBSERVER__PORT=0 \
     SCHEDR_CONFIG__MASTER__GRPC_PORT=0 \
     SCHEDR_CONFIG__WORKER__LOG_PORT=0 \
+    SCHEDR_CONFIG__OPS__PORT=0 \
     SCHEDR_CONFIG__WORKER__DATA_DIR="$work/data" \
     "$schedr" standalone >"$work/standalone.log" 2>&1 &
 standalone_pid=$!

@@ -16,17 +16,23 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use prometheus_client::registry::Registry;
 use schedr_agent::agent::AgentSettings;
+use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::LogRetention;
+use schedr_api::metrics::ApiMetrics;
 use schedr_config::Config;
 use schedr_db::Database;
 use schedr_master::core::Settings;
+use schedr_master::metrics::MasterMetrics;
 use tokio::sync::watch;
 
 use crate::app::AppError;
+use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
-    WorkerLinks, agent_settings, data_dir, listen, lock_journal, log_retention, master_settings,
-    memory_text, no_auth_warning, run_worker, serve_api, serve_master, stop_on_signal,
+    Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, listen, lock_journal,
+    log_retention, master_settings, memory_text, no_auth_warning, run_worker, serve_api,
+    serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -45,6 +51,12 @@ pub struct Standalone {
     pub http: SocketAddr,
     /// The worker's log endpoint's address.
     pub logs: SocketAddr,
+    /// The ops port's address.
+    pub ops: SocketAddr,
+    /// How long a loop may go without turning before liveness fails.
+    pub loop_stall_timeout: Duration,
+    /// The longest a database query may take.
+    pub query_timeout: Duration,
     /// What logs the worker keeps.
     pub retention: LogRetention,
     /// The master's timing.
@@ -68,6 +80,8 @@ pub struct Listening {
     pub http: SocketAddr,
     /// The worker's log endpoint's address.
     pub logs: SocketAddr,
+    /// The ops port's address.
+    pub ops: SocketAddr,
 }
 
 /// Reads the standalone setup from the configuration and the environment (`env` gives the
@@ -78,6 +92,7 @@ pub struct Listening {
 /// [`AppError::BadArgument`] when there is no data directory to use, or the DAG interpreter
 /// isn't defined.
 pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalone, AppError> {
+    check_timeouts(config)?;
     let data_dir = data_dir(config, env)?;
     let database_url = config
         .database
@@ -89,6 +104,9 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         grpc: localhost(config.master.grpc_port),
         http: localhost(config.webserver.port),
         logs: localhost(config.worker.log_port),
+        ops: localhost(config.ops.port),
+        loop_stall_timeout: config.ops.loop_stall_timeout,
+        query_timeout: config.database.query_timeout,
         retention: log_retention(config),
         master: master_settings(config),
         tick: config.master.tick_interval,
@@ -118,13 +136,12 @@ pub async fn run(
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
     let _lock = lock_data_dir(&setup.data_dir)?;
     let _journal_lock = lock_journal(&setup.agent)?;
-    let db = Database::connect(&setup.database_url).await?;
-    db.migrate().await?;
-
     let grpc = listen(setup.grpc).await?;
     let http = listen(setup.http).await?;
     let logs = listen(setup.logs).await?;
+    let ops = listen(setup.ops).await?;
     let addresses = Listening {
+        ops: ops.local_addr().map_err(|e| io("ops address", e))?,
         grpc: grpc.local_addr().map_err(|e| io("gRPC address", e))?,
         http: http.local_addr().map_err(|e| io("HTTP address", e))?,
         logs: logs
@@ -137,6 +154,46 @@ pub async fn run(
 
     // The master and the API stop once the worker has drained.
     let (stop, stopped) = watch::channel(0);
+    // One ops port for every part.
+    let health = Health::new(setup.loop_stall_timeout);
+    let (master_metrics, api_metrics, agent_metrics) = (
+        MasterMetrics::default(),
+        ApiMetrics::default(),
+        AgentMetrics::default(),
+    );
+    let mut registry = Registry::default();
+    let schedr = registry.sub_registry_with_prefix("schedr");
+    master_metrics.register(schedr);
+    api_metrics.register(schedr);
+    agent_metrics.register(schedr);
+    let master_observed = Observed {
+        metrics: master_metrics,
+        health: &health,
+        ready: health.starting("master"),
+    };
+    let api_observed = Observed {
+        metrics: api_metrics,
+        health: &health,
+        ready: health.starting("webserver"),
+    };
+    let agent_observed = Observed {
+        metrics: agent_metrics,
+        health: &health,
+        ready: health.starting("worker"),
+    };
+
+    let ops_server = tokio::spawn(serve_ops(
+        ops,
+        Ops::new(registry, health.clone()),
+        stopped.clone(),
+    ));
+    // The ops port answers (`/readyz`: starting) while the database is migrated, without a
+    // statement time limit (a long migration must finish), and then opened with one.
+    Database::connect(&setup.database_url)
+        .await?
+        .migrate()
+        .await?;
+    let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout).await?;
     // Boxed: the roles' futures are large.
     let master = Box::pin(serve_master(
         db.clone(),
@@ -144,6 +201,7 @@ pub async fn run(
         setup.tick,
         grpc,
         None,
+        master_observed,
         stopped.clone(),
     ));
     let api = Box::pin(serve_api(
@@ -151,6 +209,7 @@ pub async fn run(
         setup.identity_header.clone(),
         http,
         None,
+        api_observed,
         stopped.clone(),
     ));
     let links = WorkerLinks {
@@ -160,10 +219,20 @@ pub async fn run(
         retention: setup.retention,
     };
     let worker = Box::pin(async move {
-        run_worker(agent, setup.parse_file_timeout, links, shutdown).await;
+        run_worker(
+            agent,
+            setup.parse_file_timeout,
+            links,
+            agent_observed,
+            shutdown,
+        )
+        .await;
         let _ = stop.send(1);
     });
     let (master, api, ()) = tokio::join!(master, api, worker);
+    if let Ok(Err(error)) = ops_server.await {
+        tracing::warn!(%error, "the ops port failed");
+    }
     master?;
     api
 }
@@ -219,9 +288,10 @@ pub fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File, AppError> {
 #[must_use]
 pub fn banner(listening: Listening, setup: &Standalone) -> String {
     format!(
-        "schedr standalone: API on http://{}, master on {}, data in {}",
+        "schedr standalone: API on http://{}, master on {}, {}, data in {}",
         listening.http,
         listening.grpc,
+        ops_line(listening.ops),
         setup.data_dir.display()
     )
 }
@@ -240,7 +310,9 @@ pub async fn command(
     let stop = stop_on_signal();
     let mut setup = plan(config, env)?;
     if let Some(address) = listen {
+        // Probes and scrapes come from outside the pod too.
         setup.http.set_ip(address);
+        setup.ops.set_ip(address);
     }
     let shown = setup.clone();
     run(

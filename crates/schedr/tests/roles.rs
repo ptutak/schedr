@@ -83,6 +83,8 @@ struct Cluster {
     roles: Vec<Role>,
     /// The CA of `[tls] mode = "app"`; `mesh` mode without one.
     ca: Option<TestCa>,
+    /// Each role's ops address, by name, once it listens.
+    ops: Vec<(&'static str, String)>,
 }
 
 impl Cluster {
@@ -103,6 +105,7 @@ impl Cluster {
              [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
              heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\n\n\
              [webserver]\nbind = \"127.0.0.1\"\nport = 0\n\n\
+             [ops]\nbind = \"127.0.0.1\"\nport = 0\n\n\
              [tls]\nmode = \"mesh\"\n",
             python = python(),
             data = dir.path().join("data").display(),
@@ -115,6 +118,7 @@ impl Cluster {
             grpc_port: None,
             roles: Vec::new(),
             ca: None,
+            ops: Vec::new(),
         }
     }
 
@@ -243,15 +247,24 @@ impl Cluster {
             });
             found.unwrap()
         };
-        match name {
+        let ops = bound("ops on http://");
+        let (grpc_port, api) = match name {
             "master" => {
                 let address = bound("schedr master: gRPC on ");
-                let port = address.rsplit(':').next().unwrap().parse().unwrap();
-                self.grpc_port = Some(port);
+                (
+                    Some(address.rsplit(':').next().unwrap().parse().unwrap()),
+                    None,
+                )
             }
-            "webserver" => self.api = format!("http://{}", bound("API on http://")),
-            _ => {}
+            "webserver" => (None, Some(format!("http://{}", bound("API on http://")))),
+            _ => (None, None),
+        };
+        self.grpc_port = grpc_port.or(self.grpc_port);
+        if let Some(api) = api {
+            self.api = api;
         }
+        self.ops.retain(|(role, _)| *role != name);
+        self.ops.push((name, ops));
     }
 
     fn logs(&self) -> String {
@@ -1345,4 +1358,104 @@ fn a_task_over_its_memory_budget_is_killed_alone_and_retried() {
     assert!(peak > 0 && peak < 100 << 20, "{peak}");
     // The worker itself is still there: only the task was killed.
     assert_eq!(cluster.worker_state("w1").as_deref(), Some("active"));
+}
+
+impl Cluster {
+    /// `GET <path>` on the ops port of the role started as `name`: status and body.
+    fn ops_get(&self, name: &str, path: &str) -> (u16, String) {
+        let address = &self.ops.iter().find(|(role, _)| *role == name).unwrap().1;
+        let output = Command::new("curl")
+            .args([
+                "-s",
+                "-w",
+                "\n%{http_code}",
+                &format!("http://{address}{path}"),
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (body, status) = text.rsplit_once('\n').unwrap_or(("", "0"));
+        (status.parse().unwrap_or(0), body.to_owned())
+    }
+}
+
+#[test]
+fn every_roles_ops_port_answers_and_counts_a_run() {
+    let mut cluster = Cluster::new(None, "100ms");
+    cluster.up();
+    cluster.run_chain();
+    for role in ["master", "webserver", "worker"] {
+        assert_eq!(
+            cluster.ops_get(role, "/healthz"),
+            (200, "ok\n".to_owned()),
+            "{role}"
+        );
+        cluster.wait(&format!("the {role} to be ready"), || {
+            cluster.ops_get(role, "/readyz") == (200, "ok\n".to_owned())
+        });
+        let (status, metrics) = cluster.ops_get(role, "/metrics");
+        assert_eq!(status, 200, "{role}");
+        assert!(
+            metrics.contains("schedr_build_info{version="),
+            "{role}\n{metrics}"
+        );
+        assert!(
+            metrics.contains("process_resident_memory_bytes "),
+            "{role}\n{metrics}"
+        );
+    }
+    let (_, master) = cluster.ops_get("master", "/metrics");
+    for line in [
+        "schedr_runs_finished_total{dag_id=\"chain\",result=\"success\"} 1",
+        "schedr_attempts_ended_total{status=\"success\"} 3",
+        "schedr_assignments_total 3",
+        "schedr_commands_total{kind=\"trigger_run\",decision=\"applied\"} 1",
+    ] {
+        assert!(master.contains(line), "{line}\n{master}");
+    }
+    cluster.wait("the gauges to be refreshed", || {
+        cluster
+            .ops_get("master", "/metrics")
+            .1
+            .contains("schedr_workers{state=\"active\"} 1")
+    });
+    let (_, worker) = cluster.ops_get("worker", "/metrics");
+    for line in [
+        "schedr_worker_attempts_total{status=\"success\"} 3",
+        "schedr_worker_slots 4",
+    ] {
+        assert!(worker.contains(line), "{line}\n{worker}");
+    }
+    let (_, webserver) = cluster.ops_get("webserver", "/metrics");
+    assert!(
+        webserver.contains("schedr_http_requests_total{route=\"/api/v1/dags\",status=\"200\"}"),
+        "{webserver}"
+    );
+}
+
+#[test]
+fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
+    // A "database" that accepts connections and never answers.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let mut cluster = Cluster::new(
+        Some(format!("postgres://schedr@127.0.0.1:{port}/schedr")),
+        "100ms",
+    );
+    // Started under another name: only its ops address is waited for (its gRPC address
+    // isn't logged before the database answers).
+    cluster.start_as(
+        "waiting-master",
+        "master",
+        &[("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "20s")],
+    );
+    assert_eq!(
+        cluster.ops_get("waiting-master", "/healthz"),
+        (200, "ok\n".to_owned())
+    );
+    assert_eq!(
+        cluster.ops_get("waiting-master", "/readyz"),
+        (503, "starting: master\n".to_owned())
+    );
+    drop(silent);
 }

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use prometheus_client::metrics::counter::Counter;
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -197,7 +198,8 @@ impl Drop for GroupWatch {
 }
 
 /// Watches group `pgid` (recording in `seen`) from now until the returned watch is dropped:
-/// over the budget it kills the group at once (SIGKILL) and tells `killed`. Started as soon
+/// over the budget it kills the group at once (SIGKILL), counts it in `kills` and tells
+/// `killed`. Started as soon
 /// as the process is, it covers a runner's start and a stopped task's grace period too.
 #[must_use]
 pub fn watch_group(
@@ -205,6 +207,7 @@ pub fn watch_group(
     pgid: i32,
     seen: SharedSeen,
     killed: oneshot::Sender<()>,
+    kills: Counter,
 ) -> GroupWatch {
     let task = tokio::spawn(async move {
         over_budget(&watch, pgid, &seen).await;
@@ -212,6 +215,7 @@ pub fn watch_group(
             // A group that is gone already is fine.
             let _ = kill_process_group(group, Signal::KILL);
         }
+        kills.inc();
         let _ = killed.send(());
     });
     GroupWatch { task }

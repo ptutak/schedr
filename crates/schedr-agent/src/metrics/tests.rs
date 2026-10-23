@@ -1,0 +1,27 @@
+use prometheus_client::encoding::text::encode;
+use schedr_model::AttemptStatus;
+
+use super::*;
+
+#[test]
+fn every_metric_is_registered_and_attempts_count_by_status() {
+    let metrics = AgentMetrics::default();
+    let mut registry = Registry::with_prefix("schedr");
+    metrics.register(&mut registry);
+    metrics.slots.set(4);
+    metrics.attempt_ended(&AttemptStatus::OomKilled);
+    metrics.watchdog_kills.inc();
+    let mut out = String::new();
+    encode(&mut out, &registry).unwrap();
+    for name in [
+        "schedr_worker_slots 4",
+        "schedr_worker_slots_used 0",
+        "schedr_worker_attempts_total{status=\"oom_killed\"} 1",
+        "schedr_worker_watchdog_kills_total 1",
+        "schedr_worker_journal_records 0",
+        "schedr_worker_log_bytes 0",
+        "schedr_worker_log_swept_bytes_total 0",
+    ] {
+        assert!(out.contains(name), "{name}\n{out}");
+    }
+}

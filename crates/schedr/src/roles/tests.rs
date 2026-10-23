@@ -9,6 +9,8 @@ use super::*;
 
 fn config() -> Config {
     let mut config = Config::default();
+    // Roles started here bind their ops port: a free one.
+    config.ops.port = 0;
     config
         .interpreters
         .insert("python".to_owned(), Interpreter::path("/usr/bin/python3"));
@@ -133,12 +135,18 @@ async fn memory_db() -> Database {
 #[tokio::test]
 async fn the_master_and_the_api_serve_until_stopped() {
     let (stop, stopped) = watch::channel(0);
+    let health = Health::new(Duration::from_secs(120));
     let master = serve_master(
         memory_db().await,
         master_settings(&config()),
         Duration::from_millis(10),
         listen(loopback()).await.unwrap(),
         None,
+        Observed {
+            metrics: MasterMetrics::default(),
+            health: &health,
+            ready: health.starting("master"),
+        },
         stopped.clone(),
     );
     let api = serve_api(
@@ -146,6 +154,11 @@ async fn the_master_and_the_api_serve_until_stopped() {
         None,
         listen(loopback()).await.unwrap(),
         None,
+        Observed {
+            metrics: ApiMetrics::default(),
+            health: &health,
+            ready: health.starting("webserver"),
+        },
         stopped,
     );
     let later = async {
@@ -155,6 +168,9 @@ async fn the_master_and_the_api_serve_until_stopped() {
     let (master, api, ()) = tokio::join!(master, api, later);
     master.unwrap();
     api.unwrap();
+    // Both said they were ready; the master's loop beat.
+    assert_eq!(health.not_ready(), Vec::<&str>::new());
+    assert_eq!(health.stalled(std::time::Instant::now()), None);
 }
 
 #[tokio::test]
@@ -169,7 +185,19 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
         log_listener: listen(loopback()).await.unwrap(),
         retention: log_retention(&config()),
     };
-    let worker = Box::pin(run_worker(agent, Duration::from_secs(1), links, stopped));
+    let health = Health::new(Duration::from_secs(120));
+    let observed = Observed {
+        metrics: AgentMetrics::default(),
+        health: &health,
+        ready: health.starting("worker"),
+    };
+    let worker = Box::pin(run_worker(
+        agent,
+        Duration::from_secs(1),
+        links,
+        observed,
+        stopped,
+    ));
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = stop.send(1);
@@ -432,4 +460,35 @@ fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
         error,
         "[worker] memory_budget 1 KiB is too small for any task: give at least 16 MiB"
     );
+}
+
+#[test]
+fn the_query_timeout_must_be_shorter_than_the_loop_stall_timeout() {
+    let mut config = config();
+    assert!(check_timeouts(&config).is_ok());
+    config.database.query_timeout = Duration::from_mins(3);
+    assert_eq!(
+        check_timeouts(&config).unwrap_err().to_string(),
+        "[database] query_timeout (180 s) must be at least 1 ms and shorter than [ops] \
+         loop_stall_timeout (120 s)"
+    );
+    config.database.query_timeout = Duration::ZERO;
+    assert!(check_timeouts(&config).is_err());
+    config.database.query_timeout = Duration::from_micros(500);
+    assert!(check_timeouts(&config).is_err());
+}
+
+#[tokio::test]
+async fn the_ops_port_is_bound_and_logged() {
+    let mut config = config();
+    config.ops.bind = std::net::IpAddr::from([127, 0, 0, 1]);
+    config.ops.port = 0;
+    let (stop, stopped) = watch::channel(0);
+    let ops = crate::ops::Ops::new(
+        prometheus_client::registry::Registry::default(),
+        Health::new(Duration::from_secs(120)),
+    );
+    let bound = start_ops(&config, "master", ops, &stopped).await.unwrap();
+    assert_ne!(bound.port(), 0);
+    stop.send(1).unwrap();
 }

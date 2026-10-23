@@ -8,6 +8,7 @@ use schedr_db::Database;
 use schedr_model::SchedrVersion;
 
 use crate::logs::{HttpLogSource, LogSource};
+use crate::metrics::ApiMetrics;
 
 #[cfg(test)]
 mod tests;
@@ -31,6 +32,8 @@ pub struct ApiState {
     pub clock: fn() -> Timestamp,
     /// Where task logs come from (the workers).
     pub logs: Arc<dyn LogSource>,
+    /// The webserver's metrics.
+    pub metrics: ApiMetrics,
 }
 
 impl ApiState {
@@ -45,7 +48,14 @@ impl ApiState {
             identity_header,
             clock: Timestamp::now,
             logs: Arc::new(HttpLogSource::new(None)),
+            metrics: ApiMetrics::default(),
         }
+    }
+
+    /// This state recording its metrics in `metrics` (registered by the caller).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ApiMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// This state reading logs from `logs` (over TLS in `app` mode).

@@ -17,6 +17,7 @@ name = "schedr"
 path = "src/main.rs"
 
 [dependencies]
+prometheus-client.workspace = true
 rustix.workspace = true
 axum.workspace = true
 clap.workspace = true

@@ -9,6 +9,7 @@ use schedr_model::commands::Command;
 use schedr_model::{DagId, RunState};
 use serde_json::json;
 use tempfile::TempDir;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Endpoint, Server};
 
 use schedr_model::runner::DAG_FILE_MISSING;
@@ -1008,7 +1009,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     let (stop, stopped) = oneshot::channel();
     agent.running.insert("a1".to_owned(), Some(stop));
-    let (to_master, _outbound) = mpsc::channel(8);
+    let (to_master, _outbound) = mpsc::unbounded_channel();
     let kill = pb::JournalDecision {
         attempt_id: "a1".to_owned(),
         decision: pb::AttemptDecision::Kill.into(),

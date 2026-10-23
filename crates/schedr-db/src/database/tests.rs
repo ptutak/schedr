@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use pretty_assertions::assert_eq;
 
 use sqlx::AssertSqlSafe;
@@ -63,6 +65,23 @@ fn run_sql(id: &str, kind: &str, planned_for: &str) -> String {
 async fn connects_to_sqlite_and_reports_the_backend() {
     let db = Database::connect(MEMORY).await.unwrap();
     assert_eq!(db.backend(), Backend::Sqlite);
+}
+
+#[tokio::test]
+async fn waiting_for_a_connection_is_limited_by_the_query_timeout() {
+    // In memory there is one connection: hold it, and the next query can't get one.
+    let db = Database::connect_with_timeout(MEMORY, Duration::from_millis(100))
+        .await
+        .unwrap();
+    let Database::Sqlite(pool) = &db else {
+        panic!("expected SQLite")
+    };
+    let _held = pool.acquire().await.unwrap();
+    let started = std::time::Instant::now();
+    let error = db.state_counts().await.unwrap_err();
+    assert!(matches!(error, DbError::Sqlx(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(DEFAULT_QUERY_TIMEOUT, Duration::from_secs(30));
 }
 
 #[tokio::test]
