@@ -61,24 +61,14 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 ## Next steps
 
 1. **Ask about CI** for the pushed commits.
-2. **M2, step 2.10, standalone for production: built, not committed** (PLAN.md; decisions
-   and how it is built in PROJECT.md, Components and roles: production path). In place: the
-   lease (`schedr-db` `lease.rs`, `schedr-master` `lease.rs`, `Hub::run_leading`, standby,
-   pause, `[master] lease_period`), the query limit in `on_pool!`, statement cache off,
-   `[worker] memory_reserve`, `images/schedr/` (`make image`),
-   `examples/kubernetes/Dockerfile` (two stages), `charts/schedr/` (`make chart-check`),
-   `scripts/kind-standalone.sh`. After the code review: writes in `in_tx!`, fenced by the
-   lease for the master (`Database::fenced`, `DbError::NotLeading`) and limited in Postgres
-   (`set_config('statement_timeout', …, true)`); renewals in a task of their own
-   (`Hub::keep_leading`), `renew_lease` only the master's own; defaults 10 s query limit /
-   30 s lease (at least three limits); standalone `--migrate` (off by default) and exiting
-   when its master fails; `schedr db migrate [--wait]` holding the lease; the chart's
-   migrate init container and `fsGroup` 0 off OpenShift; a write's start one message on
-   Postgres (`Database::begin_postgres`: `BEGIN`, the limit and the fence, SQLSTATE `SR001`),
-   no pool ping, a connection whose start failed closed (PROJECT.md, after the 2.10 code
-   review). Left: the kind run
-   (ask the user first: a local kind cluster, `--context kind-schedr-test`, never the real
-   cluster).
+2. **M2, step 2.10, standalone for production: done** (commit `febca4f`; PLAN.md; decisions
+   in PROJECT.md, Components and roles: production path, and "After the 2.10 code review").
+   The kind run passed (2026-10-23, `scripts/kind-standalone.sh`, cluster `schedr-test`,
+   context `kind-schedr-test`): the chart's standalone mode ran `daily_report` on SQLite and
+   on Postgres, `schedr_master_leading 1`. After it, decided and recorded (not built: M4):
+   the `db` secret storage for standalone replacing `file` (PROJECT.md, Secret storage).
+   Also recorded for M4: `schedr.script` for plain Python scripts (`dag_ctx`, `task_ctx`,
+   the Python API's own objects, over the agent channel; PROJECT.md, In-task CLI).
 3. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
    `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
    (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.

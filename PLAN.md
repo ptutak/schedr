@@ -48,7 +48,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 
 **Out (later milestones):** async task functions, sensors and triggers (M4), outcomes and
 `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping, `schedr.toml` and scripts, cleanup and
-resources, secrets and connections, params, notifications, `TriggerDagOperator`, concurrency
+resources, secrets (Vault; the `db` storage for standalone, `schedr secrets`) and connections, params, notifications, `TriggerDagOperator`, concurrency
 limits other than `max_active_runs`, backfill, retention, the in-task CLI (`schedr task-ctx`,
 `schedr dag-ctx`; command tasks read their run information from `SCHEDR_*` variables) (M4);
 the journal on disk, the memory watchdog, mTLS, separate roles and Postgres at run time (M2);

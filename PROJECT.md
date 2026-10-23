@@ -1719,6 +1719,18 @@ reading those variables itself (two ways to the same data, and its behaviour wou
 when the agent serves it); building the connections earlier for it alone. (It was labelled
 M1 since the M0 command skeleton, before the channel was designed; M1 never included it.)
 
+- **Plain Python scripts: `schedr.script`** (decided 2026-10-23, M4): `from schedr.script
+  import dag_ctx, task_ctx` gives a plain script (a `script` task, a command running
+  `python …`) **the same objects as a Python task**, holding values: `task_ctx.secret(...)`,
+  `dag_ctx.params`, `dag_ctx.run`, cleanup and resource calls. Not a second mechanism: the
+  same agent channel and requests as `schedr task-ctx` / `schedr dag-ctx` and the Python
+  runner, the same types and rules (declared secrets and prefixes only, masked by the
+  agent), only loaded from the channel when first used instead of set by the runner; outside
+  a task it fails like the CLI. Templates are a different step and stay one: placeholders
+  and t-strings are filled by the agent before the process starts, for a task's arguments,
+  `env` and commands; these calls read values while it runs. Not chosen: only the CLI through
+  a subprocess; a Python API of its own for scripts (`secret()`, `params()`), a second set of
+  names for the same data.
 - **Namespace `schedr task-ctx`**, separate from the user CLI (listing DAGs, triggering runs) and
   the server roles and commands (`schedr master`, `schedr worker`, `schedr db migrate`), and
   **`schedr dag-ctx`** for the run's context (see Run parameters and the DAG context). Outside a
@@ -2225,8 +2237,8 @@ list) and likewise has no Python.
 
 - **Secret storage is built into schedr**, not an optional add-on or plugin.
 - The core defines a generic **secret storage** abstraction, so several kinds of secret storage
-  can be supported. **Only one implementation is built for now: HashiCorp Vault**, plus a
-  development-only `file` storage (see Testing DAGs).
+  can be supported. **Two implementations: HashiCorp Vault**, and a **`db` storage** in
+  schedr's own database for standalone (below; it replaced a development-only `file` storage).
 - Core code, the shared model and the native API use the generic name (secret storage), never
   "Vault". Vault-specific names appear only in the Vault implementation.
 - **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a Vault-specific
@@ -2300,7 +2312,7 @@ list) and likewise has no Python.
     service-account token file (no secret at all). Every key can also be set through
     `SCHEDR_CONFIG__SECRET_STORAGE__...` variables.
   - **Startup errors:** `default` not a configured storage; unknown `type` (`vault`, and
-    `file` in standalone only); auth without the fields its method needs.
+    `db`, standalone only); auth without the fields its method needs.
   - **Vault: KV v2 only** (KV v1 is not supported).
   - **Validation of storage names in DAGs:** workers **report their configured storage names**
     when they register; the master's DAG validation shows a DAG error for an unknown storage.
@@ -2321,6 +2333,46 @@ list) and likewise has no Python.
   | permission denied | `secret_denied` | no (a configuration error) |
   | path or key not found | `secret_not_found` | no (usually a typo or a missing secret) |
 
+- **The `db` storage (standalone)** (decided 2026-10-23, after 2.10; built in M4 with the
+  rest of secrets, the design recorded first):
+  - **Standalone only:** the worker agent runs in the same process as the master and reads
+    the table itself; in a distributed deployment workers have no database connection and a
+    secret never passes through the master, so a move to the separate roles moves the
+    secrets to Vault (`schedr secrets export`, below). Not chosen: workers reading the table
+    through a Postgres role allowed only `SELECT` on it (workers would need a database URL,
+    which they never have); the master handing secrets out (breaks the rule above).
+  - **Always there in standalone,** named `db`; the **default** when no other storage is
+    configured, so `secrets['path#key']` works with no `[secret_storage]` at all. With Vault
+    configured (and its default), `db` stays reachable as `secrets.db['path#key']` and its
+    table stays empty. Not chosen: `db` only when nothing else is configured.
+  - **Table:** `secrets(path TEXT PRIMARY KEY, data, created_at, updated_at)`, one row per
+    path like a Vault KV v2 secret; `data` a JSON object of key to value (`jsonb` on
+    Postgres, `TEXT` on SQLite, the `{json}` cast); `path#key` reads one key, so an export to
+    Vault is one to one. Not chosen: one row per key (`path`, `key`, `value`), further from
+    Vault's model.
+  - **Encrypted at rest:** each value encrypted inside `data` with XChaCha20-Poly1305
+    (RustCrypto `chacha20poly1305`, its version checked when built) under a key from
+    `SCHEDR_SECRET_KEY` (32 bytes, base64; an environment variable, as every secret), bound
+    to its `path#key` (associated data), so a value can't be moved to another key; paths and
+    key names stay readable (listing works, the column stays JSON). A dump, a backup, a copy
+    of the SQLite volume, or someone reading the database sees no value. Without the key,
+    reading or writing a secret fails, saying so; a lost key means setting every secret
+    again. In Kubernetes the key comes from a Secret: this protects against leaks at the
+    database's level, not against someone who can read the pod. Not chosen: plaintext,
+    relying on access to the database.
+  - **Written by the CLI, straight to the database** (as `schedr db migrate`: the database
+    URL and the key; in Kubernetes through `kubectl exec`): `schedr secrets set <path>
+    key=value …` (`key=@file`, `key=-` from stdin, keeping values out of shell history),
+    `schedr secrets list [prefix]` (paths and key names, never values), `schedr secrets get
+    <path>#<key>` (the only way a value is printed), `schedr secrets delete <path>`. The API
+    and the UI never show a value (only which secrets a task declares). Not chosen: REST
+    endpoints (need M3's authentication, and secrets over HTTP); a `--reveal` flag on `get`.
+  - **`schedr secrets export`** writes the table as JSON in Vault's KV format, for `vault kv
+    put`, for the move to the separate roles. Not chosen: copying by hand.
+  - **No `file` storage any more**: tests and local runs keep `--secret 'path#key=value'` and
+    `run_dag(secrets={…})` (values in memory). Not chosen: keeping `file` for development
+    (standalone is a production deployment now, so "refuses outside standalone" no longer
+    keeps it out of production).
 - **Caching:** fetched values are kept **in the agent's memory only** (never on disk) for a
   short TTL per storage, `cache_ttl` (default **60 s**; `0` disables it): the workload is many
   short tasks, and without a cache every attempt would call the storage.
@@ -4357,10 +4409,9 @@ and no cluster. Four levels, from cheapest to fullest.
     value. Tests routing (`.on(...)`) without network access. Only in `run_dag`, never in a
     deployed DAG.
 - **Secrets locally:** `--secret 'path#key=value'` / `run_dag(secrets={...})` gives values
-  directly (in memory, masked as usual). For standalone used as a dev environment, a **`file`
-  secret storage** (`type = "file"`, a local TOML file of paths and values), one more
-  implementation behind the generic abstraction; it **refuses to start outside standalone**, so
-  it can't reach production.
+  directly (in memory, masked as usual). Standalone, as a dev environment too, has the **`db`
+  secret storage** (see Secret storage; it replaced a `file` storage, which relied on
+  standalone never being production).
 - **Airflow:** `dag.test()` runs `run_dag` for that DAG (`conf` → `params`, `logical_date` →
   `for_`).
 
@@ -5174,7 +5225,7 @@ gRPC, journal) come before breadth of features.
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
-| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, `file`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
+| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 
