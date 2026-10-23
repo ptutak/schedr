@@ -60,6 +60,8 @@ pub struct PendingCommand {
     pub requested_by: String,
     /// When.
     pub requested_at: Timestamp,
+    /// Whether it was being applied when a round failed (see [`Database::mark_applying`]).
+    pub applying: bool,
 }
 
 /// A command row, as the CLI and the UI read it.
@@ -158,23 +160,45 @@ impl Database {
     /// [`DbError::Sqlx`] if the query fails.
     pub async fn pending_commands(&self) -> Result<Vec<PendingCommand>, DbError> {
         const PENDING: &str = "SELECT id{text}, payload{text}, requested_by, \
-            {ts<}requested_at{>ts} FROM commands WHERE status = 'pending' \
-            ORDER BY requested_at, id";
-        let rows: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
+            {ts<}requested_at{>ts}, {ts<}applying_at{>ts} FROM commands \
+            WHERE status = 'pending' ORDER BY requested_at, id";
+        type Row = (String, String, String, String, Option<String>);
+        let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, PENDING))
                 .fetch_all(pool)
                 .await?
         });
         rows.into_iter()
-            .map(|(id, payload, requested_by, requested_at)| {
+            .map(|(id, payload, requested_by, requested_at, applying_at)| {
                 Ok(PendingCommand {
                     id,
                     command: serde_json::from_str(&payload).map_err(|e| e.to_string()),
                     requested_by,
                     requested_at: parse_time("commands.requested_at", &requested_at)?,
+                    applying: applying_at.is_some(),
                 })
             })
             .collect()
+    }
+
+    /// Marks a pending command as being applied, before its first write: if its round fails
+    /// before it is decided, the next one knows it may find its own work done (B7).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn mark_applying(&self, id: &str, now: Timestamp) -> Result<(), DbError> {
+        const MARK: &str = "UPDATE commands SET applying_at = $1{ts} \
+            WHERE id = $2{uuid} AND status = 'pending'";
+        on_pool!(self, |pool, backend| {
+            sqlx::query(sql(backend, MARK))
+                .bind(db_time(now))
+                .bind(id)
+                .execute(pool)
+                .await?
+                .rows_affected()
+        });
+        Ok(())
     }
 
     /// Decides a pending command: `applied` with its result, or `rejected` with a reason.

@@ -48,7 +48,8 @@ was registered, the backoff starts from 200 ms again.
    stdout and stderr go to `<data_dir>/logs/<worker ID>/<attempt ID>.log`.
 4. **While it runs:** the memory watchdog samples the group's memory, and `execution_timeout`,
    a cancel or a drain can stop it. Stopping is SIGTERM to the group, then SIGKILL after
-   `[master] cancel_grace` (30 s). The reason the agent stopped it is the attempt's status
+   `[master] cancel_grace` (30 s), or after `[worker] drain_terminate_period` (3 s) when a
+   drain's time is up (see Draining below). The reason the agent stopped it is the attempt's status
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
 5. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`.
@@ -94,11 +95,17 @@ Every attempt reports its peak memory, shown in the API.
 **On SIGTERM** (a rolling update, a node drain) the agent sends `Draining`. The master stops
 assigning to it, and the agent rejects anything sent before the master knew. Running tasks get
 `[worker] termination_grace_period` (30 s, which should match the pod's
-`terminationGracePeriodSeconds`) minus 5 s. Whatever still runs then gets SIGTERM and ends
-`interrupted`, and runs again elsewhere without using a retry. SIGKILL follows only after
-`[master] cancel_grace`, so a task that ignores SIGTERM can outlive the pod's deadline and end
-`lost` instead (B8 in `BUGS.md`). The agent waits up to 5 s for
-the last acknowledgements, sends `Deregister` and exits 0. A second SIGTERM interrupts at once.
+`terminationGracePeriodSeconds`) minus the last part, which the drain keeps for itself:
+
+| From the end of the grace period | What happens |
+|---|---|
+| − (`drain_terminate_period` + `drain_report_period`), 5 s by default | Whatever still runs gets SIGTERM. |
+| − `drain_report_period`, 2 s by default | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
+| until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, sends `Deregister` and exits 0. |
+
+So the worker is gone before the pod is killed, and no task ends `lost` because it was slow
+to stop. The two times must fit in the grace period, else the worker doesn't start. A second
+SIGTERM interrupts at once.
 
 **For maintenance**, `schedr workers drain <id>` is a command. The worker gets no new tasks or
 parse jobs, its running tasks finish normally, and it stays connected and idle until

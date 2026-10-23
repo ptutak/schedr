@@ -442,6 +442,25 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "DurationText")]
     pub termination_grace_period: Duration,
+    /// For a task still running when a drain's time is up: from its SIGTERM to its SIGKILL
+    /// (the drain's own, instead of `[master] cancel_grace`). The running tasks get
+    /// `termination_grace_period` minus this and `drain_report_period`, whose sum must not
+    /// exceed it.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub drain_terminate_period: Duration,
+    /// From a drain's SIGKILL of the tasks still running to the end of
+    /// `termination_grace_period`: time to report them interrupted and deregister before the
+    /// pod is killed (with `0s`, their results may not reach the master, and they end `lost`).
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub drain_report_period: Duration,
     /// The address the log endpoint listens on (all interfaces by default; `schedr
     /// standalone` always listens on 127.0.0.1).
     pub log_bind: IpAddr,
@@ -485,7 +504,8 @@ pub struct WorkerSection {
 
 impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
-    /// (Kubernetes' default), the log endpoint on port 8081 of every interface, logs kept for
+    /// (Kubernetes' default) of which the last 5 s stop and report what still runs (3 s to
+    /// SIGKILL, 2 s to report), the log endpoint on port 8081 of every interface, logs kept for
     /// 30 days, the memory budget from the pod's limit, sampled every second.
     fn default() -> Self {
         Self {
@@ -495,6 +515,8 @@ impl Default for WorkerSection {
             data_dir: None,
             pass_env: Vec::new(),
             termination_grace_period: Duration::from_secs(30),
+            drain_terminate_period: Duration::from_secs(3),
+            drain_report_period: Duration::from_secs(2),
             master_url: None,
             log_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             log_port: 8081,

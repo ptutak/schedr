@@ -265,10 +265,26 @@ impl Dispatcher {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn step(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, DispatchError> {
+        let mut outgoing = Vec::new();
+        self.step_into(now, &mut outgoing).await?;
+        Ok(outgoing)
+    }
+
+    /// As [`Self::step`], into `outgoing`: the assignments made before a failure are there
+    /// still (each stored before its message is built, B7).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn step_into(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
         self.execution.prepare_runs(now).await?;
         self.execution.queue_due_retries(now).await?;
         self.expire(now).await?;
-        self.assign(now).await
+        self.assign_into(now, outgoing).await
     }
 
     /// Assigns ready tasks to workers with free slots.
@@ -278,6 +294,21 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn assign(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, DispatchError> {
         let mut outgoing = Vec::new();
+        self.assign_into(now, &mut outgoing).await?;
+        Ok(outgoing)
+    }
+
+    /// As [`Self::assign`], into `outgoing`: the assignments made before a failure are there
+    /// still.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn assign_into(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
         let mut waiting: BTreeMap<&'static str, i64> = BTreeMap::new();
         for ready in self.db.ready_instances(now).await? {
             let Some(task) = ready.dag.task(&ready.task_id) else {
@@ -341,7 +372,7 @@ impl Dispatcher {
         }
         let waiting: Vec<(&'static str, i64)> = waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
-        Ok(outgoing)
+        Ok(())
     }
 
     /// A worker reported `Started`. Returns a `CancelAttempt` if the attempt was taken back,

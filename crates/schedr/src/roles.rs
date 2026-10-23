@@ -22,6 +22,7 @@ use crate::ops::{Health, Ops, Starting, ops_line, serve_ops};
 use prometheus_client::registry::Registry;
 use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
+use schedr_agent::drain::DrainPeriods;
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
 use schedr_agent::memory::{MIN_BUDGET, MemoryWatch, budget, cgroup_limit, show_size};
@@ -154,7 +155,11 @@ pub fn agent_settings(
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
         journal_dir: data_dir.join("journal").join(file_name(&worker_id)),
-        termination_grace_period: config.worker.termination_grace_period,
+        drain: DrainPeriods {
+            grace: config.worker.termination_grace_period,
+            terminate_period: config.worker.drain_terminate_period,
+            report_period: config.worker.drain_report_period,
+        },
         // Known once the log endpoint listens (see [`log_endpoint`]).
         log_endpoint: String::new(),
         worker_id,
@@ -463,6 +468,7 @@ pub async fn run_worker(
         setup: agent.setup.clone(),
         parse_file_timeout,
         metrics: observed.metrics.clone(),
+        drain_terminate_period: agent.drain.terminate_period,
     };
     let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string())
         .with_metrics(observed.metrics);

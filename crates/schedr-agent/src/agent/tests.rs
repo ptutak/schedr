@@ -151,7 +151,10 @@ async fn world() -> World {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
-        termination_grace_period: Duration::from_secs(30),
+        drain: DrainPeriods {
+            grace: Duration::from_secs(30),
+            ..DrainPeriods::default()
+        },
         log_endpoint: String::new(),
     };
     let fake = Fake::default();
@@ -484,7 +487,10 @@ async fn against_script_with(
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: journal.dir().to_path_buf(),
-        termination_grace_period: Duration::from_secs(30),
+        drain: DrainPeriods {
+            grace: Duration::from_secs(30),
+            ..DrainPeriods::default()
+        },
         log_endpoint: "http://w1:8081".to_owned(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -780,7 +786,10 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
-        termination_grace_period: Duration::from_secs(30),
+        drain: DrainPeriods {
+            grace: Duration::from_secs(30),
+            ..DrainPeriods::default()
+        },
         log_endpoint: String::new(),
     };
     let journal = Journal::new(settings.journal_dir.clone());
@@ -905,7 +914,7 @@ async fn a_shutdown_drains_interrupts_what_still_runs_and_deregisters() {
     let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"leaving");
     let (seen, left) = against_script_with(2, Start::With(vec![]), script, done, |agent| {
         // No grace: the running attempt is interrupted as soon as the drain starts.
-        agent.settings.termination_grace_period = Duration::ZERO;
+        agent.settings.drain.grace = Duration::ZERO;
         let (requests, shutdown) = watch::channel(0);
         agent.shutdown = Some(shutdown);
         tokio::spawn(async move {
@@ -939,7 +948,13 @@ async fn a_draining_agent_rejects_assignments_and_says_so_again_after_a_reconnec
         script,
         |m| kinds(m).len() >= 3,
         |agent| {
-            agent.drain = Some(Drain::new(Instant::now(), Duration::from_secs(600)));
+            agent.drain = Some(Drain::new(
+                Instant::now(),
+                DrainPeriods {
+                    grace: Duration::from_secs(600),
+                    ..DrainPeriods::default()
+                },
+            ));
             // Something still runs: the drain isn't over.
             agent.running.insert("other".to_owned(), None);
         },
@@ -971,7 +986,10 @@ fn a_second_shutdown_request_interrupts_at_once() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: settings_dir.path().join("journal"),
-        termination_grace_period: Duration::from_secs(600),
+        drain: DrainPeriods {
+            grace: Duration::from_secs(600),
+            ..DrainPeriods::default()
+        },
         log_endpoint: String::new(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -1003,7 +1021,10 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
-        termination_grace_period: Duration::from_secs(30),
+        drain: DrainPeriods {
+            grace: Duration::from_secs(30),
+            ..DrainPeriods::default()
+        },
         log_endpoint: String::new(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());

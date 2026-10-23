@@ -29,16 +29,23 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 
 - CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
   once it is pushed (`gh` isn't installed, so the user looks).
-- The last `make check` passed (B6 fix): 1138 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 78 Rust and 15 Python integration tests; Rust line coverage 88.6 %
+- The last `make check` passed (B7 and B8 fixes): 1151 Rust unit tests, 632 Python unit
+  tests at 99.96 % coverage, 79 Rust and 15 Python integration tests; Rust line coverage 88.7 %
   (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
-- **Open bugs: B4, B7 and B8** (`BUGS.md`). B4 (a role test's `runs trigger` got no result
-  once, 2026-10-22) is most likely B6 but unproven: if it happens again, its failure message
-  now has the CLI's stderr. B7 (found in the 2.9 review): a command applied
-  twice if the master stops between applying it and recording the decision, and undelivered
-  cancels (also when a round fails) not sent again until the worker reconnects. B8 (found in
-  the 2.9b review): a drained task that ignores SIGTERM is killed only after `cancel_grace`,
-  after the pod's deadline, and ends `lost`. Their fixes wait for the user to schedule them.
+- **Open bugs: B4 and B9** (`BUGS.md`). B9 (found in the B8 fix's review): a drain can't
+  shorten a stop already under way (a cancel or a timeout keeps the 30 s grace, so the worker
+  can miss its deregistration). B4: a role test's `runs trigger` got no result once
+  (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
+  the CLI's stderr.
+- **B7 is fixed (2026-10-23):** a command is marked (`applying_at`) before
+  its first write, and applying it again is harmless (a manual run's ID is its command's;
+  "already done" is decided applied); a failed round still delivers the messages it built
+  (`tick_partial`). Option B (resending cancels every few seconds) is noted in PROJECT.md as
+  a just-in-case.
+- **B8 is fixed (2026-10-23):** a drain stops what still runs with its own
+  times, `[worker] drain_terminate_period` (3 s, SIGTERM → SIGKILL) and `drain_report_period` (2 s,
+  SIGKILL → the end of the grace period); their sum over `termination_grace_period` is a
+  configuration error.
 - **B6 is fixed (2026-10-23):** the role tests failed after a
   rebuild because the build's unflushed writes stalled Postgres for 7–8 s, and the master
   counted its own stall against workers' leases. Now the lease counts from when a message
@@ -104,7 +111,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B9); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B10); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.

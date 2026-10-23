@@ -43,6 +43,9 @@ pub struct Limits {
     pub timeout: Option<Duration>,
     /// The time between SIGTERM and SIGKILL (the master's cancel grace time).
     pub grace: Duration,
+    /// The same for a draining worker's interrupt, which must end before the pod is killed
+    /// (`[worker] drain_terminate_period`).
+    pub interrupt_grace: Duration,
 }
 
 /// How a supervised process ended.
@@ -57,7 +60,8 @@ pub struct Supervised {
 }
 
 /// Waits for `process`; on timeout, or when `stop` completes (cancel, drain), sends SIGTERM to
-/// its group, and SIGKILL if it hasn't ended after the grace time; over its memory budget
+/// its group, and SIGKILL if it hasn't ended after the grace time (the interrupt grace for a
+/// drain's interrupt); over its memory budget
 /// (`stop` says [`StopReason::OomKilled`]), SIGKILL at once.
 ///
 /// # Errors
@@ -91,7 +95,12 @@ pub async fn supervise<P: Process>(
         });
     }
     process.signal(Signal::Term)?;
-    let ended = tokio::time::timeout(limits.grace, process.wait()).await;
+    let grace = if reason == StopReason::Interrupted {
+        limits.interrupt_grace
+    } else {
+        limits.grace
+    };
+    let ended = tokio::time::timeout(grace, process.wait()).await;
     let (termination, killed) = if let Ok(termination) = ended {
         (termination?, false)
     } else {

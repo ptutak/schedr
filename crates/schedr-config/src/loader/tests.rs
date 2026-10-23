@@ -269,3 +269,39 @@ fn roles_take_bind_addresses_and_the_masters_url() {
         "{bad}"
     );
 }
+
+#[test]
+fn the_drain_times_must_fit_in_the_termination_grace_period() {
+    // Exactly the grace period: the tasks get no time of their own, but it is allowed.
+    let fits = load(
+        Some(file(
+            "[worker]\ntermination_grace_period = \"10s\"\n\
+             drain_terminate_period = \"6s\"\ndrain_report_period = \"4s\"\n",
+        )),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(fits.worker.drain_terminate_period, Duration::from_secs(6));
+    assert_eq!(fits.worker.drain_report_period, Duration::from_secs(4));
+    let error = load(
+        Some(file("[worker]\ntermination_grace_period = \"4s\"\n")),
+        &env(&[]),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ConfigError::DrainPeriods {
+            terminate_period: "3s".to_owned(),
+            report_period: "2s".to_owned(),
+            grace: "4s".to_owned(),
+        }
+    );
+    assert!(
+        error.to_string().starts_with(
+            "[worker] drain_terminate_period (3s) + drain_report_period (2s) must not exceed"
+        ),
+        "{error}"
+    );
+}

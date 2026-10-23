@@ -126,3 +126,31 @@ async fn sqlite_has_no_command_notifications() {
     assert!(db.command_notifications().await.unwrap().is_none());
     assert_eq!(COMMANDS_CHANNEL, "schedr_commands");
 }
+
+#[tokio::test]
+async fn a_command_marked_applying_reads_so_until_decided() {
+    let db = migrated().await;
+    let id = db
+        .insert_command(&pause(), "anna", ts("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap();
+    assert!(!db.pending_commands().await.unwrap()[0].applying);
+    db.mark_applying(&id, ts("2026-10-21T08:00:01Z"))
+        .await
+        .unwrap();
+    assert!(db.pending_commands().await.unwrap()[0].applying);
+    db.decide_command(
+        &id,
+        CommandStatus::Applied,
+        None,
+        None,
+        ts("2026-10-21T08:00:02Z"),
+    )
+    .await
+    .unwrap();
+    // A decided command isn't marked again.
+    db.mark_applying(&id, ts("2026-10-21T08:00:03Z"))
+        .await
+        .unwrap();
+    assert_eq!(db.pending_commands().await.unwrap(), []);
+}

@@ -40,7 +40,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{AttemptSpec, NotRun, Plan, WorkerSetup, failed_before_start, finished, plan};
-use crate::drain::{Drain, DrainStep};
+use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
@@ -95,8 +95,8 @@ pub struct AgentSettings {
     /// Where the journal is kept (see [`crate::journal`]).
     pub journal_dir: PathBuf,
     /// How long the running attempts get when the agent is asked to stop (the pod's
-    /// `terminationGracePeriodSeconds`).
-    pub termination_grace_period: Duration,
+    /// `terminationGracePeriodSeconds`), and how the end of that time is split.
+    pub drain: DrainPeriods,
     /// Where the webserver reaches this worker's log endpoint (e.g.
     /// `https://w-0.schedr-worker.etl.svc.cluster.local:8081`), sent in `Register`.
     pub log_endpoint: String,
@@ -135,6 +135,8 @@ pub struct ProcessExecutor {
     pub parse_file_timeout: Duration,
     /// Where the watchdog's kills are counted.
     pub metrics: AgentMetrics,
+    /// From an interrupted task's SIGTERM to its SIGKILL (`[worker] drain_terminate_period`).
+    pub drain_terminate_period: Duration,
 }
 
 impl Executor for ProcessExecutor {
@@ -148,6 +150,7 @@ impl Executor for ProcessExecutor {
         let limits = Limits {
             timeout: spec.timeout(),
             grace: spec.cancel_grace,
+            interrupt_grace: self.drain_terminate_period,
         };
         let seen = SharedSeen::default();
         let (killed_tx, killed) = oneshot::channel::<()>();
@@ -447,14 +450,14 @@ impl<E: Executor> Agent<E> {
         if count == 0 {
             return false;
         }
-        let mut drain = Drain::new(now, self.settings.termination_grace_period);
+        let mut drain = Drain::new(now, self.settings.drain);
         if count > 1 {
             drain.force(now);
         }
         self.drain = Some(drain);
         tracing::info!(
             running = self.running.len(),
-            grace = ?self.settings.termination_grace_period,
+            grace = ?self.settings.drain.grace,
             "draining: no new tasks; the running ones get until the grace period ends"
         );
         true
@@ -635,9 +638,13 @@ impl<E: Executor> Agent<E> {
                     if self.drain_step(true) == DrainStep::Finish {
                         let bye = worker_message::Message::Deregister(pb::Deregister {});
                         let _ = to_master.send(wrap(bye));
-                        // Our side ends; the master's ends once it has handled everything.
+                        // Our side ends; the master's ends once it has handled everything
+                        // (not waited for past the end of the grace period).
                         drop(to_master);
-                        let _ = tokio::time::timeout(DEREGISTER_WAIT, async {
+                        let left = self.drain.map_or(DEREGISTER_WAIT, |drain| {
+                            drain.end().saturating_duration_since(Instant::now())
+                        });
+                        let _ = tokio::time::timeout(DEREGISTER_WAIT.min(left), async {
                             while let Ok(Some(_)) = inbound.message().await {}
                         })
                         .await;

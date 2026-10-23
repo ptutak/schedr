@@ -238,3 +238,21 @@ async fn a_dag_whose_schedule_cant_be_evaluated_is_skipped() {
         .unwrap_err();
     assert!(matches!(error, SchedulerError::FireTimes { .. }), "{error}");
 }
+
+#[tokio::test]
+async fn a_manual_run_triggered_again_with_its_id_is_the_same_run() {
+    // B7: `trigger_run` passes its command's ID, so applying it again creates nothing new.
+    let (scheduler, db) = scheduler_with(dag(&json!({}))).await;
+    let now = ts("2026-10-21T08:00:00Z");
+    let id = "01a16884-4f28-7563-9d35-7d0555a017f1";
+    let first = scheduler
+        .trigger_as(Some(id), &sync(), None, "anna", now)
+        .await
+        .unwrap();
+    let again = scheduler
+        .trigger_as(Some(id), &sync(), None, "anna", now)
+        .await
+        .unwrap();
+    assert_eq!((first.run_id.as_str(), again.run_id.as_str()), (id, id));
+    assert_eq!(db.running_count(&sync()).await.unwrap(), 1);
+}

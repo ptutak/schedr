@@ -130,12 +130,26 @@ impl Scheduler {
     /// [`SchedulerError::NotRunnable`], [`SchedulerError::ManualRun`] for a time in the future,
     /// [`SchedulerError::FireTimes`] or [`SchedulerError::Db`].
     ///
-    /// # Panics
-    ///
-    /// Never: only scheduled runs are unique per `planned_for`, so a manual run is always
-    /// stored.
     pub async fn trigger(
         &self,
+        dag_id: &DagId,
+        requested: Option<Timestamp>,
+        user: &str,
+        now: Timestamp,
+    ) -> Result<CreatedRun, SchedulerError> {
+        self.trigger_as(None, dag_id, requested, user, now).await
+    }
+
+    /// As [`Self::trigger`], the run's ID given (`trigger_run` passes its command's): a run
+    /// with that ID already there (the command applied before its decision was stored) is
+    /// the one returned, not created again (B7).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::trigger`].
+    pub async fn trigger_as(
+        &self,
+        run_id: Option<&str>,
         dag_id: &DagId,
         requested: Option<Timestamp>,
         user: &str,
@@ -163,11 +177,10 @@ impl Scheduler {
         let times = plan.manual_times(requested, now, nearest)?;
         let mut new = new_run(&active, RunKind::Manual, times, now, user);
         new.state = RunState::Queued;
-        let run_id = self
-            .db
-            .insert_run(&new)
-            .await?
-            .expect("only scheduled runs are unique per planned_for");
+        // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
+        // run with its given ID is there already, and then that one is it.
+        let run_id = run_id.map_or_else(|| uuid::Uuid::now_v7().to_string(), str::to_owned);
+        self.db.insert_run_as(&run_id, &new).await?;
         let running = self.db.running_count(dag_id).await?;
         self.start_queued(&active, &plan, running, now).await?;
         Ok(created(&active, run_id, RunKind::Manual, times))

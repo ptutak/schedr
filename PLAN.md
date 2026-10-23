@@ -187,8 +187,9 @@ integration tests, as since 1.15.
 
 **Status (2026-10-23): steps 2.1–2.9b are done** (the commits are
 listed in `NEXT_SESSION.md`). Next is 2.10. B6 (role integration tests under disk load) is
-fixed; open bugs B4 (likely B6, unproven), B7 (a command applied twice, undelivered cancels) and B8 (a drained task
-outliving the pod) wait to be scheduled.
+fixed; open bugs B4 (likely B6, unproven) and B9 (a drain can't shorten a stop under way)
+wait; B7 (a command applied twice, undelivered cancels)
+and B8 (a drained task outliving the pod) are fixed.
 
 ## Testing approach
 

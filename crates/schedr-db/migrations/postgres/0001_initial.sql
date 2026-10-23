@@ -161,7 +161,10 @@ CREATE TABLE commands (
     reason       TEXT,
     -- What an applied command produced, e.g. the run a trigger created.
     result       JSONB,
-    decided_at   TIMESTAMPTZ
+    decided_at   TIMESTAMPTZ,
+    -- Set before the command's first write: one still pending with it was cut off partway
+    -- (its round failed), so its next application may find its own work done (B7).
+    applying_at  TIMESTAMPTZ
 );
 
 CREATE INDEX commands_pending ON commands (requested_at) WHERE status = 'pending';

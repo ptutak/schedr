@@ -206,6 +206,8 @@ fn master_webserver_and_worker_defaults() {
             pass_env: vec![],
             master_url: None,
             termination_grace_period: Duration::from_secs(30),
+            drain_terminate_period: Duration::from_secs(3),
+            drain_report_period: Duration::from_secs(2),
             log_bind: std::net::IpAddr::from([0, 0, 0, 0]),
             log_port: 8081,
             log_address: None,

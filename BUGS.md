@@ -5,33 +5,19 @@ A fixed bug is removed in the commit that fixes it, together with a test that re
 it: shown failing before the fix and passing after; git history keeps the record. Finding a bug doesn't mean fixing it at once: it
 is logged here and its fix scheduled with the user. Not part of the documentation site.
 
-## B8: a drained task can outlive the pod's grace period
+## B9: a drain can't shorten a stop already under way
 
-- **Seen:** 2026-10-23, in the M2.9b review (by reading the code, not in a run).
-- **What:** when a SIGTERM drain's time is up (`termination_grace_period` minus 5 s, 25 s by
-  default), the agent stops what still runs with `StopReason::Interrupted` through the
-  supervisor, which sends SIGTERM and then SIGKILL only after the master's `cancel_grace`
-  (30 s), at 55 s. Kubernetes kills the pod at 30 s. A task that takes more than 5 s to exit on
-  SIGTERM never reports `interrupted`: the journal still says `running`, and the master ends it
-  `lost`, using a retry (a task with `retries = 0` fails).
-- **Next:** give the drain's interrupt its own grace that ends before the pod's deadline (e.g.
-  the 5 s margin), or SIGKILL at the deadline; a test with a task ignoring SIGTERM.
-
-## B7: a command can be applied twice when its decision isn't stored
-
-- **Seen:** 2026-10-23, in the M2.9 review (by reading the code, not in a run).
-- **What:** the master applies a command (e.g. `trigger_run` inserts the run) and then marks
-  it decided (`decide_command`) in a separate statement. If the master crashes, or the
-  database fails, between the two, the command is still `pending` and the next tick applies
-  it again: a second manual run, a second cancel. Likewise a tick that ends between storing a
-  cancel (`cancel_requested_at`) and delivering `CancelAttempt` leaves the task running until
-  its worker reconnects; and a tick that **fails** (a database error in any later step)
-  returns before delivering anything, so every message it had built is dropped: a cancel
-  already decided `applied` is never sent while the worker stays connected (found again in
-  the M2.9b review; assignments recover by expiring).
-- **Next:** apply and decide in one transaction (the scheduler's and dispatcher's writes
-  inside it), and resend the `CancelAttempt` of tasks marked for cancel on every tick (not
-  only on reconnect). M2.9 decided not to abandon slow ticks partly because of this.
+- **Seen:** 2026-10-23, in the review of the B8 fix (by reading the code, not in a run).
+- **What:** a drain whose time is up interrupts the running attempts through their stop
+  channel, used once. An attempt already being stopped (cancelled by the master, or past its
+  `execution_timeout`) has used it, keeps the cancel grace (30 s) before SIGKILL, and can
+  outlive the pod's deadline: the drain doesn't finish, the worker isn't deregistered (the
+  master marks it lost later), and a timed-out task ends `lost` rather than `timed_out` (a
+  cancelled one still ends `cancelled`). Both use a retry or none as before, so the effect is
+  mostly the missed deregistration.
+- **Next:** let a stop escalate (a second reason shortens the grace to
+  `drain_terminate_period`), with a test: a task ignoring SIGTERM, cancelled just before the
+  drain's time is up.
 
 ## B4: `runs trigger` in a roles integration test got no result once
 

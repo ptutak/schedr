@@ -1,21 +1,42 @@
 //! Draining the worker on shutdown (SIGTERM): what happens when, decided apart from the agent
 //! so it is tested with plain instants (see PROJECT.md, Worker lifecycle: drain).
 //!
-//! - The running attempts get until the **termination grace period** minus a margin; whatever
-//!   still runs then is stopped and ends `interrupted` (run again without using a retry). A
-//!   second shutdown request moves the deadline to now.
-//! - Once nothing runs, the agent waits (at most [`ACK_WAIT`]) for the master to acknowledge
-//!   the last results, then deregisters and ends; without a master it ends at once (the
-//!   journal keeps the results for the next start).
+//! - The running attempts get until the **termination grace period** minus the drain's
+//!   terminate and report periods ([`DrainPeriods`]); whatever still runs then gets SIGTERM,
+//!   SIGKILL after the terminate period, and ends `interrupted` (run again without using a
+//!   retry). The report period is left for the results to reach the master before the pod is
+//!   killed (B8). A second shutdown request moves the deadline to now.
+//! - Once nothing runs, the agent waits (at most [`ACK_WAIT`], never past the end of the grace
+//!   period) for the master to acknowledge the last results, then deregisters and ends;
+//!   without a master it ends at once (the journal keeps the results for the next start).
 
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
 mod tests;
 
-/// How long before the end of the grace period the remaining attempts are stopped, so their
-/// results reach the master before the process is killed.
-pub const DRAIN_MARGIN: Duration = Duration::from_secs(5);
+/// How a drain's time is split (`[worker] termination_grace_period`, `drain_terminate_period`,
+/// `drain_report_period`; the configuration checks that the last two fit in the first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrainPeriods {
+    /// The whole drain: the pod's `terminationGracePeriodSeconds`.
+    pub grace: Duration,
+    /// From the SIGTERM of a task still running when the time is up to its SIGKILL.
+    pub terminate_period: Duration,
+    /// From that SIGKILL to the end of the grace period: reporting and deregistering.
+    pub report_period: Duration,
+}
+
+impl Default for DrainPeriods {
+    /// 30 s (Kubernetes' default), of which 3 s to SIGKILL and 2 s to report.
+    fn default() -> Self {
+        Self {
+            grace: Duration::from_secs(30),
+            terminate_period: Duration::from_secs(3),
+            report_period: Duration::from_secs(2),
+        }
+    }
+}
 
 /// How long a drained agent waits for the master to acknowledge the last results.
 pub const ACK_WAIT: Duration = Duration::from_secs(5);
@@ -35,19 +56,28 @@ pub enum DrainStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Drain {
     deadline: Instant,
+    end: Instant,
     interrupted: bool,
     idle_since: Option<Instant>,
 }
 
 impl Drain {
-    /// A drain starting at `now` with the grace period `grace`.
+    /// A drain starting at `now`, its time split as `periods` says.
     #[must_use]
-    pub fn new(now: Instant, grace: Duration) -> Self {
+    pub fn new(now: Instant, periods: DrainPeriods) -> Self {
+        let stop_and_report = periods.terminate_period + periods.report_period;
         Self {
-            deadline: now + grace.saturating_sub(DRAIN_MARGIN),
+            deadline: now + periods.grace.saturating_sub(stop_and_report),
+            end: now + periods.grace,
             interrupted: false,
             idle_since: None,
         }
+    }
+
+    /// When the grace period ends (the pod is killed then).
+    #[must_use]
+    pub const fn end(&self) -> Instant {
+        self.end
     }
 
     /// A second shutdown request: the remaining attempts are stopped at once.
@@ -76,7 +106,7 @@ impl Drain {
             return DrainStep::Finish;
         }
         let idle = *self.idle_since.get_or_insert(now);
-        if now.duration_since(idle) >= ACK_WAIT {
+        if now.duration_since(idle) >= ACK_WAIT || now >= self.end {
             DrainStep::Finish
         } else {
             DrainStep::Wait

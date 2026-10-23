@@ -463,3 +463,190 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
         "the attempt was ended: the worker was declared lost"
     );
 }
+
+/// A worker registered over a stream, its root parsed: its messages' sender and the
+/// master's stream to it.
+async fn parsed_worker(
+    client: &mut MasterClient<Channel>,
+) -> (
+    mpsc::Sender<pb::WorkerMessage>,
+    Streaming<pb::MasterMessage>,
+) {
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    client.upload_parse_result(parse_result()).await.unwrap();
+    (to_master, stream)
+}
+
+fn trigger_sync() -> schedr_model::commands::Command {
+    schedr_model::commands::Command::TriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    }
+}
+
+/// Makes the SQLite database refuse `event` on `table` (e.g. `UPDATE OF status ON commands`)
+/// until [`heal`].
+async fn break_db(db: &Database, event_on_table: &str) {
+    let Database::Sqlite(pool) = db else {
+        panic!("expected SQLite")
+    };
+    // Fixed text from the tests themselves.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER injected_failure BEFORE {event_on_table} \
+         BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn heal(db: &Database) {
+    let Database::Sqlite(pool) = db else {
+        panic!("expected SQLite")
+    };
+    sqlx::query("DROP TRIGGER injected_failure")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn count_runs(db: &Database) -> i64 {
+    let Database::Sqlite(pool) = db else {
+        panic!("expected SQLite")
+    };
+    sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_command_whose_decision_couldnt_be_stored_is_not_applied_again() {
+    // B7: applying a command and recording its decision were separate writes; when the second
+    // failed, the command stayed pending and the next round applied it again.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    break_db(&db, "UPDATE OF status ON commands").await;
+    assert!(hub.tick().await.is_err(), "the round should fail");
+    heal(&db).await;
+    hub.tick().await.unwrap();
+    assert_eq!(count_runs(&db).await, 1, "the trigger was applied twice");
+}
+
+#[tokio::test]
+async fn a_cancel_reaches_the_worker_when_a_later_step_of_its_round_fails() {
+    // B7: a round that failed after applying a cancel dropped the `CancelAttempt` it had
+    // built; the cancel was decided, so it was sent again only when the worker reconnected.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, mut stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    to_master
+        .send(wrap(worker_message::Message::Started(pb::Started {
+            attempt_id: assign.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        })))
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if db
+            .attempt(&assign.attempt_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .started
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let run_id = db
+        .attempt(&assign.attempt_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .run_id;
+    // The task is cancelled; a command after it fails, and the round with it.
+    let cancel = schedr_model::commands::Command::CancelTask {
+        run_id,
+        task_id: schedr_model::TaskId::new("extract").unwrap(),
+    };
+    db.insert_command(&cancel, "anna", fixed_now())
+        .await
+        .unwrap();
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    break_db(&db, "INSERT ON runs").await;
+    assert!(hub.tick().await.is_err(), "the round should fail");
+    heal(&db).await;
+    hub.tick().await.unwrap();
+    // The worker stays connected all along: the cancel must still reach it.
+    let cancelled = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Ok(Some(message)) = stream.message().await {
+            if let Some(master_message::Message::CancelAttempt(cancel)) = message.message {
+                return cancel.attempt_id;
+            }
+        }
+        String::new()
+    })
+    .await;
+    assert_eq!(
+        cancelled.ok(),
+        Some(assign.attempt_id),
+        "the cancel never reached the worker"
+    );
+}
+
+#[tokio::test]
+async fn a_command_applied_before_its_decision_failed_is_decided_applied_on_the_repeat() {
+    // B7: a repeat after a failed decision found its own work done and rejected the command
+    // ("isn't drained" for a resume that had resumed the worker).
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream) = parsed_worker(&mut client).await;
+    let drain = schedr_model::commands::Command::DrainWorker {
+        worker_id: "w1".to_owned(),
+    };
+    db.insert_command(&drain, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let resume = schedr_model::commands::Command::ResumeWorker {
+        worker_id: "w1".to_owned(),
+    };
+    let id = db
+        .insert_command(&resume, "anna", fixed_now())
+        .await
+        .unwrap();
+    break_db(&db, "UPDATE OF status ON commands").await;
+    assert!(hub.tick().await.is_err(), "the round should fail");
+    heal(&db).await;
+    hub.tick().await.unwrap();
+    let decided = db.command(&id).await.unwrap().unwrap();
+    assert_eq!(
+        (decided.status, decided.reason),
+        (schedr_model::commands::CommandStatus::Applied, None)
+    );
+}

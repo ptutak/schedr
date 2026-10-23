@@ -56,6 +56,7 @@ impl Process for Fake {
 const LIMITS: Limits = Limits {
     timeout: Some(Duration::from_secs(60)),
     grace: Duration::from_secs(30),
+    interrupt_grace: Duration::from_secs(3),
 };
 
 fn never() -> impl Future<Output = StopReason> {
@@ -120,6 +121,23 @@ async fn a_process_ignoring_sigterm_gets_sigkill_after_the_grace_time() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_interrupted_process_ignoring_sigterm_gets_sigkill_after_the_interrupt_grace() {
+    // B8: a drain's interrupt must end before the pod is killed, not after the cancel grace.
+    let mut fake = Fake::new(None);
+    let started = tokio::time::Instant::now();
+    let result = supervise(&mut fake, LIMITS, async { StopReason::Interrupted })
+        .await
+        .unwrap();
+    assert_eq!(started.elapsed(), Duration::from_secs(3));
+    assert_eq!(result.stopped, Some(StopReason::Interrupted));
+    assert!(result.killed);
+    assert_eq!(
+        *fake.signals.lock().unwrap(),
+        vec![Signal::Term, Signal::Kill]
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn cancelling_stops_the_process_with_the_given_reason() {
     let mut fake = Fake::new(Some(Termination::Signaled(15)));
     let cancel = async {
@@ -156,6 +174,7 @@ async fn without_a_timeout_only_a_stop_ends_supervision() {
     let limits = Limits {
         timeout: None,
         grace: Duration::from_secs(1),
+        interrupt_grace: Duration::from_secs(1),
     };
     let drain = async {
         tokio::time::sleep(Duration::from_secs(3600)).await;

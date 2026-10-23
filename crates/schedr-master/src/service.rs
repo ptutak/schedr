@@ -126,9 +126,10 @@ impl Hub {
     ///
     /// The core's failure (the next tick goes on).
     pub async fn tick(&self) -> Result<(), CoreError> {
-        let outgoing = self.core.lock().await.tick((self.clock)()).await?;
+        // What the round built before a failure is delivered too (B7).
+        let (outgoing, result) = self.core.lock().await.tick_partial((self.clock)()).await;
         self.deliver(outgoing).await;
-        Ok(())
+        result
     }
 
     /// Runs the master's loop: a tick every `interval` until `stop` completes, and at once when

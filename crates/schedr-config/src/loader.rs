@@ -15,6 +15,7 @@ use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
     FileSource, Override, SourceError, env_provider, file_metadata, override_provider,
 };
+use crate::units::format_duration;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +42,21 @@ pub enum ConfigError {
         key: &'static str,
         /// The environment variable to use instead.
         env: &'static str,
+    },
+    /// The drain's terminate and report periods don't fit in the termination grace period.
+    #[error(
+        "[worker] drain_terminate_period ({terminate_period}) + drain_report_period \
+         ({report_period}) must not exceed [worker] termination_grace_period ({grace}): \
+         shorten them, or lengthen the grace period (and the pod's \
+         terminationGracePeriodSeconds with it)"
+    )]
+    DrainPeriods {
+        /// `drain_terminate_period`, as written.
+        terminate_period: String,
+        /// `drain_report_period`, as written.
+        report_period: String,
+        /// `termination_grace_period`, as written.
+        grace: String,
     },
     /// The DAG interpreter isn't an `[interpreters]` entry.
     #[error("[dags] interpreter `{name}` is not defined in [interpreters] (defined: {defined})")]
@@ -101,6 +117,17 @@ pub fn load(
         return Err(ConfigError::SecretInFile {
             key: "database.url",
             env: "SCHEDR_CONFIG__DATABASE__URL",
+        });
+    }
+    let worker = &config.worker;
+    let drain_end = worker
+        .drain_terminate_period
+        .checked_add(worker.drain_report_period);
+    if drain_end.is_none_or(|end| end > worker.termination_grace_period) {
+        return Err(ConfigError::DrainPeriods {
+            terminate_period: format_duration(worker.drain_terminate_period),
+            report_period: format_duration(worker.drain_report_period),
+            grace: format_duration(worker.termination_grace_period),
         });
     }
     if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {

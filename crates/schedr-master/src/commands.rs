@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use schedr_db::commands::PendingCommand;
 use schedr_db::{Database, DbError};
 use schedr_model::commands::{Command, CommandStatus};
-use schedr_model::{DagId, TaskId};
+use schedr_model::{DagId, RunState, TaskId, TaskInstanceState};
 use serde_json::json;
 
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
@@ -97,9 +97,32 @@ impl Commander {
         now: Timestamp,
     ) -> Result<Applied, CommandError> {
         let mut applied = Applied::default();
+        self.apply_into(scheduler, dispatcher, &mut applied, now)
+            .await?;
+        Ok(applied)
+    }
+
+    /// As [`Self::apply_pending`], into `applied`: when a command fails, what the ones before
+    /// it produced (their messages to workers among it) is there still.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::apply_pending`].
+    pub async fn apply_into(
+        &self,
+        scheduler: &Scheduler,
+        dispatcher: &mut Dispatcher,
+        applied: &mut Applied,
+        now: Timestamp,
+    ) -> Result<(), CommandError> {
         for pending in self.db.pending_commands().await? {
+            // Marked before its first write: should this round fail before the decision is
+            // stored, the next application knows it may find its own work done (B7).
+            if !pending.applying {
+                self.db.mark_applying(&pending.id, now).await?;
+            }
             let outcome = self
-                .apply(&pending, scheduler, dispatcher, &mut applied, now)
+                .apply(&pending, scheduler, dispatcher, applied, now)
                 .await?;
             let (status, reason, result) = match outcome {
                 Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
@@ -116,7 +139,7 @@ impl Commander {
                 result,
             });
         }
-        Ok(applied)
+        Ok(())
     }
 
     fn count(&self, pending: &PendingCommand, status: CommandStatus, now: Timestamp) {
@@ -155,20 +178,18 @@ impl Commander {
                 dag_id,
                 planned_for,
             } => {
-                match scheduler
-                    .trigger(dag_id, *planned_for, &pending.requested_by, now)
+                self.trigger(pending, scheduler, dag_id, *planned_for, now)
                     .await
-                {
-                    Ok(run) => Ok(Outcome::Applied(json!({"run_id": run.run_id}))),
-                    Err(SchedulerError::Db(error)) => Err(error.into()),
-                    Err(error) => Ok(Outcome::Rejected(error.to_string())),
-                }
             }
             Command::CancelRun { run_id } => {
                 let Some(run) = self.db.run_tasks(run_id).await? else {
                     return Ok(Outcome::Rejected(format!("no run `{run_id}`")));
                 };
                 if run.state.is_final() {
+                    if pending.applying && run.state == RunState::Cancelled {
+                        // Cancelled by this command before its decision was stored.
+                        return Ok(Outcome::Applied(json!({"stopping_attempts": 0})));
+                    }
                     return Ok(Outcome::Rejected(format!(
                         "run `{run_id}` already finished ({})",
                         run.state
@@ -200,10 +221,10 @@ impl Commander {
                 Ok(Outcome::Applied(json!({})))
             }
             Command::CancelTask { run_id, task_id } => {
-                cancel_task(dispatcher, run_id, task_id, outgoing, now).await
+                cancel_task(dispatcher, pending, run_id, task_id, outgoing, now).await
             }
             Command::RetryTask { run_id, task_id } => {
-                retry_task(dispatcher, run_id, task_id, now).await
+                retry_task(dispatcher, pending, run_id, task_id, now).await
             }
             Command::DrainWorker { worker_id } => {
                 if !self.db.set_worker_drained(worker_id, true).await? {
@@ -217,24 +238,76 @@ impl Commander {
                     .map_or(0, |w| w.attempts.len());
                 Ok(Outcome::Applied(json!({"running": running})))
             }
-            Command::ResumeWorker { worker_id } => match self.db.resume_worker(worker_id).await? {
-                None => Ok(no_worker(worker_id)),
-                Some(false) => Ok(Outcome::Rejected(format!(
-                    "worker `{worker_id}` isn't drained"
-                ))),
-                Some(true) => {
-                    dispatcher.resume(worker_id, now).await?;
-                    applied.drained.push((worker_id.clone(), false));
-                    Ok(Outcome::Applied(json!({})))
-                }
-            },
+            Command::ResumeWorker { worker_id } => {
+                self.resume(pending, worker_id, dispatcher, applied, now)
+                    .await
+            }
         }
     }
 }
 
-/// Cancels one task through the dispatcher (`schedr tasks cancel`).
+impl Commander {
+    /// `trigger_run`: a manual run whose ID is the command's, so applying it again finds the
+    /// same run, looked up first, before any check that could now fail (the DAG removed
+    /// meanwhile).
+    async fn trigger(
+        &self,
+        pending: &PendingCommand,
+        scheduler: &Scheduler,
+        dag_id: &DagId,
+        planned_for: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        if pending.applying && self.db.run_tasks(&pending.id).await?.is_some() {
+            return Ok(Outcome::Applied(json!({"run_id": pending.id})));
+        }
+        let created = scheduler
+            .trigger_as(
+                Some(&pending.id),
+                dag_id,
+                planned_for,
+                &pending.requested_by,
+                now,
+            )
+            .await;
+        match created {
+            Ok(run) => Ok(Outcome::Applied(json!({"run_id": run.run_id}))),
+            Err(SchedulerError::Db(error)) => Err(error.into()),
+            Err(error) => Ok(Outcome::Rejected(error.to_string())),
+        }
+    }
+
+    /// `resume_worker`. Applied again after its round failed, a worker found not drained was
+    /// resumed by this command: what follows a resume is done again (harmless twice), as the
+    /// first try may not have got to it.
+    async fn resume(
+        &self,
+        pending: &PendingCommand,
+        worker_id: &str,
+        dispatcher: &mut Dispatcher,
+        applied: &mut Applied,
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        match self.db.resume_worker(worker_id).await? {
+            None => Ok(no_worker(worker_id)),
+            Some(false) if !pending.applying => Ok(Outcome::Rejected(format!(
+                "worker `{worker_id}` isn't drained"
+            ))),
+            Some(_) => {
+                dispatcher.resume(worker_id, now).await?;
+                applied.drained.push((worker_id.to_owned(), false));
+                Ok(Outcome::Applied(json!({})))
+            }
+        }
+    }
+}
+
+/// Cancels one task through the dispatcher (`schedr tasks cancel`). Applied again after its
+/// round failed (`pending.applying`), a task or run found already `cancelled` is its own
+/// work: applied, not rejected.
 async fn cancel_task(
     dispatcher: &mut Dispatcher,
+    pending: &PendingCommand,
     run_id: &str,
     task_id: &TaskId,
     outgoing: &mut Vec<Outgoing>,
@@ -254,6 +327,12 @@ async fn cancel_task(
         TaskCancel::Stopping => {
             Outcome::Applied(json!({"state": "stopping", "stopping_attempts": stopping}))
         }
+        TaskCancel::AlreadyFinished(TaskInstanceState::Cancelled)
+        | TaskCancel::RunFinished(RunState::Cancelled)
+            if pending.applying =>
+        {
+            Outcome::Applied(json!({"state": "cancelled"}))
+        }
         TaskCancel::AlreadyFinished(state) => Outcome::Rejected(format!(
             "task `{task_id}` of run `{run_id}` already finished ({state})"
         )),
@@ -268,8 +347,11 @@ async fn cancel_task(
 }
 
 /// Queues an `unschedulable` task again through the dispatcher (`schedr tasks retry`).
+/// Applied again after its round failed, a task found `queued` is its own work (no round
+/// assigned it in between: commands come first).
 async fn retry_task(
     dispatcher: &mut Dispatcher,
+    pending: &PendingCommand,
     run_id: &str,
     task_id: &TaskId,
     now: Timestamp,
@@ -283,6 +365,9 @@ async fn retry_task(
     };
     Ok(match retried {
         TaskRetry::Queued(_) => Outcome::Applied(json!({"state": "queued"})),
+        TaskRetry::NotUnschedulable(TaskInstanceState::Queued) if pending.applying => {
+            Outcome::Applied(json!({"state": "queued"}))
+        }
         TaskRetry::NotUnschedulable(state) => Outcome::Rejected(format!(
             "task `{task_id}` of run `{run_id}` is {state}, not unschedulable: only an \
              unschedulable task is retried (a failed one is retried by its `retries`)"

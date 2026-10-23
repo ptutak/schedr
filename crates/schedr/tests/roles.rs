@@ -1075,11 +1075,16 @@ fn a_worker_stopped_with_sigterm_drains_and_its_interrupted_task_runs_again_with
     for role in ["master", "webserver", "worker"] {
         cluster.start(role);
     }
-    let grace = [("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "2s")];
+    // A 2 s grace period of which 1 s to SIGKILL and 1 s to report: interrupted at once.
     cluster.start_as(
         "worker-2",
         "worker",
-        &[("SCHEDR_CONFIG__WORKER__ID", "w2"), grace[0]],
+        &[
+            ("SCHEDR_CONFIG__WORKER__ID", "w2"),
+            ("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "2s"),
+            ("SCHEDR_CONFIG__WORKER__DRAIN_TERMINATE_PERIOD", "1s"),
+            ("SCHEDR_CONFIG__WORKER__DRAIN_REPORT_PERIOD", "1s"),
+        ],
     );
     cluster.wait("both workers", || {
         cluster.worker_state("w2").as_deref() == Some("active")
@@ -1541,4 +1546,106 @@ fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
         (503, "starting: master\n".to_owned())
     );
     drop(silent);
+}
+
+/// A DAG whose task ignores SIGTERM on its first try (it stops only for SIGKILL) and succeeds
+/// on the next.
+fn ignores_sigterm_first_try(marker: &std::path::Path) -> String {
+    format!(
+        r#"
+import os, signal, time
+from schedr import Dag, task
+
+@task
+def work() -> str:
+    marker = {marker:?}
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        time.sleep(120)
+    return "done"
+
+with Dag("stubborn"):
+    work()
+"#,
+        marker = marker.display().to_string()
+    )
+}
+
+#[test]
+fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period() {
+    // B8: the drain's SIGTERM came at the grace period minus 5 s, but SIGKILL only after the
+    // master's cancel grace (30 s), long after the pod is killed; the task then ended `lost`
+    // (using a retry) instead of `interrupted`.
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.dir.path().join("marker");
+    std::fs::write(
+        cluster.root().join("stubborn.py"),
+        ignores_sigterm_first_try(&marker),
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    // The pod's terminationGracePeriodSeconds, matched in the worker's configuration.
+    let grace = Duration::from_secs(8);
+    let worker_env = [("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "8s")];
+    cluster.start_with("worker", &worker_env);
+    let run_id = cluster.trigger("stubborn");
+    cluster.wait("the first try to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    // Kubernetes: SIGTERM, then SIGKILL when the grace period is over.
+    let exited = cluster.terminate_within("worker", grace);
+    // SIGKILL if still running (the kubelet), and gone from the cluster's roles either way.
+    cluster.kill("worker");
+    // The pod comes back (a new incarnation, the journal on its volume).
+    cluster.start_as("worker-again", "worker", &worker_env);
+    cluster.wait("the run to end", || {
+        ["success", "failed", "cancelled"].contains(&cluster.run_state(&run_id).as_str())
+    });
+    let statuses: Vec<Value> = cluster
+        .attempts(&run_id, "work")
+        .iter()
+        .map(|a| a["status"].clone())
+        .collect();
+    assert_eq!(statuses, ["interrupted", "success"], "{}", cluster.logs());
+    assert!(
+        exited.is_some_and(|s| s.success()),
+        "the worker didn't stop within the grace period: {exited:?}\n{}",
+        cluster.logs()
+    );
+}
+
+impl Cluster {
+    /// Sends SIGTERM to a role and waits up to `limit` for it to exit; its exit status, or
+    /// `None` if it is still running.
+    fn terminate_within(
+        &mut self,
+        name: &str,
+        limit: Duration,
+    ) -> Option<std::process::ExitStatus> {
+        let role = self.roles.iter_mut().find(|r| r.name == name).unwrap();
+        let pid = role.child.id().to_string();
+        assert!(
+            Command::new("kill")
+                .args(["-TERM", &pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if let Some(status) = role.child.try_wait().unwrap() {
+                return Some(status);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        None
+    }
 }

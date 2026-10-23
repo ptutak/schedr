@@ -559,3 +559,56 @@ async fn a_worker_is_drained_and_resumed_and_unknown_ones_are_rejected() {
     assert_eq!(applied.drained, [("w1".to_owned(), false)]);
     assert!(!world.dispatcher.workers().get("w1").unwrap().drained);
 }
+
+#[tokio::test]
+async fn applying_into_adds_to_what_was_applied_before() {
+    let mut world = world().await;
+    world.ask(&Command::UnpauseDag { dag_id: sync() }).await;
+    let mut applied = world.apply().await;
+    assert_eq!(applied.decided.len(), 1);
+    world.ask(&Command::UnpauseDag { dag_id: sync() }).await;
+    world
+        .commander
+        .apply_into(
+            &world.scheduler,
+            &mut world.dispatcher,
+            &mut applied,
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(applied.decided.len(), 2);
+}
+
+#[tokio::test]
+async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
+    // B7: applied again after its round failed, a command whose requested state holds is
+    // applied; anything else wrong with it is still a rejection.
+    let mut world = world().await;
+    let trigger = Command::TriggerRun {
+        dag_id: sync(),
+        planned_for: None,
+    };
+    let id = world.ask(&trigger).await;
+    world.db.mark_applying(&id, ts(NOW)).await.unwrap();
+    // The first try made the run, then its round failed.
+    world
+        .scheduler
+        .trigger_as(Some(&id), &sync(), None, "anna", ts(NOW))
+        .await
+        .unwrap();
+    let missing = world
+        .ask(&Command::CancelTask {
+            run_id: id.clone(),
+            task_id: TaskId::new("no_such_task").unwrap(),
+        })
+        .await;
+    world.db.mark_applying(&missing, ts(NOW)).await.unwrap();
+    world.apply().await;
+    let triggered = world.db.command(&id).await.unwrap().unwrap();
+    assert_eq!(triggered.status, CommandStatus::Applied);
+    assert_eq!(triggered.result, Some(json!({"run_id": id})));
+    assert_eq!(world.db.running_count(&sync()).await.unwrap(), 1);
+    let rejected = world.db.command(&missing).await.unwrap().unwrap();
+    assert_eq!(rejected.status, CommandStatus::Rejected, "{rejected:?}");
+}

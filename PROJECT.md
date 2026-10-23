@@ -152,6 +152,31 @@ tasks share the pod's memory):
     finished, a DAG that can't run (removed, in conflict), `--for` in the future, a payload
     that doesn't read. A **database failure** leaves the command pending for the next pass: a
     command is rejected only for what is wrong with it, never for a passing outage.
+  - **Applying a command again is harmless** (B7, fixed 2026-10-23): its writes and its
+    decision are separate statements, so a failure between them leaves it pending, applied.
+    A command is marked (`commands.applying_at`) before its first write; one found pending
+    with the mark is applied again knowing it may find its own work done: a manual run's ID
+    is its command's, and the repeat looks that run up first (`trigger_as`; the insert
+    would find it too); and when **what it asks for already holds** (the run or task already
+    cancelled, the task already queued, the worker already resumed, whose follow-up is done
+    again), it is decided **applied**, whoever did it; any other rejection (an unknown task)
+    stays one. The mark is set before the command's first read, so it says only that a try
+    began; the rule needs no more. Pause, unpause and drain set a state and
+    repeat as they are. Not chosen: one transaction per command, its writes and its decision
+    (the cleanest, but every write of applying a command, about 15 database functions on two
+    backends, some with transactions of their own, would take the transaction); recording
+    the first try's outcome (each command would report when its first write is done).
+  - **A failed round still delivers what it built** (B7): each message (`CancelAttempt`,
+    `AssignTask`, `AssignParse`) is built after the write it stands for, so they are sent
+    whatever fails after them (`MasterCore::tick_partial`, the dispatcher's `step_into`; a
+    lost worker's moved parse jobs before the write that can still fail; drains and resumes
+    decided before a failing command get their follow-up). Before, a cancel decided in a
+    round that then failed was sent again only when its worker reconnected, an assignment
+    waited 10 s to expire and a parse job 10 min. **Kept as an option, just in case:**
+    resending the cancel of every attempt still being cancelled every few seconds, until it
+    ends. Not built: the ways a cancel can be lost besides a failed round (the master
+    crashing first, a broken connection) end the worker's stream, and a reconnecting worker
+    gets its pending cancels again; add it if a lost cancel is ever seen.
   - **The CLI waits for the decision** by reading the command back (every 0.5 s, for up to
     30 s), and prints the result (`triggered run … of sync for 2026-10-15 01:00 UTC · 03:00
     CEST (running)`); a rejection is an error (exit 1) with the master's reason. When the
@@ -895,17 +920,30 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
 - **Drain on SIGTERM** (M2.6): the agent sends `Draining` (again after any reconnect),
   rejects new assignments ("draining", temporary for the master), and gives its running
   attempts until **`[worker] termination_grace_period`** (default **30 s**, Kubernetes'
-  default; match the pod's `terminationGracePeriodSeconds`) minus a 5 s margin; whatever
-  still runs then is stopped (SIGTERM, SIGKILL after the cancel grace) and ends
-  **`interrupted`**, run again elsewhere without using a retry. Once nothing runs, it waits
-  up to 5 s for the master to acknowledge the last results, sends `Deregister` (the master
-  records it `offline`) and exits 0; without a master it exits at once (the journal keeps
+  default; match the pod's `terminationGracePeriodSeconds`) minus the drain's own end:
+  whatever still runs then gets SIGTERM, SIGKILL **`[worker] drain_terminate_period`** (3 s)
+  later, and ends **`interrupted`**, run again elsewhere without using a retry; the last
+  **`[worker] drain_report_period`** (2 s) is for reporting and deregistering. Once nothing
+  runs, it waits up to 5 s (never past the end of the grace period) for the master to
+  acknowledge the last results, sends `Deregister` (the master records it `offline`) and
+  exits 0; without a master it exits at once (the journal keeps
   the results). A **second SIGTERM or Ctrl-C** interrupts the running attempts at once. A
   draining worker gets no new parse jobs (one sent before the master knew is left to
   others), and its unfinished ones go to other workers that reported the same hash. A
   cancelled attempt keeps its slot until its process has ended and reported, so a drain
-  never ends with a task still running. **`schedr standalone`** drains its worker first, then stops the
-  master and the API, so interrupted tasks are recorded; `schedr dags test` interrupts at
+  never ends with a task still running.
+  **B8, fixed 2026-10-23:** the interrupt used the master's cancel grace (30 s) before
+  SIGKILL, so a task ignoring SIGTERM outlived the pod (killed at the grace period), its
+  attempt ended `lost` and used a retry (a task with `retries = 0` failed its run). The two
+  times are set apart, and `drain_terminate_period` + `drain_report_period` > `termination_grace_period`
+  is a configuration error. Not chosen: SIGTERM earlier so tasks get the full cancel grace
+  (with the defaults, every deploy would interrupt at once); fixed times (a pod with a long
+  shutdown hook needs more report time). The names end in `period`, like
+  `termination_grace_period` (kept: it mirrors Kubernetes' `terminationGracePeriodSeconds`,
+  the value it must match). Not chosen: `drain_terminate_period_before_kill` /
+  `…_before_deadline` (long, as keys and as environment variables); `drain_kill_grace` (a
+  second meaning of "grace" in the section).
+  **`schedr standalone`** drains its worker first, then stops the master and the API, so interrupted tasks are recorded; `schedr dags test` interrupts at
   once. Not chosen: interrupting at once on the first SIGTERM (every deploy would kill tasks
   that would finish in seconds); a 600 s default (a pod without the setting is killed at
   30 s mid-drain: attempts lost, retries used).
@@ -1893,7 +1931,8 @@ list) and likewise has no Python.
   **the restart is the recovery** (workers keep running, and master downtime doesn't count
   against their leases). Not chosen: abandoning a tick after a time limit (a tick cut between
   applying a command and recording its decision applies it twice, and one cut before
-  delivering a cancel leaves the task running, see B7; a restart reads everything back
+  delivering a cancel leaves the task running, see B7, fixed by making both safe to repeat
+  (Web UI and CLI: commands); a restart reads everything back
   instead). The gauge refresh only reads, so it is abandoned after half of
   `loop_stall_timeout`.
 - **Metrics** with **`prometheus-client`** (Prometheus's own Rust client; 2 small new crates

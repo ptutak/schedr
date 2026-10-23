@@ -33,31 +33,32 @@ and the task is assigned again. A cancel is sent again when the worker reconnect
 the attempt.
 
 A round that fails (the database returns an error) is logged, and the next one goes on. What
-it wrote before the error stays done, but **the messages it had built are dropped**: an
-assignment expires and is made again, while a cancel waits until the worker reconnects
-(see the note below).
+it wrote before the error stays done, and **the messages it had built are still sent**: each
+is built only after the write it stands for is stored, so none announces something the
+database doesn't know.
 
 ### A round is never cut short
 
 Each step is a series of separate writes, so stopping a round partway is like a crash in the
-middle of it. If a round stopped between applying a command and recording its decision, the
-next round would apply the command again. If it stopped after storing a cancel but before
-sending it, the task would go on running. So a round always runs to its end, or to the first
-error the database returns.
+middle of it, and a round can't be undone halfway: it always runs to its end, or to the first
+error the database returns. What such an error leaves behind is made safe instead:
+
+- **A command is safe to apply again.** It is marked "being applied" before its first write,
+  and decided after its last. One found still pending with the mark was cut off partway, and
+  is applied again: a manual run takes its command's ID, so the repeat finds the run the
+  first try made, and a repeat that finds what it asks for already holding (the run or task
+  already cancelled, the task already queued, the worker already resumed) is decided
+  applied, not rejected. Anything else wrong with it (an unknown task, say) is still a
+  rejection.
+- **Messages already built are delivered** (above). A cancel that is lost anyway (the master
+  crashed before sending it, or the connection broke) is sent again when the worker
+  reconnects, as every worker does after either.
 
 Every query has a time limit (`[database] query_timeout`, 30 s), enforced by the database, so
 a slow query ends with an error rather than holding the round. Only a database that stops
 answering altogether (a network partition) can hold a round. The loop then stops beating, and
 liveness fails after `[ops] loop_stall_timeout` (2 min). Kubernetes restarts the master,
 which reads its state back (see [State and failures](failures.md)).
-
-```{note}
-Two known limits, both B7 in `BUGS.md`. Applying a command and recording its decision are
-separate writes, so a crash or a database error between them makes the next round apply the
-command again. And a cancel that isn't delivered (the round failed later, or the master
-crashed first) isn't sent again until the worker reconnects. The planned fix: one transaction
-for applying and deciding, and resending pending cancels every round.
-```
 
 ## Between rounds: messages from workers
 

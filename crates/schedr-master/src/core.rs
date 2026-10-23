@@ -17,7 +17,7 @@ use schedr_proto::convert::parsed_file_from_proto;
 use schedr_proto::pb::{self, master_message, worker_message};
 use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
 
-use crate::commands::{CommandError, Commander};
+use crate::commands::{Applied, CommandError, Commander};
 use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
     DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
@@ -430,7 +430,10 @@ impl MasterCore {
                 moved.into_iter().map(assign_parse).collect()
             }
             worker_message::Message::Deregister(_) => {
-                self.forget(worker_id, WorkerState::Offline, now).await?
+                let mut outgoing = Vec::new();
+                self.forget(worker_id, WorkerState::Offline, now, &mut outgoing)
+                    .await?;
+                outgoing
             }
         })
     }
@@ -460,12 +463,33 @@ impl MasterCore {
     ///
     /// The first failure; what was done before it stays done, and the next tick goes on.
     pub async fn tick(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, CoreError> {
-        let applied = self
+        let (outgoing, result) = self.tick_partial(now).await;
+        result.map(|()| outgoing)
+    }
+
+    /// As [`Self::tick`], with the messages built before a failure: each is built after the
+    /// write it stands for is stored, so they are delivered whatever comes after (B7: a cancel
+    /// dropped with its failed round was sent again only when the worker reconnected).
+    pub async fn tick_partial(&mut self, now: Timestamp) -> (Vec<Outgoing>, Result<(), CoreError>) {
+        let mut outgoing = Vec::new();
+        let result = self.tick_into(&mut outgoing, now).await;
+        (outgoing, result)
+    }
+
+    async fn tick_into(
+        &mut self,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let mut applied = Applied::default();
+        let commands = self
             .commander
-            .apply_pending(&self.scheduler, &mut self.dispatcher, now)
-            .await?;
-        let mut outgoing = applied.outgoing;
-        for (worker_id, drained) in applied.drained {
+            .apply_into(&self.scheduler, &mut self.dispatcher, &mut applied, now)
+            .await;
+        outgoing.append(&mut applied.outgoing);
+        // The drains and resumes decided before a failing command get their follow-up too:
+        // being decided, they won't be applied again.
+        for (worker_id, drained) in std::mem::take(&mut applied.drained) {
             if drained {
                 let moved = self.discovery.stop_parsing(&worker_id, now);
                 outgoing.extend(moved.into_iter().map(assign_parse));
@@ -480,8 +504,9 @@ impl MasterCore {
                 outgoing.extend(jobs.into_iter().map(assign_parse));
             }
         }
+        commands?;
         self.scheduler.pass(now).await?;
-        outgoing.extend(self.dispatcher.step(now).await?);
+        self.dispatcher.step_into(now, outgoing).await?;
         let expired = self.discovery.jobs_mut().expire(now);
         outgoing.extend(expired.into_iter().map(assign_parse));
         let lease =
@@ -500,9 +525,10 @@ impl MasterCore {
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
-            outgoing.extend(self.forget(&worker_id, WorkerState::Lost, now).await?);
+            self.forget(&worker_id, WorkerState::Lost, now, outgoing)
+                .await?;
         }
-        Ok(outgoing)
+        Ok(())
     }
 
     /// A worker uploads a parse result (unary call).
@@ -677,15 +703,18 @@ impl MasterCore {
         worker_id: &str,
         state: WorkerState,
         now: Timestamp,
-    ) -> Result<Vec<Outgoing>, CoreError> {
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), CoreError> {
         self.connections.remove(worker_id);
         self.arrivals.forget(worker_id);
         self.db.set_worker_state(worker_id, state, now).await?;
         self.dispatcher.worker_lost(worker_id, now).await?;
+        // Moved in memory: sent whatever fails after (B7).
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);
+        outgoing.extend(moved.into_iter().map(assign_parse));
         self.discovery.worker_gone(worker_id, now).await?;
         self.sync_code();
-        Ok(moved.into_iter().map(assign_parse).collect())
+        Ok(())
     }
 
     /// Tells the dispatcher each root's current code, as discovery decided it.

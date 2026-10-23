@@ -221,6 +221,7 @@ enum StopAfter {
 const LIMITS: Limits = Limits {
     timeout: Some(Duration::from_secs(30)),
     grace: Duration::from_secs(5),
+    interrupt_grace: Duration::from_secs(5),
 };
 
 #[tokio::test]
@@ -291,6 +292,7 @@ async fn task_mode_stops_a_task_past_its_timeout_or_when_cancelled() {
     let short = Limits {
         timeout: Some(Duration::from_millis(1500)),
         grace: Duration::from_secs(2),
+        interrupt_grace: Duration::from_secs(2),
     };
     let ran = run(
         dir.path(),

@@ -718,3 +718,15 @@ fn arrivals_keep_the_latest_per_worker_until_forgotten() {
     assert_eq!(arrivals.last("w1"), None);
     assert_eq!(arrivals.last("w2"), Some(at("2026-10-23T08:00:20Z")));
 }
+
+#[tokio::test]
+async fn a_partial_tick_returns_its_messages_with_the_result() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let (out, result) = core.tick_partial(ts(NOW)).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(
+        matches!(message(&out[0]), master_message::Message::AssignTask(_)),
+        "{out:?}"
+    );
+}

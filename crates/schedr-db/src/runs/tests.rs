@@ -302,3 +302,23 @@ async fn runs_in_progress_are_the_queued_and_running_ones() {
     .unwrap();
     assert_eq!(db.runs_in_progress(&id).await.unwrap(), [running, queued]);
 }
+
+#[tokio::test]
+async fn a_run_inserted_with_its_id_is_stored_once() {
+    let (db, version) = with_dag().await;
+    let id = "01a16884-4f28-7563-9d35-7d0555a017f1";
+    let dag = sync();
+    let manual = run(
+        &dag,
+        &version,
+        RunKind::Manual,
+        RunState::Running,
+        "2026-10-21T08:00:00Z",
+    );
+    assert_eq!(
+        db.insert_run_as(id, &manual).await.unwrap().as_deref(),
+        Some(id)
+    );
+    assert_eq!(db.insert_run_as(id, &manual).await.unwrap(), None);
+    assert_eq!(db.running_count(&dag).await.unwrap(), 1);
+}

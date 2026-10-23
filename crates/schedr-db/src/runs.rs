@@ -67,16 +67,29 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn insert_run(&self, run: &NewRun<'_>) -> Result<Option<String>, DbError> {
+        self.insert_run_as(&Uuid::now_v7().to_string(), run).await
+    }
+
+    /// As [`Self::insert_run`], with the run's ID given (a command's, so applying it again
+    /// finds the run it made); `None` also when a run with this ID exists.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn insert_run_as(
+        &self,
+        id: &str,
+        run: &NewRun<'_>,
+    ) -> Result<Option<String>, DbError> {
         const INSERT: &str = "INSERT INTO runs \
             (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
              triggered_by, started_at) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}) \
             ON CONFLICT DO NOTHING";
-        let id = Uuid::now_v7().to_string();
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = on_pool!(self, |pool, backend| {
             sqlx::query(sql(backend, INSERT))
-                .bind(&id)
+                .bind(id)
                 .bind(run.dag_id.as_str())
                 .bind(run.dag_version_id)
                 .bind(run.kind.to_string())
@@ -90,7 +103,7 @@ impl Database {
                 .await?
                 .rows_affected()
         });
-        Ok((inserted == 1).then_some(id))
+        Ok((inserted == 1).then(|| id.to_owned()))
     }
 
     /// The latest `planned_for` of the DAG's scheduled runs: the scheduler's bookkeeping,
