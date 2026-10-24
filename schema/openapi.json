@@ -617,6 +617,13 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "description": "A token for a mesh or proxy in front of schedr that requires one; schedr itself checks none.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -1354,6 +1361,12 @@
       }
     }
   },
+  "security": [
+    {},
+    {
+      "bearer": []
+    }
+  ],
   "tags": [
     {
       "description": "DAGs and pausing",

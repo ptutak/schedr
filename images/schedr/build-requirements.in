@@ -1,0 +1,6 @@
+# What pymongo's source build needs (its pyproject's build-system), pinned in
+# build-requirements.txt by `make image-requirements`: the builder stage builds without
+# isolation, so nothing unpinned is fetched for the build.
+hatchling>1.24
+setuptools>=65.0
+hatch-requirements-txt>=0.4.1

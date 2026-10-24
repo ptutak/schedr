@@ -1,4 +1,7 @@
-# The base image's build context (images/schedr/Dockerfile) is the wheels only; an image of
-# your own (examples/kubernetes/Dockerfile) is built from its own directory.
+# The base image's build context (images/schedr/Dockerfile) is the wheels and its pinned
+# libraries only; an image of your own (examples/kubernetes/Dockerfile) is built from its own
+# directory.
 *
 !dist/*.whl
+!images/schedr/requirements.txt
+!images/schedr/build-requirements.txt

@@ -61,6 +61,21 @@ command from a header (`[webserver.auth] identity_header`), but never uses it to
 anything. A webserver listening beyond localhost warns about this at startup. Keep it behind an
 authenticating proxy or the mesh.
 
+The CLI sends a bearer token for such a proxy or mesh with `--token` (or `SCHEDR_TOKEN`), e.g.
+a Keycloak token that Istio checks at the gateway.
+
+## The API's description and Swagger UI
+
+Every webserver (and standalone) serves its OpenAPI description at `/api/v1/openapi.json` and
+**Swagger UI** over it at **`/api/v1/docs/`**, always: they describe the API and do nothing.
+The UI's files are built into the binary, so it needs no internet access. The description
+lists an optional bearer token: schedr checks none itself, but Swagger UI's **Authorize** button
+sends one, for a mesh or proxy that requires it. Behind a gateway that serves schedr under a
+path prefix and removes it, setting `X-Forwarded-Prefix` (as Istio's `rewrite` with a header
+does), the page still works: it refers to the description by a relative URL, and the
+description names the prefix as its server. The chart's Istio policy leaves both paths
+open to everyone without a token (see [Deployment](10-deployment.md#inside-an-istio-mesh)).
+
 ## Secrets
 
 Configuration secrets (a database URL with a password) come only from environment variables,

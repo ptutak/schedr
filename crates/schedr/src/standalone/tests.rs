@@ -120,6 +120,7 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
     let mut configured = config();
     configured.worker.data_dir = Some(dir.path().join("data"));
     configured.master.grpc_port = 0;
+    configured.ops.port = 0;
     configured.webserver.port = 0;
     configured.master.tick_interval = Duration::from_millis(50);
     let mut setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();

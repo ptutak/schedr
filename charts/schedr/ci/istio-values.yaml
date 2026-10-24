@@ -1,0 +1,14 @@
+# Every Istio object on (make chart-check).
+migration: onStart
+serviceAccount: {create: false, name: mesh-sa}
+istio:
+  enabled: true
+  virtualService: {enabled: true, gateways: [istio-system/b2b-ingress-gateway], hosts: ["*"], prefix: /service/schedr/}
+  requestAuthentication: {enabled: true, issuer: https://kc.example.com/realms/x, forwardOriginalToken: true}
+  authorizationPolicy:
+    enabled: true
+    api: {claims: {groups: [schedr-users], azp: schedr-cli}, principals: [cluster.local/ns/x/sa/y], namespaces: [tools]}
+    ops: {namespaces: [monitoring]}
+  peerAuthentication: {enabled: true}
+  serviceEntries:
+    - {name: postgres, hosts: [pg.example.com], ports: [{number: 5432, name: tcp-postgres, protocol: TCP}], location: MESH_EXTERNAL, resolution: DNS}

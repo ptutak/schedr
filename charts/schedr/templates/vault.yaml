@@ -1,0 +1,55 @@
+{{- /* The Vault Secrets Operator's objects (values: vault): Kubernetes Secrets kept in sync
+with Vault, e.g. the one database.existingSecret names. */}}
+{{- if .Values.vault.enabled }}
+{{- $fullname := include "schedr.fullname" . }}
+{{- with .Values.vault.auth }}
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  method: kubernetes
+  mount: {{ .mount | quote }}
+  {{- with .namespace }}
+  namespace: {{ . | quote }}
+  {{- end }}
+  kubernetes:
+    role: {{ required "vault.auth.role is required with vault.enabled" .role | quote }}
+    serviceAccount: {{ include "schedr.serviceAccountName" $ }}
+    tokenExpirationSeconds: {{ .tokenExpirationSeconds }}
+{{- end }}
+{{- range .Values.vault.staticSecrets }}
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: {{ $fullname }}-{{ required "every vault.staticSecrets item needs a name" .name }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  vaultAuthRef: {{ $fullname }}
+  mount: {{ .mount | default "kvv2" | quote }}
+  path: {{ required "every vault.staticSecrets item needs a path" .path | quote }}
+  type: {{ .type | default "kv-v2" | quote }}
+  refreshAfter: {{ .refreshAfter | default "600s" | quote }}
+  hmacSecretData: true
+  destination:
+    # Each of the Vault entry's keys a key of this Secret (e.g. url, or username and password).
+    name: {{ .secretName | default .name | quote }}
+    create: true
+    overwrite: true
+    {{- with .transformation }}
+    transformation:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- if $.Values.vault.restartOnChange }}
+  # schedr reads its Secrets at start: a change restarts it (a drain first, within
+  # terminationGracePeriodSeconds).
+  rolloutRestartTargets:
+    - kind: StatefulSet
+      name: {{ $fullname }}
+  {{- end }}
+{{- end }}
+{{- end }}

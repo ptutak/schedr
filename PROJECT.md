@@ -492,7 +492,9 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the
     master's writes (see the transaction grouping).
   - **Scaling past one master: a federated web UI over several deployments** (the user's
-    idea, decided 2026-10-24, milestone M3, a later step). Each deployment is what exists
+    idea, decided 2026-10-24, milestone M3; **federated from the start**, the user's decision
+    the same day: the UI is built for a list of deployments, one being the common case, not
+    added later in the milestone). Each deployment is what exists
     today (a master and its standby, workers, a webserver, a database of its own); one UI
     talks to several webservers and shows their DAGs, runs and workers together, sending
     each action to the deployment it concerns. The webserver already serves all the UI
@@ -542,6 +544,177 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
       about three statements a round instead of three an assignment.
 - **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
   chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
+
+**Standalone inside an Istio mesh (step 2.11a, decided 2026-10-24).** The user deploys
+standalone first (the production path above), into an existing namespace that is part of
+the mesh (`outboundTrafficPolicy: REGISTRY_ONLY`), whose ServiceAccount is reused (the user
+may create a namespace but probably not a ServiceAccount). Distributed (2.11) follows, with
+the same values. Without the mesh's objects nothing reaches schedr there; leaving schedr out
+of the mesh would defeat the point.
+
+- **`serviceAccount`:** `create: true` by default (one holding no permissions); `create:
+  false` with a `name` runs every pod as an existing account; `automountToken: false` (schedr
+  never calls the Kubernetes API). Per-role names come with distributed. Not chosen: `create:
+  false` by default (a plain install on a fresh namespace would fail).
+- **`istio`**, each object optional and off by default: `enabled` (the sidecar label for
+  Istio and annotation for OpenShift Service Mesh 2; `proxy.istio.io/config` with
+  `holdApplicationUntilProxyStarts` and `EXIT_ON_ZERO_ACTIVE_CONNECTIONS`); a
+  `virtualService` on an existing Gateway (the chart creates no Gateway); a
+  `requestAuthentication` (`issuer`, `jwksUri` or inline `jwks`); an `authorizationPolicy`;
+  a `peerAuthentication` (STRICT); `serviceEntries` (a name and a spec each, for Postgres or
+  git outside the mesh). Following the user's existing charts: the VirtualService's `prefix`
+  (other than `/`) rewritten to `/` with `X-Forwarded-Prefix` **set** (not added, so a
+  client's own value is replaced); `forwardOriginalToken` (default false: schedr doesn't use
+  the token yet); and in the policy, **anything from the same namespace to any port**
+  (`sameNamespace`, default true, their charts' default rule). `v1` where the cluster serves it (Istio 1.22 on), else `v1beta1`
+  (older Istio, OpenShift Service Mesh 2). Not chosen: no Istio objects, examples in the docs
+  only (the ALLOW-policy trap below left to each user).
+- **The AuthorizationPolicy lists every port schedr serves,** because an ALLOW policy denies
+  whatever it doesn't list: a policy for the API alone would cut off the ops port (and in
+  distributed mode the gRPC and log ports). Rules: `/api/v1/docs`, `/api/v1/docs/*` and
+  `/api/v1/openapi.json` (GET) for everyone; the API with a valid token (`requestPrincipals:
+  ["*"]`, `api.requireJwt`, default true) carrying `api.claims` (all of them, each with any of
+  its values); callers without a token by `api.principals` / `api.namespaces`; the ops port
+  from `ops.namespaces` (empty: anyone). A RequestAuthentication alone refuses only invalid
+  tokens, so the policy is what requires one. With a shared ServiceAccount the policy tells
+  callers apart only by namespace or token (Istio identifies callers by account).
+- **Found while designing:** (1) an **init container has no proxy** with classic sidecars
+  (they start after init containers), so the `migrate` init container can't reach Postgres
+  through a mesh with strict mTLS or `REGISTRY_ONLY`: **`migration: initContainer | onStart`**,
+  `onStart` running `standalone --migrate` (it migrates only a schema not up to date, holding
+  the lease); native sidecars (Kubernetes 1.29 on) don't have the problem; (2) **the sidecar
+  stops 5 s after SIGTERM** by default, while a drain lasts up to the grace period (600 s):
+  results finished during a drain would never reach the database; hence
+  `EXIT_ON_ZERO_ACTIVE_CONNECTIONS` (the proxy waits for schedr's connections to close), and
+  `holdApplicationUntilProxyStarts` (schedr's first connections need the proxy). Not chosen:
+  `migration: onStart` always (the init container keeps the migration a visible step of its
+  own where the mesh allows it); excluding Postgres's port from the proxy
+  (`excludeOutboundPorts`: the database traffic would leave the mesh's mTLS and policy).
+- **The database from a Secret's user and password** (the user's lab: Postgres set up by
+  hand, its Secret with `username` and `password`, as their other apps compose
+  `SQLALCHEMY_DATABASE_URI`): `database.postgres` (`host`, `port`, `name`, `params`,
+  `existingSecret`, `userKey`, `passwordKey`, `notificationsHost` / `notificationsPort`), the
+  URL built by Kubernetes' `$(VAR)` expansion from `SCHEDR_DB_USER` and `SCHEDR_DB_PASSWORD`
+  (from the Secret; a task never sees them: its environment is clean). The user and password
+  go in unencoded, so they must not contain `@ : / ? # %` or a space: accepted, since the
+  user's database passwords are plain static strings (they separate workloads, they don't
+  guard against outsiders). `database.existingSecret` (the whole URL) stays; both set is a
+  template error. **Switching from SQLite** is one upgrade with these values (a fresh start on
+  Postgres, decided in 2.10). Not chosen: `[database] user` / `password` in schedr, encoded into
+  the URL (safe for any password, but a schedr change the user's passwords don't need);
+  relying on sqlx reading `PGUSER` / `PGPASSWORD` (undocumented by schedr, unclear for the
+  listener's connection); a lab Postgres in `examples/` (the user sets Postgres up).
+- **`vault`** (the user's charts sync Secrets with the Vault Secrets Operator; the lab sets
+  them by hand, so off by default): a VaultAuth (`kubernetes` method, `auth.role`, `mount`,
+  the Vault `namespace`, the pods' ServiceAccount, `tokenExpirationSeconds`) and a
+  VaultStaticSecret per `staticSecrets` item (`name`, `secretName`, `path`, `mount` kvv2,
+  `type` kv-v2, `refreshAfter` 600 s, `hmacSecretData`), each Vault key a Secret key (their
+  charts' JSON transformation left out: schedr reads plain keys; an item may pass its own
+  `transformation`); `restartOnChange` (default true) adds `rolloutRestartTargets` for
+  schedr's StatefulSet, since schedr reads its Secrets at start (a restart drains first). Not
+  chosen: leaving the operator's objects to a manifest beside the chart.
+- **DAGs from a folder, by the deployment process** (the user: drop Python files into a
+  folder and let `helm upgrade` carry them, with no hand-made ConfigMap; outside schedr, since
+  it's deploying): **`charts/schedr/dags-values.sh <folder>`** prints values `dags.files` (path
+  → base64 content), and the chart makes a ConfigMap of them (each file under its own name),
+  mounted at `/dag-files` as the root `files`. **A flat folder** (the user's choice after the
+  review, option A): its `*.py` files and its `.schedrignore`, hidden files left out; Python
+  files in a subfolder are refused (`__pycache__` and hidden folders aside), helpers being
+  top-level modules and packages going through git-sync; names only of `[-._a-zA-Z0-9]`.
+  First built with subfolders: generated keys (`f0000`…, keys can't hold `/`) and the
+  volume's `items` putting each back at its path; the review found the keys positional, so
+  adding a file renumbered them and changed the pod's spec (a restart), and until the old pod
+  had drained the kubelet wrote the new ConfigMap through the old `items` (content under the
+  wrong names). Not chosen: stable keys from the path with `items` (no wrong names, but a
+  restart, so a drain, on every added or removed file); one archive and a sidecar unpacking
+  it with a link swap (subfolders without restarts, but a second git-sync of our own).
+  Otherwise:
+  at most 512 KiB together (a ConfigMap holds 1 MiB, and so does the Secret Helm keeps a
+  release in, whose values and manifest each carry the files in base64, gzipped: 700 KiB of
+  Python measured 690 KB there, so 512 KiB leaves room for files that compress less; 700
+  KiB before the review); everything checked before anything is printed; sorted output (the same
+  folder, the same values); bash and coreutils only (a CI image with Helm). A fixed
+  ConfigMap name and no checksum on the pod: a DAG change doesn't restart schedr (no drain).
+  Helm can't read files outside the chart (`.Files`), hence a step before it. The pod's spec
+  names no file, so adding, changing or removing one never restarts schedr. **Found while
+  building:** a ConfigMap volume holds its files in a timestamped hidden folder, `..data`
+  linking to it and each top-level name a link through `..data`; schedr's scan follows links
+  (for git-sync), so it saw every DAG three times, and a DAG reached through a per-file link
+  resolves to a path outside the name it was found by ("located at … but parsed from …",
+  reproduced with `dags check` on that layout). The root is therefore **the `..data` link
+  itself**, which the kubelet switches atomically, as git-sync switches its link: inside are
+  plain files (checked: parsed once each). `dagsPath: ""` leaves the image's root out (a
+  missing root would warn at every poll). Not chosen: `schedr dags pack` in the CLI (the
+  user: deploying stays outside schedr); `kubectl create configmap --from-file` with
+  `dags.existingConfigMap` (not `helm upgrade`, flat folders only); `--set-file` per file
+  (a loop by hand); plain text values in block scalars (indentation, tabs and first lines
+  starting with spaces need care; base64 can't break); a `.schedrignore` with `..*` in the
+  ConfigMap (the per-file links still resolve outside); schedr skipping `..`-folders (a
+  schedr change for a deployment detail); `dags check` in the script (would bring schedr
+  into deploying; a pipeline can run it as its own step).
+- **git-sync's credentials:** `gitSync.credentials` (`type: token`: a user and a token for an
+  HTTPS repository, git-sync's `GITSYNC_USERNAME` / `GITSYNC_PASSWORD` from the Secret;
+  `type: ssh`: a private key and `known_hosts` mounted read-only, `GITSYNC_SSH_KEY_FILE` /
+  `GITSYNC_SSH_KNOWN_HOSTS_FILE`), instead of raw `gitSync.env`; under `REGISTRY_ONLY` a
+  repository outside the mesh needs a ServiceEntry (documented). The kind test syncs from a
+  git server in the cluster (`git daemon`, no credentials); the credentials are checked by
+  rendering only.
+- **After the 2.11a code review (2026-10-24):** DAG files flat (above); `sameNamespace`
+  documented as letting an ingress gateway in the same namespace through without a token
+  (set it false then; the user's gateway is in `istio-system`); NOTES' gateway URLs with the
+  prefix, `<host>` for a wildcard host; `make standalone`'s address a variable (`LISTEN`,
+  `0.0.0.0` as the user set it); `dagsRoot: files` and `notificationsUrlKey` with
+  `database.postgres` template errors; Swagger UI's files served from their static bytes
+  with `Cache-Control` (an hour); the proxy's settings merged into a `proxy.istio.io/config`
+  of `podAnnotations` instead of replacing it; the folder's limit 512 KiB (above). A second
+  review over those fixes: a `dagsPath` root named `files` by its last part refused too; the
+  script portable (bash 3.2, BSD tools: macOS), counting only `*.py` files (a folder with only
+  `.schedrignore` refused), following links (a linked file taken, a linked subfolder refused
+  like any); file names not starting with `.` but `.schedrignore` (Kubernetes refuses `..`
+  keys, and `..data` is the root's link); the description built once and sent with `Vary:
+  X-Forwarded-Prefix`; the guide: at most two roots (git-sync's volume covers the image's
+  folder). Left: `make standalone` on all addresses by default (the user's choice).
+- **The base image's libraries** (decided 2026-10-25, the user: workers should be able to do
+  some work out of the box; changes 2.10's "the base image carries only schedr"): API calls
+  (`requests`, `httpx`, `aiohttp`, `tenacity`), data (`polars`, `orjson`, `pyyaml`,
+  `python-dateutil`), networking (`paramiko`, `netmiko`, `ncclient`, `dnspython`, `netaddr`)
+  and MongoDB (`pymongo`); no service frameworks or ORMs (no SQLAlchemy: nothing is served from
+  tasks). `images/schedr/requirements.in`, pinned with every dependency (46 packages) in
+  `requirements.txt` by `make image-requirements` (`uv pip compile` for musl and Python 3.14
+  with `--exclude-newer` two weeks back, so the rule on library ages holds for the whole tree).
+  Every package has a musllinux wheel but **`pymongo`, which publishes none**: the Dockerfile's
+  builder stage (`build-base`) compiles it with its C extensions required
+  (`PYMONGO_C_EXT_MUST_BUILD`, else it would fall back to pure Python with a warning), without
+  build isolation and with its build tools pinned too (`build-requirements.txt`); the final
+  image installs only wheels (`--no-index`), mounted from the builder rather than copied (a
+  copied layer kept 80 MB of wheels). **Size:** 108 MB → 413 MB, of which Polars' runtime 179
+  MB. The smoke test imports each library, checks `pymongo.has_c()` and runs a Polars query.
+  Async libraries run inside a plain task with `asyncio.run` until M4's async task functions.
+  Images of one's own `FROM` it still add or pin more. **Polars' engine** is
+  `polars-runtime-32`, built for x86-64-v3 (`avx`, `avx2`, `fma`, `bmi1`/`bmi2`, `lzcnt`,
+  `movbe`): on a CPU without them `import polars` only warns and a task dies of SIGILL later.
+  Checked on a node of the user's lab (2026-10-25): all four of `avx2`, `fma`, `bmi2`, `movbe`
+  on its 12 cores, so it stays. A cluster without them switches to `polars[rtcompat]` (Polars
+  prefers `compat` when installed); setting the choice by variable would need `[worker]
+  pass_env`, since tasks get a clean environment. Not chosen besides: `compat` only (slower
+  everywhere); both engines (+180 MB). Not chosen: a second "batteries" image
+  (two images to build and keep); `pandas` / `numpy` (Polars instead); pymongo without its C
+  extensions (slow BSON); a compiler in the final image.
+- **Tests:** `make chart-check` renders the Istio values (`charts/schedr/ci/istio-values.yaml`,
+  both API versions) and checks what they produce; `scripts/kind-mesh.sh` installs Istio
+  1.31.1 (`REGISTRY_ONLY`; `SIDECARS=native`, its default, or `classic`, a plain container as
+  older Istio and OpenShift Service Mesh 2 run it) on a local kind cluster and checks the docs
+  open without a token,
+  the API refused without a token (403), with a forged one (401) and without the group
+  (403), the CLI through the gateway with `--token`, a DAG on Postgres migrated on start,
+  and a pod deleted while a task runs whose result still reaches the database (one
+  successful attempt). **Both passed on 2026-10-25** (with the base image's libraries), as did
+  `scripts/kind-standalone.sh` (all its phases). Found: Istio 1.31 injects **native sidecars**
+  by default (`istio-proxy` among the init containers), which have neither problem above
+  (they start before init containers and stop after schedr); the chart's settings are for
+  classic sidecars and harmless with native ones. Not run: the drain without
+  `EXIT_ON_ZERO_ACTIVE_CONNECTIONS` (the run shows the settings work, not that they're
+  needed).
 
 ### Web UI and CLI
 
@@ -656,6 +829,30 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     …/runs/{run_id}/tasks/{task_id}/attempts/{try}/log?from=&limit=` (M2.7, see Task logs),
     `GET …/commands/{command_id}`, `GET /api/v1/workers` (M2.2), and the OpenAPI
     description at `GET /api/v1/openapi.json`.
+  - **Swagger UI at `/api/v1/docs/`** (2.11a, decided 2026-10-24), always on, in every
+    webserver and in standalone: `utoipa-swagger-ui` with its `vendored` feature, the UI's
+    files in the binary (no download at build time, no CDN for the browser), reading
+    `/api/v1/openapi.json`. The description lists an **optional bearer token** (security
+    `[{}, {"bearer": []}]`): schedr checks none itself (until M3's auth modes), but a mesh or
+    proxy in front may (Istio with Keycloak), and Swagger UI's **Authorize** sends it. In the
+    chart's Istio policy both paths are **open to everyone without a token** (they describe
+    the API and do nothing; calls from the page need a token like any other). **Behind a
+    path prefix** (the user's gateways serve apps under e.g. `/service/<app>/`, rewritten to
+    `/` with an `X-Forwarded-Prefix` header): the page refers to the description as
+    `../openapi.json` and `/api/v1/docs` redirects to `docs/`, both relative, and the served
+    description names the prefix as its `servers` URL when `X-Forwarded-Prefix` is a plain
+    path (`/`, letters, digits, `-._~`; anything else ignored; it only changes the document
+    sent back to the same caller). So schedr serves the UI's files itself (`docs.rs`, the
+    crate's `serve`), not through the crate's axum router (absolute redirect and URLs). The
+    committed `schema/openapi.json` has no `servers`. Not chosen: a setting for the prefix
+    (one more value to keep equal to the gateway's); relative `servers` URLs (how clients
+    resolve them varies). Not chosen besides: a
+    setting to turn it off (the user's choice: the description is public on the same port
+    anyway); Scalar or RapiDoc loading their JavaScript from a CDN (blocked on many internal
+    networks); `utoipa-swagger-ui` downloading Swagger UI from GitHub at build time (offline
+    builds and CI would need it vendored by hand); copying a UI's files into the repository
+    (updated by hand); `/swagger-ui` at the root (outside `/api/`, a second route in a
+    VirtualService).
   - **Actions answer `202 Accepted` with the command** (pending); the client polls `GET
     …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
     API itself only checks the request's form (IDs, body); everything else is the master's
@@ -5239,6 +5436,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | gRPC | `tonic` + `prost` | see Master–worker protocol |
 | REST | `axum` | tokio-native, the same stack as `tonic` |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
+| Swagger UI | `utoipa-swagger-ui` 10.0.1 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); 10.0.2 was too new; crc32fast 1.5.2, typed-path 0.12.3 and zopfli 0.8.3 locked (newer ones too new) |
 | JSON Schema | `schemars` | see Rust/Python integration |
 | database | `sqlx` (SQLite and Postgres), **runtime-checked queries**, migrations per backend | compile-time `query!` checking needs one backend |
 | time and zones | `jiff` | explicit handling of DST gaps and overlaps |
@@ -5506,7 +5704,7 @@ gRPC, journal) come before breadth of features.
 | **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; the webserver's REST API subset (`/api/v1`) the CLI needs (the UI comes in M3); CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test`; the runner and its protocol independent of how the process was started (for M2.5) | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server and two scheduling queues** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Two scheduling queues** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
-| **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; later in the milestone, a **federated view**: one UI over several deployments (each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
+| **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; **federated from the start**: one UI over a list of deployments (one the common case; each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **M6. Several masters on one database (not planned)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |

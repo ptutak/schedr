@@ -1,0 +1,18 @@
+{{- if .Values.dags.files }}
+# The DAG files of dags.files (charts/schedr/dags-values.sh), each under its own name: a flat
+# folder, so the pod's spec doesn't list them. A fixed name, and no checksum on the pod: adding,
+# changing or removing a file reaches the mounted files without restarting schedr.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "schedr.fullname" . }}-dags
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+binaryData:
+  {{- range $name, $content := .Values.dags.files }}
+  {{- if not (or (eq $name ".schedrignore") (regexMatch "^[-_a-zA-Z0-9][-._a-zA-Z0-9]*$" $name)) }}
+  {{- fail (printf "dags.files: `%s` isn't a plain file name (letters, digits, - . and _, not starting with `.`; no subfolders)" $name) }}
+  {{- end }}
+  {{ $name | quote }}: {{ $content | quote }}
+  {{- end }}
+{{- end }}

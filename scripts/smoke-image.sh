@@ -31,7 +31,15 @@ curl -sf "http://127.0.0.1:$port/metrics" | grep -q '^schedr_master_leading 1' |
 }
 "$tool" exec "$name" schedr workers list --server http://127.0.0.1:8080 >/dev/null
 "$tool" exec "$name" python3 -c 'import schedr'
+# Every library of the image imports (a native library missing on Alpine shows here), and
+# pymongo has its C extensions.
+"$tool" exec "$name" python3 -c '
+import aiohttp, dateutil, dns.resolver, httpx, ncclient, netaddr, netmiko, orjson, paramiko
+import polars, pymongo, requests, tenacity, yaml, bson
+assert pymongo.has_c() and bson.has_c(), "pymongo without its C extensions"
+polars.DataFrame({"a": [1, 2]}).select(polars.col("a").sum())
+'
 "$tool" stop --time 30 "$name" >/dev/null
 code=$("$tool" inspect --format '{{.State.ExitCode}}' "$name")
 [ "$code" = 0 ] || { echo "exit code $code after SIGTERM:"; "$tool" logs "$name"; exit 1; }
-echo "image ok: ready, leading, CLI answering, stopped cleanly"
+echo "image ok: ready, leading, CLI answering, the libraries importing, stopped cleanly"

@@ -5,10 +5,10 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
 - `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.10b done).
 
-## State (2026-10-24)
+## State (2026-10-25)
 
-- Branch `main`, pushed to GitHub (`gh` works now: `gh run list` shows CI). **M1 is done;
-  M2 steps 2.1 to 2.10b are done.**
+- Branch `main`, pushed to GitHub (the user pushes; `gh run list` shows CI). **M1 is done;
+  M2 steps 2.1 to 2.10b and 2.11a are done.**
   The M2 commits so far:
 
   | Commit | Step |
@@ -32,13 +32,15 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 | `febca4f` | 2.10: standalone for production: the master's lease (`master_lease`, standby, fence in the database), `schedr db migrate [--wait]`, `standalone --migrate`, the Alpine image, the chart's standalone mode; kind run passed |
 | `85b1219` | M4 decisions recorded: the `db` secret storage for standalone, `schedr.script` |
 | `8802fcc` | 2.10b in progress: the stress suite and its first fixes (B10, B11, B12, B13, B14, B16, T1/T2) |
-| this commit | 2.10b done: three code reviews' fixes, T2's fallback and setting aside, T1's memory restore and read-back, B17, B18 (caps, batching), D1-D3, `[master]` times, M3's federated view |
+| `2c1a6d5` | 2.10b done: three code reviews' fixes, T2's fallback and setting aside, T1's memory restore and read-back, B17, B18 (caps, batching), D1-D3, `[master]` times, M3's federated view |
+| this commit | 2.11a: standalone inside an Istio mesh (`serviceAccount`, `migration`, `istio`), Swagger UI at `/api/v1/docs/` (prefix-aware), `database.postgres`, `vault`, DAGs from a flat folder (`charts/schedr/dags-values.sh`), git-sync credentials, the base image's libraries (pymongo built), fixes B19 |
 
-- CI was clean up to 2.6 (all jobs, `wheel` and musllinux included). Ask about CI for 2.7
-  once it is pushed (`gh` isn't installed, so the user looks).
-- The last `make check` passed (B9 fix): 1157 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 80 Rust and 15 Python integration tests; Rust line coverage 88.8 %
-  (floor 85 %). `make docs` passed. rustls is locked at 0.23.45 (0.23.46 was too new).
+- CI is green on every pushed commit up to `2c1a6d5` (checked 2026-10-24 with `gh run list`);
+  the nightly stress run of 2026-10-24 07:21 passed, before `2c1a6d5` landed.
+- The last `make check` (2.11a, 2026-10-25): 1240 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 94 Rust and 15 Python integration tests; Rust line coverage 87.8 %
+  (floor 85 %). `make docs` passed. The kind runs passed: `scripts/kind-standalone.sh`,
+  `scripts/kind-mesh.sh` with native and with classic sidecars (`SIDECARS=classic`). rustls is locked at 0.23.45 (0.23.46 was too new).
 - **Open bug: B4** (`BUGS.md`): a role test's `runs trigger` got no result once
   (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
   the CLI's stderr.
@@ -65,7 +67,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 
 ## Next steps
 
-1. **Ask about CI** for the pushed commits.
+1. **Check CI and the nightly stress run** for newly pushed commits (`gh run list`).
 2. **M2, step 2.10b, the stress suite: done** (PLAN.md; PROJECT.md, Testing: the stress
    suite, and Components and roles: "Found by the stress suite" with every decision and
    what wasn't chosen; the guide's "Stress tests" with the baseline).
@@ -95,14 +97,30 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    - **Lessons:** don't edit sources while `make check` or `make stress` builds (a stale run
      results); build in `CARGO_TARGET_DIR=target/side` while the stress suite runs from
      `target/debug`; the lease unit tests' timings fail under heavy load (they pass alone).
-3. **Ask about CI and the nightly stress run** for the pushed commits (`gh run list`).
+3. **M2, step 2.11a: done** (PROJECT.md, Components and roles: "Standalone inside an Istio
+   mesh", with every decision; PLAN.md's row). The user's lab: an existing mesh namespace
+   (`REGISTRY_ONLY`, gateway `istio-system/b2b-ingress-gateway`, apps under `/service/<app>/`
+   rewritten with `X-Forwarded-Prefix`, Keycloak JWTs, an existing ServiceAccount tied to a
+   Vault role), Secrets set by hand, Postgres set up by the user; standalone first, on SQLite,
+   then `database.postgres`. Not yet known: whether their Istio runs native or classic
+   sidecars (classic: use `migration: onStart`). Local kind clusters `schedr-test` and
+   `schedr-mesh` may still exist (`KIND_EXPERIMENTAL_PROVIDER=podman kind get clusters`).
 4. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
    `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
    (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.
    Details already decided for it: workers as a StatefulSet with a headless Service,
    `log_address` = the pod's DNS name, certificates with both serverAuth and clientAuth; the
    user's cluster runs Istio with `REGISTRY_ONLY`.
-5. Then 2.12 (kill tests on kind), 2.13 (more wheels).
+   The decisions for it were presented on 2026-10-24 and need the user's confirmation before
+   coding: `schedr-server` (Alpine, the binary from the wheel) for master and webserver; the
+   master a one-replica Deployment with `Recreate` and the migrate init container (a standby
+   would deadlock a rollout on the lease); the webserver waiting for its schema instead of
+   refusing (`/readyz` "starting: schema"); workers a StatefulSet with a PVC each; TLS Secrets
+   per role (cert-manager optional); ServiceAccounts per role (or one existing); the Istio
+   policies for :8070 and :8081; a worker PodDisruptionBudget; the same values as standalone,
+   the API's Service keeping its name.
+5. Then 2.12 (kill tests on kind), 2.13 (more wheels). M3's web UI is **federated from the
+   start**: a list of deployments, each reached through its webserver.
 
 ## How to work with the user
 
@@ -149,7 +167,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B10); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B20); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.

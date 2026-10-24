@@ -1,14 +1,16 @@
 //! The schedr webserver: REST API and web UI.
 //!
 //! So far the REST API subset the CLI needs (`/api/v1`: DAGs, runs, tasks, attempts and their
-//! logs, commands, workers), with version headers and a generated OpenAPI description (see PROJECT.md, Web
-//! UI and CLI). Reads come straight from the database; actions are command rows the master
-//! applies.
+//! logs, commands, workers), with version headers, a generated OpenAPI description and Swagger UI
+//! over it at `/api/v1/docs` (see PROJECT.md, Web UI and CLI). Reads come straight from the
+//! database; actions are command rows the master applies.
 
+use axum::Router;
 use axum::routing::{get, post};
-use axum::{Json, Router};
-use utoipa::OpenApi;
+use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityRequirement, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
+pub mod docs;
 pub mod error;
 pub mod logs;
 pub mod metrics;
@@ -50,9 +52,41 @@ pub use state::ApiState;
         (name = "runs", description = "Runs, their tasks and attempts"),
         (name = "commands", description = "Actions and the master's decisions"),
         (name = "workers", description = "The worker registry"),
-    )
+    ),
+    modifiers(&BearerToken)
 )]
 pub struct ApiDoc;
+
+/// Where Swagger UI is served (always: it shows only what `openapi.json` already does).
+pub const DOCS_PATH: &str = "/api/v1/docs";
+
+/// Where the OpenAPI description is served.
+pub const OPENAPI_PATH: &str = "/api/v1/openapi.json";
+
+/// An optional bearer token on every operation: schedr checks none itself (until the UI's
+/// auth modes, milestone M3), but a mesh or proxy in front may require one (e.g. Istio with a
+/// Keycloak token), and Swagger UI's "Authorize" sends it.
+struct BearerToken;
+
+impl Modify for BearerToken {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let mut http = Http::new(HttpAuthScheme::Bearer);
+        http.description = Some(
+            "A token for a mesh or proxy in front of schedr that requires one; schedr itself \
+             checks none."
+                .to_owned(),
+        );
+        openapi
+            .components
+            .get_or_insert_with(Default::default)
+            .add_security_scheme("bearer", SecurityScheme::Http(http));
+        // The empty requirement first: no token is also accepted.
+        openapi.security = Some(vec![
+            SecurityRequirement::default(),
+            SecurityRequirement::new("bearer", Vec::<String>::new()),
+        ]);
+    }
+}
 
 /// The OpenAPI description as committed under `schema/` (pretty JSON).
 ///
@@ -103,10 +137,10 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/workers/{worker_id}/resume",
             post(routes::resume_worker),
         )
-        .route(
-            "/api/v1/openapi.json",
-            get(|| async { Json(openapi_json()) }),
-        )
+        .route(OPENAPI_PATH, get(docs::description))
+        .route(DOCS_PATH, get(docs::redirect))
+        .route("/api/v1/docs/", get(docs::file))
+        .route("/api/v1/docs/{*path}", get(docs::file))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             version::versions,

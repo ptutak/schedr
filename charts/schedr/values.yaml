@@ -1,4 +1,5 @@
 # schedr's chart. Only `mode: standalone` so far: every role (master, API, worker) in one pod.
+# The API's Swagger UI is at /api/v1/docs.
 mode: standalone
 
 image:
@@ -11,9 +12,32 @@ image:
 imagePullSecrets: []
 
 database:
-  # A Secret holding a Postgres URL (with its password: never in values). Without one, SQLite
-  # in the data directory, on the pod's volume. Any connection pooler (PgBouncer in either
-  # mode) works in between.
+  # The database, one of three (any connection pooler, PgBouncer in either mode, works in
+  # between):
+  # - neither existingSecret nor postgres.host: SQLite in the data directory, on the pod's
+  #   volume (the start);
+  # - postgres.host: Postgres, the URL built here with the user and password of a Secret;
+  # - existingSecret: Postgres, the whole URL (password included) in a Secret.
+  # Switching from SQLite to Postgres is one upgrade with postgres (or existingSecret) set:
+  # schedr starts afresh on the empty database (migrated as `migration` says); the volume
+  # keeps its logs and journal, and the SQLite file stays behind on it.
+  postgres:
+    # e.g. postgres.schedr.svc, or a pooler
+    host: ""
+    port: 5432
+    # The database's name.
+    name: schedr
+    # Appended to the URL after `?`, e.g. sslmode=require.
+    params: ""
+    # A Secret holding the user and password (created by hand, or by the vault section).
+    # They go into the URL as they are: neither may contain any of @ : / ? # % or a space.
+    existingSecret: ""
+    userKey: username
+    passwordKey: password
+    # A host (and port) straight to Postgres, past a pooler, used only for listening (see
+    # notifications), with the same user and password. Empty: the main host.
+    notificationsHost: ""
+    notificationsPort: 5432
   existingSecret: ""
   secretKey: url
   # New commands applied at once (Postgres LISTEN) instead of at the master's next round.
@@ -22,6 +46,7 @@ database:
   notifications: true
   # A key of existingSecret holding a URL straight to Postgres, past a pooler, used only for
   # listening: immediate commands behind a pooler in transaction mode. Empty: the main URL.
+  # (With postgres.host: postgres.notificationsHost instead.)
   notificationsUrlKey: ""
 
 persistence:
@@ -30,6 +55,13 @@ persistence:
   # locks aren't reliable there.
   size: 10Gi
   storageClass: ""
+
+# How the schema is migrated, holding the master's lease, only when it isn't up to date:
+# - initContainer: `schedr db migrate --wait` in an init container, before schedr starts;
+# - onStart: schedr itself, at start (`--migrate`). Use it under Istio with classic sidecars:
+#   an init container runs before the pod's proxy, so it can't reach the database through the
+#   mesh (native sidecars, Kubernetes 1.29 on, don't have this problem).
+migration: initContainer
 
 # How long running tasks get when the pod is stopped (an upgrade, a node drain); passed to
 # schedr as [worker] termination_grace_period, so the two always match.
@@ -44,10 +76,18 @@ resources:
   limits:
     memory: 2Gi
 
-# Where the DAG files are in the container.
+# Where the DAG files are in the container: baked into the image, or kept by git-sync (below).
+# Empty: no such root (e.g. only dags.files).
 dagsPath: /dags/current
 # The DAG root's name in references and the UI (otherwise the path's last part).
 dagsRoot: dags
+
+dags:
+  # DAG files carried in values, from a flat folder: `charts/schedr/dags-values.sh dags/ >
+  # dags-values.yaml`, then `helm upgrade ... -f dags-values.yaml`. File name → base64
+  # content; a ConfigMap mounted as the DAG root `files`, beside dagsPath. A change reaches schedr within
+  # about a minute, without a restart. Up to 512 KiB together: more goes through git-sync.
+  files: {}
 
 gitSync:
   # A sidecar keeping a git repository's DAGs in `dagsPath` (its `current` link).
@@ -56,7 +96,22 @@ gitSync:
   repo: ""
   ref: main
   period: 30s
-  # Extra environment for git-sync (e.g. GITSYNC_USERNAME / GITSYNC_PASSWORD from a Secret).
+  # The repository's credentials, from a Secret:
+  # - type token: an HTTPS repo (https://...) with a user and a token (e.g. a GitLab deploy
+  #   token), keys usernameKey and passwordKey;
+  # - type ssh: an SSH repo (git@host:group/repo.git) with a private key and the host's
+  #   known_hosts line (ssh-keyscan <host>), keys sshKeyKey and knownHostsKey.
+  # Under Istio with REGISTRY_ONLY, a repository outside the mesh needs a ServiceEntry
+  # (istio.serviceEntries, e.g. the host on 443, or 22 for SSH).
+  credentials:
+    # token or ssh; empty: a public repository.
+    type: ""
+    secret: ""
+    usernameKey: username
+    passwordKey: password
+    sshKeyKey: ssh-privatekey
+    knownHostsKey: known_hosts
+  # Extra environment for git-sync (its GITSYNC_* settings).
   env: []
 
 # More schedr configuration, as SCHEDR_CONFIG__<SECTION>__<KEY> variables without the prefix
@@ -78,6 +133,106 @@ serviceMonitor:
   enabled: false
   interval: 30s
   labels: {}
+
+serviceAccount:
+  # false: run as an existing ServiceAccount (e.g. the one a mesh-enabled namespace already
+  # has), named below.
+  create: true
+  # Defaults to the release's name when created; required when not.
+  name: ""
+  # schedr never calls the Kubernetes API: no token in its pods.
+  automountToken: false
+
+# Istio objects for a namespace in the mesh, each optional. Inside a mesh with
+# `outboundTrafficPolicy: REGISTRY_ONLY`, the API is reached through a gateway's
+# VirtualService, and a destination outside the mesh (Postgres, the git repository) needs a
+# ServiceEntry.
+istio:
+  # The sidecar injected, schedr started once its proxy is ready, and the proxy kept until
+  # schedr's connections close (a drain's results still reach the database).
+  enabled: false
+  # The API (port service.apiPort) through an existing Gateway; the chart creates none.
+  virtualService:
+    enabled: false
+    # e.g. [istio-ingress/main]
+    gateways: []
+    # e.g. [schedr.example.com], or ["*"]
+    hosts: []
+    # The path schedr is served under, e.g. /service/schedr/: removed before the request
+    # reaches schedr, and named to it in X-Forwarded-Prefix (Swagger UI and the API's
+    # description keep it; the CLI takes it in --server https://<host>/service/schedr).
+    prefix: /
+  # Tokens (JWT) checked at schedr's pod, e.g. Keycloak's. It refuses only invalid tokens:
+  # authorizationPolicy.api.requireJwt refuses requests without one.
+  requestAuthentication:
+    enabled: false
+    # e.g. https://keycloak.example.com/realms/main
+    issuer: ""
+    # Empty (and no jwks): found through the issuer's OpenID discovery.
+    jwksUri: ""
+    # The issuer's keys inline (a JWKS document as text), instead of fetching them.
+    jwks: ""
+    # The token passed on to schedr (which doesn't use it yet) instead of removed.
+    forwardOriginalToken: false
+  # Who may call schedr's ports. Istio denies whatever an ALLOW policy doesn't list, so this
+  # one lists every port schedr serves.
+  authorizationPolicy:
+    enabled: false
+    # Anything from this namespace allowed, to any port, without a token. Set false when an
+    # ingress gateway runs in this namespace: requests through it come from this namespace
+    # too, and would pass without a token.
+    sameNamespace: true
+    api:
+      # Requests need a valid token (requestAuthentication, or the namespace's own).
+      requireJwt: true
+      # Claims the token must carry, e.g. {groups: [schedr-users]}: every claim listed, each with
+      # any of its values.
+      claims: {}
+      # Callers allowed without a token: mesh identities
+      # (cluster.local/ns/<namespace>/sa/<account>) and namespaces.
+      principals: []
+      namespaces: []
+    # /metrics, /healthz and /readyz (port service.opsPort): from these namespaces (e.g.
+    # [monitoring]); empty: from anyone. The kubelet's probes pass either way (Istio sends
+    # them from inside the pod).
+    ops:
+      namespaces: []
+    # /api/v1/docs (Swagger UI) and /api/v1/openapi.json are open to everyone, without a
+    # token: they describe the API and do nothing. Calls made from the page need a token
+    # (its "Authorize" button) like any other.
+  # mTLS required on schedr's pod (STRICT), for a namespace that doesn't require it already.
+  # A Prometheus outside the mesh then can't scrape the ops port.
+  peerAuthentication:
+    enabled: false
+  # ServiceEntries for destinations outside the mesh, each a name and its spec, e.g.
+  #   - name: postgres
+  #     hosts: [pg.example.com]
+  #     ports: [{number: 5432, name: tcp-postgres, protocol: TCP}]
+  #     location: MESH_EXTERNAL
+  #     resolution: DNS
+  serviceEntries: []
+
+# Secrets synced from Vault by the Vault Secrets Operator (secrets.hashicorp.com), e.g. the
+# one database.existingSecret names. Off: create those Secrets by hand.
+vault:
+  enabled: false
+  auth:
+    # The Vault role bound to the pods' ServiceAccount (serviceAccount above).
+    role: ""
+    # The Kubernetes auth method's mount in Vault (e.g. kubernetes, or openshift).
+    mount: kubernetes
+    # The Vault namespace (Vault Enterprise), e.g. production/team.
+    namespace: ""
+    tokenExpirationSeconds: 600
+  # A change in Vault restarts schedr (which reads Secrets at start), after a drain.
+  restartOnChange: true
+  # Each a Kubernetes Secret named secretName (default: name) holding the keys of a Vault
+  # entry, e.g.
+  #   - name: db
+  #     secretName: schedr-db
+  #     path: schedr/database        # its keys: url (or username, password)
+  #     mount: kvv2                  # the default; type kv-v2, refreshAfter 600s
+  staticSecrets: []
 
 podAnnotations: {}
 podLabels: {}

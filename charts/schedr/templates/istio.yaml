@@ -1,0 +1,178 @@
+{{- /* Istio's objects for schedr's pod (values: istio). */}}
+{{- $fullname := include "schedr.fullname" . }}
+{{- $istio := .Values.istio }}
+{{- $docs := list "/api/v1/docs" "/api/v1/docs/*" "/api/v1/openapi.json" }}
+{{- with $istio.virtualService }}
+{{- if .enabled }}
+{{- if not (and .hosts .gateways) }}
+{{- fail "istio.virtualService.hosts and gateways are required with istio.virtualService.enabled" }}
+{{- end }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "networking" $) }}
+kind: VirtualService
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  hosts:
+    {{- toYaml .hosts | nindent 4 }}
+  gateways:
+    {{- toYaml .gateways | nindent 4 }}
+  {{- $prefix := trimSuffix "/" (.prefix | default "/") }}
+  http:
+    - match:
+        - uri:
+            prefix: {{ printf "%s/" $prefix | quote }}
+      {{- if $prefix }}
+      # The prefix removed, and named for schedr (Swagger UI and the API's description keep it).
+      rewrite:
+        uri: /
+      headers:
+        request:
+          set:
+            X-Forwarded-Prefix: {{ $prefix | quote }}
+      {{- end }}
+      route:
+        - destination:
+            host: {{ $fullname }}.{{ $.Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ $.Values.service.apiPort }}
+{{- end }}
+{{- end }}
+{{- with $istio.requestAuthentication }}
+{{- if .enabled }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: RequestAuthentication
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "schedr.selector" $ | nindent 6 }}
+  jwtRules:
+    - issuer: {{ required "istio.requestAuthentication.issuer is required with istio.requestAuthentication.enabled" .issuer | quote }}
+      {{- with .jwksUri }}
+      jwksUri: {{ . | quote }}
+      {{- end }}
+      {{- with .jwks }}
+      jwks: {{ . | quote }}
+      {{- end }}
+      forwardOriginalToken: {{ .forwardOriginalToken }}
+{{- end }}
+{{- end }}
+{{- with $istio.authorizationPolicy }}
+{{- if .enabled }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "schedr.selector" $ | nindent 6 }}
+  action: ALLOW
+  rules:
+    {{- if .sameNamespace }}
+    # Anything from this namespace, to any port.
+    - from:
+        - source:
+            namespaces: [{{ $.Release.Namespace | quote }}]
+    {{- end }}
+    # The API's description and Swagger UI: for everyone.
+    - to:
+        - operation:
+            ports: [{{ $.Values.service.apiPort | quote }}]
+            methods: ["GET"]
+            paths:
+              {{- toYaml $docs | nindent 14 }}
+    {{- with .api }}
+    {{- if .requireJwt }}
+    # The API with a valid token{{ if .claims }} carrying the claims{{ end }}.
+    - from:
+        - source:
+            requestPrincipals: ["*"]
+      to:
+        - operation:
+            ports: [{{ $.Values.service.apiPort | quote }}]
+      {{- with .claims }}
+      when:
+        {{- range $claim, $values := . }}
+        - key: request.auth.claims[{{ $claim }}]
+          values:
+            {{- toYaml (kindIs "slice" $values | ternary $values (list $values)) | nindent 12 }}
+        {{- end }}
+      {{- end }}
+    {{- if or .principals .namespaces }}
+    # The API without a token, for these callers.
+    - from:
+        {{- with .principals }}
+        - source:
+            principals:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+        {{- with .namespaces }}
+        - source:
+            namespaces:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      to:
+        - operation:
+            ports: [{{ $.Values.service.apiPort | quote }}]
+    {{- end }}
+    {{- else }}
+    # The API: for everyone (no token required).
+    - to:
+        - operation:
+            ports: [{{ $.Values.service.apiPort | quote }}]
+    {{- end }}
+    {{- end }}
+    {{- with .ops.namespaces }}
+    # The ops port, from these namespaces.
+    - from:
+        - source:
+            namespaces:
+              {{- toYaml . | nindent 14 }}
+      to:
+        - operation:
+            ports: [{{ $.Values.service.opsPort | quote }}]
+    {{- else }}
+    # The ops port: for everyone.
+    - to:
+        - operation:
+            ports: [{{ $.Values.service.opsPort | quote }}]
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- if $istio.peerAuthentication.enabled }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: PeerAuthentication
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "schedr.selector" $ | nindent 6 }}
+  mtls:
+    mode: STRICT
+{{- end }}
+{{- range $istio.serviceEntries }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "networking" $) }}
+kind: ServiceEntry
+metadata:
+  name: {{ $fullname }}-{{ required "every istio.serviceEntries item needs a name" .name }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  {{- toYaml (omit . "name") | nindent 2 }}
+{{- end }}

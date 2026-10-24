@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image chart-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image image-requirements chart-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -100,10 +100,13 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 # A local standalone for trying things by hand (development only): the debug binary just
 # built, the Python of `uv sync` (with schedr installed) for DAG files and tasks, SQLite and the
 # worker's data in .schedr/ in this repository (git-ignored; open .schedr/schedr.db in an IDE),
-# the DAGs of DAGS (default examples/). The API on 127.0.0.1:8080 (`schedr dags list` works
-# without --server), ops on 8090. Ctrl-C stops it; `rm -rf .schedr` starts afresh.
+# the DAGs of DAGS (default examples/). The API on LISTEN:8080, all addresses by default so it
+# can be reached from outside WSL (it has no authentication: LISTEN=127.0.0.1 on a network you
+# don't trust; `schedr dags list` works without --server with either), ops on 8090. Ctrl-C stops
+# it; `rm -rf .schedr` starts afresh.
 DAGS ?= examples
 STANDALONE_DIR ?= .schedr
+LISTEN ?= 0.0.0.0
 
 standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/)
 	cargo build -p schedr
@@ -111,7 +114,7 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
 	SCHEDR_CONFIG__DATABASE__URL="sqlite://$(abspath $(STANDALONE_DIR))/schedr.db" \
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
-	uv run --no-sync target/debug/schedr standalone --migrate
+	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
 # transaction pooling in front of it (any database name passed through), on a network of their
@@ -166,6 +169,17 @@ smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Al
 
 IMAGE ?= schedr:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
+# The base image's libraries, pinned with their dependencies for Alpine (musl) and Python 3.14,
+# none newer than two weeks (PROJECT.md, Repository and tooling: Libraries).
+IMAGE_PIN = uv pip compile --python-platform x86_64-unknown-linux-musl --python-version 3.14 \
+	--exclude-newer $$(date -u -d '14 days ago' +%Y-%m-%d) --no-annotate --quiet \
+	--custom-compile-command 'make image-requirements'
+
+image-requirements: ## Pin the base image's libraries (images/schedr/requirements.in) again
+	$(IMAGE_PIN) images/schedr/requirements.in -o images/schedr/requirements.txt
+	$(IMAGE_PIN) --only-binary :all: images/schedr/build-requirements.in \
+		-o images/schedr/build-requirements.txt
+
 image: smoke-musl ## Build the base image from the musllinux wheel and smoke-test it
 	$(CONTAINER) build -f images/schedr/Dockerfile -t $(IMAGE) .
 	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)
@@ -177,6 +191,11 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	helm template t charts/schedr --set gitSync.enabled=true \
 		--set gitSync.repo=https://example.com/dags.git >/dev/null
 	helm template t charts/schedr --set serviceMonitor.enabled=true >/dev/null
+	helm template t charts/schedr --set serviceAccount.create=false \
+		--set serviceAccount.name=existing --set migration=onStart >/dev/null
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml >/dev/null
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml \
+		--api-versions security.istio.io/v1 --api-versions networking.istio.io/v1 >/dev/null
 	! helm template t charts/schedr --set mode=distributed >/dev/null 2>&1
 	: "the data volume writable: fsGroup 0, except on OpenShift, which sets its own"
 	helm template t charts/schedr | grep -q 'fsGroup: 0'
@@ -189,6 +208,72 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	: "the schema migrated by an init container, holding the lease; schedr itself doesn't"
 	helm template t charts/schedr | grep -q 'args: \["db", "migrate", "--wait"\]'
 	! helm template t charts/schedr | grep -q -- '--migrate'
+	helm template t charts/schedr --set migration=onStart | grep -q -- '"--migrate"\]'
+	! helm template t charts/schedr --set migration=onStart | grep -q initContainers
+	: "an existing ServiceAccount: none created, the pods run as it, no token mounted"
+	! helm template t charts/schedr --set serviceAccount.create=false \
+		--set serviceAccount.name=existing | grep -q 'kind: ServiceAccount'
+	helm template t charts/schedr --set serviceAccount.create=false \
+		--set serviceAccount.name=existing | grep -q 'serviceAccountName: existing'
+	helm template t charts/schedr | grep -q 'automountServiceAccountToken: false'
+	! helm template t charts/schedr --set serviceAccount.create=false >/dev/null 2>&1
+	: "Istio: the docs open to everyone, the API with a token, the ops port listed too"
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q -- '- /api/v1/openapi.json'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'requestPrincipals: \["\*"\]'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'ports: \["8090"\]'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'holdApplicationUntilProxyStarts'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml --api-versions security.istio.io/v1 \
+		| grep -q 'apiVersion: security.istio.io/v1$$'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'X-Forwarded-Prefix: "/service/schedr"'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'namespaces: \["default"\]'
+	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml | grep -q 'forwardOriginalToken: true'
+	helm template t charts/schedr --set istio.virtualService.enabled=true --set 'istio.virtualService.hosts={*}' \
+		--set 'istio.virtualService.gateways={g}' | grep -q 'prefix: "/"'
+	! helm template t charts/schedr --set istio.virtualService.enabled=true --set 'istio.virtualService.hosts={*}' \
+		--set 'istio.virtualService.gateways={g}' | grep -q rewrite
+	! helm template t charts/schedr --set istio.virtualService.enabled=true >/dev/null 2>&1
+	! helm template t charts/schedr --set istio.requestAuthentication.enabled=true >/dev/null 2>&1
+	! helm template t charts/schedr --set migration=later >/dev/null 2>&1
+	: "Postgres from a Secret's user and password: the URL built by Kubernetes"
+	helm template t charts/schedr --set database.postgres.host=pg --set database.postgres.existingSecret=pg \
+		--set database.postgres.params=sslmode=require --set database.postgres.notificationsHost=direct \
+		| grep -q '"postgres://$$(SCHEDR_DB_USER):$$(SCHEDR_DB_PASSWORD)@direct:5432/schedr?sslmode=require"'
+	! helm template t charts/schedr --set database.postgres.host=pg >/dev/null 2>&1
+	! helm template t charts/schedr --set database.postgres.host=pg --set database.postgres.existingSecret=pg \
+		--set database.existingSecret=url >/dev/null 2>&1
+	: "DAG files from a folder (dags-values.sh) through the ConfigMap and back, and their root"
+	charts/schedr/ci/test-dags-values.sh
+	helm template t charts/schedr --set dags.files.a\\.py=eA== | grep -q 'value: "/dags/current:/dag-files/..data"'
+	helm template t charts/schedr --set dagsPath= --set dags.files.a\\.py=eA== \
+		| grep -q 'value: "/dag-files/..data"'
+	! helm template t charts/schedr --set dagsPath= >/dev/null 2>&1
+	! helm template t charts/schedr --set 'dags.files.a b\.py=eA==' >/dev/null 2>&1
+	! helm template t charts/schedr --set dags.files.a\\.py=eA== --set dagsRoot=files >/dev/null 2>&1
+	! helm template t charts/schedr --set dags.files.a\\.py=eA== --set dagsRoot= \
+		--set dagsPath=/x/files >/dev/null 2>&1
+	! helm template t charts/schedr --set 'dags.files.\.\.data=eA==' >/dev/null 2>&1
+	helm template t charts/schedr --set 'dags.files.\.schedrignore=eA==' --set dags.files.a\\.py=eA== >/dev/null
+	! helm template t charts/schedr --set database.postgres.host=h --set database.postgres.existingSecret=s \
+		--set database.notificationsUrlKey=n >/dev/null 2>&1
+	: "the proxy's settings merged into ones of podAnnotations"
+	helm template t charts/schedr --set istio.enabled=true \
+		--set-string 'podAnnotations.proxy\.istio\.io/config=terminationDrainDuration: 30s' \
+		| grep -q '"holdApplicationUntilProxyStarts":true,.*"terminationDrainDuration":"30s"'
+	: "git-sync: a token or an SSH key from a Secret"
+	helm template t charts/schedr --set gitSync.enabled=true --set gitSync.repo=https://h/r.git \
+		--set gitSync.credentials.type=token --set gitSync.credentials.secret=g | grep -q GITSYNC_PASSWORD
+	helm template t charts/schedr --set gitSync.enabled=true --set gitSync.repo=git@h:r.git \
+		--set gitSync.credentials.type=ssh --set gitSync.credentials.secret=g | grep -q GITSYNC_SSH_KEY_FILE
+	! helm template t charts/schedr --set gitSync.credentials.type=ssh >/dev/null 2>&1
+	! helm template t charts/schedr --set gitSync.credentials.type=password \
+		--set gitSync.credentials.secret=g >/dev/null 2>&1
+	: "Vault: a VaultAuth for the pods' account, a VaultStaticSecret restarting schedr on a change"
+	helm template t charts/schedr --set vault.enabled=true --set vault.auth.role=r \
+		--set 'vault.staticSecrets[0].name=db' --set 'vault.staticSecrets[0].path=p' \
+		| grep -q -A1 'rolloutRestartTargets'
+	! helm template t charts/schedr --set vault.enabled=true >/dev/null 2>&1
+	! helm template t charts/schedr --set vault.enabled=true --set vault.auth.role=r \
+		--set 'vault.staticSecrets[0].name=db' >/dev/null 2>&1
 
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size

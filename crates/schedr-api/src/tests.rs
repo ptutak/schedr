@@ -119,3 +119,60 @@ async fn requests_are_counted_by_route_template_and_status() {
     call(&app, "/nowhere", None).await;
     assert_eq!(count("unmatched", 404), 1);
 }
+
+async fn body_text(response: axum::response::Response) -> String {
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn swagger_ui_is_served_over_the_openapi_description() {
+    let app = app().await;
+    // Relative, as is the description's URL: a gateway's path prefix in front stays.
+    let bare = call(&app, DOCS_PATH, None).await;
+    assert_eq!(bare.status(), StatusCode::SEE_OTHER);
+    assert_eq!(bare.headers()["location"], "docs/");
+    let page = call(&app, "/api/v1/docs/", None).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(page.headers().contains_key(SERVER_VERSION_HEADER));
+    assert!(body_text(page).await.contains("swagger-ui"));
+    let initializer = call(&app, "/api/v1/docs/swagger-initializer.js", None).await;
+    assert_eq!(initializer.status(), StatusCode::OK);
+    assert!(
+        body_text(initializer)
+            .await
+            .contains(r#""../openapi.json""#)
+    );
+    let missing = call(&app, "/api/v1/docs/nothing.js", None).await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_description_names_a_forwarded_prefix_as_its_server() {
+    let app = app().await;
+    let request = Request::builder()
+        .uri(OPENAPI_PATH)
+        .header(docs::FORWARDED_PREFIX_HEADER, "/service/schedr/")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(
+        doc["servers"],
+        serde_json::json!([{"url": "/service/schedr"}])
+    );
+    // Without one, the committed description as it is.
+    let plain = call(&app, OPENAPI_PATH, None).await;
+    let doc: serde_json::Value = serde_json::from_str(&body_text(plain).await).unwrap();
+    assert_eq!(doc, openapi_json());
+}
+
+#[test]
+fn the_openapi_description_offers_an_optional_bearer_token() {
+    let doc = openapi_json();
+    assert_eq!(
+        doc["components"]["securitySchemes"]["bearer"]["scheme"],
+        "bearer"
+    );
+    assert_eq!(doc["security"], serde_json::json!([{}, {"bearer": []}]));
+}

@@ -1,0 +1,21 @@
+# The libraries in schedr's base image, for tasks to use (see PROJECT.md, Components and roles:
+# the base image's libraries). Pinned with their dependencies in requirements.txt by
+# `make image-requirements`; an image of your own built FROM this one can add or pin others.
+# API calls
+requests
+httpx
+aiohttp
+tenacity
+# Data
+polars
+orjson
+pyyaml
+python-dateutil
+# Networking: SSH and SFTP, device CLIs, NETCONF, DNS, addresses
+paramiko
+netmiko
+ncclient
+dnspython
+netaddr
+# MongoDB (no musllinux wheel: built in the image's builder stage)
+pymongo

@@ -35,7 +35,35 @@ The database URL (the Secret's, else SQLite on the data volume) and the configur
 both the migration and schedr.
 */}}
 {{- define "schedr.databaseEnv" -}}
-{{- if .Values.database.existingSecret }}
+{{- $pg := .Values.database.postgres }}
+{{- if and .Values.database.existingSecret $pg.host }}
+{{- fail "set database.existingSecret (a whole URL) or database.postgres.host, not both" }}
+{{- end }}
+{{- if and $pg.host .Values.database.notificationsUrlKey }}
+{{- fail "database.notificationsUrlKey belongs to database.existingSecret: with database.postgres.host, set database.postgres.notificationsHost" }}
+{{- end }}
+{{- if $pg.host }}
+{{- $query := $pg.params | default "" | trimPrefix "?" }}
+{{- $query = ternary (printf "?%s" $query) "" (ne $query "") }}
+{{- $secret := required "database.postgres.existingSecret is required with database.postgres.host (its user and password)" $pg.existingSecret }}
+# The user and password for the URLs below ($(...) is filled in by Kubernetes).
+- name: SCHEDR_DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ $secret }}
+      key: {{ $pg.userKey }}
+- name: SCHEDR_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $secret }}
+      key: {{ $pg.passwordKey }}
+- name: SCHEDR_CONFIG__DATABASE__URL
+  value: {{ printf "postgres://$(SCHEDR_DB_USER):$(SCHEDR_DB_PASSWORD)@%s:%v/%s%s" $pg.host $pg.port $pg.name $query | quote }}
+{{- with $pg.notificationsHost }}
+- name: SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL
+  value: {{ printf "postgres://$(SCHEDR_DB_USER):$(SCHEDR_DB_PASSWORD)@%s:%v/%s%s" . $pg.notificationsPort $pg.name $query | quote }}
+{{- end }}
+{{- else if .Values.database.existingSecret }}
 - name: SCHEDR_CONFIG__DATABASE__URL
   valueFrom:
     secretKeyRef:
@@ -62,3 +90,45 @@ both the migration and schedr.
 {{ toYaml . }}
 {{- end }}
 {{- end }}
+
+{{/* The ServiceAccount the pods run as: the chart's, or an existing one. */}}
+{{- define "schedr.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- .Values.serviceAccount.name | default (include "schedr.fullname" .) -}}
+{{- else -}}
+{{- required "serviceAccount.name is required with serviceAccount.create false (an existing ServiceAccount)" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/* One of initContainer, onStart. */}}
+{{- define "schedr.checkMigration" -}}
+{{- if not (has .Values.migration (list "initContainer" "onStart")) -}}
+{{- fail (printf "migration %q isn't one of \"initContainer\", \"onStart\"" .Values.migration) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The API version of Istio's `networking` or `security` group (the argument's first item): v1
+where the cluster serves it (Istio 1.22 on), else v1beta1 (older Istio, OpenShift Service Mesh
+2).
+*/}}
+{{- define "schedr.istioApi" -}}
+{{- $group := printf "%s.istio.io" (index . 0) -}}
+{{- $ctx := index . 1 -}}
+{{- if $ctx.Capabilities.APIVersions.Has (printf "%s/v1" $group) -}}
+{{- printf "%s/v1" $group -}}
+{{- else -}}
+{{- printf "%s/v1beta1" $group -}}
+{{- end -}}
+{{- end -}}
+
+{{/* gitSync.credentials: a known type, with its Secret. */}}
+{{- define "schedr.checkGitCredentials" -}}
+{{- $git := .Values.gitSync.credentials -}}
+{{- if not (has $git.type (list "" "token" "ssh")) -}}
+{{- fail (printf "gitSync.credentials.type %q isn't one of \"token\", \"ssh\" (or empty: a public repository)" $git.type) -}}
+{{- end -}}
+{{- if and $git.type (not $git.secret) -}}
+{{- fail "gitSync.credentials.secret is required with gitSync.credentials.type" -}}
+{{- end -}}
+{{- end -}}

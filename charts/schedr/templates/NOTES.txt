@@ -1,5 +1,16 @@
-schedr {{ .Chart.AppVersion }}, mode {{ .Values.mode }}, on {{ if .Values.database.existingSecret }}Postgres (Secret {{ .Values.database.existingSecret }}){{ else }}SQLite in its volume{{ end }}.
+schedr {{ .Chart.AppVersion }}, mode {{ .Values.mode }}, on {{ if .Values.database.postgres.host }}Postgres at {{ .Values.database.postgres.host }} (user and password from Secret {{ .Values.database.postgres.existingSecret }}){{ else if .Values.database.existingSecret }}Postgres (Secret {{ .Values.database.existingSecret }}){{ else }}SQLite in its volume{{ end }}.
 
-The REST API has no authentication of its own until the UI: keep it internal. From your machine:
+The REST API has no authentication of its own until the UI: keep it internal{{ if .Values.istio.authorizationPolicy.enabled }} (Istio's policy decides who reaches it){{ end }}. From your machine:
   kubectl port-forward svc/{{ include "schedr.fullname" . }} {{ .Values.service.apiPort }}
   schedr dags list --server http://127.0.0.1:{{ .Values.service.apiPort }}
+Swagger UI: http://127.0.0.1:{{ .Values.service.apiPort }}/api/v1/docs/
+{{- with .Values.istio.virtualService }}
+{{- if .enabled }}
+{{- $host := first .hosts }}
+{{- $host = ternary "<host>" $host (contains "*" $host) }}
+{{- $url := printf "https://%s%s" $host (trimSuffix "/" (.prefix | default "/")) }}
+
+Through the gateway: {{ $url }}/api/v1/docs/
+  schedr dags list --server {{ $url }}{{ if $.Values.istio.authorizationPolicy.api.requireJwt }} --token "$TOKEN"{{ end }}
+{{- end }}
+{{- end }}
