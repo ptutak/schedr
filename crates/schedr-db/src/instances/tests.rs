@@ -83,7 +83,7 @@ async fn running_runs_without_instances_are_newly_running() {
     let new = db.newly_running().await.unwrap();
     assert_eq!(new.len(), 1);
     assert_eq!(
-        (new[0].run_id.as_str(), &new[0].dag),
+        (new[0].run_id.as_str(), &*new[0].dag),
         (run_id.as_str(), &dag())
     );
     let now = ts("2026-10-21T08:00:01Z");
@@ -119,7 +119,7 @@ async fn instances_are_read_back_with_the_run() {
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     assert_eq!(run.state, RunState::Running);
     assert!(!run.cancel_requested);
-    assert_eq!(run.dag, dag());
+    assert_eq!(*run.dag, dag());
     assert_eq!(run.parse_version, "0.1.0");
     let summary: Vec<(&str, TaskInstanceState, Option<Timestamp>)> = run
         .instances

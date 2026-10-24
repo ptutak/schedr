@@ -16,6 +16,13 @@ database:
   # mode) works in between.
   existingSecret: ""
   secretKey: url
+  # New commands applied at once (Postgres LISTEN) instead of at the master's next round.
+  # Behind a pooler in transaction mode the master finds out, warns and polls; false silences
+  # that.
+  notifications: true
+  # A key of existingSecret holding a URL straight to Postgres, past a pooler, used only for
+  # listening: immediate commands behind a pooler in transaction mode. Empty: the main URL.
+  notificationsUrlKey: ""
 
 persistence:
   # The data directory: the SQLite database (without Postgres), task logs, the worker's

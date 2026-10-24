@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration smoke smoke-musl image chart-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image chart-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -81,7 +81,7 @@ test: test-rust test-python  ## Run all unit tests
 
 test-integration: ## Run integration tests (real processes, the binary, Postgres in Docker)
 	@set -e; \
-	cargo nextest run --workspace -E 'kind(test)' --no-run; \
+	cargo nextest run --workspace -E 'kind(test) & not binary(stress)' --no-run; \
 	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
 	sync; \
 	name=schedr-test-pg-$$$$; \
@@ -94,8 +94,57 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	export SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:$$port/postgres; \
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
-	cargo nextest run --workspace -E 'kind(test)'; \
+	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \
 	uv run pytest python/tests/integration examples
+
+# A local standalone for trying things by hand (development only): the debug binary just
+# built, the Python of `uv sync` (with schedr installed) for DAG files and tasks, SQLite and the
+# worker's data in .schedr/ in this repository (git-ignored; open .schedr/schedr.db in an IDE),
+# the DAGs of DAGS (default examples/). The API on 127.0.0.1:8080 (`schedr dags list` works
+# without --server), ops on 8090. Ctrl-C stops it; `rm -rf .schedr` starts afresh.
+DAGS ?= examples
+STANDALONE_DIR ?= .schedr
+
+standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/)
+	cargo build -p schedr
+	mkdir -p $(STANDALONE_DIR)
+	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
+	SCHEDR_CONFIG__DATABASE__URL="sqlite://$(abspath $(STANDALONE_DIR))/schedr.db" \
+	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
+	uv run --no-sync target/debug/schedr standalone --migrate
+
+# The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
+# transaction pooling in front of it (any database name passed through), on a network of their
+# own; one scenario at a time. `STRESS_PROFILE=full` for the large one, `STRESS=<name>` for some
+# scenarios (a nextest name filter, e.g. `STRESS=failover`); reports in target/stress/.
+PGBOUNCER_IMAGE := docker.io/edoburu/pgbouncer:v1.26.0-p0
+STRESS_PROFILE ?= quick
+STRESS ?=
+
+stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
+	@set -e; \
+	cargo nextest run -p schedr --test stress --no-run; \
+	sync; \
+	net=schedr-stress-$$$$; pg=schedr-stress-pg-$$$$; bouncer=schedr-stress-bouncer-$$$$; \
+	$(CONTAINER) network create $$net >/dev/null; \
+	trap '$(CONTAINER) rm -f '$$pg' '$$bouncer' >/dev/null; $(CONTAINER) network rm '$$net' >/dev/null' EXIT; \
+	$(CONTAINER) run -d --rm --name $$pg --network $$net -e POSTGRES_PASSWORD=schedr \
+		-p 127.0.0.1::5432 $(POSTGRES_IMAGE) -c max_connections=500 >/dev/null; \
+	$(CONTAINER) run -d --rm --name $$bouncer --network $$net -e DB_HOST=$$pg \
+		-e DB_USER=postgres -e DB_PASSWORD=schedr -e AUTH_TYPE=scram-sha-256 \
+		-e POOL_MODE=transaction -e MAX_CLIENT_CONN=1000 -e DEFAULT_POOL_SIZE=40 \
+		-p 127.0.0.1::5432 $(PGBOUNCER_IMAGE) >/dev/null; \
+	port=$$($(CONTAINER) port $$pg 5432/tcp | head -1 | sed 's/.*://'); \
+	bport=$$($(CONTAINER) port $$bouncer 5432/tcp | head -1 | sed 's/.*://'); \
+	until $(CONTAINER) exec $$pg psql -h 127.0.0.1 -U postgres -c 'select 1' >/dev/null 2>&1; do \
+		sleep 0.5; done; \
+	export SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:$$port/postgres; \
+	export SCHEDR_TEST_PGBOUNCER=127.0.0.1:$$bport; \
+	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
+	export SCHEDR_STRESS_PROFILE=$(STRESS_PROFILE); \
+	test -x "$$SCHEDR_TEST_PYTHON"; \
+	cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast \
+		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)')
 
 smoke:           ## Build the release wheel and smoke-test it (install, dags test, standalone run)
 	rm -f dist/*manylinux*.whl dist/*linux_x86_64.whl
@@ -133,6 +182,10 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	helm template t charts/schedr | grep -q 'fsGroup: 0'
 	! helm template t charts/schedr --api-versions security.openshift.io/v1 | grep -q fsGroup
 	helm template t charts/schedr --set podSecurityContext.fsGroup=2000 | grep -q 'fsGroup: 2000'
+	: "notifications: on by default; a listening URL from the database Secret when given"
+	helm template t charts/schedr | grep -q -A1 'SCHEDR_CONFIG__DATABASE__NOTIFICATIONS$$'
+	helm template t charts/schedr --set database.existingSecret=pg \
+		--set database.notificationsUrlKey=direct | grep -q -A3 'NOTIFICATIONS_URL'
 	: "the schema migrated by an init container, holding the lease; schedr itself doesn't"
 	helm template t charts/schedr | grep -q 'args: \["db", "migrate", "--wait"\]'
 	! helm template t charts/schedr | grep -q -- '--migrate'

@@ -164,6 +164,49 @@ async fn an_uploaded_parse_stores_its_dags_and_a_known_hash_needs_no_job() {
     assert_eq!(core.handle("w1", empty, ts(NOW)).await.unwrap(), []);
 }
 
+/// Makes the database refuse writes matching `when` (an SQLite trigger on `table`), as a
+/// failing disk or a lost connection would partway through a piece of work.
+async fn refuse(core: &MasterCore, table: &str, when: &str) {
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER refuse_{table} BEFORE UPDATE ON {table} WHEN {when} \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_finished_message_is_stored_whole_or_not_at_all() {
+    // T1 (2.10b): a worker message's writes were each their own transaction; a failure
+    // partway left the first stored (the attempt ended, its run not finished).
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    });
+    core.handle("w1", started, ts(NOW)).await.unwrap();
+    // The run's own write fails: the last of the `Finished`'s writes.
+    refuse(&core, "runs", "NEW.state = 'success'").await;
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: assign.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: b"null".to_vec(),
+        ..pb::Finished::default()
+    });
+    assert!(core.handle("w1", finished, ts(NOW)).await.is_err());
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None, "a part of the `Finished` was stored");
+}
+
 #[tokio::test]
 async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end() {
     let mut core = with_dag().await;
@@ -717,6 +760,20 @@ fn arrivals_keep_the_latest_per_worker_until_forgotten() {
     arrivals.forget("w1");
     assert_eq!(arrivals.last("w1"), None);
     assert_eq!(arrivals.last("w2"), Some(at("2026-10-23T08:00:20Z")));
+}
+
+#[test]
+fn arrivals_hold_an_arrived_start_until_it_is_handled() {
+    let arrivals = Arrivals::default();
+    assert!(!arrivals.start_waiting("a1"));
+    arrivals.clone().start_arrived("a1");
+    assert!(arrivals.start_waiting("a1"));
+    assert!(!arrivals.start_waiting("a2"));
+    arrivals.start_handled("a1");
+    assert!(!arrivals.start_waiting("a1"));
+    // Handled twice (a `Started`, then its `Finished`): nothing left, nothing wrong.
+    arrivals.start_handled("a1");
+    assert!(!arrivals.start_waiting("a1"));
 }
 
 #[tokio::test]

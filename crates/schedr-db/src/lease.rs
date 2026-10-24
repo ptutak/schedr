@@ -239,7 +239,9 @@ impl Database {
     }
 
     /// The start of a write's transaction on Postgres, in one message: `BEGIN`, each
-    /// statement limited to the query limit, and the fence if this database is a master's
+    /// statement limited to the query limit, the transaction ended by Postgres if it stays idle
+    /// that long (a stalled client's locks released, B10), and the fence if this database is a
+    /// master's
     /// (holding the lease's row until the write commits). Values are written into the text (a
     /// message of several statements takes no parameters), each as a quoted literal.
     pub(crate) fn begin_postgres(&self) -> sqlx::AssertSqlSafe<String> {
@@ -253,9 +255,13 @@ impl Database {
             )
         });
         // Safe: fixed text, and values only as literals quoted by `literal`.
+        // The idle limit too: a transaction whose client stalls between statements (a network
+        // partition, a frozen master) is ended by Postgres, and its locks with it, the lease's
+        // row among them; it would otherwise block a takeover for as long as the stall (B10).
         sqlx::AssertSqlSafe(format!(
-            "BEGIN; SELECT set_config('statement_timeout', {}, true);{fence}",
-            literal(&limit)
+            "BEGIN; SELECT set_config('statement_timeout', {limit}, true), \
+             set_config('idle_in_transaction_session_timeout', {limit}, true);{fence}",
+            limit = literal(&limit)
         ))
     }
 }

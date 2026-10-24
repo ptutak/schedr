@@ -41,10 +41,19 @@ both the migration and schedr.
     secretKeyRef:
       name: {{ .Values.database.existingSecret }}
       key: {{ .Values.database.secretKey }}
+{{- with .Values.database.notificationsUrlKey }}
+- name: SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $.Values.database.existingSecret }}
+      key: {{ . }}
+{{- end }}
 {{- else }}
 - name: SCHEDR_CONFIG__DATABASE__URL
   value: sqlite:///var/lib/schedr/schedr.db
 {{- end }}
+- name: SCHEDR_CONFIG__DATABASE__NOTIFICATIONS
+  value: {{ .Values.database.notifications | quote }}
 {{- range $key, $value := .Values.config }}
 - name: SCHEDR_CONFIG__{{ $key }}
   value: {{ $value | quote }}

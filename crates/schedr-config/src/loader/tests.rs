@@ -214,6 +214,28 @@ fn a_database_url_with_a_password_is_refused_from_the_file() {
 }
 
 #[test]
+fn a_notifications_url_with_a_password_is_refused_from_the_file() {
+    let contents = "[database]\nnotifications_url = \"postgres://schedr:secret@pg/schedr\"\n";
+    let err = load(Some(file(contents)), &env(&[]), &[]).unwrap_err();
+    assert_eq!(
+        err,
+        ConfigError::SecretInFile {
+            key: "database.notifications_url",
+            env: "SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL"
+        }
+    );
+    let vars = env(&[(
+        "SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL",
+        "postgres://schedr:secret@pg/schedr",
+    )]);
+    let config = load(Some(file("")), &vars, &[]).unwrap();
+    assert_eq!(
+        config.database.notifications_url.as_deref(),
+        Some("postgres://schedr:secret@pg/schedr")
+    );
+}
+
+#[test]
 fn a_database_url_with_a_password_is_accepted_from_the_environment() {
     let vars = env(&[(
         "SCHEDR_CONFIG__DATABASE__URL",

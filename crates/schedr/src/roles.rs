@@ -553,7 +553,12 @@ pub async fn run_worker(
 /// schema is outdated.
 pub async fn open_database(config: &Config, role: &str) -> Result<Database, AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
-    let db = Database::connect_with_timeout(url, config.database.query_timeout).await?;
+    let db = Database::connect_with_timeout(url, config.database.query_timeout)
+        .await?
+        .with_notifications(
+            config.database.notifications,
+            config.database.notifications_url.clone(),
+        );
     if db.backend() == Backend::Sqlite {
         tracing::warn!(
             "schedr {role} on SQLite: every role must run on this host, on a local disk; \

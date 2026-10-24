@@ -24,7 +24,7 @@ pub enum DbError {
     #[error(transparent)]
     UnsupportedUrl(#[from] UnsupportedUrl),
     /// A query or connection failed.
-    #[error("database error: {0}")]
+    #[error("database error: {0}{hint}", hint = pooler_hint(.0))]
     Sqlx(#[from] sqlx::Error),
     /// Applying migrations failed.
     #[error("migration failed: {0}")]
@@ -58,6 +58,65 @@ pub enum DbError {
 pub struct Database {
     pool: Pool,
     fence: Option<Arc<Fence>>,
+    /// DAG definitions by version, parsed once (shared by clones; see [`DagCache`]).
+    dags: Arc<DagCache>,
+    /// The same for every clone: which database a transaction of
+    /// [`Database::atomically`] belongs to.
+    identity: Arc<()>,
+    /// How the master learns of new commands (see [`Database::with_notifications`]).
+    notifications: Arc<Notifications>,
+}
+
+/// `[database] notifications` and `notifications_url`.
+#[derive(Debug, Clone)]
+pub(crate) struct Notifications {
+    /// On: a new command is announced, and the master listens.
+    pub(crate) on: bool,
+    /// The connection the master listens through, if not this database's own.
+    pub(crate) url: Option<String>,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            on: true,
+            url: None,
+        }
+    }
+}
+
+/// DAG definitions by version ID, each parsed once: a version never changes once stored, so
+/// what is cached never goes stale. Rounds read many rows of the same few versions (a wide
+/// DAG's ready tasks, every active DAG); each brought and parsed its whole definition (B13).
+/// Cleared when it holds [`DagCache::MAX`] versions (the current ones come back at once).
+#[derive(Debug, Default)]
+pub(crate) struct DagCache(
+    std::sync::Mutex<std::collections::HashMap<String, Arc<schedr_model::Dag>>>,
+);
+
+impl DagCache {
+    /// The most versions kept before clearing.
+    pub(crate) const MAX: usize = 4096;
+
+    pub(crate) fn get(&self, version_id: &str) -> Option<Arc<schedr_model::Dag>> {
+        self.map().get(version_id).cloned()
+    }
+
+    pub(crate) fn insert(&self, version_id: &str, dag: Arc<schedr_model::Dag>) {
+        let mut map = self.map();
+        if map.len() >= Self::MAX {
+            map.clear();
+        }
+        map.insert(version_id.to_owned(), dag);
+    }
+
+    fn map(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Arc<schedr_model::Dag>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// The connection pool of a [`Database`].
@@ -78,6 +137,19 @@ pub(crate) struct Fence {
     pub(crate) epoch: i32,
 }
 
+/// The likely cause of an error showing a notification where a query's answer was expected:
+/// a connection pooler in transaction mode lends a server connection that someone `LISTEN`s
+/// on to other clients (B16); empty for any other error.
+fn pooler_hint(error: &sqlx::Error) -> &'static str {
+    if error.to_string().contains("NotificationResponse") {
+        " (probably a connection pooler in transaction mode, PgBouncer or similar, in front of \
+         Postgres while a master listens for notifications: set `[database] notifications = \
+         false`, or `notifications_url` to a connection straight to Postgres)"
+    } else {
+        ""
+    }
+}
+
 impl DbError {
     /// A failed start of a write's transaction on Postgres: [`Self::NotLeading`] if it was the
     /// fence that refused it ([`Database::begin_postgres`]).
@@ -93,7 +165,13 @@ impl DbError {
 
 impl From<Pool> for Database {
     fn from(pool: Pool) -> Self {
-        Self { pool, fence: None }
+        Self {
+            pool,
+            fence: None,
+            dags: Arc::default(),
+            identity: Arc::default(),
+            notifications: Arc::default(),
+        }
     }
 }
 
@@ -175,11 +253,63 @@ impl Database {
     pub fn fenced(&self, holder: &str, epoch: i64) -> Self {
         Self {
             pool: self.pool.clone(),
+            dags: self.dags.clone(),
+            identity: self.identity.clone(),
+            notifications: self.notifications.clone(),
             fence: Some(Arc::new(Fence {
                 holder: holder.to_owned(),
                 epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
             })),
         }
+    }
+
+    /// The DAG of version `version_id`, from the cache or read and parsed once (B13).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored DAG doesn't read; [`DbError::InvalidData`]
+    /// for an unknown version.
+    pub async fn dag_version(&self, version_id: &str) -> Result<Arc<schedr_model::Dag>, DbError> {
+        const JSON: &str = "SELECT dag_json{text} FROM dag_versions WHERE id = $1{uuid}";
+        if let Some(dag) = self.dags.get(version_id) {
+            return Ok(dag);
+        }
+        let json: Option<String> = crate::query::on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(crate::query::sql(backend, JSON))
+                .bind(version_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        let json = json.ok_or_else(|| DbError::InvalidData {
+            what: "dag_versions.id",
+            reason: format!("no DAG version `{version_id}`"),
+        })?;
+        let dag = Arc::new(crate::query::from_json::<schedr_model::Dag>(
+            "dag_versions.dag_json",
+            &json,
+        )?);
+        self.dags.insert(version_id, dag.clone());
+        Ok(dag)
+    }
+
+    /// This database with notifications of new commands `on` or off (`[database]
+    /// notifications`), the master listening through `url` if given (`notifications_url`) or
+    /// through this database's own connections. Off: commands aren't announced, and the master
+    /// polls (see [`Database::command_notifications`]).
+    #[must_use]
+    pub fn with_notifications(mut self, on: bool, url: Option<String>) -> Self {
+        self.notifications = Arc::new(Notifications { on, url });
+        self
+    }
+
+    /// Whether notifications are on, and the connection the master listens through.
+    pub(crate) fn notifications(&self) -> &Notifications {
+        &self.notifications
+    }
+
+    /// The same for every clone of this database (see [`Database::atomically`]).
+    pub(crate) const fn identity(&self) -> &Arc<()> {
+        &self.identity
     }
 
     /// The lease this database's writes are fenced by, if any.

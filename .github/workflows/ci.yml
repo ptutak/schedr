@@ -75,7 +75,8 @@ jobs:
       # Installs schedr (built with maturin) into the environment the runner runs from.
       - run: uv sync --python 3.14
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
-      - run: cargo nextest run --workspace -E 'kind(test)'
+      # The stress suite runs nightly instead (stress.yml).
+      - run: cargo nextest run --workspace -E 'kind(test) & not binary(stress)'
       - run: uv run pytest python/tests/integration examples
 
   # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on

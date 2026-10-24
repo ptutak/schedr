@@ -6,6 +6,7 @@
 //! least once, so a repeated `Finished` changes nothing (see PROJECT.md, Task assignment).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use schedr_model::{AttemptStatus, Dag, RunKind, TaskId, TaskInstanceState};
@@ -34,8 +35,8 @@ pub struct ReadyInstance {
     pub planned_for: Timestamp,
     /// The start of the run's window.
     pub since: Timestamp,
-    /// The DAG version the run runs.
-    pub dag: Dag,
+    /// The DAG version the run runs (shared: the cache's, see [`Database::dag_version`]).
+    pub dag: Arc<Dag>,
     /// The content hash of the code that version was parsed from (the worker reports what it
     /// actually ran).
     pub content_hash: String,
@@ -155,7 +156,7 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
-            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, v.dag_json{text}, p.content_hash, \
+            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
             t.queued_reason, p.schedr_version FROM task_instances t JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
@@ -168,7 +169,14 @@ impl Database {
                 .fetch_all(pool)
                 .await?
         });
-        rows.into_iter().map(ready).collect()
+        // Each run's DAG from the cache, by version: a row no longer brings the whole
+        // definition along, once per ready task (B13).
+        let mut ready_list = Vec::with_capacity(rows.len());
+        for row in rows {
+            let dag = self.dag_version(&row.7).await?;
+            ready_list.push(ready(row, dag)?);
+        }
+        Ok(ready_list)
     }
 
     /// Assigns a queued task instance to a worker: it becomes `running` with a new attempt.
@@ -425,7 +433,7 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
     })
 }
 
-fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
+fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
     let (
         instance_id,
         run_id,
@@ -434,7 +442,7 @@ fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
         kind,
         planned_for,
         since,
-        json,
+        _version_id,
         content_hash,
         queued_reason,
         parse_version,
@@ -447,7 +455,7 @@ fn ready(row: ReadyRow) -> Result<ReadyInstance, DbError> {
         run_kind: from_name("runs.kind", kind)?,
         planned_for: parse_time("runs.planned_for", &planned_for)?,
         since: parse_time("runs.since", &since)?,
-        dag: from_json("dag_versions.dag_json", &json)?,
+        dag,
         content_hash,
         queued_reason,
         parse_version,

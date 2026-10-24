@@ -16,14 +16,29 @@ announced. Every notification that has arrived by then is taken by that one roun
 burst of commands costs one round, not one each. The 1 s timer starts again after a round
 woken this way.
 
+**Notifications behind a connection pooler.** The master listens (Postgres `LISTEN`) on a
+connection of its own. A pooler in **transaction** mode (PgBouncer and similar) can't carry
+that: it lends the server connection the master listens on to other clients, whose queries
+then fail on notifications they didn't expect. So before listening, the master checks the
+connection it would listen through, from inside its own database (no other rights needed):
+it reads the Postgres process behind one connection, opens a transaction on a second one, and
+reads the first's again. A second client on the first one's process, or the first moved to
+another process, means a pooler in transaction mode; the check repeats five times. Found, the
+master warns and doesn't listen: new commands then wait for its next round (up to 1 s). For
+immediate commands behind such a pooler, `[database] notifications_url` gives the master a
+connection straight to Postgres for listening only (checked the same way);
+`[database] notifications = false` turns notifications off, and the warning with them. A
+database error that shows a notification where an answer was expected says that a pooler is
+the likely cause.
+
 A round does six things, in order:
 
 | # | Step | What it does |
 |---|---|---|
 | 1 | **Commands** | Applies every pending command, oldest first (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again. |
-| 3 | **Scheduler** | For each active DAG: works out the schedule's fire times since the last scheduled run and inserts the runs that are due (unless the DAG is paused). Then it starts queued runs while the DAG is under `max_active_runs`. |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started; queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s; assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API. |
+| 3 | **Scheduler** | Reads every DAG's running count, last scheduled run and queued runs at once (three queries, however many DAGs). Then for each active DAG: works out the schedule's fire times since the last scheduled run and inserts the runs that are due (unless the DAG is paused), and starts queued runs while the DAG is under `max_active_runs`. |
+| 4 | **Dispatcher** | Creates the task instances of runs that just started; queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API. |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than 10 minutes to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts (`lost`, each using a retry). |
 
@@ -36,7 +51,11 @@ the attempt.
 A round that fails (the database returns an error) is logged, and the next one goes on. What
 it wrote before the error stays done, and **the messages it had built are still sent**: each
 is built only after the write it stands for is stored, so none announces something the
-database doesn't know.
+database doesn't know. The one exception is the dispatcher's assignments: a round's
+assignments are stored in one transaction, **together or not at all**. A failure among them
+stores none, sends none of their `AssignTask` messages and frees the slots they took; the next
+round assigns those tasks again. One transaction costs one lease check and one commit, where
+each assignment used to cost its own.
 
 ### A round is never cut short
 
@@ -63,8 +82,14 @@ restarts the master, which reads its state back (see [State and failures](07-fai
 
 ## Between rounds: messages from workers
 
-Messages from workers are handled as they arrive, each under the same lock (in order for
-each worker; messages from different workers take the lock in turn):
+Messages from workers are handled as they arrive, under the same lock, in order for each
+worker. A worker's messages that are already waiting are handled together, up to 10 in one turn
+of the lock; then the round and other workers get their turns, and the rest follow in the
+worker's next turn. (Each task sends two: `Started` and `Finished`.)
+
+Each message's writes are one transaction too, stored **whole or not at all**: a `Finished`
+whose last write fails leaves nothing of it stored (the worker sends it again when it
+reconnects), never an ended attempt with its run left behind.
 
 | Message | What the master does |
 |---|---|
@@ -83,8 +108,15 @@ arrives too. So while the master is stuck in a slow database
 write, the heartbeats of its workers still count, and a round that runs after the stall
 doesn't declare live workers lost.
 
+**A task's start counts when its `Started` arrives, too.** The reader also notes each
+`Started` (and `Finished`) as it arrives, and a round doesn't take back an assignment whose
+`Started` is waiting in the queue: a busy master would otherwise take back tasks that did
+start, assign them again, and get busier still with the extra writes (B11, found by the stress
+suite).
+
 Parse results arrive as separate unary calls (`UploadParseResult`). So do large task inputs,
-which workers fetch with `FetchInputs`.
+which workers fetch with `FetchInputs`; these are read from the database without the master's
+lock, so a busy master doesn't hold a task's start up.
 
 ## One master per database: the lease
 
@@ -139,7 +171,11 @@ Each step needs nothing of the database session, so the lease works through any 
 pooler (PgBouncer in session or transaction pooling), and on SQLite. The same goes for the
 query limit: schedr cuts a query off itself, and on Postgres each write's statements are also
 limited in Postgres (`statement_timeout` for that transaction only), so a statement cut off
-stops there instead of running on.
+stops there instead of running on. **A write's transaction left idle** that long (its master
+stalled between two statements: a network partition, a frozen process) is ended by Postgres
+too (`idle_in_transaction_session_timeout`), with its lock on the lease's row: without that, a
+standby couldn't take over for as long as the stall lasted. On SQLite a write takes the write
+lock at its start (`BEGIN IMMEDIATE`), waiting for another writer instead of failing.
 
 ## Starting up
 

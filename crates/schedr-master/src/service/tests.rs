@@ -794,3 +794,164 @@ async fn a_long_round_doesnt_hold_the_leases_renewals_up() {
     drop(round);
     assert_eq!(running.await.unwrap(), Ok(()));
 }
+
+#[tokio::test]
+async fn a_tasks_inputs_are_served_while_the_master_is_busy() {
+    // B11: a task fetches its inputs before it starts; behind the master's lock (a round, or
+    // messages queued), its `Started` came too late and the assignment expired.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    client.upload_parse_result(parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    // A long round holds the master.
+    let core = hub.core();
+    let busy = core.lock().await;
+    let fetched = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.fetch_inputs(pb::FetchInputsRequest {
+            attempt_id: assign.attempt_id.clone(),
+        }),
+    )
+    .await
+    .expect("inputs served without waiting for the master's lock")
+    .unwrap();
+    let chunk = fetched.into_inner().message().await.unwrap().unwrap();
+    assert_eq!(chunk.data, b"{}");
+    drop(busy);
+}
+
+#[tokio::test]
+async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
+    // B11: under load the master handled `Started` after the 10 s start timeout, though the
+    // worker sent it in time; the task was taken back and assigned again, which loaded the
+    // master more (624 expired attempts for 11 successes in stress scenario 13).
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    client.upload_parse_result(parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    // The master is busy (a long round); the worker's `Started` arrives and waits.
+    let core = hub.core();
+    let mut busy = core.lock().await;
+    to_master
+        .send(wrap(worker_message::Message::Started(pb::Started {
+            attempt_id: assign.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        })))
+        .await
+        .unwrap();
+    // The stream's reader records it at once (an in-memory connection: well within this).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The next round comes past the start timeout, the `Started` still unhandled.
+    busy.tick(fixed_now() + Duration::from_secs(11))
+        .await
+        .unwrap();
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None, "a task that started was taken back");
+    drop(busy);
+}
+
+#[tokio::test]
+async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
+    // B12: one message per turn of the master's lock left a worker's messages behind every
+    // round in between (1 task a second in stress scenario 13).
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    client.upload_parse_result(parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    // While the master is busy, the task starts and finishes: two messages wait.
+    let core = hub.core();
+    let busy = core.lock().await;
+    for message in [
+        worker_message::Message::Started(pb::Started {
+            attempt_id: assign.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        }),
+        worker_message::Message::Finished(pb::Finished {
+            attempt_id: assign.attempt_id.clone(),
+            status: pb::AttemptStatus::Success.into(),
+            ..pb::Finished::default()
+        }),
+    ] {
+        to_master.send(wrap(message)).await.unwrap();
+    }
+    // The worker's handler is waiting for the lock by then (an in-memory connection).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(busy);
+    // Next in line after the handler (the lock is first come, first served): both messages
+    // were handled in its one turn.
+    let _round = core.lock().await;
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
+}

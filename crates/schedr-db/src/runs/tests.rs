@@ -75,7 +75,7 @@ async fn active_dags_have_a_version_and_their_first_seen_time() {
     assert!(active[0].paused);
     assert_eq!(active[0].first_seen, ts("2026-10-01T00:00:00Z"));
     assert_eq!(active[0].version_id, version_id);
-    assert_eq!(active[0].dag, dag("sync"));
+    assert_eq!(*active[0].dag, dag("sync"));
     db.apply_dag_changes(
         &[DagChange::Remove { dag_id: sync() }],
         ts("2026-10-02T00:00:00Z"),
@@ -145,6 +145,55 @@ async fn the_scheduler_bookkeeping_counts_only_scheduled_runs() {
             .unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn the_overview_has_every_dags_running_last_scheduled_and_queued_runs() {
+    let (db, version) = with_dag().await;
+    let id = sync();
+    let other = DagId::new("other").unwrap();
+    assert_eq!(db.run_overview().await.unwrap(), RunOverview::default());
+    for (kind, state, at) in [
+        (
+            RunKind::Scheduled,
+            RunState::Success,
+            "2026-10-14T03:00:00Z",
+        ),
+        (
+            RunKind::Scheduled,
+            RunState::Running,
+            "2026-10-15T03:00:00Z",
+        ),
+        (RunKind::Manual, RunState::Running, "2026-10-20T12:00:00Z"),
+        (RunKind::Manual, RunState::Queued, "2026-10-21T12:00:00Z"),
+        (RunKind::Event, RunState::Queued, "2026-10-21T11:00:00Z"),
+    ] {
+        db.insert_run(&run(&id, &version, kind, state, at))
+            .await
+            .unwrap();
+    }
+    let overview = db.run_overview().await.unwrap();
+    assert_eq!(overview.running(&id), 2);
+    assert_eq!(
+        overview.last_scheduled(&id),
+        Some(ts("2026-10-15T03:00:00Z"))
+    );
+    let queued: Vec<(RunKind, Timestamp)> = overview
+        .queued(&id)
+        .iter()
+        .map(|r| (r.kind, r.triggered_at))
+        .collect();
+    assert_eq!(
+        queued,
+        [
+            (RunKind::Event, ts("2026-10-21T11:00:00Z")),
+            (RunKind::Manual, ts("2026-10-21T12:00:00Z"))
+        ]
+    );
+    // A DAG without runs: nothing running, never scheduled, nothing queued.
+    assert_eq!(overview.running(&other), 0);
+    assert_eq!(overview.last_scheduled(&other), None);
+    assert_eq!(overview.queued(&other), []);
 }
 
 #[tokio::test]

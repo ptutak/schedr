@@ -110,14 +110,26 @@ pub fn load(
         .merge(env_provider(env)?)
         .merge(override_provider(overrides));
     let mut config: Config = figment.extract()?;
-    let url_from_file = figment
-        .find_metadata("database.url")
-        .is_some_and(|m| m.source.as_ref().is_some_and(|s| s.file_path().is_some()));
-    if url_from_file && config.database.url.as_deref().is_some_and(url_has_password) {
-        return Err(ConfigError::SecretInFile {
-            key: "database.url",
-            env: "SCHEDR_CONFIG__DATABASE__URL",
-        });
+    let from_file = |key: &str| {
+        figment
+            .find_metadata(key)
+            .is_some_and(|m| m.source.as_ref().is_some_and(|s| s.file_path().is_some()))
+    };
+    for (key, env, url) in [
+        (
+            "database.url",
+            "SCHEDR_CONFIG__DATABASE__URL",
+            &config.database.url,
+        ),
+        (
+            "database.notifications_url",
+            "SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL",
+            &config.database.notifications_url,
+        ),
+    ] {
+        if from_file(key) && url.as_deref().is_some_and(url_has_password) {
+            return Err(ConfigError::SecretInFile { key, env });
+        }
     }
     let worker = &config.worker;
     let drain_end = worker

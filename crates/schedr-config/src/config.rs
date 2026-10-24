@@ -260,14 +260,27 @@ pub struct DatabaseSection {
     )]
     #[schemars(with = "DurationText")]
     pub query_timeout: Duration,
+    /// Whether the master listens for new commands on Postgres (`LISTEN`), applying them at
+    /// once rather than at its next round. A connection pooler in transaction mode (`PgBouncer`
+    /// or similar) can't carry it: the master checks the connection it listens through, and
+    /// behind such a pooler it warns, turns notifications off and polls. Off: polling only;
+    /// the webserver doesn't notify either.
+    pub notifications: bool,
+    /// A connection for the master's listening only, straight to Postgres past a pooler, so
+    /// commands stay immediate behind one; the main URL when not set. With a password, it must
+    /// come from `SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL`, never the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notifications_url: Option<String>,
 }
 
 impl Default for DatabaseSection {
-    /// No URL, queries limited to 10 s.
+    /// No URL, queries limited to 10 s, notifications on (through the main URL).
     fn default() -> Self {
         Self {
             url: None,
             query_timeout: Duration::from_secs(10),
+            notifications: true,
+            notifications_url: None,
         }
     }
 }

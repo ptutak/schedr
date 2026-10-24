@@ -305,6 +305,106 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     `security.openshift.io/v1`), which assigns its own and refuses 0. Not chosen: an
     `openshift` value (one more thing to set right).
   - Left: `0001` edited in place (allowed before the first release).
+- **Found by the stress suite (2.10b, 2026-10-24):**
+  - **A task's start counts when its `Started` arrives** (B11): under load (stress scenario
+    13: 624 assignments expired for 11 successes) the master handled `Started` after the
+    10 s start timeout, though every one of the expired tasks had started on its worker; each
+    expiry assigned the task again and added writes, a feedback loop. Now each stream's reader
+    notes the `Started` and `Finished` it reads (`Arrivals::start_arrived`), and a round
+    doesn't take back an attempt whose start arrived and waits to be handled. Also: a task's
+    inputs (`FetchInputs`, for inputs over 4 MiB) are read from the database without the
+    master's lock (`dispatch::attempt_inputs`).
+  - **A worker's queued messages are handled together** (B12): up to `MESSAGES_PER_TURN` (10)
+    in one turn of the master's lock, the rest in its next turn; one message per turn left a
+    worker's messages behind every round in between (1 task a second in scenario 13). Each
+    task sends 2 (`Started`, `Finished`): 10 is about a round's worth for a worker of 4 slots
+    and short tasks, and still allows far more than the master's writes can take. A count,
+    not a time budget: deterministic and the same on any machine. Not chosen: no cap (a long
+    queue holds rounds and the other workers up); a larger one (helps only a worker with many
+    slots, at everyone else's cost).
+  - **A scheduler round reads every DAG's runs at once** (B12): `Database::run_overview`
+    (running counts, latest scheduled times, queued runs: three queries, `GROUP BY dag_id`)
+    instead of three queries per DAG, so a round no longer costs round trips in proportion to
+    the number of DAGs: with a few hundred idle DAGs it would have filled the master's time
+    with nothing to do. The master is the only writer of runs, so the round works from the
+    overview until it ends. A manual trigger keeps its per-DAG queries (one DAG, rarely).
+  - **DAG definitions cached by version** (B13, decided 2026-10-24): a version never changes
+    once stored, so `Database::dag_version` reads and parses each once and shares it
+    (`Arc<Dag>`) with every clone of the database; the dispatcher's ready tasks, the active
+    DAGs, a run's tasks and new runs carry the version and take the definition from the
+    cache. Before, each ready task's row brought its run's whole DAG definition, parsed per
+    row: a 400-task DAG cost tens of MB per round (scenario 1 never finished). Bounded: cleared
+    at 4,096 versions (the current ones come back at once).
+  - **Several writes, one transaction: `Database::atomically`** (decided 2026-10-24): runs a
+    piece of work with every query of that database, reads too, through one transaction
+    (begun with the statement limit and the fence once, committed at the end, rolled back on
+    an error; SQLite `BEGIN IMMEDIATE`). The transaction is found through a task-local, so
+    only the work's own future uses it, never another task on the same database (the lease's
+    renewals, gauge refreshes, input fetches); work inside work joins it. The query macros
+    take their connection from it when there is one. Not chosen: a transaction slot shared by
+    the database's clones (it would catch those other tasks).
+    - **T1: a worker message's writes are one transaction** (`Started`, `Rejected`,
+      `Finished`, `CodeVersionChanged`; heartbeats write at most once): stored whole or not
+      at all, one lease check and one commit per message instead of one per write. Before, a
+      failure partway left part stored (B7's rules then repaired it).
+    - **T2: a round's assignments are one transaction** (`Dispatcher::assign_into`): stored
+      together or not at all; on a failure the slots they reserved are given back and their
+      `AssignTask` messages dropped, and the next round assigns again. The B7 rule ("messages
+      already built are still sent") stays for everything else. Accepted: an idle round's
+      assignment step opens and commits an empty transaction.
+    - Not chosen: T3, one transaction for a batch of up to 10 messages (one bad message would
+      roll back nine others; savepoints or retries for the last bit of gain); T4,
+      `synchronous_commit = off` for the master (cheap commits, but a Postgres crash could
+      lose commits the master already acted on, breaking B7's guarantees).
+  - **A stalled write doesn't block the takeover** (B10, found by reasoning, confirmed by
+    scenario 5): a write's opening message also sets `idle_in_transaction_session_timeout`
+    to the query limit, for that transaction only, so Postgres ends a transaction whose
+    master stalled between statements, and its lock on the lease's row. Not chosen:
+    `transaction_timeout` (Postgres 17 only).
+  - **SQLite writes take the write lock at their start** (B14, scenario 9: "database is
+    locked"): `BEGIN IMMEDIATE`, waiting for another writer under the busy timeout, where a
+    deferred transaction that read first (the fence) failed at once.
+  - **Notifications behind a pooler** (B16, scenario 6: through PgBouncer in transaction mode
+    the master's `LISTEN` sent notifications into other clients' queries, "unexpected message:
+    NotificationResponse"; decided 2026-10-24): `[database] notifications` (on by default) and
+    `[database] notifications_url` (a connection for listening only, straight to Postgres;
+    with a password, from the environment only). With notifications on, the master first
+    checks the connection it would listen through (`commands::listening_is_safe`): five
+    rounds of reading one connection's server process (`pg_backend_pid()`), opening a
+    transaction on a second, and reading the first's again; a second client on the first
+    one's process, or the first moved, is a pooler in transaction mode (only a pooler does
+    either; one in session mode or none does neither). Found: a warning saying how to have
+    immediate commands, notifications off, polling (the guarantee since 2.10). The check needs
+    nothing beyond the database's own user. A database error showing a notification where an
+    answer was expected adds its likely cause (a pooler; the settings). The webserver doesn't
+    notify with notifications off. The chart: `database.notifications`,
+    `database.notificationsUrlKey`. Not chosen: refusing to start behind a pooler (the user:
+    warn and poll instead); a setting alone (a mistake shows as random query failures);
+    detection alone (a missed pooler with no way to override); dropping `LISTEN` (immediate
+    commands are worth keeping where they work).
+  - **What the database user needs** (the user's setups give access to their own database
+    only): owning it (the schema in `public`, closed to others since Postgres 15), and PL/pgSQL
+    (the fence's `DO` block; allowed to everyone by default). Nothing reads other databases,
+    `pg_stat_activity` or anything a superuser grants.
+  - **Two scheduling queues (M2.5, decided 2026-10-24):** built beside the current round,
+    not reworking it. The scheduler's work for one DAG stays one function (fire times,
+    catch-up, `max_active_runs`, starting queued runs); only **which DAGs a round visits**
+    differs: the **polled** queue (busy DAGs: runs in progress, or firing often) every round,
+    as now; the **woken** queue (quiet DAGs) only when its timer fires (the next fire time, in
+    memory) or something marks it (a run ending, a command, a new version, an unpause), like
+    an async executor polling only woken futures. DAGs move between queues by measurement,
+    with hysteresis (to woken after some quiet rounds, back to polled once a run is in
+    progress); every DAG starts polled after a restart. Moving is safe: everything happens in
+    the round, under the master's lock, and visiting a DAG twice creates nothing twice (a
+    scheduled run is unique per `planned_for`). A full pass every N seconds also visits the
+    woken queue: a missed wake costs at most N seconds, never a run that doesn't start. A
+    comparison test runs one simulated timeline through the full round and the two queues
+    and requires the same runs. **Stress scenario 14** (about 1,000 daily DAGs and a few busy
+    ones) measures it and tunes the classification. Not chosen: reworking the round into an
+    event-driven one (the user's preference: a second path beside the proven one, switched
+    by measurement); two separate engines (the per-DAG logic twice, drifting apart). It
+    doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the
+    master's writes (see the transaction grouping).
 - **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
   chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
 
@@ -5066,6 +5166,50 @@ a real server or talks to Postgres is an integration test.
   the ops port (M2.9: every role's `/healthz`, `/readyz` and `/metrics` after a run, a master
   waiting for an unanswering database alive but not ready, standalone's single ops port; a
   Postgres query past `query_timeout` stopped).
+- **The stress suite** (decided 2026-10-23, step 2.10b): `crates/schedr/tests/stress/`, a
+  test target of its own on the same harness as the role tests (`tests/support/`: the real
+  binary, real processes, real Postgres), **not** in `make check` or the CI run on each push
+  (`-E 'kind(test) & not binary(stress)'`). Each scenario ends with the same **invariants**,
+  read from the database (nothing still running, no task succeeding twice, no command
+  undecided, no run in a state the scenario doesn't expect, no try of a task starting before
+  the previous one ended) and from the tasks' own **marks** (each stress task appends a
+  `start` and an `end` line with its run, task, try and process to one file; a try killed by
+  the harness ends when it was killed, one stopped by schedr when the database recorded its
+  end), and writes a report, `target/stress/<scenario>.json`. **Performance fails only on a
+  gross regression** (a generous floor per scenario: at least so many tasks a second, the
+  master's round p99 under 5 s, assignment to start p99 under 30 s, …); the numbers are in the
+  report, and a baseline is in the guide (Stress tests).
+  - **Scenarios:** 1 throughput (many DAGs and one wide one); 2 command bursts (triggers at
+    once, a pause/unpause storm, cancelling running runs at once); 3 worker churn (`kill -9`
+    of a worker's whole process tree, as a pod dying, and back); 4 master failover (the
+    leader killed; then the next frozen past its lease with `SIGSTOP` and thawed: its writes
+    refused, it exits 1); 5 the database stalled (a proxy freezing the leader's connection:
+    shorter than its lease, it goes on; longer, the standby takes over and it exits); 6
+    through PgBouncer in transaction pooling (1 and 4 again); 7 a rolling restart (SIGTERM
+    one worker after another, no task may fail); 8 code churn (many files, the code changing
+    while runs go on); 9 standalone on SQLite; 10 a soak (memory and open files of each role
+    flat once warmed up); 11 heavy output (big logs read through the API at once, outputs
+    near their limit); 12 the memory watchdog with many tasks over budget beside normal ones;
+    13 Python tasks as the load (`@task` chains passing outputs, a process each). Masters are
+    reached through a proxy following the ready one, as a Service would.
+  - **When:** nightly in CI (`.github/workflows/stress.yml`, skipped when `main` hasn't
+    changed since the last passing run; by hand with a profile and a name filter), and
+    locally with `make stress` at the end of each milestone and after a step that changes
+    the master, the database layer or the agent (AI_INSTRUCTIONS.md). Not chosen: weekly
+    (too long between a regression and its cause); on every push (too slow, and timing makes
+    it flaky).
+  - **Size:** `SCHEDR_STRESS_PROFILE` = `quick` (the default, about 20 minutes, sized for
+    GitHub's smallest standard runner, 2 CPUs and 7 GB, the one a private repository gets, and
+    scaled up by the machine's CPUs and memory, at most 4 times) or `full` (fixed and larger,
+    an hour's soak; locally or by hand). Not chosen: one size (either too slow for nightly or
+    too small to find anything).
+  - **Not chosen:** a load generator of its own driving a deployment from outside (`cargo
+    xtask stress`): more flexible, but without the harness and its checks; tight performance
+    limits (shared runners vary too much: they would fail at random). Kubernetes stays with
+    `scripts/kind-standalone.sh`, per milestone.
+  - **Services:** `make stress` starts Postgres and **PgBouncer** (`edoburu/pgbouncer`
+    v1.26.0-p0, 2026-09-30, transaction pooling, any database name passed through) on a
+    network of their own; CI has them as service containers.
 
 - **Every public function, method and class / struct has unit tests. Private ones are not
   tested directly**: testing them would break the point of making them private (an
@@ -5223,9 +5367,9 @@ gRPC, journal) come before breadth of features.
 | **M0. Foundations** | the shared model as Rust types (DAG JSON, JSON Schema, Protobuf); configuration loading; database schema and `schedr db migrate` (SQLite and Postgres); CLI skeleton | — |
 | **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; the webserver's REST API subset (`/api/v1`) the CLI needs (the UI comes in M3); CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test`; the runner and its protocol independent of how the process was started (for M2.5) | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
-| **M2.5. Fork server** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics | Python tasks start from the fork server on Linux workers, with fallback to spawn |
+| **M2.5. Fork server and two scheduling queues** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Two scheduling queues** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
-| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
+| **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 

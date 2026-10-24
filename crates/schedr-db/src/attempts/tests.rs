@@ -99,6 +99,32 @@ async fn instance_state(db: &Database, run_id: &str, task: &str) -> (TaskInstanc
 }
 
 #[tokio::test]
+async fn ready_tasks_share_their_dags_one_definition() {
+    // B13: each ready task brought its run's whole DAG definition and parsed it; a wide DAG
+    // made every round read it once per ready task.
+    let (db, run_id) = with_run().await;
+    db.update_instances(
+        &run_id,
+        &[crate::instances::InstanceUpdate {
+            task_id: id("load"),
+            state: TaskInstanceState::Queued,
+            ready_at: Some(ts(NOW)),
+            outcome: None,
+            used_retry: false,
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    assert_eq!(ready.len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&ready[0].dag, &ready[1].dag));
+    // And the next round's too: parsed once per version.
+    let again = db.ready_instances(ts(NOW)).await.unwrap();
+    assert!(std::sync::Arc::ptr_eq(&ready[0].dag, &again[0].dag));
+}
+
+#[tokio::test]
 async fn ready_instances_are_the_queued_tasks_of_running_runs() {
     let (db, run_id) = with_run().await;
     let ready = db.ready_instances(ts(NOW)).await.unwrap();
@@ -113,7 +139,7 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
         (extract.planned_for, extract.since),
         (ts(NOW), ts("2026-10-20T08:00:00Z"))
     );
-    assert_eq!(extract.dag, dag());
+    assert_eq!(*extract.dag, dag());
     assert_eq!(extract.content_hash, "h1");
     assert_eq!(extract.queued_reason, None);
     assert_eq!(extract.parse_version, "0.1.0");

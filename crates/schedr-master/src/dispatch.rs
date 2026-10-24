@@ -35,6 +35,7 @@ use schedr_proto::convert::{
 };
 use schedr_proto::pb;
 
+use crate::core::Arrivals;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::workers::{Needs, Workers};
@@ -115,6 +116,8 @@ pub struct Dispatcher {
     /// those hashes and of at least that version.
     current_code: BTreeMap<String, (BTreeSet<String>, Option<SchedrVersion>)>,
     metrics: MasterMetrics,
+    /// Attempts whose `Started` arrived but waits for the master: never taken back (B11).
+    arrivals: Arrivals,
 }
 
 /// A task's code missing on workers.
@@ -138,6 +141,7 @@ impl Dispatcher {
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
             metrics: MasterMetrics::default(),
+            arrivals: Arrivals::default(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -147,6 +151,14 @@ impl Dispatcher {
     pub fn set_metrics(&mut self, metrics: MasterMetrics) {
         self.execution.set_metrics(metrics.clone());
         self.metrics = metrics;
+    }
+
+    /// The dispatcher reading which attempts' `Started` arrived from `arrivals` (the core's, which
+    /// the streams' readers fill), so it doesn't take them back as never started.
+    #[must_use]
+    pub fn with_arrivals(mut self, arrivals: Arrivals) -> Self {
+        self.arrivals = arrivals;
+        self
     }
 
     /// The dispatcher with another code wait (see [`DEFAULT_CODE_WAIT`]).
@@ -212,26 +224,13 @@ impl Dispatcher {
         self.workers.reserve(worker_id, attempt_id, now);
     }
 
-    /// The inputs of an open attempt as JSON (what `FetchInputs` streams when they were too
-    /// big for `AssignTask`); `None` for an unknown or ended attempt.
+    /// The inputs of an open attempt as JSON (see [`attempt_inputs`]).
     ///
     /// # Errors
     ///
     /// [`DispatchError::Db`] if the database fails.
     pub async fn attempt_inputs(&self, attempt_id: &str) -> Result<Option<Vec<u8>>, DispatchError> {
-        let Some(attempt) = self.db.attempt(attempt_id).await? else {
-            return Ok(None);
-        };
-        if attempt.status.is_some() {
-            return Ok(None);
-        }
-        let Some(run) = self.db.run_tasks(&attempt.run_id).await? else {
-            return Ok(None);
-        };
-        Ok(Some(
-            self.inputs(&run.dag, &attempt.run_id, &attempt.task_id)
-                .await?,
-        ))
+        attempt_inputs(&self.db, attempt_id).await
     }
 
     /// A worker is draining: it gets no new tasks.
@@ -298,13 +297,33 @@ impl Dispatcher {
         Ok(outgoing)
     }
 
-    /// As [`Self::assign`], into `outgoing`: the assignments made before a failure are there
-    /// still.
+    /// As [`Self::assign`], into `outgoing`: all of the step's assignments, or, after a failure,
+    /// none (nothing of them stored either).
     ///
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn assign_into(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        // The step's assignments are one transaction: stored together or not at all, with one
+        // lease check and one commit (T2, 2.10b). What they changed in memory (the slots
+        // reserved) and the messages built for them go with them.
+        let (workers, built) = (self.workers.clone(), outgoing.len());
+        let db = self.db.clone();
+        let assigned = Box::pin(db.atomically(self.assign_each(now, outgoing))).await;
+        if assigned.is_err() {
+            self.workers = workers;
+            outgoing.truncate(built);
+        }
+        assigned
+    }
+
+    /// Assigns ready tasks to workers with free slots, each assignment's message into
+    /// `outgoing` once it is stored (in [`Self::assign_into`]'s transaction).
+    async fn assign_each(
         &mut self,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
@@ -346,9 +365,8 @@ impl Dispatcher {
             else {
                 continue;
             };
-            let inputs = self
-                .inputs(&ready.dag, &ready.run_id, &ready.task_id)
-                .await?;
+            let inputs =
+                upstream_inputs(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
             if inputs.len() > MAX_INPUTS {
                 self.end(
                     &attempt_id,
@@ -532,14 +550,17 @@ impl Dispatcher {
     }
 
     /// Takes back assignments with no `Started` within [`START_TIMEOUT`]: they end
-    /// `assignment_expired` and their tasks run again without using a retry. Returns how many.
+    /// `assignment_expired` and their tasks run again without using a retry. One whose
+    /// `Started` arrived but waits for a busy master isn't taken back: the task did start
+    /// (B11). Returns how many.
     ///
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
         let cutoff = now.checked_sub(START_TIMEOUT).unwrap_or(Timestamp::MIN);
-        let expired = self.db.unstarted_attempts(cutoff).await?;
+        let mut expired = self.db.unstarted_attempts(cutoff).await?;
+        expired.retain(|attempt| !self.arrivals.start_waiting(&attempt.id));
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
             self.record(
@@ -902,30 +923,6 @@ impl Dispatcher {
         )
     }
 
-    /// The upstream outputs the task uses, as JSON (`{task_id: output}`).
-    async fn inputs(
-        &self,
-        dag: &schedr_model::Dag,
-        run_id: &str,
-        task_id: &TaskId,
-    ) -> Result<Vec<u8>, DispatchError> {
-        let Some(task) = dag.task(task_id) else {
-            return Ok(b"{}".to_vec());
-        };
-        let used: BTreeSet<&TaskId> = task
-            .references()
-            .into_iter()
-            .filter_map(Reference::upstream_task)
-            .collect();
-        if used.is_empty() {
-            return Ok(b"{}".to_vec());
-        }
-        let outputs = self.db.run_outputs(run_id).await?;
-        let inputs: BTreeMap<&TaskId, &serde_json::Value> =
-            outputs.iter().filter(|(id, _)| used.contains(id)).collect();
-        Ok(serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()))
-    }
-
     fn assign_message(
         &self,
         ready: &ReadyInstance,
@@ -1048,4 +1045,53 @@ fn proto_time(t: Timestamp) -> prost_types::Timestamp {
         seconds: t.as_second(),
         nanos: t.subsec_nanosecond(),
     }
+}
+
+/// The inputs of an open attempt as JSON (what `FetchInputs` streams when they were too big for
+/// `AssignTask`); `None` for an unknown or ended attempt. Only reads the database, so it needs
+/// none of the master's state, nor its lock: a busy master doesn't hold a task's start up (B11).
+///
+/// # Errors
+///
+/// [`DispatchError::Db`] if the database fails.
+pub async fn attempt_inputs(
+    db: &Database,
+    attempt_id: &str,
+) -> Result<Option<Vec<u8>>, DispatchError> {
+    let Some(attempt) = db.attempt(attempt_id).await? else {
+        return Ok(None);
+    };
+    if attempt.status.is_some() {
+        return Ok(None);
+    }
+    let Some(run) = db.run_tasks(&attempt.run_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        upstream_inputs(db, &run.dag, &attempt.run_id, &attempt.task_id).await?,
+    ))
+}
+
+/// The upstream outputs the task uses, as JSON (`{task_id: output}`).
+async fn upstream_inputs(
+    db: &Database,
+    dag: &schedr_model::Dag,
+    run_id: &str,
+    task_id: &TaskId,
+) -> Result<Vec<u8>, DispatchError> {
+    let Some(task) = dag.task(task_id) else {
+        return Ok(b"{}".to_vec());
+    };
+    let used: BTreeSet<&TaskId> = task
+        .references()
+        .into_iter()
+        .filter_map(Reference::upstream_task)
+        .collect();
+    if used.is_empty() {
+        return Ok(b"{}".to_vec());
+    }
+    let outputs = db.run_outputs(run_id).await?;
+    let inputs: BTreeMap<&TaskId, &serde_json::Value> =
+        outputs.iter().filter(|(id, _)| used.contains(id)).collect();
+    Ok(serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()))
 }

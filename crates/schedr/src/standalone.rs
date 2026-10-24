@@ -61,6 +61,11 @@ pub struct Standalone {
     pub loop_stall_timeout: Duration,
     /// The longest a database query may take.
     pub query_timeout: Duration,
+    /// `[database] notifications`: whether new commands are announced and listened for.
+    pub notifications: bool,
+    /// `[database] notifications_url`: what the master listens through, if not the database's
+    /// own connection.
+    pub notifications_url: Option<String>,
     /// The master's lease (one master per database).
     pub lease_period: Duration,
     /// What logs the worker keeps.
@@ -115,6 +120,8 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         ops: localhost(config.ops.port),
         loop_stall_timeout: config.ops.loop_stall_timeout,
         query_timeout: config.database.query_timeout,
+        notifications: config.database.notifications,
+        notifications_url: config.database.notifications_url.clone(),
         lease_period: config.master.lease_period,
         retention: log_retention(config),
         master: master_settings(config),
@@ -178,7 +185,9 @@ pub async fn run(
     // The ops port answers (`/readyz`: starting) meanwhile. One master per database: an
     // up-to-date schema lets the API and the worker start while the master waits for the
     // lease (a standby); with `--migrate`, one to migrate is migrated by the lease's holder.
-    let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout).await?;
+    let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout)
+        .await?
+        .with_notifications(setup.notifications, setup.notifications_url.clone());
     let leading = lead(
         &db,
         &setup.database_url,

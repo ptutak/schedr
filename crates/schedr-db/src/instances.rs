@@ -1,6 +1,8 @@
 //! Task instances of runs: created when a run starts, moved forward by the master, and the
 //! run's result when they have all finished.
 
+use std::sync::Arc;
+
 use jiff::Timestamp;
 use schedr_model::{Dag, RunState, TaskId, TaskInstanceState};
 use uuid::Uuid;
@@ -17,7 +19,7 @@ pub struct NewlyRunning {
     /// The run's ID.
     pub run_id: String,
     /// The DAG version it runs.
-    pub dag: Dag,
+    pub dag: Arc<Dag>,
 }
 
 /// A stored task instance.
@@ -47,7 +49,7 @@ pub struct RunTasks {
     /// Whether a user asked to cancel it.
     pub cancel_requested: bool,
     /// The DAG version it runs.
-    pub dag: Dag,
+    pub dag: Arc<Dag>,
     /// The schedr version of the parse that DAG version came from.
     pub parse_version: String,
     /// Its task instances, in task ID order.
@@ -70,7 +72,7 @@ pub struct InstanceUpdate {
 }
 
 type InstanceRow = (String, String, String, i32, i32, Option<String>, bool);
-/// A run's state, whether it is being cancelled, its DAG JSON and its parse's version.
+/// A run's state, whether it is being cancelled, its DAG version and its parse's version.
 type RunRow = (String, bool, String, String);
 
 impl Database {
@@ -80,22 +82,19 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a stored DAG doesn't read.
     pub async fn newly_running(&self) -> Result<Vec<NewlyRunning>, DbError> {
-        const NEW: &str = "SELECT r.id{text}, v.dag_json{text} FROM runs r \
-            JOIN dag_versions v ON v.id = r.dag_version_id \
+        const NEW: &str = "SELECT r.id{text}, r.dag_version_id{text} FROM runs r \
             WHERE r.state = 'running' \
             AND NOT EXISTS (SELECT 1 FROM task_instances t WHERE t.run_id = r.id) \
             ORDER BY r.started_at, r.id";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, NEW)).fetch_all(pool).await?
         });
-        rows.into_iter()
-            .map(|(run_id, json)| {
-                Ok(NewlyRunning {
-                    run_id,
-                    dag: from_json("dag_versions.dag_json", &json)?,
-                })
-            })
-            .collect()
+        let mut runs = Vec::with_capacity(rows.len());
+        for (run_id, version_id) in rows {
+            let dag = self.dag_version(&version_id).await?;
+            runs.push(NewlyRunning { run_id, dag });
+        }
+        Ok(runs)
     }
 
     /// Creates a run's task instances in their first states.
@@ -136,7 +135,7 @@ impl Database {
     ///
     /// [`DbError`] if a query fails or stored data doesn't read.
     pub async fn run_tasks(&self, run_id: &str) -> Result<Option<RunTasks>, DbError> {
-        const RUN: &str = "SELECT r.state, r.cancel_requested_at IS NOT NULL, v.dag_json{text}, \
+        const RUN: &str = "SELECT r.state, r.cancel_requested_at IS NOT NULL, v.id{text}, \
             p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
@@ -145,21 +144,22 @@ impl Database {
         let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
             let run = sqlx::query_as(sql(backend, RUN))
                 .bind(run_id)
-                .fetch_optional(pool)
+                .fetch_optional(&mut *pool)
                 .await?;
             let rows = sqlx::query_as(sql(backend, INSTANCES))
                 .bind(run_id)
-                .fetch_all(pool)
+                .fetch_all(&mut *pool)
                 .await?;
             (run, rows)
         });
-        let Some((state, cancel_requested, json, parse_version)) = run else {
+        let Some((state, cancel_requested, version_id, parse_version)) = run else {
             return Ok(None);
         };
+        let dag = self.dag_version(&version_id).await?;
         Ok(Some(RunTasks {
             state: from_name("runs.state", state)?,
             cancel_requested,
-            dag: from_json("dag_versions.dag_json", &json)?,
+            dag,
             parse_version,
             instances: rows.into_iter().map(instance).collect::<Result<_, _>>()?,
         }))

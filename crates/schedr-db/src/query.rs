@@ -12,23 +12,48 @@ use sqlx::AssertSqlSafe;
 use crate::backend::Backend;
 use crate::database::DbError;
 
-/// Runs `$body` with `$pool` bound to the pool and `$backend` to its [`Backend`], once per
-/// backend (the queries are the same text, typed per driver), within the database's query
-/// limit: past it, the enclosing function returns [`DbError::QueryTimeout`] (the query is
-/// cut off here, whatever pooler is between; see PROJECT.md, production path). For reads:
-/// writes go through [`in_tx`].
+/// Runs `$body` with `$pool` bound to a connection (`&mut` the backend's connection type) and
+/// `$backend` to its [`Backend`], once per backend (the queries are the same text, typed per
+/// driver), within the database's query limit: past it, the enclosing function returns
+/// [`DbError::QueryTimeout`] (the query is cut off here, whatever pooler is between; see
+/// PROJECT.md, production path). Inside [`Database::atomically`] on this database the
+/// connection is that transaction's, so the work reads its own writes; otherwise one from the
+/// pool. For reads: writes go through [`in_tx`]. A body using `$pool` twice reborrows it
+/// (`&mut *pool`).
+///
+/// [`Database::atomically`]: crate::database::Database::atomically
 macro_rules! on_pool {
     ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {{
         let db: &$crate::database::Database = $db;
         let run = async {
-            Ok::<_, $crate::database::DbError>(match db.pool() {
-                $crate::database::Pool::Sqlite($pool) => {
-                    let $backend = $crate::backend::Backend::Sqlite;
-                    $body
+            Ok::<_, $crate::database::DbError>(if let Some(scope) = $crate::scope::current(db) {
+                let mut scoped = scope.connection.lock().await;
+                match &mut scoped.connection {
+                    $crate::scope::Connection::Sqlite(connection) => {
+                        let $pool: &mut sqlx::SqliteConnection = &mut **connection;
+                        let $backend = $crate::backend::Backend::Sqlite;
+                        $body
+                    }
+                    $crate::scope::Connection::Postgres(connection) => {
+                        let $pool: &mut sqlx::PgConnection = &mut **connection;
+                        let $backend = $crate::backend::Backend::Postgres;
+                        $body
+                    }
                 }
-                $crate::database::Pool::Postgres($pool) => {
-                    let $backend = $crate::backend::Backend::Postgres;
-                    $body
+            } else {
+                match db.pool() {
+                    $crate::database::Pool::Sqlite(pool) => {
+                        let mut connection = pool.acquire().await?;
+                        let $pool: &mut sqlx::SqliteConnection = &mut *connection;
+                        let $backend = $crate::backend::Backend::Sqlite;
+                        $body
+                    }
+                    $crate::database::Pool::Postgres(pool) => {
+                        let mut connection = pool.acquire().await?;
+                        let $pool: &mut sqlx::PgConnection = &mut *connection;
+                        let $backend = $crate::backend::Backend::Postgres;
+                        $body
+                    }
                 }
             })
         };
@@ -51,7 +76,8 @@ pub(crate) const BATCH_LIMITS: u32 = 6;
 /// each statement is limited by the query limit in Postgres too (`statement_timeout` for this
 /// transaction only, so it holds through any pooler, and a statement cut off stops there
 /// instead of running on); the whole by `$limits` query limits ([`WRITE_LIMITS`] if not
-/// given). The transaction commits when `$body` ends without an error.
+/// given); on SQLite it takes the write lock at its start (`BEGIN IMMEDIATE`). The transaction
+/// commits when `$body` ends without an error.
 ///
 /// On Postgres the transaction's start, its limit and the fence are one message to the
 /// server ([`Database::begin_postgres`]), so a write costs one round trip more than its own
@@ -66,10 +92,30 @@ macro_rules! in_tx {
     ($db:expr, $limits:expr, |$tx:ident, $backend:ident| $body:expr) => {{
         let db: &$crate::database::Database = $db;
         let run = async {
+            // Inside `Database::atomically` on this database: its transaction (begun, limited
+            // and fenced already; committed at its end).
+            if let Some(scope) = $crate::scope::current(db) {
+                let mut scoped = scope.connection.lock().await;
+                return Ok::<_, $crate::database::DbError>(match &mut scoped.connection {
+                    $crate::scope::Connection::Sqlite(connection) => {
+                        let $backend = $crate::backend::Backend::Sqlite;
+                        let $tx: &mut sqlx::SqliteConnection = &mut **connection;
+                        $body
+                    }
+                    $crate::scope::Connection::Postgres(connection) => {
+                        let $backend = $crate::backend::Backend::Postgres;
+                        let $tx: &mut sqlx::PgConnection = &mut **connection;
+                        $body
+                    }
+                });
+            }
             Ok::<_, $crate::database::DbError>(match db.pool() {
                 $crate::database::Pool::Sqlite(pool) => {
                     let $backend = $crate::backend::Backend::Sqlite;
-                    let mut $tx = pool.begin().await?;
+                    // The write lock at once, waiting for it under the busy timeout: a
+                    // transaction begun deferred that reads first (the fence) fails at once if
+                    // another connection writes before it does (B14).
+                    let mut $tx = pool.begin_with("BEGIN IMMEDIATE").await?;
                     db.check_fence_sqlite(&mut *$tx).await?;
                     let done = $body;
                     $tx.commit().await?;

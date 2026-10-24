@@ -50,7 +50,13 @@ no musl wheel, so no compiler ends up in your image.
 - one replica (a StatefulSet) with a ReadWriteOnce volume on block storage for the data
   directory (task logs, the worker's journal, and on SQLite the database);
 - `database.existingSecret`: a Secret with a Postgres URL; without it, SQLite on the volume.
-  Any connection pooler can sit in between;
+  Any connection pooler can sit in between. Behind one in transaction mode the master finds it
+  and polls for new commands (see [the master](04-master.md)); `database.notificationsUrlKey`
+  names a key of the same Secret with a URL straight to Postgres, for listening only;
+- **what the database user needs:** its own database only. It owns the database (so it can
+  create the schema in `public`, which Postgres 15 no longer lets everyone do), and can use
+  PL/pgSQL (`DO` blocks: a master's lease check), which Postgres allows everyone by default; a
+  server that revokes it refuses a master's writes;
 - an **init container** migrates the schema (`schedr db migrate --wait`) before schedr
   starts: an install or upgrade migrates once, and a failed migration shows as a failed init
   container. schedr itself doesn't migrate (no `--migrate`), and refuses a schema that isn't
@@ -81,3 +87,11 @@ What to know:
 On a laptop, `schedr standalone --migrate` runs everything on localhost, with SQLite in the
 data directory (`[worker] data_dir`, else `~/.local/share/schedr`), migrating the database at
 start.
+
+In this repository, **`make standalone`** does the same for trying things by hand (development
+only): the debug binary just built, the Python environment of `uv sync` for DAG files and
+tasks, and everything in `.schedr/` in the repository (git-ignored): the SQLite database
+(`.schedr/schedr.db`, to open in an IDE), task logs and the journal. It runs the DAGs in
+`examples/` unless `DAGS=<directory>` says otherwise, with the API on `127.0.0.1:8080` (so
+`schedr dags list` needs no `--server`) and the ops port on 8090. Ctrl-C stops it; `rm -rf
+.schedr` starts afresh.

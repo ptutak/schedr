@@ -241,6 +241,53 @@ async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
     assert!(attempts[0].ended_at < attempts[0].started_at);
 }
 
+/// `extract` and `audit`, independent: both ready at once.
+fn two_independent() -> Dag {
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1,
+        "tasks": [task("extract", &json!({}), 0), task("audit", &json!({}), 0)],
+        "edges": []
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_rounds_assignments_are_stored_together_or_not_at_all() {
+    // T2 (2.10b): each assignment was its own transaction; a failure partway kept the first
+    // ones (stored, reserved, their messages sent) and lost the rest.
+    let (mut dispatcher, db, _run_id) = with_run(two_independent()).await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    // The round's second assignment fails.
+    sqlx::query(
+        "CREATE TRIGGER refuse_second BEFORE INSERT ON attempts \
+         WHEN (SELECT COUNT(*) FROM attempts) >= 1 \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut out = Vec::new();
+    assert!(dispatcher.step_into(ts(NOW), &mut out).await.is_err());
+    assert_eq!(out, [], "messages for assignments not stored");
+    let attempts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attempts")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
+    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
+    // The next round assigns both.
+    sqlx::query("DROP TRIGGER refuse_second")
+        .execute(pool)
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 2);
+}
+
 #[tokio::test]
 async fn without_a_free_slot_nothing_is_assigned() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
@@ -312,6 +359,22 @@ async fn a_start_for_an_attempt_taken_back_is_answered_with_a_cancel() {
         .unwrap()
         .unwrap();
     assert_eq!(other.worker_id, "w2");
+}
+
+#[tokio::test]
+async fn an_attempt_whose_start_arrived_is_not_taken_back() {
+    let (dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    let arrivals = crate::core::Arrivals::default();
+    let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    // Its `Started` arrived; the master hasn't handled it yet.
+    arrivals.start_arrived(&attempt);
+    assert_eq!(dispatcher.step(later(11)).await.unwrap(), []);
+    // Handled, it no longer protects the attempt: with no `Started` stored, it expires.
+    arrivals.start_handled(&attempt);
+    let out = dispatcher.step(later(12)).await.unwrap();
+    assert_eq!(assignment(&out[0]).try_number, 2);
 }
 
 #[tokio::test]

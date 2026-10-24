@@ -22,6 +22,9 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    need no edits, but a new setting, command, endpoint or metric needs its doc comment.
 4. **Run `make check` and `make docs`** (or the project's equivalents) and make sure both
    pass. Never claim something passes without running it; report failures with their output.
+   **Run the stress suite** (`make stress`, if the project has one) at the end of each
+   milestone and after a step that changes the core's scheduling, database or worker code, and
+   report its numbers.
 5. **Run a code review once over the whole step** (the code-review skill, `/code-review`, on
    everything the step changed, after the checks pass). It also checks that the guide matches
    the change. Fix what it confirms, re-run the checks, and list in the summary what it found

@@ -240,10 +240,14 @@ impl Database {
         const WORKERS: &str = "SELECT state, COUNT(*) FROM workers GROUP BY state ORDER BY state";
         let (runs, tasks, workers) = on_pool!(self, |pool, backend| {
             (
-                sqlx::query_as(sql(backend, RUNS)).fetch_all(pool).await?,
-                sqlx::query_as(sql(backend, TASKS)).fetch_all(pool).await?,
+                sqlx::query_as(sql(backend, RUNS))
+                    .fetch_all(&mut *pool)
+                    .await?,
+                sqlx::query_as(sql(backend, TASKS))
+                    .fetch_all(&mut *pool)
+                    .await?,
                 sqlx::query_as(sql(backend, WORKERS))
-                    .fetch_all(pool)
+                    .fetch_all(&mut *pool)
                     .await?,
             )
         });

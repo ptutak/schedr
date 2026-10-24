@@ -4,12 +4,15 @@
 //! that crashes after creating one can't create it twice; manual, backfill, chained and event runs
 //! are exempt (see PROJECT.md, Runs: manual runs, backfill and pausing).
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use jiff::Timestamp;
 use schedr_model::{Dag, DagId, RunKind, RunState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql};
+use crate::query::{db_time, from_name, in_tx, on_pool, parse_time, sql};
 
 #[cfg(test)]
 mod tests;
@@ -46,6 +49,38 @@ pub struct QueuedRun {
     pub triggered_at: Timestamp,
 }
 
+/// What the scheduler needs of every DAG's runs, read at once for a whole round
+/// ([`Database::run_overview`]): a few queries, however many DAGs there are (B12).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunOverview {
+    /// Running runs, per DAG.
+    pub running: BTreeMap<String, u32>,
+    /// The latest scheduled run's `planned_for`, per DAG.
+    pub last_scheduled: BTreeMap<String, Timestamp>,
+    /// Queued runs, per DAG, oldest first.
+    pub queued: BTreeMap<String, Vec<QueuedRun>>,
+}
+
+impl RunOverview {
+    /// `dag_id`'s running runs (0 if none).
+    #[must_use]
+    pub fn running(&self, dag_id: &DagId) -> u32 {
+        self.running.get(dag_id.as_str()).copied().unwrap_or(0)
+    }
+
+    /// `dag_id`'s latest scheduled `planned_for`, if it has a scheduled run.
+    #[must_use]
+    pub fn last_scheduled(&self, dag_id: &DagId) -> Option<Timestamp> {
+        self.last_scheduled.get(dag_id.as_str()).copied()
+    }
+
+    /// `dag_id`'s queued runs, oldest first.
+    #[must_use]
+    pub fn queued(&self, dag_id: &DagId) -> &[QueuedRun] {
+        self.queued.get(dag_id.as_str()).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// A DAG the scheduler looks at: not removed, not in conflict, with a current version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveDag {
@@ -56,7 +91,7 @@ pub struct ActiveDag {
     /// Its current version's ID.
     pub version_id: String,
     /// Its current version.
-    pub dag: Dag,
+    pub dag: Arc<Dag>,
 }
 
 impl Database {
@@ -190,6 +225,52 @@ impl Database {
             .collect()
     }
 
+    /// Every DAG's running count, latest scheduled `planned_for` and queued runs, in three
+    /// queries: what a scheduler round reads, instead of three queries per DAG (B12). The
+    /// master is the only writer of runs, so the round can work from it until it ends.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a query fails or a stored value doesn't read.
+    pub async fn run_overview(&self) -> Result<RunOverview, DbError> {
+        const RUNNING: &str =
+            "SELECT dag_id, COUNT(*) FROM runs WHERE state = 'running' GROUP BY dag_id";
+        const LAST: &str = "SELECT dag_id, {ts<}MAX(planned_for){>ts} FROM runs \
+            WHERE kind = 'scheduled' GROUP BY dag_id";
+        const QUEUED: &str = "SELECT dag_id, id{text}, kind, {ts<}triggered_at{>ts} FROM runs \
+            WHERE state = 'queued' ORDER BY dag_id, triggered_at, id";
+        let running: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, RUNNING))
+                .fetch_all(pool)
+                .await?
+        });
+        let last: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, LAST)).fetch_all(pool).await?
+        });
+        let queued: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, QUEUED)).fetch_all(pool).await?
+        });
+        let mut overview = RunOverview {
+            running: running
+                .into_iter()
+                .map(|(dag, count)| (dag, u32::try_from(count).unwrap_or(u32::MAX)))
+                .collect(),
+            last_scheduled: last
+                .into_iter()
+                .map(|(dag, at)| Ok((dag, parse_time("runs.planned_for", &at)?)))
+                .collect::<Result<_, DbError>>()?,
+            queued: BTreeMap::new(),
+        };
+        for (dag, id, kind, triggered_at) in queued {
+            overview.queued.entry(dag).or_default().push(QueuedRun {
+                id,
+                kind: from_name("runs.kind", kind)?,
+                triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
+            });
+        }
+        Ok(overview)
+    }
+
     /// The DAG's runs not finished (`queued` or `running`), oldest first.
     ///
     /// # Errors
@@ -232,21 +313,23 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn active_dags(&self) -> Result<Vec<ActiveDag>, DbError> {
-        const ACTIVE: &str = "SELECT d.paused, {ts<}d.first_seen_at{>ts}, v.id{text}, \
-            v.dag_json{text} FROM dags d JOIN dag_versions v ON v.id = d.current_version_id \
-            WHERE d.removed_at IS NULL AND d.conflict IS NULL ORDER BY d.dag_id";
-        let rows: Vec<(bool, String, String, String)> = on_pool!(self, |pool, backend| {
+        const ACTIVE: &str = "SELECT d.paused, {ts<}d.first_seen_at{>ts}, d.current_version_id{text} \
+            FROM dags d WHERE d.current_version_id IS NOT NULL \
+            AND d.removed_at IS NULL AND d.conflict IS NULL ORDER BY d.dag_id";
+        let rows: Vec<(bool, String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, ACTIVE)).fetch_all(pool).await?
         });
-        rows.into_iter()
-            .map(|(paused, first_seen, version_id, json)| {
-                Ok(ActiveDag {
-                    paused,
-                    first_seen: parse_time("dags.first_seen_at", &first_seen)?,
-                    version_id,
-                    dag: from_json("dag_versions.dag_json", &json)?,
-                })
-            })
-            .collect()
+        let mut active = Vec::with_capacity(rows.len());
+        for (paused, first_seen, version_id) in rows {
+            // The definition from the cache: parsed once per version, not every round (B13).
+            let dag = self.dag_version(&version_id).await?;
+            active.push(ActiveDag {
+                paused,
+                first_seen: parse_time("dags.first_seen_at", &first_seen)?,
+                version_id,
+                dag,
+            });
+        }
+        Ok(active)
     }
 }

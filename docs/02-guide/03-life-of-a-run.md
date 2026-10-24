@@ -79,7 +79,8 @@ interpreter are there, and its code is at the expected hash. If a check fails it
 
 If the checks pass, it records the attempt as running in its journal on disk, then sends
 `Started`. A `Started` that doesn't arrive within 10 s makes the master take the assignment
-back (`assignment_expired`) and queue the task again, without using a retry.
+back (`assignment_expired`) and queue the task again, without using a retry; one that arrived
+in time counts even if a busy master handles it later.
 
 The agent starts a Python runner in a new process group, with stdout and stderr going to the
 attempt's log file. The memory watchdog samples the group's memory every second. The runner

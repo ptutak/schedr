@@ -19,7 +19,7 @@ use schedr_model::{
     AttemptStatus, Dag, DagId, DagLocation, RunKind, RunState, TaskId, TaskInstanceState,
 };
 use serde_json::json;
-use sqlx::AssertSqlSafe;
+use sqlx::{AssertSqlSafe, Connection as _};
 
 fn ts(text: &str) -> Timestamp {
     text.parse().unwrap()
@@ -274,6 +274,13 @@ async fn runs_are_created_counted_queued_and_read() {
         db.runs_in_progress(&sync()).await.unwrap(),
         [first.clone(), queued.clone()]
     );
+    let overview = db.run_overview().await.unwrap();
+    assert_eq!(overview.running(&sync()), 1);
+    assert_eq!(
+        overview.last_scheduled(&sync()),
+        Some(ts("2026-10-21T01:00:00Z"))
+    );
+    assert_eq!(overview.queued(&sync()), waiting.as_slice());
     db.start_run(&queued, ts(NOW)).await.unwrap();
     assert_eq!(db.running_count(&sync()).await.unwrap(), 2);
 
@@ -728,4 +735,112 @@ async fn a_holder_named_with_quotes_and_dollars_is_fenced_as_written() {
         matches!(other, Err(schedr_db::DbError::NotLeading)),
         "{other:?}"
     );
+}
+
+#[tokio::test]
+async fn several_writes_in_one_transaction_commit_together_or_roll_back_on_postgres() {
+    let db = fresh().await;
+    let trigger = Command::TriggerRun {
+        dag_id: sync(),
+        planned_for: None,
+    };
+    Box::pin(db.atomically(async {
+        db.insert_command(&trigger, "anna", ts(NOW)).await?;
+        db.insert_command(&trigger, "anna", ts(NOW)).await?;
+        // The work reads its own writes.
+        assert_eq!(db.pending_commands().await?.len(), 2);
+        Ok::<_, schedr_db::DbError>(())
+    }))
+    .await
+    .unwrap();
+    let failed = Box::pin(db.atomically(async {
+        db.insert_command(&trigger, "anna", ts(NOW)).await?;
+        Err::<(), _>(schedr_db::DbError::NotLeading)
+    }))
+    .await;
+    assert!(failed.is_err());
+    assert_eq!(db.pending_commands().await.unwrap().len(), 2);
+    // A master whose lease was taken over: refused at the start, nothing stored.
+    let period = std::time::Duration::from_millis(300);
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(db.take_lease("b", period).await.unwrap(), Some(2));
+    let master = db.fenced("a", 1);
+    let refused = Box::pin(master.atomically(async {
+        master.insert_command(&trigger, "anna", ts(NOW)).await?;
+        Ok::<_, schedr_db::DbError>(())
+    }))
+    .await;
+    assert!(
+        matches!(refused, Err(schedr_db::DbError::NotLeading)),
+        "{refused:?}"
+    );
+    // Its connections are all still usable.
+    for _ in 0..20 {
+        db.insert_command(&trigger, "anna", ts(NOW)).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_master_stalled_in_a_write_doesnt_block_the_takeover() {
+    // B10: a master whose connection stalls between a write's start (the fence, holding the
+    // lease's row) and its commit left that transaction open: the standby's takeover waited on
+    // the row for as long as the stall lasted (no master at all meanwhile).
+    let url = fresh_url().await;
+    let limit = std::time::Duration::from_secs(1);
+    let master = Database::connect_with_timeout(&url, limit).await.unwrap();
+    master.migrate().await.unwrap();
+    let standby = Database::connect_with_timeout(&url, limit).await.unwrap();
+    let period = std::time::Duration::from_secs(3);
+    assert_eq!(master.take_lease("a", period).await.unwrap(), Some(1));
+    let fenced = master.fenced("a", 1);
+    // A write begun, then the master stalls with its transaction open.
+    let stalled = tokio::spawn(async move {
+        Box::pin(fenced.atomically(async {
+            fenced.worker_seen("w1", ts(NOW)).await?;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            Ok::<_, schedr_db::DbError>(())
+        }))
+        .await
+    });
+    tokio::time::sleep(period + std::time::Duration::from_millis(500)).await;
+    // The lease expired: the standby takes it within a few tries.
+    let started = std::time::Instant::now();
+    let taken = loop {
+        match standby.take_lease("b", period).await {
+            Ok(Some(epoch)) => break Some(epoch),
+            Ok(None) | Err(schedr_db::DbError::QueryTimeout(_)) => {}
+            Err(error) => panic!("{error}"),
+        }
+        if started.elapsed() > std::time::Duration::from_secs(8) {
+            break None;
+        }
+    };
+    assert_eq!(
+        taken,
+        Some(2),
+        "the stalled master's transaction blocked the takeover"
+    );
+    stalled.abort();
+}
+
+#[tokio::test]
+async fn straight_to_postgres_the_master_listens_unless_told_not_to() {
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    // A direct connection keeps its server process: listening is safe.
+    let mut y = sqlx::PgConnection::connect(&url).await.unwrap();
+    let mut x = sqlx::PgConnection::connect(&url).await.unwrap();
+    assert!(
+        schedr_db::commands::listening_is_safe(&mut y, &mut x)
+            .await
+            .unwrap()
+    );
+    assert!(db.command_notifications().await.unwrap().is_some());
+    // Through a separate URL (here the same server).
+    let through = db.clone().with_notifications(true, Some(url.clone()));
+    assert!(through.command_notifications().await.unwrap().is_some());
+    let off = db.with_notifications(false, None);
+    assert!(off.command_notifications().await.unwrap().is_none());
 }

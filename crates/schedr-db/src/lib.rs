@@ -13,6 +13,7 @@ pub mod lease;
 mod query;
 pub mod reads;
 pub mod runs;
+mod scope;
 pub mod status;
 pub mod workers;
 

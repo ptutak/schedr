@@ -115,7 +115,8 @@ async fn a_writes_start_on_postgres_limits_it_and_fences_a_masters() {
     let plain = db.begin_postgres().0;
     assert_eq!(
         plain,
-        "BEGIN; SELECT set_config('statement_timeout', E'10000ms', true);"
+        "BEGIN; SELECT set_config('statement_timeout', E'10000ms', true), \
+         set_config('idle_in_transaction_session_timeout', E'10000ms', true);"
     );
     let fenced = db.fenced("a'b", 3).begin_postgres().0;
     assert!(fenced.starts_with(&plain), "{fenced}");

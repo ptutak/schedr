@@ -69,13 +69,28 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    the `db` secret storage for standalone replacing `file` (PROJECT.md, Secret storage).
    Also recorded for M4: `schedr.script` for plain Python scripts (`dag_ctx`, `task_ctx`,
    the Python API's own objects, over the agent channel; PROJECT.md, In-task CLI).
-3. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
+3. **M2, step 2.10b, the stress suite: built, committed, not finished** (PLAN.md; PROJECT.md,
+   Testing: the stress suite, and Components and roles: "Found by the stress suite"; the
+   guide's "Stress tests"). `crates/schedr/tests/stress/` (13 scenarios on the role tests'
+   harness, `tests/support/`), `make stress`, `.github/workflows/stress.yml` (nightly; the
+   repository is public), `make standalone`. Fixed in the step, each with a reproducing test
+   failing before: B11 (start counted on arrival), B12 (10 messages a lock turn, one overview
+   query for all DAGs), B13 (DAG definitions cached by version), T1/T2 (a message's writes, a
+   round's assignments: one transaction, `Database::atomically`), B10 (idle-transaction
+   limit), B14 (`BEGIN IMMEDIATE` on SQLite), B16 (`[database] notifications`,
+   `notifications_url`, the pooler check, warn and poll, the error's likely cause). Measured:
+   scenario 13 1.14 → 10.1 tasks/s; scenario 1 completes (13.9 tasks/s). **Left:** the
+   rerun of 1, 6, 8, 9 on the last build (6 = B16 against real PgBouncer: until it passes,
+   "works behind PgBouncer" is unverified; remove B16 from BUGS.md then); scenario 1's round
+   p99 (8.2 s over its 5 s limit); B15 and B17 (suspected, BUGS.md); the code review over
+   the step; then a full quick run as the baseline for the guide.
+4. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
    `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
    (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.
    Details already decided for it: workers as a StatefulSet with a headless Service,
    `log_address` = the pod's DNS name, certificates with both serverAuth and clientAuth; the
    user's cluster runs Istio with `REGISTRY_ONLY`.
-4. Then 2.12 (kill tests on kind), 2.13 (more wheels).
+5. Then 2.12 (kill tests on kind), 2.13 (more wheels).
 
 ## How to work with the user
 

@@ -79,7 +79,12 @@ async fn waiting_for_a_connection_is_limited_by_the_query_timeout() {
     let _held = pool.acquire().await.unwrap();
     let started = std::time::Instant::now();
     let error = db.state_counts().await.unwrap_err();
-    assert!(matches!(error, DbError::Sqlx(_)), "{error:?}");
+    // The pool's wait and schedr's own limit are both the query timeout: either may end it
+    // first (under load, schedr's; it failed then when only the pool's was accepted).
+    assert!(
+        matches!(error, DbError::Sqlx(_) | DbError::QueryTimeout(_)),
+        "{error:?}"
+    );
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(DEFAULT_QUERY_TIMEOUT, Duration::from_secs(10));
 }
@@ -317,4 +322,46 @@ fn a_failed_start_is_a_database_error_unless_the_fence_refused_it() {
         DbError::from_begin(sqlx::Error::PoolTimedOut),
         DbError::Sqlx(sqlx::Error::PoolTimedOut)
     ));
+}
+
+#[tokio::test]
+async fn a_dag_version_is_read_and_parsed_once() {
+    let db = migrated().await;
+    insert_dag(&db).await;
+    execute(
+        &db,
+        r#"UPDATE dag_versions SET dag_json = '{"produced_by": "0.1", "id": "sync",
+            "location": {"root": "etl", "path": "a.py"}, "trigger": {"kind": "none"},
+            "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []}'"#,
+    )
+    .await
+    .unwrap();
+    let version = "v1";
+    let first = db.dag_version(version).await.unwrap();
+    assert_eq!(first.id.as_str(), "sync");
+    // A clone (the master's components each hold one) shares the cache.
+    let again = db.clone().dag_version(version).await.unwrap();
+    assert!(Arc::ptr_eq(&first, &again));
+    let missing = db.dag_version("0190a3e5-0000-7000-8000-000000000000").await;
+    assert!(
+        matches!(missing, Err(DbError::InvalidData { .. })),
+        "{missing:?}"
+    );
+}
+
+#[test]
+fn an_unexpected_notification_names_its_probable_cause() {
+    // B16: through a pooler in transaction mode, a master's `LISTEN` sent notifications into
+    // other clients' queries; the error alone didn't say why.
+    let notified = DbError::Sqlx(sqlx::Error::Protocol(
+        "execute: unexpected message: NotificationResponse".to_owned(),
+    ));
+    assert!(
+        notified
+            .to_string()
+            .contains("probably a connection pooler in transaction mode"),
+        "{notified}"
+    );
+    let other = DbError::Sqlx(sqlx::Error::PoolTimedOut);
+    assert!(!other.to_string().contains("pooler"), "{other}");
 }

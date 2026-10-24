@@ -20,4 +20,5 @@ Read [Overview](01-overview.md) first; the other pages each go into one part.
 08-network
 09-observability
 10-deployment
+11-stress
 ```

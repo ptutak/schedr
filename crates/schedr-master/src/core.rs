@@ -5,7 +5,7 @@
 //! The gRPC service ([`crate::service`]) only moves messages between workers' streams and
 //! this core, so everything here is tested without a network.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -98,15 +98,24 @@ struct Connection {
     live: bool,
 }
 
-/// When each worker's latest message arrived (cheap to clone; clones share it). Its stream's
-/// reader records it as the message is read, before the message waits for the master's lock,
-/// and the lease counts from it: a master stuck in a slow write doesn't count against workers
-/// whose messages keep arriving (B6).
+/// What has arrived from workers before the master handled it (cheap to clone; clones share
+/// it). A stream's reader records each message as it is read, before the message waits for the
+/// master's lock, so a busy master doesn't count its own delay against workers:
+/// - when each worker's latest message arrived: the lease counts from it, so a master stuck in
+///   a slow write doesn't declare workers lost whose messages keep arriving (B6);
+/// - which attempts' `Started` (or `Finished`) arrived and wait to be handled: they aren't
+///   taken back as never started (B11).
 #[derive(Debug, Clone, Default)]
-pub struct Arrivals(Arc<std::sync::Mutex<BTreeMap<String, Timestamp>>>);
+pub struct Arrivals(Arc<std::sync::Mutex<Arrived>>);
+
+#[derive(Debug, Default)]
+struct Arrived {
+    last: BTreeMap<String, Timestamp>,
+    started: BTreeSet<String>,
+}
 
 impl Arrivals {
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Timestamp>> {
+    fn inner(&self) -> std::sync::MutexGuard<'_, Arrived> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -114,20 +123,36 @@ impl Arrivals {
 
     /// A message from `worker_id` arrived `at`.
     pub fn arrived(&self, worker_id: &str, at: Timestamp) {
-        let mut map = self.map();
-        let last = map.entry(worker_id.to_owned()).or_insert(at);
+        let mut inner = self.inner();
+        let last = inner.last.entry(worker_id.to_owned()).or_insert(at);
         *last = (*last).max(at);
     }
 
     /// When the latest message from `worker_id` arrived, if one has since it was forgotten.
     #[must_use]
     pub fn last(&self, worker_id: &str) -> Option<Timestamp> {
-        self.map().get(worker_id).copied()
+        self.inner().last.get(worker_id).copied()
     }
 
     /// Forgets `worker_id` (it is gone).
     pub fn forget(&self, worker_id: &str) {
-        self.map().remove(worker_id);
+        self.inner().last.remove(worker_id);
+    }
+
+    /// A `Started` or `Finished` for `attempt_id` arrived: the attempt started.
+    pub fn start_arrived(&self, attempt_id: &str) {
+        self.inner().started.insert(attempt_id.to_owned());
+    }
+
+    /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
+    #[must_use]
+    pub fn start_waiting(&self, attempt_id: &str) -> bool {
+        self.inner().started.contains(attempt_id)
+    }
+
+    /// The message about `attempt_id`'s start was handled (or failed to be).
+    pub fn start_handled(&self, attempt_id: &str) {
+        self.inner().started.remove(attempt_id);
     }
 }
 
@@ -149,6 +174,7 @@ impl MasterCore {
     /// The master over `db`, with no workers yet.
     #[must_use]
     pub fn new(db: Database, settings: Settings) -> Self {
+        let arrivals = Arrivals::default();
         Self {
             discovery: Discovery::new(
                 db.clone(),
@@ -156,11 +182,12 @@ impl MasterCore {
                 ParseJobs::new(settings.parse_job_timeout),
             ),
             dispatcher: Dispatcher::new(db.clone(), settings.cancel_grace)
-                .with_code_wait(settings.code_wait),
+                .with_code_wait(settings.code_wait)
+                .with_arrivals(arrivals.clone()),
             scheduler: Scheduler::new(db.clone()),
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),
-            arrivals: Arrivals::default(),
+            arrivals,
             metrics: MasterMetrics::default(),
             settings,
             db,
@@ -404,22 +431,36 @@ impl MasterCore {
                 });
             }
             worker_message::Message::Heartbeat(_) => Vec::new(),
+            // A message's writes are one transaction: stored whole or not at all, with one
+            // lease check and one commit (T1, 2.10b).
             worker_message::Message::CodeVersionChanged(changed) => match changed.root {
-                Some(root) => self.root_reported(worker_id, &root, now).await?,
+                Some(root) => {
+                    let db = self.db.clone();
+                    Box::pin(db.atomically(self.root_reported(worker_id, &root, now))).await?
+                }
                 None => Vec::new(),
             },
-            worker_message::Message::Started(started) => self
-                .dispatcher
-                .started(worker_id, &started, now)
-                .await?
-                .into_iter()
-                .collect(),
+            worker_message::Message::Started(started) => {
+                let db = self.db.clone();
+                let handled =
+                    Box::pin(db.atomically(self.dispatcher.started(worker_id, &started, now)))
+                        .await;
+                self.arrivals.start_handled(&started.attempt_id);
+                handled?.into_iter().collect()
+            }
             worker_message::Message::Rejected(rejected) => {
-                self.dispatcher.rejected(worker_id, &rejected, now).await?;
+                let db = self.db.clone();
+                Box::pin(db.atomically(self.dispatcher.rejected(worker_id, &rejected, now)))
+                    .await?;
                 Vec::new()
             }
             worker_message::Message::Finished(finished) => {
-                vec![self.dispatcher.finished(worker_id, &finished, now).await?]
+                let db = self.db.clone();
+                let handled =
+                    Box::pin(db.atomically(self.dispatcher.finished(worker_id, &finished, now)))
+                        .await;
+                self.arrivals.start_handled(&finished.attempt_id);
+                vec![handled?]
             }
             worker_message::Message::Draining(_) => {
                 self.dispatcher.draining(worker_id);

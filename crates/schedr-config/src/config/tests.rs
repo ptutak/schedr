@@ -157,8 +157,19 @@ fn reads_the_database_url() {
         Config::default().database,
         DatabaseSection {
             url: None,
-            query_timeout: Duration::from_secs(10)
+            query_timeout: Duration::from_secs(10),
+            notifications: true,
+            notifications_url: None,
         }
+    );
+    let config = parse(
+        "[database]\nnotifications = false\nnotifications_url = \"postgres://schedr@pg/schedr\"\n",
+    )
+    .unwrap();
+    assert!(!config.database.notifications);
+    assert_eq!(
+        config.database.notifications_url.as_deref(),
+        Some("postgres://schedr@pg/schedr")
     );
     let config =
         parse("[database]\nquery_timeout = \"10s\"\n[ops]\nbind = \"127.0.0.1\"\n").unwrap();

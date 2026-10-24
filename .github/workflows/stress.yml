@@ -1,0 +1,102 @@
+name: Stress
+
+# The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): nightly when main changed since
+# the last passing run, and by hand (any profile). Not on each push: see ci.yml.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "quick (sized for 2 CPUs and 7 GB, scaled up on bigger runners) or full"
+        default: quick
+        type: choice
+        options: [quick, full]
+      filter:
+        description: "Only scenarios whose name matches (a regular expression); empty for all"
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.6-alpine
+        env:
+          POSTGRES_PASSWORD: schedr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      # Transaction pooling in front of the same server, any database name passed through.
+      pgbouncer:
+        image: docker.io/edoburu/pgbouncer:v1.26.0-p0
+        env:
+          DB_HOST: postgres
+          DB_USER: postgres
+          DB_PASSWORD: schedr
+          AUTH_TYPE: scram-sha-256
+          POOL_MODE: transaction
+          MAX_CLIENT_CONN: "1000"
+          DEFAULT_POOL_SIZE: "40"
+        ports:
+          - 6432:5432
+    env:
+      SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
+      SCHEDR_TEST_PGBOUNCER: 127.0.0.1:6432
+      SCHEDR_STRESS_PROFILE: ${{ inputs.profile || 'quick' }}
+    steps:
+      # Nightly: nothing to do when main is where the last passing run left it.
+      - name: Changed since the last passing run?
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          last=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/stress.yml/runs?status=success&branch=main&per_page=1" \
+            | python3 -c 'import json, sys; runs = json.load(sys.stdin)["workflow_runs"]; print(runs[0]["head_sha"] if runs else "")')
+          if [ "$last" = "${{ github.sha }}" ]; then
+            echo "main unchanged since the last passing run ($last)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.changed.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.changed.outputs.run == 'true'
+        uses: Swatinem/rust-cache@v2
+      - if: steps.changed.outputs.run == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - if: steps.changed.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v4
+      - if: steps.changed.outputs.run == 'true'
+        run: uv sync --python 3.14
+      - if: steps.changed.outputs.run == 'true'
+        run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - if: steps.changed.outputs.run == 'true'
+        name: Stress suite
+        run: >-
+          cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast --no-capture
+          ${{ inputs.filter && format('-E ''test(/{0}/)''', inputs.filter) || '' }}
+      - if: always() && steps.changed.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-report-${{ github.run_id }}
+          path: target/stress/
+          if-no-files-found: warn

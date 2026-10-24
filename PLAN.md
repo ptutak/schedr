@@ -25,6 +25,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - Trigger rule `NoneFailed` only; every task has the single outcome `SUCCESS`.
 - Runner `parse` and `task` modes; the agent ↔ runner channel (Unix socket, length-prefixed
   JSON).
+- **M2.5 also gets the two scheduling queues** (busy DAGs polled, quiet DAGs woken; PROJECT.md, Components and roles, "Found by the stress suite") with stress scenario 14 (many quiet DAGs).
 - **Ready for the fork server (M2.5):** the runner and its protocol don't depend on how the
   process was started: the runner gets everything over the socket (nothing from inherited
   state), the agent supervises by process group, and every attempt records its start method
@@ -50,7 +51,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping, `schedr.toml` and scripts, cleanup and
 resources, secrets (Vault; the `db` storage for standalone, `schedr secrets`) and connections, params, notifications, `TriggerDagOperator`, concurrency
 limits other than `max_active_runs`, backfill, retention, the in-task CLI (`schedr task-ctx`,
-`schedr dag-ctx`; command tasks read their run information from `SCHEDR_*` variables) (M4);
+`schedr dag-ctx`, and `schedr.script` giving plain Python scripts `dag_ctx` and `task_ctx`; command tasks read their run information from `SCHEDR_*` variables) (M4);
 the journal on disk, the memory watchdog, mTLS, separate roles and Postgres at run time (M2);
 the web UI (M3); `run_dag(step=True)` and `replace=` (M4); anything Airflow (M5). (`Once` was
 built in M1.)
@@ -176,6 +177,7 @@ integration tests, as since 1.15.
 | 2.9 | **Ops port** on every role: `/healthz`, `/readyz`, `/metrics` (Prometheus, `prometheus-client`), loop-stall detection, `[database] query_timeout` | tests |
 | 2.9b | **Documentation of the system as built:** the guide (`docs/02-guide/`: overview, glossary, life of a run, the master's rounds, workers, parsing, failures, network, observability, deployment; Mermaid diagrams), reference pages generated from the code (configuration from its JSON Schema, CLI from clap, REST API from OpenAPI, metrics from a list per role checked against a scrape); every later step updates the guide | `make docs` builds it without warnings; unit tests for the generators |
 | 2.10 | **Standalone for production** (see PROJECT.md, Components and roles: production path): working through any connection pooler (PgBouncer in any mode): a `master_lease` row for one master per database (a second waits as a standby; standalone and `schedr master`; SQLite too), the query limit enforced by schedr instead of `SET statement_timeout`, sqlx's statement cache off, polling as the command guarantee; the master's writes fenced by the lease in the database (a write's start one message on Postgres); migrations by the lease holder (`schedr db migrate [--wait]`, the chart's init container; standalone only with `--migrate`); `[worker] memory_reserve` (10 % worker, 25 % standalone, measured); an image with the DAGs' libraries on top of schedr's; a Helm chart with a standalone mode (one pod, SQLite on a volume or Postgres from a Secret, probes, `terminationGracePeriodSeconds` matched) | tests: a second master waits and takes over; the chart's standalone mode installs on kind / k3d, on SQLite and on Postgres |
+| 2.10b | **Stress suite** (see PROJECT.md, Testing: the stress suite): `crates/schedr/tests/stress/` on the role tests' harness (moved to `tests/support/`), 13 scenarios (throughput, command bursts, worker churn, master failover, the database stalled, through PgBouncer, rolling restart, code churn, standalone on SQLite, soak, heavy output, the memory watchdog, Python tasks), invariants from the database and the tasks' marks, reports in `target/stress/`; `make stress` (`STRESS_PROFILE`, `STRESS`); nightly in CI (`stress.yml`) | the suite passes locally (`quick`); bugs it finds go to BUGS.md |
 | 2.11 | **Images and Helm chart, distributed:** master / webserver without Python, a worker base image with Python 3.14 and `schedr`, arbitrary UID; the chart with 2 workers, `terminationGracePeriodSeconds` 600 and `[worker] termination_grace_period` set to match, probes | the chart installs on kind / k3d |
 | 2.12 | **Kill tests** (M2's "done when"): on kind / k3d with 2 workers, kill the master, then a worker, during runs; on OpenShift by hand; standalone's pod killed during runs | runs finish; retries as the rules say |
 | 2.13 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |

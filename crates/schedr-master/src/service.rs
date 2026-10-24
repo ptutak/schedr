@@ -354,19 +354,30 @@ impl Hub {
             self.clock,
             queue,
         ));
-        while let Some(message) = queued.recv().await {
+        while let Some(first) = queued.recv().await {
             // Not while paused: another master may be leading.
             self.while_leading().await;
-            let handled = self
-                .core
-                .lock()
-                .await
-                .handle(&worker_id, message, (self.clock)())
-                .await;
-            match handled {
-                Ok(outgoing) => self.deliver(outgoing).await,
-                Err(error) => tracing::error!(worker_id, %error, "worker message not handled"),
+            // Everything already queued, up to MESSAGES_PER_TURN, in one turn of the lock: one
+            // message per turn left a worker's messages behind every round in between (B12).
+            let mut outgoing = Vec::new();
+            {
+                let mut core = self.core.lock().await;
+                let mut next = Some(first);
+                let mut handled = 0;
+                while let Some(message) = next.take() {
+                    match core.handle(&worker_id, message, (self.clock)()).await {
+                        Ok(out) => outgoing.extend(out),
+                        Err(error) => {
+                            tracing::error!(worker_id, %error, "worker message not handled");
+                        }
+                    }
+                    handled += 1;
+                    if handled < MESSAGES_PER_TURN {
+                        next = queued.try_recv().ok();
+                    }
+                }
             }
+            self.deliver(outgoing).await;
         }
         if let Err(error) = reader.await {
             tracing::error!(worker_id, %error, "worker stream reader failed");
@@ -398,6 +409,13 @@ async fn read_stream(
         match inbound.message().await {
             Ok(Some(message)) => {
                 arrivals.arrived(&worker_id, clock());
+                if let Some(
+                    worker_message::Message::Started(pb::Started { attempt_id, .. })
+                    | worker_message::Message::Finished(pb::Finished { attempt_id, .. }),
+                ) = &message.message
+                {
+                    arrivals.start_arrived(attempt_id);
+                }
                 if let Some(message) = message.message
                     && queue.send(message).is_err()
                 {
@@ -492,11 +510,8 @@ impl Master for Hub {
         request: Request<pb::FetchInputsRequest>,
     ) -> Result<Response<Self::FetchInputsStream>, Status> {
         let attempt_id = request.into_inner().attempt_id;
-        let inputs = self
-            .core
-            .lock()
-            .await
-            .inputs(&attempt_id)
+        // Read without the master's lock: a busy master doesn't hold a task's start up (B11).
+        let inputs = crate::dispatch::attempt_inputs(&self.db, &attempt_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found(format!("no open attempt `{attempt_id}`")))?;
@@ -509,6 +524,11 @@ impl Master for Hub {
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
 }
+
+/// The most messages of one worker handled in one turn of the master's lock: what is queued
+/// gets through together, and a long queue doesn't hold rounds and other workers up for long
+/// (at most this many `Finished`, each a few writes; the rest waits for the next turn).
+pub const MESSAGES_PER_TURN: usize = 10;
 
 /// How long the master waits before listening again after notifications failed.
 pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);

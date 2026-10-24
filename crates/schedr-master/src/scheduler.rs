@@ -7,7 +7,7 @@
 //! `planned_for`, so a pass repeated after a crash creates nothing twice.
 
 use jiff::Timestamp;
-use schedr_db::runs::{ActiveDag, NewRun};
+use schedr_db::runs::{ActiveDag, NewRun, QueuedRun};
 use schedr_db::{Database, DbError};
 use schedr_model::{DagId, RunKind, RunState};
 
@@ -87,6 +87,8 @@ impl Scheduler {
     /// [`SchedulerError::Db`] if the database fails (the pass stops; what was stored stays).
     pub async fn pass(&self, now: Timestamp) -> Result<Pass, SchedulerError> {
         let mut pass = Pass::default();
+        // Every DAG's runs at once: a round costs a few queries, not three per DAG (B12).
+        let overview = self.db.run_overview().await?;
         for active in self.db.active_dags().await? {
             let fire_times = match FireTimes::new(&active.dag.trigger) {
                 Ok(fire_times) => fire_times,
@@ -103,9 +105,9 @@ impl Scheduler {
                 fire_times: &fire_times,
                 first_seen: active.first_seen,
             };
-            let mut running = self.db.running_count(&active.dag.id).await?;
+            let mut running = overview.running(&active.dag.id);
             if !active.paused {
-                let last = self.db.last_scheduled_for(&active.dag.id).await?;
+                let last = overview.last_scheduled(&active.dag.id);
                 for times in plan.scheduled_runs(last, running, now) {
                     let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER);
                     if let Some(run_id) = self.db.insert_run(&new).await? {
@@ -115,8 +117,10 @@ impl Scheduler {
                     }
                 }
             }
-            pass.started
-                .extend(self.start_queued(&active, &plan, running, now).await?);
+            pass.started.extend(
+                self.start_queued(overview.queued(&active.dag.id), &plan, running, now)
+                    .await?,
+            );
         }
         Ok(pass)
     }
@@ -182,20 +186,21 @@ impl Scheduler {
         let run_id = run_id.map_or_else(|| uuid::Uuid::now_v7().to_string(), str::to_owned);
         self.db.insert_run_as(&run_id, &new).await?;
         let running = self.db.running_count(dag_id).await?;
-        self.start_queued(&active, &plan, running, now).await?;
+        let queued = self.db.queued_runs(dag_id).await?;
+        self.start_queued(&queued, &plan, running, now).await?;
         Ok(created(&active, run_id, RunKind::Manual, times))
     }
 
+    /// Starts the DAG's `queued` runs that fit next to its `running` ones.
     async fn start_queued(
         &self,
-        active: &ActiveDag,
+        queued: &[QueuedRun],
         plan: &Plan<'_>,
         running: u32,
         now: Timestamp,
     ) -> Result<Vec<String>, SchedulerError> {
-        let queued = self.db.queued_runs(&active.dag.id).await?;
         let mut started = Vec::new();
-        for run in runs_to_start(&queued, plan.free_places(running)) {
+        for run in runs_to_start(queued, plan.free_places(running)) {
             self.db.start_run(&run.id, now).await?;
             started.push(run.id.clone());
         }
