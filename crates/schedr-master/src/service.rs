@@ -49,6 +49,9 @@ pub struct Hub {
     refresh_limit: Duration,
     /// When each worker's latest message arrived (the core's).
     arrivals: Arrivals,
+    /// How often to try listening for commands again while the loop has no notifications
+    /// because starting them failed (see [`Hub::with_listen_retry`]).
+    listen_retry: Option<Duration>,
     /// Whether this master leads (holds the lease, see [`crate::lease`]): worker messages,
     /// registrations and uploads wait while it doesn't.
     leading: Arc<watch::Sender<bool>>,
@@ -76,10 +79,21 @@ impl Hub {
             db: core.db().clone(),
             arrivals: core.arrivals(),
             leading: Arc::new(watch::Sender::new(true)),
+            listen_retry: None,
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             clock,
         }
+    }
+
+    /// The hub trying to listen for commands again every `period` while its loop runs without
+    /// notifications (starting them failed: the database too slow to check for a pooler, or
+    /// unreachable), polling meanwhile; it stops trying once they start, or once they are found
+    /// off or behind a pooler.
+    #[must_use]
+    pub const fn with_listen_retry(mut self, period: Duration) -> Self {
+        self.listen_retry = Some(period);
+        self
     }
 
     /// The hub abandoning a gauge refresh that takes longer than `limit` (it only reads, so
@@ -198,6 +212,27 @@ impl Hub {
             .await
     }
 
+    /// Tries to listen for commands again: `Some` once decided (listening, or found off or
+    /// behind a pooler), `None` to try later.
+    async fn listen_again(&self) -> Option<Option<CommandNotifications>> {
+        match self.db.command_notifications().await {
+            Ok(started) => {
+                if started.is_some() {
+                    tracing::info!("listening for commands now");
+                }
+                Some(started)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "still can't listen for commands; polling, trying again in {} min",
+                    self.listen_retry.unwrap_or_default().as_secs() / 60
+                );
+                None
+            }
+        }
+    }
+
     async fn run_with(
         &self,
         interval: Duration,
@@ -213,6 +248,7 @@ impl Hub {
             Alive,
             Refresh,
             LeaseLost,
+            ListenAgain,
         }
         let (release, released) = tokio::sync::oneshot::channel();
         let mut keeper = leadership.map(|leadership| {
@@ -226,6 +262,10 @@ impl Hub {
         let mut refresh = tokio::time::interval(GAUGE_REFRESH);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut paused_until: Option<tokio::time::Instant> = None;
+        let mut listen_again = self
+            .listen_retry
+            .filter(|_| notifications.is_none())
+            .map(|period| tokio::time::interval_at(tokio::time::Instant::now() + period, period));
         tokio::pin!(stop);
         loop {
             let wake = tokio::select! {
@@ -240,6 +280,8 @@ impl Hub {
                 _ = async { keeper.as_mut().expect("guarded").await }, if keeper.is_some() => {
                     Wake::LeaseLost
                 }
+                _ = async { listen_again.as_mut().expect("guarded").tick().await },
+                    if listen_again.is_some() => Wake::ListenAgain,
             };
             self.beat.beat();
             let leads = *self.leading.borrow();
@@ -254,6 +296,13 @@ impl Hub {
                 }
                 Wake::LeaseLost => return Err(LeaseLost),
                 Wake::Alive => continue,
+                Wake::ListenAgain => {
+                    if let Some(started) = self.listen_again().await {
+                        notifications = started;
+                        listen_again = None;
+                    }
+                    continue;
+                }
                 // Paused: no rounds until the lease is renewed.
                 Wake::Tick | Wake::Command if !leads => continue,
                 Wake::Refresh => {
@@ -414,11 +463,18 @@ async fn read_stream(
                     | worker_message::Message::Finished(pb::Finished { attempt_id, .. }),
                 ) = &message.message
                 {
-                    arrivals.start_arrived(attempt_id);
+                    arrivals.start_arrived(&worker_id, attempt_id);
                 }
                 if let Some(message) = message.message
-                    && queue.send(message).is_err()
+                    && let Err(mpsc::error::SendError(unsent)) = queue.send(message)
                 {
+                    // Never to be handled: its start mustn't keep protecting the attempt.
+                    if let worker_message::Message::Started(pb::Started { attempt_id, .. })
+                    | worker_message::Message::Finished(pb::Finished { attempt_id, .. }) =
+                        &unsent
+                    {
+                        arrivals.start_handled(attempt_id);
+                    }
                     return;
                 }
             }

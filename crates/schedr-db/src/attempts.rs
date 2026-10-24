@@ -13,7 +13,10 @@ use schedr_model::{AttemptStatus, Dag, RunKind, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql};
+use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, sql_text};
+
+/// The most tasks one query reads the outputs of.
+const OUTPUTS_PER_QUERY: usize = 500;
 
 #[cfg(test)]
 mod tests;
@@ -404,6 +407,40 @@ impl Database {
         rows.into_iter()
             .map(|(task_id, value)| Ok((task_id_of(task_id)?, from_json("outputs.value", &value)?)))
             .collect()
+    }
+
+    /// The outputs stored for `tasks` of a run, by task ID: what one task gets as inputs,
+    /// without reading every other task's (a wide DAG's assignment read the whole run's, B18).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn outputs_of(
+        &self,
+        run_id: &str,
+        tasks: &[&TaskId],
+    ) -> Result<BTreeMap<TaskId, serde_json::Value>, DbError> {
+        let mut outputs = BTreeMap::new();
+        for chunk in tasks.chunks(OUTPUTS_PER_QUERY) {
+            let wanted: Vec<String> = (2..chunk.len() + 2).map(|n| format!("${n}")).collect();
+            let text = format!(
+                "SELECT t.task_id, o.value{{text}} FROM outputs o \
+                 JOIN task_instances t ON t.id = o.task_instance_id \
+                 WHERE t.run_id = $1{{uuid}} AND t.task_id IN ({})",
+                wanted.join(", ")
+            );
+            let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+                let mut query = sqlx::query_as(sql_text(backend, &text)).bind(run_id);
+                for task in chunk {
+                    query = query.bind(task.as_str());
+                }
+                query.fetch_all(pool).await?
+            });
+            for (task_id, value) in rows {
+                outputs.insert(task_id_of(task_id)?, from_json("outputs.value", &value)?);
+            }
+        }
+        Ok(outputs)
     }
 
     /// Queues every `unschedulable` task instance again (the set of workers changed).

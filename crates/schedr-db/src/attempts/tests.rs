@@ -143,9 +143,11 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
     assert_eq!(extract.content_hash, "h1");
     assert_eq!(extract.queued_reason, None);
     assert_eq!(extract.parse_version, "0.1.0");
-    db.set_queued_reason(
-        &extract.instance_id,
-        "no worker serves queue `large`",
+    db.set_queued_reasons(
+        &[(
+            extract.instance_id.clone(),
+            "no worker serves queue `large`".to_owned(),
+        )],
         ts(NOW),
     )
     .await
@@ -371,6 +373,18 @@ async fn run_outputs_are_the_stored_outputs_by_task() {
         db.run_outputs(&run_id).await.unwrap(),
         BTreeMap::from([(id("extract"), json!({"rows": 3}))])
     );
+    // Only the tasks asked for: an output not stored yet is simply not there.
+    assert_eq!(
+        db.outputs_of(&run_id, &[&id("extract"), &id("load")])
+            .await
+            .unwrap(),
+        BTreeMap::from([(id("extract"), json!({"rows": 3}))])
+    );
+    assert_eq!(
+        db.outputs_of(&run_id, &[&id("load")]).await.unwrap(),
+        BTreeMap::new()
+    );
+    assert_eq!(db.outputs_of(&run_id, &[]).await.unwrap(), BTreeMap::new());
 }
 
 #[tokio::test]

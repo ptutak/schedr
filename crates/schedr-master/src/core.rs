@@ -5,7 +5,7 @@
 //! The gRPC service ([`crate::service`]) only moves messages between workers' streams and
 //! this core, so everything here is tested without a network.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,6 +42,12 @@ pub struct Settings {
     pub parse_job_timeout: Duration,
     /// How long a task's code may be missing on every eligible worker.
     pub code_wait: Duration,
+    /// How long a task whose assignment fails on its own is set aside.
+    pub set_aside: Duration,
+    /// How a commit cut off is read back (see [`crate::dispatch::ReadBack`]).
+    pub read_back: crate::dispatch::ReadBack,
+    /// How often to try listening for commands again after it failed to start.
+    pub listen_retry: Duration,
 }
 
 impl Default for Settings {
@@ -54,6 +60,9 @@ impl Default for Settings {
             cancel_grace: DEFAULT_CANCEL_GRACE,
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
+            set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
+            read_back: crate::dispatch::ReadBack::default(),
+            listen_retry: Duration::from_mins(30),
         }
     }
 }
@@ -111,7 +120,8 @@ pub struct Arrivals(Arc<std::sync::Mutex<Arrived>>);
 #[derive(Debug, Default)]
 struct Arrived {
     last: BTreeMap<String, Timestamp>,
-    started: BTreeSet<String>,
+    /// Attempts whose start arrived and waits to be handled, with their worker.
+    started: BTreeMap<String, String>,
 }
 
 impl Arrivals {
@@ -134,20 +144,25 @@ impl Arrivals {
         self.inner().last.get(worker_id).copied()
     }
 
-    /// Forgets `worker_id` (it is gone).
+    /// Forgets `worker_id` (it is gone), and the starts of its that wait: their messages won't
+    /// be handled any more.
     pub fn forget(&self, worker_id: &str) {
-        self.inner().last.remove(worker_id);
+        let mut inner = self.inner();
+        inner.last.remove(worker_id);
+        inner.started.retain(|_, worker| worker != worker_id);
     }
 
-    /// A `Started` or `Finished` for `attempt_id` arrived: the attempt started.
-    pub fn start_arrived(&self, attempt_id: &str) {
-        self.inner().started.insert(attempt_id.to_owned());
+    /// A `Started` or `Finished` for `attempt_id` arrived from `worker_id`: the attempt started.
+    pub fn start_arrived(&self, worker_id: &str, attempt_id: &str) {
+        self.inner()
+            .started
+            .insert(attempt_id.to_owned(), worker_id.to_owned());
     }
 
     /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
     #[must_use]
     pub fn start_waiting(&self, attempt_id: &str) -> bool {
-        self.inner().started.contains(attempt_id)
+        self.inner().started.contains_key(attempt_id)
     }
 
     /// The message about `attempt_id`'s start was handled (or failed to be).
@@ -183,6 +198,7 @@ impl MasterCore {
             ),
             dispatcher: Dispatcher::new(db.clone(), settings.cancel_grace)
                 .with_code_wait(settings.code_wait)
+                .with_set_aside(settings.set_aside, settings.read_back)
                 .with_arrivals(arrivals.clone()),
             scheduler: Scheduler::new(db.clone()),
             commander: Commander::new(db.clone()),
@@ -440,27 +456,48 @@ impl MasterCore {
                 }
                 None => Vec::new(),
             },
+            // Rolled back, their changes to memory are put back too; a commit cut off is read
+            // back first (D1): stored, memory stays as the message left it.
             worker_message::Message::Started(started) => {
-                let db = self.db.clone();
+                let (db, memory) = (self.db.clone(), self.dispatcher.memory());
                 let handled =
                     Box::pin(db.atomically(self.dispatcher.started(worker_id, &started, now)))
                         .await;
                 self.arrivals.start_handled(&started.attempt_id);
-                handled?.into_iter().collect()
+                let id = started.attempt_id.as_str();
+                match self
+                    .settle(handled, memory, id, |a| a.is_some_and(|a| a.started))
+                    .await?
+                {
+                    Some(out) => out.into_iter().collect(),
+                    None => Vec::new(),
+                }
             }
             worker_message::Message::Rejected(rejected) => {
-                let db = self.db.clone();
-                Box::pin(db.atomically(self.dispatcher.rejected(worker_id, &rejected, now)))
-                    .await?;
+                let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+                let handled =
+                    Box::pin(db.atomically(self.dispatcher.rejected(worker_id, &rejected, now)))
+                        .await;
+                let id = rejected.attempt_id.as_str();
+                // Undone, the attempt is deleted.
+                self.settle(handled, memory, id, |a| a.is_none()).await?;
                 Vec::new()
             }
             worker_message::Message::Finished(finished) => {
-                let db = self.db.clone();
+                let (db, memory) = (self.db.clone(), self.dispatcher.memory());
                 let handled =
                     Box::pin(db.atomically(self.dispatcher.finished(worker_id, &finished, now)))
                         .await;
                 self.arrivals.start_handled(&finished.attempt_id);
-                vec![handled?]
+                let id = finished.attempt_id.as_str();
+                let settled = self.settle(handled, memory, id, |a| {
+                    a.is_some_and(|a| a.status.is_some())
+                });
+                vec![
+                    settled
+                        .await?
+                        .unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id)),
+                ]
             }
             worker_message::Message::Draining(_) => {
                 self.dispatcher.draining(worker_id);
@@ -623,6 +660,40 @@ impl MasterCore {
     /// [`CoreError::Dispatch`] if the database fails.
     pub async fn inputs(&self, attempt_id: &str) -> Result<Option<Vec<u8>>, CoreError> {
         Ok(self.dispatcher.attempt_inputs(attempt_id).await?)
+    }
+
+    /// What a worker message's handling comes to: its result when stored; when its commit was
+    /// cut off and attempt `id` (or its absence) reads back as `landed` (see
+    /// [`crate::dispatch::ReadBack`]), `Ok(None)`: stored after all, memory kept; otherwise
+    /// the error, memory put back. A read that fails tells nothing.
+    async fn settle<T>(
+        &mut self,
+        handled: Result<T, DispatchError>,
+        memory: crate::dispatch::Memory,
+        id: &str,
+        landed: impl Fn(Option<&schedr_db::attempts::StoredAttempt>) -> bool,
+    ) -> Result<Option<T>, CoreError> {
+        match handled {
+            Ok(done) => Ok(Some(done)),
+            Err(DispatchError::Db(DbError::CommitUnknown))
+                if self
+                    .settings
+                    .read_back
+                    .stored(|| async {
+                        self.db
+                            .attempt(id)
+                            .await
+                            .is_ok_and(|attempt| landed(attempt.as_ref()))
+                    })
+                    .await =>
+            {
+                Ok(None)
+            }
+            Err(error) => {
+                self.dispatcher.restore(memory);
+                Err(error.into())
+            }
+        }
     }
 
     /// A registered worker's version, maintenance drain and roots: its reports replace what it

@@ -256,3 +256,24 @@ async fn a_manual_run_triggered_again_with_its_id_is_the_same_run() {
     assert_eq!((first.run_id.as_str(), again.run_id.as_str()), (id, id));
     assert_eq!(db.running_count(&sync()).await.unwrap(), 1);
 }
+
+#[tokio::test]
+async fn a_dag_catching_up_gets_at_most_so_many_runs_a_round() {
+    // B18: a DAG catching up after a long pause had every due run created in one round.
+    let (scheduler, db) = scheduler_with(dag(&json!({
+        "trigger": {"kind": "cron", "expression": "0 * * * *", "timezone": "UTC",
+                    "catchup": true, "start": "2026-10-01T00:00:00Z"},
+        "max_active_runs": 1000
+    })))
+    .await;
+    execute(&db, "UPDATE dags SET paused = FALSE").await;
+    let now = ts("2026-10-03T00:30:00Z");
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()).len(),
+        SCHEDULED_PER_ROUND
+    );
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()).len(),
+        SCHEDULED_PER_ROUND
+    );
+}

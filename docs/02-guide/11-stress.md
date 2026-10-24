@@ -61,3 +61,33 @@ make stress STRESS_PROFILE=full      # the large profile (an hour's soak)
 the machine, at most four times; **full** is fixed and larger. Each scenario writes its numbers
 to `target/stress/<scenario>.json` (in CI, an artifact of the run): the profile, the metrics,
 and what failed, if anything. A scenario that fails also prints the logs of every process.
+
+## Baseline
+
+The first run with every scenario passing (2026-10-24, quick profile ×2: a laptop under WSL,
+Postgres and PgBouncer in containers; the disk's flush on commit dominates there, so a real
+Postgres server does better). Throughput counts successful tasks a second over the scenario;
+the round p99 is the bucket of `schedr_master_tick_duration_seconds` holding it.
+
+| # | Scenario | Tasks | Tasks/s | Assigned → started p99 | Round p99 |
+|---|---|---|---|---|---|
+| 1 | throughput | 2,501 | 16.0 | 1.9 s | ≤ 4.1 s |
+| 2 | command burst | 601 runs | — | commands decided p99 0.58 s | — |
+| 3 | worker churn | 330 | 8.3 | 2.2 s | ≤ 2.0 s |
+| 4 | master failover | 330 | 7.7 | 1.4 s | ≤ 1.0 s |
+| 5 | database stall | 330 | 7.3 | 6.0 s | ≤ 1.0 s |
+| 6 | through PgBouncer: failover / throughput | 330 / 2,501 | 7.2 / 14.9 | 2.3 s / 2.4 s | ≤ 2.0 s / ≤ 4.1 s |
+| 7 | rolling restart | 270 | 6.4 | 2.2 s | ≤ 2.0 s |
+| 8 | code churn | 70 runs | — | — | — |
+| 9 | standalone on SQLite | 440 | 20.0 | 1.4 s | — |
+| 10 | soak (3 minutes) | 1,020 | 5.6 | 0.9 s | ≤ 1.0 s |
+| 11 | heavy output | 168 | 4.6 | 1.3 s (logs read p99 1.4 s) | ≤ 2.0 s |
+| 12 | memory watchdog | 120 (12 killed over budget) | 5.7 | 1.3 s | ≤ 1.0 s |
+| 13 | Python tasks | 640 | 11.5 | 2.4 s | ≤ 2.0 s |
+
+On the way there the suite found and the step fixed: assignments taken back though started
+(scenario 13 went from 624 expired assignments and 11 successes to 11.5 tasks a second),
+rounds costing queries per DAG and reading a wide DAG's definition per ready task, a stalled
+master blocking the takeover, SQLite writes failing with "database is locked", the master's
+`LISTEN` breaking other connections behind PgBouncer, a leaving worker's unstarted tasks
+counted as lost, and slow rounds after a burst of runs (per-round limits, batched writes).

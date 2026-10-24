@@ -239,16 +239,24 @@ impl Database {
             WHERE kind = 'scheduled' GROUP BY dag_id";
         const QUEUED: &str = "SELECT dag_id, id{text}, kind, {ts<}triggered_at{>ts} FROM runs \
             WHERE state = 'queued' ORDER BY dag_id, triggered_at, id";
-        let running: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, RUNNING))
-                .fetch_all(pool)
-                .await?
-        });
-        let last: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, LAST)).fetch_all(pool).await?
-        });
-        let queued: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, QUEUED)).fetch_all(pool).await?
+        type Rows = (
+            Vec<(String, i64)>,
+            Vec<(String, String)>,
+            Vec<(String, String, String, String)>,
+        );
+        // One connection, one time limit, for all three.
+        let (running, last, queued): Rows = on_pool!(self, |pool, backend| {
+            (
+                sqlx::query_as(sql(backend, RUNNING))
+                    .fetch_all(&mut *pool)
+                    .await?,
+                sqlx::query_as(sql(backend, LAST))
+                    .fetch_all(&mut *pool)
+                    .await?,
+                sqlx::query_as(sql(backend, QUEUED))
+                    .fetch_all(&mut *pool)
+                    .await?,
+            )
         });
         let mut overview = RunOverview {
             running: running

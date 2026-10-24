@@ -31,16 +31,19 @@ connection straight to Postgres for listening only (checked the same way);
 database error that shows a notification where an answer was expected says that a pooler is
 the likely cause.
 
-A round does six things, in order:
+A round does six things, in order. Each handles at most so many items a round (commands 50,
+new runs' task instances 2,000, assignments 50, expiries 50, retries 100, scheduled runs 10 a
+DAG, waiting reasons 100), the rest first in the next round, so that no round takes seconds
+and holds up the workers' messages and the lease:
 
 | # | Step | What it does |
 |---|---|---|
-| 1 | **Commands** | Applies every pending command, oldest first (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
+| 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again. |
 | 3 | **Scheduler** | Reads every DAG's running count, last scheduled run and queued runs at once (three queries, however many DAGs). Then for each active DAG: works out the schedule's fire times since the last scheduled run and inserts the runs that are due (unless the DAG is paused), and starts queued runs while the DAG is under `max_active_runs`. |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started; queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API. |
+| 4 | **Dispatcher** | Creates the task instances of runs that just started; queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than 10 minutes to another worker with the same code. |
-| 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts (`lost`, each using a retry). |
+| 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
 
 When the round ends, the master sends the messages it built (`AssignTask`, `CancelAttempt`,
 `AssignParse`) down the workers' streams. A message for a worker without a live stream is
@@ -52,10 +55,14 @@ A round that fails (the database returns an error) is logged, and the next one g
 it wrote before the error stays done, and **the messages it had built are still sent**: each
 is built only after the write it stands for is stored, so none announces something the
 database doesn't know. The one exception is the dispatcher's assignments: a round's
-assignments are stored in one transaction, **together or not at all**. A failure among them
-stores none, sends none of their `AssignTask` messages and frees the slots they took; the next
-round assigns those tasks again. One transaction costs one lease check and one commit, where
-each assignment used to cost its own.
+assignments are stored in one transaction, **together**, which costs one lease check and one
+commit where each assignment used to cost its own. If that transaction fails, none of it is
+stored, sent or kept (slots given back), and the round then assigns the same tasks **one at a
+time**, each in its own transaction: a task whose assignment fails on its own (data that won't
+read, a statement the database refuses) is **set aside** for a minute, with a warning naming
+it, and the others go on; then it is tried again. When every task fails, or the failure is the
+database's (unreachable, too slow, the lease lost), the round fails as any other and nothing is
+set aside.
 
 ### A round is never cut short
 

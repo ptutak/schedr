@@ -14,6 +14,9 @@ use schedr_model::{DagId, RunKind, RunState};
 use crate::fire_times::{FireTimes, FireTimesError};
 use crate::planning::{ManualRunError, Plan, RunTimes, manual_planned_for, runs_to_start};
 
+/// The most scheduled runs a round creates for one DAG: a DAG catching up after a long pause
+/// goes over a few rounds, the earliest first (B18).
+pub const SCHEDULED_PER_ROUND: usize = 10;
 #[cfg(test)]
 mod tests;
 
@@ -108,7 +111,12 @@ impl Scheduler {
             let mut running = overview.running(&active.dag.id);
             if !active.paused {
                 let last = overview.last_scheduled(&active.dag.id);
-                for times in plan.scheduled_runs(last, running, now) {
+                // At most so many a DAG a round: a long catch-up goes over a few (B18).
+                for times in plan
+                    .scheduled_runs(last, running, now)
+                    .into_iter()
+                    .take(SCHEDULED_PER_ROUND)
+                {
                     let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER);
                     if let Some(run_id) = self.db.insert_run(&new).await? {
                         running += 1;

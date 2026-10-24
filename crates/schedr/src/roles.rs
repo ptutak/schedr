@@ -64,6 +64,12 @@ pub fn master_settings(config: &Config) -> Settings {
         cancel_grace: config.master.cancel_grace,
         parse_job_timeout: PARSE_JOB_TIMEOUT,
         code_wait: config.master.code_wait,
+        set_aside: config.master.set_aside,
+        read_back: schedr_master::dispatch::ReadBack {
+            window: config.master.read_back_window,
+            interval: config.master.read_back_interval,
+        },
+        listen_retry: config.master.listen_retry,
     }
 }
 
@@ -380,17 +386,25 @@ pub async fn serve_master(
     );
     let connections = incoming(listener, tls, Protocol::Grpc)
         .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
-    let notifications = match db.command_notifications().await {
-        Ok(notifications) => notifications,
+    let listen_retry = settings.listen_retry;
+    let (notifications, retry) = match db.command_notifications().await {
+        Ok(notifications) => (notifications, false),
         Err(error) => {
-            tracing::warn!(%error, "can't listen for commands; polling every tick");
-            None
+            tracing::warn!(
+                %error,
+                "can't listen for commands; polling every tick, trying again in {} min",
+                listen_retry.as_secs() / 60
+            );
+            (None, true)
         }
     };
     // Its writes through the lease: refused once another master took it over.
-    let hub =
+    let mut hub =
         Hub::new(MasterCore::new(leadership.fenced_db(), settings).with_metrics(observed.metrics))
             .with_refresh_limit(observed.health.stall() / 2);
+    if retry {
+        hub = hub.with_listen_retry(listen_retry);
+    }
     observed.health.watch_loop("scheduling loop", hub.beat());
     let restored = hub.restore().await.map_err(|e| match e {
         CoreError::Db(db) => AppError::Db(db),

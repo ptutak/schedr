@@ -188,12 +188,10 @@ integration tests, as since 1.15.
   builds on 2.8 and 2.9.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
-**Status (2026-10-23): steps 2.1–2.9b are done** (the commits are
-listed in `NEXT_SESSION.md`); 2.10, standalone for production, is built, waiting for its run
-on a local kind cluster (added 2026-10-23; the distributed chart moved to 2.11). B6 (role integration tests under disk load) is
-fixed; open bug B4 (likely B6, unproven) waits; B7 (a command applied twice, undelivered
-cancels), B8 (a drained task outliving the pod) and B9 (a drain couldn't shorten a stop
-under way) are fixed.
+**Status (2026-10-24): steps 2.1–2.10b are done** (the commits are listed in
+`NEXT_SESSION.md`): 2.10, standalone for production (its kind run passed), and 2.10b, the
+stress suite with what it found (B10-B18 fixed; all 14 scenarios pass). Open bugs: B4
+(likely B6, unproven) and B15 (suspected). Next: 2.11, the distributed chart.
 
 ## Testing approach
 

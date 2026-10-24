@@ -32,6 +32,10 @@ pub(crate) struct Scope {
 pub(crate) struct Scoped {
     pub(crate) connection: Connection,
     open: bool,
+    /// A query of the work failed or was cut off: the transaction is void (on Postgres
+    /// aborted, its `COMMIT` a silent rollback; on SQLite partly done), even if the work
+    /// handled the error and went on.
+    pub(crate) broken: bool,
 }
 
 /// One of the two backends' pooled connections.
@@ -94,7 +98,8 @@ impl Database {
     /// # Errors
     ///
     /// `work`'s error, or [`DbError`] if the transaction can't start or commit
-    /// ([`DbError::NotLeading`] for a master whose lease was taken over).
+    /// ([`DbError::NotLeading`] for a master whose lease was taken over;
+    /// [`DbError::CommitUnknown`] for a commit cut off, which may have stored it).
     pub async fn atomically<T, E>(&self, work: impl Future<Output = Result<T, E>>) -> Result<T, E>
     where
         E: From<DbError>,
@@ -109,13 +114,17 @@ impl Database {
             database: self.identity().clone(),
             connection: Arc::new(tokio::sync::Mutex::new(scoped)),
         };
-        let result = CURRENT.scope(scope.clone(), work).await;
+        let mut result = CURRENT.scope(scope.clone(), work).await;
         let mut scoped = scope.connection.lock().await;
+        if result.is_ok() && scoped.broken {
+            result = Err(DbError::TransactionFailed.into());
+        }
         if result.is_ok() {
             self.limited(self.query_timeout(), async {
                 Ok(scoped.end("COMMIT").await?)
             })
-            .await?;
+            .await
+            .map_err(DbError::from_commit)?;
         } else {
             // Nothing of it is stored either way: a rollback that fails closes the connection.
             let _ = self
@@ -136,6 +145,7 @@ impl Database {
                 let mut scoped = Scoped {
                     connection: Connection::Sqlite(pool.acquire().await?),
                     open: true,
+                    broken: false,
                 };
                 scoped
                     .run(AssertSqlSafe("BEGIN IMMEDIATE".to_owned()))
@@ -150,6 +160,7 @@ impl Database {
                 let mut scoped = Scoped {
                     connection: Connection::Postgres(pool.acquire().await?),
                     open: true,
+                    broken: false,
                 };
                 let begin = self.begin_postgres();
                 scoped

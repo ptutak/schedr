@@ -382,11 +382,44 @@ pub struct MasterSection {
     )]
     #[schemars(with = "DurationText")]
     pub lease_period: Duration,
+    /// How long a task whose assignment fails on its own (its data won't read, the database
+    /// refuses it) is left out of the rounds, so the others go on, before it is tried again.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub set_aside: Duration,
+    /// How often a master whose listening for commands failed to start (the database too slow
+    /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub listen_retry: Duration,
+    /// After a commit cut off by the time limit or a lost connection, how long the master reads
+    /// back whether it was stored (holding its lock: rounds and worker messages wait). Not seen
+    /// by then: taken as not stored.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub read_back_window: Duration,
+    /// How often it reads back within `read_back_window` (zero is taken as 1 ms).
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub read_back_interval: Duration,
 }
 
 impl Default for MasterSection {
     /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
-    /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease.
+    /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease; a task set aside for 60 s,
+    /// listening tried again every 30 min, a commit read back for 3 s every 500 ms.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -397,6 +430,10 @@ impl Default for MasterSection {
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
             lease_period: Duration::from_secs(30),
+            set_aside: Duration::from_mins(1),
+            listen_retry: Duration::from_mins(30),
+            read_back_window: Duration::from_secs(3),
+            read_back_interval: Duration::from_millis(500),
         }
     }
 }

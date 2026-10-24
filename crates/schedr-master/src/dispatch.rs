@@ -46,6 +46,82 @@ mod tests;
 /// How long a worker has to report `Started` after an assignment.
 pub const START_TIMEOUT: SignedDuration = SignedDuration::from_secs(10);
 
+/// How long a task whose assignment failed on its own is left out of the rounds before it is
+/// tried again, unless set otherwise (see [`Dispatcher::assign_into`]).
+pub const DEFAULT_SET_ASIDE: Duration = Duration::from_mins(1);
+
+/// The acknowledgement of `attempt_id`'s `Finished`, for `worker_id`: its result is stored.
+#[must_use]
+pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
+    Outgoing {
+        worker_id: worker_id.to_owned(),
+        message: pb::MasterMessage {
+            message: Some(pb::master_message::Message::FinishedAck(pb::FinishedAck {
+                attempt_id: attempt_id.to_owned(),
+            })),
+        },
+    }
+}
+
+/// How a commit cut off by the time limit or a lost connection is read back: whether the work
+/// is stored, checked at once, then every `interval` for up to `window`, since a server slow
+/// enough to have cut it off may still be committing it (`[master] read_back_window`,
+/// `read_back_interval`). Never seen meanwhile: not stored (a stored round's attempts are
+/// taken back after [`START_TIMEOUT`] and run again). The master holds its lock meanwhile:
+/// only after a commit cut off, a database incident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadBack {
+    /// How long it goes on.
+    pub window: Duration,
+    /// How often it checks (zero is taken as 1 ms).
+    pub interval: Duration,
+}
+
+impl Default for ReadBack {
+    /// For 3 s, every 500 ms.
+    fn default() -> Self {
+        Self {
+            window: Duration::from_secs(3),
+            interval: Duration::from_millis(500),
+        }
+    }
+}
+
+impl ReadBack {
+    /// Whether the work is stored, by `stored` (true once it is).
+    pub async fn stored<F, Fut>(self, mut stored: F) -> bool
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        let interval = self.interval.max(Duration::from_millis(1));
+        let deadline = tokio::time::Instant::now() + self.window;
+        loop {
+            if stored().await {
+                return true;
+            }
+            if tokio::time::Instant::now() + interval > deadline {
+                return false;
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+}
+
+/// The most assignments a round makes (a few statements each, about 5-13 ms in stress runs):
+/// thousands of ready tasks and free slots go over a few rounds, the longest ready first
+/// (B18). Steady state stays under it (about 16 a round in scenario 1).
+pub const ASSIGNMENTS_PER_ROUND: usize = 50;
+
+/// The most assignments a round takes back as never started (B18).
+pub const EXPIRIES_PER_ROUND: usize = 50;
+
+/// The most waiting reasons a round writes (each a statement, about 3.5 ms in stress runs): a
+/// burst of runs leaves thousands of tasks waiting, and their reasons (only shown) are filled in
+/// over the following rounds rather than in one long one (B18). The waiting counts in the
+/// metrics still cover every task.
+pub const REASONS_PER_ROUND: usize = 100;
+
 /// When a task whose code wasn't on the worker yet is tried again: about the git-sync
 /// interval plus the settle time.
 pub const CODE_RETRY_DELAY: SignedDuration = SignedDuration::from_secs(35);
@@ -118,6 +194,32 @@ pub struct Dispatcher {
     metrics: MasterMetrics,
     /// Attempts whose `Started` arrived but waits for the master: never taken back (B11).
     arrivals: Arrivals,
+    /// Task instances whose assignment failed on its own, and until when they are left out.
+    set_aside: BTreeMap<String, Timestamp>,
+    /// How long they are left out.
+    set_aside_for: SignedDuration,
+    /// How a commit cut off is read back.
+    read_back: ReadBack,
+}
+
+/// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
+#[derive(Debug, Clone)]
+pub struct Memory {
+    workers: Workers,
+    rejections: BTreeMap<String, BTreeMap<String, String>>,
+    code_missing: BTreeMap<String, CodeMissing>,
+}
+
+/// What a step's assignments count as they go.
+#[derive(Debug, Default)]
+struct Tally {
+    /// Tasks left waiting, by why.
+    waiting: BTreeMap<&'static str, i64>,
+    /// Assignments made (at most [`ASSIGNMENTS_PER_ROUND`]).
+    assigned: usize,
+    /// Waiting reasons to write, `(instance ID, reason)`: at most [`REASONS_PER_ROUND`],
+    /// written together at the step's end.
+    reasons: Vec<(String, String)>,
 }
 
 /// A task's code missing on workers.
@@ -142,6 +244,10 @@ impl Dispatcher {
             current_code: BTreeMap::new(),
             metrics: MasterMetrics::default(),
             arrivals: Arrivals::default(),
+            set_aside: BTreeMap::new(),
+            set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
+                .unwrap_or(SignedDuration::MAX),
+            read_back: ReadBack::default(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -153,11 +259,40 @@ impl Dispatcher {
         self.metrics = metrics;
     }
 
+    /// A copy of what a worker's message changes in memory (worker slots, rejections, code
+    /// missing), to [`Self::restore`] if the message's transaction rolls back: memory then
+    /// shows only what is stored (code review of 2.10b; metrics already counted stay).
+    #[must_use]
+    pub fn memory(&self) -> Memory {
+        Memory {
+            workers: self.workers.clone(),
+            rejections: self.rejections.clone(),
+            code_missing: self.code_missing.clone(),
+        }
+    }
+
+    /// Puts back a copy taken by [`Self::memory`].
+    pub fn restore(&mut self, memory: Memory) {
+        self.workers = memory.workers;
+        self.rejections = memory.rejections;
+        self.code_missing = memory.code_missing;
+    }
+
     /// The dispatcher reading which attempts' `Started` arrived from `arrivals` (the core's, which
     /// the streams' readers fill), so it doesn't take them back as never started.
     #[must_use]
     pub fn with_arrivals(mut self, arrivals: Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// The dispatcher leaving a task whose assignment fails on its own out for `set_aside`,
+    /// and reading a commit cut off back as `read_back` says (`[master] set_aside`,
+    /// `read_back_window`, `read_back_interval`).
+    #[must_use]
+    pub fn with_set_aside(mut self, set_aside: Duration, read_back: ReadBack) -> Self {
+        self.set_aside_for = SignedDuration::try_from(set_aside).unwrap_or(SignedDuration::MAX);
+        self.read_back = read_back;
         self
     }
 
@@ -308,88 +443,215 @@ impl Dispatcher {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
-        // The step's assignments are one transaction: stored together or not at all, with one
-        // lease check and one commit (T2, 2.10b). What they changed in memory (the slots
-        // reserved) and the messages built for them go with them.
+        self.set_aside.retain(|_, until| *until > now);
+        let ready: Vec<ReadyInstance> = self
+            .db
+            .ready_instances(now)
+            .await?
+            .into_iter()
+            .filter(|r| !self.set_aside.contains_key(&r.instance_id))
+            .collect();
+        // Nothing ready (an idle round): no transaction, nothing to keep.
+        if ready.is_empty() {
+            self.metrics.set_waiting(&[]);
+            return Ok(());
+        }
+        // The step's assignments are one transaction: stored together, with one lease check
+        // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the
+        // messages built for them go with a rollback.
         let (workers, built) = (self.workers.clone(), outgoing.len());
         let db = self.db.clone();
-        let assigned = Box::pin(db.atomically(self.assign_each(now, outgoing))).await;
-        if assigned.is_err() {
-            self.workers = workers;
-            outgoing.truncate(built);
+        let together = Box::pin(db.atomically(self.assign_each(now, &ready, outgoing))).await;
+        let Err(error) = together else {
+            // Counted once stored (a step redone one at a time would count them twice).
+            self.count_assignments(outgoing.len() - built);
+            return Ok(());
+        };
+        // A commit cut off may have stored them all (they are one transaction): one of its new
+        // attempts there means it did, and its messages go; none, or no answer, means it
+        // didn't (taken back; a stored one would expire after START_TIMEOUT).
+        if matches!(error, DispatchError::Db(DbError::CommitUnknown))
+            && self.stored(&outgoing[built..]).await
+        {
+            self.count_assignments(outgoing.len() - built);
+            return Ok(());
         }
-        assigned
+        self.workers = workers;
+        outgoing.truncate(built);
+        if !task_specific(&error) {
+            return Err(error);
+        }
+        // One task may fail every time (its data won't read, the database refuses it): one at
+        // a time, the others go on and it is set aside, instead of every round failing on it.
+        tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
+        self.assign_one_by_one(now, &ready, outgoing).await
     }
 
-    /// Assigns ready tasks to workers with free slots, each assignment's message into
+    /// Counts `made` assignments, once stored.
+    fn count_assignments(&self, made: usize) {
+        self.metrics
+            .assignments
+            .inc_by(u64::try_from(made).unwrap_or(u64::MAX));
+    }
+
+    /// Whether the attempt of the first assignment in `built` is stored, after a commit whose
+    /// outcome is unknown (see [`read_back`]; `false` if it can't be told).
+    async fn stored(&self, built: &[Outgoing]) -> bool {
+        let Some(attempt_id) = built.iter().find_map(|o| match &o.message.message {
+            Some(pb::master_message::Message::AssignTask(assign)) => Some(&assign.attempt_id),
+            _ => None,
+        }) else {
+            return false;
+        };
+        self.read_back
+            .stored(|| async { matches!(self.db.attempt(attempt_id).await, Ok(Some(_))) })
+            .await
+    }
+
+    /// The `ready` tasks assigned each in a transaction of its own; one whose assignment fails
+    /// on its own is set aside for [`SET_ASIDE`], with a warning. An error that isn't one
+    /// task's (the database gone, the lease lost), or every task failing, is the step's.
+    async fn assign_one_by_one(
+        &mut self,
+        now: Timestamp,
+        ready: &[ReadyInstance],
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        let mut tally = Tally::default();
+        let (mut failed, mut made) = (Vec::new(), 0);
+        for one in ready {
+            let (workers, built) = (self.workers.clone(), outgoing.len());
+            let db = self.db.clone();
+            let assigned =
+                Box::pin(db.atomically(self.assign_one(now, one, outgoing, &mut tally))).await;
+            let Err(error) = assigned else {
+                made += outgoing.len() - built;
+                self.count_assignments(outgoing.len() - built);
+                continue;
+            };
+            self.workers = workers;
+            outgoing.truncate(built);
+            if !task_specific(&error) {
+                return Err(error);
+            }
+            failed.push((one, error));
+        }
+        // Every one that tried failed (more than one, none assigned): the database's trouble,
+        // not theirs. Those that only waited for a slot don't count.
+        if made == 0 && failed.len() > 1 {
+            return Err(failed.swap_remove(0).1);
+        }
+        for (one, error) in failed {
+            let until = now.checked_add(self.set_aside_for).unwrap_or(now);
+            tracing::warn!(
+                %error,
+                run_id = one.run_id,
+                task_id = %one.task_id,
+                %until,
+                "a task's assignment failed on its own: set aside, the others go on"
+            );
+            self.set_aside.insert(one.instance_id.clone(), until);
+        }
+        // Its own transaction: shown only, and the assignments are stored already.
+        let db = self.db.clone();
+        let written = Box::pin(db.atomically(db.set_queued_reasons(&tally.reasons, now))).await;
+        if let Err(error) = written {
+            tracing::warn!(%error, "waiting reasons not written");
+        }
+        let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
+        self.metrics.set_waiting(&waiting);
+        Ok(())
+    }
+
+    /// Assigns the `ready` tasks to workers with free slots, each assignment's message into
     /// `outgoing` once it is stored (in [`Self::assign_into`]'s transaction).
     async fn assign_each(
         &mut self,
         now: Timestamp,
+        ready: &[ReadyInstance],
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
-        let mut waiting: BTreeMap<&'static str, i64> = BTreeMap::new();
-        for ready in self.db.ready_instances(now).await? {
-            let Some(task) = ready.dag.task(&ready.task_id) else {
-                continue;
-            };
-            let excluded: BTreeSet<String> = self
-                .rejections
-                .get(&ready.instance_id)
-                .map(|r| r.keys().cloned().collect())
-                .unwrap_or_default();
-            let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
-            // Workers that didn't have the code yet come last: the others are asked first.
-            let mut without_code = excluded.clone();
-            if let Some(missing) = self.code_missing.get(&ready.instance_id) {
-                without_code.extend(missing.by.keys().cloned());
-            }
-            let picked = self
-                .workers
-                .pick(needs, &without_code)
-                .or_else(|| self.workers.pick(needs, &excluded));
-            let Some(worker_id) = picked.map(str::to_owned) else {
-                let (why, reason) = self.why_waiting(needs, &excluded);
-                *waiting.entry(why).or_default() += 1;
-                if ready.queued_reason.as_deref() != Some(reason.as_str()) {
-                    self.db
-                        .set_queued_reason(&ready.instance_id, &reason, now)
-                        .await?;
-                }
-                continue;
-            };
-            let Some((attempt_id, try_number)) = self
-                .db
-                .assign_attempt(&ready.instance_id, &worker_id, now)
-                .await?
-            else {
-                continue;
-            };
-            let inputs =
-                upstream_inputs(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
-            if inputs.len() > MAX_INPUTS {
-                self.end(
-                    &attempt_id,
-                    &ready.run_id,
-                    &ready.task_id,
-                    inputs_too_large(),
-                    now,
-                )
-                .await?;
-                continue;
-            }
-            self.workers.reserve(&worker_id, &attempt_id, now);
-            self.metrics.assignments.inc();
-            let message = self.assign_message(&ready, &worker_id, &attempt_id, try_number, inputs);
-            outgoing.push(Outgoing {
-                worker_id,
-                message: pb::MasterMessage {
-                    message: Some(pb::master_message::Message::AssignTask(message)),
-                },
-            });
+        let mut tally = Tally::default();
+        for one in ready {
+            self.assign_one(now, one, outgoing, &mut tally).await?;
         }
-        let waiting: Vec<(&'static str, i64)> = waiting.into_iter().collect();
+        self.db.set_queued_reasons(&tally.reasons, now).await?;
+        let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
+        Ok(())
+    }
+
+    /// Assigns one ready task to a worker with a free slot, its message into `outgoing` once
+    /// it is stored; or says why it waits.
+    async fn assign_one(
+        &mut self,
+        now: Timestamp,
+        ready: &ReadyInstance,
+        outgoing: &mut Vec<Outgoing>,
+        tally: &mut Tally,
+    ) -> Result<(), DispatchError> {
+        let Some(task) = ready.dag.task(&ready.task_id) else {
+            return Ok(());
+        };
+        let excluded: BTreeSet<String> = self
+            .rejections
+            .get(&ready.instance_id)
+            .map(|r| r.keys().cloned().collect())
+            .unwrap_or_default();
+        let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
+        // Workers that didn't have the code yet come last: the others are asked first.
+        let mut without_code = excluded.clone();
+        if let Some(missing) = self.code_missing.get(&ready.instance_id) {
+            without_code.extend(missing.by.keys().cloned());
+        }
+        let picked = self
+            .workers
+            .pick(needs, &without_code)
+            .or_else(|| self.workers.pick(needs, &excluded));
+        // Enough for a round: the rest wait for the next one, counted as waiting (B18).
+        if picked.is_some() && tally.assigned >= ASSIGNMENTS_PER_ROUND {
+            *tally.waiting.entry("next_round").or_default() += 1;
+            return Ok(());
+        }
+        let Some(worker_id) = picked.map(str::to_owned) else {
+            let (why, reason) = self.why_waiting(needs, &excluded);
+            *tally.waiting.entry(why).or_default() += 1;
+            // At most so many a round: the rest in the next ones (B18).
+            if ready.queued_reason.as_deref() != Some(reason.as_str())
+                && tally.reasons.len() < REASONS_PER_ROUND
+            {
+                tally.reasons.push((ready.instance_id.clone(), reason));
+            }
+            return Ok(());
+        };
+        let Some((attempt_id, try_number)) = self
+            .db
+            .assign_attempt(&ready.instance_id, &worker_id, now)
+            .await?
+        else {
+            return Ok(());
+        };
+        let inputs = upstream_inputs(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+        if inputs.len() > MAX_INPUTS {
+            self.end(
+                &attempt_id,
+                &ready.run_id,
+                &ready.task_id,
+                inputs_too_large(),
+                now,
+            )
+            .await?;
+            return Ok(());
+        }
+        self.workers.reserve(&worker_id, &attempt_id, now);
+        tally.assigned += 1;
+        let message = self.assign_message(ready, &worker_id, &attempt_id, try_number, inputs);
+        outgoing.push(Outgoing {
+            worker_id,
+            message: pb::MasterMessage {
+                message: Some(pb::master_message::Message::AssignTask(message)),
+            },
+        });
         Ok(())
     }
 
@@ -539,14 +801,7 @@ impl Dispatcher {
             };
             self.record(&attempt, &end, &result, now).await?;
         }
-        Ok(Outgoing {
-            worker_id: worker_id.to_owned(),
-            message: pb::MasterMessage {
-                message: Some(pb::master_message::Message::FinishedAck(pb::FinishedAck {
-                    attempt_id: finished.attempt_id.clone(),
-                })),
-            },
-        })
+        Ok(finished_ack(worker_id, &finished.attempt_id))
     }
 
     /// Takes back assignments with no `Started` within [`START_TIMEOUT`]: they end
@@ -561,6 +816,8 @@ impl Dispatcher {
         let cutoff = now.checked_sub(START_TIMEOUT).unwrap_or(Timestamp::MIN);
         let mut expired = self.db.unstarted_attempts(cutoff).await?;
         expired.retain(|attempt| !self.arrivals.start_waiting(&attempt.id));
+        // At most so many a round (several writes each): after an outage, over a few (B18).
+        expired.truncate(EXPIRIES_PER_ROUND);
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
             self.record(
@@ -604,8 +861,9 @@ impl Dispatcher {
         Ok(ended)
     }
 
-    /// A worker is lost: its attempts end `lost` with a `WorkerLost` error summary (each uses
-    /// a retry) and it is forgotten.
+    /// A worker is lost or gone: its started attempts end `lost` with a `WorkerLost` error
+    /// summary (each uses a retry), the ones it never started `assignment_expired` with a
+    /// `WorkerLeft` one (queued again, no retry), and it is forgotten.
     ///
     /// # Errors
     ///
@@ -617,12 +875,21 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         self.workers.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
-            let end = AttemptEnd {
-                error_summary: Some(lost_summary(worker_id)),
-                ..AttemptEnd::by_master(AttemptStatus::Lost)
+            // One it never started (sent as it began draining, say) never ran there: taken
+            // back like an expired assignment, queued again without using a retry (B17).
+            let (status, summary) = if attempt.started {
+                (AttemptStatus::Lost, lost_summary(worker_id))
+            } else {
+                (
+                    AttemptStatus::AssignmentExpired,
+                    not_started_summary(worker_id),
+                )
             };
-            self.record(&attempt, &end, &by_master(AttemptStatus::Lost), now)
-                .await?;
+            let end = AttemptEnd {
+                error_summary: Some(summary),
+                ..AttemptEnd::by_master(status)
+            };
+            self.record(&attempt, &end, &by_master(status), now).await?;
         }
         Ok(())
     }
@@ -1006,6 +1273,13 @@ fn restarted_summary(worker_id: &str) -> String {
 }
 
 /// The error summary of an attempt whose worker was lost (no sign of life for the lease).
+fn not_started_summary(worker_id: &str) -> String {
+    ErrorSummary::json(
+        "WorkerLeft",
+        &format!("worker `{worker_id}` left before starting the attempt: it runs again"),
+    )
+}
+
 fn lost_summary(worker_id: &str) -> String {
     ErrorSummary::json(
         "WorkerLost",
@@ -1090,8 +1364,20 @@ async fn upstream_inputs(
     if used.is_empty() {
         return Ok(b"{}".to_vec());
     }
-    let outputs = db.run_outputs(run_id).await?;
-    let inputs: BTreeMap<&TaskId, &serde_json::Value> =
-        outputs.iter().filter(|(id, _)| used.contains(id)).collect();
+    // Only the outputs it uses: not the whole run's, which grows with a DAG's width (B18).
+    let wanted: Vec<&TaskId> = used.into_iter().collect();
+    let outputs = db.outputs_of(run_id, &wanted).await?;
+    let inputs: BTreeMap<&TaskId, &serde_json::Value> = outputs.iter().collect();
     Ok(serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()))
+}
+
+/// Whether `error` is one task's own (data that won't read, a statement the database
+/// refuses), so that setting the task aside lets the others go on; not the database gone, a
+/// time limit, or the lease lost, which are every task's.
+fn task_specific(error: &DispatchError) -> bool {
+    let db = match error {
+        DispatchError::Db(db) | DispatchError::Execution(ExecutionError::Db(db)) => db,
+        DispatchError::Execution(_) | DispatchError::BadMessage { .. } => return true,
+    };
+    db.is_data_fault()
 }

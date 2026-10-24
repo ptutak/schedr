@@ -54,7 +54,8 @@ const TASKS_WAITING: MetricDoc = MetricDoc {
     name: "tasks_waiting",
     kind: MetricKind::Gauge,
     labels: &["reason"],
-    help: "Ready tasks no worker could take at the last assignment pass, by reason",
+    help: "Ready tasks not assigned at the last assignment pass, by reason (`next_round`: over \
+           the round's limit of assignments)",
 };
 const ASSIGNMENTS: MetricDoc = MetricDoc {
     name: "assignments",

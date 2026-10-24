@@ -8,7 +8,9 @@ use schedr_model::{Dag, RunState, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json};
+use crate::query::{
+    db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, sql_text, to_json,
+};
 
 #[cfg(test)]
 mod tests;
@@ -75,6 +77,32 @@ type InstanceRow = (String, String, String, i32, i32, Option<String>, bool);
 /// A run's state, whether it is being cancelled, its DAG version and its parse's version.
 type RunRow = (String, bool, String, String);
 
+/// `updates` with one entry per task, in the order each task first appears: a task given
+/// twice ends as its last update says, its used retries added up, as one statement each in
+/// turn did (one statement for many rows would apply one of them, any).
+fn merged(updates: &[InstanceUpdate]) -> Vec<(&InstanceUpdate, i32)> {
+    let mut merged: Vec<(&InstanceUpdate, i32)> = Vec::with_capacity(updates.len());
+    let mut at: std::collections::HashMap<&TaskId, usize> = std::collections::HashMap::new();
+    for update in updates {
+        let retries = i32::from(update.used_retry);
+        if let Some(&i) = at.get(&update.task_id) {
+            let used = merged[i].1 + retries;
+            merged[i] = (update, used);
+        } else {
+            at.insert(&update.task_id, merged.len());
+            merged.push((update, retries));
+        }
+    }
+    merged
+}
+
+/// The most task instances one `UPDATE` changes (five parameters each).
+const UPDATES_PER_STATEMENT: usize = 500;
+
+/// The most task instances one `INSERT` creates (six parameters each: well under SQLite's
+/// 32,766 and Postgres's 65,535).
+const INSTANCES_PER_STATEMENT: usize = 500;
+
 impl Database {
     /// Running runs with no task instances yet, oldest first.
     ///
@@ -108,22 +136,43 @@ impl Database {
         states: &[(TaskId, TaskInstanceState)],
         now: Timestamp,
     ) -> Result<(), DbError> {
-        const CREATE: &str = "INSERT INTO task_instances \
-            (id, run_id, task_id, state, ready_at, updated_at) \
-            VALUES ($1{uuid}, $2{uuid}, $3, $4, $5{ts}, $6{ts})";
         let now_text = db_time(now);
+        // Many rows a statement (a run of a wide DAG was one statement a task, B18), in chunks
+        // that stay under SQLite's and Postgres's limits on parameters.
         in_tx!(self, |tx, backend| {
-            for (task_id, state) in states {
-                let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
-                sqlx::query(sql(backend, CREATE))
-                    .bind(Uuid::now_v7().to_string())
-                    .bind(run_id)
-                    .bind(task_id.as_str())
-                    .bind(state.to_string())
-                    .bind(ready)
-                    .bind(&now_text)
-                    .execute(&mut *tx)
-                    .await?;
+            for chunk in states.chunks(INSTANCES_PER_STATEMENT) {
+                let rows: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let n = i * 6;
+                        format!(
+                            "(${}{{uuid}}, ${}{{uuid}}, ${}, ${}, ${}{{ts}}, ${}{{ts}})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4,
+                            n + 5,
+                            n + 6
+                        )
+                    })
+                    .collect();
+                let text = format!(
+                    "INSERT INTO task_instances \
+                     (id, run_id, task_id, state, ready_at, updated_at) VALUES {}",
+                    rows.join(", ")
+                );
+                let text = sql_text(backend, &text);
+                let mut insert = sqlx::query(text);
+                for (task_id, state) in chunk {
+                    let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
+                    insert = insert
+                        .bind(Uuid::now_v7().to_string())
+                        .bind(run_id)
+                        .bind(task_id.as_str())
+                        .bind(state.to_string())
+                        .bind(ready)
+                        .bind(&now_text);
+                }
+                insert.execute(&mut *tx).await?;
             }
         });
         Ok(())
@@ -176,22 +225,86 @@ impl Database {
         updates: &[InstanceUpdate],
         now: Timestamp,
     ) -> Result<(), DbError> {
-        const UPDATE: &str = "UPDATE task_instances SET state = $1, ready_at = $2{ts}, \
-            outcome = $3, retries_used = retries_used + $4, updated_at = $5{ts} \
-            WHERE run_id = $6{uuid} AND task_id = $7";
+        let now = db_time(now);
+        let updates = merged(updates);
+        // Many rows a statement, joined to a list of values (a finished task in a wide DAG
+        // changes many at once, B18); `columnN` names the list's columns on both backends.
+        in_tx!(self, |tx, backend| {
+            for chunk in updates.chunks(UPDATES_PER_STATEMENT) {
+                let rows: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let n = 2 + i * 5;
+                        format!(
+                            "(${}, ${}, ${}{{ts}}, ${}, ${})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4,
+                            n + 5
+                        )
+                    })
+                    .collect();
+                let text = format!(
+                    "UPDATE task_instances AS t SET state = v.column2, ready_at = v.column3, \
+                     outcome = v.column4, retries_used = t.retries_used + v.column5, \
+                     updated_at = $1{{ts}} FROM (VALUES {}) AS v \
+                     WHERE t.run_id = $2{{uuid}} AND t.task_id = v.column1",
+                    rows.join(", ")
+                );
+                let mut update = sqlx::query(sql_text(backend, &text))
+                    .bind(&now)
+                    .bind(run_id);
+                for (one, retries) in chunk {
+                    update = update
+                        .bind(one.task_id.as_str())
+                        .bind(one.state.to_string())
+                        .bind(one.ready_at.map(db_time))
+                        .bind(one.outcome.as_deref())
+                        .bind(*retries);
+                }
+                update.execute(&mut *tx).await?;
+            }
+        });
+        Ok(())
+    }
+
+    /// Sets the waiting reasons of queued task instances (`(instance ID, reason)`): one
+    /// statement per distinct reason and 500 instances, where it was one
+    /// per instance (B18); most waiting tasks share a few reasons.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn set_queued_reasons(
+        &self,
+        reasons: &[(String, String)],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        let mut by_reason: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for (instance_id, reason) in reasons {
+            by_reason.entry(reason).or_default().push(instance_id);
+        }
         let now = db_time(now);
         in_tx!(self, |tx, backend| {
-            for update in updates {
-                sqlx::query(sql(backend, UPDATE))
-                    .bind(update.state.to_string())
-                    .bind(update.ready_at.map(db_time))
-                    .bind(update.outcome.as_deref())
-                    .bind(i32::from(update.used_retry))
-                    .bind(&now)
-                    .bind(run_id)
-                    .bind(update.task_id.as_str())
-                    .execute(&mut *tx)
-                    .await?;
+            for (reason, instances) in &by_reason {
+                for chunk in instances.chunks(UPDATES_PER_STATEMENT) {
+                    let ids: Vec<String> = (3..chunk.len() + 3)
+                        .map(|n| format!("${n}{{uuid}}"))
+                        .collect();
+                    let text = format!(
+                        "UPDATE task_instances SET queued_reason = $1, updated_at = $2{{ts}} \
+                         WHERE state = 'queued' AND id IN ({})",
+                        ids.join(", ")
+                    );
+                    let mut update = sqlx::query(sql_text(backend, &text))
+                        .bind(*reason)
+                        .bind(&now);
+                    for id in chunk {
+                        update = update.bind(*id);
+                    }
+                    update.execute(&mut *tx).await?;
+                }
             }
         });
         Ok(())
@@ -286,30 +399,6 @@ impl Database {
                 .rows_affected()
         });
         Ok(updated > 0)
-    }
-
-    /// Sets why a queued task waits (shown with it), if it still waits.
-    ///
-    /// # Errors
-    ///
-    /// [`DbError::Sqlx`] if the statement fails.
-    pub async fn set_queued_reason(
-        &self,
-        instance_id: &str,
-        reason: &str,
-        now: Timestamp,
-    ) -> Result<(), DbError> {
-        const REASON: &str = "UPDATE task_instances SET queued_reason = $1, updated_at = $2{ts} \
-            WHERE id = $3{uuid} AND state = 'queued'";
-        in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, REASON))
-                .bind(reason)
-                .bind(db_time(now))
-                .bind(instance_id)
-                .execute(&mut *tx)
-                .await?;
-        });
-        Ok(())
     }
 
     /// The task instances whose retry delay has passed: (run ID, task ID), oldest first.

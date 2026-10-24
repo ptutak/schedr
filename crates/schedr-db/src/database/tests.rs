@@ -350,6 +350,36 @@ async fn a_dag_version_is_read_and_parsed_once() {
 }
 
 #[test]
+fn a_commit_refused_is_a_rollback_and_one_cut_off_is_unknown() {
+    let timed_out = DbError::QueryTimeout(Duration::from_secs(10));
+    assert!(matches!(
+        DbError::from_commit(timed_out),
+        DbError::CommitUnknown
+    ));
+    let lost = DbError::Sqlx(sqlx::Error::Io(std::io::Error::other("connection reset")));
+    assert!(matches!(DbError::from_commit(lost), DbError::CommitUnknown));
+    let refused = DbError::Sqlx(sqlx::Error::Protocol("x".to_owned()));
+    // A protocol error mid-commit: the connection's state is unknown, so the commit's too.
+    assert!(matches!(
+        DbError::from_commit(refused),
+        DbError::CommitUnknown
+    ));
+}
+
+#[tokio::test]
+async fn a_commit_the_database_refuses_stays_its_error() {
+    let db = migrated().await;
+    let refused = execute(&db, "INSERT INTO no_such_table VALUES (1)")
+        .await
+        .unwrap_err();
+    let refused = DbError::from_commit(DbError::Sqlx(refused));
+    assert!(
+        matches!(refused, DbError::Sqlx(sqlx::Error::Database(_))),
+        "{refused:?}"
+    );
+}
+
+#[test]
 fn an_unexpected_notification_names_its_probable_cause() {
     // B16: through a pooler in transaction mode, a master's `LISTEN` sent notifications into
     // other clients' queries; the error alone didn't say why.

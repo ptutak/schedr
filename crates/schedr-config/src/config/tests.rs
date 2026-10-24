@@ -204,7 +204,30 @@ fn master_webserver_and_worker_defaults() {
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
             lease_period: Duration::from_secs(30),
+            set_aside: Duration::from_mins(1),
+            listen_retry: Duration::from_mins(30),
+            read_back_window: Duration::from_secs(3),
+            read_back_interval: Duration::from_millis(500),
         }
+    );
+    let tuned = parse(
+        "[master]\nset_aside = \"2m\"\nlisten_retry = \"1h\"\nread_back_window = \"5s\"\n\
+         read_back_interval = \"250ms\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            tuned.master.set_aside,
+            tuned.master.listen_retry,
+            tuned.master.read_back_window,
+            tuned.master.read_back_interval
+        ),
+        (
+            Duration::from_mins(2),
+            Duration::from_hours(1),
+            Duration::from_secs(5),
+            Duration::from_millis(250)
+        )
     );
     assert_eq!(config.webserver.port, 8080);
     assert_eq!(config.webserver.auth.identity_header, None);

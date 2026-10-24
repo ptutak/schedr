@@ -26,21 +26,33 @@ macro_rules! on_pool {
     ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {{
         let db: &$crate::database::Database = $db;
         let run = async {
-            Ok::<_, $crate::database::DbError>(if let Some(scope) = $crate::scope::current(db) {
-                let mut scoped = scope.connection.lock().await;
-                match &mut scoped.connection {
-                    $crate::scope::Connection::Sqlite(connection) => {
-                        let $pool: &mut sqlx::SqliteConnection = &mut **connection;
-                        let $backend = $crate::backend::Backend::Sqlite;
-                        $body
-                    }
-                    $crate::scope::Connection::Postgres(connection) => {
-                        let $pool: &mut sqlx::PgConnection = &mut **connection;
-                        let $backend = $crate::backend::Backend::Postgres;
-                        $body
-                    }
+            if let Some(scope) = $crate::scope::current(db) {
+                // Marked broken until it succeeds: a failed or cut-off query voids the
+                // transaction (see `Database::atomically`).
+                let mut guard = scope.connection.lock().await;
+                let scoped = &mut *guard;
+                let was_broken = std::mem::replace(&mut scoped.broken, true);
+                let done = async {
+                    Ok::<_, $crate::database::DbError>(match &mut scoped.connection {
+                        $crate::scope::Connection::Sqlite(connection) => {
+                            let $pool: &mut sqlx::SqliteConnection = &mut **connection;
+                            let $backend = $crate::backend::Backend::Sqlite;
+                            $body
+                        }
+                        $crate::scope::Connection::Postgres(connection) => {
+                            let $pool: &mut sqlx::PgConnection = &mut **connection;
+                            let $backend = $crate::backend::Backend::Postgres;
+                            $body
+                        }
+                    })
                 }
-            } else {
+                .await;
+                if done.is_ok() {
+                    scoped.broken = was_broken;
+                }
+                return done;
+            }
+            Ok::<_, $crate::database::DbError>({
                 match db.pool() {
                     $crate::database::Pool::Sqlite(pool) => {
                         let mut connection = pool.acquire().await?;
@@ -95,19 +107,30 @@ macro_rules! in_tx {
             // Inside `Database::atomically` on this database: its transaction (begun, limited
             // and fenced already; committed at its end).
             if let Some(scope) = $crate::scope::current(db) {
-                let mut scoped = scope.connection.lock().await;
-                return Ok::<_, $crate::database::DbError>(match &mut scoped.connection {
-                    $crate::scope::Connection::Sqlite(connection) => {
-                        let $backend = $crate::backend::Backend::Sqlite;
-                        let $tx: &mut sqlx::SqliteConnection = &mut **connection;
-                        $body
-                    }
-                    $crate::scope::Connection::Postgres(connection) => {
-                        let $backend = $crate::backend::Backend::Postgres;
-                        let $tx: &mut sqlx::PgConnection = &mut **connection;
-                        $body
-                    }
-                });
+                // Marked broken until it succeeds: a write failed or cut off voids the
+                // transaction, even if its error is handled (see `Database::atomically`).
+                let mut guard = scope.connection.lock().await;
+                let scoped = &mut *guard;
+                let was_broken = std::mem::replace(&mut scoped.broken, true);
+                let done = async {
+                    Ok::<_, $crate::database::DbError>(match &mut scoped.connection {
+                        $crate::scope::Connection::Sqlite(connection) => {
+                            let $backend = $crate::backend::Backend::Sqlite;
+                            let $tx: &mut sqlx::SqliteConnection = &mut **connection;
+                            $body
+                        }
+                        $crate::scope::Connection::Postgres(connection) => {
+                            let $backend = $crate::backend::Backend::Postgres;
+                            let $tx: &mut sqlx::PgConnection = &mut **connection;
+                            $body
+                        }
+                    })
+                }
+                .await;
+                if done.is_ok() {
+                    scoped.broken = was_broken;
+                }
+                return done;
             }
             Ok::<_, $crate::database::DbError>(match db.pool() {
                 $crate::database::Pool::Sqlite(pool) => {
@@ -158,6 +181,12 @@ const TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6fZ";
 
 /// A query in this crate's dialect, for one backend.
 pub(crate) fn sql(backend: Backend, query: &'static str) -> AssertSqlSafe<String> {
+    sql_text(backend, query)
+}
+
+/// As [`sql`], for a query built at run time from this crate's fixed text (placeholders and
+/// casts only, never values: those are bound).
+pub(crate) fn sql_text(backend: Backend, query: &str) -> AssertSqlSafe<String> {
     let casts: [(&str, &str); 6] = match backend {
         Backend::Sqlite => [
             ("{uuid}", ""),

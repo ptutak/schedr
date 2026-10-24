@@ -341,17 +341,27 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     an error; SQLite `BEGIN IMMEDIATE`). The transaction is found through a task-local, so
     only the work's own future uses it, never another task on the same database (the lease's
     renewals, gauge refreshes, input fetches); work inside work joins it. The query macros
-    take their connection from it when there is one. Not chosen: a transaction slot shared by
+    take their connection from it when there is one. A statement inside it that fails or is
+    cut off voids the transaction even if the work handles the error and goes on
+    (`DbError::TransactionFailed`, rolled back): on Postgres it is aborted anyway, and its
+    `COMMIT` would roll back without an error (code review). Not chosen: a transaction slot shared by
     the database's clones (it would catch those other tasks).
     - **T1: a worker message's writes are one transaction** (`Started`, `Rejected`,
       `Finished`, `CodeVersionChanged`; heartbeats write at most once): stored whole or not
       at all, one lease check and one commit per message instead of one per write. Before, a
       failure partway left part stored (B7's rules then repaired it).
     - **T2: a round's assignments are one transaction** (`Dispatcher::assign_into`): stored
-      together or not at all; on a failure the slots they reserved are given back and their
-      `AssignTask` messages dropped, and the next round assigns again. The B7 rule ("messages
-      already built are still sent") stays for everything else. Accepted: an idle round's
-      assignment step opens and commits an empty transaction.
+      together; on a failure the slots they reserved are given back and their `AssignTask`
+      messages dropped, and the step **falls back to one transaction per task** (A+B, decided
+      2026-10-24 after the code review found that one task failing every time stalled every
+      round): a task whose own assignment fails (`DbError::is_data_fault`: data that won't
+      read, a statement refused) is **set aside** for `SET_ASIDE` (60 s), with a warning, and
+      the others go on; an error that is the database's (unreachable, a time limit, the
+      lease), or every task failing, fails the step and sets nothing aside. The B7 rule
+      ("messages already built are still sent") stays for everything else. An idle round's
+      assignment step opens no transaction. Not chosen: the fallback alone (a task broken for
+      good would make every round take the slow path); setting aside alone (it needs to know
+      which task failed); undoing T2.
     - Not chosen: T3, one transaction for a batch of up to 10 messages (one bad message would
       roll back nine others; savepoints or retries for the last bit of gain); T4,
       `synchronous_commit = off` for the master (cheap commits, but a Postgres crash could
@@ -386,6 +396,82 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     only): owning it (the schema in `public`, closed to others since Postgres 15), and PL/pgSQL
     (the fence's `DO` block; allowed to everyone by default). Nothing reads other databases,
     `pg_stat_activity` or anything a superuser grants.
+  - **At most 100 waiting reasons a round** (`REASONS_PER_ROUND`, B18 in part; the user: "a
+    max batch size", 100 chosen from measurements): a burst of runs left thousands of tasks
+    waiting and one round wrote 580 reasons (about 2 s); the rest are written in the next
+    rounds (reasons are only shown; the waiting counts in the metrics cover every task). Not
+    chosen: 200 (0.7 s a round), 500 (close to what hurt).
+  - **From the step's code review** (fixed): a failed statement voids an `atomically`
+    transaction (above); a start that arrived is forgotten with its worker, or when its
+    message can't be queued (it protected the attempt from expiry forever); the pooler check
+    timing out counts as a pooler (a pool of one server connection can't pass it); an idle
+    round's assignment step opens no transaction; `run_overview` reads on one connection;
+    the nightly workflow's Postgres gets `max_connections = 500` and its name filter comes
+    through the environment.
+  - **Decided after the code review (2026-10-24):**
+    - **T1 rolled back puts memory back** (`Dispatcher::memory` / `restore`): a worker
+      message whose transaction fails leaves the dispatcher's memory (worker slots,
+      rejections, code missing) as before it; metrics already counted stay. Not chosen:
+      making the changes only after the commit (the user's first choice): the handlers read
+      their own changes back within a message (`Rejected` counts the refusals it just
+      recorded to decide unschedulable), so it would need each handler split into plan,
+      store, apply, with an overlay of pending changes: a rewrite for the same result.
+    - **A commit cut off is read back** (`DbError::CommitUnknown`, `DbError::from_commit`):
+      a `COMMIT` past the time limit or with its connection lost may have stored the work;
+      T2 then checks one of the round's new attempts (stored together, one is all): there,
+      its messages go; not there, or no answer, they are dropped (a stored one expires after
+      `START_TIMEOUT`). A commit the database refused stays a rollback. Not chosen: treating
+      it as rolled back (stored assignments unsent, the worker overbooked).
+    - **A worker leaving gives back what it never started** (B17, stress scenario 7):
+      `Dispatcher::worker_lost` ends started attempts `lost` (a retry used) and the others
+      `assignment_expired` with a `WorkerLeft` summary (queued again, no retry). Not chosen:
+      a new status (`withdrawn`: one more everywhere for the same meaning).
+    - **Per-round caps** (B18; the user: cap every batch step), the rest first in the next
+      round, so no round takes seconds: commands 50 (`COMMANDS_PER_ROUND`), task instances
+      for new runs 2,000 (`INSTANCES_PER_ROUND`; a run never split, one always made), due
+      retries 100, assignments 50 (`ASSIGNMENTS_PER_ROUND`), expiries 50, scheduled runs 10
+      per DAG (`SCHEDULED_PER_ROUND`), waiting reasons 100. Sized from the stress
+      measurements to a few hundred milliseconds each. The price: a burst finishes over more
+      rounds. Not chosen: a time budget per round (machine-dependent, harder to test).
+    - **Similar writes batched** (the user's idea): a new run's instances in multi-row
+      `INSERT`s, a finished task's downstream changes in `UPDATE … FROM (VALUES …)`, the
+      round's waiting reasons one `UPDATE … WHERE id IN (…)` per reason text: **500 rows a
+      statement** (well under both databases' parameter limits; 200-2,000 would do about the
+      same). A task's inputs read only the outputs it uses (`Database::outputs_of`), not its
+      run's every one. Not chosen now: a round's assignments as one batch (each message must
+      carry its stored attempt, and the fallback must work per task: possible later, once
+      one master's throughput is measured); expiries batched (the cap covers them); several messages in
+      one transaction (T3, one bad message would roll back the rest).
+    - **From the second code review** (fixed): a task's own fault is told from the
+      database's trouble by the error's code (`DbError::is_data_fault`: on Postgres the
+      SQLSTATE classes 40, 53, 55, 57, 08 and 58, on SQLite busy, locked, I/O, full and can't
+      open, are the database's: a statement cancelled at its limit sets no task aside); "every
+      task failed" counts only those that tried, not those waiting for a slot; a task over the
+      round's assignments counts as waiting (`next_round`); the assignments counter counts
+      once, after the commit; a task given twice in one batched update ends as its last
+      update, retries added up (as a statement each did); the single `set_queued_reason` is
+      gone.
+    - **Decided on the second review's open points** (2026-10-24):
+      - **D1: T1 reads back too.** A worker message whose commit was cut off is read back
+        before memory is put back: stored after all (`Finished`: its attempt ended, the
+        `FinishedAck` sent; `Started`: started; `Rejected`: the attempt gone, undone), memory
+        stays as the message left it. Not chosen: leaving it (memory wrong until the worker
+        reconnects).
+      - **D2: a read-back waits for a slow commit:** checked at once, then every
+        `[master] read_back_interval` (500 ms) for up to `[master] read_back_window` (3 s),
+        holding the master's lock: rounds and worker messages wait that long, only after a
+        commit cut off (a database incident; never seen in the stress runs). Not seen by
+        then: not stored (a stored round's attempts are taken back after 10 s and run
+        again). Not chosen: one query limit (a 10 s stop); resolving in the background
+        (held messages, a pending state: more than this rare path needs); no wait (a commit
+        merely slow taken as not stored).
+      - **D3: listening tried again.** Starting to listen failing (the pooler check timing
+        out on a slow database, or the database unreachable) polls with a warning saying so,
+        and tries again every `[master] listen_retry` (30 min) until it listens or finds a
+        pooler or notifications off. Not chosen: off until a restart.
+      - **The times configurable** (the user): `[master] set_aside` (60 s), `listen_retry`
+        (30 min), `read_back_window` (3 s), `read_back_interval` (500 ms). The per-round
+        caps and the messages per turn stay constants (counts, not times).
   - **Two scheduling queues (M2.5, decided 2026-10-24):** built beside the current round,
     not reworking it. The scheduler's work for one DAG stays one function (fire times,
     catch-up, `max_active_runs`, starting queued runs); only **which DAGs a round visits**
@@ -405,6 +491,55 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     by measurement); two separate engines (the per-DAG logic twice, drifting apart). It
     doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the
     master's writes (see the transaction grouping).
+  - **Scaling past one master: a federated web UI over several deployments** (the user's
+    idea, decided 2026-10-24, milestone M3, a later step). Each deployment is what exists
+    today (a master and its standby, workers, a webserver, a database of its own); one UI
+    talks to several webservers and shows their DAGs, runs and workers together, sending
+    each action to the deployment it concerns. The webserver already serves all the UI
+    needs, workers' logs included (it fetches them from their log endpoints), so the UI
+    never reaches workers or databases. Write capacity adds up across deployments as it
+    would across masters; a deployment's master failing is covered by its own standby
+    (2.10); nothing in the scheduler changes. What it doesn't do: spread load by itself
+    (which deployment runs which DAGs is chosen by hand). To work out in M3: one identity
+    across the webservers (M3's auth), a deployment down while the others answer (shown
+    unavailable), paging lists merged from several, triggering a DAG of another
+    deployment. Not chosen: several masters on one database (below): the same capacity
+    for a far larger change.
+  - **Not planned: several masters on one database, each with its own workers** (the user's
+    idea, 2026-10-24, first recorded for M6; superseded the same day by the federated view
+    above, kept as the alternative should one deployment not carry a load that can't be
+    split by DAG). Today one master leads
+    and a standby waits. The idea: masters share the database, each leading part of the
+    work through leases of its own, with its own flock of workers; a master that dies leaves
+    its part to be taken over by another (with its flock) once its leases expire, as the
+    standby does now. A standalone could run without its webserver, one webserver reaching
+    every master's workers (simpler in the distributed deployment, where the webserver
+    already reads workers from the registry).
+    - **Grain of the lease:** one per task would add a lease row and its renewals to every
+      task, about doubling the master's writes, when writes are the measured limit (B18,
+      scenario 13). One per DAG, or per bucket of DAGs (a hash of the DAG ID), keeps the
+      cost per lease, not per task: a DAG's runs, tasks and `max_active_runs` stay with one
+      master, so most of today's logic applies within a share unchanged.
+    - **For:** the master's write capacity adds up across masters (one does about 12-15
+      tasks a second locally, more on a real Postgres); every master works (no idle
+      standby); a master's failure stops only its share, for one lease period.
+    - **Against, or to work out:** everything the master keeps in memory assumes one writer
+      (the worker registry and slots, the dispatcher's state, parse jobs and code
+      versions): each would be per share or coordinated; which master applies a command
+      (by its DAG's share; worker commands by the worker's master); a DAG's tasks run only
+      on its master's workers, unless masters lend slots to each other; anything across
+      DAGs (`TriggerDagOperator`, chained runs) crosses shares; shares moving when masters
+      come and go (gradually, lease by lease); the fence per share (holder and takeover
+      counter per lease); the webserver reaching every flock's log endpoints; and a much
+      larger test surface (the stress suite with several masters, takeovers of part of the
+      work).
+    - **To decide it:** first measure one master's ceiling on a real Postgres with B18's
+      remaining parts fixed (fewer writes a task: instances in one statement, outputs read
+      by task, batched messages). If one master meets the expected load, this stays on
+      paper; if not, sharding by DAG is the way, and a design step of its own.
+    - **Possible later** (one master's throughput, measured first): a round's assignments as one batch (all the attempts in
+      one `INSERT`, the tasks in one `UPDATE`, the messages built from what was stored),
+      about three statements a round instead of three an assignment.
 - **No SQLite backup tool:** SQLite is the test phase; real persistence is Postgres. Not
   chosen: `schedr db backup` (SQLite's online backup) for a phase that doesn't need it.
 
@@ -1809,7 +1944,8 @@ permission to create pods.
 Commands that only work **inside a running task** (they talk to the agent over the task's
 channel, `SCHEDR_AGENT_FD`, each call on a connection of its own; see Rust/Python
 integration), for `command` / `script` tasks, their cleanups and resource setups.
-Python tasks use the Python API instead.
+Python tasks use the Python API instead, and plain Python scripts the same objects through
+`schedr.script` (below).
 
 **Milestone M4, all of it,** `dag-ctx run get` included: it needs the per-call connections
 (a channel for command tasks, new socket-pair ends over `SCM_RIGHTS`) that `task-ctx` and
@@ -2344,9 +2480,10 @@ list) and likewise has no Python.
 - **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a Vault-specific
   one) that refers to a value in secret storage (see Airflow compatibility, Scope: Templating), e.g.
   `t"{secrets['etl/db#password']}"`.
-- **Several secret storages** can be configured at the same time, each with a name. For now
-  only one is set up, but the placeholder syntax **names the storage** a secret comes from, so
-  adding storages later doesn't change the syntax:
+- **Several secret storages** can be configured at the same time, each with a name (in
+  standalone the `db` storage is always there besides any configured one, see below), and the
+  placeholder syntax **names the storage** a secret comes from, so adding storages later
+  doesn't change the syntax:
   - `secrets['path#key']`: the **default** storage. The configuration marks one storage as
     the default.
   - `secrets.<storage>['path#key']`: the named storage.
@@ -3171,6 +3308,7 @@ its summary.
 | t-strings (commands, script `args`, `env`, task arguments) | a reference, rendered by the agent | `command=["./publish.sh", t"{dag_ctx.params.region}"]` |
 | Python task code (also cleanups, resource setups) | read at run time, decoded strictly into the dataclass passed | `p = dag_ctx.params(ReportParams)`; `dag_ctx.run.planned_for` |
 | scripts and commands (incl. `schedr.toml` jobs) | `schedr dag-ctx` (see In-task CLI) | `schedr dag-ctx params get --field region` |
+| plain Python scripts | `schedr.script` (see In-task CLI): the same `dag_ctx` as Python task code | `from schedr.script import dag_ctx`; `dag_ctx.params.region` |
 
 - Paths are **checked at parse time** against the declared dataclass (an unknown field, or a type
   that doesn't fit the task's parameter, is an import error). Statically `dag_ctx.params.x` is
@@ -5368,9 +5506,10 @@ gRPC, journal) come before breadth of features.
 | **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; the webserver's REST API subset (`/api/v1`) the CLI needs (the UI comes in M3); CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test`; the runner and its protocol independent of how the process was started (for M2.5) | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
 | **M2.5. Fork server and two scheduling queues** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Two scheduling queues** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
-| **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local | — |
+| **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; later in the milestone, a **federated view**: one UI over several deployments (each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
+| **M6. Several masters on one database (not planned)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |
 | **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 
 - **The fork server is M2.5**, after M2 and before M3: everything it builds on (the watchdog,

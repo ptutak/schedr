@@ -404,6 +404,12 @@ async fn attempts_and_outputs_move_a_task_forward() {
         db.run_outputs(&run_id).await.unwrap(),
         BTreeMap::from([(id("extract"), json!({"rows": 3}))])
     );
+    assert_eq!(
+        db.outputs_of(&run_id, &[&id("extract"), &id("load")])
+            .await
+            .unwrap(),
+        BTreeMap::from([(id("extract"), json!({"rows": 3}))])
+    );
     let tasks = db.run_tasks(&run_id).await.unwrap().unwrap();
     assert_eq!(
         (
@@ -676,6 +682,9 @@ async fn a_write_past_the_query_timeout_is_stopped_by_postgres_too() {
         ),
         "{error}"
     );
+    // The database's trouble (its statement limit, 57014), not the data's: no task is set
+    // aside for it.
+    assert!(!error.is_data_fault(), "{error}");
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     // Nothing of the cut-off write waits on the lock any more.
     let waiting: i64 = sqlx::query_scalar(
@@ -843,4 +852,104 @@ async fn straight_to_postgres_the_master_listens_unless_told_not_to() {
     assert!(through.command_notifications().await.unwrap().is_some());
     let off = db.with_notifications(false, None);
     assert!(off.command_notifications().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_wide_runs_instances_are_all_created_on_postgres() {
+    let (db, version) = with_dag().await;
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T02:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let states: Vec<(TaskId, TaskInstanceState)> = (0..1201)
+        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Queued))
+        .collect();
+    db.create_instances(&run_id, &states, ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.instances.len(), 1201);
+    assert!(run.instances.iter().all(|i| i.ready_at == Some(ts(NOW))));
+}
+
+#[tokio::test]
+async fn many_updates_change_each_task_on_postgres() {
+    let (db, version) = with_dag().await;
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T02:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..1201)
+        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Scheduled))
+        .collect();
+    db.create_instances(&run_id, &tasks, ts(NOW)).await.unwrap();
+    let updates: Vec<InstanceUpdate> = (0..1201)
+        .map(|i| InstanceUpdate {
+            task_id: id(&format!("t{i:04}")),
+            state: if i % 3 == 0 {
+                TaskInstanceState::Queued
+            } else {
+                TaskInstanceState::Success
+            },
+            ready_at: (i % 3 == 0).then(|| ts(NOW)),
+            outcome: (i % 3 != 0).then(|| "SUCCESS".to_owned()),
+            used_retry: i % 2 == 0,
+        })
+        .collect();
+    db.update_instances(&run_id, &updates, ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    for (instance, update) in run.instances.iter().zip(&updates) {
+        assert_eq!(
+            (&instance.task_id, instance.state, instance.ready_at),
+            (&update.task_id, update.state, update.ready_at)
+        );
+        assert_eq!(instance.retries_used, u32::from(update.used_retry));
+    }
+}
+
+#[tokio::test]
+async fn waiting_reasons_are_set_together_on_postgres() {
+    let (db, version) = with_dag().await;
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T02:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..3)
+        .map(|i| (id(&format!("t{i}")), TaskInstanceState::Queued))
+        .collect();
+    db.create_instances(&run_id, &tasks, ts(NOW)).await.unwrap();
+    let instances = db.run_tasks(&run_id).await.unwrap().unwrap().instances;
+    let reasons: Vec<(String, String)> = instances
+        .iter()
+        .map(|i| {
+            (
+                i.id.clone(),
+                format!("reason {}", i.task_id.as_str().len() % 2),
+            )
+        })
+        .collect();
+    db.set_queued_reasons(&reasons, ts(NOW)).await.unwrap();
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    assert_eq!(ready.len(), 3);
+    assert!(ready.iter().all(|r| r.queued_reason.is_some()));
 }

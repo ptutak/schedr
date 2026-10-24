@@ -41,6 +41,14 @@ pub enum DbError {
     /// A query took longer than the limit ([`Database::connect_with_timeout`]): cut off here.
     #[error("a database query took longer than {} s (`[database] query_timeout`)", .0.as_secs_f64())]
     QueryTimeout(Duration),
+    /// The `COMMIT` of a [`Database::atomically`] transaction was cut off by the time limit or
+    /// lost with its connection: whether the transaction is stored isn't known (read it back).
+    #[error("the transaction's commit was cut off; whether it is stored is unknown")]
+    CommitUnknown,
+    /// A statement of a [`Database::atomically`] transaction failed or was cut off, though the
+    /// work went on: the transaction was rolled back, nothing of it stored.
+    #[error("a statement of this transaction failed; nothing of it is stored")]
+    TransactionFailed,
     /// A master's write found the lease no longer its own (another master took it over): it
     /// was refused, nothing of it stored ([`Database::fenced`]).
     #[error("this master no longer holds the database's lease (another took it over)")]
@@ -137,6 +145,22 @@ pub(crate) struct Fence {
     pub(crate) epoch: i32,
 }
 
+/// Whether a database error code is the database's own trouble rather than a statement's data:
+/// on Postgres (SQLSTATE) the classes of transaction rollback (40: deadlock, serialization),
+/// insufficient resources (53), object not ready (55: lock not available), operator
+/// intervention (57: a statement cancelled at its limit, a shutdown), connection (08) and
+/// system errors (58); on SQLite (a number) busy, locked, I/O, full and can't open.
+fn databases_trouble(postgres: bool, code: &str) -> bool {
+    if postgres {
+        // SQLSTATE: five characters, often all digits (57014), so told by the backend.
+        return ["40", "53", "55", "57", "08", "58"]
+            .iter()
+            .any(|class| code.starts_with(class));
+    }
+    code.parse::<i64>()
+        .is_ok_and(|sqlite| matches!(sqlite & 0xff, 5 | 6 | 10 | 13 | 14))
+}
+
 /// The likely cause of an error showing a notification where a query's answer was expected:
 /// a connection pooler in transaction mode lends a server connection that someone `LISTEN`s
 /// on to other clients (B16); empty for any other error.
@@ -151,6 +175,40 @@ fn pooler_hint(error: &sqlx::Error) -> &'static str {
 }
 
 impl DbError {
+    /// What a failed `COMMIT` means: refused by the database (a constraint checked at commit,
+    /// a serialization failure: rolled back, the error as it is), or cut off or its connection
+    /// lost ([`Self::CommitUnknown`]: it may be stored).
+    #[must_use]
+    pub fn from_commit(error: Self) -> Self {
+        match error {
+            Self::Sqlx(sqlx::Error::Database(_)) => error,
+            _ => Self::CommitUnknown,
+        }
+    }
+
+    /// Whether this is about the data a statement touched (stored data that won't read, a
+    /// statement the database refuses for its data: a constraint, a trigger), not the
+    /// database's own trouble (unreachable, a time limit, its own statement limit, a deadlock
+    /// or serialization failure, a lock it couldn't get, an operator's shutdown, a busy SQLite,
+    /// a full disk) or the lease: retrying the same statement fails the same way, while other
+    /// statements may go through.
+    #[must_use]
+    pub fn is_data_fault(&self) -> bool {
+        match self {
+            Self::InvalidData { .. }
+            | Self::Sqlx(sqlx::Error::Decode(_) | sqlx::Error::ColumnDecode { .. }) => true,
+            Self::Sqlx(sqlx::Error::Database(error)) => {
+                let postgres = error
+                    .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+                    .is_some();
+                !error
+                    .code()
+                    .is_some_and(|code| databases_trouble(postgres, &code))
+            }
+            _ => false,
+        }
+    }
+
     /// A failed start of a write's transaction on Postgres: [`Self::NotLeading`] if it was the
     /// fence that refused it ([`Database::begin_postgres`]).
     pub(crate) fn from_begin(error: sqlx::Error) -> Self {

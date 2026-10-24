@@ -205,6 +205,13 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
     assert!(core.handle("w1", finished, ts(NOW)).await.is_err());
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, None, "a part of the `Finished` was stored");
+    // Nor in memory (code review): the attempt still runs, so its slot is still taken.
+    let w1 = core.dispatcher().workers().get("w1").unwrap();
+    assert_eq!(
+        w1.free_slots(),
+        w1.slots - 1,
+        "the slot was freed in memory"
+    );
 }
 
 #[tokio::test]
@@ -766,11 +773,17 @@ fn arrivals_keep_the_latest_per_worker_until_forgotten() {
 fn arrivals_hold_an_arrived_start_until_it_is_handled() {
     let arrivals = Arrivals::default();
     assert!(!arrivals.start_waiting("a1"));
-    arrivals.clone().start_arrived("a1");
+    arrivals.clone().start_arrived("w1", "a1");
     assert!(arrivals.start_waiting("a1"));
     assert!(!arrivals.start_waiting("a2"));
     arrivals.start_handled("a1");
     assert!(!arrivals.start_waiting("a1"));
+    // A worker forgotten (lost, gone) takes its waiting starts with it.
+    arrivals.start_arrived("w1", "a3");
+    arrivals.start_arrived("w2", "a4");
+    arrivals.forget("w1");
+    assert!(!arrivals.start_waiting("a3"));
+    assert!(arrivals.start_waiting("a4"));
     // Handled twice (a `Started`, then its `Finished`): nothing left, nothing wrong.
     arrivals.start_handled("a1");
     assert!(!arrivals.start_waiting("a1"));

@@ -14,6 +14,12 @@ use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState};
 use crate::metrics::MasterMetrics;
 use crate::progress::{AfterAttempt, RunProgress, after_attempt};
 
+/// The most task instances a round creates for runs that just started (whole runs only, at
+/// least one): many runs starting at once go over a few rounds (B18).
+pub const INSTANCES_PER_ROUND: usize = 2000;
+
+/// The most failed tasks a round queues again once their retry delay passed (B18).
+pub const RETRIES_PER_ROUND: usize = 100;
 #[cfg(test)]
 mod tests;
 
@@ -140,7 +146,15 @@ impl Execution {
     /// [`ExecutionError::Db`] if the database fails.
     pub async fn prepare_runs(&self, now: Timestamp) -> Result<Vec<String>, ExecutionError> {
         let mut prepared = Vec::new();
+        let mut created = 0;
         for run in self.db.newly_running().await? {
+            // At most so many instances a round (a run is never split, and one is always
+            // made): many runs starting at once go over a few rounds (B18).
+            let tasks = run.dag.tasks.len();
+            if !prepared.is_empty() && created + tasks > INSTANCES_PER_ROUND {
+                break;
+            }
+            created += tasks;
             let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
             progress.settle();
             let states: Vec<(TaskId, TaskInstanceState)> = progress
@@ -240,7 +254,9 @@ impl Execution {
     ///
     /// [`ExecutionError::Db`] if the database fails.
     pub async fn queue_due_retries(&self, now: Timestamp) -> Result<usize, ExecutionError> {
-        let due = self.db.due_retries(now).await?;
+        let mut due = self.db.due_retries(now).await?;
+        // At most so many a round, the earliest due first; the rest in the next ones (B18).
+        due.truncate(RETRIES_PER_ROUND);
         for (run_id, task_id) in &due {
             let queued = InstanceUpdate {
                 ready_at: Some(now),

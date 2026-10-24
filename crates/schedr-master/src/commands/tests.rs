@@ -612,3 +612,22 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
     let rejected = world.db.command(&missing).await.unwrap().unwrap();
     assert_eq!(rejected.status, CommandStatus::Rejected, "{rejected:?}");
 }
+
+#[tokio::test]
+async fn a_round_applies_at_most_so_many_commands_the_rest_in_the_next() {
+    // B18: a burst of commands (101 triggers) was applied in one round of about 0.85 s.
+    let mut world = world().await;
+    for i in 0..COMMANDS_PER_ROUND + 5 {
+        let command = if i % 2 == 0 {
+            Command::PauseDag {
+                dag_id: sync(),
+                cancel_runs: false,
+            }
+        } else {
+            Command::UnpauseDag { dag_id: sync() }
+        };
+        world.ask(&command).await;
+    }
+    assert_eq!(world.apply().await.decided.len(), COMMANDS_PER_ROUND);
+    assert_eq!(world.apply().await.decided.len(), 5);
+}

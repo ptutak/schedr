@@ -85,15 +85,27 @@ jobs:
           tool: cargo-nextest
       - if: steps.changed.outputs.run == 'true'
         uses: astral-sh/setup-uv@v4
+      # As `make stress`: room for the suite's connections (a service container takes no
+      # arguments, so set and restarted; PgBouncer reconnects on its own).
+      - if: steps.changed.outputs.run == 'true'
+        name: Postgres with max_connections = 500
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_connections = 500"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - if: steps.changed.outputs.run == 'true'
         run: uv sync --python 3.14
       - if: steps.changed.outputs.run == 'true'
         run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - if: steps.changed.outputs.run == 'true'
         name: Stress suite
-        run: >-
-          cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast --no-capture
-          ${{ inputs.filter && format('-E ''test(/{0}/)''', inputs.filter) || '' }}
+        # The filter through the environment, never pasted into the script.
+        env:
+          FILTER: ${{ inputs.filter }}
+        run: |
+          filter=()
+          if [ -n "$FILTER" ]; then filter=(-E "test(/$FILTER/)"); fi
+          cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast --no-capture "${filter[@]}"
       - if: always() && steps.changed.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:

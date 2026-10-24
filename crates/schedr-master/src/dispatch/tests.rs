@@ -254,14 +254,15 @@ fn two_independent() -> Dag {
 }
 
 #[tokio::test]
-async fn a_rounds_assignments_are_stored_together_or_not_at_all() {
-    // T2 (2.10b): each assignment was its own transaction; a failure partway kept the first
-    // ones (stored, reserved, their messages sent) and lost the rest.
+async fn a_rounds_assignments_that_fail_together_are_made_one_at_a_time() {
+    // T2 (2.10b): the step's assignments are one transaction. One failing rolls them all back
+    // (stored, slots and messages); then they are made one at a time, and the one that fails
+    // is set aside (code review: otherwise it stalled every round).
     let (mut dispatcher, db, _run_id) = with_run(two_independent()).await;
     let schedr_db::Pool::Sqlite(pool) = db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
-    // The round's second assignment fails.
+    // The step's second assignment fails, together and alone.
     sqlx::query(
         "CREATE TRIGGER refuse_second BEFORE INSERT ON attempts \
          WHEN (SELECT COUNT(*) FROM attempts) >= 1 \
@@ -271,21 +272,89 @@ async fn a_rounds_assignments_are_stored_together_or_not_at_all() {
     .await
     .unwrap();
     let mut out = Vec::new();
-    assert!(dispatcher.step_into(ts(NOW), &mut out).await.is_err());
-    assert_eq!(out, [], "messages for assignments not stored");
+    dispatcher.step_into(ts(NOW), &mut out).await.unwrap();
+    assert_eq!(out.len(), 1, "the first, alone");
+    let first = assignment(&out[0]).task_id.clone();
+    let other = if first == "extract" {
+        "audit"
+    } else {
+        "extract"
+    };
     let attempts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attempts")
         .fetch_one(pool)
         .await
         .unwrap();
-    assert_eq!(attempts, 0);
-    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
-    // The next round assigns both.
+    assert_eq!(attempts, 1);
+    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 1);
     sqlx::query("DROP TRIGGER refuse_second")
         .execute(pool)
         .await
         .unwrap();
+    // The other, set aside, once its time is up (the first, never started here, has expired
+    // by then and goes again too).
+    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
+    let out = dispatcher.step(later(61)).await.unwrap();
+    assert!(
+        out.iter().any(|o| assignment(o).task_id == other),
+        "{out:?}"
+    );
+}
+
+#[tokio::test]
+async fn when_every_task_fails_the_round_fails_and_none_is_set_aside() {
+    // The database's trouble, not the tasks': setting them all aside would hold them back
+    // a minute after it is over.
+    let (mut dispatcher, db, _run_id) = with_run(two_independent()).await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_all BEFORE INSERT ON attempts \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut out = Vec::new();
+    assert!(dispatcher.step_into(ts(NOW), &mut out).await.is_err());
+    assert_eq!(out, []);
+    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
+    sqlx::query("DROP TRIGGER refuse_all")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(later(1)).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_task_that_always_fails_to_be_assigned_is_set_aside_and_the_rest_go_on() {
+    // T2's downside (code review, 2026-10-24): with a round's assignments in one transaction,
+    // a task whose assignment failed every time rolled back every other one, round after
+    // round: nothing was assigned anywhere.
+    let (mut dispatcher, db, _run_id) = with_run(two_independent()).await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_audit BEFORE INSERT ON attempts WHEN NEW.task_instance_id = \
+         (SELECT id FROM task_instances WHERE task_id = 'audit') \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     let out = dispatcher.step(ts(NOW)).await.unwrap();
-    assert_eq!(out.len(), 2);
+    let assigned: Vec<&str> = out.iter().map(|o| assignment(o).task_id.as_str()).collect();
+    assert_eq!(assigned, ["extract"]);
+    // Set aside: the next rounds don't try it (nor fail on it).
+    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
+    // Once its time is up, tried again: assigned now that it can be.
+    sqlx::query("DROP TRIGGER refuse_audit")
+        .execute(pool)
+        .await
+        .unwrap();
+    let out = dispatcher.step(later(61)).await.unwrap();
+    assert_eq!(assignment(&out[0]).task_id, "audit");
 }
 
 #[tokio::test]
@@ -369,7 +438,7 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     // Its `Started` arrived; the master hasn't handled it yet.
-    arrivals.start_arrived(&attempt);
+    arrivals.start_arrived("w1", &attempt);
     assert_eq!(dispatcher.step(later(11)).await.unwrap(), []);
     // Handled, it no longer protects the attempt: with no `Started` stored, it expires.
     arrivals.start_handled(&attempt);
@@ -523,6 +592,32 @@ async fn a_lost_workers_attempts_use_a_retry() {
 }
 
 #[tokio::test]
+async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
+    // B17: a worker draining and leaving (or lost) ended every open attempt `lost`, using a
+    // retry, though assignments sent as it began draining never ran there: with no retries,
+    // their runs failed (stress scenario 7, now and then).
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher.worker_lost("w1", ts(NOW)).await.unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::AssignmentExpired)
+    );
+    // Queued again, its retries untouched (none here, and the run goes on).
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let extract = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("extract"))
+        .unwrap();
+    assert_eq!(
+        (extract.state, extract.retries_used),
+        (TaskInstanceState::Queued, 0)
+    );
+}
+
+#[tokio::test]
 async fn cancelling_a_run_cancels_its_running_attempts() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
@@ -599,6 +694,47 @@ async fn reason_of(db: &Database, run_id: &str, task: &str) -> Option<String> {
         .into_iter()
         .find(|i| i.task_id == id(task))
         .and_then(|i| i.queued_reason)
+}
+
+#[tokio::test]
+async fn a_round_writes_at_most_so_many_waiting_reasons() {
+    // B18: a burst of runs left thousands of tasks waiting, and the round that first saw them
+    // wrote every one's reason (580 in one round of stress scenario 1, about 2 s of it).
+    let width = REASONS_PER_ROUND + 10;
+    let tasks: Vec<Json> = (0..width)
+        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
+        .collect();
+    let wide: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": []
+    }))
+    .unwrap();
+    let (mut dispatcher, db, _run_id) = with_run(wide).await;
+    // No worker serves the tasks' queue: every one waits, with a reason.
+    dispatcher
+        .register("w1", "i2", &["large".to_owned()], 2, ts(NOW))
+        .await
+        .unwrap();
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let with_reason = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM task_instances WHERE queued_reason IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(
+        with_reason().await,
+        i64::try_from(REASONS_PER_ROUND).unwrap()
+    );
+    // The rest in the next round.
+    dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(with_reason().await, i64::try_from(width).unwrap());
 }
 
 #[tokio::test]
@@ -1106,4 +1242,87 @@ async fn a_queue_whose_workers_are_drained_says_so() {
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("the workers serving queue `default` are drained (`schedr workers resume`)")
     );
+}
+
+#[tokio::test]
+async fn memory_put_back_undoes_what_changed_since() {
+    let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    let before = dispatcher.memory();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 1);
+    dispatcher.restore(before);
+    assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
+}
+
+#[tokio::test]
+async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
+    // B18: a burst made a round of assignments, and after an outage of expiries, as long as
+    // there were tasks and slots.
+    let width = ASSIGNMENTS_PER_ROUND + 5;
+    let tasks: Vec<Json> = (0..width)
+        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
+        .collect();
+    let wide: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": []
+    }))
+    .unwrap();
+    let (mut dispatcher, db, _run_id) = with_run(wide).await;
+    dispatcher
+        .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher.step(ts(NOW)).await.unwrap().len(),
+        ASSIGNMENTS_PER_ROUND
+    );
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 5);
+    // None starts: taken back at most EXPIRIES_PER_ROUND a round.
+    dispatcher.step(later(11)).await.unwrap();
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let expired = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM attempts WHERE status = 'assignment_expired'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(expired().await, i64::try_from(EXPIRIES_PER_ROUND).unwrap());
+    dispatcher.step(later(12)).await.unwrap();
+    assert_eq!(expired().await, i64::try_from(width).unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_read_back_checks_through_its_window_and_stops_when_it_sees_the_work() {
+    let read_back = ReadBack {
+        window: Duration::from_secs(3),
+        interval: Duration::from_millis(500),
+    };
+    // Landing on the third check: seen.
+    let checks = std::cell::Cell::new(0);
+    let seen = read_back
+        .stored(|| async {
+            checks.set(checks.get() + 1);
+            checks.get() == 3
+        })
+        .await;
+    assert!(seen);
+    assert_eq!(checks.get(), 3);
+    // Never: checked at once and every 500 ms up to 3 s, then not stored.
+    let started = tokio::time::Instant::now();
+    checks.set(0);
+    let seen = read_back
+        .stored(|| async {
+            checks.set(checks.get() + 1);
+            false
+        })
+        .await;
+    assert!(!seen);
+    assert_eq!(checks.get(), 7);
+    assert_eq!(started.elapsed(), Duration::from_secs(3));
 }

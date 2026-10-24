@@ -315,3 +315,156 @@ async fn a_task_cancel_is_recorded_and_an_unschedulable_task_retried() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn a_wide_runs_instances_are_created_in_a_few_statements_all_of_them() {
+    // B18: one statement a task made a 400-task run's start cost a round trip per task; now a
+    // few statements of up to INSTANCES_PER_STATEMENT rows, which must store every one.
+    let (db, run_id) = with_run(RunState::Running).await;
+    let count = INSTANCES_PER_STATEMENT * 2 + 201;
+    let states: Vec<(TaskId, TaskInstanceState)> = (0..count)
+        .map(|i| {
+            let state = if i % 2 == 0 {
+                TaskInstanceState::Queued
+            } else {
+                TaskInstanceState::Scheduled
+            };
+            (id(&format!("t{i:04}")), state)
+        })
+        .collect();
+    db.create_instances(&run_id, &states, ts("2026-10-21T08:00:00Z"))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.instances.len(), count);
+    for (instance, (task_id, state)) in run.instances.iter().zip(&states) {
+        assert_eq!((&instance.task_id, instance.state), (task_id, *state));
+        assert_eq!(
+            instance.ready_at.is_some(),
+            *state == TaskInstanceState::Queued
+        );
+    }
+}
+
+#[tokio::test]
+async fn many_updates_in_a_few_statements_change_each_task_as_one_by_one() {
+    // B18: one statement a task; now up to UPDATES_PER_STATEMENT a statement, which must
+    // change each task as a statement of its own did (state, ready time, outcome, retries).
+    let (db, run_id) = with_run(RunState::Running).await;
+    let count = UPDATES_PER_STATEMENT * 2 + 201;
+    let at = ts("2026-10-21T08:00:00Z");
+    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..count)
+        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Scheduled))
+        .collect();
+    db.create_instances(&run_id, &tasks, at).await.unwrap();
+    let updates: Vec<InstanceUpdate> = (0..count)
+        .map(|i| {
+            let queued = i % 3 == 0;
+            InstanceUpdate {
+                task_id: id(&format!("t{i:04}")),
+                state: if queued {
+                    TaskInstanceState::Queued
+                } else {
+                    TaskInstanceState::Success
+                },
+                ready_at: queued.then_some(at),
+                outcome: (!queued).then(|| "SUCCESS".to_owned()),
+                used_retry: i % 2 == 0,
+            }
+        })
+        .collect();
+    db.update_instances(&run_id, &updates, at).await.unwrap();
+    db.update_instances(&run_id, &updates, at).await.unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.instances.len(), count);
+    for (instance, update) in run.instances.iter().zip(&updates) {
+        assert_eq!(instance.task_id, update.task_id);
+        assert_eq!(instance.state, update.state);
+        assert_eq!(instance.ready_at, update.ready_at);
+        // Counted twice: the second update added to the first.
+        assert_eq!(instance.retries_used, if update.used_retry { 2 } else { 0 });
+    }
+}
+
+#[tokio::test]
+async fn waiting_reasons_are_set_together_on_queued_tasks_only() {
+    let (db, run_id) = with_run(RunState::Running).await;
+    let at = ts("2026-10-21T08:00:00Z");
+    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..5)
+        .map(|i| {
+            let state = if i == 4 {
+                TaskInstanceState::Scheduled
+            } else {
+                TaskInstanceState::Queued
+            };
+            (id(&format!("t{i}")), state)
+        })
+        .collect();
+    db.create_instances(&run_id, &tasks, at).await.unwrap();
+    let ids: Vec<String> = db
+        .run_tasks(&run_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .instances
+        .iter()
+        .map(|i| i.id.clone())
+        .collect();
+    let slot = "waiting for a free slot".to_owned();
+    let queue = "no active worker serves queue `gpu`".to_owned();
+    let reasons = vec![
+        (ids[0].clone(), slot.clone()),
+        (ids[1].clone(), slot.clone()),
+        (ids[2].clone(), queue.clone()),
+        // Not queued: left as it is.
+        (ids[4].clone(), slot.clone()),
+    ];
+    db.set_queued_reasons(&reasons, at).await.unwrap();
+    db.set_queued_reasons(&[], at).await.unwrap();
+    let schedr_db_pool = match db.pool() {
+        crate::database::Pool::Sqlite(pool) => pool.clone(),
+        crate::database::Pool::Postgres(_) => unreachable!("SQLite here"),
+    };
+    let shown: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT queued_reason FROM task_instances ORDER BY task_id")
+            .fetch_all(&schedr_db_pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        shown,
+        [Some(slot.clone()), Some(slot), Some(queue), None, None]
+    );
+}
+
+#[tokio::test]
+async fn a_task_updated_twice_at_once_ends_as_its_last_update_with_both_retries() {
+    // Code review: one statement for many rows applied one of a task's two updates, any;
+    // a statement each applied both in turn.
+    let (db, run_id) = with_run(RunState::Running).await;
+    let at = ts("2026-10-21T08:00:00Z");
+    db.create_instances(&run_id, &[(id("t0"), TaskInstanceState::Scheduled)], at)
+        .await
+        .unwrap();
+    let queued = InstanceUpdate {
+        task_id: id("t0"),
+        state: TaskInstanceState::Queued,
+        ready_at: Some(at),
+        outcome: None,
+        used_retry: true,
+    };
+    let done = InstanceUpdate {
+        state: TaskInstanceState::Success,
+        ready_at: None,
+        outcome: Some("SUCCESS".to_owned()),
+        ..queued.clone()
+    };
+    db.update_instances(&run_id, &[queued, done], at)
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let t0 = &run.instances[0];
+    assert_eq!(
+        (t0.state, t0.ready_at, t0.retries_used),
+        (TaskInstanceState::Success, None, 2)
+    );
+}

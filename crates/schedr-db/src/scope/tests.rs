@@ -5,6 +5,8 @@ use pretty_assertions::assert_eq;
 use schedr_model::DagId;
 use schedr_model::commands::Command;
 
+use sqlx::Connection as _;
+
 use super::*;
 
 /// A migrated database in a file (several connections, so readers outside a transaction are
@@ -110,4 +112,70 @@ async fn a_masters_work_is_refused_once_its_lease_was_taken_over() {
     .await;
     assert!(matches!(refused, Err(DbError::NotLeading)), "{refused:?}");
     assert_eq!(db.pending_commands().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_write_that_failed_voids_the_work_even_if_its_error_was_handled() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = file_db(&dir).await;
+    let Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite here")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_bob BEFORE INSERT ON commands WHEN NEW.requested_by = 'bob' \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let done = Box::pin(db.atomically(async {
+        db.insert_command(&trigger(), "anna", now()).await?;
+        // Handled and gone on from: the transaction is void all the same (on Postgres it
+        // is aborted, and its COMMIT would quietly roll back).
+        let refused = db.insert_command(&trigger(), "bob", now()).await;
+        assert!(refused.is_err());
+        Ok::<_, DbError>(())
+    }))
+    .await;
+    assert!(matches!(done, Err(DbError::TransactionFailed)), "{done:?}");
+    assert_eq!(db.pending_commands().await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn a_refused_statement_is_the_datas_fault_and_a_busy_database_isnt() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = file_db(&dir).await;
+    let Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite here")
+    };
+    let insert = "INSERT INTO workers (worker_id, incarnation_id, state, protocol_version, \
+         schedr_version, queues, slots, log_endpoint, registered_at, last_heartbeat_at) \
+         VALUES ('w1', 'i', 'active', '1', '0.1', '[]', 1, 'x', 'now', 'now')";
+    sqlx::query(insert).execute(pool).await.unwrap();
+    let duplicate = DbError::from(sqlx::query(insert).execute(pool).await.unwrap_err());
+    assert!(duplicate.is_data_fault(), "{duplicate}");
+    // Another connection holds the write lock; one that won't wait finds the database busy.
+    // Connected patiently (opening a connection may find the file busy for a moment), then
+    // made impatient for the write under test only.
+    let url = format!("sqlite://{}", dir.path().join("scope.db").display());
+    let mut impatient = sqlx::SqliteConnection::connect(&url).await.unwrap();
+    sqlx::query("PRAGMA busy_timeout = 1")
+        .execute(&mut impatient)
+        .await
+        .unwrap();
+    let busy = Box::pin(db.atomically(async {
+        db.insert_command(&trigger(), "anna", now()).await?;
+        Ok::<_, DbError>(
+            sqlx::query("BEGIN IMMEDIATE")
+                .execute(&mut impatient)
+                .await
+                .map_err(DbError::from),
+        )
+    }))
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(!busy.is_data_fault(), "{busy}");
+    assert!(!DbError::TransactionFailed.is_data_fault());
+    assert!(!DbError::QueryTimeout(Duration::from_secs(1)).is_data_fault());
 }

@@ -198,7 +198,7 @@ impl Database {
             return Ok(None);
         }
         let url = notifications.url.as_deref();
-        let safe = self
+        let checked = self
             .limited(self.query_timeout() * PROBE_LIMITS, async {
                 Ok(if let Some(url) = url {
                     let mut y = sqlx::PgConnection::connect(url).await?;
@@ -210,7 +210,22 @@ impl Database {
                     listening_is_safe(&mut y, &mut x).await?
                 })
             })
-            .await?;
+            .await;
+        // A check that can't finish isn't a verdict: the database may only be slow (a pooler
+        // with one server connection can't pass it either). The caller polls, and tries again
+        // later (`Hub::with_listen_retry`).
+        let safe = match checked {
+            Ok(safe) => safe,
+            Err(error @ DbError::QueryTimeout(_)) => {
+                tracing::warn!(
+                    %error,
+                    "couldn't check whether the master's connection passes a connection pooler \
+                     in transaction mode (the database answered too slowly): polling for now"
+                );
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         if !safe {
             tracing::warn!(
                 through = if url.is_some() {

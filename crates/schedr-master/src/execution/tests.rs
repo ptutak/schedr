@@ -536,3 +536,65 @@ async fn cancelling_an_unknown_task_is_an_error_and_settling_a_finished_run_does
         .unwrap();
     assert_eq!(execution.settle(&run_id, ts(NOW)).await.unwrap(), None);
 }
+
+/// A DAG of `count` independent Python tasks.
+fn wide(count: usize) -> Dag {
+    let tasks: Vec<Json> = (0..count)
+        .map(|i| task(&format!("t{i:04}"), "python", 0))
+        .collect();
+    dag(&json!(tasks), &json!([]))
+}
+
+#[tokio::test]
+async fn a_round_creates_at_most_so_many_instances_a_run_whole() {
+    // B18: many runs starting at once had all their instances created in one round (up to
+    // 2.2 s in stress scenario 1).
+    let width = INSTANCES_PER_ROUND * 3 / 4;
+    let (execution, db, first) = with_run(wide(width), RunState::Running).await;
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let dag_id = DagId::new("sync").unwrap();
+    let second = db
+        .insert_run(&NewRun {
+            dag_id: &dag_id,
+            dag_version_id: &version,
+            kind: RunKind::Manual,
+            state: RunState::Running,
+            planned_for: ts(NOW),
+            since: ts(NOW),
+            triggered_at: ts(NOW),
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    // Two runs would be over the cap: one this round (never split), the other next.
+    let prepared = execution.prepare_runs(ts(NOW)).await.unwrap();
+    assert_eq!(prepared.len(), 1);
+    let next = execution.prepare_runs(ts(NOW)).await.unwrap();
+    assert_eq!(next.len(), 1);
+    assert_ne!(prepared, next);
+    for run in [&first, &second] {
+        assert_eq!(states(&db, run).await.len(), width);
+    }
+}
+
+#[tokio::test]
+async fn a_round_queues_at_most_so_many_retries_the_rest_in_the_next() {
+    let count = RETRIES_PER_ROUND + 5;
+    let (execution, db, run_id) = with_run(wide(count), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    let waiting: Vec<InstanceUpdate> = (0..count)
+        .map(|i| InstanceUpdate {
+            ready_at: Some(ts(NOW)),
+            ..update(&id(&format!("t{i:04}")), TaskInstanceState::UpForRetry)
+        })
+        .collect();
+    db.update_instances(&run_id, &waiting, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        execution.queue_due_retries(ts(NOW)).await.unwrap(),
+        RETRIES_PER_ROUND
+    );
+    assert_eq!(execution.queue_due_retries(ts(NOW)).await.unwrap(), 5);
+}
