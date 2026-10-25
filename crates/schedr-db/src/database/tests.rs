@@ -106,21 +106,9 @@ async fn rejects_malformed_sqlite_urls() {
 async fn a_new_database_is_uninitialized_and_not_usable() {
     let db = Database::connect(MEMORY).await.unwrap();
     assert_eq!(db.applied_migrations().await.unwrap(), Vec::<i64>::new());
-    assert_eq!(
-        db.schema_status().await.unwrap(),
-        SchemaStatus::Uninitialized
-    );
-    let err = db.require_usable_schema().await.unwrap_err();
-    assert!(matches!(
-        &err,
-        DbError::SchemaNotUsable {
-            status: SchemaStatus::Uninitialized
-        }
-    ));
-    assert!(
-        err.to_string().contains("run `schedr db migrate` first"),
-        "{err}"
-    );
+    let status = db.schema_status().await.unwrap();
+    assert_eq!(status, SchemaStatus::Uninitialized);
+    assert!(!status.is_usable());
 }
 
 #[tokio::test]
@@ -132,10 +120,7 @@ async fn migrate_brings_the_schema_up_to_date_and_is_idempotent() {
     );
     assert_eq!(db.schema_status().await.unwrap(), SchemaStatus::UpToDate);
     db.migrate().await.unwrap();
-    assert_eq!(
-        db.require_usable_schema().await.unwrap(),
-        SchemaStatus::UpToDate
-    );
+    assert_eq!(db.schema_status().await.unwrap(), SchemaStatus::UpToDate);
 }
 
 #[tokio::test]
@@ -148,7 +133,8 @@ async fn a_schema_migrated_by_a_newer_schedr_is_still_usable() {
     )
     .await
     .unwrap();
-    let status = db.require_usable_schema().await.unwrap();
+    let status = db.schema_status().await.unwrap();
+    assert!(status.is_usable());
     assert_eq!(
         status,
         SchemaStatus::Newer {

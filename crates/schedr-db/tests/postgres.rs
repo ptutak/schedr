@@ -151,7 +151,7 @@ fn run<'a>(version: &'a str, kind: RunKind, state: RunState, planned_for: &str) 
 async fn the_schema_migrates_and_reports_itself() {
     let db = fresh().await;
     assert_eq!(db.schema_status().await.unwrap(), SchemaStatus::UpToDate);
-    db.require_usable_schema().await.unwrap();
+    assert!(db.schema_status().await.unwrap().is_usable());
     assert_eq!(
         db.applied_migrations().await.unwrap(),
         Backend::Postgres.migration_versions()

@@ -1,10 +1,13 @@
-# schedr's chart. Only `mode: standalone` so far: every role (master, API, worker) in one pod.
-# The API's Swagger UI is at /api/v1/docs.
+# schedr's chart. The API's Swagger UI is at /api/v1/docs.
+# - standalone: every role (master, API, worker) in one pod, on SQLite or Postgres: the start.
+# - distributed: the master, the webserver and the workers in pods of their own, on Postgres
+#   (the sections master, webserver and worker below). Moving there is one upgrade with
+#   mode: distributed on the same Postgres; the other values mean the same in both modes.
 mode: standalone
 
 image:
-  # Your image, built FROM the schedr base image with your DAGs' libraries
-  # (examples/kubernetes/Dockerfile).
+  # The image running tasks (standalone's pod, distributed's workers): the schedr base image,
+  # or yours built FROM it with more libraries (examples/kubernetes/Dockerfile).
   repository: schedr
   # Defaults to the chart's appVersion.
   tag: ""
@@ -114,6 +117,11 @@ gitSync:
   # Extra environment for git-sync (its GITSYNC_* settings).
   env: []
 
+# Variables of schedr's environment that tasks get too ([worker] pass_env): tasks get a clean
+# environment, so a variable set in env below (a MongoDB URI from a Secret, a proxy) reaches
+# them only when listed here, e.g. [MONGO_URI, HTTPS_PROXY].
+passEnv: []
+
 # More schedr configuration, as SCHEDR_CONFIG__<SECTION>__<KEY> variables without the prefix
 # (see the configuration reference), e.g. WORKER__SLOTS: "4", WORKER__MEMORY_RESERVE: "1GiB".
 config: {}
@@ -127,6 +135,10 @@ service:
   apiPort: 8080
   # /healthz, /readyz, /metrics (plain HTTP; nothing else is served there).
   opsPort: 8090
+  # Distributed: the master's gRPC port (workers connect), a worker's log endpoint (the
+  # webserver reads task logs there).
+  grpcPort: 8070
+  logPort: 8081
 
 serviceMonitor:
   # A Prometheus Operator ServiceMonitor for /metrics.
@@ -138,7 +150,9 @@ serviceAccount:
   # false: run as an existing ServiceAccount (e.g. the one a mesh-enabled namespace already
   # has), named below.
   create: true
-  # Defaults to the release's name when created; required when not.
+  # Created: its name (default: the release's), shared by every role in mode distributed too;
+  # empty in mode distributed: one per role (<release>-master, -webserver, -worker), which
+  # Istio's policies can tell apart. Required when not created.
   name: ""
   # schedr never calls the Kubernetes API: no token in its pods.
   automountToken: false
@@ -217,8 +231,11 @@ istio:
 vault:
   enabled: false
   auth:
-    # The Vault role bound to the pods' ServiceAccount (serviceAccount above).
+    # The Vault role bound to the ServiceAccount below.
     role: ""
+    # The account the operator authenticates as. Empty: the pods' (serviceAccount above); in
+    # mode distributed with an account per role, the master's.
+    serviceAccount: ""
     # The Kubernetes auth method's mount in Vault (e.g. kubernetes, or openshift).
     mount: kubernetes
     # The Vault namespace (Vault Enterprise), e.g. production/team.
@@ -233,6 +250,98 @@ vault:
   #     path: schedr/database        # its keys: url (or username, password)
   #     mount: kvv2                  # the default; type kv-v2, refreshAfter 600s
   staticSecrets: []
+
+# The cluster's DNS domain, in the names the workers are reached at.
+clusterDomain: cluster.local
+
+# mode distributed: the roles' own settings (standalone uses the top-level ones).
+master:
+  # Without Python: the schedr server image (images/schedr-server). Tag: the chart's appVersion.
+  image:
+    repository: schedr-server
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  # An existing ServiceAccount for the master alone (else as serviceAccount says).
+  serviceAccountName: ""
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+webserver:
+  # Holds no state: more replicas just share the requests.
+  replicas: 1
+  image:
+    repository: schedr-server
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  serviceAccountName: ""
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  replicas: 2
+  # Every task runs in a worker's container: size its memory for its slots' tasks. Task
+  # budgets are (the limit − 10 %) ÷ slots ([worker] slots, 2; memory_reserve).
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 2Gi
+  # Each worker's own volume: its task logs and journal, kept when its pod moves to another
+  # node (its worker ID is the pod's name). ReadWriteOnce, block storage.
+  persistence:
+    size: 10Gi
+    storageClass: ""
+  # At most this many workers taken down at once by a node drain or similar.
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  serviceAccountName: ""
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# mode distributed: mutual TLS between the roles (standalone never uses it).
+tls:
+  # app: schedr's own mTLS; mesh: plain traffic for a service mesh that encrypts it (Istio),
+  # no certificates needed.
+  mode: app
+  # In app mode the certificates come from, in order:
+  # - Secrets of your own, one per role (keys ca.crt, tls.crt, tls.key): all three, or none.
+  #   The master's must name its Service (<release>-master...), the workers' tls.workerName,
+  #   both with serverAuth and clientAuth;
+  existingSecrets:
+    master: ""
+    webserver: ""
+    worker: ""
+  # - cert-manager, from this issuer (e.g. {name: my-ca, kind: ClusterIssuer});
+  certManager:
+    issuerRef: {}
+  # - generated by the chart at install: a CA and a certificate per role (10 years), kept on
+  #   upgrades. Needs Helm talking to the cluster: `helm template`, client dry runs and GitOps
+  #   tools that render (ArgoCD) can't see them and make new ones each time; use cert-manager
+  #   or your own Secrets there. Rotate by deleting the <release>-*-tls Secrets and upgrading
+  #   (schedr reloads certificates without a restart).
+  generate: true
+  # The name in the workers' certificate, checked by the webserver ([tls] worker_name).
+  workerName: schedr-worker
 
 podAnnotations: {}
 podLabels: {}

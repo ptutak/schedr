@@ -67,7 +67,40 @@ fn the_master_refuses_a_database_not_migrated_yet() {
     let cluster = Cluster::new(Some(postgres_database()), "100ms");
     let (code, err) = cluster.schedr(&["master"]);
     assert_eq!(code, 1, "{err}");
-    assert!(err.contains("run `schedr db migrate` first"), "{err}");
+    assert!(
+        err.contains("run `schedr db migrate`, or start master with `--migrate`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_webserver_started_before_the_migration_serves_once_the_master_has_migrated() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    cluster.start_unready("webserver", &["webserver"]);
+    cluster.wait("the webserver to say it waits for the schema", || {
+        cluster.log_of("webserver").contains("waiting for it")
+    });
+    let (status, body) = cluster.ops_get("webserver", "/readyz");
+    assert_eq!(status, 503, "{body}");
+    // The chart's `migration: onStart`: the master migrates, holding its lease.
+    cluster.start_args("master", &["master", "--migrate"], &[]);
+    cluster.wait("the webserver to be ready", || {
+        cluster.ops_get("webserver", "/readyz").0 == 200
+    });
+    cluster.api = cluster
+        .log_of("webserver")
+        .split("API on http://")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|address| format!("http://{}", address.trim_end_matches(',')))
+        .expect("the webserver's API address");
+    cluster.start("worker");
+    cluster.wait("the DAG to be parsed", || {
+        cluster
+            .cli_json(&["dags", "list"])
+            .is_some_and(|dags| dags.to_string().contains("\"chain\""))
+    });
+    cluster.run_chain();
 }
 
 #[test]

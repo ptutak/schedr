@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image image-requirements chart-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -180,6 +180,12 @@ image-requirements: ## Pin the base image's libraries (images/schedr/requirement
 	$(IMAGE_PIN) --only-binary :all: images/schedr/build-requirements.in \
 		-o images/schedr/build-requirements.txt
 
+SERVER_IMAGE ?= schedr-server:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+
+server-image: smoke-musl ## Build the server image (master, webserver: no Python) and smoke-test it
+	$(CONTAINER) build -f images/schedr-server/Dockerfile -t $(SERVER_IMAGE) .
+	scripts/smoke-server-image.sh $(CONTAINER) $(SERVER_IMAGE)
+
 image: smoke-musl ## Build the base image from the musllinux wheel and smoke-test it
 	$(CONTAINER) build -f images/schedr/Dockerfile -t $(IMAGE) .
 	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)
@@ -196,7 +202,8 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml >/dev/null
 	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml \
 		--api-versions security.istio.io/v1 --api-versions networking.istio.io/v1 >/dev/null
-	! helm template t charts/schedr --set mode=distributed >/dev/null 2>&1
+	: "mode distributed: the roles, TLS (generated certificates checked with openssl), accounts, Istio"
+	charts/schedr/ci/test-distributed.sh
 	: "the data volume writable: fsGroup 0, except on OpenShift, which sets its own"
 	helm template t charts/schedr | grep -q 'fsGroup: 0'
 	! helm template t charts/schedr --api-versions security.openshift.io/v1 | grep -q fsGroup

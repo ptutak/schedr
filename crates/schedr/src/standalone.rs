@@ -27,16 +27,15 @@ use schedr_api::metrics::ApiMetrics;
 use schedr_config::Config;
 use schedr_db::Database;
 use schedr_master::core::Settings;
-use schedr_master::lease::Leadership;
 use schedr_master::metrics::MasterMetrics;
 use tokio::sync::watch;
 
-use crate::app::{AppError, describe_status};
+use crate::app::AppError;
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
-    Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, listen, lock_journal,
-    log_retention, master_settings, memory_text, migrate_holding, no_auth_warning, run_worker,
-    serve_api, serve_master, stop_on_signal, take_lease, unlimited, until,
+    Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, lead, listen, lock_journal,
+    log_retention, master_settings, memory_text, no_auth_warning, run_worker, serve_api,
+    serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -193,6 +192,7 @@ pub async fn run(
         &setup.database_url,
         (setup.lease_period, setup.migrate),
         shutdown.clone(),
+        "standalone",
     );
     let Some(leadership) = leading.await? else {
         return Ok(());
@@ -293,49 +293,6 @@ fn observed(
             ready: part("worker"),
         },
     )
-}
-
-/// The master's lease, being taken (see [`take_lease`]).
-type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Leadership> + Send>>;
-
-/// The master's lease, being taken while the API and the worker start when the schema is
-/// usable; else, with `--migrate`, taken now (a standby waits) and the schema migrated by its
-/// holder. `None` when a shutdown is asked for while waiting.
-///
-/// # Errors
-///
-/// [`AppError::BadArgument`] for a schema to migrate without `--migrate`, as
-/// [`migrate_holding`], or [`AppError::Db`] if the schema can't be read.
-async fn lead(
-    db: &Database,
-    url: &str,
-    (period, migrate): (Duration, bool),
-    shutdown: watch::Receiver<u32>,
-) -> Result<Option<LeaseFuture>, AppError> {
-    let status = db.schema_status().await?;
-    if status.is_usable() {
-        return Ok(Some(Box::pin(take_lease(db.clone(), period, "standalone"))));
-    }
-    if !migrate {
-        return Err(AppError::BadArgument(format!(
-            "the database schema is {}, or start standalone with `--migrate`",
-            describe_status(&status)
-        )));
-    }
-    let lease = take_lease(db.clone(), period, "standalone");
-    let Some(lead) = until_stopped(lease, shutdown).await else {
-        return Ok(None);
-    };
-    let lead = migrate_holding(lead, &unlimited(url, db).await?).await?;
-    Ok(Some(Box::pin(std::future::ready(lead))))
-}
-
-/// `work`'s output, or `None` once a shutdown is asked for.
-async fn until_stopped<T>(work: impl Future<Output = T>, stop: watch::Receiver<u32>) -> Option<T> {
-    tokio::select! {
-        done = work => Some(done),
-        () = until(stop) => None,
-    }
 }
 
 /// Passes the stop requests counted by `from` on to `to` (never lowering its count).

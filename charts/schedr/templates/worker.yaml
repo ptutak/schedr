@@ -1,0 +1,181 @@
+{{- if eq .Values.mode "distributed" }}
+{{- $fullname := include "schedr.fullname" . }}
+{{- $w := .Values.worker }}
+{{- $scheme := ternary "https" "http" (eq .Values.tls.mode "app") }}
+# schedr workers: the agents running tasks. A StatefulSet, so each keeps its name (its worker
+# ID), its volume (task logs, the journal) and its DNS name behind the headless Service (the
+# webserver reads task logs there; under Istio a pod's IP alone isn't in the registry).
+# Updated one pod at a time, each draining first.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-worker
+  replicas: {{ $w.replicas }}
+  # Started together; updates still go one pod at a time.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "schedr.roleSelector" (list . "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "schedr.roleSelector" (list . "worker") | nindent 8 }}
+        {{- if .Values.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with include "schedr.podAnnotations" (list . $w.podAnnotations) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "schedr.roleServiceAccount" (list . "worker") }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* The data volume writable by the image's group (0); OpenShift sets its own. */}}
+      {{- with include "schedr.podSecurityContext" . | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: schedr
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SCHEDR_CONFIG__WORKER__MASTER_URL
+              value: "{{ $scheme }}://{{ $fullname }}-master.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}"
+            # Where the webserver reaches this worker's logs: the pod's own DNS name.
+            - name: SCHEDR_CONFIG__WORKER__LOG_ADDRESS
+              value: "$(POD_NAME).{{ $fullname }}-worker.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}"
+            - name: SCHEDR_CONFIG__WORKER__LOG_PORT
+              value: {{ .Values.service.logPort | quote }}
+            - name: SCHEDR_CONFIG__WORKER__DATA_DIR
+              value: /var/lib/schedr
+            # The pod's grace period, so the drain fits it.
+            - name: SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD
+              value: "{{ .Values.terminationGracePeriodSeconds }}s"
+            - name: SCHEDR_CONFIG__OPS__PORT
+              value: {{ .Values.service.opsPort | quote }}
+            {{- include "schedr.dagEnv" . | trim | nindent 12 }}
+            {{- include "schedr.tlsEnv" (list . "worker") | trim | nindent 12 }}
+            {{- with include "schedr.extraEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: {{ include "schedr.logPortName" . }}
+              containerPort: {{ .Values.service.logPort }}
+            - name: http-ops
+              containerPort: {{ .Values.service.opsPort }}
+          # No readiness probe: nothing reaches workers through a balancing Service. Liveness
+          # fails only when the agent's loop is stuck, never because the master is away.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ops
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/schedr
+            {{- if eq .Values.tls.mode "app" }}
+            - name: tls
+              mountPath: /etc/schedr/tls
+              readOnly: true
+            {{- end }}
+            {{- with include "schedr.dagMounts" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
+        {{- with include "schedr.gitSync" . | trim }}
+        {{- . | nindent 8 }}
+        {{- end }}
+      {{- $volumes := include "schedr.dagVolumes" . | trim }}
+      {{- if or $volumes (eq .Values.tls.mode "app") }}
+      volumes:
+        {{- if eq .Values.tls.mode "app" }}
+        - name: tls
+          secret:
+            secretName: {{ include "schedr.tlsSecret" (list . "worker") }}
+        {{- end }}
+        {{- with $volumes }}
+        {{- . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with $w.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $w.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $w.persistence.size }}
+---
+# Headless: each worker's name resolves to that one pod (no balancing).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # A worker's logs stay readable while it drains.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "schedr.roleSelector" (list . "worker") | nindent 4 }}
+  # Named for Istio's protocol detection.
+  ports:
+    - name: {{ include "schedr.logPortName" . }}
+      port: {{ .Values.service.logPort }}
+      targetPort: {{ include "schedr.logPortName" . }}
+    - name: http-ops
+      port: {{ .Values.service.opsPort }}
+      targetPort: http-ops
+{{- if $w.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ $w.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "schedr.roleSelector" (list . "worker") | nindent 6 }}
+{{- end }}
+{{- end }}

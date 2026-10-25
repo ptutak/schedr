@@ -3,7 +3,6 @@ use std::net::Ipv4Addr;
 use pretty_assertions::assert_eq;
 use schedr_agent::memory::STANDALONE_RESERVE;
 use schedr_config::config::Interpreter;
-use schedr_db::DbError;
 use tempfile::TempDir;
 
 use super::*;
@@ -219,28 +218,64 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
 }
 
 #[tokio::test]
-async fn a_role_needs_a_database_with_a_usable_schema() {
+async fn a_role_needs_a_database_url() {
     assert!(matches!(
-        open_database(&config(), "master").await,
+        connect_database(&config(), "master").await,
         Err(AppError::NoDatabase)
     ));
     let tmp = TempDir::new().unwrap();
-    let url = format!("sqlite://{}", tmp.path().join("schedr.db").display());
     let mut config = config();
-    config.database.url = Some(url.clone());
-    let error = open_database(&config, "master").await.unwrap_err();
+    config.database.url = Some(format!(
+        "sqlite://{}",
+        tmp.path().join("schedr.db").display()
+    ));
+    // Whatever its schema: the roles decide what to do with one not migrated.
+    let db = connect_database(&config, "webserver").await.unwrap();
+    assert_eq!(db.backend(), Backend::Sqlite);
+}
+
+#[tokio::test]
+async fn a_webserver_waits_for_its_schema_to_be_migrated() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("schedr.db").display());
+    let db = Database::connect(&url).await.unwrap();
+    let waiting = tokio::spawn({
+        let db = db.clone();
+        async move { wait_for_schema(&db, "webserver", Duration::from_millis(10)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
-        matches!(error, AppError::Db(DbError::SchemaNotUsable { .. })),
-        "{error}"
+        !waiting.is_finished(),
+        "a schema not migrated is waited for"
     );
-    Database::connect(&url)
+    db.migrate().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
-        .unwrap()
-        .migrate()
+        .expect("done once migrated")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("schedr.db").display());
+    let db = Database::connect(&url).await.unwrap();
+    let (_stop, stopped) = watch::channel(0);
+    let period = Duration::from_secs(30);
+    let Err(error) = lead(&db, &url, (period, false), stopped.clone(), "master").await else {
+        panic!("a schema not migrated was accepted");
+    };
+    assert_eq!(
+        error.to_string(),
+        "the database schema is uninitialized: run `schedr db migrate`, or start master with \
+         `--migrate`"
+    );
+    let leading = lead(&db, &url, (period, true), stopped, "master")
         .await
         .unwrap();
-    let db = open_database(&config, "webserver").await.unwrap();
-    assert_eq!(db.backend(), Backend::Sqlite);
+    let leadership = leading.expect("not stopped").await;
+    assert!(db.schema_status().await.unwrap().is_usable());
+    assert!(leadership.epoch() > 0);
 }
 
 #[test]
@@ -362,7 +397,7 @@ fn app_mode_needs_the_three_files_and_mesh_mode_none() {
 #[tokio::test]
 async fn the_roles_say_what_they_miss() {
     for error in [
-        Box::pin(master(&config())).await,
+        Box::pin(master(&config(), false)).await,
         webserver(&config()).await,
     ] {
         let error = error.unwrap_err().to_string();
@@ -371,7 +406,7 @@ async fn the_roles_say_what_they_miss() {
     let mut mesh = config();
     mesh.tls.mode = TlsMode::Mesh;
     assert!(matches!(
-        Box::pin(master(&mesh)).await,
+        Box::pin(master(&mesh, false)).await,
         Err(AppError::NoDatabase)
     ));
     assert!(matches!(webserver(&mesh).await, Err(AppError::NoDatabase)));

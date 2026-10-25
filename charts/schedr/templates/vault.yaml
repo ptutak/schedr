@@ -17,7 +17,7 @@ spec:
   {{- end }}
   kubernetes:
     role: {{ required "vault.auth.role is required with vault.enabled" .role | quote }}
-    serviceAccount: {{ include "schedr.serviceAccountName" $ }}
+    serviceAccount: {{ include "schedr.vaultServiceAccount" $ }}
     tokenExpirationSeconds: {{ .tokenExpirationSeconds }}
 {{- end }}
 {{- range .Values.vault.staticSecrets }}
@@ -48,8 +48,17 @@ spec:
   # schedr reads its Secrets at start: a change restarts it (a drain first, within
   # terminationGracePeriodSeconds).
   rolloutRestartTargets:
+    {{- if eq $.Values.mode "distributed" }}
+    - kind: Deployment
+      name: {{ $fullname }}-master
+    - kind: Deployment
+      name: {{ $fullname }}-webserver
+    - kind: StatefulSet
+      name: {{ $fullname }}-worker
+    {{- else }}
     - kind: StatefulSet
       name: {{ $fullname }}
+    {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}

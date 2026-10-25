@@ -7,8 +7,14 @@ metadata:
     {{- include "schedr.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
+  # The API, whichever pod serves it: the same name in both modes, so clients and a
+  # VirtualService stay as they are when moving to distributed.
   selector:
+    {{- if eq .Values.mode "distributed" }}
+    {{- include "schedr.roleSelector" (list . "webserver") | nindent 4 }}
+    {{- else }}
     {{- include "schedr.selector" . | nindent 4 }}
+    {{- end }}
   # Named for Istio's protocol detection.
   ports:
     - name: http-api

@@ -1,4 +1,4 @@
-schedr {{ .Chart.AppVersion }}, mode {{ .Values.mode }}, on {{ if .Values.database.postgres.host }}Postgres at {{ .Values.database.postgres.host }} (user and password from Secret {{ .Values.database.postgres.existingSecret }}){{ else if .Values.database.existingSecret }}Postgres (Secret {{ .Values.database.existingSecret }}){{ else }}SQLite in its volume{{ end }}.
+schedr {{ .Chart.AppVersion }}, mode {{ .Values.mode }}{{ if eq .Values.mode "distributed" }} ({{ .Values.worker.replicas }} workers, TLS {{ .Values.tls.mode }}){{ end }}, on {{ if .Values.database.postgres.host }}Postgres at {{ .Values.database.postgres.host }} (user and password from Secret {{ .Values.database.postgres.existingSecret }}){{ else if .Values.database.existingSecret }}Postgres (Secret {{ .Values.database.existingSecret }}){{ else }}SQLite in its volume{{ end }}.
 
 The REST API has no authentication of its own until the UI: keep it internal{{ if .Values.istio.authorizationPolicy.enabled }} (Istio's policy decides who reaches it){{ end }}. From your machine:
   kubectl port-forward svc/{{ include "schedr.fullname" . }} {{ .Values.service.apiPort }}
@@ -12,5 +12,15 @@ Swagger UI: http://127.0.0.1:{{ .Values.service.apiPort }}/api/v1/docs/
 
 Through the gateway: {{ $url }}/api/v1/docs/
   schedr dags list --server {{ $url }}{{ if $.Values.istio.authorizationPolicy.api.requireJwt }} --token "$TOKEN"{{ end }}
+{{- end }}
+{{- end }}
+{{- if eq .Values.mode "distributed" }}
+
+Moved here from standalone? Its volume stays (logs, an old SQLite file): delete it when no
+longer needed with
+  kubectl delete pvc data-{{ include "schedr.fullname" . }}-0
+{{- if and (eq .Values.tls.mode "app") .Values.tls.generate (not .Values.tls.existingSecrets.master) (not .Values.tls.certManager.issuerRef.name) }}
+Certificates were generated (Secrets {{ include "schedr.fullname" . }}-{master,webserver,worker}-tls, 10 years); to
+rotate them, delete those Secrets and upgrade.
 {{- end }}
 {{- end }}

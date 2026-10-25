@@ -2,6 +2,10 @@
 {{- $fullname := include "schedr.fullname" . }}
 {{- $istio := .Values.istio }}
 {{- $docs := list "/api/v1/docs" "/api/v1/docs/*" "/api/v1/openapi.json" }}
+{{- $distributed := eq .Values.mode "distributed" }}
+{{- /* The pod serving the API: standalone's, or the webserver's. */}}
+{{- $apiSelector := include "schedr.selector" . }}
+{{- if $distributed }}{{ $apiSelector = include "schedr.roleSelector" (list . "webserver") }}{{ end }}
 {{- with $istio.virtualService }}
 {{- if .enabled }}
 {{- if not (and .hosts .gateways) }}
@@ -52,7 +56,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      {{- include "schedr.selector" $ | nindent 6 }}
+      {{- $apiSelector | nindent 6 }}
   jwtRules:
     - issuer: {{ required "istio.requestAuthentication.issuer is required with istio.requestAuthentication.enabled" .issuer | quote }}
       {{- with .jwksUri }}
@@ -70,20 +74,17 @@ spec:
 apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
 kind: AuthorizationPolicy
 metadata:
-  name: {{ $fullname }}
+  name: {{ $fullname }}{{ if $distributed }}-webserver{{ end }}
   labels:
     {{- include "schedr.labels" $ | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      {{- include "schedr.selector" $ | nindent 6 }}
+      {{- $apiSelector | nindent 6 }}
   action: ALLOW
   rules:
-    {{- if .sameNamespace }}
-    # Anything from this namespace, to any port.
-    - from:
-        - source:
-            namespaces: [{{ $.Release.Namespace | quote }}]
+    {{- with include "schedr.istioSameNamespaceRule" $ | trim }}
+    {{- . | nindent 4 }}
     {{- end }}
     # The API's description and Swagger UI: for everyone.
     - to:
@@ -133,21 +134,43 @@ spec:
             ports: [{{ $.Values.service.apiPort | quote }}]
     {{- end }}
     {{- end }}
-    {{- with .ops.namespaces }}
-    # The ops port, from these namespaces.
+    {{- include "schedr.istioOpsRule" $ | trim | nindent 4 }}
+{{- if $distributed }}
+{{- /* The internal links: by account when every role has its own, else by namespace. */}}
+{{- $perRole := include "schedr.accountsPerRole" $ }}
+{{- range $target := list (list "master" "worker" $.Values.service.grpcPort) (list "worker" "webserver" $.Values.service.logPort) }}
+{{- $role := index $target 0 }}
+{{- $caller := index $target 1 }}
+---
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-{{ $role }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "schedr.roleSelector" (list $ $role) | nindent 6 }}
+  action: ALLOW
+  rules:
+    {{- with include "schedr.istioSameNamespaceRule" $ | trim }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    # The {{ $caller }}s, to the {{ $role }}'s {{ ternary "gRPC port" "log endpoint" (eq $role "master") }}.
     - from:
         - source:
-            namespaces:
-              {{- toYaml . | nindent 14 }}
+            {{- if $perRole }}
+            principals: [{{ printf "*/ns/%s/sa/%s" $.Release.Namespace (include "schedr.roleServiceAccount" (list $ $caller)) | quote }}]
+            {{- else }}
+            namespaces: [{{ $.Release.Namespace | quote }}]
+            {{- end }}
       to:
         - operation:
-            ports: [{{ $.Values.service.opsPort | quote }}]
-    {{- else }}
-    # The ops port: for everyone.
-    - to:
-        - operation:
-            ports: [{{ $.Values.service.opsPort | quote }}]
-    {{- end }}
+            ports: [{{ $target | last | quote }}]
+    {{- include "schedr.istioOpsRule" $ | trim | nindent 4 }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if $istio.peerAuthentication.enabled }}
@@ -161,9 +184,33 @@ metadata:
 spec:
   selector:
     matchLabels:
+      {{- if $distributed }}
+      {{- /* Every role's pods. */}}
+      app.kubernetes.io/name: {{ $.Chart.Name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      {{- else }}
       {{- include "schedr.selector" $ | nindent 6 }}
+      {{- end }}
   mtls:
     mode: STRICT
+{{- end }}
+{{- if and $distributed $istio.enabled }}
+---
+# The webserver's calls to the workers' log endpoints through Istio's mTLS. The workers' Service
+# is headless, which Istio reaches through an ORIGINAL_DST cluster without automatic mTLS: plain
+# text, without the webserver's identity, which the workers' AuthorizationPolicy (by account or
+# namespace) then refuses. Every worker has a sidecar (istio.enabled), so ISTIO_MUTUAL is safe.
+apiVersion: {{ include "schedr.istioApi" (list "networking" $) }}
+kind: DestinationRule
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  host: {{ $fullname }}-worker.{{ $.Release.Namespace }}.svc.{{ $.Values.clusterDomain }}
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
 {{- end }}
 {{- range $istio.serviceEntries }}
 ---

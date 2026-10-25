@@ -178,7 +178,9 @@ pub async fn execute(
             ))
             .await
         }
-        (Command::Master, None) => Box::pin(crate::roles::master(config)).await,
+        (Command::Master { migrate }, None) => {
+            Box::pin(crate::roles::master(config, *migrate)).await
+        }
         (Command::Webserver, None) => Box::pin(crate::roles::webserver(config)).await,
         (Command::Worker, None) => Box::pin(crate::roles::worker(config, env)).await,
         (

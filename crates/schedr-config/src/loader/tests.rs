@@ -55,6 +55,17 @@ fn precedence_is_flags_then_environment_then_file() {
 }
 
 #[test]
+fn a_list_comes_from_the_environment_as_an_array() {
+    // The Helm chart's `passEnv` sets `[worker] pass_env` this way.
+    let vars = env(&[(
+        "SCHEDR_CONFIG__WORKER__PASS_ENV",
+        r#"["MONGO_URI", "API_TOKEN"]"#,
+    )]);
+    let config = load(None, &vars, &[]).unwrap();
+    assert_eq!(config.worker.pass_env, ["MONGO_URI", "API_TOKEN"]);
+}
+
+#[test]
 fn resolves_dag_and_script_roots() {
     let contents = "[dags.roots]\netl = \"/git/dags/etl-repo\"\n";
     let vars = env(&[

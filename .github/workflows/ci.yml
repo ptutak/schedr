@@ -125,6 +125,9 @@ jobs:
       # The base image from that wheel, run as a pod would (pushed to a registry with releases).
       - run: docker build -f images/schedr/Dockerfile -t schedr:ci .
       - run: scripts/smoke-image.sh docker schedr:ci
+      # The server image (master, webserver: the binary from the same wheel, no Python).
+      - run: docker build -f images/schedr-server/Dockerfile -t schedr-server:ci .
+      - run: scripts/smoke-server-image.sh docker schedr-server:ci
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64

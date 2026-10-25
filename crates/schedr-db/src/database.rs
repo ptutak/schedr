@@ -53,12 +53,6 @@ pub enum DbError {
     /// was refused, nothing of it stored ([`Database::fenced`]).
     #[error("this master no longer holds the database's lease (another took it over)")]
     NotLeading,
-    /// The schema isn't usable by this binary: `schedr db migrate` must run first.
-    #[error("the database schema is outdated ({status:?}); run `schedr db migrate` first")]
-    SchemaNotUsable {
-        /// What was found.
-        status: SchemaStatus,
-    },
 }
 
 /// A connection pool to the schedr database, and the lease its writes are fenced by, if any.
@@ -489,20 +483,5 @@ impl Database {
             &self.backend().migration_versions(),
             &applied,
         ))
-    }
-
-    /// Fails unless the schema is usable: what the roles check at startup.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DbError::SchemaNotUsable`] for an uninitialized or outdated schema, or
-    /// [`DbError::Sqlx`] if reading it fails.
-    pub async fn require_usable_schema(&self) -> Result<SchemaStatus, DbError> {
-        let status = self.schema_status().await?;
-        if status.is_usable() {
-            Ok(status)
-        } else {
-            Err(DbError::SchemaNotUsable { status })
-        }
     }
 }

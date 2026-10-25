@@ -45,7 +45,7 @@ use schedr_tls::{Protocol, Tls, TlsFiles, incoming};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::app::{AppError, role_config};
+use crate::app::{AppError, describe_status, role_config};
 
 #[cfg(test)]
 mod tests;
@@ -558,14 +558,13 @@ pub async fn run_worker(
     }
 }
 
-/// Opens the database of the master or the webserver: `[database] url` is required, SQLite is
-/// for one host (it warns), and the schema must be usable by this binary.
+/// Connects to the database of the master or the webserver, whatever its schema:
+/// `[database] url` is required, SQLite is for one host (it warns).
 ///
 /// # Errors
 ///
-/// [`AppError::NoDatabase`] without a URL; [`AppError::Db`] if it can't be reached or its
-/// schema is outdated.
-pub async fn open_database(config: &Config, role: &str) -> Result<Database, AppError> {
+/// [`AppError::NoDatabase`] without a URL; [`AppError::Db`] if it can't be reached.
+pub async fn connect_database(config: &Config, role: &str) -> Result<Database, AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
     let db = Database::connect_with_timeout(url, config.database.query_timeout)
         .await?
@@ -579,9 +578,40 @@ pub async fn open_database(config: &Config, role: &str) -> Result<Database, AppE
              use Postgres for anything distributed"
         );
     }
-    db.require_usable_schema().await?;
     tracing::info!(database = %redact_password(url), "schedr {role}: database ready");
     Ok(db)
+}
+
+/// How often a webserver checks again for a schema it can use.
+pub const SCHEMA_RETRY: Duration = Duration::from_secs(5);
+
+/// Waits until `db`'s schema is usable by this binary, checking every `retry` and saying what
+/// it waits for whenever that changes (the database unreachable, then a schema to migrate, …;
+/// the master, or `schedr db migrate`, migrates it), so a webserver started before the
+/// migration serves once it is done instead of failing.
+pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) {
+    let mut said = String::new();
+    loop {
+        let (waiting, error) = match db.schema_status().await {
+            Ok(status) if status.is_usable() => return,
+            Ok(status) => (describe_status(&status), false),
+            Err(error) => (format!("unreadable ({error})"), true),
+        };
+        if waiting != said {
+            let line = format!(
+                "schedr {role}: the database schema is {waiting}; waiting for it (checked every \
+                 {} s)",
+                retry.as_secs()
+            );
+            if error {
+                tracing::warn!("{line}");
+            } else {
+                tracing::info!("{line}");
+            }
+            said = waiting;
+        }
+        tokio::time::sleep(retry).await;
+    }
 }
 
 /// The warning for the REST API listening on `address` beyond loopback: it has no
@@ -676,6 +706,54 @@ pub async fn take_lease(db: Database, period: Duration, role: &'static str) -> L
     .await
 }
 
+/// The master's lease, being taken (see [`take_lease`]).
+pub type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Leadership> + Send>>;
+
+/// The master's lease for `role` (`master` or `standalone`), being taken while the role's
+/// other parts start when the schema is usable; else, with `--migrate`, taken now (a standby
+/// waits) and the schema migrated by its holder. `None` when a shutdown is asked for while
+/// waiting.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for a schema to migrate without `--migrate`, as
+/// [`migrate_holding`], or [`AppError::Db`] if the schema can't be read.
+pub async fn lead(
+    db: &Database,
+    url: &str,
+    (period, migrate): (Duration, bool),
+    shutdown: watch::Receiver<u32>,
+    role: &'static str,
+) -> Result<Option<LeaseFuture>, AppError> {
+    let status = db.schema_status().await?;
+    if status.is_usable() {
+        return Ok(Some(Box::pin(take_lease(db.clone(), period, role))));
+    }
+    if !migrate {
+        return Err(AppError::BadArgument(format!(
+            "the database schema is {}, or start {role} with `--migrate`",
+            describe_status(&status)
+        )));
+    }
+    let lease = take_lease(db.clone(), period, role);
+    let Some(lead) = until_stopped(lease, shutdown).await else {
+        return Ok(None);
+    };
+    let lead = migrate_holding(lead, &unlimited(url, db).await?).await?;
+    Ok(Some(Box::pin(std::future::ready(lead))))
+}
+
+/// `work`'s output, or `None` once a shutdown is asked for.
+pub async fn until_stopped<T>(
+    work: impl Future<Output = T>,
+    stop: watch::Receiver<u32>,
+) -> Option<T> {
+    tokio::select! {
+        done = work => Some(done),
+        () = until(stop) => None,
+    }
+}
+
 /// `schedr db migrate`: migrates the database at `url` holding the master's lease, so no master
 /// runs on the schema meanwhile and no other migration runs at once (sqlx's own lock is a
 /// session lock, which a pooler in transaction mode doesn't keep). Refused while a master
@@ -757,8 +835,8 @@ pub async fn migrate_holding(mut lead: Leadership, db: &Database) -> Result<Lead
 ///
 /// # Errors
 ///
-/// As [`open_database`], [`listen`] and [`serve_master`].
-pub async fn master(config: &Config) -> Result<(), AppError> {
+/// As [`connect_database`], [`lead`], [`listen`] and [`serve_master`].
+pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
     check_timeouts(config)?;
@@ -768,7 +846,12 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
     let mut registry = Registry::default();
     metrics.register(registry.sub_registry_with_prefix("schedr"));
     start_ops(config, "master", Ops::new(registry, health.clone()), &stop).await?;
-    let db = open_database(config, "master").await?;
+    let db = connect_database(config, "master").await?;
+    let url = config.database.url.as_deref().unwrap_or_default();
+    let period = (config.master.lease_period, migrate);
+    let Some(leadership) = lead(&db, url, period, stop.clone(), "master").await? else {
+        return Ok(());
+    };
     let address = SocketAddr::new(config.master.bind, config.master.grpc_port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);
@@ -777,7 +860,6 @@ pub async fn master(config: &Config) -> Result<(), AppError> {
         links_text(tls.as_ref())
     );
     watch_tls(tls.as_ref(), config, &stop);
-    let leadership = take_lease(db.clone(), config.master.lease_period, "master");
     // Boxed: the role's future is large.
     Box::pin(serve_master(
         db,
@@ -870,7 +952,8 @@ fn links_text(tls: Option<&Tls>) -> &'static str {
 ///
 /// # Errors
 ///
-/// As [`open_database`], [`listen`] and [`serve_api`].
+/// As [`connect_database`], [`listen`] and [`serve_api`]. A schema it can't use yet is waited
+/// for (see [`wait_for_schema`]), not ready meanwhile.
 pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
@@ -887,7 +970,11 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         &stop,
     )
     .await?;
-    let db = open_database(config, "webserver").await?;
+    let db = connect_database(config, "webserver").await?;
+    let waiting = wait_for_schema(&db, "webserver", SCHEMA_RETRY);
+    if until_stopped(waiting, stop.clone()).await.is_none() {
+        return Ok(());
+    }
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);

@@ -23,10 +23,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: standalone
 {{- end -}}
 
-{{/* Only standalone so far. */}}
+{{/* The labels selecting one role's pods (the argument: the root context and the role). */}}
+{{- define "schedr.roleSelector" -}}
+{{- $ctx := index . 0 -}}
+app.kubernetes.io/name: {{ $ctx.Chart.Name }}
+app.kubernetes.io/instance: {{ $ctx.Release.Name }}
+app.kubernetes.io/component: {{ index . 1 }}
+{{- end -}}
+
+{{/* standalone or distributed; distributed needs Postgres. */}}
 {{- define "schedr.checkMode" -}}
-{{- if ne .Values.mode "standalone" -}}
-{{- fail (printf "mode %q isn't supported yet: only \"standalone\" (\"distributed\" comes with step 2.11)" .Values.mode) -}}
+{{- if not (has .Values.mode (list "standalone" "distributed")) -}}
+{{- fail (printf "mode %q isn't one of \"standalone\", \"distributed\"" .Values.mode) -}}
+{{- end -}}
+{{- if and (eq .Values.mode "distributed") (not (or .Values.database.postgres.host .Values.database.existingSecret)) -}}
+{{- fail "mode distributed needs Postgres: set database.postgres.host (or database.existingSecret); SQLite is for one pod" -}}
 {{- end -}}
 {{- end -}}
 
@@ -82,6 +93,19 @@ both the migration and schedr.
 {{- end }}
 - name: SCHEDR_CONFIG__DATABASE__NOTIFICATIONS
   value: {{ .Values.database.notifications | quote }}
+{{ include "schedr.extraEnv" . }}
+{{- end }}
+
+{{/* The configuration of values: config, passEnv, env (every role). */}}
+{{- define "schedr.extraEnv" -}}
+{{- if and .Values.passEnv (hasKey .Values.config "WORKER__PASS_ENV") }}
+{{- fail "set passEnv or config.WORKER__PASS_ENV, not both" }}
+{{- end }}
+{{- with .Values.passEnv }}
+# The variables tasks get from schedr's environment (tasks get a clean one otherwise).
+- name: SCHEDR_CONFIG__WORKER__PASS_ENV
+  value: {{ toJson . | quote }}
+{{- end }}
 {{- range $key, $value := .Values.config }}
 - name: SCHEDR_CONFIG__{{ $key }}
   value: {{ $value | quote }}
@@ -97,6 +121,146 @@ both the migration and schedr.
 {{- .Values.serviceAccount.name | default (include "schedr.fullname" .) -}}
 {{- else -}}
 {{- required "serviceAccount.name is required with serviceAccount.create false (an existing ServiceAccount)" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The ServiceAccount of one role (the argument: the root context and the role) in mode
+distributed: the role's own `serviceAccountName`; else, created by the chart, the one named
+`serviceAccount.name` shared by every role (as in standalone, so moving keeps the account
+anything is bound to), or one per role without a name; else the existing one every role shares.
+*/}}
+{{- define "schedr.roleServiceAccount" -}}
+{{- $ctx := index . 0 -}}
+{{- $role := index . 1 -}}
+{{- $own := (index $ctx.Values $role).serviceAccountName -}}
+{{- if $own -}}
+{{- $own -}}
+{{- else if and $ctx.Values.serviceAccount.create (not $ctx.Values.serviceAccount.name) -}}
+{{- printf "%s-%s" (include "schedr.fullname" $ctx) $role -}}
+{{- else -}}
+{{- include "schedr.serviceAccountName" $ctx -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The account the Vault Secrets Operator authenticates as (vault.auth.serviceAccount). */}}
+{{- define "schedr.vaultServiceAccount" -}}
+{{- if .Values.vault.auth.serviceAccount -}}
+{{- .Values.vault.auth.serviceAccount -}}
+{{- else if eq .Values.mode "distributed" -}}
+{{- include "schedr.roleServiceAccount" (list . "master") -}}
+{{- else -}}
+{{- include "schedr.serviceAccountName" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Whether every role runs under its own account (Istio's policies can then tell them apart). */}}
+{{- define "schedr.accountsPerRole" -}}
+{{- $accounts := list -}}
+{{- range $role := list "master" "webserver" "worker" -}}
+{{- $accounts = append $accounts (include "schedr.roleServiceAccount" (list $ $role)) -}}
+{{- end -}}
+{{- if eq (len (uniq $accounts)) 3 }}true{{ end -}}
+{{- end -}}
+
+{{/* The pod's security context: fsGroup 0 for the volumes unless set, except on OpenShift. */}}
+{{- define "schedr.podSecurityContext" -}}
+{{- $podSecurity := deepCopy (.Values.podSecurityContext | default dict) }}
+{{- if not (or (hasKey $podSecurity "fsGroup") (.Capabilities.APIVersions.Has "security.openshift.io/v1")) }}
+{{- $_ := set $podSecurity "fsGroup" 0 }}
+{{- end }}
+{{- with $podSecurity }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+A pod's annotations: the role's (the argument: the root context and the role's
+podAnnotations), and with istio.enabled the sidecar's and the proxy's settings, merged into
+proxy settings of the role's own.
+*/}}
+{{- define "schedr.podAnnotations" -}}
+{{- $ctx := index . 0 -}}
+{{- $annotations := deepCopy (index . 1 | default dict) }}
+{{- if $ctx.Values.istio.enabled }}
+{{- /* schedr starts once its proxy is ready (it reaches the database and the master through
+it), and the proxy stays until schedr's connections close: a drain's results still reach the
+master and the database (without this a classic sidecar stops 5 s after SIGTERM). */}}
+{{- $_ := set $annotations "sidecar.istio.io/inject" "true" }}
+{{- $proxy := fromYaml (index $annotations "proxy.istio.io/config" | default "{}") }}
+{{- $_ := set $proxy "holdApplicationUntilProxyStarts" true }}
+{{- $metadata := $proxy.proxyMetadata | default dict }}
+{{- $_ := set $metadata "EXIT_ON_ZERO_ACTIVE_CONNECTIONS" "true" }}
+{{- $_ := set $proxy "proxyMetadata" $metadata }}
+{{- $_ := set $annotations "proxy.istio.io/config" (toJson $proxy) }}
+{{- end }}
+{{- with $annotations }}
+annotations:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+The names of the master's gRPC port and the workers' log port, for Istio's protocol detection:
+in tls.mode app they carry schedr's own TLS, which a sidecar must pass through (`tls-`), not
+parse as gRPC or HTTP.
+*/}}
+{{- define "schedr.grpcPortName" -}}
+{{- ternary "tls-grpc" "grpc" (eq .Values.tls.mode "app") -}}
+{{- end -}}
+{{- define "schedr.logPortName" -}}
+{{- ternary "tls-logs" "http-logs" (eq .Values.tls.mode "app") -}}
+{{- end -}}
+
+{{/* The TLS Secret of one role (the argument: the root context and the role). */}}
+{{- define "schedr.tlsSecret" -}}
+{{- $ctx := index . 0 -}}
+{{- $role := index . 1 -}}
+{{- (index $ctx.Values.tls.existingSecrets $role) | default (printf "%s-%s-tls" (include "schedr.fullname" $ctx) $role) -}}
+{{- end -}}
+
+{{/* The master's host names (its Service), which its certificate names. */}}
+{{- define "schedr.masterHosts" -}}
+{{- $name := printf "%s-master" (include "schedr.fullname" .) -}}
+{{- $ns := .Release.Namespace -}}
+{{- toJson (list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.%s" $name $ns .Values.clusterDomain)) -}}
+{{- end -}}
+
+{{/* The TLS settings of one role (the argument: the root context and the role), as env. */}}
+{{- define "schedr.tlsEnv" -}}
+{{- $ctx := index . 0 -}}
+- name: SCHEDR_CONFIG__TLS__MODE
+  value: {{ $ctx.Values.tls.mode | quote }}
+{{- if eq $ctx.Values.tls.mode "app" }}
+- name: SCHEDR_CONFIG__TLS__CA
+  value: /etc/schedr/tls/ca.crt
+- name: SCHEDR_CONFIG__TLS__CERT
+  value: /etc/schedr/tls/tls.crt
+- name: SCHEDR_CONFIG__TLS__KEY
+  value: /etc/schedr/tls/tls.key
+- name: SCHEDR_CONFIG__TLS__WORKER_NAME
+  value: {{ $ctx.Values.tls.workerName | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* tls.mode app or mesh; in app mode, where the certificates come from. */}}
+{{- define "schedr.checkTls" -}}
+{{- $tls := .Values.tls -}}
+{{- if not (has $tls.mode (list "app" "mesh")) -}}
+{{- fail (printf "tls.mode %q isn't one of \"app\", \"mesh\"" $tls.mode) -}}
+{{- end -}}
+{{- if eq $tls.mode "app" -}}
+{{- $given := 0 -}}
+{{- range $role := list "master" "webserver" "worker" -}}
+{{- if index $tls.existingSecrets $role }}{{ $given = add1 $given }}{{ end -}}
+{{- end -}}
+{{- if and (gt $given 0) (lt $given 3) -}}
+{{- fail "tls.existingSecrets: set all three (master, webserver, worker), or none" -}}
+{{- end -}}
+{{- if and (eq $given 0) (not $tls.certManager.issuerRef.name) (not $tls.generate) -}}
+{{- fail "tls.mode app needs certificates: tls.existingSecrets, tls.certManager.issuerRef, or tls.generate (or tls.mode mesh behind a service mesh)" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

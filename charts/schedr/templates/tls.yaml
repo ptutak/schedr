@@ -1,0 +1,73 @@
+{{- /*
+mode distributed, tls.mode app: a certificate per role in a Secret of its own (ca.crt,
+tls.crt, tls.key), from cert-manager or generated here, unless tls.existingSecrets names
+Secrets of one's own. The master's names its Service (the workers check it); the workers'
+names tls.workerName (the webserver checks it); every one has serverAuth and clientAuth.
+*/}}
+{{- $tls := .Values.tls }}
+{{- if and (eq .Values.mode "distributed") (eq $tls.mode "app") (not $tls.existingSecrets.master) }}
+{{- $fullname := include "schedr.fullname" . }}
+{{- $names := dict
+  "master" (fromJsonArray (include "schedr.masterHosts" .))
+  "webserver" (list (printf "%s-webserver" $fullname))
+  "worker" (list $tls.workerName) }}
+{{- if $tls.certManager.issuerRef.name }}
+{{- range $role := list "master" "webserver" "worker" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-{{ $role }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  secretName: {{ include "schedr.tlsSecret" (list $ $role) }}
+  commonName: {{ first (index $names $role) | quote }}
+  dnsNames:
+    {{- toYaml (index $names $role) | nindent 4 }}
+  usages: ["server auth", "client auth", "digital signature", "key encipherment"]
+  issuerRef:
+    {{- toYaml $tls.certManager.issuerRef | nindent 4 }}
+{{- end }}
+{{- else if $tls.generate }}
+{{- /* Kept on upgrades: all three read back (Helm's lookup, so only when Helm talks to the
+cluster); if one is missing, or the names the certificates must carry have changed
+(tls.workerName, the release, clusterDomain: a fingerprint on each Secret), all are made again
+under a new CA, so they always match. */}}
+{{- $fingerprint := toJson $names | sha256sum }}
+{{- $found := dict }}
+{{- range $role := list "master" "webserver" "worker" }}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace (include "schedr.tlsSecret" (list $ $role)) }}
+{{- $annotations := ($secret.metadata | default dict).annotations | default dict }}
+{{- if and $secret (index ($secret.data | default dict) "ca.crt") (eq (index $annotations "schedr.io/certificate-names" | default "") $fingerprint) }}
+{{- $_ := set $found $role $secret.data }}
+{{- end }}
+{{- end }}
+{{- $data := dict }}
+{{- if eq (len $found) 3 }}
+{{- $data = $found }}
+{{- else }}
+{{- $ca := genCA (printf "%s-ca" $fullname) 3650 }}
+{{- range $role := list "master" "webserver" "worker" }}
+{{- $hosts := index $names $role }}
+{{- $cert := genSignedCert (first $hosts) nil $hosts 3650 $ca }}
+{{- $_ := set $data $role (dict "ca.crt" ($ca.Cert | b64enc) "tls.crt" ($cert.Cert | b64enc) "tls.key" ($cert.Key | b64enc)) }}
+{{- end }}
+{{- end }}
+{{- range $role := list "master" "webserver" "worker" }}
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: {{ include "schedr.tlsSecret" (list $ $role) }}
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+  annotations:
+    # The names its certificate was made for: another set makes them again.
+    schedr.io/certificate-names: {{ $fingerprint }}
+data:
+  {{- toYaml (index $data $role) | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

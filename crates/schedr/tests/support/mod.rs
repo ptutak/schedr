@@ -285,7 +285,17 @@ impl Cluster {
     /// Starts `schedr <args>` (a role and its options) under the name `name`, with more
     /// environment variables.
     pub fn start_args(&mut self, name: &str, args: &[&str], env: &[(&str, &str)]) {
-        let role = args[0];
+        self.start_listening(name, args, env, true);
+    }
+
+    /// Starts `schedr <args>` as [`Self::start_args`] does, but waits only for its ops port: a
+    /// role that doesn't listen yet (a webserver waiting for its schema).
+    pub fn start_unready(&mut self, name: &str, args: &[&str]) {
+        self.start_listening(name, args, &[], false);
+    }
+
+    fn start_listening(&mut self, name: &str, args: &[&str], env: &[(&str, &str)], ports: bool) {
+        let role = if ports { args[0] } else { "" };
         let log = self.dir.path().join(format!("{name}.log"));
         let file = if self.keep_logs {
             std::fs::OpenOptions::new()

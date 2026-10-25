@@ -1,0 +1,100 @@
+{{- if eq .Values.mode "distributed" }}
+{{- $fullname := include "schedr.fullname" . }}
+{{- $w := .Values.webserver }}
+# schedr webserver: the REST API (and the UI, milestone M3), reading the database and task
+# logs from workers. Holds no state. Started before the master has migrated, it waits for the
+# schema (not ready meanwhile), so during an upgrade the old one serves until the new is ready.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-webserver
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $w.replicas }}
+  selector:
+    matchLabels:
+      {{- include "schedr.roleSelector" (list . "webserver") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "schedr.roleSelector" (list . "webserver") | nindent 8 }}
+        {{- if .Values.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with include "schedr.podAnnotations" (list . $w.podAnnotations) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "schedr.roleServiceAccount" (list . "webserver") }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "schedr.podSecurityContext" . | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: schedr
+          image: "{{ $w.image.repository }}:{{ $w.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $w.image.pullPolicy }}
+          args: ["webserver"]
+          env:
+            - name: SCHEDR_CONFIG__WEBSERVER__PORT
+              value: {{ .Values.service.apiPort | quote }}
+            - name: SCHEDR_CONFIG__OPS__PORT
+              value: {{ .Values.service.opsPort | quote }}
+            {{- include "schedr.tlsEnv" (list . "webserver") | trim | nindent 12 }}
+            {{- include "schedr.databaseEnv" . | trim | nindent 12 }}
+          ports:
+            - name: http-api
+              containerPort: {{ .Values.service.apiPort }}
+            - name: http-ops
+              containerPort: {{ .Values.service.opsPort }}
+          # Ready once its schema is usable and the API listens.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http-ops
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ops
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          {{- if eq .Values.tls.mode "app" }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/schedr/tls
+              readOnly: true
+          {{- end }}
+      {{- if eq .Values.tls.mode "app" }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "schedr.tlsSecret" (list . "webserver") }}
+      {{- end }}
+      {{- with $w.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -28,7 +28,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the master: scheduling loop, state in the database, internal API for workers.
-    Master,
+    Master {
+        /// Migrate the database at start, holding the master's lease, when its schema isn't up
+        /// to date, instead of refusing it: for a deployment that can't migrate as a step of
+        /// its own (e.g. an init container without a mesh's sidecar).
+        #[arg(long)]
+        migrate: bool,
+    },
     /// Run a worker agent.
     Worker,
     /// Run the webserver: web UI and the API used by the UI and CLI.
@@ -415,7 +421,7 @@ impl Command {
             | Self::Dags { .. }
             | Self::Runs { .. }
             | Self::Standalone { .. }
-            | Self::Master
+            | Self::Master { .. }
             | Self::Worker
             | Self::Webserver
             | Self::Tasks { .. }
@@ -428,7 +434,7 @@ impl Command {
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Master => "master",
+            Self::Master { .. } => "master",
             Self::Worker => "worker",
             Self::Webserver => "webserver",
             Self::Standalone { .. } => "standalone",

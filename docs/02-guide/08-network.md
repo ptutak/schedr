@@ -49,7 +49,9 @@ Istio with `outboundTrafficPolicy: REGISTRY_ONLY`, traffic may only go to hosts 
 registry. A raw pod IP isn't one, but a pod behind a **headless Service** is. So workers run as
 a StatefulSet with a headless Service, and each worker's `log_address` is set to its own pod's
 DNS name (`<pod>.<service>.<namespace>.svc.cluster.local`). A headless Service doesn't
-balance: the name resolves to that one pod.
+balance: the name resolves to that one pod. Istio doesn't apply its automatic mTLS to a
+headless Service's pods, so the chart adds a DestinationRule with `ISTIO_MUTUAL` for it; the
+calls then carry the webserver's identity, which the workers' policies check.
 
 Requests to workers **never go through an HTTP proxy**, whatever `HTTPS_PROXY` says: a proxy
 can't reach pod addresses, and in mesh mode it would bypass the mesh's policy.

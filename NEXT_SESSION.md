@@ -8,7 +8,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 ## State (2026-10-25)
 
 - Branch `main`, pushed to GitHub (the user pushes; `gh run list` shows CI). **M1 is done;
-  M2 steps 2.1 to 2.10b and 2.11a are done.**
+  M2 steps 2.1 to 2.11 are done.**
   The M2 commits so far:
 
   | Commit | Step |
@@ -33,14 +33,17 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 | `85b1219` | M4 decisions recorded: the `db` secret storage for standalone, `schedr.script` |
 | `8802fcc` | 2.10b in progress: the stress suite and its first fixes (B10, B11, B12, B13, B14, B16, T1/T2) |
 | `2c1a6d5` | 2.10b done: three code reviews' fixes, T2's fallback and setting aside, T1's memory restore and read-back, B17, B18 (caps, batching), D1-D3, `[master]` times, M3's federated view |
-| this commit | 2.11a: standalone inside an Istio mesh (`serviceAccount`, `migration`, `istio`), Swagger UI at `/api/v1/docs/` (prefix-aware), `database.postgres`, `vault`, DAGs from a flat folder (`charts/schedr/dags-values.sh`), git-sync credentials, the base image's libraries (pymongo built), fixes B19 |
+| `94f42c4` | 2.11a: standalone inside an Istio mesh (`serviceAccount`, `migration`, `istio`), Swagger UI at `/api/v1/docs/` (prefix-aware), `database.postgres`, `vault`, DAGs from a flat folder (`charts/schedr/dags-values.sh`), git-sync credentials, the base image's libraries (pymongo built), fixes B19 |
+| this commit | 2.11: the distributed chart (`mode: distributed`: master, webserver, workers; TLS generated, from cert-manager or Secrets; accounts and Istio policies per role), `schedr-server`, `schedr master --migrate`, the webserver waiting for its schema, `passEnv`; the connections draft (function-based) |
 
 - CI is green on every pushed commit up to `2c1a6d5` (checked 2026-10-24 with `gh run list`);
   the nightly stress run of 2026-10-24 07:21 passed, before `2c1a6d5` landed.
-- The last `make check` (2.11a, 2026-10-25): 1240 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 94 Rust and 15 Python integration tests; Rust line coverage 87.8 %
+- The last `make check` (2.11, 2026-10-25): 1243 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 95 Rust and 15 Python integration tests; Rust line coverage 87.8 %
   (floor 85 %). `make docs` passed. The kind runs passed: `scripts/kind-standalone.sh`,
-  `scripts/kind-mesh.sh` with native and with classic sidecars (`SIDECARS=classic`). rustls is locked at 0.23.45 (0.23.46 was too new).
+  `scripts/kind-mesh.sh` (native and classic sidecars), `scripts/kind-distributed.sh` (and
+  `MESH=1` on the mesh cluster). WSL's `fs.inotify.max_user_instances` is 512 now (the user
+  raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.45 (0.23.46 was too new).
 - **Open bug: B4** (`BUGS.md`): a role test's `runs trigger` got no result once
   (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
   the CLI's stderr.
@@ -105,22 +108,22 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    then `database.postgres`. Not yet known: whether their Istio runs native or classic
    sidecars (classic: use `migration: onStart`). Local kind clusters `schedr-test` and
    `schedr-mesh` may still exist (`KIND_EXPERIMENTAL_PROVIDER=podman kind get clusters`).
-4. **M2, step 2.11** (PLAN.md): images and the distributed Helm chart (probes on the ops port 8090:
-   `/healthz`, `/readyz`; a `ServiceMonitor` optional). Start by laying out the decisions
-   (see "How to work"), reading PROJECT.md's "Packaging and releases" and PLAN.md first.
-   Details already decided for it: workers as a StatefulSet with a headless Service,
-   `log_address` = the pod's DNS name, certificates with both serverAuth and clientAuth; the
-   user's cluster runs Istio with `REGISTRY_ONLY`.
-   The decisions for it were presented on 2026-10-24 and need the user's confirmation before
-   coding: `schedr-server` (Alpine, the binary from the wheel) for master and webserver; the
-   master a one-replica Deployment with `Recreate` and the migrate init container (a standby
-   would deadlock a rollout on the lease); the webserver waiting for its schema instead of
-   refusing (`/readyz` "starting: schema"); workers a StatefulSet with a PVC each; TLS Secrets
-   per role (cert-manager optional); ServiceAccounts per role (or one existing); the Istio
-   policies for :8070 and :8081; a worker PodDisruptionBudget; the same values as standalone,
-   the API's Service keeping its name.
-5. Then 2.12 (kill tests on kind), 2.13 (more wheels). M3's web UI is **federated from the
+4. **M2, step 2.11: done** (PROJECT.md, Components and roles: "The distributed chart", with
+   every decision and the review's fixes): `schedr-server` (44 MB, no Python), `schedr master
+   --migrate`, the webserver waiting for its schema, the chart's `mode: distributed` (master
+   Deployment with `Recreate`, webserver, workers as a StatefulSet with a volume each and a
+   PodDisruptionBudget, TLS from Secrets, cert-manager or generated, accounts per role or
+   shared, Istio policies per role, `passEnv`, `clusterDomain`), `ci/test-distributed.sh` in
+   `make chart-check`, `scripts/kind-distributed.sh`.
+5. **Next: 2.12** (kill tests on kind: the master, then a worker, killed during runs; on
+   OpenShift by hand; standalone's pod killed), building on `kind-distributed.sh`; then 2.13
+   (more wheels). M3's web UI is **federated from the
    start**: a list of deployments, each reached through its webserver.
+6. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
+   "Connections (draft)", M4): `@connection(arg=t"{secrets[...]}")` on a generator function,
+   as `contextlib.contextmanager`; tasks use `with name() as client:`. The in-task CLI for
+   Bash is accepted; CommandOperator, Bash scripts and plain Python are undecided (candidates
+   listed). The user rejected Airflow's fixed fields as the native shape.
 
 ## How to work with the user
 
