@@ -6,7 +6,7 @@ Every role reads the same configuration: one TOML file (`--config`, else
 `SCHEDR_CONFIG_FILE`, else `/etc/schedr/config.toml`) and environment variables mirroring
 it, e.g. `SCHEDR_CONFIG__MASTER__GRPC_PORT` for `[master] grpc_port`. Flags win over the
 environment, which wins over the file. Unknown keys are an error. Each role uses only its own
-sections. The [configuration reference](../_generated/03-reference/01-configuration.md) lists
+sections. The [configuration reference](../_generated/04-reference/01-configuration.md) lists
 every key.
 
 ## The roles in a cluster

@@ -159,8 +159,12 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
   + **napoleon** (the Python API from docstrings); **rustdoc** copied under `rust/`.
 - Long Markdown documents (e.g. `PROJECT.md`) stay one file in the repository; a small
   generator splits them into pages at build time.
-- **Three kinds of pages:**
-  - **The guide** (e.g. `docs/02-guide/`, written by hand, committed): how the running system works
+- **Four kinds of pages:**
+  - **Writing DAGs** (`docs/02-dags/`, written by hand, committed): how to define a DAG with
+    the native API, as built, not as planned. A planned feature is one line pointing at its
+    Design chapter. Non-trivial examples are files (included, and tested). Updated in the same
+    step as the API it describes.
+  - **The guide** (e.g. `docs/03-guide/`, written by hand, committed): how the running system works
     (components, the flow of a request, loops, failure handling, deployment), as built, not
     as planned. It describes, and links to the design log for the reasons. Updated in the same
     step as the code it describes.
@@ -170,8 +174,8 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
     that the code registers from, checked by a test against a scrape).
   - **The design log and plan** (`PROJECT.md`, `PLAN.md`), split into pages at build time.
 - **Files numbered in the site's order:** each section gets its number (a folder when it has
-  several pages, `docs/02-guide/`; a file when one, `05-plan.md`), and the pages in a folder
-  too (`02-guide/04-master.md`, two digits); generated pages use the same numbers. A page
+  several pages, `docs/03-guide/`; a file when one, `06-plan.md`), and the pages in a folder
+  too (`03-guide/04-master.md`, two digits); generated pages use the same numbers. A page
   with pages of its own becomes a folder (`05-workers/01-journal.md`, read as 5.1).
 - **Diagrams in Mermaid**, written as plain ```` ```mermaid ```` fences so GitHub draws them too
   (`sphinxcontrib-mermaid`, with `myst_fence_as_directive`; mermaid.js pinned).

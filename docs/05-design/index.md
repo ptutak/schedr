@@ -7,5 +7,5 @@ repository root, split at build time).
 :maxdepth: 2
 :glob:
 
-/_generated/04-design/*
+/_generated/05-design/*
 ```

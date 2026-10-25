@@ -277,10 +277,10 @@ fn the_reference_sources_are_four_pages_under_reference() {
     assert_eq!(
         paths,
         [
-            "docs/_generated/03-reference/01-configuration.md",
-            "docs/_generated/03-reference/02-cli.md",
-            "docs/_generated/03-reference/03-rest-api.md",
-            "docs/_generated/03-reference/04-metrics.md",
+            "docs/_generated/04-reference/01-configuration.md",
+            "docs/_generated/04-reference/02-cli.md",
+            "docs/_generated/04-reference/03-rest-api.md",
+            "docs/_generated/04-reference/04-metrics.md",
         ]
     );
     assert!(files[0].contents.starts_with("# Configuration\n"));

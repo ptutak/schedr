@@ -29,7 +29,7 @@ its Service helps nobody.
 ## Metrics
 
 `/metrics` serves Prometheus metrics in the OpenMetrics text format. The
-[metrics reference](../_generated/03-reference/04-metrics.md) lists every metric, generated from
+[metrics reference](../_generated/04-reference/04-metrics.md) lists every metric, generated from
 the code. Roughly:
 
 - **master:** round durations (`schedr_master_tick_duration_seconds`), runs, tasks and workers

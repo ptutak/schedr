@@ -50,6 +50,7 @@ The gRPC port and the log endpoint use mTLS unless a service mesh provides it (s
 
 ## Where to go next
 
+- [Writing DAGs](../02-dags/index.md) is how to define the tasks this system runs.
 - [Life of a run](03-life-of-a-run.md) follows one run through every part.
 - [The master](04-master.md) explains the scheduling loop and its rounds.
 - [Workers](05-workers.md) covers what a worker does with a task, and how it survives restarts.

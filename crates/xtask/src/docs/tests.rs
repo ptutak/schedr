@@ -140,12 +140,12 @@ fn docs_sources_contains_every_page() {
         paths,
         [
             "docs/_generated/01-overview.md",
-            "docs/_generated/05-plan.md",
-            "docs/_generated/06-api/01-python.md",
-            "docs/_generated/06-api/02-rust.md",
-            "docs/_generated/04-design/00-schedr-project-decisions.md",
-            "docs/_generated/04-design/01-goal.md",
-            "docs/_generated/04-design/02-architecture.md",
+            "docs/_generated/06-plan.md",
+            "docs/_generated/07-api/01-python.md",
+            "docs/_generated/07-api/02-rust.md",
+            "docs/_generated/05-design/00-schedr-project-decisions.md",
+            "docs/_generated/05-design/01-goal.md",
+            "docs/_generated/05-design/02-architecture.md",
         ]
     );
     assert_eq!(files[0].contents, "# readme\n");

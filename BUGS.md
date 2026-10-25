@@ -9,6 +9,16 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B20: `dags check --against` says milestone M2, and no M2 step plans it
+
+- **Seen:** 2026-10-25, while writing the testing page. `crates/schedr/src/local.rs:100`
+  returns `not_yet("dags check --against", "M2")`, so the command reports
+  `` `schedr dags check --against` isn't implemented yet (milestone M2) ``.
+- **Cause:** the message names M2, but no step in `PLAN.md` plans `--against`. The right
+  milestone is the user's decision.
+- **Next:** leave the code as it is. The Writing DAGs page says the flag is not implemented
+  yet and does not name a milestone.
+
 ## B15 (Suspected): a panic inside tokio's `AtomicWaker` aborts standalone (SQLite and Postgres)
 
 - **Seen:** 2026-10-24, stress scenario 9 (standalone on SQLite, quick x2), in the standalone
