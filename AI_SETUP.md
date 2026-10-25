@@ -25,7 +25,7 @@ PROJECT.md              # decision log (see Project documents)
 PLAN.md                 # milestones and steps
 BUGS.md                 # open bugs
 NEXT_SESSION.md         # hand-off for the next working session
-AI_SETUP.md, AI_INSTRUCTIONS.md
+AI_SETUP.md, AI_INSTRUCTIONS.md   # the Grok worker's skill lives in ~/.claude/skills/grok, not here
 Makefile                # every task has a target; `make help` lists them
 .pre-commit-config.yaml
 .github/workflows/ci.yml
@@ -223,6 +223,25 @@ Separate jobs, each one reproducible with a make target:
   where it came from.
 - **Secrets only from environment variables,** never from configuration files (a secret in
   the file is a startup error).
+
+## Agent tooling
+
+- **Claude Code is the main agent;** Grok Build (xAI's terminal agent, on a SuperGrok or X
+  Premium+ subscription, so no per-token billing) can be its worker. How the two work
+  together is in `AI_INSTRUCTIONS.md`, Working with a worker agent.
+- **Set up once per machine,** not per repository: the `/grok` skill lives in
+  `~/.claude/skills/grok/`. It has `SKILL.md`, `grok-turn.sh` (one headless turn, resumed by
+  session ID, logs in `logs/`) and `install.sh`. Copy the folder to a new machine and run
+  `~/.claude/skills/grok/install.sh`. It installs the Grok CLI (`npm install -g
+  @xai-official/grok`), runs `grok login`, and allows the turn script in
+  `~/.claude/settings.json`. Running it again is safe.
+- **Per repository, nothing to add:** the skill finds the working rules (this file and
+  `AI_INSTRUCTIONS.md`, else `AGENTS.md` / `CLAUDE.md`) and the checks (`make check`,
+  `make docs`). Grok's worktree is a sibling folder (`../<repo>-grok`), outside the
+  repository, so nothing needs ignoring.
+- **The worktree has its own build directory,** so Grok's first build is a full one. Kind
+  clusters, ports and containers are shared with the main checkout: don't run the same
+  cluster script in both at once.
 
 ## Project documents
 

@@ -39,6 +39,34 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    myself, often without saying so, so don't claim CI hasn't run. To know CI's state, ask me
    (I may not have `gh` installed).
 
+## Working with a worker agent (Grok)
+
+A step can be handed to a second agent, Grok Build, through the `/grok` skill (set up as
+`AI_SETUP.md`, Agent tooling, says). I still talk only to you. Grok writes the code; you
+relay, decide, and check.
+
+- **Grok works in its own git worktree** (`<repo>-grok`, branch `grok/<step>`), approving
+  its own commands there. It never commits, pushes, or touches the main checkout. It
+  follows this file, except the code review, the summary, and committing, which are yours.
+- **Who decides:**
+
+  | Decision | Decided by |
+  |---|---|
+  | **Important:** anything I see or depend on (API, CLI, config, schema, data format, defaults, behaviour), scope, a new dependency, anything hard to undo; when unsure, important | **me,** from Grok's options table, shown as Grok wrote it, with your view added if you disagree |
+  | **Small:** internal names, helper structure, test layout, wording, what the project's documents already settle | **Grok** in normal mode (listed in its summary under "Small decisions"); **you** in paranoid mode, each said in one status line so I can overrule it |
+
+- **Modes:** *normal* (the default) and *paranoid*, where Grok stops at every decision. Use
+  paranoid for brittle work (migrations, concurrency, security, data formats) or when I ask;
+  propose it when a step looks brittle.
+- **Grok's "done" is a claim, not a result:** read its diff, run `make check` and
+  `make docs` yourself, run the code review, and send the findings back to Grok until it is
+  clean. Then present the summary as in "How a step goes", step 7. Check its "Small
+  decisions" list as part of the review.
+- **When I say commit,** commit in the worktree, fast-forward the main branch to it, and
+  remove the worktree.
+- Grok's blockers and requests outside its worktree (system packages, `sudo`, other
+  clusters or accounts) come to me; don't grant them yourself.
+
 ## Decisions
 
 - **Recommend, don't just list:** the recommended option first, marked as such, with why.
