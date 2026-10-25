@@ -137,6 +137,9 @@ relay, decide, and check.
 ## Environment
 
 - Temporary files go in the session's scratch directory, not `/tmp`.
+- A cheaper model (e.g. Haiku as a subagent) may read long logs for the result or gather
+  things, when its answer is easy to check; reviews, diagnosis and decisions stay with the
+  main model, which reads the decisive lines (a failure's output) itself.
 - New library versions must be at least two weeks old; record new libraries in `PROJECT.md`.
 - Update `NEXT_SESSION.md` at the end of a milestone or when I ask, so the next session can
   start from it.

@@ -239,6 +239,11 @@ Separate jobs, each one reproducible with a make target:
   `AI_INSTRUCTIONS.md`, else `AGENTS.md` / `CLAUDE.md`) and the checks (`make check`,
   `make docs`). Grok's worktree is a sibling folder (`../<repo>-grok-<step>`), outside the
   repository, so nothing needs ignoring.
+- **The worktree has its own Python environment** (a pyenv virtualenv
+  `<repo>-grok-<step>`, named in the worktree's untracked `.python-version`, deleted with
+  it): one environment shared by checkouts has an editable install pointing at whichever
+  synced last, so tests import another branch's code. Never `make setup` there: git hooks
+  are shared by all checkouts.
 - **The worktree has its own build directory,** so Grok's first build is a full one. Kind
   clusters, ports and containers are shared with the main checkout: don't run the same
   cluster script in both at once.
