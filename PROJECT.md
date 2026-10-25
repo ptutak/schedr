@@ -5823,11 +5823,10 @@ items ("possibly later") are noted where they belong.
 
 ### Connections (draft, M4; to be worked on further)
 
-**Status:** a draft from the conversation of 2026-10-25, not decided. Milestone M4, with the
-secret storage it builds on. The direction for Python tasks is the user's (a decorator in the
-manner of `contextlib.contextmanager`); **how CommandOperator tasks, Bash scripts and plain
-Python scripts use connections is still undecided** (candidates below), except the in-task
-CLI for Bash, which the user accepted.
+**Status:** a draft for M4, with the secret storage it builds on. Decided so far: the
+direction for Python tasks (a decorator in the manner of `contextlib.contextmanager`, the
+user's), the in-task CLI for Bash, and **typed connections for tasks without Python**
+(2026-10-25, below). The rest is still to be worked on.
 
 **The need (the user's):** the same DAG moves between environments (dev, preprod, prod)
 without code changes, so it names what it uses (`mongodb_default`), and each environment
@@ -5901,9 +5900,6 @@ def count() -> int:
   `[connections]` table in the configuration).
 - **Async:** `@connection` on an `async def` generator gives `async with` (with M4's async
   task functions).
-- **Ready-made connections** for the base image's libraries (HTTP with `requests`, SSH with
-  `paramiko`, MongoDB) as functions in `schedr.connections` to wrap or copy, each library
-  imported only when used (`import schedr` stays dependency-free).
 - **Airflow (M5):** `schedr.airflow`'s `Connection.get(conn_id)` and
   `BaseHook.get_connection` read Airflow-format entries from the same storage, a shape of
   their own beside the native connections.
@@ -5912,39 +5908,91 @@ def count() -> int:
 CLI: `schedr task-ctx connection mongodb_default --env MONGO` prints `export MONGO_URI=…`
 lines for `eval`; `--json` prints the rendered arguments as an object.
 
-**Undecided: CommandOperator tasks, Bash scripts (`ScriptOperator`) and plain Python
-scripts.** They can't run the `@connection` function (no Python, or no schedr), so they get
-the connection's **rendered arguments**, never the client; by the rule decided for secrets,
-in the environment or in files, never on the command line. Candidates proposed on
-2026-10-25 (none chosen):
+**Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
+CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`
+function (no Python, or no schedr), and the native tools they call (`ssh`, `curl`,
+`mongosh`, `psql`) each want their values in a form of their own, some only as files. So
+schedr has **built-in connection types**, each a fixed shape with a fixed mapping to
+variables and files:
 
 ```python
+# connections.py, anywhere in the DAG folder
+from schedr.connections import HTTP, SSH
+
+billing_api = HTTP(base_url="https://billing.example.com", token=t"{secrets['billing#token']}")
+router = SSH(host="10.0.0.1", user="netops", private_key=t"{secrets['router#key']}")
+
+# a DAG
 CommandOperator(
-    "export_orders",
-    command="mongoexport --uri \"$MONGO_URI\" --db \"$MONGO_DATABASE\" -c orders",
-    connections={"MONGO": mongodb_default},      # prefix -> connection
+    "fetch",
+    command='curl -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"; ssh -F "$R_SSH_CONFIG" target "show version"',
+    connections={"API": billing_api, "R": router},     # prefix -> connection
 )
-ScriptOperator("sync", script="sync.sh", connections={"MONGO": mongodb_default})
-ScriptOperator("report", script="report.py", connections={"MONGO": mongodb_default})
+
+@task
+def version() -> str:
+    with router() as client:                          # paramiko, imported only here
+        return client.exec_command("show version")[1].read().decode()
 ```
 
-- **How the arguments reach the process:** (A) environment variables by default (`MONGO_URI`,
-  `MONGO_DATABASE`: the prefix, `_`, the parameter's name in upper case), files per argument
-  on request (`mongodb_default.files("uri")` gives `MONGO_URI_FILE=/run/schedr/<attempt>/MONGO_URI`,
-  removed after the attempt), for values that mustn't sit in the environment; (B) files only,
-  one JSON per connection (`MONGO_CONNECTION=…/MONGO.json`; Bash then needs `jq`); (C) the
-  environment only. The agent renders the arguments before the process starts, secret values
-  masked.
-- **Plain Python scripts:** (A) both the same variables and files as Bash (no schedr import
-  needed) and, with `schedr.script` (M4: plain scripts get `dag_ctx` and `task_ctx` over the
-  agent's channel), `import connections` and `with mongodb_default() as db:` as in a task,
-  when the module is importable; (B) variables only.
-- **The variables' names:** (A) a prefix given where the connection is used (two of one kind
-  in a task: `SRC_URI`, `DST_URI`); (B) the connection's name as the prefix
-  (`MONGODB_DEFAULT_URI`: long, and colliding when one connection is used twice).
+- **One definition, every kind of task.** A typed connection is defined once, in any `.py`
+  file of the DAG folder. Python tasks (and plain scripts with `schedr.script`) enter it with
+  `with router() as client:`, getting the type's client (`requests.Session`, a paramiko
+  `SSHClient`, a pymongo `Database`, …; the library imported only on use, so `import
+  schedr` stays dependency-free). Commands and scripts get the type's variables and files.
+  **Custom `@connection` functions stay** for shapes of one's own, Python first; given to a
+  command or script, they deliver their rendered arguments as `PREFIX_PARAM` variables and
+  the JSON file. Not chosen: types only for Bash with `@connection` functions for Python (the
+  same host defined twice, drifting apart); no types, only rendered arguments in the
+  environment (the draft's candidate A: no key files, no curl or ssh configuration, so
+  secrets end up on command lines).
+- **What a process gets** (the prefix comes from where it is used, so two of one type in a
+  task don't clash: `SRC_URI`, `DST_URI`): **variables for plain values, files for what
+  tools read from files, and one JSON file with everything** (`<PREFIX>_JSON`). Files go in
+  a folder of the attempt's own, mode 0600, removed when the attempt ends; values rendered
+  from secrets are masked in the log. Secrets never reach a command line: `curl` reads its
+  header from `-K`, `ssh` its key and options from `-F`. Not chosen: JSON only (needs `jq`,
+  and `ssh` still needs a key file); variables only (`ssh` can't take a key from a variable,
+  and keys would sit in the environment).
+- **Finding a connection:** by object in Python (`from connections import router`: a typo
+  is an import error, at parse time) and by name from Bash (`schedr task-ctx connection
+  router --env R`). Names are unique across the DAG folder: two definitions of one name are
+  a parse error (the parser already imports every file, so it builds the registry). Not
+  chosen: names as strings everywhere (`connections={"R": "router"}`; a typo found only when
+  the registry is checked).
+- **The first types:**
 
-**Still open besides:** how nested arguments become variables (JSON, or flattened); whether
-every value rendered from a secret is masked, or only some; how a connection's parameters
-change over time while environments still hold the old secrets (defaults only, or versions);
-the name `@connection` (also Airflow's concept's name; not `@resource`, taken by M4's
-resources).
+  | Type | Variables | Files | Python client |
+  |---|---|---|---|
+  | `HTTP` | `_BASE_URL`, `_TOKEN` if any | `_CURL_CONFIG` (headers, CA), `_CA_FILE` if given | `requests.Session` |
+  | `SSH` | `_HOST`, `_PORT`, `_USER` | `_KEY_FILE`, `_KNOWN_HOSTS`, `_SSH_CONFIG` (host `target`) | paramiko `SSHClient` |
+  | `Mongo` | `_URI`, `_DATABASE` | | pymongo `Database` |
+  | `SQL` (a URL: Postgres, MySQL) | `_URL` | `_PGPASSFILE` for Postgres | a DB-API connection |
+  | `Generic` (keys of one's own) | `_<KEY>` per key | | a dict |
+
+  Network devices go through `SSH`. Exact names are settled when built; the table is the
+  shape. Not chosen: fewer types (HTTP, SSH, Generic), with Mongo and SQL as Generic
+  (losing the clients and the `.pgpass` file).
+
+**Decided besides (2026-10-25):**
+- **A custom connection's arguments, given to a command or script:** one variable per
+  parameter; a simple value as itself (`C_TOKEN=…`), a nested one as JSON
+  (`C_OPTIONS='{"tls":true,"timeout":5}'`), and everything in `C_JSON`. Not chosen:
+  flattening (`C_OPTIONS_TLS`: keys clash, `{"a_b": 1}` and `{"a": {"b": 1}}` both give
+  `C_OPTIONS_A_B`; case is lost; an empty list gives no variable); nested values only in
+  the JSON file (a script expecting `C_HOSTS` silently gets nothing).
+- **Parameters that change while an environment's secrets lag behind** (a parameter added,
+  or moved to another path, before its secret is stored there): `schedr connections check`
+  against the target environment lists every missing secret, run before deploying (in CI
+  or the chart's pre-upgrade hook); a parameter may fall back to a default
+  (`t"{secrets.get('billing#client_id', '')}"`) where an empty value is acceptable. Without
+  either, tasks fail with `secret_not_found` (no retry used); a removed parameter is
+  harmless; a value changed in the storage is read at the next attempt. Not chosen:
+  versioned connections (versions everywhere for a gap a check catches); nothing (found in
+  production).
+- **The name stays `connection`** (`@connection`, `schedr.connections`, `schedr connections
+  check`): it is what the thing is. Airflow uses the same word, and that is no reason to
+  avoid it; schedr's names follow what describes the API best, the same rule that made
+  Airflow's setup and teardown schedr's resources. `schedr.airflow`'s `Connection` (M5) maps
+  onto it, and its docs say so once. Not chosen: `@service` (clashes with Kubernetes
+  Services); `@endpoint` (odd for a database or an SSH host).

@@ -45,7 +45,7 @@ A step can be handed to a second agent, Grok Build, through the `/grok` skill (s
 `AI_SETUP.md`, Agent tooling, says). I still talk only to you. Grok writes the code; you
 relay, decide, and check.
 
-- **Grok works in its own git worktree** (`<repo>-grok`, branch `grok/<step>`), approving
+- **Grok works in its own git worktree** (`<repo>-grok-<step>`, branch `grok/<step>`; one per step, so two can run side by side), approving
   its own commands there. It never commits, pushes, or touches the main checkout. It
   follows this file, except the code review, the summary, and committing, which are yours.
 - **Who decides:**
@@ -55,9 +55,14 @@ relay, decide, and check.
   | **Important:** anything I see or depend on (API, CLI, config, schema, data format, defaults, behaviour), scope, a new dependency, anything hard to undo; when unsure, important | **me,** from Grok's options table, shown as Grok wrote it, with your view added if you disagree |
   | **Small:** internal names, helper structure, test layout, wording, what the project's documents already settle | **Grok** in normal mode (listed in its summary under "Small decisions"); **you** in paranoid mode, each said in one status line so I can overrule it |
 
+- **Answer Grok as I answer you:** it numbers its decisions and letters the options, and the
+  answer is one line each: `1. A`, `2. B`, `3. explain`, `4. A+B`, `5. other: <suggestion>`;
+  yours are marked `(mine)`.
 - **Modes:** *normal* (the default) and *paranoid*, where Grok stops at every decision. Use
   paranoid for brittle work (migrations, concurrency, security, data formats) or when I ask;
-  propose it when a step looks brittle.
+  propose it when a step looks brittle. **Split a step by risk** rather than running all of
+  it paranoid: the brittle part (e.g. handling secrets) in paranoid mode, the rest in
+  normal mode, as two tasks or two phases.
 - **Grok's "done" is a claim, not a result:** read its diff, run `make check` and
   `make docs` yourself, run the code review, and send the findings back to Grok until it is
   clean. Then present the summary as in "How a step goes", step 7. Check its "Small
@@ -71,7 +76,10 @@ relay, decide, and check.
 
 - **Recommend, don't just list:** the recommended option first, marked as such, with why.
 - **Show options side by side:** a small table with a concrete example of each (code, output,
-  file layout), plus what each costs. I often pick from the table.
+  file layout), plus what each costs, and a **Who (does the work)** column: `Claude`,
+  `Grok (normal)` or `Grok (paranoid)`; `you` only for something I must run myself (a
+  login, my settings). Deciding is always mine; the column never says so. I often pick
+  from the table.
 - **Precise definitions when I ask to elaborate:** what exactly happens, edge cases, a table
   of common situations and the result in each.
 - **When I reject or question a proposal,** rework it; don't defend it. When I ask a question

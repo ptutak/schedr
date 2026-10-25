@@ -237,7 +237,7 @@ Separate jobs, each one reproducible with a make target:
   `~/.claude/settings.json`. Running it again is safe.
 - **Per repository, nothing to add:** the skill finds the working rules (this file and
   `AI_INSTRUCTIONS.md`, else `AGENTS.md` / `CLAUDE.md`) and the checks (`make check`,
-  `make docs`). Grok's worktree is a sibling folder (`../<repo>-grok`), outside the
+  `make docs`). Grok's worktree is a sibling folder (`../<repo>-grok-<step>`), outside the
   repository, so nothing needs ignoring.
 - **The worktree has its own build directory,** so Grok's first build is a full one. Kind
   clusters, ports and containers are shared with the main checkout: don't run the same
