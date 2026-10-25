@@ -9,15 +9,25 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
-## B15 (Suspected): a panic inside tokio in standalone on SQLite under load
+## B15 (Suspected): a panic inside tokio's `AtomicWaker` aborts standalone (SQLite and Postgres)
 
 - **Seen:** 2026-10-24, stress scenario 9 (standalone on SQLite, quick x2), in the standalone
   process's log, after many B14 errors: `thread 'tokio-rt-worker' panicked at
   tokio-1.54.0/src/sync/task/atomic_waker.rs:324:17: assertion failed: old_state == WAKING`.
   2 of 40 runs never finished (B14 may explain them alone).
+- **Seen again:** 2026-10-25, `make check` for 2.12 (no Rust change in that step), the
+  integration test `schedr::standalone the_same_run_works_on_postgres`: on **Postgres**, 2 s
+  after start (the machine busy: two other worktrees building and testing, a kind cluster),
+  right after `schedr master: leading`: `thread 'tokio-rt-worker' panicked at
+  tokio-1.54.0/src/sync/task/atomic_waker.rs:336:17: assertion failed: state == REGISTERING
+  || state == REGISTERING | WAKING || state == WAKING`, then `worker thread panicking;
+  aborting process`, so the CLI found no server. Not reproduced by Grok's `make check` of
+  the same tree a little earlier, nor by the docs worktree's. So not SQLite-specific; it
+  ends the whole process, not one task, and it needs no B14 errors first.
 - **Not understood yet:** an internal assertion of tokio's `AtomicWaker`; it can follow a
   panic inside a waker (a nested panic), misuse of a waker, or a bug in tokio or in what
-  wakes through it (sqlx's SQLite worker thread). Debug builds only assert it.
+  wakes through it (sqlx: its SQLite worker thread, or its Postgres connection). Debug
+  builds only assert it.
 - **Confirm:** rerun scenario 9 with `RUST_BACKTRACE=1` for the role processes, before and
   after B14's fix; find the panicking task's stack.
 

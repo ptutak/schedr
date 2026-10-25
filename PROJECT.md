@@ -809,6 +809,47 @@ roles' sizes; the API's Service keeps its name (the CLI's URL and the VirtualSer
   certificates, a DAG run, a task's log through the webserver, a worker drained during a task;
   `SIDECARS` native and classic with `tls.mode: mesh` on the mesh cluster).
 
+**Kill tests (step 2.12, decided 2026-10-25).** M2's "done when" on a cluster:
+`scripts/kind-kill.sh`, only the local kind cluster `schedr-test` (context `kind-schedr-test`;
+any other `CLUSTER` is refused, and the context's server has to be loopback). It is not part
+of `make check` or CI. A crash is `kubectl delete pod --force --grace-period=0` (no SIGTERM, so
+no drain). Three runs, in order:
+
+- Distributed, 2 workers, the chart's generated certificates, Postgres database `schedr`
+  (created by the script; `kind-distributed.sh` keeps using the `postgres` database): `hold`
+  sleeps 90 s with `retries=0`. Once it has started, the master pod is killed. The new master
+  takes the lease when it expires (within `[master] lease_period`, 30 s). The same attempt
+  finishes `success`. Neither worker becomes `lost`. The new master records them
+  `disconnected` until they register (the lease counts from then), and both are `active`
+  again once the run has finished.
+- Then `again` sleeps 30 s with `retries=1` and `retry_delay` of 0 (the default is 0 retries,
+  so without the retry the run would fail, which is the rule; the default delay is 5 minutes,
+  so the DAG sets 0 and the check is not waiting that out). Its worker pod is killed. The
+  StatefulSet brings that pod name back with its volume, so the journal is there. The attempt
+  ends `lost` with `WorkerRestarted` when that pod is ready again within `[master]
+  lease_timeout` (60 s). Past that, `WorkerLost` is the rule and the script prints it; the
+  killed worker being `lost` is not a failure of the check. The retry succeeds. The other
+  worker stays `active`.
+- Then the release is installed again as standalone on SQLite. A short run (`ping`) succeeds,
+  then `again` is killed with the pod. `ping` is still `success` (the volume kept the
+  database), and `again` is `lost` / `WorkerRestarted`, then `success` (`WorkerLost` when the
+  pod took the lease, as for the worker).
+
+The same three checks, as commands for a release that is already installed, are in the guide
+("Killing the master or a worker") for OpenShift. Nothing in the repository runs them: the lab
+context stays untouched. Not chosen: adding the kills to `kind-distributed.sh` and
+`kind-standalone.sh` (every install run would pay for them, and a kill failure would look like
+an install failure); a script that only checks a cluster those two left behind
+(`kind-standalone.sh` ends on Postgres, so the SQLite volume would be missed); a k3d cluster
+(the repo's cluster scripts are kind; the checks are kubectl and Helm); one run with both
+workers busy (a slow lease takeover can let the surviving task finish before the worker is
+killed); a graceful `kubectl delete pod` (already checked: the task finishes in the drain, one
+`success`); letting the script take any context (one variable away from the lab cluster);
+applying it to the lab cluster from here; leaving the step open until that lab run. The role
+tests already cover the same rules in processes (`roles.rs`: a master restart continues one
+attempt; a worker killed and restarted ends `lost` / `WorkerRestarted` and retries). A kill
+that breaks one of these goes to `BUGS.md` and is not fixed in this step.
+
 ### Web UI and CLI
 
 - A **web dashboard** is required: live view of what is running, and access to task logs.

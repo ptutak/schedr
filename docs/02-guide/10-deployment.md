@@ -103,7 +103,8 @@ run, then `mode: distributed` (the run still there), two workers over mTLS with 
 certificates, a DAG run, a task's log read through the webserver from its worker, the
 certificates kept by an upgrade, and a worker deleted while its task runs (the task finishes
 in the drain, one attempt). `MESH=1` does the same on the mesh cluster of `kind-mesh.sh`, in
-`tls.mode: mesh`, with the internal links allowed by account only.
+`tls.mode: mesh`, with the internal links allowed by account only. Killing the master or a
+worker without a drain is a separate check, below.
 
 ## One pod: `schedr standalone`, the production start
 
@@ -300,3 +301,136 @@ tasks, and everything in `.schedr/` in the repository (git-ignored): the SQLite 
 port on 8090. The API has no authentication: on a network you don't trust, run
 `make standalone LISTEN=127.0.0.1`. Ctrl-C stops it; `rm -rf
 .schedr` starts afresh.
+
+## Killing the master or a worker
+
+`kubectl delete pod` sends SIGTERM. The worker drains: a task that finishes within the grace
+period ends `success` (one attempt), and one still running ends `interrupted` and runs again
+without using a retry. `scripts/kind-distributed.sh` checks that with a worker deleted during
+a 20 s task, and `scripts/kind-mesh.sh` checks it for standalone in the mesh.
+
+A crash leaves no time to drain. `kubectl delete pod POD --force --grace-period=0` kills the
+container at once. What schedr does then is in [State and failures](07-failures.md). With the
+chart's defaults (one master, workers as a StatefulSet with a volume each, `[master]
+lease_period` 30 s):
+
+| Killed | The run | Attempts |
+|---|---|---|
+| The master pod | Finishes. Workers keep the task and register again with the new master. It holds the lease within `[master] lease_period` (30 s) of the old one's last renewal, after its pod has been scheduled and has started. The kind script allows 180 s for that. | The same attempt, `success`. No retry. Each worker is `disconnected` until it registers, then `active`. |
+| A worker pod | Finishes when the task has a retry left. The default is `retries=0`, so a DAG that does not set `retries` fails the run here. The StatefulSet brings the pod back under the same name, with its volume, so the journal is still there. | `lost`, with `error_summary.exception` `WorkerRestarted` ("worker `<id>` restarted while the attempt ran (possibly out of memory)"), then `success`. The other worker stays `active`. |
+| The standalone pod, SQLite on its volume | Finishes the same way. The volume keeps the database and the journal, so a run that already succeeded is still there. | `lost` / `WorkerRestarted`, then `success`, and the task needs a retry left. |
+
+A worker listed `lost` after the master is killed means the downtime was counted against the
+lease, which it must not be. A killed worker's attempt is `WorkerLost` instead of
+`WorkerRestarted` when its new pod is not ready within `[master] lease_timeout` (60 s). That
+is the rule, and the kind script prints it. The other worker has to stay `active`.
+
+`scripts/kind-kill.sh` runs these three, in that order, on the local kind cluster `schedr-test`
+(context `kind-schedr-test`; any other cluster name is refused). It is not part of `make
+check`. It needs the images from `make image` and `make server-image`. `hold` sleeps 90 s with
+`retries=0` (the master). `again` sleeps 30 s with `retries=1` and `retry_delay` of 0 (a
+worker, then standalone). The default delay is 5 minutes, which would only postpone the same
+retry. `ping` is a short run that has to still be `success` after the standalone pod is killed.
+
+### On OpenShift, by hand
+
+The same three checks, against a release that is already installed. Nothing in this repository
+runs them: `scripts/kind-kill.sh` refuses every context except `kind-schedr-test`. A plain
+`kubectl delete pod` is the drain above. The crash is the command with `--force
+--grace-period=0`.
+
+The DAGs, wherever the workers or the standalone pod read their code. `ping` is the short
+run that standalone keeps:
+
+```python
+import time
+from datetime import timedelta
+
+from schedr import CommandOperator, Dag, task
+
+with Dag("hold"):
+
+    @task(retries=0)
+    def hold() -> str:
+        time.sleep(90)
+        return "held"
+
+    hold()
+
+with Dag("again"):
+
+    @task(retries=1, retry_delay=timedelta(0))
+    def again() -> str:
+        time.sleep(30)
+        return "again"
+
+    again()
+
+with Dag("ping"):
+    CommandOperator("ping", command="echo pong")
+```
+
+The call inside `with Dag` records the task. Decorating the function and not calling it
+leaves a DAG with no tasks: a trigger still returns a run, and that run never starts `hold`
+or `again`. `CommandOperator` records `ping` by being constructed there.
+
+`CTX` and `NS` are the lab's context and namespace, `REL` the release name (`schedr` in the
+kind scripts). Distributed, the CLI and the API are the webserver's. Standalone, the pod is
+`schedr-0` and the same commands run there. The server image has no Python, so the attempts
+document is read with `wget` and judged on the laptop.
+
+```bash
+CTX=<the lab context>
+NS=<namespace>
+REL=schedr
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  schedr dags unpause hold --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  schedr runs trigger hold --server http://127.0.0.1:8080
+```
+
+When `hold`'s attempt has `started_at`, kill the master. The attempts stay that one attempt,
+and it ends `success`. `schedr workers list` shows both workers `active` again;
+`disconnected` in between is the lease starting over.
+
+```bash
+kubectl --context "$CTX" -n "$NS" delete pod \
+  -l "app.kubernetes.io/instance=$REL,app.kubernetes.io/component=master" \
+  --force --grace-period=0
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  wget -qO- "http://127.0.0.1:8080/api/v1/runs/<run id>/tasks/hold/attempts"
+```
+
+Then `again`. Kill the pod named by that attempt's `worker_id` (`$REL-worker-0` or
+`$REL-worker-1`), not a fixed pod:
+
+```bash
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  schedr dags unpause again --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  schedr runs trigger again --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
+  wget -qO- "http://127.0.0.1:8080/api/v1/runs/<run id>/tasks/again/attempts"
+kubectl --context "$CTX" -n "$NS" delete pod "<worker_id>" --force --grace-period=0
+```
+
+The attempts, oldest first, are `lost` with `WorkerRestarted`, then `success`. `WorkerLost`
+instead, when the new pod was not ready within 60 s, is the same rule.
+
+Standalone on SQLite: `ping` first, then `again`. The commands run in `$REL-0`. The attempt's
+`worker_id` is that pod.
+
+```bash
+kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
+  schedr dags unpause ping --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
+  schedr runs trigger ping --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
+  schedr dags unpause again --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
+  schedr runs trigger again --server http://127.0.0.1:8080
+kubectl --context "$CTX" -n "$NS" delete pod "<worker_id>" --force --grace-period=0
+```
+
+`ping` is still `success`. `again` is `lost` / `WorkerRestarted`, then `success` (`WorkerLost`
+when the pod took longer than the 60 s lease).
