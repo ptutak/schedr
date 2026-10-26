@@ -326,11 +326,13 @@ lease, which it must not be. A killed worker's attempt is `WorkerLost` instead o
 is the rule, and the kind script prints it. The other worker has to stay `active`.
 
 `scripts/kind-kill.sh` runs these three, in that order, on the local kind cluster `schedr-test`
-(context `kind-schedr-test`; any other cluster name is refused). It is not part of `make
-check`. It needs the images from `make image` and `make server-image`. `hold` sleeps 90 s with
-`retries=0` (the master). `again` sleeps 30 s with `retries=1` and `retry_delay` of 0 (a
-worker, then standalone). The default delay is 5 minutes, which would only postpone the same
-retry. `ping` is a short run that has to still be `success` after the standalone pod is killed.
+(context `kind-schedr-test`; any other cluster name is refused). It is not part of `make check`.
+The context's server has to be loopback; `scripts/kind-standalone.sh` and
+`scripts/kind-distributed.sh` require the same, and the three share `scripts/kind-lib.sh`.
+It needs the images from `make image` and `make server-image`. `hold` sleeps 90 s with `retries=0`
+(the master). `again` sleeps 30 s with `retries=1` and `retry_delay` of 0 (a worker, then
+standalone). The default delay is 5 minutes, which would only postpone the same retry. `ping` is
+a short run that has to still be `success` after the standalone pod is killed.
 
 ### On OpenShift, by hand
 

@@ -4,7 +4,8 @@
 # user and password from a Secret), then on Postgres with the whole URL in a Secret; then DAGs
 # from a folder (charts/schedr/dags-values.sh) through `helm upgrade` without a restart, and
 # DAGs from git-sync (a git server in the cluster). Every kubectl and helm call
-# names the kind cluster's context explicitly: it never touches another cluster.
+# names the kind cluster's context explicitly: it never touches another cluster. The context's
+# server has to be loopback. Shared pieces live in scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-standalone.sh            (the base image `make image` built must exist)
 #   CLUSTER=schedr-test  the kind cluster (created if missing, kept afterwards; delete it with
@@ -14,20 +15,20 @@ set -euo pipefail
 CLUSTER=${CLUSTER:-schedr-test}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
+# Unqualified, so this stays schedr:0.1.0. kind-lib.sh would add podman's localhost/ prefix.
 IMAGE=${IMAGE:-schedr:0.1.0}
-TOOL=${CONTAINER:-podman}
 TEST_IMAGE=localhost/schedr-kind-test:1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=kind-lib.sh
+source "$ROOT/scripts/kind-lib.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-export KIND_EXPERIMENTAL_PROVIDER=$TOOL
-
-k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-say() { printf '\n== %s\n' "$*"; }
 
 say "kind cluster $CLUSTER (context $CONTEXT)"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER"
+require_local_context
+start_kind_node
 kubectl --context "$CONTEXT" get namespace "$NAMESPACE" >/dev/null 2>&1 \
     || kubectl --context "$CONTEXT" create namespace "$NAMESPACE"
 
@@ -38,8 +39,7 @@ FROM $IMAGE
 COPY daily_report.py /dags/current/daily_report.py
 DOCKERFILE
 "$TOOL" build -q -t "$TEST_IMAGE" "$WORK" >/dev/null
-"$TOOL" save -o "$WORK/image.tar" "$TEST_IMAGE"
-kind load image-archive --name "$CLUSTER" "$WORK/image.tar"
+load_images "$TEST_IMAGE"
 
 # Runs the CLI in the pod, against its own API.
 cli() { k exec schedr-0 -c schedr -- schedr "$@" --server http://127.0.0.1:8080; }
@@ -72,9 +72,8 @@ run_a_dag() {
 chart_values=(
     --set image.repository="${TEST_IMAGE%:*}" --set image.tag="${TEST_IMAGE##*:}"
     --set image.pullPolicy=Never
-    --set persistence.size=1Gi --set terminationGracePeriodSeconds=30
-    --set resources.requests.cpu=100m --set resources.requests.memory=512Mi
-    --set resources.limits.memory=1Gi
+    --set terminationGracePeriodSeconds=30
+    "${fit[@]}"
 )
 
 say "standalone on SQLite"
@@ -84,32 +83,7 @@ h install schedr "$ROOT/charts/schedr" "${chart_values[@]}" --wait --timeout 5m
 run_a_dag
 
 say "Postgres in the cluster"
-k apply -f - <<'MANIFEST'
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: {name: postgres}
-spec:
-  serviceName: postgres
-  replicas: 1
-  selector: {matchLabels: {app: postgres}}
-  template:
-    metadata: {labels: {app: postgres}}
-    spec:
-      containers:
-        - name: postgres
-          image: docker.io/library/postgres:17.6-alpine
-          env: [{name: POSTGRES_PASSWORD, value: schedr}]
-          ports: [{containerPort: 5432}]
-          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}
----
-apiVersion: v1
-kind: Service
-metadata: {name: postgres}
-spec: {selector: {app: postgres}, ports: [{port: 5432}]}
-MANIFEST
-k rollout status statefulset/postgres --timeout=180s
-k create secret generic schedr-pg --from-literal=username=postgres --from-literal=password=schedr \
-    --dry-run=client -o yaml | k apply -f -
+apply_postgres
 k create secret generic schedr-db \
     --from-literal=url=postgres://postgres:schedr@postgres:5432/postgres \
     --dry-run=client -o yaml | k apply -f -

@@ -10,7 +10,8 @@
 # drain, which scripts/kind-distributed.sh and scripts/kind-mesh.sh already check.
 #
 # The context is always kind-schedr-test. Any other CLUSTER is refused, so this cannot be
-# pointed at another cluster. Not part of `make check` or CI.
+# pointed at another cluster. Not part of `make check` or CI. Shared pieces live in
+# scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-kill.sh     (the images `make image` and `make server-image` built)
 #   IMAGE, SERVER_IMAGE  as the container tool names them (podman: localhost/schedr:0.1.0)
@@ -28,31 +29,13 @@ fi
 CLUSTER=schedr-test
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
-TOOL=${CONTAINER:-podman}
-local_prefix=
-[ "$TOOL" = podman ] && local_prefix=localhost/
-IMAGE=${IMAGE:-${local_prefix}schedr:0.1.0}
-SERVER_IMAGE=${SERVER_IMAGE:-${local_prefix}schedr-server:0.1.0}
 WORKER_IMAGE=localhost/schedr-kind-kill:1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=kind-lib.sh
+source "$ROOT/scripts/kind-lib.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-export KIND_EXPERIMENTAL_PROVIDER=$TOOL
-
-k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-say() { printf '\n== %s\n' "$*"; }
-fail() {
-    echo "FAILED: $*"
-    echo "---- pods ----"
-    k get pods -o wide 2>/dev/null || true
-    echo "---- workers ----"
-    if [ -n "${WEB:-}" ]; then
-        k exec "$WEB" -c schedr -- wget -qO- -T 5 http://127.0.0.1:8080/api/v1/workers 2>/dev/null || true
-        echo
-    fi
-    exit 1
-}
 
 # The API, from inside the pod that serves it (the webserver, or standalone). The body is
 # judged by check.py: exit 0 holds, 1 is not yet, 2 means the failure rules broke.
@@ -443,26 +426,8 @@ PY
 
 say "kind cluster $CLUSTER (context $CONTEXT)"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER"
-server=$(kubectl config view -o jsonpath="{.clusters[?(@.name==\"${CONTEXT}\")].cluster.server}")
-case "$server" in
-https://127.0.0.1:* | https://localhost:* | https://\[::1\]:*) ;;
-*) fail "context $CONTEXT has server ${server:-<none>}; this script only talks to local kind" ;;
-esac
-# A listed cluster can still have its node container stopped (podman shows it Created).
-if ! kubectl --context "$CONTEXT" get --raw=/readyz >/dev/null 2>&1; then
-    say "starting kind node ${CLUSTER}-control-plane"
-    "$TOOL" start "${CLUSTER}-control-plane" \
-        || fail "kind cluster $CLUSTER is listed but its node did not start"
-    ready=0
-    for _ in $(seq 1 30); do
-        if kubectl --context "$CONTEXT" get --raw=/readyz >/dev/null 2>&1; then
-            ready=1
-            break
-        fi
-        sleep 2
-    done
-    [ "$ready" = 1 ] || fail "kind cluster $CLUSTER did not answer after its node was started"
-fi
+require_local_context
+start_kind_node
 kubectl --context "$CONTEXT" get namespace "$NAMESPACE" >/dev/null 2>&1 \
     || kubectl --context "$CONTEXT" create namespace "$NAMESPACE"
 
@@ -512,54 +477,16 @@ FROM $IMAGE
 COPY hold.py again.py ping.py /dags/current/
 DOCKERFILE
 "$TOOL" build -q -t "$WORKER_IMAGE" "$WORK" >/dev/null
-for image in "$WORKER_IMAGE" "$SERVER_IMAGE"; do
-    archive="$WORK/$(echo "$image" | tr '/:' '__').tar"
-    "$TOOL" save -o "$archive" "$image"
-    kind load image-archive --name "$CLUSTER" "$archive"
-done
+load_images "$WORKER_IMAGE" "$SERVER_IMAGE"
 
 say "Postgres in the namespace, database schedr (kind-distributed.sh's database postgres is left as it is)"
-k apply -f - <<'MANIFEST'
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: {name: postgres}
-spec:
-  serviceName: postgres
-  replicas: 1
-  selector: {matchLabels: {app: postgres}}
-  template:
-    metadata: {labels: {app: postgres}}
-    spec:
-      containers:
-        - name: postgres
-          image: docker.io/library/postgres:17.6-alpine
-          env: [{name: POSTGRES_PASSWORD, value: schedr}]
-          ports: [{containerPort: 5432}]
-          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}
----
-apiVersion: v1
-kind: Service
-metadata: {name: postgres}
-spec: {selector: {app: postgres}, ports: [{name: tcp-postgres, port: 5432}]}
-MANIFEST
-k rollout status statefulset/postgres --timeout=180s
-k create secret generic schedr-pg --from-literal=username=postgres --from-literal=password=schedr \
-    --dry-run=client -o yaml | k apply -f -
+apply_postgres
 
 # A registry left by an earlier install would list workers that are already lost.
 clean_release
 k exec postgres-0 -- psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS schedr WITH (FORCE)"
 k exec postgres-0 -- psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE schedr"
 
-# Smaller than the chart's defaults, so a kind node can schedule two workers. Same as
-# scripts/kind-distributed.sh.
-fit=(
-    --set persistence.size=1Gi --set worker.persistence.size=1Gi
-    --set resources.requests.cpu=100m --set resources.requests.memory=512Mi
-    --set resources.limits.memory=1Gi
-    --set worker.resources.requests.cpu=100m --set worker.resources.requests.memory=512Mi
-    --set worker.resources.limits.memory=1Gi
-)
 image_set=(
     --set image.repository="${WORKER_IMAGE%:*}" --set image.tag="${WORKER_IMAGE##*:}"
     --set image.pullPolicy=Never

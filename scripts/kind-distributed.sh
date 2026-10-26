@@ -4,7 +4,8 @@
 # chart's generated certificates, a DAG run, a task's log read through the webserver from its
 # worker, the certificates kept by an upgrade, and a worker stopped while its task runs (the
 # task finishes in the drain, one attempt). Every kubectl and helm call names the kind
-# cluster's context explicitly: it never touches another cluster.
+# cluster's context explicitly: it never touches another cluster. The context's server has
+# to be loopback. Shared pieces live in scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-distributed.sh   (the images `make image` and `make server-image` built)
 #   CLUSTER=schedr-test  the kind cluster (created if missing, kept afterwards)
@@ -18,25 +19,19 @@ set -euo pipefail
 CLUSTER=${CLUSTER:-schedr-test}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
-TOOL=${CONTAINER:-podman}
-# podman names local images localhost/...; docker, docker.io/library/... (the bare name).
-local_prefix=; [ "$TOOL" = podman ] && local_prefix=localhost/
-IMAGE=${IMAGE:-${local_prefix}schedr:0.1.0}
-SERVER_IMAGE=${SERVER_IMAGE:-${local_prefix}schedr-server:0.1.0}
 MESH=${MESH:-}
 WORKER_IMAGE=localhost/schedr-kind-distributed:1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=kind-lib.sh
+source "$ROOT/scripts/kind-lib.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-export KIND_EXPERIMENTAL_PROVIDER=$TOOL
-
-k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-say() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAILED: $*"; exit 1; }
 
 say "kind cluster $CLUSTER (context $CONTEXT)${MESH:+, in the mesh}"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER"
+require_local_context
+start_kind_node
 kubectl --context "$CONTEXT" get namespace "$NAMESPACE" >/dev/null 2>&1 \
     || kubectl --context "$CONTEXT" create namespace "$NAMESPACE"
 
@@ -61,39 +56,10 @@ FROM $IMAGE
 COPY daily_report.py slow.py /dags/current/
 DOCKERFILE
 "$TOOL" build -q -t "$WORKER_IMAGE" "$WORK" >/dev/null
-for image in "$WORKER_IMAGE" "$SERVER_IMAGE"; do
-    archive="$WORK/$(echo "$image" | tr '/:' '__').tar"
-    "$TOOL" save -o "$archive" "$image"
-    kind load image-archive --name "$CLUSTER" "$archive"
-done
+load_images "$WORKER_IMAGE" "$SERVER_IMAGE"
 
 say "Postgres in the namespace"
-k apply -f - <<'MANIFEST'
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: {name: postgres}
-spec:
-  serviceName: postgres
-  replicas: 1
-  selector: {matchLabels: {app: postgres}}
-  template:
-    metadata: {labels: {app: postgres}}
-    spec:
-      containers:
-        - name: postgres
-          image: docker.io/library/postgres:17.6-alpine
-          env: [{name: POSTGRES_PASSWORD, value: schedr}]
-          ports: [{containerPort: 5432}]
-          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}
----
-apiVersion: v1
-kind: Service
-metadata: {name: postgres}
-spec: {selector: {app: postgres}, ports: [{name: tcp-postgres, port: 5432}]}
-MANIFEST
-k rollout status statefulset/postgres --timeout=180s
-k create secret generic schedr-pg --from-literal=username=postgres --from-literal=password=schedr \
-    --dry-run=client -o yaml | k apply -f -
+apply_postgres
 
 values=(
     --set image.repository="${WORKER_IMAGE%:*}" --set image.tag="${WORKER_IMAGE##*:}"
@@ -104,12 +70,8 @@ values=(
     --set webserver.image.pullPolicy=Never
     --set database.postgres.host=postgres --set database.postgres.name=postgres
     --set database.postgres.existingSecret=schedr-pg
-    --set persistence.size=1Gi --set worker.persistence.size=1Gi
     --set terminationGracePeriodSeconds=60
-    --set resources.requests.cpu=100m --set resources.requests.memory=512Mi
-    --set resources.limits.memory=1Gi
-    --set worker.resources.requests.cpu=100m --set worker.resources.requests.memory=512Mi
-    --set worker.resources.limits.memory=1Gi
+    "${fit[@]}"
 )
 if [ -n "$MESH" ]; then
     values+=(
