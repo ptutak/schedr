@@ -87,8 +87,9 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
 
 ## Rust
 
-- **Toolchain:** stable, pinned with `rust-toolchain.toml` (components `rustfmt`, `clippy`,
+- **Toolchain:** an exact release in `rust-toolchain.toml` (components `rustfmt`, `clippy`,
   `llvm-tools-preview`); edition 2024; an explicit MSRV (`rust-version`) in the workspace.
+  This project pins `1.99.1`.
 - **Workspace:** crates under `crates/`, split along responsibilities so each one's
   dependencies stay small; every third-party version in `[workspace.dependencies]` only.
 - **Lints, shared by the workspace:**
@@ -211,12 +212,19 @@ Separate jobs. The ones that run on this machine each have a make target:
 - `integration`: integration tests, with services as service containers (same images as the
   Makefile uses);
 - `docs`: the site, failing on warnings;
-- `package` / `wheel`: the Linux x86_64 release wheels (manylinux and musllinux) built and
-  smoke-tested (`make smoke`, `make smoke-musl`); uploaded;
+- `package` / `wheel`: the Linux x86_64 release wheels (manylinux and musllinux) built by
+  `scripts/build-wheel.sh` and smoke-tested (`make smoke`, `make smoke-musl`); uploaded;
 - `wheel-native`: Linux aarch64 manylinux and macOS arm64, one matrix, shown as
-  `wheel-linux-aarch64` and `wheel-macos-arm64`. The same smoke test on native runners. No
-  local make target (this machine is x86_64, and there is no Mac). See `PROJECT.md`,
-  Packaging and releases.
+  `wheel-linux-aarch64` and `wheel-macos-arm64`. The same script and smoke test on native
+  runners. No local make target (this machine is x86_64, and there is no Mac). See
+  `PROJECT.md`, Packaging and releases.
+- **Supply-chain pins** (see `PROJECT.md`, CI supply-chain pins): every `uses:` is a
+  40-character commit SHA (a local `./` action and `docker://image@sha256:<64 hex>` are
+  allowed), with the version in a comment; `dtolnay/rust-toolchain` sets `toolchain:`;
+  maturin (hashed requirements, for the wheels and the sdist), uv (version plus the
+  tarball checksum), nextest, llvm-cov and Helm are exact versions; images CI or the
+  scripts pull are digest-pinned. `make pin-check` (in `make check`) runs the checker
+  with `uv run --no-sync` and does not sync. The `rust` job installs the dev group first.
 
 ## Dependencies
 
@@ -228,6 +236,9 @@ Separate jobs. The ones that run on this machine each have a make target:
   exists, otherwise back to the newest earlier one that meets it and isn't yanked.
 - Each dependency is listed in `PROJECT.md` (a "Libraries" table: need, choice, why, and what
   wasn't chosen).
+- **GitHub Actions and the tools they download** follow the same age rule. The pins, and
+  how to bump one (the age check, the changelog, the commit SHA), are in `PROJECT.md`,
+  CI supply-chain pins.
 
 ## Configuration and secrets
 

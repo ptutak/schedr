@@ -183,6 +183,7 @@ integration tests, as since 1.15.
 | 2.12 | **Kill tests** (M2's "done when"): `scripts/kind-kill.sh` on kind cluster `schedr-test` only (any other context refused; not in `make check` or CI). Hard kill (`kubectl delete pod --force --grace-period=0`): the master during a run (`retries=0`, the same attempt finishes), then a worker (`retries=1`, `lost` / `WorkerRestarted`, then success), then standalone on SQLite (an earlier run kept). On OpenShift the same checks are a procedure in the guide, run by hand | the kind script passes; runs finish; retries as the rules say |
 | 2.12b | **`dags check --against`:** read the server's active workers' `schedr_version` and exit 1 when this schedr is newer by minor version than any of them (patch ignored; a drained worker counts; an unreadable version stays eligible, as in dispatch). A pass prints one `ok:` line; `--json` includes `version_check.message`. Fixes B20. The `standalone` help and the overview match production (SQLite or Postgres, one pod) | the flag no longer says it isn't implemented; `make check` and `make docs` |
 | 2.13 | **More wheels:** Linux aarch64 and macOS, with the full smoke test (deferred from 1.16) | built and smoke-tested in CI |
+| 2.13b | **Supply-chain pins:** every `uses:` is a full commit SHA (local `./` actions and `docker://…@sha256` accepted); tool versions pinned (`toolchain:`, `tool:`, `version:`, setup-uv's tarball checksum); Rust `1.99.1` in `rust-toolchain.toml`; wheels and the sdist use hashed maturin (no `maturin-action`); digest-pinned images, including the kind scripts; `make pin-check` fails a bad pin | `make check` and `make docs` |
 
 - **Order:** 2.1–2.3 first: separate processes and what survives their deaths are the
   architectural risk. 2.7 includes the log endpoint because a distributed run's logs are on
@@ -198,7 +199,12 @@ integration tests, as since 1.15.
 (not done): Linux aarch64 manylinux and macOS arm64, one matrix job (`wheel-native`) shown
 as `wheel-linux-aarch64` (`ubuntu-24.04-arm`) and `wheel-macos-arm64` (`macos-15`), each
 with the full `scripts/smoke-wheel.sh`. It counts as done when those checks pass after the
-push. Open bugs: B4 (likely B6, unproven).
+push. **2.13b** pins CI's supply chain: actions by commit SHA, exact tool versions, Rust
+`1.99.1` in `rust-toolchain.toml`, digest-pinned images, maturin from a hashed
+requirements file, and wheel builds through `scripts/build-wheel.sh` (the wheel jobs do
+not use `maturin-action`; neither does the sdist). `make pin-check` parses the workflow
+YAML and fails a missing pin (images in `scripts/*.sh` too). Open bugs: B22 (a draining
+worker once missed its 8 s grace under load; not reproduced), B4 (likely B6, unproven).
 
 ## Testing approach
 

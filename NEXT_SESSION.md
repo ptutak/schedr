@@ -58,7 +58,10 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   `MESH=1` on the mesh cluster), `scripts/kind-kill.sh` (master, worker, standalone).
   WSL's `fs.inotify.max_user_instances` is 512 now (the user
   raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.46.
-- **Open bugs: B4** (`BUGS.md`). **B4:** a role test's `runs trigger` got no result once
+- **Open bugs: B22, B4** (`BUGS.md`). **B22:** `a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period`
+  failed once in `make check` on 2026-10-26 under load (the worker did not exit within its
+  8 s grace); the next full run passed. Suspect the grace under load, like B21. Not fixed.
+  **B4:** a role test's `runs trigger` got no result once
   (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
   the CLI's stderr.
 - **B9 is fixed (2026-10-23):** a stop escalates (`supervise::Stops`, one
@@ -201,7 +204,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B22); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B23); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -236,13 +239,17 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - **Rust integration tests by hand:** `export SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python`,
   then e.g. `cargo nextest run -p schedr --test local`. The Postgres tests also need
   `SCHEDR_TEST_POSTGRES_URL`; `make test-integration` starts Postgres
-  (`postgres:17.6-alpine`) with podman and sets both. The docker snap under WSL has broken
+  (`postgres:17.6-alpine`, digest-pinned) with podman and sets both. The docker snap under WSL has broken
   port forwarding.
 - **`run_dag` by hand** with a freshly built binary: `SCHEDR_BIN=$PWD/target/debug/schedr`.
-- **Wheels:** `make smoke` (release build, a few minutes), `make smoke-musl` (musllinux via
-  `uvx maturin` + ziglang, smoke-tested on Alpine), or `uv build --wheel` and
-  `scripts/smoke-wheel.sh <wheel> <python 3.14>`. Linux aarch64 and macOS arm64 are CI only
-  (one matrix, `wheel-native`, shown as `wheel-linux-aarch64` and `wheel-macos-arm64`).
+- **Wheels:** `make smoke` and `make smoke-musl` both call `scripts/build-wheel.sh`
+  (release builds, a few minutes each: manylinux x86_64 and musllinux x86_64 in
+  digest-pinned images, podman locally, then `scripts/smoke-wheel.sh`). The script
+  installs rustup-init 1.29.1 (minimal channel only, `maturin build --locked`). Linux
+  aarch64 and macOS arm64 are CI only (one matrix, `wheel-native`, shown as
+  `wheel-linux-aarch64` and `wheel-macos-arm64`; macOS installs the same rustup-init, not
+  the runner's). CI does not use `maturin-action` (the sdist installs maturin from
+  `scripts/maturin-requirements.txt`).
 - **Every role opens the ops port** (`[ops] port`, 8090): tests set it to 0, like the other
   ports, and read `ops on http://…` from the log.
 - **Roles need `[tls]`:** `app` mode (the default) needs `ca`, `cert`, `key`; set

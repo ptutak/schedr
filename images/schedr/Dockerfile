@@ -12,7 +12,8 @@
 # none, so it is compiled here, its C extensions required (PYMONGO_C_EXT_MUST_BUILD: without
 # them it would fall back to pure Python, with only a warning), with the pinned build tools
 # (no build isolation: nothing unpinned fetched).
-FROM docker.io/library/python:3.14.8-alpine3.24 AS builder
+# python:3.14.8-alpine3.24, created 2026-10-01 (PROJECT.md, CI supply-chain pins).
+FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS builder
 RUN apk add --no-cache build-base
 COPY images/schedr/requirements.txt images/schedr/build-requirements.txt /tmp/
 RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore \
@@ -20,7 +21,8 @@ RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ig
     && PYMONGO_C_EXT_MUST_BUILD=1 pip wheel --no-cache-dir --disable-pip-version-check \
         --no-build-isolation --wheel-dir /wheels -r /tmp/requirements.txt
 
-FROM docker.io/library/python:3.14.8-alpine3.24
+# Same digest as the builder stage.
+FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 # tini as PID 1 reaps orphaned processes (a task's child that outlives it), which schedr, not
 # being an init, wouldn't.

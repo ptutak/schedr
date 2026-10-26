@@ -9,14 +9,29 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # pin-check is Python (uv run --no-sync). It does not build the package.
+      # The dev group, including PyYAML, is installed here. The Makefile target
+      # does not sync: a local `uv sync` once removed packages already installed.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5,
+          # and without this input it installs the tarball without checking it.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+      - run: uv sync --frozen --no-install-project --inexact
+      - run: make pin-check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
           components: rustfmt, clippy, llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: cargo-nextest,cargo-llvm-cov
+          tool: cargo-nextest@0.9.149,cargo-llvm-cov@0.9.1
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The committed JSON Schemas must match the Rust model (see the Makefile, schema-check).
@@ -35,11 +50,18 @@ jobs:
       matrix:
         python-version: ["3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # The package is built with maturin, so `uv sync` compiles the Rust binary.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5,
+          # and without this input it installs the tarball without checking it.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - run: uv sync --python ${{ matrix.python-version }}
       - run: uv run ruff format --check python examples
       - run: uv run ruff check python examples
@@ -52,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: docker.io/library/postgres:17.6-alpine
+        image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
         env:
           POSTGRES_PASSWORD: schedr
         ports:
@@ -65,13 +87,20 @@ jobs:
     env:
       SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          tool: cargo-nextest
-      - uses: astral-sh/setup-uv@v4
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.149
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5,
+          # and without this input it installs the tarball without checking it.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       # Installs schedr (built with maturin) into the environment the runner runs from.
       - run: uv sync --python 3.14
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
@@ -84,13 +113,20 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5,
+          # and without this input it installs the tarball without checking it.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - run: uv sync --group docs --python 3.14
       - run: make docs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docs-site
           path: site
@@ -98,29 +134,23 @@ jobs:
   # The wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
   # releases). Linux x86_64 as manylinux (glibc) and musllinux (Alpine, e.g. the standalone
   # image in examples/kubernetes). Linux aarch64 manylinux and macOS arm64 are the matrix
-  # job below. The smoke test is PLAN.md's "M1 is done": install, `dags test`, and a run
-  # in `schedr standalone` through the CLI.
+  # job below. scripts/build-wheel.sh builds every wheel (digest-pinned images; no
+  # maturin-action). The smoke test is PLAN.md's "M1 is done": install, `dags test`, and a
+  # run in `schedr standalone` through the CLI.
   wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64
-          manylinux: auto
-          args: --release --out dist
+      - run: CONTAINER=docker scripts/build-wheel.sh manylinux-x86_64
       - run: scripts/smoke-wheel.sh dist/*manylinux*.whl python
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64-unknown-linux-musl
-          manylinux: musllinux_1_2
-          args: --release --out dist
-      # On Alpine itself, the base of the standalone image (same tag as its Dockerfile).
+      - run: CONTAINER=docker scripts/build-wheel.sh musllinux-x86_64
+      # On Alpine itself, the base of the standalone image (same digest as its Dockerfile).
       - run: >-
-          docker run --rm -v "$PWD:/repo:ro" docker.io/library/python:3.14.8-alpine3.24
+          docker run --rm -v "$PWD:/repo:ro"
+          docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
           sh -c 'apk add --no-cache bash >/dev/null && cd /repo
           && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
       # The base image from that wheel, run as a pod would (pushed to a registry with releases).
@@ -129,18 +159,16 @@ jobs:
       # The server image (master, webserver: the binary from the same wheel, no Python).
       - run: docker build -f images/schedr-server/Dockerfile -t schedr-server:ci .
       - run: scripts/smoke-server-image.sh docker schedr-server:ci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-linux-x86_64
           path: dist/*.whl
 
   # Linux aarch64 manylinux and macOS arm64 (M2.13), one matrix. The check name is
-  # `matrix.name`, so the two stay visible per platform. `manylinux: auto` on the arm
-  # runner is expected to pick quay.io/pypa/manylinux2014_aarch64; the first CI run
-  # verifies that. The macOS runner has rustup, so rust-toolchain.toml governs the
-  # toolchain on every job (no `rust-toolchain` input). `manylinux` is ignored off Linux;
-  # `"off"` is quoted because YAML reads a bare `off` as false. One platform failing
-  # does not cancel the other. The macOS wheel tag is maturin's default macosx_11_0_arm64.
+  # `matrix.name`, so the two stay visible per platform. scripts/build-wheel.sh uses the
+  # digest-pinned manylinux2014_aarch64 image, or, on macOS, rustup-init 1.29.1
+  # (no container). One platform failing does not cancel the other.
+  # The macOS wheel tag is maturin's default macosx_11_0_arm64.
   wheel-native:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -150,28 +178,22 @@ jobs:
         include:
           - name: wheel-linux-aarch64
             runner: ubuntu-24.04-arm
-            target: aarch64
-            manylinux: auto
+            platform: manylinux-aarch64
             wheel: dist/*manylinux*.whl
             artifact: wheels-linux-aarch64
           - name: wheel-macos-arm64
             runner: macos-15
-            target: aarch64
-            manylinux: "off"
+            platform: macos-arm64
             wheel: dist/*macosx*.whl
             artifact: wheels-macos-arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist
+      - run: CONTAINER=docker scripts/build-wheel.sh ${{ matrix.platform }}
       - run: scripts/smoke-wheel.sh ${{ matrix.wheel }} python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: dist/*.whl
@@ -180,21 +202,27 @@ jobs:
   chart:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v5.0.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
       - run: make chart-check
 
+  # Source distribution. maturin comes from the same hashed requirements file as the
+  # wheels (no maturin-action). `sdist` packs the tree; it does not compile Rust.
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v4
+          python-version: "3.14"
+      - run: >-
+          python -m pip install --disable-pip-version-check
+          --require-hashes --only-binary=maturin
+          -r scripts/maturin-requirements.txt
+      - run: maturin sdist --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sdist
           path: dist/*.tar.gz

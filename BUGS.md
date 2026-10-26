@@ -9,6 +9,20 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B22: a draining worker once missed its 8 s grace under load
+
+- **Seen:** 2026-10-26, one `make check` while other role tests were running.
+  `roles::a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period`
+  (`crates/schedr/tests/roles.rs`) panicked: `terminate_within` for the worker, grace 8 s,
+  was not success ("the worker didn't stop within the grace period"). 37 role tests had
+  passed; that one failed and `make check` exited 2.
+- **Not reproduced** on the next full `make check` (1257 Rust unit tests, 662 Python unit
+  tests, 99 Rust integration tests, 27 Python integration tests, then `make docs`).
+- **Suspect:** the 8 s grace under load, the same kind of limit as B21 (a bound that is
+  long enough until the machine is busy). Not fixed.
+- **Next:** if it happens again, look at the grace and what the worker was doing in those
+  8 s. One miss is not enough to change the limit.
+
 ## B4: `runs trigger` in a roles integration test got no result once
 
 - **Seen:** 2026-10-22, the first `make test-integration` of M2.3:

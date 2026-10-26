@@ -1,0 +1,4 @@
+# maturin 1.15.0, the wheel builder (PROJECT.md, CI supply-chain pins).
+# On Python 3.14 maturin has no third-party dependencies (tomli is only for
+# Python before 3.11), so the compiled file is maturin and its hashes.
+maturin==1.15.0

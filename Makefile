@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -19,7 +19,8 @@ COVERAGE_MIN := 85
 # Integration tests: the Python with `schedr` installed (for the real runner, found through uv
 # inside the recipe, where the uv settings above apply) and a throwaway Postgres container; see
 # PROJECT.md, Repository and tooling: Testing.
-POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine
+# postgres:17.6-alpine, created 2025-10-15 (PROJECT.md, CI supply-chain pins).
+POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
 # Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
 # under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
@@ -120,7 +121,8 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 # transaction pooling in front of it (any database name passed through), on a network of their
 # own; one scenario at a time. `STRESS_PROFILE=full` for the large one, `STRESS=<name>` for some
 # scenarios (a nextest name filter, e.g. `STRESS=failover`); reports in target/stress/.
-PGBOUNCER_IMAGE := docker.io/edoburu/pgbouncer:v1.26.0-p0
+# pgbouncer:v1.26.0-p0, created 2026-09-30 (PROJECT.md, CI supply-chain pins).
+PGBOUNCER_IMAGE := docker.io/edoburu/pgbouncer:v1.26.0-p0@sha256:b17551c776ef7e5769ef80b956d20f85e2fd25dd8912d31d58f782aad495b711
 STRESS_PROFILE ?= quick
 STRESS ?=
 
@@ -150,20 +152,18 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)')
 
 smoke:           ## Build the release wheel and smoke-test it (install, dags test, standalone run)
-	rm -f dist/*manylinux*.whl dist/*linux_x86_64.whl
-	uv build --wheel --out-dir dist
-	scripts/smoke-wheel.sh dist/*-linux_x86_64.whl $$(uv run python -c 'import sys; print(sys.executable)')
+	rm -f dist/*manylinux*x86_64.whl dist/*-linux_x86_64.whl
+	CONTAINER=$(CONTAINER) scripts/build-wheel.sh manylinux-x86_64
+	scripts/smoke-wheel.sh dist/*manylinux*x86_64.whl $$(uv run python -c 'import sys; print(sys.executable)')
 
-# The musllinux wheel (Alpine) is cross-built with zig, and smoke-tested on the image the
-# standalone example uses (examples/kubernetes/Dockerfile).
-MATURIN := uvx --python 3.14 --from 'maturin==1.15.0' --with 'ziglang==0.17.0' maturin
-ALPINE_IMAGE := docker.io/library/python:3.14.8-alpine3.24
+# The musllinux wheel is built in the pinned musllinux image (scripts/build-wheel.sh) and
+# smoke-tested on the Alpine image the standalone example uses.
+# python:3.14.8-alpine3.24, created 2026-10-01 (PROJECT.md, CI supply-chain pins).
+ALPINE_IMAGE := docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Alpine
-	rustup target add x86_64-unknown-linux-musl
 	rm -f dist/*musllinux*.whl
-	$(MATURIN) build --release --target x86_64-unknown-linux-musl --zig \
-		--compatibility musllinux_1_2 --out dist
+	CONTAINER=$(CONTAINER) scripts/build-wheel.sh musllinux-x86_64
 	$(CONTAINER) run --rm -v "$(CURDIR):/repo:ro,Z" $(ALPINE_IMAGE) sh -c \
 		'apk add --no-cache bash >/dev/null && cd /repo && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
 
@@ -282,9 +282,12 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	! helm template t charts/schedr --set vault.enabled=true --set vault.auth.role=r \
 		--set 'vault.staticSecrets[0].name=db' >/dev/null 2>&1
 
+pin-check:       ## Fail if a workflow, tool, image or requirements pin is missing
+	uv run --no-sync python scripts/check-action-pins.py
+
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
-	@$(MAKE) --no-print-directory fmt-check lint schema-check chart-check test test-integration
+	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check chart-check test test-integration
 
 target-size:     ## Clean target/ when it holds more than TARGET_MAX_GIB (default 50)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \

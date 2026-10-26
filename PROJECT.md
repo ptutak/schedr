@@ -5521,7 +5521,7 @@ own `providers.schedr`) don't exist in `schedr.airflow` either.
 
 ```
 Cargo.toml              # Cargo workspace; shared lints
-rust-toolchain.toml     # stable + rustfmt + clippy
+rust-toolchain.toml     # 1.99.1 + rustfmt + clippy
 crates/
   schedr-model/         # shared model (DAG JSON, states); JSON Schema
   schedr-proto/         # Protobuf + tonic code, master <-> agent
@@ -5551,8 +5551,9 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ### Rust
 
-- Edition 2024, stable toolchain pinned via `rust-toolchain.toml`. **Minimum supported Rust
-  version: 1.99** (`rust-version` in the workspace `Cargo.toml`).
+- Edition 2024, toolchain `1.99.1` pinned in `rust-toolchain.toml` (an exact release; see
+  CI supply-chain pins). **Minimum supported Rust version: 1.99** (`rust-version` in the
+  workspace `Cargo.toml`).
 - `rustfmt` (max width 100).
 - `clippy` with `all` and `pedantic` lint groups at warn; CI fails on any warning (`-D warnings`).
 - `unsafe_code = "forbid"`, `missing_docs = "warn"`.
@@ -5588,23 +5589,20 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   package later includes a compiled Rust extension (allowed, see Rust/Python integration), it
   goes into the same wheel.
 - **Platform wheels:** Linux x86_64 (manylinux and musllinux), Linux aarch64 (manylinux), and
-  macOS arm64 (local development). **In M1 (1.16): Linux x86_64 manylinux**, built by
-  `maturin-action` in CI. **M2.1b adds Linux x86_64 musllinux** (Alpine uses musl: a manylinux
-  wheel's binary doesn't run there), smoke-tested in CI inside `python:3.14.8-alpine3.24`;
-  built locally with `make smoke-musl` (maturin 1.15.0 with zig 0.17.0 through `uvx`, and the
-  `x86_64-unknown-linux-musl` target). The x86_64 wheels go to `dist/` (their names tell them
-  apart), where the example image takes the musllinux one. **M2.13 (2026-10-26) adds Linux
-  aarch64 manylinux and macOS arm64**, one matrix job on native standard runners
-  (`wheel-native` in `ci.yml`), shown per platform as `wheel-linux-aarch64`
-  (`ubuntu-24.04-arm`, `manylinux: auto`) and `wheel-macos-arm64` (`macos-15`, Apple Silicon;
-  `manylinux: off`, ignored off Linux). `manylinux: auto` on the arm runner is expected to
-  pick the native `quay.io/pypa/manylinux2014_aarch64` image, the same manylinux2014 tag as
-  x86_64; that image is verified only by the first CI run. The macOS runner has rustup, so
-  `rust-toolchain.toml` governs the toolchain on every job (no `rust-toolchain` input). The
-  macOS wheel tag is maturin's default `macosx_11_0_arm64`. The repository is public, so
-  these standard runners cost nothing. Larger (billed) runners are not used. No new action
-  and no new crate: the job reuses `PyO3/maturin-action@v1`, `actions/setup-python@v5`,
-  `actions/checkout@v4` and `actions/upload-artifact@v4`. **macOS has no `/proc`.** Off
+  macOS arm64 (local development). **In M1 (1.16): Linux x86_64 manylinux**. **M2.1b adds
+  Linux x86_64 musllinux** (Alpine uses musl: a manylinux wheel's binary doesn't run there),
+  smoke-tested in CI inside `python:3.14.8-alpine3.24` (digest-pinned); built locally with
+  `make smoke-musl`. The x86_64 wheels go to `dist/` (their names tell them apart), where the
+  example image takes the musllinux one. **M2.13 (2026-10-26) adds Linux aarch64 manylinux
+  and macOS arm64**, one matrix job on native standard runners (`wheel-native` in `ci.yml`),
+  shown per platform as `wheel-linux-aarch64` (`ubuntu-24.04-arm`) and `wheel-macos-arm64`
+  (`macos-15`, Apple Silicon). The macOS job installs `rustup-init` 1.29.1 itself and reads
+  the channel from `rust-toolchain.toml` (the runner's rustup is not used; see CI
+  supply-chain pins). The macOS wheel
+  tag is maturin's default `macosx_11_0_arm64`. The repository is public, so these standard
+  runners cost nothing. Larger (billed) runners are not used. No new action and no new crate:
+  the wheel jobs use checkout, setup-python and upload-artifact, each pinned by commit SHA
+  (see CI supply-chain pins). **macOS has no `/proc`.** Off
   there: the memory watchdog, the cgroup limit, stopping orphaned tasks from the journal
   after a crash (process identity), and the ops port's process metrics. When `/proc` is
   absent the agent warns once per process (`no /proc: orphaned tasks aren't stopped after
@@ -5614,14 +5612,33 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   that read `/proc` need marking Linux-only.
   Not chosen: cross-compiling aarch64 on the x86_64 runner (the smoke test would then need
   QEMU or a second machine, and `aws-lc-rs` plus the bundled SQLite compile with the target's
-  own C compiler on the native runner); cross-compiling macOS from Linux (`maturin-action`
-  has no macOS SDK); macOS x86_64 as a second wheel and universal2 (local development is
+  own C compiler on the native runner); cross-compiling macOS from Linux (the Linux build
+  image has no macOS SDK); macOS x86_64 as a second wheel and universal2 (local development is
   Apple Silicon; an Intel Mac gets no wheel; a universal2 wheel would run only its arm64
   slice in the smoke test); musllinux aarch64 (the target cluster is x86_64, so the Alpine
   image stays on the x86_64 musllinux wheel); a larger macOS runner (billed; the standard
   `macos-15` is 3 cores and 7 GB); documenting the missing `/proc` only, with a WARN on every
   task (the log would repeat it for each attempt); macOS equivalents through `sysctl` /
   `libproc` (real work, for local development only); a Rust unit-test job on `macos-15`.
+- **How a wheel is built** (`scripts/build-wheel.sh`; CI jobs `wheel` and `wheel-native`,
+  `make smoke`, `make smoke-musl`): one script for every wheel. Linux runs `maturin build
+  --release --locked` inside a digest-pinned image (`quay.io/pypa/manylinux2014_x86_64`,
+  `manylinux2014_aarch64`, `musllinux_1_2_x86_64`; tag `2026.10.16-1`, pushed 2026-10-16).
+  The container tool is `$CONTAINER`, else podman when it is installed, else docker (podman
+  locally, docker in CI). Inside the image: `rustup-init` 1.29.1 checked against its
+  published sha256, then only the channel in `rust-toolchain.toml` (`rustup install
+  --profile minimal --no-self-update` from `/tmp`, so the file's rustfmt, clippy and
+  llvm-tools are not installed, and rustup stays that installer). `RUSTUP_TOOLCHAIN` is
+  that channel. maturin 1.15.0 comes from `scripts/maturin-requirements.txt`
+  (`pip install --require-hashes`; `uv pip compile --generate-hashes`, and on Python 3.14
+  maturin has no third-party dependencies). `--locked` keeps Cargo from re-resolving or
+  rewriting `Cargo.lock` (the tree is mounted read-write). The compatibility tag is
+  `manylinux2014` or `musllinux_1_2`; patchelf comes from the image (the build stops if it
+  is missing). macOS is the same without a container: `rustup-init` 1.29.1 for
+  `aarch64-apple-darwin`, checked the same way, into a temporary cargo home (the runner's
+  rustup is left alone), then maturin from the same requirements file. Wheels land in
+  `dist/`. The digests, the rustup-init checksums and the requirements hashes are listed
+  under CI supply-chain pins.
 - **Smoke test of the wheel** (`scripts/smoke-wheel.sh`; CI job `wheel`, and the matrix
   checks `wheel-linux-aarch64` and `wheel-macos-arm64`; `make smoke` locally for the x86_64
   manylinux wheel): PLAN.md's "M1 is done" as a new user does it. The wheel goes into a fresh
@@ -5630,7 +5647,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   with `dags list`, `dags unpause`, `runs trigger --for ...` and `runs list` until that run
   succeeds. The same script runs on each runner. Not part of `make check` (a release build
   takes minutes). There is no local target for the aarch64 or macOS wheel: this machine is
-  x86_64 and there is no Mac, and a zig cross-build is not the manylinux image CI uses.
+  x86_64 and there is no Mac.
   Not chosen: smoking the macOS wheel only as far as `schedr --version`; smoking the aarch64
   wheel under QEMU on the x86_64 runner.
 - **Container images:**
@@ -5963,6 +5980,130 @@ its configuration, not the content.
   `wheel-linux-aarch64` and `wheel-macos-arm64`; see Packaging and releases) and `sdist`.
   The repository is public, so the standard runners cost nothing. No Rust unit-test job on
   macOS (see Packaging and releases).
+
+### CI supply-chain pins
+
+Decided 2026-10-26 (step 2.13b). CI must not take a new release of an action, or of a tool
+an action downloads, the moment it is published (the tj-actions attack, 2025). Not chosen:
+Dependabot with a cooldown (the bump is a bot's pull request; merging it is not the age
+check); pinning only the release path (the same actions build and test every push); doing
+it inside 2.13 (that step is the extra wheels).
+
+- Every `uses:` in `.github/workflows/` is a full 40-character commit SHA, with the version
+  in a comment (`actions/checkout@<sha> # v4.4.0`). The major stays the one the workflow
+  already used. `dtolnay/rust-toolchain` is a commit on `master` (its moving `v1` tag, the
+  commit of 2026-10-16). The `stable` branch's tip is one commit ahead of `master` and is
+  outside `master`'s history; the action's own docs say a pin outside that history is
+  garbage-collected, and that commit is what makes the action install the moving `stable`
+  channel. A master SHA has no default toolchain, and the action does not read
+  `rust-toolchain.toml`, so each job sets `toolchain:` to the same release as the file.
+- **Rust** is that release: `1.99.1` (released 2026-10-16; `1.99.0` on 2026-10-01, so the
+  minor qualifies, and the patch is 10 days old). The MSRV stays 1.99. Local rustup reads
+  the file. A wheel build installs that channel and nothing else: `scripts/build-wheel.sh`
+  downloads `rustup-init` 1.29.1, checks it against the published sha256, and runs it with
+  `--default-toolchain none`. It then reads `channel` from the file and runs
+  `rustup install --profile minimal --no-self-update` from `/tmp` (in the repo, rustup
+  would also install the file's rustfmt, clippy and llvm-tools). `RUSTUP_TOOLCHAIN` is
+  that channel, so a later `rustc` does not sync those components. Without
+  `--no-self-update` the install replaces rustup itself. macOS uses the same installer
+  for `aarch64-apple-darwin`, in a temporary cargo home. The checksums (archive dated
+  2026-09-01) are
+  `dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71`
+  (x86_64-unknown-linux-gnu),
+  `15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433`
+  (aarch64-unknown-linux-gnu),
+  `331228566cc931f32cd684f9bebc5956a5e5d7394c8d5de595f196a658ab98e6`
+  (x86_64-unknown-linux-musl) and
+  `ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a`
+  (aarch64-apple-darwin). The `sdist` job does not install Rust.
+- **Tools**, the same age rule as libraries. maturin `1.15.0` (2026-08-24) is
+  `scripts/maturin-requirements.txt` for the wheel builds and the `sdist` job
+  (`pip install --require-hashes --only-binary=maturin`; 14 hashes; on Python 3.14
+  maturin has no third-party dependencies). uv `0.13.5` (2026-10-22; `0.13.0` on
+  2026-10-09) is setup-uv's `version`, plus `checksum` of
+  `uv-x86_64-unknown-linux-gnu.tar.gz`
+  (`f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f`). setup-uv stays
+  `v4.2.0`: that release hashes the tarball when `checksum` is set, and it does not know
+  0.13.5 on its own. `v10.3.2` (2026-10-22) does, and the patch is old enough, but v10
+  turns `enable-cache` on by default and is six majors newer. Every setup-uv job is
+  `ubuntu-latest`, so one hash covers them. cargo-nextest `0.9.149` (2026-10-20) and
+  cargo-llvm-cov `0.9.1` (2026-09-06; `0.9.0` on 2026-08-16) on install-action's `tool`
+  input. Helm stays `v4.3.0` (2026-09-09; it is that minor's `x.y.0` and qualifies).
+  `v4.3.1` (2026-10-15) also qualifies and was left, because CI already pinned `v4.3.0`.
+  Python stays `3.14`.
+- **Images are digest-pinned** (`name@sha256:<64 hex>`), the same age rule. Wheel builds
+  (`scripts/build-wheel.sh`), tag `2026.10.16-1`, modified 2026-10-16:
+  `quay.io/pypa/manylinux2014_x86_64@sha256:2bd80fa8fca6b775a913b7e42fa410c5f2246fb6f7f8f3280b5d562e5ca5d63f`,
+  `quay.io/pypa/manylinux2014_aarch64@sha256:01984696ca71627d9f61991da836e5d542aa21695e8337ab0dc1f27a4559502f`,
+  `quay.io/pypa/musllinux_1_2_x86_64@sha256:915d73c75b4551f98fd7b12de655ef2e27419a6441ea07472b6e25e0d868d18d`.
+  Service and smoke images: `postgres:17.6-alpine` created 2025-10-15
+  (`sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94`),
+  `pgbouncer:v1.26.0-p0` created 2026-09-30
+  (`sha256:b17551c776ef7e5769ef80b956d20f85e2fd25dd8912d31d58f782aad495b711`),
+  `python:3.14.8-alpine3.24` created 2026-10-01
+  (`sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72`),
+  `alpine:3.24` created 2026-10-21
+  (`sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a`;
+  a rebuild of the tag already chosen, 5 days old, which meets the 3-day patch rule).
+  `scripts/kind-lib.sh` uses the postgres digest and `scripts/kind-standalone.sh` the
+  alpine digest.
+- **Actions** (the release the floating tag resolved to): checkout `v4.4.0` (2026-07-20),
+  rust-cache `v2.9.3` (2026-10-20), install-action `v2.87.31` (2026-10-23), setup-uv
+  `v4.2.0` (2024-11-30), setup-python `v5.6.0` (2025-04-24), upload-artifact `v4.6.2`
+  (2025-03-19), setup-helm `v5.0.1` (2026-06-23).
+- `make pin-check` is part of `make check`. It runs
+  `uv run --no-sync python scripts/check-action-pins.py` and does not sync: a local
+  `uv sync` once removed packages already installed. PyYAML 6.0.3 is a direct dev
+  dependency (it was already locked, through pre-commit). The `rust` job installs that
+  dev group first (`uv sync --frozen --no-install-project --inexact`, so it does not
+  compile the Rust binary; the cost is the dev group, not a Rust build) and then runs
+  `make pin-check`. The checker parses workflow YAML and `.github/actions/**/action.yml`.
+  It fails if a `uses:` is not a 40-character SHA, a local `./...` action or reusable
+  workflow, or `docker://image@sha256:<64 hex>`; if `dtolnay/rust-toolchain` has no
+  `toolchain:` or that input differs from the file; if a `rust-toolchain:` input differs
+  from the file; if install-action's `tool:` lacks `@version` or setup-uv / setup-helm's
+  `version:` is not `x.y.z`; if an image in a workflow (including `container:` and
+  `services`), `scripts/*.sh`, the Makefile, `images/**/Dockerfile` or
+  `examples/kubernetes/Dockerfile` is not digest-pinned (no tag is implicit `:latest`);
+  or if `scripts/maturin-requirements.txt` is missing a sha256 hash. The error names the
+  file and line. The example Dockerfile's `FROM ${SCHEDR}` is the locally built base
+  (`ARG SCHEDR=schedr:0.1.0`), not a registry pull.
+
+**How to bump a pin.** Apply the library-age rule (Libraries, above): a new major or minor,
+its `x.y.0`, at least 7 UTC calendar days old; a patch at least 3 once that minor
+qualifies; a yanked or withdrawn release moves forward to one that qualifies, otherwise
+back. Read the changelog. Resolve the tag to its commit with
+`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`. When `object.type` is `tag`, follow
+`object.sha` with `gh api repos/<owner>/<repo>/git/tags/<sha>` until `object.type` is
+`commit`. Put that commit on the `uses:` line and the version in the comment. A tool pin
+is the version input, checked the same way, with no SHA. Rust is `channel` in
+`rust-toolchain.toml` and every `toolchain:` input, changed together.
+`dtolnay/rust-toolchain` has no semver besides the moving `v1` tag: treat a new commit as
+a new version (7 days) and pin a commit that is on `master`. An image pin is the index
+digest of a tag that meets the age rule (a rebuild of a tag already chosen follows the
+patch rule), written as `@sha256:<64 hex>` everywhere that tag is pulled. maturin is
+recompiled with `uv pip compile --python-version 3.14 --universal --generate-hashes`.
+`rustup-init` is a version whose `.sha256` is published at
+`static.rust-lang.org/rustup/archive/<version>/<triple>/rustup-init.sha256`; the four
+triples in `scripts/build-wheel.sh` change together.
+
+**CI does not use `maturin-action`** (decided 2026-10-26, the second half of 2.13b).
+The wheel jobs and `make smoke` / `make smoke-musl` call `scripts/build-wheel.sh`. The
+`sdist` job installs maturin from the same requirements file
+(`pip install --require-hashes --only-binary=maturin`) and runs `maturin sdist --out dist`
+(it packs the tree; it does not compile Rust). Not chosen: (A) keeping `maturin-action`
+and only pinning its container image by digest (inside that image the action still runs
+`rustup toolchain install stable`, curls `https://astral.sh/uv/install.sh`, installs
+patchelf with `uv tool install` when it is missing, and `pip install --user cffi`, all at
+whatever is current, before any hook of ours); (B) recording that gap and leaving the
+action in the wheel jobs. What a wheel build still downloads: `rustup-init` 1.29.1,
+checked against its published sha256 before it runs, and the Rust toolchain for the
+channel in `rust-toolchain.toml` (minimal profile only), from `static.rust-lang.org`,
+verified by rustup against the release manifest. Rustup does not replace itself
+(`rustup install --no-self-update`). Crates keep the checksums in `Cargo.lock`
+(`maturin build --locked` does not rewrite it). maturin comes from PyPI with the hashes
+in `scripts/maturin-requirements.txt`. uv's tarball is checked with the `checksum` input
+above.
 
 ## Roadmap
 

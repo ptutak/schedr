@@ -102,7 +102,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: docker.io/library/postgres:17.6-alpine
+          image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
           env: [{name: POSTGRES_PASSWORD, value: schedr}]
           ports: [{containerPort: 5432}]
           readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}

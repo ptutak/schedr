@@ -23,6 +23,7 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",
+    "pyyaml==6.0.3",
     "jsonschema>=4.25",
 ]
 docs = [
@@ -89,6 +90,8 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "python/tests/**" = ["PLR2004", "D"]
+# The pin checker walks YAML and requirements; each branch is a case it rejects.
+"scripts/check-action-pins.py" = ["PLR0912"]
 # Example DAGs are user code: docstrings on their tasks are up to the author.
 "examples/**" = ["D103"]
 "examples/test_*.py" = ["PLR2004", "D"]
