@@ -191,20 +191,25 @@ integration tests, as since 1.15.
   builds on 2.8 and 2.9.
 - Open bugs (`BUGS.md`) are fixed when scheduled with the user.
 
-**Status (2026-10-26): steps 2.1–2.12b are done** (the commits are listed in
-`NEXT_SESSION.md`): 2.11a, standalone inside an Istio mesh, 2.11, the distributed chart
-(its kind runs passed, in and out of a mesh), 2.12, the kill tests
-(`scripts/kind-kill.sh` passed on kind-schedr-test), and 2.12b, `dags check --against`
-(fixes B20). B15 fixed (tokio 1.54.1; RUSTSEC-2026-0384). **2.13 committed, CI pending**
-(not done): Linux aarch64 manylinux and macOS arm64, one matrix job (`wheel-native`) shown
-as `wheel-linux-aarch64` (`ubuntu-24.04-arm`) and `wheel-macos-arm64` (`macos-15`), each
-with the full `scripts/smoke-wheel.sh`. It counts as done when those checks pass after the
-push. **2.13b** pins CI's supply chain: actions by commit SHA, exact tool versions, Rust
-`1.99.1` in `rust-toolchain.toml`, digest-pinned images, maturin from a hashed
-requirements file, and wheel builds through `scripts/build-wheel.sh` (the wheel jobs do
-not use `maturin-action`; neither does the sdist). `make pin-check` parses the workflow
-YAML and fails a missing pin (images in `scripts/*.sh` too). Open bugs: B22 (a draining
-worker once missed its 8 s grace under load; not reproduced), B4 (likely B6, unproven).
+**Status (2026-10-26, end of day): M2's steps 2.1–2.13b are done** (the commits are listed
+in `NEXT_SESSION.md`). 2.13's wheel jobs passed in CI at `b3c9c47` (`wheel-linux-aarch64`
+4 min 10 s, `wheel-macos-arm64` 5 min 42 s). 2.13b (`f3a8631`) pins CI's supply chain and
+builds every wheel through `scripts/build-wheel.sh`; its CI run passed with every job green
+(`wheel` 17 min 32 s, `wheel-macos-arm64` 5 min 49 s, `wheel-linux-aarch64` 4 min 23 s).
+Today also: B15 fixed (tokio 1.54.1), B21 fixed (the lease tests' query limit),
+`scripts/kind-mesh.sh` onto `scripts/kind-lib.sh`. Open bugs: B22 (a draining worker once
+missed its 8 s grace under load; not reproduced), B4 (likely B6, unproven).
+
+**Next: M2.5, the fork server and two scheduling queues** (PROJECT.md, Roadmap: "M2.5. Fork
+server and two scheduling queues"; the designs in "How Python tasks are started" and
+Components and roles, "Found by the stress suite"). Its steps aren't planned yet: the next
+session starts by drafting them with the user, decisions first.
+
+## M2.5: Fork server and two scheduling queues
+
+Done when (PROJECT.md, Roadmap): Python tasks start from the fork server on Linux workers,
+with fallback to spawn; stress scenario 14's rounds no longer grow with the quiet DAGs.
+Steps: to be planned with the user (2026-10-27).
 
 ## Testing approach
 

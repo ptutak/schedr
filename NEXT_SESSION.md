@@ -3,14 +3,13 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.12b done;
-  2.13 committed, CI pending).
+- `PLAN.md` holds the milestones, the M1 steps (done), the M2 steps (2.1–2.13b, all done)
+  and M2.5 (next, steps to plan).
 
 ## State (2026-10-26)
 
 - On `main` (this worktree). The user commits and pushes; `gh run list` shows CI. **M1 is
-  done; M2 steps 2.1 to 2.12b are done. 2.13 committed, CI pending** (not done until the
-  `wheel-native` checks `wheel-linux-aarch64` and `wheel-macos-arm64` pass after the push).
+  done; M2 steps 2.1 to 2.13b are done.** Next: M2.5.
   The M2 commits so far:
 
   | Commit | Step |
@@ -44,9 +43,11 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 | `fa83d25` | fixes B15: tokio 1.54.1 (RUSTSEC-2026-0384), `crates/schedr/tests/timers.rs`; the library-age rule (7 days for a minor, 3 for a patch); `cargo update` under it; B21 logged |
 | `9edc4a1` | fixes B21: the lease tests use a 2 s query limit (periods three limits, every wait derived from it), two write-lock stall tests |
 | `2d8c8ee` | `scripts/kind-mesh.sh` sources `kind-lib.sh` (all four kind scripts share it); passed on schedr-mesh, native and classic sidecars |
-| this commit | 2.13: Linux aarch64 manylinux and macOS arm64 wheels, full `scripts/smoke-wheel.sh` on native runners (one matrix, `wheel-native`, shown as `wheel-linux-aarch64` on `ubuntu-24.04-arm` and `wheel-macos-arm64` on `macos-15`). CI pending |
+| `b3c9c47` | 2.13: Linux aarch64 manylinux and macOS arm64 wheels, full `scripts/smoke-wheel.sh` on native runners (one matrix, `wheel-native`, shown as `wheel-linux-aarch64` on `ubuntu-24.04-arm` and `wheel-macos-arm64` on `macos-15`); passed in CI |
+| `f3a8631` | 2.13b: the CI supply chain pinned (actions by SHA, tools by version, Rust 1.99.1, images by digest, maturin by hash); wheels through `scripts/build-wheel.sh`, no `maturin-action`; `make pin-check`; B22 logged; passed in CI |
+| this commit | the plan: M2's steps done, M2.5 next; NEXT_SESSION.md: what 2026-10-26 taught |
 
-- CI is green on every pushed commit up to `2c1a6d5` (checked 2026-10-24 with `gh run list`);
+- CI is green on every pushed commit up to `f3a8631` (checked 2026-10-26 with `gh run list`);
   the nightly stress run of 2026-10-24 07:21 passed, before `2c1a6d5` landed.
 - The last `make check` (2.12b, 2026-10-26): 1254 Rust unit tests, 632 Python unit tests at
   99.96 % coverage, 98 Rust integration tests and 27 Python integration tests (the
@@ -87,7 +88,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 
 ## Next steps
 
-1. **Check CI and the nightly stress run** for newly pushed commits (`gh run list`).
+1. **Check CI and the nightly stress run** for newly pushed commits (`gh run list`). 2.13b's
+   run (`f3a8631`) passed on 2026-10-26: all four wheels through `scripts/build-wheel.sh`.
 2. **M2, step 2.10b, the stress suite: done** (PLAN.md; PROJECT.md, Testing: the stress
    suite, and Components and roles: "Found by the stress suite" with every decision and
    what wasn't chosen; the guide's "Stress tests" with the baseline).
@@ -150,9 +152,26 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    in a minute (workers stay disconnected after a master restart until they register). The
    call uses `connect_to` (the CLI's credentials and HTTP timeouts). Fixes B20. The
    `standalone` help and the overview match production (SQLite or Postgres, one pod).
-   **2.13 committed, CI pending** (not done until the new wheel jobs pass). M3's web UI is
+   **2.13 done** (its wheel jobs passed in CI at `b3c9c47`). M3's web UI is
    **federated from the start**: a list of deployments, each reached through its webserver.
-7. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
+7. **2026-10-26, what was learned** (the details are in PROJECT.md and the skill):
+   - **Library ages** (PROJECT.md, Libraries): a new major or minor at least 7 UTC calendar
+     days old, a patch at least 3, a yanked version moves forward else back; CI pins
+     (actions by SHA, tools by version, images by digest, maturin by hash) are bumped by hand
+     as PROJECT.md, Packaging and releases, describes; `make pin-check` guards them.
+   - **Timings on this machine:** `make check` 6-9 min (the test suites ~2 min of it, the rest
+     compiling; Rust unit tests ~25 s since B21), `make docs` ~1 min, `make smoke` ~7 min,
+     `make smoke-musl` ~15 min (release builds in the pinned images).
+   - **Load makes timing tests flaky** (B21, B22): two kind clusters (`schedr-test`,
+     `schedr-mesh`, podman: `KIND_EXPERIMENTAL_PROVIDER=podman kind get clusters`) and a
+     second worktree building push the load average past 10.
+   - **Grok as the worker** (`~/.claude/skills/grok`): what it does well and where to look
+     in review is in its SKILL.md, "What to expect from Grok"; its weekly usage, measured
+     per round, in USAGE.md (about 3.5% of the week per 100 calls; 15% -> 40% on 2026-10-26).
+     `grok-watch` follows the active session with Claude's prompts and diffs.
+8. **Next: M2.5, the fork server and two scheduling queues** (PLAN.md; PROJECT.md, Roadmap).
+   Plan its steps with the user first, decisions before code.
+9. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
    "Connections (draft)", M4): `@connection(arg=t"{secrets[...]}")` on a generator function,
    as `contextlib.contextmanager`; tasks use `with name() as client:`. The in-task CLI for
    Bash is accepted; CommandOperator, Bash scripts and plain Python are undecided (candidates
@@ -295,3 +314,9 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+
+claude
+
+Resume this session with:
+claude --resume d19fef83-fd35-4f6c-bba0-d6a3c355065c
