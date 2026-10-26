@@ -50,11 +50,9 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   `MESH=1` on the mesh cluster), `scripts/kind-kill.sh` (master, worker, standalone).
   WSL's `fs.inotify.max_user_instances` is 512 now (the user
   raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.46.
-- **Open bugs: B4, B21** (`BUGS.md`). **B4:** a role test's `runs trigger` got no result once
+- **Open bugs: B4** (`BUGS.md`). **B4:** a role test's `runs trigger` got no result once
   (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
-  the CLI's stderr. **B21:** three `schedr-master` lease unit tests failed together in
-  `make check` on 2026-10-26 with `QueryTimeout(100ms)` under load (two kind clusters,
-  coverage). Alone they passed. Not fixed; a test-only limit is the plan.
+  the CLI's stderr.
 - **B9 is fixed (2026-10-23):** a stop escalates (`supervise::Stops`, one
   channel of reasons per attempt): a drain's interrupt hurries the SIGKILL of an attempt
   already being cancelled or timed out.
@@ -101,14 +99,14 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    - **Decided for later:** M2.5 gets two scheduling queues and stress scenario 14; M3 gets
      a federated web UI over several deployments (M6, several masters on one database: not
      planned); a round's assignments as one batch: possible later.
-   - **Open:** B4, B21; the `db` secret storage's
+   - **Open:** B4; the `db` secret storage's
      design points for M4 (listed in the 2026-10-24 conversation: export guarded and per
      path, the key checked at start, `default` required with several storages, `set`
      merge, aliases, the key's variable name, local runs naming a storage).
    - **Lessons:** don't edit sources while `make check` or `make stress` builds (a stale run
      results); build in `CARGO_TARGET_DIR=target/side` while the stress suite runs from
-     `target/debug`; the lease unit tests' timings fail under heavy load (they pass alone;
-     logged as B21).
+     `target/debug`; the lease unit tests used to time out under load at a 100 ms query limit
+     (B21, fixed).
 3. **M2, step 2.11a: done** (PROJECT.md, Components and roles: "Standalone inside an Istio
    mesh", with every decision; PLAN.md's row). The user's lab: an existing mesh namespace
    (`REGISTRY_ONLY`, gateway `istio-system/b2b-ingress-gateway`, apps under `/service/<app>/`

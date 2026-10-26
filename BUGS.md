@@ -9,20 +9,6 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
-## B21: master lease unit tests time out together under load
-
-- **Seen:** 2026-10-26, `make check` on this tree (the machine loaded: two kind clusters, load
-  average about 10, coverage instrumentation). Three `schedr-master` unit tests failed
-  together with `QueryTimeout(100ms)`:
-  `lease::tests::a_master_writes_through_its_lease` (`crates/schedr-master/src/lease/tests.rs:134`),
-  `a_master_taken_over_never_writes_itself_back_as_the_holder` (`:78`),
-  `a_renewal_keeps_leading_and_a_takeover_is_seen` (`:64`).
-- **Alone:** 5/5 passed. The whole unit suite without coverage: 3/3 passed.
-- **Suspect:** the tests' 100 ms query limit under load (`Database::connect_with_timeout` in
-  `lease/tests.rs:11`).
-- **Plan:** a test-only limit that tolerates load while keeping what the tests check.
-  Scheduled with the user. Not fixed here.
-
 ## B4: `runs trigger` in a roles integration test got no result once
 
 - **Seen:** 2026-10-22, the first `make test-integration` of M2.3:

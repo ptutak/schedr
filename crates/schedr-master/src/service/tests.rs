@@ -28,10 +28,15 @@ async fn connected_with(clock: fn() -> Timestamp) -> (Hub, Database, MasterClien
     connected_on(db, clock).await
 }
 
-/// As [`connected`], with queries limited to 200 ms: a lease renewal then leads for its
-/// period less that.
+/// One statement's limit for the lease tests below. Same budget as the lease unit tests: long
+/// enough that a loaded machine still finishes one statement. A period is three of these (the
+/// production ratio); a round is a quarter of one.
+const QUERY_LIMIT: Duration = Duration::from_secs(2);
+
+/// As [`connected`], with queries limited to [`QUERY_LIMIT`]: a lease renewal then leads for
+/// its period less that.
 async fn connected_limited() -> (Hub, Database, MasterClient<Channel>) {
-    let db = Database::connect_with_timeout("sqlite::memory:", Duration::from_millis(200))
+    let db = Database::connect_with_timeout("sqlite::memory:", QUERY_LIMIT)
         .await
         .unwrap();
     connected_on(db, fixed_now).await
@@ -671,24 +676,22 @@ async fn a_command_applied_before_its_decision_failed_is_decided_applied_on_the_
 #[tokio::test]
 async fn a_master_whose_lease_isnt_renewed_pauses_and_resumes_once_it_is() {
     let (hub, db, _client) = connected_limited().await;
-    let period = Duration::from_millis(600);
+    let period = QUERY_LIMIT * 3;
+    let tick = QUERY_LIMIT / 4;
     let leadership =
         crate::lease::Leadership::take(db.clone(), "m1".to_owned(), period, || {}).await;
-    // Renewals fail from now on; the lease leads for 400 ms from its taking.
+    // Renewals fail from now on. The lease leads for the period less the query limit; waiting
+    // out the whole period passes that. The stop covers this wait, a quiet stretch, and a
+    // period more so a renewal after the heal still lands.
     break_db(&db, "UPDATE ON master_lease").await;
     let running = tokio::spawn({
         let hub = hub.clone();
         async move {
-            hub.run_leading(
-                Duration::from_millis(50),
-                None,
-                leadership,
-                tokio::time::sleep(Duration::from_secs(4)),
-            )
-            .await
+            hub.run_leading(tick, None, leadership, tokio::time::sleep(period * 3))
+                .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    tokio::time::sleep(period).await;
     assert_eq!(hub.metrics.leading.get(), 0, "paused");
     let unpause = schedr_model::commands::Command::UnpauseDag {
         dag_id: DagId::new("ghost").unwrap(),
@@ -697,7 +700,7 @@ async fn a_master_whose_lease_isnt_renewed_pauses_and_resumes_once_it_is() {
         .insert_command(&unpause, "anna", fixed_now())
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(QUERY_LIMIT).await;
     let waiting = db.command(&id).await.unwrap().unwrap();
     assert_eq!(
         waiting.status,
@@ -705,40 +708,43 @@ async fn a_master_whose_lease_isnt_renewed_pauses_and_resumes_once_it_is() {
         "a paused master applies nothing"
     );
     heal(&db).await;
-    for _ in 0..100 {
-        let decided = db.command(&id).await.unwrap().unwrap();
-        if decided.status != schedr_model::commands::CommandStatus::Pending {
-            assert_eq!(hub.metrics.leading.get(), 1);
-            assert_eq!(running.await.unwrap(), Ok(()));
-            return;
+    let resumed = tokio::time::timeout(period, async {
+        loop {
+            let decided = db.command(&id).await.unwrap().unwrap();
+            if decided.status != schedr_model::commands::CommandStatus::Pending {
+                return;
+            }
+            tokio::time::sleep(tick).await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("the renewed master didn't apply the command");
+    })
+    .await;
+    assert!(
+        resumed.is_ok(),
+        "the renewed master didn't apply the command"
+    );
+    assert_eq!(hub.metrics.leading.get(), 1);
+    assert_eq!(running.await.unwrap(), Ok(()));
 }
 
 #[tokio::test]
 async fn a_master_whose_lease_was_taken_over_stops() {
     let (hub, db, _client) = connected_limited().await;
-    let period = Duration::from_millis(600);
+    let period = QUERY_LIMIT * 3;
+    let tick = QUERY_LIMIT / 4;
     let leadership =
         crate::lease::Leadership::take(db.clone(), "m1".to_owned(), period, || {}).await;
     let running = tokio::spawn({
         let hub = hub.clone();
         async move {
-            hub.run_leading(
-                Duration::from_millis(50),
-                None,
-                leadership,
-                std::future::pending(),
-            )
-            .await
+            hub.run_leading(tick, None, leadership, std::future::pending())
+                .await
         }
     });
     // Another master takes it over (as after this one's lease expired).
     db.release_lease("m1").await.unwrap();
     assert_eq!(db.take_lease("m2", period).await.unwrap(), Some(2));
-    let ended = tokio::time::timeout(Duration::from_secs(5), running)
+    // A renewal is every third of the period; several periods covers a late one.
+    let ended = tokio::time::timeout(period * 3, running)
         .await
         .expect("the master stops")
         .unwrap();
@@ -749,19 +755,15 @@ async fn a_master_whose_lease_was_taken_over_stops() {
 #[tokio::test]
 async fn a_stopped_master_gives_its_lease_up() {
     let (hub, db, _client) = connected_limited().await;
-    let period = Duration::from_secs(15);
+    let period = QUERY_LIMIT * 3;
+    let tick = QUERY_LIMIT / 4;
     let leadership =
         crate::lease::Leadership::take(db.clone(), "m1".to_owned(), period, || {}).await;
     let ended = hub
-        .run_leading(
-            Duration::from_millis(50),
-            None,
-            leadership,
-            tokio::time::sleep(Duration::from_millis(100)),
-        )
+        .run_leading(tick, None, leadership, tokio::time::sleep(tick * 2))
         .await;
     assert_eq!(ended, Ok(()));
-    // Taken at once by the next master, not after 15 s.
+    // Taken at once by the next master, not after the period.
     assert_eq!(db.take_lease("m2", period).await.unwrap(), Some(2));
 }
 
@@ -770,26 +772,24 @@ async fn a_long_round_doesnt_hold_the_leases_renewals_up() {
     // The round holds the master's core past the lease's period: renewed meanwhile, the lease
     // stays this master's (not taken over by a standby while the round goes on).
     let (hub, db, _client) = connected_limited().await;
-    let period = Duration::from_millis(600);
+    let period = QUERY_LIMIT * 3;
+    let tick = QUERY_LIMIT / 4;
+    // Longer than the lease, so only a renewal during the round keeps it.
+    let hold = period + QUERY_LIMIT;
     let leadership =
         crate::lease::Leadership::take(db.clone(), "m1".to_owned(), period, || {}).await;
     let running = tokio::spawn({
         let hub = hub.clone();
         async move {
-            hub.run_leading(
-                Duration::from_millis(50),
-                None,
-                leadership,
-                tokio::time::sleep(Duration::from_secs(3)),
-            )
-            .await
+            hub.run_leading(tick, None, leadership, tokio::time::sleep(hold + period))
+                .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    // Leading from the start, before its first renewal.
+    // Leading from the start, before its first renewal (a third of the period).
+    tokio::time::sleep(tick).await;
     assert_eq!(hub.metrics.leading.get(), 1);
     let round = hub.core.lock().await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::sleep(hold).await;
     assert_eq!(db.take_lease("m2", period).await.unwrap(), None);
     drop(round);
     assert_eq!(running.await.unwrap(), Ok(()));

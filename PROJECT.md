@@ -214,6 +214,13 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     than `[ops] loop_stall_timeout`, else a startup error. Defaults 10 s / 30 s (option A after
     the review): a standby takes over within 30 s of a crash. Not chosen: 30 s / 90 s (a
     takeover up to 90 s); fixed constants.
+  - **Lease unit tests (B21, 2026-10-26):** a 2 s query limit, long enough that a loaded
+    machine still finishes one statement, and a period of three limits. A renewal still leads
+    for the period less that limit; a stall past the limit is a failed renewal and does not
+    move the lead. The service tests that drive the lease (pause, takeover, giving it up, a
+    long round) use that same limit and ratio. Not chosen: the old 100 ms limit, and those
+    service tests' 200 ms limit (they returned `QueryTimeout` under load); subtracting 100 ms
+    while enforcing a longer timeout (the test would stop leading before a real query must).
   - **The query limit:** one timeout around every query in `schedr-db`'s common path,
     `DbError::QueryTimeout`; SQLite's `busy_timeout` stays (a file setting, not session
     state). Not chosen: a timeout per master round (which query was slow is lost).
