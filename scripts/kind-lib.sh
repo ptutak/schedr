@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Shared by scripts/kind-distributed.sh, scripts/kind-kill.sh and scripts/kind-standalone.sh
-# (sourced, not run). scripts/kind-mesh.sh does not use it.
+# Shared by scripts/kind-distributed.sh, scripts/kind-kill.sh, scripts/kind-standalone.sh
+# and scripts/kind-mesh.sh (sourced, not run).
 #
 # The caller sets CLUSTER, CONTEXT and NAMESPACE, and may set CONTAINER, IMAGE and
 # SERVER_IMAGE, before sourcing. podman names a local image localhost/<name>; docker keeps
 # the bare name. The default IMAGE and SERVER_IMAGE get that prefix only for podman.
-# kind-standalone.sh sets IMAGE itself (the unqualified name).
+# kind-standalone.sh and kind-mesh.sh set IMAGE themselves (the unqualified name).
 
 # shellcheck disable=SC2034 # fit, TOOL, IMAGE and SERVER_IMAGE are for the caller.
 # shellcheck disable=SC2154 # CLUSTER, CONTEXT, NAMESPACE and WORK come from the caller.

@@ -284,7 +284,8 @@ containers is native, among the containers classic.
 (`REGISTRY_ONLY`; `SIDECARS=native` or `classic`) and checks it: the docs open without a token, the API refused without one,
 with a forged one and without the required group, the CLI through the gateway with
 `--token`, a DAG run on Postgres migrated on start, and a pod stopped while a task runs, whose
-result still reaches the database through the sidecar.
+result still reaches the database through the sidecar. Like the other kind scripts, it refuses a
+context whose server isn't loopback, before calling anything on that cluster.
 
 On a laptop, `schedr standalone --migrate` runs everything on localhost, with SQLite in the
 data directory (`[worker] data_dir`, else `~/.local/share/schedr`), migrating the database at
@@ -327,8 +328,9 @@ is the rule, and the kind script prints it. The other worker has to stay `active
 
 `scripts/kind-kill.sh` runs these three, in that order, on the local kind cluster `schedr-test`
 (context `kind-schedr-test`; any other cluster name is refused). It is not part of `make check`.
-The context's server has to be loopback; `scripts/kind-standalone.sh` and
-`scripts/kind-distributed.sh` require the same, and the three share `scripts/kind-lib.sh`.
+The context's server has to be loopback; `scripts/kind-standalone.sh`,
+`scripts/kind-distributed.sh` and `scripts/kind-mesh.sh` require the same, and all four
+share `scripts/kind-lib.sh`.
 It needs the images from `make image` and `make server-image`. `hold` sleeps 90 s with `retries=0`
 (the master). `again` sleeps 30 s with `retries=1` and `retry_delay` of 0 (a worker, then
 standalone). The default delay is 5 minutes, which would only postpone the same retry. `ping` is

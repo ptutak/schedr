@@ -5,7 +5,8 @@
 # the API only with a valid token carrying the required claim, the CLI with `--token`, a DAG
 # run on Postgres through the sidecar (migrated on start), and a drain whose task finishes
 # after SIGTERM with its result still reaching the database. Every kubectl, helm and istioctl
-# call names the kind cluster's context explicitly: it never touches another cluster.
+# call names the kind cluster's context explicitly: it never touches another cluster. The
+# context's server has to be loopback. Shared pieces live in scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-mesh.sh     (the base image `make image` built must exist, and a schedr
 #                                  binary for the CLI on this machine)
@@ -21,13 +22,16 @@ set -euo pipefail
 CLUSTER=${CLUSTER:-schedr-mesh}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
+# Unqualified, so this stays schedr:0.1.0. kind-lib.sh would add podman's localhost/ prefix.
 IMAGE=${IMAGE:-schedr:0.1.0}
-TOOL=${CONTAINER:-podman}
 ISTIO=${ISTIO:-1.31.1}
 SIDECARS=${SIDECARS:-native}
 case $SIDECARS in native) NATIVE=true ;; classic) NATIVE=false ;; *) echo "SIDECARS: native or classic"; exit 2 ;; esac
 TEST_IMAGE=localhost/schedr-kind-mesh:1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=kind-lib.sh
+source "$ROOT/scripts/kind-lib.sh"
 SCHEDR_BIN=${SCHEDR_BIN:-$ROOT/target/debug/schedr}
 ISTIOCTL=$ROOT/target/tools/istioctl-$ISTIO
 GATEWAY_PORT=18080
@@ -36,14 +40,9 @@ PREFIX=/service/schedr
 WORK=$(mktemp -d)
 FORWARD=
 trap '[ -n "$FORWARD" ] && kill "$FORWARD" 2>/dev/null; rm -rf "$WORK"' EXIT
-export KIND_EXPERIMENTAL_PROVIDER=$TOOL
 
-k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
-say() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAILED: $*"; exit 1; }
-
-[ -x "$SCHEDR_BIN" ] || fail "no schedr binary at $SCHEDR_BIN (cargo build, or set SCHEDR_BIN)"
+# Not fail(): that dumps pods, and this runs before the context is known to be local.
+[ -x "$SCHEDR_BIN" ] || { echo "FAILED: no schedr binary at $SCHEDR_BIN (cargo build, or set SCHEDR_BIN)"; exit 1; }
 
 say "istioctl $ISTIO"
 if [ ! -x "$ISTIOCTL" ]; then
@@ -55,6 +54,8 @@ fi
 
 say "kind cluster $CLUSTER (context $CONTEXT) with Istio, outbound REGISTRY_ONLY, $SIDECARS sidecars"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER"
+require_local_context
+start_kind_node
 "$ISTIOCTL" install --context "$CONTEXT" -y --set profile=default \
     --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY \
     --set values.pilot.env.ENABLE_NATIVE_SIDECARS=$NATIVE
@@ -82,33 +83,11 @@ FROM $IMAGE
 COPY daily_report.py slow.py /dags/current/
 DOCKERFILE
 "$TOOL" build -q -t "$TEST_IMAGE" "$WORK" >/dev/null
-"$TOOL" save -o "$WORK/image.tar" "$TEST_IMAGE"
-kind load image-archive --name "$CLUSTER" "$WORK/image.tar"
+load_images "$TEST_IMAGE"
 
 say "Postgres in the namespace (outside the mesh), an existing ServiceAccount, a Gateway"
+apply_postgres
 k apply -f - <<'MANIFEST'
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: {name: postgres}
-spec:
-  serviceName: postgres
-  replicas: 1
-  selector: {matchLabels: {app: postgres}}
-  template:
-    metadata: {labels: {app: postgres}}
-    spec:
-      containers:
-        - name: postgres
-          image: docker.io/library/postgres:17.6-alpine
-          env: [{name: POSTGRES_PASSWORD, value: schedr}]
-          ports: [{containerPort: 5432}]
-          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}
----
-apiVersion: v1
-kind: Service
-metadata: {name: postgres}
-spec: {selector: {app: postgres}, ports: [{name: tcp-postgres, port: 5432}]}
----
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: mesh-workload}
@@ -122,9 +101,6 @@ spec:
     - port: {number: 80, name: http, protocol: HTTP}
       hosts: ["*"]
 MANIFEST
-k rollout status statefulset/postgres --timeout=180s
-k create secret generic schedr-pg --from-literal=username=postgres --from-literal=password=schedr \
-    --dry-run=client -o yaml | k apply -f -
 
 say "a test issuer: an RSA key, its JWKS, and tokens"
 openssl genrsa -out "$WORK/issuer.pem" 2048 2>/dev/null
@@ -152,14 +128,14 @@ NO_GROUP=$(token "$WORK/issuer.pem" '["others"]')
 FORGED=$(token "$WORK/other.pem" '["schedr-users"]')
 
 say "the chart: standalone on Postgres, every Istio object, migrated on start"
-h upgrade --install schedr "$ROOT/charts/schedr" --wait --timeout 6m -f - <<VALUES
+# terminationGracePeriodSeconds stays 60: fit does not set it, and the scripts disagree.
+# Sizes (persistence, resources) come from fit: its --set wins over the values below.
+h upgrade --install schedr "$ROOT/charts/schedr" --wait --timeout 6m "${fit[@]}" -f - <<VALUES
 image: {repository: "${TEST_IMAGE%:*}", tag: "${TEST_IMAGE##*:}", pullPolicy: Never}
 database: {postgres: {host: postgres, name: postgres, existingSecret: schedr-pg}}
 migration: onStart
 serviceAccount: {create: false, name: mesh-workload}
-persistence: {size: 1Gi}
 terminationGracePeriodSeconds: 60
-resources: {requests: {cpu: 100m, memory: 512Mi}, limits: {memory: 1Gi}}
 istio:
   enabled: true
   virtualService: {enabled: true, gateways: [$NAMESPACE/main], hosts: ["*"], prefix: $PREFIX/}

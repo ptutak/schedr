@@ -859,10 +859,10 @@ tests already cover the same rules in processes (`roles.rs`: a master restart co
 attempt; a worker killed and restarted ends `lost` / `WorkerRestarted` and retries). A kill
 that breaks one of these goes to `BUGS.md` and is not fixed in this step.
 
-`scripts/kind-lib.sh` is sourced by `kind-distributed.sh`, `kind-kill.sh` and
-`kind-standalone.sh` (the helpers, podman's image prefix, the loopback context guard, starting
-a stopped node, loading images, in-namespace Postgres, the `fit` values, `fail`). Not chosen:
-copies in each script (they drifted apart).
+`scripts/kind-lib.sh` is sourced by `kind-distributed.sh`, `kind-kill.sh`,
+`kind-standalone.sh` and `kind-mesh.sh` (the helpers, podman's image prefix, the loopback
+context guard, starting a stopped node, loading images, in-namespace Postgres, the `fit`
+values, `fail`). Not chosen: copies in each script (they drifted apart).
 
 ### Web UI and CLI
 

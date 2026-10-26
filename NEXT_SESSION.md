@@ -46,7 +46,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   `python/tests/integration` and `examples` pytest run); Rust line coverage 88.19 %
   (floor 85 %). `make docs` passed. The kind runs passed before this step:
   `scripts/kind-standalone.sh`,
-  `scripts/kind-mesh.sh` (native and classic sidecars), `scripts/kind-distributed.sh` (and
+  `scripts/kind-mesh.sh` (native and classic sidecars; again on 2026-10-26 after it moved onto
+  `scripts/kind-lib.sh`, which all four kind scripts now share), `scripts/kind-distributed.sh` (and
   `MESH=1` on the mesh cluster), `scripts/kind-kill.sh` (master, worker, standalone).
   WSL's `fs.inotify.max_user_instances` is 512 now (the user
   raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.46.
