@@ -43,14 +43,14 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 thiserror = "2.0.21"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
-tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "signal", "test-util"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "signal", "test-util"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 utoipa = { version = "6.0.0", features = ["jiff_0_2"] }
-utoipa-swagger-ui = { version = "10.0.1", default-features = false, features = ["vendored"] }
+utoipa-swagger-ui = { version = "10.0.2", default-features = false, features = ["vendored"] }
 uuid = { version = "1.28.0", features = ["v7"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
 

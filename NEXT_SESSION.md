@@ -49,11 +49,12 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   `scripts/kind-mesh.sh` (native and classic sidecars), `scripts/kind-distributed.sh` (and
   `MESH=1` on the mesh cluster), `scripts/kind-kill.sh` (master, worker, standalone).
   WSL's `fs.inotify.max_user_instances` is 512 now (the user
-  raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.45
-  (0.23.46 was too new).
-- **Open bug: B4** (`BUGS.md`): a role test's `runs trigger` got no result once
+  raised it; 128 ran out with two kind clusters and Istio). rustls is locked at 0.23.46.
+- **Open bugs: B4, B21** (`BUGS.md`). **B4:** a role test's `runs trigger` got no result once
   (2026-10-22); most likely B6 but unproven. If it happens again, its failure message now has
-  the CLI's stderr.
+  the CLI's stderr. **B21:** three `schedr-master` lease unit tests failed together in
+  `make check` on 2026-10-26 with `QueryTimeout(100ms)` under load (two kind clusters,
+  coverage). Alone they passed. Not fixed; a test-only limit is the plan.
 - **B9 is fixed (2026-10-23):** a stop escalates (`supervise::Stops`, one
   channel of reasons per attempt): a drain's interrupt hurries the SIGKILL of an attempt
   already being cancelled or timed out.
@@ -100,13 +101,14 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    - **Decided for later:** M2.5 gets two scheduling queues and stress scenario 14; M3 gets
      a federated web UI over several deployments (M6, several masters on one database: not
      planned); a round's assignments as one batch: possible later.
-   - **Open:** B15 (suspected tokio panic, not seen since B14), B4; the `db` secret storage's
+   - **Open:** B4, B21; the `db` secret storage's
      design points for M4 (listed in the 2026-10-24 conversation: export guarded and per
      path, the key checked at start, `default` required with several storages, `set`
      merge, aliases, the key's variable name, local runs naming a storage).
    - **Lessons:** don't edit sources while `make check` or `make stress` builds (a stale run
      results); build in `CARGO_TARGET_DIR=target/side` while the stress suite runs from
-     `target/debug`; the lease unit tests' timings fail under heavy load (they pass alone).
+     `target/debug`; the lease unit tests' timings fail under heavy load (they pass alone;
+     logged as B21).
 3. **M2, step 2.11a: done** (PROJECT.md, Components and roles: "Standalone inside an Istio
    mesh", with every decision; PLAN.md's row). The user's lab: an existing mesh namespace
    (`REGISTRY_ONLY`, gateway `istio-system/b2b-ingress-gateway`, apps under `/service/<app>/`
@@ -193,7 +195,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B21); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B22); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -202,7 +204,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   the file is a startup error; tests pass it via `SCHEDR_CONFIG__DATABASE__URL`.
 - Rust MSRV is 1.99, `unsafe_code = forbid` (use rustix for fcntl, flock, signals and the
   like). Clippy limits functions to 100 lines: split by meaning when it complains.
-- New external library versions must be at least 2 weeks old. Check with
+- Library ages (PROJECT.md, Libraries): a new major or minor (its `x.y.0`) at least 7 UTC
+  calendar days old, a patch at least 3 days; a yanked version moves forward, else back. Check with
   `curl https://crates.io/api/v1/crates/<name>/versions` (or PyPI), and add them to the
   "Libraries" table in PROJECT.md.
 - `0001_initial.sql` (both `postgres/` and `sqlite/`) and the protocol (`PROTOCOL_VERSION`

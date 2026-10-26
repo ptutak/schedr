@@ -140,6 +140,10 @@ relay, decide, and check.
 - A cheaper model (e.g. Haiku as a subagent) may read long logs for the result or gather
   things, when its answer is easy to check; reviews, diagnosis and decisions stay with the
   main model, which reads the decisive lines (a failure's output) itself.
-- New library versions must be at least two weeks old; record new libraries in `PROJECT.md`.
+- **Library ages:** a new major or minor version (its `x.y.0`) must be at least 7 days old;
+  a patch on a minor that already qualifies may move once it is 3 days old (ages in UTC
+  calendar days; a yanked `x.y.0` still dates its minor). A yanked version in the lock moves
+  to a version that meets the rule, forward if one exists, else back. Record new libraries in
+  `PROJECT.md`.
 - Update `NEXT_SESSION.md` at the end of a milestone or when I ask, so the next session can
   start from it.

@@ -215,8 +215,12 @@ Separate jobs, each one reproducible with a make target:
 
 ## Dependencies
 
-- **New versions must be at least two weeks old** (check the registry: crates.io API, PyPI)
-  when added.
+- **A new major or minor version must be at least 7 days old** (its `x.y.0`, checked in the
+  registry: crates.io API, PyPI); **a patch** on a minor that already qualifies may move once
+  it is 3 days old (time for a compromised release to be found and yanked). Ages count in UTC
+  calendar days; a yanked `x.y.0` still dates its minor.
+- **A yanked version** in the lock moves to a version that meets the rule: forward when one
+  exists, otherwise back to the newest earlier one that meets it and isn't yanked.
 - Each dependency is listed in `PROJECT.md` (a "Libraries" table: need, choice, why, and what
   wasn't chosen).
 

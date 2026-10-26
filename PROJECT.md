@@ -681,7 +681,9 @@ of the mesh would defeat the point.
   and MongoDB (`pymongo`); no service frameworks or ORMs (no SQLAlchemy: nothing is served from
   tasks). `images/schedr/requirements.in`, pinned with every dependency (46 packages) in
   `requirements.txt` by `make image-requirements` (`uv pip compile` for musl and Python 3.14
-  with `--exclude-newer` two weeks back, so the rule on library ages holds for the whole tree).
+  with `--exclude-newer` two weeks back, stricter than the library-age rule (a new major or
+  minor at least 7 days old, a patch at least 3 days old, calendar days UTC), so the rule holds
+  for the whole tree).
   Every package has a musllinux wheel but **`pymongo`, which publishes none**: the Dockerfile's
   builder stage (`build-base`) compiles it with its C extensions required
   (`PYMONGO_C_EXT_MUST_BUILD`, else it would fall back to pure Python with a warning), without
@@ -5608,11 +5610,11 @@ Rust crates chosen for the implementation (versions pinned when added):
 
 | Need | Crate | Why |
 |---|---|---|
-| async runtime | `tokio` | required by `tonic` and `axum` |
+| async runtime | `tokio` 1.54.1 | required by `tonic` and `axum`; 1.54.0 yanked (RUSTSEC-2026-0384); see below |
 | gRPC | `tonic` + `prost` | see Master–worker protocol |
 | REST | `axum` | tokio-native, the same stack as `tonic` |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
-| Swagger UI | `utoipa-swagger-ui` 10.0.1 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); 10.0.2 was too new; crc32fast 1.5.2, typed-path 0.12.3 and zopfli 0.8.3 locked (newer ones too new) |
+| Swagger UI | `utoipa-swagger-ui` 10.0.2 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); crc32fast 1.5.3, typed-path 0.12.4 and zopfli 0.8.4 locked; zip went 8 → 9.0.5 (a major, through utoipa-swagger-ui's vendored build), which brings nix 0.31.3, a new transitive crate |
 | JSON Schema | `schemars` | see Rust/Python integration |
 | database | `sqlx` (SQLite and Postgres), **runtime-checked queries**, migrations per backend | compile-time `query!` checking needs one backend |
 | time and zones | `jiff` | explicit handling of DST gaps and overlaps |
@@ -5627,11 +5629,42 @@ Rust crates chosen for the implementation (versions pinned when added):
 | ignore files | `ignore` | gitignore semantics for `.schedrignore`, directory walking with symbolic links |
 | content hashes | `sha2` | SHA-256 of DAG roots |
 | metrics | `prometheus-client` | Prometheus's own client: a registry per process, typed label sets; see Observability (M2.9) |
-| TLS | `rustls` (aws-lc-rs provider, TLS 1.3), `tokio-rustls`; `hyper-util` and `tower` for the gRPC connector | see Master–worker protocol: mTLS (M2.7); rustls locked at 0.23.45, the newest at least two weeks old |
+| TLS | `rustls` (aws-lc-rs provider, TLS 1.3), `tokio-rustls`; `hyper-util` and `tower` for the gRPC connector | see Master–worker protocol: mTLS (M2.7); rustls locked at 0.23.46 |
 | test certificates | `rcgen` (dev only, through `schedr-tls`'s `testing` feature) | a CA and its certificates generated in tests |
 
 Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-time `sqlx` macros
 (two backends); `actix-web` (a second async stack). The Python package stays dependency-free.
+
+**Library ages** (decided 2026-10-26, B15, the user): a new major or minor version (its `x.y.0`)
+must be at least 7 days old; a patch on a minor that already qualifies may move once it is 3
+days old. Age is calendar days in UTC (published on date D is today − D days old). A yanked
+`x.y.0` still dates its minor. A yanked version in the lock moves to a version that meets the
+rule, forward if one exists, else back. Record new libraries here. Not chosen: elapsed hours
+(the result depends on when the check runs); a yanked `x.y.0` not counting (works against
+taking its fixing patch); two weeks for every version (the old rule: held back fixes like
+tokio 1.54.1); 1 day for a patch (first chosen, raised to 3 the same day for security: a
+compromised or broken patch needs a few days to be found and yanked).
+
+**tokio 1.54.1** (B15, 2026-10-26): 1.54.0 is yanked (RUSTSEC-2026-0384, `Interval` /
+`AtomicWaker` race; a debug build aborts in the time driver). 1.54.1 is a patch; 1.54.0
+(yanked) is 7 calendar days old on 2026-10-26, so the minor qualifies. Taken now because
+1.54.0 aborts the process. `crates/schedr/tests/timers.rs` aborted 5/5 and, in an earlier
+phase, 20/20 on 1.54.0, in `AtomicWaker::take_waker` from the time driver (`StateCell::fire`
+→ `process_at_time` → the multi-thread parker), the same path as B15's Postgres abort. The
+same test passes 20/20 on 1.54.1. `make stress` quick passed 14/14; scenario 9 ×10 passed
+with no panic in the logs. Not chosen: 1.53.2 now and 1.54.1 later (a downgrade and a second
+move); 1.53.3 (also a later second move).
+
+**Lock update** (B15, 2026-10-26): `cargo update` on the whole lock (`Cargo.toml` requirements
+unchanged except tokio, and `utoipa-swagger-ui` set to 10.0.2, the version this locked).
+Every changed version checked on crates.io (`created_at` of the
+version and of its `x.y.0`, yanked). Taken: croner 4.0.2, ctutils 0.4.5, nix 0.31.3 (new lock
+entry), pulldown-cmark 0.13.5, rustls 0.23.46, smallvec 1.16.4, tinystr 0.8.5, tokio 1.54.1,
+typed-path 0.12.4, utoipa-swagger-ui 10.0.2, webpki-root-certs 1.0.11, yoke 0.8.4, zerovec
+0.11.9, zerovec-derive 0.11.7, zip 9.0.5, zopfli 0.8.4. Pinned back (too new): cc 1.10.0 →
+1.9.0, icu 2.4.0 → 2.3.0 (`icu_provider` 2.3.1), uuid 1.29.0 → 1.28.0; zip 9.1.1 → 9.0.5
+(9.1.0 is 2 days old); typed-path 0.13.0 → 0.12.4 (0.13.0 is 6 days old); ctutils 0.4.6 →
+0.4.5 (0.4.6 is 1 day old, under the 3 days for a patch).
 
 ### Testing
 

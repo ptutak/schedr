@@ -194,7 +194,8 @@ integration tests, as since 1.15.
 `NEXT_SESSION.md`): 2.11a, standalone inside an Istio mesh, 2.11, the distributed chart
 (its kind runs passed, in and out of a mesh), 2.12, the kill tests
 (`scripts/kind-kill.sh` passed on kind-schedr-test), and 2.12b, `dags check --against`
-(fixes B20). Open bugs: B4 (likely B6, unproven) and B15 (suspected). Next: 2.13, more wheels.
+(fixes B20). B15 fixed (tokio 1.54.1; RUSTSEC-2026-0384). Open bugs: B4 (likely B6, unproven),
+B21 (lease unit tests' 100 ms query limit under load). Next: 2.13, more wheels.
 
 ## Testing approach
 
