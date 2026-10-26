@@ -60,6 +60,22 @@ fn command(status: &str) -> serde_json::Value {
     })
 }
 
+#[test]
+fn a_token_wins_over_basic_credentials() {
+    assert_eq!(
+        Auth::from_cli(Some("t"), Some("anna"), Some("secret")),
+        Auth::Bearer("t".to_owned())
+    );
+    assert_eq!(
+        Auth::from_cli(None, Some("anna"), Some("secret")),
+        Auth::Basic {
+            user: "anna".to_owned(),
+            password: Some("secret".to_owned())
+        }
+    );
+    assert_eq!(Auth::from_cli(None, None, Some("secret")), Auth::None);
+}
+
 #[tokio::test]
 async fn requests_go_to_the_api_paths_with_their_bodies() {
     let api = client(vec![

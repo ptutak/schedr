@@ -39,7 +39,8 @@ pub enum Command {
     Worker,
     /// Run the webserver: web UI and the API used by the UI and CLI.
     Webserver,
-    /// Run every role in one process with SQLite (local development, or one pod for testing).
+    /// Run every role in one process (SQLite or Postgres): local development, or one pod in
+    /// production.
     Standalone {
         /// The address the REST API listens on (default 127.0.0.1); e.g. 0.0.0.0 in a pod
         /// behind a Service. The master's gRPC stays on loopback.
@@ -159,11 +160,12 @@ pub enum DagsCommand {
         /// The DAG's ID.
         dag: String,
     },
-    /// Parse DAG files and `schedr.toml` files locally and report errors (no server).
+    /// Parse DAG files and `schedr.toml` files locally and report errors.
     Check {
         /// A file or directory.
         path: PathBuf,
-        /// Also warn when the DAGs need a newer schedr than the server's workers run.
+        /// Fail if an active worker at this server runs an older schedr (major.minor) than this
+        /// one.
         #[arg(long, value_name = "SERVER_URL")]
         against: Option<String>,
     },

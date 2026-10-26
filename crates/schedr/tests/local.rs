@@ -6,8 +6,13 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
+use schedr_api::{ApiState, router};
+use schedr_db::Database;
+use schedr_db::workers::WorkerRegistration;
+use schedr_model::{SchedrVersion, WorkerState};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -269,4 +274,221 @@ fn check_doesnt_wait_for_a_process_a_dag_file_detached() {
         "took {:?}",
         started.elapsed()
     );
+}
+
+async fn add_worker(db: &Database, id: &str, version: &str, state: WorkerState, drained: bool) {
+    db.register_worker(
+        &WorkerRegistration {
+            id,
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "0.1",
+            schedr_version: version,
+            queues: &[],
+            slots: 1,
+            log_endpoint: "",
+        },
+        jiff::Timestamp::now(),
+    )
+    .await
+    .unwrap();
+    if state != WorkerState::Active {
+        db.set_worker_state(id, state, jiff::Timestamp::now())
+            .await
+            .unwrap();
+    }
+    if drained {
+        db.set_worker_drained(id, true).await.unwrap();
+    }
+}
+
+async fn serve(db: Database) -> (String, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = router(ApiState::new(db, None)).layer(axum::middleware::from_fn_with_state(
+        seen.clone(),
+        remember_auth,
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (url, seen)
+}
+
+async fn remember_auth(
+    axum::extract::State(seen): axum::extract::State<Arc<Mutex<Vec<String>>>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(header) = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        seen.lock().unwrap().push(header.to_owned());
+    }
+    next.run(request).await
+}
+
+/// A `major.minor.patch` string for `version`, as a worker reports it.
+fn reported(version: SchedrVersion, patch: u32) -> String {
+    format!("{version}.{patch}")
+}
+
+/// The minor before `current`, or the previous major when this one is `.0`.
+fn older_minor(current: SchedrVersion) -> SchedrVersion {
+    if current.minor > 0 {
+        SchedrVersion::new(current.major, current.minor - 1)
+    } else {
+        SchedrVersion::new(current.major.saturating_sub(1), 0)
+    }
+}
+
+/// The minor after `current`.
+fn newer_minor(current: SchedrVersion) -> SchedrVersion {
+    SchedrVersion::new(current.major, current.minor.saturating_add(1))
+}
+
+/// B20: `--against` used to print "isn't implemented yet" and stop.
+#[tokio::test]
+async fn check_against_fails_for_an_older_active_worker() {
+    let current = SchedrVersion::current();
+    let older = older_minor(current);
+    assert!(older < current, "{current} has no older minor");
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    add_worker(&db, "w-lost", &reported(older, 0), WorkerState::Lost, false).await;
+    add_worker(
+        &db,
+        "w-new",
+        &reported(current, 0),
+        WorkerState::Active,
+        false,
+    )
+    .await;
+    add_worker(&db, "w-old", &reported(older, 1), WorkerState::Active, true).await;
+    let (url, seen) = serve(db).await;
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let url2 = url.clone();
+    let (code, out, err) = tokio::task::spawn_blocking(move || {
+        local.check(&["--against", &url2, "--token", "s3cret"])
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("ok     sync.py: sync (2 tasks)"), "{out}");
+    let failure =
+        format!("error: this schedr is {current}; older active workers at {url}: {older}: w-old\n");
+    assert_eq!(err, failure);
+    assert!(!err.contains("isn't implemented yet"), "{err}");
+    assert!(!err.contains("w-lost"), "{err}");
+    assert_eq!(seen.lock().unwrap().as_slice(), ["Bearer s3cret"]);
+
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let url2 = url.clone();
+    let (code, out, err) =
+        tokio::task::spawn_blocking(move || local.check(&["--against", &url2, "--json"]))
+            .await
+            .unwrap();
+    assert_eq!(code, 1, "{out}{err}");
+    let report: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(report["version_check"]["ok"], false);
+    assert_eq!(report["version_check"]["local"], current.to_string());
+    assert_eq!(report["version_check"]["message"], failure.trim_end());
+    let ids: Vec<&str> = report["version_check"]["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|worker| worker["worker_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["w-new", "w-old"]);
+    assert!(!err.contains("isn't implemented yet"), "{err}");
+}
+
+#[tokio::test]
+async fn check_against_passes_when_every_active_worker_is_current() {
+    let current = SchedrVersion::current();
+    let older = older_minor(current);
+    let newer = newer_minor(current);
+    assert!(
+        older < current && newer > current,
+        "{older} {current} {newer}"
+    );
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    add_worker(
+        &db,
+        "w-old",
+        &reported(older, 1),
+        WorkerState::Disconnected,
+        false,
+    )
+    .await;
+    add_worker(
+        &db,
+        "w-same",
+        &reported(current, 9),
+        WorkerState::Active,
+        false,
+    )
+    .await;
+    add_worker(
+        &db,
+        "w-newer",
+        &reported(newer, 0),
+        WorkerState::Active,
+        false,
+    )
+    .await;
+    let (url, _) = serve(db).await;
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let url2 = url.clone();
+    let (code, out, err) = tokio::task::spawn_blocking(move || local.check(&["--against", &url2]))
+        .await
+        .unwrap();
+    assert_eq!(code, 0, "{out}{err}");
+    let summary = out.find("0 error(s)").expect(&out);
+    let line = format!(
+        "ok: this schedr is {current}; 2 active workers at {url} run {current} (w-same), {newer} (w-newer)"
+    );
+    let at = out.find(&line).expect(&out);
+    assert!(summary < at, "{out}");
+    assert!(!out.contains("w-old"), "{out}");
+    assert!(!err.contains("error:"), "{err}");
+}
+
+#[tokio::test]
+async fn check_against_fails_when_no_worker_is_active_or_the_server_is_down() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let (url, _) = serve(db).await;
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let url2 = url.clone();
+    let (code, out, err) = tokio::task::spawn_blocking(move || local.check(&["--against", &url2]))
+        .await
+        .unwrap();
+    let local_version = SchedrVersion::current();
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("0 error(s)"), "{out}");
+    assert_eq!(
+        err,
+        format!(
+            "error: no active worker at {url} to compare with this schedr ({local_version}): \
+             workers are recorded disconnected right after a master restart until they \
+             register again, so retry in a minute\n"
+        )
+    );
+
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let (code, out, err) =
+        tokio::task::spawn_blocking(move || local.check(&["--against", "http://127.0.0.1:1"]))
+            .await
+            .unwrap();
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("ok     sync.py: sync (2 tasks)"), "{out}");
+    assert!(
+        err.contains("can't reach the schedr server at http://127.0.0.1:1"),
+        "{err}"
+    );
+    assert!(!err.contains("isn't implemented yet"), "{err}");
 }

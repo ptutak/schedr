@@ -8,7 +8,7 @@ runs in its own pods; on a laptop `schedr standalone` runs them all in one proce
 | `schedr master` | Decides everything: when runs start, which worker runs which task, what a failure means. Its scheduling loop works in [rounds](04-master.md). | Never | Reads and writes the database |
 | `schedr worker` | A Rust agent that runs tasks and parses DAG files, each in a Python or shell subprocess. Keeps task logs on its disk. | Yes, in subprocesses | A journal on its own disk; no database |
 | `schedr webserver` | The REST API that the CLI uses (later the web UI). Reads state from the database; turns actions into **commands** for the master. | Never | Reads the database, writes only commands |
-| `schedr standalone` | All three in one process, on localhost, with SQLite by default. For a laptop, or one pod to try schedr on a cluster. | Yes | SQLite file in the data directory |
+| `schedr standalone` | All three in one process (SQLite or Postgres): local development, or one pod in production. | Yes | SQLite file in the data directory, or Postgres |
 
 ## How the parts talk
 

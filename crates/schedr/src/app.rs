@@ -191,7 +191,7 @@ pub async fn execute(
             None,
         ) => {
             let config = local_config(config, env)?;
-            crate::local::run_local(command, &config, env, client.json, out).await
+            crate::local::run_local(command, &config, env, client, out).await
         }
         (Command::Dags { client, command }, None) => {
             let (api, output) = connect(client, env);
@@ -249,26 +249,33 @@ pub fn role_config(
     Ok(config)
 }
 
-/// The client and output settings of a user CLI command: the server, credentials (the password
-/// from `SCHEDR_PASSWORD`), `--json` and the local zone (`TZ`, else the system's).
+/// The API client for `url`: the CLI's credentials and the same poll, wait, connect and
+/// request timeouts as every other server command.
+///
+/// Bearer (`--token`) wins over HTTP Basic (`--user`, password from `SCHEDR_PASSWORD`).
+#[must_use]
+pub fn connect_to(
+    url: &str,
+    args: &ClientArgs,
+    env: &BTreeMap<String, String>,
+) -> Client<HttpTransport> {
+    let auth = Auth::from_cli(
+        args.token.as_deref(),
+        args.user.as_deref(),
+        env.get("SCHEDR_PASSWORD").map(String::as_str),
+    );
+    Client::new(HttpTransport::new(url, auth), POLL_INTERVAL, WAIT_TIMEOUT)
+}
+
+/// The client and output settings of a user CLI command: the server ([`connect_to`]),
+/// credentials (the password from `SCHEDR_PASSWORD`), `--json` and the local zone (`TZ`, else
+/// the system's).
 #[must_use]
 pub fn connect(
     args: &ClientArgs,
     env: &BTreeMap<String, String>,
 ) -> (Client<HttpTransport>, Output) {
-    let auth = match (&args.token, &args.user) {
-        (Some(token), _) => Auth::Bearer(token.clone()),
-        (None, Some(user)) => Auth::Basic {
-            user: user.clone(),
-            password: env.get("SCHEDR_PASSWORD").cloned(),
-        },
-        (None, None) => Auth::None,
-    };
-    let client = Client::new(
-        HttpTransport::new(&args.server, auth),
-        POLL_INTERVAL,
-        WAIT_TIMEOUT,
-    );
+    let client = connect_to(&args.server, args, env);
     let output = Output {
         json: args.json,
         local: local_zone(env.get("TZ").map(String::as_str)),

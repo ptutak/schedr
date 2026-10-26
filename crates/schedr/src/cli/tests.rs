@@ -219,6 +219,39 @@ fn dags_test_takes_secrets_and_a_task() {
 }
 
 #[test]
+fn standalone_help_describes_one_pod_in_production() {
+    let mut command = Cli::command();
+    let standalone = command.find_subcommand_mut("standalone").unwrap();
+    assert_eq!(
+        standalone.get_about().unwrap().to_string(),
+        "Run every role in one process (SQLite or Postgres): local development, or one pod in production"
+    );
+    let help = standalone.render_long_help().to_string();
+    assert!(
+        help.contains("SQLite or Postgres") && help.contains("one pod in production"),
+        "{help}"
+    );
+}
+
+#[test]
+fn dags_check_against_says_it_fails_for_an_older_worker() {
+    let mut command = Cli::command();
+    let check = command
+        .find_subcommand_mut("dags")
+        .unwrap()
+        .find_subcommand_mut("check")
+        .unwrap();
+    let against = check
+        .get_arguments()
+        .find(|arg| arg.get_id() == "against")
+        .unwrap();
+    assert_eq!(
+        against.get_help().unwrap().to_string(),
+        "Fail if an active worker at this server runs an older schedr (major.minor) than this one"
+    );
+}
+
+#[test]
 fn version_and_help_are_reported_as_clap_display_errors() {
     assert_eq!(
         parse(&["--version"]).unwrap_err().kind(),

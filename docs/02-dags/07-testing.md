@@ -1,7 +1,8 @@
 # Testing a DAG
 
 Three ways, from the narrowest: call the function, call it with a run's context, or run
-the DAG. `schedr dags check` and `schedr dags test` need no server. The commands are in
+the DAG. `schedr dags test` needs no server. `schedr dags check` needs one only with
+`--against`. The commands are in
 the [CLI reference](../_generated/04-reference/02-cli.md).
 
 `examples/test_daily_report.py` does all three for [the report DAG](06-context.md):
@@ -32,8 +33,59 @@ Exit 2 is wrong usage.
 `--json` prints `{"files": [{"path", "dags", "error"}]}`. `dags` is the list of DAG IDs.
 `error` is `null` or an object with `exception`, `message` and `traceback`.
 
-`schedr dags check --against` is accepted by the argument parser and then reports that it
-is not implemented yet. Comparing a file with a server is
+`schedr dags check --against <server URL>` reads that server's workers
+(`GET /api/v1/workers`) after the file report. It fails, exit 1, when this `schedr` is
+newer than any worker whose state is `active`. A worker drained for maintenance is
+`active` and counts. Draining, disconnected, offline and lost workers take no new tasks,
+so they are left out. Versions compare as `major.minor`; the patch is ignored.
+
+When every counted worker is current or newer, one line follows the file report:
+
+```
+ok: this schedr is 0.3; 2 active workers at https://prod run 0.3 (w1, w2)
+```
+
+One worker says `1 active worker` and `runs`. Several versions are oldest first:
+`run 0.3 (w1), 0.4 (w2)`.
+
+It fails when any counted worker is older. The error names those workers, grouped by
+version, oldest first, in the order the server returned:
+
+```
+error: this schedr is 0.3; older active workers at http://sched.example: 0.2: w2
+```
+
+Several versions: `0.1: w3; 0.2: w1, w2`.
+
+A version that is not `major.minor` or `major.minor.patch` is unknown. The master stores
+that as no version and still assigns tasks to the worker. This check follows that rule:
+the worker stays eligible, and the check passes when no counted worker is older. The
+passing line names the text as `unknown version`, with the worker id, and `workers` in
+`--json` keeps the text the worker reported.
+
+No active worker fails the same way. Right after a master restart every worker is
+recorded disconnected until it registers again, so the message says to retry in a minute:
+
+```
+error: no active worker at http://sched.example to compare with this schedr (0.3): workers are recorded disconnected right after a master restart until they register again, so retry in a minute
+```
+
+A server that cannot be reached, or that rejects the call, exits 1 with that error after
+the file report. The call is the same client as the other commands: the same credentials,
+a 5 second connect timeout and a 30 second request timeout, so a server that never
+answers stops with the usual connection error. A different major version is the API's
+usual refusal, which names what to install. `--token` and `--user` are sent, as for
+every server command (`SCHEDR_TOKEN`, `SCHEDR_USER`, `SCHEDR_PASSWORD`). `--server` is
+not the URL this flag uses.
+
+A worker on the same minor, or a newer one, does not fail the check. Pinning the local
+package to the worker image (`schedr==1.4.*`) is still how you write DAGs against that
+version.
+
+`--json` adds `version_check` when the worker list was read: `local`, `ok`, `message`,
+and `workers` (each `worker_id` and `schedr_version` as the worker reported it, every
+active worker). `message` is the same line the text output prints (`ok: ...` on a pass,
+`error: ...` on a failure). `ok` is false when this check fails. The decisions are in
 [Testing DAGs](../_generated/05-design/08-testing-dags.md).
 
 ## `schedr dags test`

@@ -1,9 +1,11 @@
-//! The DAG author's local commands, with no server: `schedr dags check` and `schedr dags test`
+//! The DAG author's local commands: `schedr dags check` and `schedr dags test`
 //! (see PROJECT.md, Testing DAGs).
 //!
 //! - **`dags check <path>`** imports the DAG files with the real runner (parse mode, the
 //!   per-file timeout) and applies the master's checks, so whatever the master would refuse is
-//!   reported here; exit 1 on any error.
+//!   reported here; exit 1 on any error. **`--against <url>`** then reads that server's active
+//!   workers and fails when this schedr is newer (by minor version) than any of them. A pass
+//!   prints one `ok:` line. A version the master cannot parse does not fail the check.
 //! - **`dags test <dag> [--for]`** runs one real run in an in-process standalone with a
 //!   temporary SQLite database: every task its own process, exactly as in production. It prints
 //!   each task's state as it changes, then the logs (prefixed with the task) and the outputs;
@@ -19,18 +21,18 @@ use schedr_agent::launch::ProcessParseRunner;
 use schedr_agent::parse::parse_files;
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
-use schedr_api::views::{AttemptList, LocationView, RunDetail};
+use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
 use schedr_config::{Config, Root};
 use schedr_db::Database;
 use schedr_master::validate::validate_files;
-use schedr_model::SchedrVersion;
 use schedr_model::runner::{ParseRequest, ParsedFile};
+use schedr_model::{SchedrVersion, WorkerState};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::app::AppError;
-use crate::cli::DagsCommand;
-use crate::client::{Auth, Client, HttpTransport};
+use crate::app::{AppError, connect_to};
+use crate::cli::{ClientArgs, DagsCommand};
+use crate::client::{Auth, Client, ClientError, HttpTransport};
 use crate::standalone::{plan, run};
 
 #[cfg(test)]
@@ -85,23 +87,19 @@ impl LocalRoot {
 ///
 /// # Errors
 ///
-/// [`AppError`] for bad arguments, a failure to run the runner, errors found by `check`, or a
-/// run of `test` that didn't succeed.
+/// [`AppError`] for bad arguments, a failure to run the runner, errors found by `check`, a
+/// worker version older than this schedr, a server `--against` cannot read, or a run of
+/// `test` that didn't succeed.
 pub async fn run_local(
     command: &DagsCommand,
     config: &Config,
     env: &BTreeMap<String, String>,
-    json: bool,
+    client: &ClientArgs,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     match command {
         DagsCommand::Check { path, against } => {
-            if against.is_some() {
-                return Err(not_yet("dags check --against", "M2"));
-            }
-            let root = LocalRoot::at(path)?;
-            let files = check_root(&root, config, env).await?;
-            report_check(&files, json, out)
+            check_path(path, against.as_deref(), client, config, env, out).await
         }
         DagsCommand::Test {
             dag,
@@ -126,10 +124,33 @@ pub async fn run_local(
                 .transpose()
                 .map_err(AppError::BadArgument)?
                 .map(|t| t.at);
-            test_dag(dag, at, path.as_deref(), config, env, json, out).await
+            test_dag(dag, at, path.as_deref(), config, env, client.json, out).await
         }
         _ => Err(AppError::BadArgument("not a local command".to_owned())),
     }
+}
+
+/// Parses `path`, reports it, and when `against` is set compares this schedr with that
+/// server's active workers.
+///
+/// # Errors
+///
+/// As [`run_local`] for `dags check`.
+async fn check_path(
+    path: &Path,
+    against: Option<&str>,
+    client: &ClientArgs,
+    config: &Config,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let root = LocalRoot::at(path)?;
+    let files = check_root(&root, config, env).await?;
+    let version = match against {
+        Some(url) => Some(worker_versions(url, client, env).await),
+        None => None,
+    };
+    finish_check(&files, version, client.json, out)
 }
 
 /// Parses a root's files with the real runner and applies the master's checks.
@@ -233,6 +254,181 @@ fn runner_failed(error: &str, config: &Config, python: &Path, output: &str) -> S
     message
 }
 
+/// An active worker compared with the local schedr (`dags check --against`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ComparedWorker {
+    /// Its ID.
+    pub worker_id: String,
+    /// The version it reported (`major.minor` or `major.minor.patch`).
+    pub schedr_version: String,
+}
+
+/// What `--against` found. `ok` is false when an active worker is older than `local`, or
+/// none is active. A version that does not parse is unknown, as the master stores it, and
+/// does not by itself make `ok` false.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionCheck {
+    /// This schedr, as `major.minor`.
+    pub local: SchedrVersion,
+    /// Whether every active worker is eligible: at least `local`, or an unknown version.
+    pub ok: bool,
+    /// Set when `ok` is false. The CLI prints it as `error: {message}`.
+    pub message: Option<String>,
+    /// Every active worker, in the order the server listed them.
+    pub workers: Vec<ComparedWorker>,
+    /// The server URL the lines name, without a trailing slash.
+    server: String,
+}
+
+impl VersionCheck {
+    /// The line a person sees: `ok: ...` when the check passes, `error: ...` when it fails.
+    #[must_use]
+    pub(crate) fn line(&self) -> String {
+        match &self.message {
+            Some(body) => format!("error: {body}"),
+            None => passing_line(self.local, &self.server, &self.workers),
+        }
+    }
+}
+
+/// Reads `GET /api/v1/workers` at `url` with the CLI's client ([`connect_to`]) and compares
+/// the active workers with this build of schedr.
+///
+/// # Errors
+///
+/// [`ClientError`] when the server cannot be reached or the answer is not the worker list.
+pub(crate) async fn worker_versions(
+    url: &str,
+    client: &ClientArgs,
+    env: &BTreeMap<String, String>,
+) -> Result<VersionCheck, ClientError> {
+    let api = connect_to(url, client, env);
+    let server = api.transport().server().to_owned();
+    let listed = api.workers().await?;
+    Ok(compare_active_workers(
+        SchedrVersion::current(),
+        &server,
+        &listed.workers,
+    ))
+}
+
+/// Compares `local` with the active workers at `server`.
+///
+/// Active includes a worker drained for maintenance. Draining, disconnected, offline and lost
+/// workers are left out. The patch level is ignored. A version that does not parse is unknown:
+/// the master stores `None` and still assigns tasks, so the check does not fail for that worker.
+#[must_use]
+pub(crate) fn compare_active_workers(
+    local: SchedrVersion,
+    server: &str,
+    workers: &[WorkerView],
+) -> VersionCheck {
+    let active_name = WorkerState::Active.to_string();
+    let mut compared = Vec::new();
+    for worker in workers {
+        if worker.state == active_name {
+            compared.push(ComparedWorker {
+                worker_id: worker.worker_id.clone(),
+                schedr_version: worker.schedr_version.clone(),
+            });
+        }
+    }
+    if compared.is_empty() {
+        return VersionCheck {
+            local,
+            ok: false,
+            message: Some(no_active_message(server, local)),
+            workers: compared,
+            server: server.to_owned(),
+        };
+    }
+    let message = older_workers(local, server, &compared);
+    VersionCheck {
+        local,
+        ok: message.is_none(),
+        message,
+        workers: compared,
+        server: server.to_owned(),
+    }
+}
+
+/// No counted worker. A master restart records workers disconnected until they register.
+fn no_active_message(server: &str, local: SchedrVersion) -> String {
+    format!(
+        "no active worker at {server} to compare with this schedr ({local}): \
+         workers are recorded disconnected right after a master restart until they \
+         register again, so retry in a minute"
+    )
+}
+
+/// The failure when any of `active` is older than `local`, naming those workers.
+///
+/// An unreadable version is left out: the master treats it as unknown and still assigns tasks.
+fn older_workers(local: SchedrVersion, server: &str, active: &[ComparedWorker]) -> Option<String> {
+    let mut by_version: BTreeMap<SchedrVersion, Vec<&str>> = BTreeMap::new();
+    for worker in active {
+        if let Ok(version) = worker.schedr_version.parse::<SchedrVersion>()
+            && local > version
+        {
+            by_version
+                .entry(version)
+                .or_default()
+                .push(worker.worker_id.as_str());
+        }
+    }
+    if by_version.is_empty() {
+        return None;
+    }
+    let mut groups = Vec::new();
+    for (version, ids) in &by_version {
+        groups.push(format!("{version}: {}", ids.join(", ")));
+    }
+    Some(format!(
+        "this schedr is {local}; older active workers at {server}: {}",
+        groups.join("; ")
+    ))
+}
+
+/// The passing line, for example `ok: this schedr is 0.3; 2 active workers at the server run 0.3 (w1, w2)`.
+fn passing_line(local: SchedrVersion, server: &str, active: &[ComparedWorker]) -> String {
+    let n = active.len();
+    let (noun, verb) = if n == 1 {
+        ("worker", "runs")
+    } else {
+        ("workers", "run")
+    };
+    format!(
+        "ok: this schedr is {local}; {n} active {noun} at {server} {verb} {}",
+        run_groups(active)
+    )
+}
+
+/// Versions oldest first, then unknown texts, each with its worker ids.
+fn run_groups(active: &[ComparedWorker]) -> String {
+    let mut by_version: BTreeMap<SchedrVersion, Vec<&str>> = BTreeMap::new();
+    let mut unknown: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for worker in active {
+        match worker.schedr_version.parse::<SchedrVersion>() {
+            Ok(version) => by_version
+                .entry(version)
+                .or_default()
+                .push(worker.worker_id.as_str()),
+            Err(_) => unknown
+                .entry(worker.schedr_version.as_str())
+                .or_default()
+                .push(worker.worker_id.as_str()),
+        }
+    }
+    let mut groups = Vec::new();
+    for (version, ids) in &by_version {
+        groups.push(format!("{version} ({})", ids.join(", ")));
+    }
+    for (text, ids) in &unknown {
+        groups.push(format!("unknown version `{text}` ({})", ids.join(", ")));
+    }
+    groups.join(", ")
+}
+
 /// One file in `dags check --json`.
 #[derive(Debug, Serialize)]
 struct CheckedFile<'a> {
@@ -241,55 +437,153 @@ struct CheckedFile<'a> {
     error: Option<&'a schedr_model::runner::ErrorSummary>,
 }
 
-fn report_check(files: &[ParsedFile], json: bool, out: &mut impl Write) -> Result<(), AppError> {
+/// `dags check --json`, with `version_check` when `--against` read the worker list.
+#[derive(Serialize)]
+struct CheckJson<'a> {
+    files: Vec<CheckedFile<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_check: Option<VersionJson<'a>>,
+}
+
+/// The `version_check` object. `message` is the line a person sees.
+#[derive(Serialize)]
+struct VersionJson<'a> {
+    local: SchedrVersion,
+    ok: bool,
+    message: String,
+    workers: &'a [ComparedWorker],
+}
+
+/// Prints the file report and returns the version failure, the file failure, or both.
+///
+/// # Errors
+///
+/// [`AppError::Failed`] when a file has an error or an active worker is older (both, when
+/// both happened), [`AppError::Client`] when the server could not be read and the files were
+/// fine, or [`AppError::Output`] when writing fails.
+pub(crate) fn finish_check(
+    files: &[ParsedFile],
+    version: Option<Result<VersionCheck, ClientError>>,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let shown = version.as_ref().and_then(|result| result.as_ref().ok());
+    let errors = write_report(files, shown, json, out)?;
+    combine(file_failure(errors), version_failure(version))
+}
+
+/// The file-report half of a failure, when any file has an error.
+fn file_failure(errors: usize) -> Option<String> {
+    (errors > 0).then(|| format!("{errors} file(s) with errors"))
+}
+
+/// The `--against` half of a failure.
+fn version_failure(version: Option<Result<VersionCheck, ClientError>>) -> Option<AppError> {
+    match version {
+        Some(Err(error)) => Some(AppError::Client(error)),
+        Some(Ok(check)) => check.message.map(AppError::Failed),
+        None => None,
+    }
+}
+
+/// One error, or both with a second `error:` line.
+fn combine(files: Option<String>, version: Option<AppError>) -> Result<(), AppError> {
+    match (files, version) {
+        (None, None) => Ok(()),
+        (Some(files), None) => Err(AppError::Failed(files)),
+        (None, Some(error)) => Err(error),
+        (Some(files), Some(error)) => Err(AppError::Failed(format!("{files}\nerror: {error}"))),
+    }
+}
+
+/// Writes the file report and returns how many files have an error.
+///
+/// # Errors
+///
+/// [`AppError::Output`] when writing fails.
+fn write_report(
+    files: &[ParsedFile],
+    version: Option<&VersionCheck>,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<usize, AppError> {
     let errors = files.iter().filter(|f| f.error.is_some()).count();
     if json {
-        let checked: Vec<CheckedFile<'_>> = files
-            .iter()
-            .map(|f| CheckedFile {
-                path: &f.path,
-                dags: f.dags.iter().map(|d| d.id.as_str()).collect(),
-                error: f.error.as_ref(),
-            })
-            .collect();
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&json!({"files": checked})).unwrap_or_default()
-        )?;
+        write_json(files, version, out)?;
     } else {
-        for file in files {
-            match &file.error {
-                None if file.dags.is_empty() => writeln!(out, "ok     {}: no DAGs", file.path)?,
-                None => {
-                    let dags: Vec<String> = file
-                        .dags
-                        .iter()
-                        .map(|d| format!("{} ({} tasks)", d.id, d.tasks.len()))
-                        .collect();
-                    writeln!(out, "ok     {}: {}", file.path, dags.join(", "))?;
-                }
-                Some(error) => {
-                    writeln!(
-                        out,
-                        "error  {}: {}: {}",
-                        file.path, error.exception, error.message
-                    )?;
-                    for line in error.traceback.lines() {
-                        writeln!(out, "         {line}")?;
-                    }
+        write_text(files, errors, version, out)?;
+    }
+    Ok(errors)
+}
+
+/// `--json`: the files, and `version_check` when the worker list was read.
+fn write_json(
+    files: &[ParsedFile],
+    version: Option<&VersionCheck>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let report = CheckJson {
+        files: files
+            .iter()
+            .map(|file| CheckedFile {
+                path: &file.path,
+                dags: file.dags.iter().map(|dag| dag.id.as_str()).collect(),
+                error: file.error.as_ref(),
+            })
+            .collect(),
+        version_check: version.map(|check| VersionJson {
+            local: check.local,
+            ok: check.ok,
+            message: check.line(),
+            workers: &check.workers,
+        }),
+    };
+    writeln!(
+        out,
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_default()
+    )?;
+    Ok(())
+}
+
+/// One line per file, then the summary, then the passing `--against` line.
+fn write_text(
+    files: &[ParsedFile],
+    errors: usize,
+    version: Option<&VersionCheck>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    for file in files {
+        match &file.error {
+            None if file.dags.is_empty() => writeln!(out, "ok     {}: no DAGs", file.path)?,
+            None => {
+                let dags: Vec<String> = file
+                    .dags
+                    .iter()
+                    .map(|dag| format!("{} ({} tasks)", dag.id, dag.tasks.len()))
+                    .collect();
+                writeln!(out, "ok     {}: {}", file.path, dags.join(", "))?;
+            }
+            Some(error) => {
+                writeln!(
+                    out,
+                    "error  {}: {}: {}",
+                    file.path, error.exception, error.message
+                )?;
+                for line in error.traceback.lines() {
+                    writeln!(out, "         {line}")?;
                 }
             }
         }
-        let dags: usize = files.iter().map(|f| f.dags.len()).sum();
-        writeln!(
-            out,
-            "{} file(s), {dags} DAG(s), {errors} error(s)",
-            files.len()
-        )?;
     }
-    if errors > 0 {
-        return Err(AppError::Failed(format!("{errors} file(s) with errors")));
+    let dags: usize = files.iter().map(|file| file.dags.len()).sum();
+    writeln!(
+        out,
+        "{} file(s), {dags} DAG(s), {errors} error(s)",
+        files.len()
+    )?;
+    if let Some(check) = version.filter(|check| check.ok) {
+        writeln!(out, "{}", check.line())?;
     }
     Ok(())
 }

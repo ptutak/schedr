@@ -258,6 +258,15 @@ fn connect_sends_the_token_else_basic_credentials_else_nothing() {
     assert_eq!(client.transport().auth(), &Auth::None);
     assert_eq!(client.transport().server(), "http://127.0.0.1:1");
     assert!(!output.json);
+
+    let client = connect_to(
+        "http://sched.example/",
+        &client_args(Some("t0k"), Some("anna"), false),
+        &BTreeMap::new(),
+    );
+    assert_eq!(client.transport().server(), "http://sched.example");
+    assert_eq!(client.transport().auth(), &Auth::Bearer("t0k".to_owned()));
+    assert_eq!(client.poll(), crate::client::POLL_INTERVAL);
 }
 
 #[rstest]

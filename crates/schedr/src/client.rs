@@ -29,6 +29,14 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long [`Client::wait`] waits for the master's decision.
 pub const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long connecting to the server may take.
+///
+/// A handshake that never completes (a black-holed address) stops here.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long one request may take, from the start of the connection until the body ends.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// An HTTP method the client uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -119,6 +127,21 @@ pub enum Auth {
     },
 }
 
+impl Auth {
+    /// Bearer when `token` is set (it wins over a user name), else HTTP Basic, else none.
+    #[must_use]
+    pub fn from_cli(token: Option<&str>, user: Option<&str>, password: Option<&str>) -> Self {
+        match (token, user) {
+            (Some(token), _) => Self::Bearer(token.to_owned()),
+            (None, Some(user)) => Self::Basic {
+                user: user.to_owned(),
+                password: password.map(str::to_owned),
+            },
+            (None, None) => Self::None,
+        }
+    }
+}
+
 /// The API over HTTP.
 #[derive(Debug, Clone)]
 pub struct HttpTransport {
@@ -129,10 +152,23 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     /// A transport to `server` (e.g. `http://localhost:8080`) sending `auth`.
+    ///
+    /// Connecting gives up after [`CONNECT_TIMEOUT`]; the request gives up after
+    /// [`REQUEST_TIMEOUT`].
+    ///
+    /// # Panics
+    ///
+    /// If the HTTP client cannot be built. The builder here sets only the two timeouts, so
+    /// this does not happen in practice.
     #[must_use]
     pub fn new(server: &str, auth: Auth) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .expect("the HTTP client builds with connect and request timeouts");
         Self {
-            client: reqwest::Client::new(),
+            client,
             server: server.trim_end_matches('/').to_owned(),
             auth,
         }

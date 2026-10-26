@@ -1002,8 +1002,8 @@ that breaks one of these goes to `BUGS.md` and is not fixed in this step.
   - Not part of the user CLI: `schedr task-ctx` and `schedr dag-ctx` (talk to the agent),
     server commands such as `schedr db migrate` / `schedr db status` (talk to the database),
     the server roles,
-    and the local commands `schedr dags check <path>` and `schedr dags test <dag>` (no server;
-    see Testing DAGs).
+    and the local commands `schedr dags check <path> [--against <url>]` and `schedr dags test <dag>`
+    (`dags test` has no server; `--against` reads the server's workers, see Testing DAGs).
   - **Human output** is aligned columns (`DAG PAUSED TRIGGER DEFINED IN`, `RUN KIND STATE
     FOR BY`; a DAG in conflict shows `CONFLICT: N places`; `TRIGGER` shows the trigger as
     written, then `catchup` and its window as a range, either end open, e.g. `0 3 * * *
@@ -4857,11 +4857,43 @@ and no cluster. Four levels, from cheapest to fullest.
   - **Tracebacks start at the user's code:** the runner drops its own and `importlib`'s leading
     frames from import errors (in `dags check`, the UI and the DB alike), so the first frame
     shown is the DAG file's.
-- **Local version vs the workers:** a DAG written with a newer local `schedr` than the worker
-  image may use a feature the workers don't have (an import error in the UI, never silent).
-  Documented: pin the local `schedr` to the worker image's version in the DAG repository's dev
-  dependencies (e.g. `schedr==1.4.*`). `schedr dags check --against <server URL>` asks the
-  server which worker versions are running and warns when the DAGs need a newer one.
+- **Local version vs the workers (2.12b):** a DAG written with a newer local `schedr` than a
+  worker may use a feature that worker doesn't have (an import error in the UI, never silent).
+  Pinning the local `schedr` to the worker image (`schedr==1.4.*` in the DAG repository's dev
+  dependencies) remains how you write against that version. `schedr dags check --against
+  <server URL>` reads `GET /api/v1/workers` after the file report and **fails** (exit 1) when
+  this schedr is newer, as `major.minor`, than any **active** worker. A worker drained for
+  maintenance stays `active` and counts; `draining`, `disconnected`, `offline` and `lost` do
+  not take new tasks. The patch is ignored, as everywhere else. The error names the older
+  ones, grouped by version, oldest first: `this schedr is 0.3; older active workers at
+  http://sched.example: 0.1: w3; 0.2: w1, w2` (the CLI prints it with the `error:` prefix).
+  A pass prints one line after the file report: `ok: this schedr is 0.3; 2 active workers at
+  https://prod run 0.3 (w1, w2)` (one worker says `runs`; several versions are oldest first).
+  A version that does not parse is unknown. Dispatch stores `parse().ok()` (`None`) and
+  `Worker::runs` still offers that worker tasks. The check follows that rule: the worker is
+  listed and does not fail the check, and the passing line names the text as `unknown version`.
+  No active worker: `no active worker at <url> to compare with this schedr (0.3): workers are
+  recorded disconnected right after a master restart until they register again, so retry in a
+  minute`. The server
+  unreachable, or refusing the call, is that error after the file report; a different major
+  is the API's existing refusal (`Schedr-Client-Version`). The call is `connect_to`: the same
+  credentials as the other commands, a 5 s connect timeout and a 30 s request timeout (a
+  handshake that never completes stops). `--token` / `--user` (and `SCHEDR_TOKEN`,
+  `SCHEDR_USER`, `SCHEDR_PASSWORD`) are sent; `--server` is not the URL.
+  `--json` adds `version_check: {local, ok, message, workers: [{worker_id, schedr_version}]}`
+  when the list was read (`workers` is every active worker, the version text as reported;
+  `message` is the `ok:` or `error:` line). A worker on the same or a newer minor does not
+  fail the check.
+  - **Not chosen:** failing only when every active worker is older (one current worker would
+    hide a leftover old one, and that old one still takes tasks); exit 0 with a `warning:`
+    line (a green check deploys onto workers that queue the DAG); a `warning:` line as well
+    as exit 1 (two lines for one fact); ignoring drained workers (resuming one is then a
+    surprise); filtering by the queues the checked files name (a queue added later is not
+    covered); failing before the file report when the server cannot be asked; comparing the
+    patch (patches add no features; see Upgrades and compatibility); treating an unreadable
+    version as its own older group (dispatch stores it as unknown and still assigns the
+    worker); a silent pass (the `ok:` line names the workers that were compared); a separate
+    HTTP client for this flag (the shared `connect_to` keeps the credentials and the timeouts).
 - **Unit tests of task functions.** Outside `with Dag(...)` a `@task` function is **the plain
   function**: calling it runs it and returns the real value (inside a DAG the same call returns
   an `Output[...]`). For code reading the run context or registering handles,
@@ -4914,8 +4946,8 @@ and no cluster. Four levels, from cheapest to fullest.
   - **Exit codes:** like every CLI command, 0 on success and 1 on any failure (errors found,
     a run that didn't succeed, a bad argument); 2 only for wrong usage from the argument
     parser.
-  - **Later:** `-p` and `--secret` (run parameters and secrets, M4), `--task` (M4) and `dags
-    check --against` (M2) say so with the milestone; they aren't silently ignored.
+  - **Later:** `-p` and `--secret` (run parameters and secrets, M4) and `--task` (M4) say so
+    with the milestone; they aren't silently ignored. `dags check --against` is 2.12b.
 - **From Python: `schedr.testing.run_dag(path, dag_id, for_=..., params=..., secrets=...)`**
   starts the same thing as a subprocess. Every task can be inspected and asserted separately:
 

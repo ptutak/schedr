@@ -3,12 +3,12 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.12 done).
+- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.12b done).
 
-## State (2026-10-25)
+## State (2026-10-26)
 
-- Branch `main`, pushed to GitHub (the user pushes; `gh run list` shows CI). **M1 is done;
-  M2 steps 2.1 to 2.12 are done.**
+- On `main` (this worktree). The user commits and pushes; `gh run list` shows CI. **M1 is
+  done; M2 steps 2.1 to 2.12b are done.**
   The M2 commits so far:
 
   | Commit | Step |
@@ -35,13 +35,17 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 | `2c1a6d5` | 2.10b done: three code reviews' fixes, T2's fallback and setting aside, T1's memory restore and read-back, B17, B18 (caps, batching), D1-D3, `[master]` times, M3's federated view |
 | `94f42c4` | 2.11a: standalone inside an Istio mesh (`serviceAccount`, `migration`, `istio`), Swagger UI at `/api/v1/docs/` (prefix-aware), `database.postgres`, `vault`, DAGs from a flat folder (`charts/schedr/dags-values.sh`), git-sync credentials, the base image's libraries (pymongo built), fixes B19 |
 | `ae5fa2c` | 2.11: the distributed chart (`mode: distributed`: master, webserver, workers; TLS generated, from cert-manager or Secrets; accounts and Istio policies per role), `schedr-server`, `schedr master --migrate`, the webserver waiting for its schema, `passEnv`; the connections draft (function-based) |
-| this commit | 2.12: kill tests (`scripts/kind-kill.sh` on kind-schedr-test: hard-kill the master, then a worker, then standalone on SQLite); the same checks as a procedure in the guide |
+| `94b40c1` | 2.12: kill tests (`scripts/kind-kill.sh` on kind-schedr-test: hard-kill the master, then a worker, then standalone on SQLite); the same checks as a procedure in the guide |
+| `a0ce974` | docs: Writing DAGs as built; B20 logged (`dags check --against` named milestone M2) |
+| this commit | 2.12b: `dags check --against` reads active workers' `schedr_version` and exits 1 when this schedr is newer by minor version than any of them (names those workers; a drained worker counts; patch ignored; an unreadable version stays eligible, as in dispatch). A pass prints one `ok:` line; `--json` stores that line in `version_check.message`. The call uses the CLI client (credentials and HTTP timeouts). Fixes B20. `standalone` help and the overview: one pod in production, SQLite or Postgres |
 
 - CI is green on every pushed commit up to `2c1a6d5` (checked 2026-10-24 with `gh run list`);
   the nightly stress run of 2026-10-24 07:21 passed, before `2c1a6d5` landed.
-- The last `make check` (2.12, 2026-10-25): 1243 Rust unit tests, 632 Python unit tests at
-  99.96 % coverage, 95 Rust and 15 Python integration tests; Rust line coverage 87.79 %
-  (floor 85 %). `make docs` passed. The kind runs passed: `scripts/kind-standalone.sh`,
+- The last `make check` (2.12b, 2026-10-26): 1254 Rust unit tests, 632 Python unit tests at
+  99.96 % coverage, 98 Rust integration tests and 27 Python integration tests (the
+  `python/tests/integration` and `examples` pytest run); Rust line coverage 88.19 %
+  (floor 85 %). `make docs` passed. The kind runs passed before this step:
+  `scripts/kind-standalone.sh`,
   `scripts/kind-mesh.sh` (native and classic sidecars), `scripts/kind-distributed.sh` (and
   `MESH=1` on the mesh cluster), `scripts/kind-kill.sh` (master, worker, standalone).
   WSL's `fs.inotify.max_user_instances` is 512 now (the user
@@ -124,9 +128,20 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    finishes), then a worker during `again` (`retries=1`, `retry_delay` 0, `lost` /
    `WorkerRestarted`, then success), then standalone on SQLite (an earlier run kept). It
    passed on `kind-schedr-test`. OpenShift is the same procedure in the guide, not run from
-   here. **Next: 2.13** (more wheels). M3's web UI is **federated from the
+   here.
+6. **M2, step 2.12b: done** (on `main`; PROJECT.md, Testing DAGs:
+   "Local version vs the workers", with what wasn't chosen; PLAN.md's row). `schedr dags
+   check --against <url>` reads that server's active workers (a maintenance drain still
+   counts) and exits 1 when this schedr is newer by `major.minor` than any of them, naming
+   those workers. A pass prints one `ok:` line after the file report, and `--json` stores
+   that line (and the `error:` line on a failure) in `version_check.message`. A version the
+   master cannot parse does not fail the check. No active worker exits 1 and says to retry
+   in a minute (workers stay disconnected after a master restart until they register). The
+   call uses `connect_to` (the CLI's credentials and HTTP timeouts). Fixes B20. The
+   `standalone` help and the overview match production (SQLite or Postgres, one pod).
+   **Next: 2.13** (more wheels). M3's web UI is **federated from the
    start**: a list of deployments, each reached through its webserver.
-6. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
+7. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
    "Connections (draft)", M4): `@connection(arg=t"{secrets[...]}")` on a generator function,
    as `contextlib.contextmanager`; tasks use `with name() as client:`. The in-task CLI for
    Bash is accepted; CommandOperator, Bash scripts and plain Python are undecided (candidates
@@ -178,7 +193,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B20); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B21); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
