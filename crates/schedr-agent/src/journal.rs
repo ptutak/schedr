@@ -12,8 +12,8 @@
 //!   SIGKILL after a grace time); those attempts aren't reported, so the master ends them
 //!   `lost`.
 //! - **Process identity:** a process group ID and the start time of its leader (from
-//!   `/proc/<pid>/stat`), so a recycled PID isn't taken for the task. Without `/proc`, or once
-//!   the leader is gone, nothing is stopped.
+//!   `/proc/<pid>/stat`), so a recycled PID isn't taken for the task. Without `/proc` the
+//!   agent warns once and nothing is stopped; once the leader is gone, nothing is stopped.
 //!
 //! - **One agent per journal:** it holds a lock (see [`Journal::lock`]).
 //!

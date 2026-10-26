@@ -38,7 +38,8 @@ the code. Roughly:
 - **worker:** slots and slots used, attempts by status, watchdog kills, journal records, log
   disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
-- **every role:** process memory, CPU, open files, start time, and the build version.
+- **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
+  macOS), and the build version.
 
 Counters and histograms are updated where things happen. The gauges that need the database
 (runs, tasks and workers by state) are refreshed by the master's loop every 15 s, with one

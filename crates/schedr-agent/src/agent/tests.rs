@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -1081,4 +1082,40 @@ fn with_memory_adds_the_peak_and_says_why_a_task_was_killed() {
     );
     assert_eq!(fine.peak_memory_bytes, 5 << 20);
     assert_eq!(fine.error_summary_json, Vec::<u8>::new());
+}
+
+#[test]
+fn a_missing_proc_is_warned_once_and_other_identity_errors_every_time() {
+    let said = AtomicBool::new(false);
+    assert_eq!(
+        identity_warning(false, &said),
+        Some(IdentityWarning::NoProc)
+    );
+    assert_eq!(
+        identity_warning(false, &said),
+        None,
+        "said once per process"
+    );
+    assert!(said.load(Ordering::Relaxed));
+
+    // A present `/proc` is some other failure (the process has gone, or the stat line
+    // doesn't parse). It warns every time and doesn't consume the once-warning.
+    let said = AtomicBool::new(false);
+    assert_eq!(
+        identity_warning(true, &said),
+        Some(IdentityWarning::ThisTask)
+    );
+    assert_eq!(
+        identity_warning(true, &said),
+        Some(IdentityWarning::ThisTask)
+    );
+    assert!(!said.load(Ordering::Relaxed));
+    assert_eq!(
+        identity_warning(false, &said),
+        Some(IdentityWarning::NoProc)
+    );
+    assert_eq!(
+        NO_PROC_WARNING,
+        "no /proc: orphaned tasks aren't stopped after a crash"
+    );
 }

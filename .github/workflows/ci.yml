@@ -97,8 +97,9 @@ jobs:
 
   # The wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
   # releases). Linux x86_64 as manylinux (glibc) and musllinux (Alpine, e.g. the standalone
-  # image in examples/kubernetes); aarch64 and macOS come with M2. The smoke test is PLAN.md's
-  # "M1 is done": install, `dags test`, and a run in `schedr standalone` through the CLI.
+  # image in examples/kubernetes). Linux aarch64 manylinux and macOS arm64 are the matrix
+  # job below. The smoke test is PLAN.md's "M1 is done": install, `dags test`, and a run
+  # in `schedr standalone` through the CLI.
   wheel:
     runs-on: ubuntu-latest
     steps:
@@ -131,6 +132,48 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
+          path: dist/*.whl
+
+  # Linux aarch64 manylinux and macOS arm64 (M2.13), one matrix. The check name is
+  # `matrix.name`, so the two stay visible per platform. `manylinux: auto` on the arm
+  # runner is expected to pick quay.io/pypa/manylinux2014_aarch64; the first CI run
+  # verifies that. The macOS runner has rustup, so rust-toolchain.toml governs the
+  # toolchain on every job (no `rust-toolchain` input). `manylinux` is ignored off Linux;
+  # `"off"` is quoted because YAML reads a bare `off` as false. One platform failing
+  # does not cancel the other. The macOS wheel tag is maturin's default macosx_11_0_arm64.
+  wheel-native:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wheel-linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64
+            manylinux: auto
+            wheel: dist/*manylinux*.whl
+            artifact: wheels-linux-aarch64
+          - name: wheel-macos-arm64
+            runner: macos-15
+            target: aarch64
+            manylinux: "off"
+            wheel: dist/*macosx*.whl
+            artifact: wheels-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+      - run: scripts/smoke-wheel.sh ${{ matrix.wheel }} python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
           path: dist/*.whl
 
   # The Helm chart: lint and render it (see `make chart-check`).

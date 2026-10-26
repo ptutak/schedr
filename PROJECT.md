@@ -5587,20 +5587,52 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   DAG author the API **and** `schedr standalone` for local development. If schedr's Python
   package later includes a compiled Rust extension (allowed, see Rust/Python integration), it
   goes into the same wheel.
-- **Platform wheels:** Linux x86_64 and aarch64, and macOS (local development; Linux-only
-  features such as the memory watchdog are disabled there). **In M1 (1.16): Linux x86_64**
-  (manylinux, built by `maturin-action` in CI); aarch64 and macOS come with M2. **M2.1b adds
-  Linux x86_64 musllinux** (Alpine uses musl: a manylinux wheel's binary doesn't run there),
-  smoke-tested in CI inside `python:3.14.8-alpine3.24`; built locally with `make smoke-musl`
-  (maturin 1.15.0 with zig 0.17.0 through `uvx`, and the `x86_64-unknown-linux-musl` target).
-  Both wheels go to `dist/` (their names tell them apart), where the example image takes the
-  musllinux one.
-- **Smoke test of the wheel** (`scripts/smoke-wheel.sh`, CI's `wheel` job, `make smoke`
-  locally): PLAN.md's "M1 is done" as a new user does it. The wheel goes into a fresh venv
-  that isn't activated, with only the system's directories on `PATH`; then `schedr dags
+- **Platform wheels:** Linux x86_64 (manylinux and musllinux), Linux aarch64 (manylinux), and
+  macOS arm64 (local development). **In M1 (1.16): Linux x86_64 manylinux**, built by
+  `maturin-action` in CI. **M2.1b adds Linux x86_64 musllinux** (Alpine uses musl: a manylinux
+  wheel's binary doesn't run there), smoke-tested in CI inside `python:3.14.8-alpine3.24`;
+  built locally with `make smoke-musl` (maturin 1.15.0 with zig 0.17.0 through `uvx`, and the
+  `x86_64-unknown-linux-musl` target). The x86_64 wheels go to `dist/` (their names tell them
+  apart), where the example image takes the musllinux one. **M2.13 (2026-10-26) adds Linux
+  aarch64 manylinux and macOS arm64**, one matrix job on native standard runners
+  (`wheel-native` in `ci.yml`), shown per platform as `wheel-linux-aarch64`
+  (`ubuntu-24.04-arm`, `manylinux: auto`) and `wheel-macos-arm64` (`macos-15`, Apple Silicon;
+  `manylinux: off`, ignored off Linux). `manylinux: auto` on the arm runner is expected to
+  pick the native `quay.io/pypa/manylinux2014_aarch64` image, the same manylinux2014 tag as
+  x86_64; that image is verified only by the first CI run. The macOS runner has rustup, so
+  `rust-toolchain.toml` governs the toolchain on every job (no `rust-toolchain` input). The
+  macOS wheel tag is maturin's default `macosx_11_0_arm64`. The repository is public, so
+  these standard runners cost nothing. Larger (billed) runners are not used. No new action
+  and no new crate: the job reuses `PyO3/maturin-action@v1`, `actions/setup-python@v5`,
+  `actions/checkout@v4` and `actions/upload-artifact@v4`. **macOS has no `/proc`.** Off
+  there: the memory watchdog, the cgroup limit, stopping orphaned tasks from the journal
+  after a crash (process identity), and the ops port's process metrics. When `/proc` is
+  absent the agent warns once per process (`no /proc: orphaned tasks aren't stopped after
+  a crash`). Where `/proc` exists, a failure to identify a process still warns per task.
+  **No Rust unit-test job on macOS:** it is
+  local development, and the smoke run covers the wheel. A unit-test job would mean tests
+  that read `/proc` need marking Linux-only.
+  Not chosen: cross-compiling aarch64 on the x86_64 runner (the smoke test would then need
+  QEMU or a second machine, and `aws-lc-rs` plus the bundled SQLite compile with the target's
+  own C compiler on the native runner); cross-compiling macOS from Linux (`maturin-action`
+  has no macOS SDK); macOS x86_64 as a second wheel and universal2 (local development is
+  Apple Silicon; an Intel Mac gets no wheel; a universal2 wheel would run only its arm64
+  slice in the smoke test); musllinux aarch64 (the target cluster is x86_64, so the Alpine
+  image stays on the x86_64 musllinux wheel); a larger macOS runner (billed; the standard
+  `macos-15` is 3 cores and 7 GB); documenting the missing `/proc` only, with a WARN on every
+  task (the log would repeat it for each attempt); macOS equivalents through `sysctl` /
+  `libproc` (real work, for local development only); a Rust unit-test job on `macos-15`.
+- **Smoke test of the wheel** (`scripts/smoke-wheel.sh`; CI job `wheel`, and the matrix
+  checks `wheel-linux-aarch64` and `wheel-macos-arm64`; `make smoke` locally for the x86_64
+  manylinux wheel): PLAN.md's "M1 is done" as a new user does it. The wheel goes into a fresh
+  venv that isn't activated, with only the system's directories on `PATH`; then `schedr dags
   check` and `schedr dags test` on the example DAG, and `schedr standalone` on free ports
   with `dags list`, `dags unpause`, `runs trigger --for ...` and `runs list` until that run
-  succeeds. Not part of `make check` (a release build takes minutes).
+  succeeds. The same script runs on each runner. Not part of `make check` (a release build
+  takes minutes). There is no local target for the aarch64 or macOS wheel: this machine is
+  x86_64 and there is no Mac, and a zig cross-build is not the manylinux image CI uses.
+  Not chosen: smoking the macOS wheel only as far as `schedr --version`; smoking the aarch64
+  wheel under QEMU on the x86_64 runner.
 - **Container images:**
   - Master/webserver image: the Rust binary only, **no Python at all**.
   - Worker base image: Rust binary + Python 3.14 + the `schedr` package. Users build their own
@@ -5926,8 +5958,11 @@ its configuration, not the content.
   rebuild leaves to flush, but doesn't replace the `sync`.
 - Pre-commit hooks run the same checks on commit.
 - CI: GitHub Actions: `rust` and `python` (unit tests, lints, coverage), `integration`
-  (integration tests with a Postgres service; see Testing), `docs`, `wheel` (the release
-  wheel and its smoke test, see Packaging and releases) and `sdist`.
+  (integration tests with a Postgres service; see Testing), `docs`, `wheel` (Linux x86_64
+  manylinux and musllinux, and the images), `wheel-native` (one matrix, shown as
+  `wheel-linux-aarch64` and `wheel-macos-arm64`; see Packaging and releases) and `sdist`.
+  The repository is public, so the standard runners cost nothing. No Rust unit-test job on
+  macOS (see Packaging and releases).
 
 ## Roadmap
 

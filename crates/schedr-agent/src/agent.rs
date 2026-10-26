@@ -18,14 +18,16 @@
 //!   their results. A second request interrupts at once.
 //! - **The journal** on disk backs `Started` and `Finished` (see [`crate::journal`]): an
 //!   attempt that can't be recorded is rejected, and on start the agent reports the results
-//!   its previous incarnation had and stops the processes it left running.
+//!   its previous incarnation had and stops the processes it left running. Without `/proc`
+//!   it warns once and leaves them.
 //!
 //! The work itself goes through an [`Executor`]: processes in production
 //! ([`ProcessExecutor`]), something simpler in tests.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use schedr_model::beat::Beat;
@@ -127,6 +129,50 @@ pub trait Executor: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<Vec<ParsedFile>, String>> + Send;
 }
 
+/// Warned once when `/proc` is missing, so a crash leaves task processes running.
+pub(crate) const NO_PROC_WARNING: &str = "no /proc: orphaned tasks aren't stopped after a crash";
+
+/// Set once [`NO_PROC_WARNING`] has been logged in this process.
+static NO_PROC_SAID: AtomicBool = AtomicBool::new(false);
+
+/// How to report that a task's process couldn't be identified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityWarning {
+    /// `/proc` is not a directory. Logged once per process, as [`NO_PROC_WARNING`].
+    NoProc,
+    /// Any other failure. Logged for this task.
+    ThisTask,
+}
+
+/// What to log when [`process_identity`] failed.
+///
+/// `proc_present` is whether `/proc` is a directory. When it isn't, the failure is that
+/// `/proc` is absent (macOS): [`IdentityWarning::NoProc`] the first time (`said` flips), then
+/// nothing. When it is, every failure is [`IdentityWarning::ThisTask`] — a process that has
+/// already exited is `NotFound` too, and that still warns per task. `said` is the
+/// process-wide flag in the agent; a test passes its own.
+#[must_use]
+pub(crate) fn identity_warning(proc_present: bool, said: &AtomicBool) -> Option<IdentityWarning> {
+    if proc_present {
+        Some(IdentityWarning::ThisTask)
+    } else if said.swap(true, Ordering::Relaxed) {
+        None
+    } else {
+        Some(IdentityWarning::NoProc)
+    }
+}
+
+/// Logs [`identity_warning`] for this process (`/proc` as it is on this machine).
+fn warn_unidentified(pid: i32, error: &std::io::Error) {
+    match identity_warning(Path::new("/proc").is_dir(), &NO_PROC_SAID) {
+        Some(IdentityWarning::NoProc) => tracing::warn!("{}", NO_PROC_WARNING),
+        Some(IdentityWarning::ThisTask) => {
+            tracing::warn!(pid, %error, "can't identify the task's process");
+        }
+        None => {}
+    }
+}
+
 /// Runs attempts and parse jobs as processes.
 #[derive(Debug, Clone)]
 pub struct ProcessExecutor {
@@ -169,7 +215,7 @@ impl Executor for ProcessExecutor {
             ));
             match process_identity(pid) {
                 Ok(identity) => spawned(identity),
-                Err(error) => tracing::warn!(pid, %error, "can't identify the task's process"),
+                Err(error) => warn_unidentified(pid, &error),
             }
         };
         let ran = match plan {

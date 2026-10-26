@@ -71,8 +71,9 @@ When the agent starts, it reads the journal before connecting:
   the summary "worker restarted while the attempt ran (possibly out of memory)".
 
 A process group is identified by its ID and its leader's start time, so a recycled PID is
-never signalled. One agent per journal: a second agent with the same ID and data directory
-exits at once.
+never signalled. Without `/proc` (macOS) that start time can't be read: the agent warns once
+that orphaned tasks aren't stopped after a crash, and leaves them running. One agent per
+journal: a second agent with the same ID and data directory exits at once.
 
 ## Memory
 
@@ -87,7 +88,9 @@ fires, it kills everything in the container, the agent included. So the agent en
   (PSS, so shared pages aren't counted twice).
 - A group over its budget gets **SIGKILL at once**: a spike can't wait for a grace period.
   The attempt ends `oom_killed` (using a retry), with "exceeded memory budget … (… used)".
-- With no limit found (cgroup v1, a laptop), memory is measured but never limited.
+- With no limit found (cgroup v1, a Linux laptop), memory is measured but never limited.
+- Without `/proc` (macOS) there is no cgroup limit and a task's memory can't be read, so the
+  watchdog neither measures nor kills.
 
 Every attempt reports its peak memory, shown in the API.
 

@@ -5,7 +5,8 @@
 //!
 //! - **The limit** is the smallest cgroup v2 `memory.max` from the agent's own cgroup up to
 //!   the root (`/proc/self/cgroup`), so it is found in a pod and on a host alike. None found
-//!   (`max`, cgroup v1, no `/proc`): nothing is killed, peak memory is still measured.
+//!   (`max`, cgroup v1): nothing is killed, peak memory is still measured. No `/proc`:
+//!   nothing is measured and nothing is killed.
 //! - **The budget** per task is `[worker] memory_budget`, else (limit − 10 %) ÷ slots.
 //! - **A task's memory** is the PSS (`/proc/<pid>/smaps_rollup`) of every process in its
 //!   process group (what SIGTERM and SIGKILL reach), RSS where PSS can't be read: PSS splits

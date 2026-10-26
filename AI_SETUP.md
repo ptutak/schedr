@@ -204,14 +204,19 @@ they use the project's versions.
 
 ## CI (GitHub Actions)
 
-Separate jobs, each one reproducible with a make target:
+Separate jobs. The ones that run on this machine each have a make target:
 
 - `rust`: fmt, clippy, generated-file check, unit tests with coverage, doc tests;
 - `python`: ruff format and check, mypy, unit tests with coverage;
 - `integration`: integration tests, with services as service containers (same images as the
   Makefile uses);
 - `docs`: the site, failing on warnings;
-- `package` / `wheel`: the release artifact built and smoke-tested; uploaded.
+- `package` / `wheel`: the Linux x86_64 release wheels (manylinux and musllinux) built and
+  smoke-tested (`make smoke`, `make smoke-musl`); uploaded;
+- `wheel-native`: Linux aarch64 manylinux and macOS arm64, one matrix, shown as
+  `wheel-linux-aarch64` and `wheel-macos-arm64`. The same smoke test on native runners. No
+  local make target (this machine is x86_64, and there is no Mac). See `PROJECT.md`,
+  Packaging and releases.
 
 ## Dependencies
 

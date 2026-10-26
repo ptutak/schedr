@@ -3,12 +3,14 @@
 Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - `BUGS.md` lists the open bugs. Log new ones there instead of fixing them on the spot.
 - `PROJECT.md` is the decision log. Every decision goes there, in the section it belongs to.
-- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.12b done).
+- `PLAN.md` holds the milestones, the M1 steps (done) and the M2 steps (2.1–2.12b done;
+  2.13 committed, CI pending).
 
 ## State (2026-10-26)
 
 - On `main` (this worktree). The user commits and pushes; `gh run list` shows CI. **M1 is
-  done; M2 steps 2.1 to 2.12b are done.**
+  done; M2 steps 2.1 to 2.12b are done. 2.13 committed, CI pending** (not done until the
+  `wheel-native` checks `wheel-linux-aarch64` and `wheel-macos-arm64` pass after the push).
   The M2 commits so far:
 
   | Commit | Step |
@@ -37,7 +39,12 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 | `ae5fa2c` | 2.11: the distributed chart (`mode: distributed`: master, webserver, workers; TLS generated, from cert-manager or Secrets; accounts and Istio policies per role), `schedr-server`, `schedr master --migrate`, the webserver waiting for its schema, `passEnv`; the connections draft (function-based) |
 | `94b40c1` | 2.12: kill tests (`scripts/kind-kill.sh` on kind-schedr-test: hard-kill the master, then a worker, then standalone on SQLite); the same checks as a procedure in the guide |
 | `a0ce974` | docs: Writing DAGs as built; B20 logged (`dags check --against` named milestone M2) |
-| this commit | 2.12b: `dags check --against` reads active workers' `schedr_version` and exits 1 when this schedr is newer by minor version than any of them (names those workers; a drained worker counts; patch ignored; an unreadable version stays eligible, as in dispatch). A pass prints one `ok:` line; `--json` stores that line in `version_check.message`. The call uses the CLI client (credentials and HTTP timeouts). Fixes B20. `standalone` help and the overview: one pod in production, SQLite or Postgres |
+| `837836d` | 2.12b: `dags check --against` reads active workers' `schedr_version` and exits 1 when this schedr is newer by minor version than any of them (names those workers; a drained worker counts; patch ignored; an unreadable version stays eligible, as in dispatch). A pass prints one `ok:` line; `--json` stores that line in `version_check.message`. The call uses the CLI client (credentials and HTTP timeouts). Fixes B20. `standalone` help and the overview: one pod in production, SQLite or Postgres |
+| `e04fab8` | `scripts/kind-lib.sh`: the helpers `kind-distributed.sh`, `kind-kill.sh` and `kind-standalone.sh` shared |
+| `fa83d25` | fixes B15: tokio 1.54.1 (RUSTSEC-2026-0384), `crates/schedr/tests/timers.rs`; the library-age rule (7 days for a minor, 3 for a patch); `cargo update` under it; B21 logged |
+| `9edc4a1` | fixes B21: the lease tests use a 2 s query limit (periods three limits, every wait derived from it), two write-lock stall tests |
+| `2d8c8ee` | `scripts/kind-mesh.sh` sources `kind-lib.sh` (all four kind scripts share it); passed on schedr-mesh, native and classic sidecars |
+| this commit | 2.13: Linux aarch64 manylinux and macOS arm64 wheels, full `scripts/smoke-wheel.sh` on native runners (one matrix, `wheel-native`, shown as `wheel-linux-aarch64` on `ubuntu-24.04-arm` and `wheel-macos-arm64` on `macos-15`). CI pending |
 
 - CI is green on every pushed commit up to `2c1a6d5` (checked 2026-10-24 with `gh run list`);
   the nightly stress run of 2026-10-24 07:21 passed, before `2c1a6d5` landed.
@@ -140,8 +147,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    in a minute (workers stay disconnected after a master restart until they register). The
    call uses `connect_to` (the CLI's credentials and HTTP timeouts). Fixes B20. The
    `standalone` help and the overview match production (SQLite or Postgres, one pod).
-   **Next: 2.13** (more wheels). M3's web UI is **federated from the
-   start**: a list of deployments, each reached through its webserver.
+   **2.13 committed, CI pending** (not done until the new wheel jobs pass). M3's web UI is
+   **federated from the start**: a list of deployments, each reached through its webserver.
 7. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
    "Connections (draft)", M4): `@connection(arg=t"{secrets[...]}")` on a generator function,
    as `contextlib.contextmanager`; tasks use `with name() as client:`. The in-task CLI for
@@ -234,7 +241,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
 - **`run_dag` by hand** with a freshly built binary: `SCHEDR_BIN=$PWD/target/debug/schedr`.
 - **Wheels:** `make smoke` (release build, a few minutes), `make smoke-musl` (musllinux via
   `uvx maturin` + ziglang, smoke-tested on Alpine), or `uv build --wheel` and
-  `scripts/smoke-wheel.sh <wheel> <python 3.14>`.
+  `scripts/smoke-wheel.sh <wheel> <python 3.14>`. Linux aarch64 and macOS arm64 are CI only
+  (one matrix, `wheel-native`, shown as `wheel-linux-aarch64` and `wheel-macos-arm64`).
 - **Every role opens the ops port** (`[ops] port`, 8090): tests set it to 0, like the other
   ports, and read `ops on http://…` from the log.
 - **Roles need `[tls]`:** `app` mode (the default) needs `ca`, `cert`, `key`; set
