@@ -1,7 +1,9 @@
 //! The fork servers, agent side (see PROJECT.md, How Python tasks are started: the fork
 //! server): started with the worker, two per interpreter (one preloading the configured
-//! libraries, a bare one), each restarted with backoff when it dies; a Python task asks the
-//! preloaded one to fork its runner, then the bare one, and is spawned when neither can.
+//! libraries, a bare one), each restarted with backoff when it dies; a Python task or a parse
+//! job asks the preloaded one to fork its runner, then the bare one, and is spawned when
+//! neither can (a task with `preload=False` asks only the bare one, one with
+//! `fresh_process=True` neither).
 //!
 //! A forked runner is not the agent's child: its **shim** (forked by the fork server) is its
 //! parent and reports on a status socket the agent passes with the request,
@@ -418,15 +420,24 @@ impl ForkServers {
     }
 
     /// Forks a runner in `mode` for `spec` (its environment, directory, log file and output
-    /// limit): from the preloaded server, else the bare one. Each one that couldn't is
-    /// counted.
+    /// limit): from the preloaded server (unless `preload` is off: `@task(preload=False)`),
+    /// else the bare one. Each one that couldn't is counted; one skipped by choice isn't.
     ///
     /// # Errors
     ///
     /// The last server's [`Fallback`] when none forked it: the caller spawns it.
-    pub async fn fork(&self, spec: &ProcessSpec, mode: RunnerMode) -> Result<Forked, Fallback> {
+    pub async fn fork(
+        &self,
+        spec: &ProcessSpec,
+        mode: RunnerMode,
+        preload: bool,
+    ) -> Result<Forked, Fallback> {
         let mut last = Fallback::Down;
-        for server in self.servers.iter() {
+        let tried = self
+            .servers
+            .iter()
+            .filter(|server| preload || server.kind == Kind::Bare);
+        for server in tried {
             match fork_on(server, spec, mode).await {
                 Ok(forked) => return Ok(forked),
                 Err(fallback) => {
@@ -668,8 +679,8 @@ async fn fork_on(
             status: Some(status),
             ended: None,
             usage: Ended::default(),
-            stdout: tokio::spawn(collect(stdout, Arc::clone(&log), limit)),
-            stderr: tokio::spawn(collect(stderr, log, limit)),
+            stdout: Some(tokio::spawn(collect(stdout, Arc::clone(&log), limit))),
+            stderr: Some(tokio::spawn(collect(stderr, log, limit))),
         },
         stream: tokio_stream(ours).map_err(io)?,
         hold,
@@ -781,8 +792,9 @@ pub struct ForkedProcess {
     status: Option<UnixStream>,
     ended: Option<Termination>,
     usage: Ended,
-    stdout: JoinHandle<io::Result<TailBuffer>>,
-    stderr: JoinHandle<io::Result<TailBuffer>>,
+    /// Taken by [`ForkedProcess::output`].
+    stdout: Option<JoinHandle<io::Result<TailBuffer>>>,
+    stderr: Option<JoinHandle<io::Result<TailBuffer>>>,
 }
 
 impl ForkedProcess {
@@ -797,10 +809,25 @@ impl ForkedProcess {
     /// # Errors
     ///
     /// Returns an I/O error from reading a pipe or writing the log file.
-    pub async fn output(self) -> io::Result<(TailBuffer, TailBuffer)> {
-        let stdout = self.stdout.await.map_err(io::Error::other)??;
-        let stderr = self.stderr.await.map_err(io::Error::other)??;
+    pub async fn output(mut self) -> io::Result<(TailBuffer, TailBuffer)> {
+        let taken = (self.stdout.take(), self.stderr.take());
+        let (Some(stdout), Some(stderr)) = taken else {
+            return Err(io::Error::other("the output was taken already"));
+        };
+        let stdout = stdout.await.map_err(io::Error::other)??;
+        let stderr = stderr.await.map_err(io::Error::other)??;
         Ok((stdout, stderr))
+    }
+}
+
+impl Drop for ForkedProcess {
+    /// A process dropped before its end was seen is killed, as a spawned one is
+    /// (`kill_on_drop`): a dropped attempt or parse job must not leave it running unwatched.
+    /// Its PID is still its own: the caller's [`GroupHold`] outlives it.
+    fn drop(&mut self) {
+        if self.ended.is_none() {
+            let _ = kill_process_group(self.group, rustix::process::Signal::KILL);
+        }
     }
 }
 

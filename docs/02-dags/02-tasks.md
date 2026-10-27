@@ -31,9 +31,13 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 
 `@task(timeout=..., retries=...)` sets that task's options. `.override(...)` returns a new
 task function and leaves the original unchanged. The options are
-[Defaults and retries](05-defaults.md). Each Python task runs in its own process; how that
-process is started is
-[How Python tasks are started](../_generated/05-design/03-architecture.md#how-python-tasks-are-started).
+[Defaults and retries](05-defaults.md). Each Python task runs in its own process. Leave the
+start as it is for a task that can share the worker's preloaded libraries. Set
+`preload=False` when the task misbehaves next to those libraries: it still forks, but only
+from the bare fork server. Set `fresh_process=True` when the task misbehaves after a fork:
+it is always a new process, and never forked. The same two arguments are on `.override(...)`
+and `TaskDefaults(...)`, and the task's own argument wins. What the worker does with them is
+[The fork server](../03-guide/05-workers.md#the-fork-server).
 
 ## Commands
 

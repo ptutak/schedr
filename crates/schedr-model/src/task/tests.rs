@@ -56,6 +56,7 @@ fn python_task_serializes_flat_with_a_kind_tag() {
         "settings": {
             "retries": 0, "retry_delay_ms": 300_000, "timeout_ms": null,
             "queue": "default", "max_output_size": 1_048_576,
+            "preload": true, "fresh_process": false,
         },
         "output_type": {"type": "int"},
     });
@@ -176,4 +177,14 @@ fn empty_tasks_have_no_references() {
         output_type: TypeDesc::None,
     };
     assert_eq!(task.references(), Vec::<&Reference>::new());
+}
+
+#[test]
+fn settings_without_how_a_task_starts_read_as_forked_from_the_preloaded_server() {
+    let settings: TaskSettings = serde_json::from_value(json!({
+        "retries": 0, "retry_delay_ms": 300_000, "timeout_ms": null,
+        "queue": "default", "max_output_size": 1_048_576,
+    }))
+    .unwrap();
+    assert_eq!((settings.preload, settings.fresh_process), (true, false));
 }

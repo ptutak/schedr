@@ -50,7 +50,7 @@ was registered, the backoff starts from 200 ms again.
    [The fork server](#the-fork-server)). A command, and a Python task that was spawned, stay
    `spawn`.
 3. **The process.** A Python task runs `python -m schedr.runner task`, forked from a fork
-   server when that server can do it, otherwise in a new process. A command runs through
+   server when the task allows it and a server can, otherwise in a new process. A command runs through
    the shell when it is a string, or directly when it is a list of arguments. Each starts in
    its own process group, so cancelling or killing reaches the whole
    task, and runs in its root's directory (Python) or its DAG file's directory (commands).
@@ -75,8 +75,9 @@ The runner has a third mode, `python -m schedr.runner fork_server`. It imports a
 libraries once, then starts one process per request. The process runs the same `task` or
 `parse` code a spawned runner runs, with its own channel, log and process group. On Linux
 the worker starts this mode for the interpreter `[dags] interpreter` names, when that
-interpreter has `fork_server = true`, and forks Python tasks from it. Command tasks are
-always a new process. Parse jobs are still one new process each.
+interpreter has `fork_server = true`, and forks Python tasks and parse jobs from it.
+Command tasks are always a new process. A Python task can ask for the bare server only,
+or for a new process every time (below).
 
 **Turning it on.** Off by default. An interpreter written as a path spawns every task:
 
@@ -132,7 +133,7 @@ Linux gets, and what a preload that raises or exits gets. A thread that appears 
 answered `fork_server_disabled` for that request. The worker stops the process and does not
 start that server again.
 
-A `fork` request carries an id, the mode (the worker sends `task`), the process's environment and
+A `fork` request carries an id, the mode (`task` or `parse`), the process's environment and
 working directory, and four open files sent with the message: the process's own channel, its
 stdout, its stderr, and a status socket. The server answers `forked`, or `fork_failed` with
 the reason. Before the fork it flushes its output buffers, including C's, so text a preloaded
@@ -196,8 +197,20 @@ The status socket closes, and there is no `process_exited`. What the worker does
 below.
 
 **What the worker does with a task.** It asks the preloaded server to fork the runner, then
-the bare one (only the bare one, when that is the only server). A server that does not fork
-the task counts in `schedr_worker_fork_fallbacks_total{interpreter,reason}`, once per server:
+the bare one (only the bare one, when that is the only server). A task with `preload` false
+asks only the bare server. That is for code that misbehaves next to the preloaded libraries.
+The skipped server is not counted in `schedr_worker_fork_fallbacks_total`: the task never
+asked it. A task with `fresh_process` true is always a new process, never forked, for code
+that misbehaves after a fork, and `start_method` stays `spawn`. Left unset, `preload` is
+true and `fresh_process` is false, so the task asks the preloaded server. When both are
+set, `fresh_process` true wins. The DAG author sets them on `@task(...)`, `.override(...)`
+and `TaskDefaults(...)`. The task's own argument wins, and they are stored as `preload`
+and `fresh_process` in the task's settings. They apply to a Python task. A command is
+always a new process. `CommandOperator` does not take them. A `TaskDefaults` value is
+stored on every task and used only when that task is Python.
+
+A server that does not fork the task counts in
+`schedr_worker_fork_fallbacks_total{interpreter,reason}`, once per server:
 
 | `reason` | Why that server was skipped |
 |---|---|
@@ -212,6 +225,14 @@ one does, the worker takes the process ID from `process_started` and sends the s
 never says hello fails the attempt with error kind `start_failed`. The worker does not
 spawn another process for it.
 
+A parse job forks one fresh child when the worker has fork servers: the preloaded server,
+then the bare one, then a new process. Each server that does not fork it counts in the
+same metric, with the same reasons. `schedr dags check` starts a new process and does not
+ask the fork servers.
+
+A forked task or parse job that the worker drops before the process has ended is killed,
+as a spawned process is.
+
 If the status socket then closes with no `process_exited`, the worker sends SIGKILL to the
 process group. There is no exit code. When the runner sent no result, the attempt ends
 `failed` with error kind `process_status_unknown`. The error says the shim that reports the
@@ -221,9 +242,9 @@ already stopped keeps that status (`timed_out`, `cancelled`, `interrupted` or
 
 **When a server stops.** A server that exits, or that cannot be started, is started again.
 The wait is 1 s, then doubles, up to 5 min. After the server has been up for 10 min, the
-next wait is 1 s again. Meanwhile tasks use the other server, then a spawned process. A
-task already forked keeps running: its shim still reports, and the server's exit does not
-signal it.
+next wait is 1 s again. Meanwhile a task or a parse job uses the other server, then a new
+process. One already forked keeps running: its shim still reports, and the server's exit
+does not signal it.
 
 A preload that fails to import disables that server. The worker starts it again on those
 same waits, while the time since the first failure is still under
@@ -244,7 +265,7 @@ include `reason`.
 | `fork server disabled; retrying` | A preload import failed, and it will be tried again. Logged on the first failure, and again only when the reason changes. |
 | `fork server disabled until restart` | It will not be started again until the worker process starts again. For an import it has stopped retrying, `gave_up` is how many minutes it had been failing. |
 | `fork server disabled` | It disabled itself while handling a fork. Not started again. |
-| `fork failed` | One fork request failed. The task tries the next server, or is spawned. |
+| `fork failed` | One fork request failed. The task or parse job tries the next server, or is spawned. |
 | `fork server out of step; restarting it` | An answer could not be paired with its request. The server is dropped and started again. |
 
 `schedr_worker_fork_servers{interpreter,kind,state}` is 1 for a server's current state and
@@ -257,8 +278,9 @@ and again whenever that list changes, the worker sends `Warnings`: the whole lis
 server that is no longer disabled drops out, and a worker with none sends an empty list.
 One warning per disabled server. Its kind is `fork_server_disabled`, its interpreter is the
 DAG interpreter's name, and its message names the server and why it is disabled, then what
-that means for tasks. The message is `the preloaded fork server is disabled: <reason>;
-<what tasks do>`, or the same with `bare` in place of `preloaded`:
+that means for tasks. A parse job uses those same servers. The message is `the preloaded
+fork server is disabled: <reason>; <what tasks do>`, or the same with `bare` in place of
+`preloaded`:
 
 | What is disabled | The message ends |
 |---|---|
@@ -276,7 +298,10 @@ as `<worker>: <message>`.
 A forked task shares pages with its fork server, so the watchdog does not kill it on
 resident set size when PSS cannot be read (see [Memory](#memory)).
 
-**Not yet.** A task cannot opt out of the preload or of forking. Parse jobs are not forked.
+**Not yet.** The chart has no `worker.forkServer` value. Turning the fork server on is
+still the worker's own configuration, above. The worker image's build does not check that
+preloading its libraries leaves a single thread. A thread found when the server starts
+still disables that server, as above.
 
 ## The journal
 

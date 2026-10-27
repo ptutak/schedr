@@ -15,8 +15,9 @@ the [CLI reference](../_generated/04-reference/02-cli.md).
 ## `schedr dags check`
 
 `schedr dags check <path>` imports the DAG files with the runner and reports what they
-define. A directory is scanned like a DAG root, honouring `.schedrignore`. A file is
-checked alone.
+define. It starts a new process for that import. A worker's parse job can be forked; this
+command is not. A directory is scanned like a DAG root, honouring `.schedrignore`. A file
+is checked alone.
 
 ```
 ok     helpers.py: no DAGs

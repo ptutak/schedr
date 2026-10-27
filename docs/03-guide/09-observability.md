@@ -38,9 +38,9 @@ the code. Roughly:
   attempts ended, parse jobs, commands and how long they waited for a decision;
 - **worker:** slots and slots used, attempts by status, how long a Python task took to start
   (`schedr_worker_task_start_seconds{method,phase}`), fork servers
-  (`schedr_worker_fork_servers{interpreter,kind,state}`), tasks a fork server didn't fork
-  (`schedr_worker_fork_fallbacks_total{interpreter,reason}`), watchdog kills, journal
-  records, log disk usage;
+  (`schedr_worker_fork_servers{interpreter,kind,state}`), Python tasks and parse jobs a fork
+  server didn't fork (`schedr_worker_fork_fallbacks_total{interpreter,reason}`), watchdog
+  kills, journal records, log disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
 - **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
   macOS), and the build version.
@@ -75,10 +75,11 @@ in state `disabled` is also a warning on that worker, shown in the API and by
 `schedr workers list` (see [The fork server](05-workers.md#the-fork-server)).
 
 `schedr_worker_fork_fallbacks_total` counts each time a fork server did not fork a Python
-task. `reason` is `disabled` (the server is disabled), `down` (it isn't taking requests),
-`fork_failed` (it refused the fork) or `shim_died` (the shim ended before
-`process_started`). The next server, or a spawned process, runs the task. A task the first
-server forks does not add to the counter.
+task or a parse job. `reason` is `disabled` (the server is disabled), `down` (it isn't
+taking requests), `fork_failed` (it refused the fork) or `shim_died` (the shim ended before
+`process_started`). The next server, or a spawned process, runs it. A Python task or parse
+job the first server forks does not add to the counter. A server a task skips with
+`preload` false does not add to the counter either: the task did not ask it.
 
 Counters and histograms are updated where things happen. The gauges that need the database
 (runs, tasks and workers by state) are refreshed by the master's loop every 15 s, with one

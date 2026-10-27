@@ -34,6 +34,10 @@ class TaskDefaults:
         timeout: The attempt's timeout.
         queue: The queue tasks go to.
         max_output_size: The output size limit in bytes (e.g. ``8 * MiB``).
+        preload: Python tasks fork from the preloaded fork server (``False``: only from the
+            bare one, for code that misbehaves next to the preloaded libraries).
+        fresh_process: Python tasks are always a new process, never forked (for code that
+            misbehaves after a fork).
     """
 
     retries: int | None = None
@@ -41,6 +45,8 @@ class TaskDefaults:
     timeout: timedelta | None = None
     queue: str | None = None
     max_output_size: int | None = None
+    preload: bool | None = None
+    fresh_process: bool | None = None
 
     def options(self) -> _build.TaskOptions:
         """These defaults as task options.
@@ -54,6 +60,8 @@ class TaskDefaults:
             timeout=self.timeout,
             queue=self.queue,
             max_output_size=self.max_output_size,
+            preload=self.preload,
+            fresh_process=self.fresh_process,
         )
 
 

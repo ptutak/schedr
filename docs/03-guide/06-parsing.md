@@ -25,9 +25,12 @@ flowchart LR
 3. **Report.** `CodeVersionChanged(root, hash)` goes to the master. Every worker reports on its
    own, but the master creates **one parse job per (root, hash, schedr version)**.
 4. **Parse.** One worker that reported the hash gets `AssignParse`. Its parse slot (one per
-   worker, separate from task slots) runs a Python runner that imports each `.py` file. The
-   native API only *records* DAGs while a file is imported; no task runs. A file that takes
-   longer than `[dags] parse_file_timeout` (60 s) is an import error.
+   worker, separate from task slots) runs a Python runner that imports each `.py` file. When
+   the worker has fork servers, that runner is a fresh child for the job: the preloaded
+   server, then the bare one, then a new process. `schedr dags check` starts a new process
+   and does not ask the fork servers. The native API only *records* DAGs while a file is
+   imported; no task runs. A file that takes longer than `[dags] parse_file_timeout` (60 s)
+   is an import error.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file with a unary call.
    The master validates them and stores a new DAG version for each DAG that changed. A new
    DAG is stored **paused**.

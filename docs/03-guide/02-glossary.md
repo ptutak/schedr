@@ -46,7 +46,8 @@ The names used across the documentation, the API and the logs.
   then starts a process per request. That process runs `task` or `parse` as a spawned runner
   does, with its own channel, log and process group. On Linux, a worker whose DAG interpreter
   has `fork_server = true` starts one or two when the worker starts, and forks Python tasks
-  from them. Parse jobs stay spawned. See [Workers](05-workers.md#the-fork-server).
+  and parse jobs from them. A Python task can ask for the bare server only, or for a new
+  process every time. A command stays a new process. See [Workers](05-workers.md#the-fork-server).
 
 **Shim**
 : The process a fork server puts between itself and one forked process. It reports the

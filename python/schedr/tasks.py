@@ -315,6 +315,8 @@ class TaskFunction[**P, R]:
         timeout: timedelta | None = None,
         queue: str | None = None,
         max_output_size: int | None = None,
+        preload: bool | None = None,
+        fresh_process: bool | None = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -325,11 +327,15 @@ class TaskFunction[**P, R]:
             timeout: Overrides the timeout.
             queue: Overrides the queue.
             max_output_size: Overrides the output size limit.
+            preload: Overrides whether it forks from the preloaded fork server.
+            fresh_process: Overrides whether it is always a new process.
 
         Returns:
             A new task function; this one is unchanged.
         """
-        changes = _build.TaskOptions(retries, retry_delay, timeout, queue, max_output_size)
+        changes = _build.TaskOptions(
+            retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process
+        )
         return TaskFunction(self._fn, task_id or self._task_id, changes.over(self._options))
 
 
@@ -346,6 +352,8 @@ def task[**P, R](
     timeout: timedelta | None = None,
     queue: str | None = None,
     max_output_size: int | None = None,
+    preload: bool | None = None,
+    fresh_process: bool | None = None,
 ) -> Callable[[Callable[P, R]], TaskFunction[P, R]]: ...
 
 
@@ -359,6 +367,8 @@ def task[**P, R](
     timeout: timedelta | None = None,
     queue: str | None = None,
     max_output_size: int | None = None,
+    preload: bool | None = None,
+    fresh_process: bool | None = None,
 ) -> TaskFunction[P, R] | Callable[[Callable[P, R]], TaskFunction[P, R]]:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -373,6 +383,11 @@ def task[**P, R](
         timeout: The attempt's timeout.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes.
+        preload: Fork it from the preloaded fork server, on a worker that has one (default);
+            ``False``: only from the bare one, for code that misbehaves next to the preloaded
+            libraries.
+        fresh_process: Always a new process, never forked, for code that misbehaves after a
+            fork.
 
     Returns:
         The task function, or a decorator making one.
@@ -380,7 +395,9 @@ def task[**P, R](
     Raises:
         TypeError: If the function can't be a task.
     """
-    options = _build.TaskOptions(retries, retry_delay, timeout, queue, max_output_size)
+    options = _build.TaskOptions(
+        retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process
+    )
 
     def decorate(function: Callable[P, R]) -> TaskFunction[P, R]:
         name: str = getattr(function, "__name__", "")

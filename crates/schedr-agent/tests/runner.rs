@@ -107,6 +107,7 @@ async fn parse_watched(
         process: runner("parse", dir, &dir.join("parse.log")),
         memory,
         kills: prometheus_client::metrics::counter::Counter::default(),
+        forks: None,
     };
     let mut files: Vec<String> = std::fs::read_dir(dir)
         .unwrap()

@@ -1101,11 +1101,21 @@
       "additionalProperties": false,
       "description": "A task's settings, resolved from its own arguments and the defaults that apply to it.",
       "properties": {
+        "fresh_process": {
+          "default": false,
+          "description": "A Python task: always a new process, never forked (for code that misbehaves after a\nfork). Not for other tasks.",
+          "type": "boolean"
+        },
         "max_output_size": {
           "description": "The output size limit in bytes.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "preload": {
+          "default": true,
+          "description": "A Python task: fork it from the preloaded fork server (`false`: only from the bare\none, for code that misbehaves next to the preloaded libraries). Not for other tasks.",
+          "type": "boolean"
         },
         "queue": {
           "description": "The queue the task goes to.",

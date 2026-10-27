@@ -196,13 +196,15 @@ impl Process for TaskProcess {
     }
 }
 
-/// Starts a Python task's runner, forked by `forks` if they can, else spawned, and completes
-/// the handshake; `spawned` gets its process ID (and whether it was forked) as soon as it
+/// Starts a Python task's runner, forked by `forks` if they can (from the preloaded server
+/// only with `preload`), else spawned, and completes the handshake; `spawned` gets its process ID (and whether it was forked) as soon as it
 /// runs, and `hold` a forked one's [`GroupHold`]. A forked runner that fails the handshake
 /// isn't spawned again: it ran.
 async fn start_task_runner(
     spec: &ProcessSpec,
+    mode: RunnerMode,
     forks: Option<&ForkServers>,
+    preload: bool,
     hold: &mut Option<GroupHold>,
     spawned: impl FnOnce(i32, bool),
 ) -> Result<(TaskProcess, UnixStream, Duration), LaunchError> {
@@ -212,7 +214,7 @@ async fn start_task_runner(
             process,
             mut stream,
             hold: held,
-        }) = forks.fork(spec, RunnerMode::Task).await
+        }) = forks.fork(spec, mode, preload).await
     {
         *hold = Some(held);
         spawned(process.id(), true);
@@ -223,9 +225,9 @@ async fn start_task_runner(
         )
         .await;
         let error = match said {
-            Ok(Ok(RunnerMode::Task)) => return Ok((process, stream, starting.elapsed())),
+            Ok(Ok(said)) if said == mode => return Ok((process, stream, starting.elapsed())),
             Ok(Ok(said)) => LaunchError::WrongMode {
-                expected: RunnerMode::Task,
+                expected: mode,
                 got: said,
             },
             Ok(Err(error)) => error.into(),
@@ -236,7 +238,7 @@ async fn start_task_runner(
         let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
         return Err(error);
     }
-    let runner = start_runner(spec, RunnerMode::Task, |pid| spawned(pid, false)).await?;
+    let runner = start_runner(spec, mode, |pid| spawned(pid, false)).await?;
     Ok((
         TaskProcess::Spawned(runner.process),
         runner.stream,
@@ -244,7 +246,8 @@ async fn start_task_runner(
     ))
 }
 
-/// Runs a Python task: starts the runner (forked by `forks` when there are any and they can),
+/// Runs a Python task: starts the runner (forked by `forks` when there are any and they can,
+/// unless the task asks for a fresh process; only by the bare server with `preload` off),
 /// sends the request, and waits for its result while supervising the process; `spawned` gets
 /// the runner's process ID, and whether it was forked, as soon as it runs. A forked process's
 /// [`GroupHold`] goes to `hold`, on every path (the caller drops it after its watchdog).
@@ -263,8 +266,12 @@ pub async fn run_python(
     spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
+    // The task's own choice: never forked (`fresh_process`), or not from the preloaded server.
+    let settings = &request.task.settings;
+    let forks = forks.filter(|_| !settings.fresh_process);
+    let preload = settings.preload;
     let (mut process, mut stream, hello_after) =
-        start_task_runner(process, forks, hold, spawned).await?;
+        start_task_runner(process, RunnerMode::Task, forks, preload, hold, spawned).await?;
     let forked = matches!(process, TaskProcess::Forked(_));
     write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
     let sent = Instant::now();
@@ -343,21 +350,27 @@ pub struct ProcessParseRunner {
     pub memory: MemoryWatch,
     /// Where the watchdog's kills are counted.
     pub kills: Counter,
+    /// The DAG interpreter's fork servers: a parse job forks from them like a task (a fresh
+    /// child per job), spawned when they can't.
+    pub forks: Option<ForkServers>,
 }
 
 /// A parse runner that connected and got its request.
 #[derive(Debug)]
 pub struct ProcessParseSession {
-    runner: Runner,
+    process: TaskProcess,
+    stream: UnixStream,
     /// The watchdog, killing the runner's group over its budget (stops when dropped).
-    _watching: Option<GroupWatch>,
+    watching: Option<GroupWatch>,
+    /// A forked runner's hold, let go after the watchdog (see [`GroupHold`]).
+    hold: Option<GroupHold>,
     seen: SharedSeen,
     budget: Option<u64>,
 }
 
 impl ParseSession for ProcessParseSession {
     async fn next(&mut self) -> Result<RunnerMessage, ChannelError> {
-        let message = read_message(&mut self.runner.stream).await;
+        let message = read_message(&mut self.stream).await;
         let over = self
             .seen
             .lock()
@@ -372,7 +385,18 @@ impl ParseSession for ProcessParseSession {
     }
 
     async fn stop(self) {
-        abandon(self.runner.process).await;
+        let Self {
+            mut process,
+            watching,
+            hold,
+            ..
+        } = self;
+        let _ = process.signal(Signal::Kill);
+        let _ = process.wait().await;
+        let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+        // The watchdog stops first; then the hold goes, and a fork server's shim reaps it.
+        drop(watching);
+        drop(hold);
     }
 }
 
@@ -381,30 +405,55 @@ impl ParseRunner for ProcessParseRunner {
 
     async fn start(&mut self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
         let seen = SharedSeen::default();
+        // Declared before the watch, so it is dropped after it on any path (locals go in
+        // reverse order), a cancelled start included.
+        let mut hold = None;
         let mut watching = None;
-        let mut runner = start_runner(&self.process, RunnerMode::Parse, |pgid| {
-            // Told through `seen`, read when the runner's connection breaks (no one listens to
-            // its reason).
-            watching = Some(watch_group(
-                self.memory.clone(),
-                pgid,
-                seen.clone(),
-                Stops::new().0,
-                self.kills.clone(),
-                false,
-            ));
-        })
-        .await
-        .map_err(|e| match e {
-            LaunchError::Channel(channel) => channel,
-            other => ChannelError::Io(std::io::Error::other(other.to_string())),
-        })?;
-        write_message(&mut runner.stream, &AgentMessage::Parse(request)).await?;
-        Ok(ProcessParseSession {
-            runner,
-            _watching: watching,
+        let forks = self.forks.as_ref();
+        let started = start_task_runner(
+            &self.process,
+            RunnerMode::Parse,
+            forks,
+            true,
+            &mut hold,
+            |pgid, forked| {
+                // Told through `seen`, read when the runner's connection breaks (no one listens
+                // to its reason).
+                watching = Some(watch_group(
+                    self.memory.clone(),
+                    pgid,
+                    seen.clone(),
+                    Stops::new().0,
+                    self.kills.clone(),
+                    forked,
+                ));
+            },
+        )
+        .await;
+        let (process, stream, _) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                drop(watching);
+                drop(hold);
+                return Err(match error {
+                    LaunchError::Channel(channel) => channel,
+                    other => ChannelError::Io(std::io::Error::other(other.to_string())),
+                });
+            }
+        };
+        let mut session = ProcessParseSession {
+            process,
+            stream,
+            watching,
+            hold,
             seen,
             budget: self.memory.budget,
-        })
+        };
+        if let Err(error) = write_message(&mut session.stream, &AgentMessage::Parse(request)).await
+        {
+            session.stop().await;
+            return Err(error);
+        }
+        Ok(session)
     }
 }

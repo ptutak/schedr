@@ -37,6 +37,8 @@ def test_default_settings_match_the_rust_defaults(validate: Validate) -> None:
         "timeout_ms": None,
         "queue": "default",
         "max_output_size": 1_048_576,
+        "preload": True,
+        "fresh_process": False,
     }
     validate("TaskSettings", TaskSettings().to_json())
 
@@ -76,6 +78,8 @@ def test_python_task_serializes_flat(validate: Validate) -> None:
             "timeout_ms": 60_000,
             "queue": "large",
             "max_output_size": 1_048_576,
+            "preload": True,
+            "fresh_process": False,
         },
         "output_type": {"type": "int"},
     }

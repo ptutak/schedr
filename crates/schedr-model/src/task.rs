@@ -38,11 +38,24 @@ pub struct TaskSettings {
     pub queue: String,
     /// The output size limit in bytes.
     pub max_output_size: u64,
+    /// A Python task: fork it from the preloaded fork server (`false`: only from the bare
+    /// one, for code that misbehaves next to the preloaded libraries). Not for other tasks.
+    #[serde(default = "yes")]
+    pub preload: bool,
+    /// A Python task: always a new process, never forked (for code that misbehaves after a
+    /// fork). Not for other tasks.
+    #[serde(default)]
+    pub fresh_process: bool,
+}
+
+const fn yes() -> bool {
+    true
 }
 
 impl Default for TaskSettings {
     /// The settings of a task that sets nothing and has no defaults: no retries, a 5 minute
-    /// retry delay, no timeout, the default queue and a 1 MiB output limit.
+    /// retry delay, no timeout, the default queue, a 1 MiB output limit, forked from the
+    /// preloaded fork server where there is one.
     fn default() -> Self {
         Self {
             retries: 0,
@@ -50,6 +63,8 @@ impl Default for TaskSettings {
             timeout_ms: None,
             queue: DEFAULT_QUEUE.to_owned(),
             max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
+            preload: true,
+            fresh_process: false,
         }
     }
 }

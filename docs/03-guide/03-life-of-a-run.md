@@ -91,9 +91,11 @@ times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
 The memory watchdog samples the group's memory every second. With `fork_server = true` on
 the DAG interpreter, a Linux worker starts that Python runner from a fork server (see
 [The fork server](05-workers.md#the-fork-server)), and the attempts API shows `start_method`
-`fork`. Otherwise, and when those servers can't fork it, the task is a new process
-(`spawn`). A forked task whose PSS can't be read is not killed on resident set size, because
-that size includes the pages it shares with the fork server.
+`fork`. A task with `preload` false asks only the bare server. A task with `fresh_process`
+true, and a task those servers can't fork, is a new process (`spawn`). A forked task the
+worker drops before it has ended is killed, as a spawned one is. A forked task whose PSS
+can't be read is not killed on resident set size, because that size includes the pages it
+shares with the fork server.
 
 ## 6. The result comes back
 

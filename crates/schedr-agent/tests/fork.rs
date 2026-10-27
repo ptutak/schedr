@@ -32,9 +32,27 @@ def whoami() -> int:
 def slow() -> None:
     time.sleep(30)
 
+@task
+def sees_preload() -> bool:
+    import sys
+    return "schedr_probe_preloaded" in sys.modules
+
+@task(preload=False)
+def bare_sees_preload() -> bool:
+    import sys
+    return "schedr_probe_preloaded" in sys.modules
+
+@task(fresh_process=True)
+def fresh_sees_preload() -> bool:
+    import sys
+    return "schedr_probe_preloaded" in sys.modules
+
 with Dag("sync"):
     whoami()
     slow()
+    sees_preload()
+    bare_sees_preload()
+    fresh_sees_preload()
 "#;
 
 fn python() -> PathBuf {
@@ -136,6 +154,7 @@ async fn the_dag(dir: &Path) -> Dag {
             proc_root: PathBuf::from("/proc"),
         },
         kills: prometheus_client::metrics::counter::Counter::default(),
+        forks: None,
     };
     let request = schedr_model::runner::ParseRequest {
         root: "etl".to_owned(),
@@ -510,7 +529,7 @@ async fn an_abandoned_answer_restarts_the_server_instead_of_pairing_the_next_req
     );
     let abandoned = tokio::time::timeout(
         Duration::from_millis(100),
-        forks.fork(&task, RunnerMode::Task),
+        forks.fork(&task, RunnerMode::Task, true),
     )
     .await;
     assert!(
@@ -519,12 +538,12 @@ async fn an_abandoned_answer_restarts_the_server_instead_of_pairing_the_next_req
     );
     // The next request finds the answer abandoned: the preloaded server is let go (the bare
     // one forks it) and restarted.
-    let next = forks.fork(&task, RunnerMode::Task).await;
+    let next = forks.fork(&task, RunnerMode::Task, true).await;
     assert!(next.is_ok());
     assert_eq!(fallbacks(&metrics, "down"), 1);
     until("it is up again", || state(&metrics, "preloaded", "up") == 1).await;
     // Up again, it answers a request as its own: no fallback this time.
-    let again = forks.fork(&task, RunnerMode::Task).await;
+    let again = forks.fork(&task, RunnerMode::Task, true).await;
     assert!(again.is_ok());
     assert_eq!(fallbacks(&metrics, "down"), 1);
 }
@@ -558,7 +577,7 @@ async fn the_fork_that_finds_a_late_thread_disables_the_server() {
         dir.path(),
         "task.log",
     );
-    let forked = forks.fork(&task, RunnerMode::Task).await;
+    let forked = forks.fork(&task, RunnerMode::Task, true).await;
     // The bare server forked it; the preloaded one is disabled by this very request.
     assert!(forked.is_ok());
     assert_eq!(fallbacks(&metrics, "disabled"), 1);
@@ -603,4 +622,168 @@ async fn a_forked_runner_that_fails_to_start_stays_held_until_the_caller_lets_it
     assert!(hold.is_some() && !gone(pid));
     drop(hold);
     until("the shim reaps it", || gone(pid)).await;
+}
+
+#[tokio::test]
+async fn a_task_picks_the_bare_server_or_a_fresh_process_and_the_rest_fork_preloaded() {
+    let dir = root();
+    let dag = the_dag(dir.path()).await;
+    std::fs::write(dir.path().join("schedr_probe_preloaded.py"), "").unwrap();
+    let (forks, metrics) = retrying_servers(
+        python(),
+        dir.path(),
+        &["schedr_probe_preloaded"],
+        Duration::ZERO,
+    );
+    until("both servers are up", || {
+        state(&metrics, "preloaded", "up") == 1 && state(&metrics, "bare", "up") == 1
+    })
+    .await;
+    let task = spec(
+        python(),
+        &["-m", "schedr.runner", "task"],
+        dir.path(),
+        "task.log",
+    );
+    let mut seen = Vec::new();
+    for name in ["sees_preload", "bare_sees_preload", "fresh_sees_preload"] {
+        let mut hold = None;
+        let ran = run_python(
+            &task,
+            request(dir.path(), &dag, name),
+            limits(None),
+            Stops::new().1,
+            Some(&forks),
+            &mut hold,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        let Some(RunnerMessage::TaskSucceeded { output, .. }) = &ran.runner_result else {
+            panic!("{name}: no result: {ran:?}");
+        };
+        seen.push((name, ran.forked, output.clone()));
+    }
+    assert_eq!(
+        seen,
+        [
+            ("sees_preload", true, serde_json::json!(true)),
+            ("bare_sees_preload", true, serde_json::json!(false)),
+            ("fresh_sees_preload", false, serde_json::json!(false)),
+        ]
+    );
+    // Skipping a server by choice isn't a fallback.
+    for reason in ["disabled", "down", "fork_failed", "shim_died"] {
+        assert_eq!(fallbacks(&metrics, reason), 0, "{reason}");
+    }
+}
+
+/// Parses `file` in `dir`, forked by `forks` when given; the DAG IDs it defines.
+async fn parsed_ids(dir: &Path, file: &str, forks: Option<ForkServers>) -> Vec<String> {
+    let process = spec(
+        python(),
+        &["-m", "schedr.runner", "parse"],
+        dir,
+        "parse.log",
+    );
+    let mut runner = schedr_agent::launch::ProcessParseRunner {
+        process,
+        memory: schedr_agent::memory::MemoryWatch {
+            budget: None,
+            interval: Duration::from_secs(1),
+            proc_root: PathBuf::from("/proc"),
+        },
+        kills: prometheus_client::metrics::counter::Counter::default(),
+        forks,
+    };
+    let request = schedr_model::runner::ParseRequest {
+        root: "etl".to_owned(),
+        root_dir: dir.to_string_lossy().into_owned(),
+        files: vec![file.to_owned()],
+        sys_path: vec![dir.to_string_lossy().into_owned()],
+    };
+    let files = schedr_agent::parse::parse_files(&mut runner, request, Duration::from_secs(30))
+        .await
+        .unwrap();
+    files[0].dags.iter().map(|d| d.id.to_string()).collect()
+}
+
+#[tokio::test]
+async fn a_parse_job_forks_from_the_preloaded_server() {
+    let dir = root();
+    std::fs::write(dir.path().join("schedr_probe_preloaded.py"), "").unwrap();
+    std::fs::write(
+        dir.path().join("probe.py"),
+        "import sys\nfrom schedr import Dag\n\
+         with Dag('preloaded' if 'schedr_probe_preloaded' in sys.modules else 'not_preloaded'):\n    pass\n",
+    )
+    .unwrap();
+    let (forks, metrics) = retrying_servers(
+        python(),
+        dir.path(),
+        &["schedr_probe_preloaded"],
+        Duration::ZERO,
+    );
+    until("the preloaded server is up", || {
+        state(&metrics, "preloaded", "up") == 1
+    })
+    .await;
+    assert_eq!(
+        parsed_ids(dir.path(), "probe.py", Some(forks)).await,
+        ["preloaded"]
+    );
+    assert_eq!(
+        parsed_ids(dir.path(), "probe.py", None).await,
+        ["not_preloaded"]
+    );
+}
+
+#[tokio::test]
+async fn a_forked_parse_dropped_unfinished_is_killed() {
+    use schedr_agent::parse::ParseRunner;
+    let dir = root();
+    let pid_file = dir.path().join("pid");
+    std::fs::write(
+        dir.path().join("hangs.py"),
+        format!(
+            "import os, time\nopen({:?}, 'w').write(str(os.getpid()))\ntime.sleep(600)\n",
+            pid_file.display().to_string()
+        ),
+    )
+    .unwrap();
+    let (forks, metrics) = servers(python(), dir.path(), &["json"]);
+    until("the preloaded server is up", || {
+        state(&metrics, "preloaded", "up") == 1
+    })
+    .await;
+    let mut runner = schedr_agent::launch::ProcessParseRunner {
+        process: spec(
+            python(),
+            &["-m", "schedr.runner", "parse"],
+            dir.path(),
+            "parse.log",
+        ),
+        memory: schedr_agent::memory::MemoryWatch {
+            budget: None,
+            interval: Duration::from_secs(1),
+            proc_root: PathBuf::from("/proc"),
+        },
+        kills: prometheus_client::metrics::counter::Counter::default(),
+        forks: Some(forks),
+    };
+    let session = runner
+        .start(schedr_model::runner::ParseRequest {
+            root: "etl".to_owned(),
+            root_dir: dir.path().to_string_lossy().into_owned(),
+            files: vec!["hangs.py".to_owned()],
+            sys_path: vec![dir.path().to_string_lossy().into_owned()],
+        })
+        .await
+        .unwrap();
+    until("the file is being imported", || pid_file.exists()).await;
+    let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    assert!(!gone(pid));
+    // Dropped without `stop` (its parse task aborted): killed, as a spawned runner would be.
+    drop(session);
+    until("the forked runner is gone", || gone(pid)).await;
 }

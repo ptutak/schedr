@@ -28,6 +28,9 @@ class TaskSettings:
         timeout_ms: The attempt's timeout; ``None`` for none.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes.
+        preload: A Python task forks from the preloaded fork server (``False``: only from the
+            bare one).
+        fresh_process: A Python task is always a new process, never forked.
     """
 
     retries: int = 0
@@ -35,6 +38,8 @@ class TaskSettings:
     timeout_ms: int | None = None
     queue: str = DEFAULT_QUEUE
     max_output_size: int = DEFAULT_MAX_OUTPUT_SIZE
+    preload: bool = True
+    fresh_process: bool = False
 
     def __post_init__(self) -> None:
         """Checks that the numbers are in range.
@@ -62,6 +67,8 @@ class TaskSettings:
             "timeout_ms": self.timeout_ms,
             "queue": self.queue,
             "max_output_size": self.max_output_size,
+            "preload": self.preload,
+            "fresh_process": self.fresh_process,
         }
 
 

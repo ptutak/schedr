@@ -193,6 +193,8 @@ pub async fn check_root(
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),
+        // `schedr dags check` parses once: a fork server would only add its start.
+        forks: None,
     };
     let request = ParseRequest {
         root: root.name.clone(),

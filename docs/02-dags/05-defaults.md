@@ -18,12 +18,19 @@ timeout and no retries, and keeps the DAG's `retry_delay` and `max_output_size`.
 | `timeout` | none | How long one attempt may run. When it is reached the attempt ends `timed_out`. |
 | `queue` | `"default"` | Which workers may run the task. A worker with no `[worker] queues` serves `default`. |
 | `max_output_size` | 1 MiB | How large the stored output may be. `KiB` and `MiB` are the sizes in bytes (`8 * MiB`). For a command the limit is per stream. |
+| `preload` | `True` | A Python task forks from the preloaded fork server. `False` forks only from the bare one, for code that misbehaves next to the preloaded libraries. |
+| `fresh_process` | `False` | A Python task is always a new process, never forked, for code that misbehaves after a fork. `True` wins when `preload` is also set. |
 
 A duration is a `timedelta` of whole milliseconds. `retry_delay` must not be negative.
 `timeout` must be positive. `retries` and `max_output_size` must not be negative, and
-`queue` must not be empty. The same arguments exist on `@task`, `.override(...)` and
-`CommandOperator`. `EmptyOperator` takes only its ID; the master completes it, and no
-worker is involved.
+`queue` must not be empty. `retries`, `retry_delay`, `timeout`, `queue` and
+`max_output_size` exist on `@task`, `.override(...)` and `CommandOperator`. `preload` and
+`fresh_process` exist on `@task`, `.override(...)` and `TaskDefaults(...)`. A task's own
+argument wins over the DAG's `defaults`. Both are stored on the task as `preload` and
+`fresh_process`. They matter for a Python task only. A command always starts a new process,
+and `CommandOperator` does not take them. A `TaskDefaults` value is still stored on every
+task, including a command and an `EmptyOperator`. `EmptyOperator` takes only its ID; the
+master completes it, and no worker is involved.
 
 A task runs on a worker that serves its queue
 ([Configuration](../_generated/04-reference/01-configuration.md), `[worker] queues`). With

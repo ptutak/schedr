@@ -70,6 +70,8 @@ class TaskOptions:
         timeout: The attempt's timeout.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes.
+        preload: A Python task forks from the preloaded fork server.
+        fresh_process: A Python task is always a new process.
     """
 
     retries: int | None = None
@@ -77,6 +79,8 @@ class TaskOptions:
     timeout: timedelta | None = None
     queue: str | None = None
     max_output_size: int | None = None
+    preload: bool | None = None
+    fresh_process: bool | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -95,6 +99,8 @@ class TaskOptions:
             max_output_size=(
                 base.max_output_size if self.max_output_size is None else self.max_output_size
             ),
+            preload=base.preload if self.preload is None else self.preload,
+            fresh_process=base.fresh_process if self.fresh_process is None else self.fresh_process,
         )
 
     def settings(self) -> TaskSettings:
@@ -118,6 +124,10 @@ class TaskOptions:
             queue=defaults.queue if self.queue is None else self.queue,
             max_output_size=(
                 defaults.max_output_size if self.max_output_size is None else self.max_output_size
+            ),
+            preload=defaults.preload if self.preload is None else self.preload,
+            fresh_process=(
+                defaults.fresh_process if self.fresh_process is None else self.fresh_process
             ),
         )
 

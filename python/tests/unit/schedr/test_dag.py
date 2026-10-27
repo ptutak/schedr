@@ -181,6 +181,27 @@ def test_task_defaults_apply_and_task_arguments_win() -> None:
     assert b.settings == TaskSettings(5, 60_000, 3_600_000, "other", 10)
 
 
+def test_how_python_tasks_start_is_a_default_and_a_tasks_own_argument_wins() -> None:
+    @task(preload=True)
+    def keeps() -> int:
+        return 1
+
+    @task
+    def follows() -> int:
+        return 2
+
+    @task(fresh_process=False)
+    def forks() -> int:
+        return 3
+
+    with Dag("d", defaults=TaskDefaults(preload=False, fresh_process=True)):
+        keeps()
+        follows()
+        forks()
+    settings = {t.id: (t.settings.preload, t.settings.fresh_process) for t in only_dag().tasks}
+    assert settings == {"keeps": (True, True), "follows": (False, True), "forks": (False, False)}
+
+
 def test_dags_cant_be_nested() -> None:
     with Dag("outer"), pytest.raises(RuntimeError, match="DAGs can't be nested"):
         Dag("inner").__enter__()

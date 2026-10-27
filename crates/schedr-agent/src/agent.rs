@@ -220,8 +220,10 @@ impl Executor for ProcessExecutor {
         // The watchdog's kill is one more reason to stop, in the same channel.
         let oom = stop.sender();
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
-        let mut watching = None;
+        // Declared before the watch, so it is dropped after it on any path (locals go in
+        // reverse order), a dropped attempt included.
         let mut hold = None;
+        let mut watching = None;
         let spawned = |pid, forked| {
             // The task's process leads its own group; watched from its first moment.
             watching = Some(watch_group(
@@ -296,6 +298,7 @@ impl Executor for ProcessExecutor {
             },
             memory: self.setup.memory.clone(),
             kills: self.metrics.watchdog_kills.clone(),
+            forks: self.forks.clone(),
         };
         let request = ParseRequest {
             root,

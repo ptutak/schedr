@@ -167,6 +167,23 @@ def test_override_changes_the_id_and_options_only_for_the_copy() -> None:
     assert (plain.settings.queue, plain.settings.timeout_ms) == ("large", None)
 
 
+def test_preload_and_fresh_process_default_to_forking_and_can_be_overridden() -> None:
+    bare = load.override(task_id="bare", preload=False)
+    fresh = load.override(task_id="fresh", fresh_process=True)
+    with Dag("d"):
+        rows = extract()
+        load(rows)
+        bare(rows)
+        fresh(rows)
+    starts = {t.id: (t.settings.preload, t.settings.fresh_process) for t in only_dag().tasks}
+    assert starts == {
+        "extract": (True, False),
+        "load": (True, False),
+        "bare": (False, False),
+        "fresh": (True, True),
+    }
+
+
 def test_override_keeps_the_id_when_none_is_given() -> None:
     assert load.override(retries=0).task_id == "load"
 
