@@ -114,6 +114,7 @@ def test_task_mode_runs_the_task_and_exits_with_its_code(tmp_path: Path) -> None
             "sys_path": [str(tmp_path)],
         }
     )
+    assert agent.receive() == {"type": "task_imported"}
     assert agent.receive() == {"type": "task_succeeded", "output": 3, "outcome": "SUCCESS"}
     assert finish(process) == (0, "")
 

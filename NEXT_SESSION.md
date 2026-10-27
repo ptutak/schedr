@@ -109,7 +109,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
      rollback, read back after a cut-off commit), T2 (a round's assignments together, else
      one at a time with a failing task set aside), read-back for `[master] read_back_window`
      every `read_back_interval`; `[master] set_aside`, `listen_retry`.
-   - **Decided for later:** M2.5 gets two scheduling queues and stress scenario 14; M3 gets
+   - **Decided for later:** M2.5 gets quiet DAGs and stress scenario 14; M3 gets
      a federated web UI over several deployments (M6, several masters on one database: not
      planned); a round's assignments as one batch: possible later.
    - **Open:** B4; the `db` secret storage's
@@ -170,7 +170,7 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
      in review is in its SKILL.md, "What to expect from Grok"; its weekly usage, measured
      per round, in USAGE.md (about 3.5% of the week per 100 calls; 15% -> 40% on 2026-10-26).
      `grok-watch` follows the active session with Claude's prompts and diffs.
-8. **Next: M2.5, the fork server and two scheduling queues** (PLAN.md; PROJECT.md, Roadmap).
+8. **Next: M2.5, the fork server and quiet DAGs** (PLAN.md; PROJECT.md, Roadmap).
    Plan its steps with the user first, decisions before code.
 9. **Connections: a draft to work on with the user** (PROJECT.md, Open questions,
    "Connections (draft)", M4): `@connection(arg=t"{secrets[...]}")` on a generator function,

@@ -100,6 +100,9 @@ pub enum RunnerMessage {
     },
     /// Every requested file was handled.
     ParseFinished,
+    /// The task's DAG file is imported and its arguments built; its function is called next
+    /// (the agent times the start from it). Not sent when that fails.
+    TaskImported,
     /// The task's function returned; its output is encoded and within the size limit.
     TaskSucceeded {
         /// The output as stored JSON (tagged extra types).

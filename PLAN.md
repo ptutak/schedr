@@ -25,7 +25,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - Trigger rule `NoneFailed` only; every task has the single outcome `SUCCESS`.
 - Runner `parse` and `task` modes; the agent ↔ runner channel (Unix socket, length-prefixed
   JSON).
-- **M2.5 also gets the two scheduling queues** (busy DAGs polled, quiet DAGs woken; PROJECT.md, Components and roles, "Found by the stress suite") with stress scenario 14 (many quiet DAGs).
+- **M2.5 also gets quiet DAGs** (busy DAGs visited every round, quiet DAGs only when woken; PROJECT.md, Components and roles, "Found by the stress suite") with stress scenario 14 (many quiet DAGs).
 - **Ready for the fork server (M2.5):** the runner and its protocol don't depend on how the
   process was started: the runner gets everything over the socket (nothing from inherited
   state), the agent supervises by process group, and every attempt records its start method
@@ -200,16 +200,24 @@ Today also: B15 fixed (tokio 1.54.1), B21 fixed (the lease tests' query limit),
 `scripts/kind-mesh.sh` onto `scripts/kind-lib.sh`. Open bugs: B22 (a draining worker once
 missed its 8 s grace under load; not reproduced), B4 (likely B6, unproven).
 
-**Next: M2.5, the fork server and two scheduling queues** (PROJECT.md, Roadmap: "M2.5. Fork
-server and two scheduling queues"; the designs in "How Python tasks are started" and
-Components and roles, "Found by the stress suite"). Its steps aren't planned yet: the next
-session starts by drafting them with the user, decisions first.
+**Next: M2.5, the fork server and quiet DAGs**, steps planned below (2026-10-27).
 
-## M2.5: Fork server and two scheduling queues
+## M2.5: Fork server and quiet DAGs
 
 Done when (PROJECT.md, Roadmap): Python tasks start from the fork server on Linux workers,
 with fallback to spawn; stress scenario 14's rounds no longer grow with the quiet DAGs.
-Steps: to be planned with the user (2026-10-27).
+
+Steps planned with the user (2026-10-27; decisions in PROJECT.md, "How Python tasks are
+started" and "Quiet DAGs"). Claude implements each; Grok reviews it independently
+and updates the guide.
+
+| Step | Contents | Done when |
+|---|---|---|
+| M2.5.1 | **Measure first:** a task process start-time histogram by start method (`runner`: starting the process to the runner's hello; `import`: sending the task to the DAG file imported), `start_method` in the attempts API; **stress scenario 14** (about 1,000 daily DAGs and a few busy ones) run on today's round as the baseline | scenario 14's baseline recorded; `make check`, `make docs` |
+| M2.5.2 | **Quiet DAGs:** busy and quiet DAGs in the master's memory, wake marks (run end, command, new version, unpause, timer), the full pass every `[master] quiet_dag_full_pass_interval`, `quiet_dag_after` and `quiet_dag_wake_ahead`; a round reads only the DAGs it visits (active DAGs and the run overview limited to them); the comparison test (one timeline through both paths, the same runs) | scenario 14's rounds no longer grow with the quiet DAGs |
+| M2.5.3 | **Fork server, runner side:** `python -m schedr.runner forkserver`: preload, the single-thread check, `gc.freeze()`, forking on request; the child gets its channel and output pipes by `SCM_RIGHTS`, `setsid()`, its environment and directory, closes inherited descriptors, reseeds, resets logging, and runs the normal `task` / `parse` code | Python unit tests, including fork safety |
+| M2.5.4 | **Fork server, agent side:** two fork servers per interpreter started with the worker (preloaded and bare), fork requests, the fallback chain (preloaded, bare, spawn), restart with backoff, the version check, `start_method: fork`, pidfd and the child subreaper, metrics (up / down, fallbacks by reason), worker `warnings` in the REST API and `schedr workers list`, the macOS warning | tasks start forked on Linux; every fallback tested |
+| M2.5.5 | **Finish:** parse jobs through the fork server (a fresh child per job), `@task(preload=False)` and `@task(fresh_process=True)` (also in `TaskDefaults`), the chart's `worker.forkServer` (on, preload: the worker image's libraries except `polars`; the image's build fails if the list starts a thread), scenario 13 with spawn and with fork | M2.5's "done when"; the guide updated |
 
 ## Testing approach
 

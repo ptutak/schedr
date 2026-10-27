@@ -153,6 +153,8 @@ def test_task_mode_runs_the_task_and_exits_with_its_code(
     agent = FakeAgent({"type": "welcome"}, request)
     code, err = run(["task"], agent)
     assert (code, err) == (1, "")
-    hello, result = agent.messages()
+    hello, imported, result = agent.messages()
     assert hello["mode"] == "task"
+    validate_runner_message(imported)
+    assert imported == {"type": "task_imported"}
     assert (result["type"], result["kind"]) == ("task_failed", None)

@@ -35,16 +35,27 @@ the code. Roughly:
 - **master:** round durations (`schedr_master_tick_duration_seconds`), runs, tasks and workers
   by state, tasks waiting by reason, assignments, rejections, attempts ended, parse jobs,
   commands and how long they waited for a decision;
-- **worker:** slots and slots used, attempts by status, watchdog kills, journal records, log
+- **worker:** slots and slots used, attempts by status, how long a Python task took to start
+  (`schedr_worker_task_start_seconds{method,phase}`), watchdog kills, journal records, log
   disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
 - **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
   macOS), and the build version.
 
+`schedr_worker_task_start_seconds` is one histogram (10 ms to about 40 s). It is how M2.5
+judges the fork server and which libraries to preload: the same series, split by how the
+process was started, before and after. `method` is `spawn` (a new process; what workers
+record today) or `fork` (from the fork server, once that starts tasks). `phase` is `runner`
+(from starting the process to the runner's hello: the interpreter and `schedr`) or `import`
+(from sending the task to the runner's `task_imported`: the DAG file imported and the
+arguments built). The import phase is left out when that fails. The agent times both on its
+own clock; the runner only sends the message. A command task is not in the histogram.
+
 Counters and histograms are updated where things happen. The gauges that need the database
 (runs, tasks and workers by state) are refreshed by the master's loop every 15 s, with one
 read-only query. **A scrape reads only memory**: never the database, never the master's lock.
-Labels are bounded (states, kinds, reasons, `dag_id`), never a run, task or attempt ID.
+Labels are bounded (states, kinds, reasons, `dag_id`, and `method` / `phase` on the start
+histogram), never a run, task or attempt ID.
 
 ## schedr's own logs
 

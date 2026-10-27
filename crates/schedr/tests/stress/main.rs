@@ -918,3 +918,204 @@ with Dag("{id}"):
 "#
     )
 }
+
+/// Scenario 14: Quiet DAGs: a few busy DAGs, measured alone and then beside many daily DAGs
+/// that don't fire meanwhile (PROJECT.md, "Quiet DAGs"). The rounds' times beside the quiet
+/// ones, over their times alone, is what M2.5.2 brings close to 1.
+#[test]
+fn stress_14_quiet_dags() {
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new("14_quiet_dags");
+    let window = size.time(MINUTE, 5 * MINUTE);
+    let busy: Vec<String> = (1..=size.n(5, 10))
+        .map(|i| {
+            let id = format!("busy{i:04}");
+            let every = "Every(timedelta(seconds=10))";
+            stress.write_dag(&id, &one_task_dag(&id, every, &stress.marks));
+            id
+        })
+        .collect();
+    stress.start_core("master", &[]);
+    stress.start_workers(2, 4, &[]);
+    stress.wait_for_dags(busy.len(), 5 * MINUTE);
+    unpause(&stress, &busy);
+    let alone = rounds_over(&stress, &mut report, "alone", window, busy.len());
+
+    // Daily, 12 hours from now: none fires while the scenario lasts.
+    let hour = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 3600
+        % 24;
+    let daily = format!(r#"Cron("0 {} * * *")"#, (hour + 12) % 24);
+    let quiet: Vec<String> = (1..=size.n(300, 1000))
+        .map(|i| {
+            let id = format!("quiet{i:04}");
+            stress.write_dag(&id, &one_task_dag(&id, &daily, &stress.marks));
+            id
+        })
+        .collect();
+    let parsed = stress.wait_for_dags(busy.len() + quiet.len(), 15 * MINUTE);
+    report.set("parse_quiet_s", parsed.as_secs_f64());
+    unpause(&stress, &quiet);
+    let beside = rounds_over(&stress, &mut report, "beside_quiet", window, busy.len());
+
+    report.set("quiet_dags", f64::from(u32::try_from(quiet.len()).unwrap()));
+    report.set("rounds_alone", alone.count);
+    report.set("rounds_beside_quiet", beside.count);
+    report.set("round_mean_alone_ms", alone.mean() * 1000.0);
+    report.set("round_mean_beside_quiet_ms", beside.mean() * 1000.0);
+    report.set("round_p99_alone_s", alone.quantile(0.99));
+    report.set("round_p99_beside_quiet_s", beside.quantile(0.99));
+    report.set("round_mean_ratio", beside.mean() / alone.mean().max(1e-6));
+    // No quiet DAG fired.
+    let fired = stress
+        .db
+        .count("SELECT COUNT(DISTINCT dag_id) FROM runs WHERE kind = 'scheduled'");
+    if fired != i64::try_from(busy.len()).unwrap() {
+        report.broken(vec![format!(
+            "{fired} DAGs had scheduled runs, expected the {} busy ones",
+            busy.len()
+        )]);
+    }
+    let calls = busy
+        .iter()
+        .map(|d| vec!["dags".to_owned(), "pause".to_owned(), d.clone()])
+        .collect();
+    stress.expect_ok(&cli_many(&stress.cluster.api, calls, 16));
+    let runs = usize::try_from(stress.db.runs()).unwrap();
+    stress.wait_for_runs(runs, 5 * MINUTE, |_| {});
+    finish(&stress, report, &["success"]);
+}
+
+/// A DAG `id` with `trigger` and one quick command task between its marks.
+fn one_task_dag(id: &str, trigger: &str, marks: &std::path::Path) -> String {
+    let command = check::marked(marks, "true");
+    format!(
+        r#"from datetime import timedelta
+
+from schedr import CommandOperator, Cron, Dag, Every
+
+with Dag("{id}", trigger={trigger}):
+    CommandOperator("tick", {command:?})
+"#
+    )
+}
+
+/// Unpauses `dags`, many CLI calls at once.
+fn unpause(stress: &Stress, dags: &[String]) {
+    let calls = dags
+        .iter()
+        .map(|d| vec!["dags".to_owned(), "unpause".to_owned(), d.clone()])
+        .collect();
+    stress.expect_ok(&cli_many(&stress.cluster.api, calls, 16));
+}
+
+/// How long the rounds settle before a window: the unpause commands just sent each woke one.
+const SETTLE: Duration = Duration::from_secs(20);
+
+/// The master's rounds over the next `window` (named `name`), after [`SETTLE`]: the
+/// difference of its tick histogram between two scrapes. Broken in `report` unless rounds
+/// were counted and each of the `busy` DAGs had a scheduled run in it.
+fn rounds_over(
+    stress: &Stress,
+    report: &mut Report,
+    name: &str,
+    window: Duration,
+    busy: usize,
+) -> Rounds {
+    std::thread::sleep(SETTLE);
+    let scrape = || {
+        let (status, body) = stress.cluster.ops_get("master", "/metrics");
+        assert_eq!(status, 200, "the master's metrics: {body}");
+        Rounds::scraped(&body)
+    };
+    let started = check::now_s();
+    let before = scrape();
+    std::thread::sleep(window);
+    let after = scrape();
+    let rounds = after.since(&before);
+    if rounds.count < 1.0 || rounds.buckets.is_empty() {
+        report.broken(vec![format!(
+            "no rounds counted in the {name} window ({} before, {} after: did the master restart?)",
+            before.count, after.count
+        )]);
+    }
+    let fired = stress.db.count(&format!(
+        "SELECT COUNT(DISTINCT dag_id) FROM runs WHERE kind = 'scheduled' AND {} >= {started}",
+        stress.db.epoch("triggered_at")
+    ));
+    if fired < i64::try_from(busy).unwrap() {
+        report.broken(vec![format!(
+            "{fired} of the {busy} busy DAGs fired in the {name} window"
+        )]);
+    }
+    rounds
+}
+
+/// Rounds from `schedr_master_tick_duration_seconds`: how many, their total time, and the
+/// cumulative buckets.
+struct Rounds {
+    count: f64,
+    sum: f64,
+    buckets: Vec<(f64, f64)>,
+}
+
+impl Rounds {
+    const NAME: &str = "schedr_master_tick_duration_seconds";
+
+    fn scraped(metrics: &str) -> Self {
+        let value = |suffix: &str| {
+            let prefix = format!("{}{suffix} ", Self::NAME);
+            metrics
+                .lines()
+                .find_map(|line| line.strip_prefix(&prefix)?.trim().parse().ok())
+                .unwrap_or(0.0)
+        };
+        let bucket = format!("{}_bucket{{le=\"", Self::NAME);
+        let buckets = metrics
+            .lines()
+            .filter_map(|line| {
+                let (le, count) = line.strip_prefix(&bucket)?.split_once("\"}")?;
+                let le = if le == "+Inf" {
+                    f64::INFINITY
+                } else {
+                    le.parse().ok()?
+                };
+                Some((le, count.trim().parse().ok()?))
+            })
+            .collect();
+        Self {
+            count: value("_count"),
+            sum: value("_sum"),
+            buckets,
+        }
+    }
+
+    fn since(&self, earlier: &Self) -> Self {
+        Self {
+            count: self.count - earlier.count,
+            sum: self.sum - earlier.sum,
+            buckets: self
+                .buckets
+                .iter()
+                .zip(&earlier.buckets)
+                .map(|(&(le, now), &(_, then))| (le, now - then))
+                .collect(),
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        self.sum / self.count.max(1.0)
+    }
+
+    /// The upper bound of the bucket holding the `q` quantile.
+    fn quantile(&self, q: f64) -> f64 {
+        self.buckets
+            .iter()
+            .find(|(_, count)| *count >= q * self.count)
+            .map_or(0.0, |(le, _)| *le)
+    }
+}

@@ -163,6 +163,9 @@ Both times must be aware datetimes, and `since` must not be after `planned_for`.
 
 `duration` is what the worker measured. It is `None` for an attempt the master ended.
 `error` is the failure summary (`exception`, `message`, `traceback`).
+The JSON for each attempt also has `start_method` (`spawn`, or `fork`), the same field as
+`GET /api/v1/runs/<run id>/tasks/<task id>/attempts`. It is `null` until the worker's
+`Started` is stored. The `Attempt` class doesn't carry it.
 
 `RunDagError` means the run never started: no `schedr` binary, an unknown DAG, or a file
 that does not import. The binary is `$SCHEDR_BIN`, or else the `schedr` installed with

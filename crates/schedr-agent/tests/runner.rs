@@ -59,10 +59,15 @@ def boom() -> None:
 def slow() -> None:
     time.sleep(30)
 
+@task
+def nap() -> None:
+    time.sleep(1)
+
 with Dag("sync"):
     load(extract()["rows"])
     boom()
     slow()
+    nap()
 "#;
 
 /// A root `etl` with the test DAG files.
@@ -246,6 +251,35 @@ async fn task_mode_runs_a_task_with_its_inputs() {
         ran.supervised.termination,
         schedr_agent::status::Termination::Exited(0)
     );
+    // Both phases of the start timed, each within the run.
+    let start = ran.start.expect("a Python task's start is timed");
+    let import = start.import.expect("the DAG file was imported");
+    assert!(start.runner > Duration::ZERO && start.runner < ran.duration);
+    assert!(import > Duration::ZERO && start.runner + import < ran.duration);
+}
+
+#[tokio::test]
+async fn task_mode_times_the_import_apart_from_the_task() {
+    let dir = root();
+    let dag = the_dag().await;
+    let ran = run(
+        dir.path(),
+        request(dir.path(), &dag, "nap", json!({})),
+        LIMITS,
+        StopAfter::Never,
+    )
+    .await;
+    assert!(matches!(
+        ran.runner_result,
+        Some(RunnerMessage::TaskSucceeded { .. })
+    ));
+    // The import ends before the task's 1 s nap, not with the result after it.
+    let import = ran
+        .start
+        .and_then(|s| s.import)
+        .expect("the import is timed");
+    assert!(import < Duration::from_secs(1), "{import:?}");
+    assert!(ran.duration > Duration::from_secs(1), "{:?}", ran.duration);
 }
 
 #[tokio::test]
@@ -282,6 +316,9 @@ async fn task_mode_reports_the_tasks_failure_and_a_missing_task() {
         panic!("expected TaskFailed")
     };
     assert_eq!(kind.as_deref(), Some("task_not_found"));
+    // Its runner started, but nothing was imported to run.
+    let start = ran.start.expect("a Python task's start is timed");
+    assert_eq!(start.import, None);
 }
 
 #[tokio::test]

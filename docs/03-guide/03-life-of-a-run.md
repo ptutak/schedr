@@ -83,8 +83,12 @@ back (`assignment_expired`) and queue the task again, without using a retry; one
 in time counts even if a busy master handles it later.
 
 The agent starts a Python runner in a new process group, with stdout and stderr going to the
-attempt's log file. The memory watchdog samples the group's memory every second. The runner
-imports the DAG file, calls the task's function and reports the result over a local socket.
+attempt's log file. The runner says `hello`. The agent sends the task. Once the DAG file is
+imported and the arguments are built, the runner sends `task_imported` (no fields) and calls
+the function; it does not send that message when the import or the arguments fail. The agent
+times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
+[Observability](09-observability.md)). The result comes back over the same local socket.
+The memory watchdog samples the group's memory every second.
 
 ## 6. The result comes back
 

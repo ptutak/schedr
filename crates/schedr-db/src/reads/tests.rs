@@ -177,6 +177,7 @@ async fn a_runs_instances_and_attempts_are_shown() {
     assert_eq!(attempt.assigned_at, now);
     assert_eq!(attempt.ended_at, Some(now));
     assert_eq!(attempt.started_at, None);
+    assert_eq!(attempt.start_method, None);
 }
 
 #[tokio::test]

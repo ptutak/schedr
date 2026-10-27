@@ -271,13 +271,15 @@ def test_execute_checks_the_output_size(root: Path) -> None:
 
 
 def test_execute_reports_a_missing_task_and_a_broken_file(root: Path) -> None:
-    missing = execute(request_for(root, "one", dag_id="other"))
+    imported: list[None] = []
+    missing = execute(request_for(root, "one", dag_id="other"), lambda: imported.append(None))
     assert missing["kind"] == "task_not_found"
     broken = request_for(root, "one")
     broken["dag_file"]["path"] = "broken.py"
-    result = execute(broken)
+    result = execute(broken, lambda: imported.append(None))
     assert result["kind"] == "import_failed"
     assert result["error"]["message"] == "import boom"
+    assert imported == []
 
 
 @pytest.mark.parametrize(
@@ -290,7 +292,9 @@ def test_run_task_sends_the_result_and_exits_with_its_code(
     try:
         request = request_for(root, task_id, sys_path=["/dags/shared"])
         assert run_task(Channel(ours), request) == code
-        assert Channel(theirs).receive()["type"] == kind
+        received = Channel(theirs)
+        assert received.receive() == {"type": "task_imported"}
+        assert received.receive()["type"] == kind
         assert sys.path[0] == "/dags/shared"
     finally:
         ours.close()

@@ -43,10 +43,27 @@ are in the report.
 | 11 | Heavy output: big logs read through the API at once, outputs near their limit | logs complete and served in time |
 | 12 | The memory watchdog: many tasks over their budget beside normal ones | only those are killed (`oom_killed`); the workers stay |
 | 13 | Python tasks: chains of `@task` functions passing outputs on | outputs arrive right; a Python process for each task |
+| 14 | Quiet DAGs: a few busy DAGs alone, then beside many daily DAGs that do not fire | how much the master's rounds grow when the quiet DAGs are added |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
 back.
+
+**Scenario 14** is the baseline for quiet DAGs (M2.5.2 measures the same thing once a round
+can skip them). Two workers of four slots run a few busy DAGs, each an `Every` of 10 s with
+one `true` command (5 in the quick profile, times the machine's scale, or 10 full). They are
+unpaused, and after a 20 s settle the master's rounds are scraped for 1 minute (5 minutes
+full): the difference of `schedr_master_tick_duration_seconds` between two scrapes. Then many
+daily DAGs are parsed and unpaused (300 times the scale, or 1,000 full). The cron is minute 0
+of the UTC hour twelve hours ahead, `catchup` off and no `start`, so a fire before the DAG
+was stored does not run and none fires while the scenario lasts. The same settle and window
+run again. The settle is there because the unpause commands just sent each woke a round, and
+that round is a full pass (at most 50 commands, then every DAG); the window starts after
+those rounds. A window with no counted rounds, a metrics scrape that is not 200, a busy DAG
+that did not fire in that window, or a quiet DAG with a scheduled run fails the scenario.
+The report `target/stress/14_quiet_dags.json` records `quiet_dags`, `parse_quiet_s`, each
+window's round count, mean (`round_mean_alone_ms`, `round_mean_beside_quiet_ms`) and p99
+(`round_p99_alone_s`, `round_p99_beside_quiet_s`), and `round_mean_ratio` (beside / alone).
 
 ## Running it
 
@@ -84,6 +101,10 @@ the round p99 is the bucket of `schedr_master_tick_duration_seconds` holding it.
 | 11 | heavy output | 168 | 4.6 | 1.3 s (logs read p99 1.4 s) | ≤ 2.0 s |
 | 12 | memory watchdog | 120 (12 killed over budget) | 5.7 | 1.3 s | ≤ 1.0 s |
 | 13 | Python tasks | 640 | 11.5 | 2.4 s | ≤ 2.0 s |
+| 14 | quiet DAGs (later quick ×2 run, 600 quiet DAGs) | — | — | — | ≤ 0.512 s alone, ≤ 1.024 s beside |
+
+Scenario 14's row is that later run, not the 2026-10-24 one. Its mean round was 41 ms alone
+and 291 ms beside the 600 quiet DAGs (ratio 7.1).
 
 On the way there the suite found and the step fixed: assignments taken back though started
 (scenario 13 went from 624 expired assignments and 11 successes to 11.5 tasks a second),

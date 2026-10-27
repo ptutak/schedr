@@ -40,12 +40,19 @@ was registered, the backoff starts from 200 ms again.
    `Rejected` with a reason; most reasons are temporary, and the master tries again.
 2. **Journal, then `Started`.** The attempt is written to the journal before `Started` is
    sent. That way a restarted agent always knows about an attempt the master believes is
-   running.
+   running. `Started` carries `start_method`: `spawn` for a new process (the interpreter, or
+   the command itself), or `fork` from the fork server (M2.5; until then every attempt is
+   `spawn`). The master stores
+   it, and the attempts API shows it from then on.
 3. **The process.** A Python task runs `python -m schedr.runner task`. A command runs through
    the shell when it is a string, or directly when it is a list of arguments. Each starts in
    its own process group, so cancelling or killing reaches the whole
    task, and runs in its root's directory (Python) or its DAG file's directory (commands).
    stdout and stderr go to `<data_dir>/logs/<worker ID>/<attempt ID>.log`.
+   The runner's first message is `hello`. The agent sends the task, and the runner answers
+   `task_imported` (a message of no fields) once the DAG file is imported and the arguments
+   are built, then calls the function. It sends no `task_imported` when that fails. The agent
+   times the two gaps on its own clock (see [Observability](09-observability.md)).
 4. **While it runs:** the memory watchdog samples the group's memory, and `execution_timeout`,
    a cancel or a drain can stop it. Stopping is SIGTERM to the group, then SIGKILL after
    `[master] cancel_grace` (30 s), or after `[worker] drain_terminate_period` (3 s) when a
@@ -92,7 +99,8 @@ fires, it kills everything in the container, the agent included. So the agent en
 - Without `/proc` (macOS) there is no cgroup limit and a task's memory can't be read, so the
   watchdog neither measures nor kills.
 
-Every attempt reports its peak memory, shown in the API.
+Every attempt reports its peak memory, shown in the API, and its `start_method` once
+`Started` has been stored.
 
 ## Draining
 

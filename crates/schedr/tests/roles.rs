@@ -944,6 +944,7 @@ fn a_task_over_its_memory_budget_is_killed_alone_and_retried() {
     );
     assert!(attempts[0]["peak_memory_bytes"].as_u64().unwrap() > 100 << 20);
     assert_eq!(attempts[1]["status"], "success");
+    assert_eq!(attempts[1]["start_method"], "spawn");
     // Measured, well under the budget.
     let peak = attempts[1]["peak_memory_bytes"].as_u64().unwrap();
     assert!(peak > 0 && peak < 100 << 20, "{peak}");

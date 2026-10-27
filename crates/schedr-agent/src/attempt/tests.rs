@@ -278,6 +278,7 @@ fn ran(
         runner_result: runner,
         output: None,
         duration: Duration::from_millis(1500),
+        start: None,
     }
 }
 

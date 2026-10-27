@@ -38,7 +38,7 @@ with Dag(
 ## Status
 
 Under development; nothing is released yet. **M1** (standalone runs a native DAG) and most of
-**M2** (distributed) are done; next are the fork server and two scheduling queues (M2.5), the
+**M2** (distributed) are done; next are the fork server and quiet DAGs (M2.5), the
 web UI (M3) and the rest of the native API (M4: secrets and connections, sensors, branching,
 `ScriptOperator`, ...). The Airflow layer is M5. See `PLAN.md` and the roadmap in
 `PROJECT.md`.

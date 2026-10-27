@@ -288,6 +288,18 @@ pub struct Ran {
     pub output: Option<(TailBuffer, TailBuffer)>,
     /// How long it ran.
     pub duration: Duration,
+    /// For a Python task that said hello: how long it took to start.
+    pub start: Option<StartTimes>,
+}
+
+/// How long a Python task's process took to start, by phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartTimes {
+    /// From starting the process to its runner's hello: the interpreter and `schedr`.
+    pub runner: Duration,
+    /// From sending the task to `task_imported`: the DAG file imported and the arguments
+    /// built; `None` when that failed or the runner sent nothing.
+    pub import: Option<Duration>,
 }
 
 /// The `Finished` message for an attempt that ran.

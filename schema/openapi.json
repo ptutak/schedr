@@ -77,6 +77,13 @@
               "null"
             ]
           },
+          "start_method": {
+            "description": "How the worker started it: `spawn` (a new process: an interpreter for a Python task,\nthe command for a command task) or `fork` (from the fork server); none until the\nworker reported its start.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "started_at": {
             "description": "When the worker started it.",
             "format": "date-time",

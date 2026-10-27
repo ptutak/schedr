@@ -35,7 +35,8 @@ The names used across the documentation, the API and the logs.
 : One try of a task instance on one worker, with its own ID. Its try number counts every
   attempt; the retry budget counts only the attempts that used a retry. How it ended is its
   status: `success`, `failed`, `timed_out`, `oom_killed`, `cancelled`, `interrupted`,
-  `lost` or `assignment_expired`.
+  `lost` or `assignment_expired`. `start_method` (`spawn` or `fork`) is set when the worker's
+  `Started` is stored, and the attempts API shows it.
 
 **Command**
 : A request to change something (trigger a run, cancel a run or task, retry a task,

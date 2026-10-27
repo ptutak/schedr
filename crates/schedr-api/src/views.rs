@@ -207,6 +207,10 @@ pub struct AttemptView {
     /// The peak memory of its processes, sampled by the worker (about once a second); none
     /// when it wasn't measured.
     pub peak_memory_bytes: Option<u64>,
+    /// How the worker started it: `spawn` (a new process: an interpreter for a Python task,
+    /// the command for a command task) or `fork` (from the fork server); none until the
+    /// worker reported its start.
+    pub start_method: Option<String>,
 }
 
 impl From<&AttemptRecord> for AttemptView {
@@ -227,6 +231,7 @@ impl From<&AttemptRecord> for AttemptView {
             ended_at: attempt.ended_at,
             duration_ms: attempt.duration_ms,
             peak_memory_bytes: attempt.peak_memory_bytes,
+            start_method: attempt.start_method.clone(),
         }
     }
 }

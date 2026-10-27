@@ -95,6 +95,8 @@ pub struct AttemptRecord {
     pub duration_ms: Option<u64>,
     /// The peak memory of its process group, sampled by the worker's watchdog.
     pub peak_memory_bytes: Option<u64>,
+    /// How the worker started its process (`spawn` or `fork`); `None` until it started.
+    pub start_method: Option<String>,
 }
 
 type RunRow = (
@@ -125,6 +127,7 @@ type AttemptRow = (
     Option<String>,
     Option<i64>,
     Option<i64>,
+    Option<String>,
 );
 
 const RUN_COLUMNS_ONE: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
@@ -270,7 +273,8 @@ impl Database {
     ) -> Result<Vec<AttemptRecord>, DbError> {
         const ATTEMPTS: &str = "SELECT a.id{text}, a.try_number, a.worker_id, a.status, \
             a.exit_code, a.error_kind, a.error_summary{text}, {ts<}a.assigned_at{>ts}, \
-            {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts}, a.duration_ms, a.peak_memory_bytes FROM attempts a \
+            {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts}, a.duration_ms, a.peak_memory_bytes, \
+            a.start_method FROM attempts a \
             JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 ORDER BY a.try_number";
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
@@ -325,6 +329,7 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         ended,
         duration_ms,
         peak_memory,
+        start_method,
     ) = row;
     Ok(AttemptRecord {
         id,
@@ -341,5 +346,6 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         ended_at: optional_time("attempts.ended_at", ended)?,
         duration_ms: duration_ms.and_then(|ms| u64::try_from(ms).ok()),
         peak_memory_bytes: peak_memory.and_then(|bytes| u64::try_from(bytes).ok()),
+        start_method,
     })
 }

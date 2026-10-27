@@ -479,21 +479,28 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
       - **The times configurable** (the user): `[master] set_aside` (60 s), `listen_retry`
         (30 min), `read_back_window` (3 s), `read_back_interval` (500 ms). The per-round
         caps and the messages per turn stay constants (counts, not times).
-  - **Two scheduling queues (M2.5, decided 2026-10-24):** built beside the current round,
-    not reworking it. The scheduler's work for one DAG stays one function (fire times,
-    catch-up, `max_active_runs`, starting queued runs); only **which DAGs a round visits**
-    differs: the **polled** queue (busy DAGs: runs in progress, or firing often) every round,
-    as now; the **woken** queue (quiet DAGs) only when its timer fires (the next fire time, in
-    memory) or something marks it (a run ending, a command, a new version, an unpause), like
-    an async executor polling only woken futures. DAGs move between queues by measurement,
-    with hysteresis (to woken after some quiet rounds, back to polled once a run is in
-    progress); every DAG starts polled after a restart. Moving is safe: everything happens in
-    the round, under the master's lock, and visiting a DAG twice creates nothing twice (a
-    scheduled run is unique per `planned_for`). A full pass every N seconds also visits the
-    woken queue: a missed wake costs at most N seconds, never a run that doesn't start. A
-    comparison test runs one simulated timeline through the full round and the two queues
-    and requires the same runs. **Stress scenario 14** (about 1,000 daily DAGs and a few busy
-    ones) measures it and tunes the classification. Not chosen: reworking the round into an
+  - **Quiet DAGs (M2.5, decided 2026-10-24; first called "two scheduling queues", renamed
+    2026-10-27 so as not to mix with task queues):** built beside the current round, not
+    reworking it. The scheduler's work for one DAG stays one function (fire times, catch-up,
+    `max_active_runs`, starting queued runs); only **which DAGs a round visits** differs:
+    **busy** DAGs (runs in progress, or firing often) every round, as now; **quiet** DAGs only
+    when their timer fires (the next fire time, in memory) or something wakes them (a run
+    ending, a command, a new version, an unpause), like an async executor polling only woken
+    futures. A DAG turns quiet or busy by measurement, with hysteresis; every DAG starts busy
+    after a restart. Changing is safe: everything happens in the round, under the master's
+    lock, and visiting a DAG twice creates nothing twice (a scheduled run is unique per
+    `planned_for`). A full pass at an interval also visits the quiet DAGs: a missed wake costs
+    at most that interval, never a run that doesn't start. A comparison test runs one
+    simulated timeline through the full round and the busy / quiet split and requires the
+    same runs. **Settings** (decided 2026-10-27, all configurable, the user's):
+    `[master] quiet_dag_after` (60 s: no run in progress this long, and no fire time due
+    within `quiet_dag_wake_ahead`, makes a DAG quiet), `quiet_dag_wake_ahead` (60 s),
+    `quiet_dag_full_pass_interval` (60 s); a run starting or queued makes it busy again. A
+    round reads only the DAGs it visits (the active DAGs and the run overview limited to
+    them), or it would still grow with the quiet ones. Not chosen: thresholds as constants; a
+    `queues_` prefix (mixes with task queues, `@task(queue=...)`); a `scheduling_` prefix;
+    renaming task queues (public API, Airflow's word). **Stress scenario 14** (about 1,000
+    daily DAGs and a few busy ones) measures it and tunes the classification. Not chosen: reworking the round into an
     event-driven one (the user's preference: a second path beside the proven one, switched
     by measurement); two separate engines (the per-DAG logic twice, drifting apart). It
     doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the
@@ -2214,8 +2221,18 @@ permission to create pods.
   (the memory watchdog, timeouts, signal-based cancellation and the journal work unchanged). The
   runner and the agent ↔ runner protocol must not depend on how the process was started, so this can
   be added without changing them.
-  - **One fork server per worker and interpreter** (each `[interpreters]` entry may be a
-    different virtualenv, and a child must come from a parent with the same environment).
+  - **Two fork servers per worker and interpreter, both started upfront** (decided
+    2026-10-27, the user's): a **preloaded** one (the `preload` list imported) and a **bare**
+    one (only `schedr`), so both are ready when needed. A task or parse job forks from the
+    preloaded one; when it is off (a failed preload, a thread after preloading, crashed and
+    restarting) from the bare one; spawn only when both are off. A task can pick the bare one
+    with **`@task(preload=False)`** (also in `TaskDefaults`), for code that misbehaves next to
+    preloaded libraries. Per interpreter because each `[interpreters]` entry may be a different
+    virtualenv and a child must come from a parent with the same environment; today a worker
+    runs one interpreter (`[dags] interpreter`), so one pair. Not chosen: one fork server
+    (a bad preload drops every task to spawn); the bare one only as a fallback, or only by
+    choice (C, both, was picked); parse jobs from the bare one and tasks from the preloaded
+    one (parsing imports the same libraries).
   - It preloads only a **configured list of libraries**, **never DAG code**; each task child
     imports its DAG file itself. So the fork server never goes stale on a code push (libraries
     change only with the image, which restarts the pod), its memory doesn't grow with the
@@ -2248,8 +2265,10 @@ permission to create pods.
   - **Process model:** the agent starts `<interpreter> -m schedr.runner forkserver` **when the
     worker starts** (the first task is fast; a failing preload shows at once). Per attempt the
     agent asks it to fork; the child calls `setsid()` (its own process group, as with spawn, so
-    timeouts, cancellation and the watchdog are unchanged), gets the **log file descriptors
-    passed by the agent** over the Unix socket as stdout / stderr, replaces its whole
+    timeouts, cancellation and the watchdog are unchanged), gets **the agent's output pipes**
+    over the Unix socket as stdout / stderr (as spawn's pipes: the agent's log collection and
+    the kept tail are unchanged; decided 2026-10-27, replacing log file descriptors),
+    replaces its whole
     environment with the task's clean environment, changes to the working directory, closes
     inherited descriptors, and runs the normal runner `task` code with **its own** channel: a socket-pair end
     the agent passes over the fork server's socket (`SCM_RIGHTS`). The agent is a **child subreaper** (`PR_SET_CHILD_SUBREAPER`) and
@@ -2258,8 +2277,8 @@ permission to create pods.
     running.
   - **Safety checks:** after preloading, the parent must be **single-threaded** (checked in
     `/proc/self/task`; forking with threads, e.g. BLAS pools or database drivers, can deadlock
-    the child). A second thread or a failing preload **disables the fork server for that
-    interpreter** with a worker warning in the UI, and tasks **fall back to spawn**: a task never
+    the child). A second thread or a failing preload **disables that fork server** with a
+    worker warning, and tasks **fall back** (to the bare one, then to spawn): a task never
     fails because of the fork server's setup. **Linux only:** on macOS `fork_server = true` is
     ignored with a warning (fork is unsafe there), like the memory watchdog.
   - **State after fork:** the child reseeds `random`, resets `logging` handlers, closes the
@@ -2267,12 +2286,44 @@ permission to create pods.
     **`gc.freeze()`** after preloading, so the garbage collector doesn't copy shared pages in
     every child (keeps each task's PSS small).
   - **Crashes and versions:** a crashed fork server is restarted by the agent with backoff;
-    running children are unaffected, and meanwhile tasks spawn. It reports its `schedr` version
+    running children are unaffected, and meanwhile tasks fall back as above. It reports its
+    `schedr` version
     like any runner; a mismatch disables it. It can't go stale (libraries change only with the
     image, which restarts the pod).
   - **Visibility:** each attempt records its **start method** (`spawn` / `fork`), shown in the
-    Attempts tab; metrics: fork server up / down per interpreter, process start time by start
-    method, fallbacks to spawn by reason.
+    Attempts tab and the attempts API; metrics: fork server up / down per interpreter and kind
+    (preloaded / bare), process start time by start method (built first, in M2.5.1: M2 has no
+    such metric), fallbacks by reason. **The start-time metric** (M2.5.1, decided 2026-10-27):
+    one histogram, `schedr_worker_task_start_seconds{method, phase}` (10 ms to about 40 s),
+    `method` `spawn` / `fork`, `phase` `runner` (from starting the process to the runner's
+    hello: the interpreter and `schedr`) and `import` (from sending the task to the runner's
+    `task_imported`: the DAG file imported and the arguments built; not observed when that
+    fails). Every phase is timed on the agent's clock: the runner sends `task_imported`, a
+    message of no fields, rather than timing itself. The attempts API shows `start_method`.
+    Not chosen: two histograms (two reference entries for one question); the import time as
+    a field of the runner's result (its own clock, and nothing for a task that never
+    returns). **A disabled fork server is a worker warning** in the
+    REST API's worker view and `schedr workers list` (decided 2026-10-27; M3's UI shows the same
+    field), as well as a metric and a log line. Not chosen: logs and a metric only until M3.
+  - **The chart turns it on** for its workers (decided 2026-10-27): `worker.forkServer`, the
+    preload list defaulting to the worker image's libraries **except `polars`**, overridable
+    per deployment. Polars starts threads on import (measured 2026-10-27 with Polars 2.0: two
+    `jemalloc_bg_thd`, which `_RJEM_MALLOC_CONF=background_thread:false` stops, and a
+    `polars-ooc-clea` out-of-core cleaner, which no setting found stops), so it would fail
+    the single-thread check and turn the preloaded server off on every worker; a Polars task
+    imports it in the child (~1 s). The image's build runs the same check: it imports the
+    default list and fails if a thread starts, catching a library update that starts one.
+    When the check fails on a worker, the worker's warning says so, e.g. `preloaded fork
+    server off (python): 3 threads after preloading (jemalloc_bg_thd, polars-ooc-clea);
+    tasks fork from the bare server`, shown in the API, `schedr workers list` and M3's UI.
+    Not chosen: allowing known thread names (a thread holding a lock at `fork()` deadlocks
+    the child, the failure the check exists for; an allowlist to keep up with each release). The
+    config's default stays off. Who sets the list: the image's maintainer (the default, kept
+    with the image's requirements) and the deployment's operator (their values); a DAG author
+    only opts a task out (`preload=False`, `fresh_process=True`). The guide: preload a
+    library that is slow to import and used by most tasks; never one that starts threads (the
+    fallback metric names it). Not chosen: `["schedr"]` only (the two servers would hardly
+    differ); off in the chart.
 - **Rejected:**
   - Warm worker pools (long-lived Python processes reused across tasks): globals, leaked
     memory and old code carry over between tasks; the watchdog can't tell whose task used
@@ -2742,7 +2793,7 @@ list) and likewise has no Python.
   | Role | Metrics |
   |---|---|
   | master | `schedr_master_tick_duration_seconds` (histogram), `schedr_runs{state,kind}`, `schedr_runs_finished_total{dag_id,result}`, `schedr_tasks{state}` (unfinished runs; `unschedulable` among them), `schedr_tasks_waiting{reason}` (`no_worker`, `drained`, `schedr_version`, `newest_code`, `rejected`, `no_slot`, at the last assignment pass), `schedr_assignments_total`, `schedr_rejections_total{reason}`, `schedr_attempts_ended_total{status}`, `schedr_parse_jobs_started_total`, `schedr_parse_jobs_finished_total`, `schedr_parse_duration_seconds`, `schedr_commands_total{kind,decision}`, `schedr_command_latency_seconds`, `schedr_workers{state}` |
-  | worker | `schedr_worker_slots`, `schedr_worker_slots_used`, `schedr_worker_attempts_total{status}`, `schedr_worker_watchdog_kills_total`, `schedr_worker_journal_records`, `schedr_worker_log_bytes`, `schedr_worker_log_swept_bytes_total` |
+  | worker | `schedr_worker_slots`, `schedr_worker_slots_used`, `schedr_worker_attempts_total{status}`, `schedr_worker_task_start_seconds{method,phase}`, `schedr_worker_watchdog_kills_total`, `schedr_worker_journal_records`, `schedr_worker_log_bytes`, `schedr_worker_log_swept_bytes_total` |
   | webserver | `schedr_http_requests_total{route,status}` (the route template, never a raw path; `unmatched` for no route; requests the version check refuses included), `schedr_log_proxy_errors_total{kind}` (`missing`, `stale_address`, `unreachable`, `worker_gone`, `no_endpoint`) |
   | every role | `process_resident_memory_bytes`, `process_cpu_seconds_total`, `process_open_fds`, `process_start_time_seconds` (from `/proc/self` at the scrape), `schedr_build_info{version}` |
 
@@ -6115,7 +6166,7 @@ gRPC, journal) come before breadth of features.
 | **M0. Foundations** | the shared model as Rust types (DAG JSON, JSON Schema, Protobuf); configuration loading; database schema and `schedr db migrate` (SQLite and Postgres); CLI skeleton | — |
 | **M1. Standalone runs a native DAG** | native API core (`Dag`, `@task`, `CommandOperator`, `EmptyOperator`, data flow and `>>`, output serialization, `Cron` / `Every` / `None`); runner `parse` / `task`; agent (process groups, log files, timeouts, cancellation); master loop (`planned_for` / `since`, `catchup`, `max_active_runs`, retries, `NoneFailed`); `schedr standalone` over gRPC on localhost; the webserver's REST API subset (`/api/v1`) the CLI needs (the UI comes in M3); CLI `dags list/pause/unpause`, `runs trigger/list/cancel`, `dags check`, `dags test`; the runner and its protocol independent of how the process was started (for M2.5) | a real DAG runs end to end on a laptop and its tests pass with `run_dag` |
 | **M2. Distributed** | separate roles, mTLS, Postgres; worker lifecycle (register, heartbeat, reconnect, drain, journal); assignment and rejections, queues, slots; change detection, parsing per (root, hash, version), DAG conflicts; memory watchdog; ops port; images and Helm chart | runs on OpenShift with 2 workers and survives killing the master or a worker |
-| **M2.5. Fork server and two scheduling queues** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Two scheduling queues** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
+| **M2.5. Fork server and quiet DAGs** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Quiet DAGs** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; **federated from the start**: one UI over a list of deployments (one the common case; each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |

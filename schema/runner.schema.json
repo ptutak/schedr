@@ -647,6 +647,20 @@
         },
         {
           "additionalProperties": false,
+          "description": "The task's DAG file is imported and its arguments built; its function is called next\n(the agent times the start from it). Not sent when that fails.",
+          "properties": {
+            "type": {
+              "const": "task_imported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The task's function returned; its output is encoded and within the size limit.",
           "properties": {
             "outcome": {

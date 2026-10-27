@@ -239,6 +239,21 @@ async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
     let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
     assert_eq!(attempts[0].duration_ms, Some(300));
     assert!(attempts[0].ended_at < attempts[0].started_at);
+    assert_eq!(attempts[0].start_method.as_deref(), Some("spawn"));
+}
+
+#[tokio::test]
+async fn a_forked_start_is_stored_as_fork() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let forked = pb::Started {
+        start_method: pb::StartMethod::Fork.into(),
+        ..started(&attempt)
+    };
+    dispatcher.started("w1", &forked, ts(NOW)).await.unwrap();
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(attempts[0].start_method.as_deref(), Some("fork"));
 }
 
 /// `extract` and `audit`, independent: both ready at once.

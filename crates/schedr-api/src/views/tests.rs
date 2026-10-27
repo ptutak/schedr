@@ -107,10 +107,12 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         ended_at: None,
         duration_ms: Some(1_500),
         peak_memory_bytes: Some(64 << 20),
+        start_method: Some("spawn".to_owned()),
     });
     assert_eq!(attempt.status.as_deref(), Some("timed_out"));
     assert_eq!(attempt.duration_ms, Some(1_500));
     assert_eq!(attempt.peak_memory_bytes, Some(64 << 20));
+    assert_eq!(attempt.start_method.as_deref(), Some("spawn"));
     assert_eq!(attempt.error_summary, Some(json!({"exception": "Timeout"})));
 
     let command = CommandView::from(&CommandRecord {

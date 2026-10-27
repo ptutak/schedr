@@ -17,7 +17,7 @@ use prometheus_client::metrics::counter::Counter;
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
 use tokio::net::UnixStream;
 
-use crate::attempt::Ran;
+use crate::attempt::{Ran, StartTimes};
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
 use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
 use crate::parse::{ParseRunner, ParseSession};
@@ -70,6 +70,8 @@ pub struct Runner {
     pub process: OsProcess,
     /// Its socket.
     pub stream: UnixStream,
+    /// From starting its process to its hello.
+    pub hello_after: Duration,
 }
 
 /// Starts the runner described by `spec` in `mode`, handing it its end of a new socket pair,
@@ -93,6 +95,7 @@ pub async fn start_runner(
     let mut spec = spec.clone();
     spec.env
         .insert(FD_ENV.to_owned(), theirs.as_raw_fd().to_string());
+    let starting = Instant::now();
     let process = spawn_passing(&spec, Some(OwnedFd::from(theirs)))
         .await
         .map_err(|e| start("the runner", e))?;
@@ -123,7 +126,11 @@ pub async fn start_runner(
             return Err(LaunchError::NoHello(RUNNER_START_TIMEOUT));
         }
     }
-    Ok(Runner { process, stream })
+    Ok(Runner {
+        process,
+        stream,
+        hello_after: starting.elapsed(),
+    })
 }
 
 /// How long a stopped runner's output may take to reach its log. A process it started in a
@@ -158,13 +165,25 @@ pub async fn run_python(
     let Runner {
         mut process,
         mut stream,
+        hello_after,
     } = start_runner(process, RunnerMode::Task, spawned).await?;
     write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
+    let sent = Instant::now();
     let result = async {
-        let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
-        message.ok()
+        let mut import = None;
+        loop {
+            let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
+            match message {
+                // The first one counts; a repeat isn't the result.
+                Ok(RunnerMessage::TaskImported) => {
+                    import.get_or_insert_with(|| sent.elapsed());
+                }
+                message => return (message.ok(), import),
+            }
+        }
     };
-    let (runner_result, supervised) = tokio::join!(result, supervise(&mut process, limits, stop));
+    let ((runner_result, import), supervised) =
+        tokio::join!(result, supervise(&mut process, limits, stop));
     let supervised = supervised.map_err(LaunchError::Supervise)?;
     let _ = process.output().await;
     Ok(Ran {
@@ -172,6 +191,10 @@ pub async fn run_python(
         runner_result,
         output: None,
         duration: started.elapsed(),
+        start: Some(StartTimes {
+            runner: hello_after,
+            import,
+        }),
     })
 }
 
@@ -201,6 +224,7 @@ pub async fn run_command(
         supervised,
         runner_result: None,
         output: Some(output),
+        start: None,
         duration: started.elapsed(),
     })
 }

@@ -41,7 +41,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
-use crate::attempt::{AttemptSpec, NotRun, Plan, WorkerSetup, failed_before_start, finished, plan};
+use crate::attempt::{
+    AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan,
+};
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
@@ -225,6 +227,12 @@ impl Executor for ProcessExecutor {
             Plan::Command(process) => run_command(&process, limits, stop, spawned).await,
         };
         drop(watching);
+        if let Ok(Ran {
+            start: Some(start), ..
+        }) = &ran
+        {
+            self.metrics.task_started("spawn", start);
+        }
         let mut finished = match ran {
             Ok(ran) => finished(&spec.attempt_id, &ran),
             Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),

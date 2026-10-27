@@ -212,11 +212,15 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
     return {"type": "task_failed", "error": summary, "kind": kind}
 
 
-def execute(request: Mapping[str, Any]) -> dict[str, Any]:
+def execute(
+    request: Mapping[str, Any], imported: Callable[[], None] = lambda: None
+) -> dict[str, Any]:
     """Runs a task request and returns the message to send.
 
     Args:
         request: The ``task`` message.
+        imported: Called once the DAG file is imported and the arguments are built, just
+            before the task's function (not when that fails).
 
     Returns:
         ``task_succeeded`` with the encoded output, or ``task_failed``.
@@ -236,6 +240,7 @@ def execute(request: Mapping[str, Any]) -> dict[str, Any]:
         return failure(e, "input_mismatch")
     except (Exception, SystemExit) as e:
         return failure(e, "import_failed")
+    imported()
     try:
         with running(run_values(run)):
             result = function(**arguments)
@@ -269,6 +274,7 @@ def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
         The exit code: 0 if the task succeeded, 1 otherwise.
     """
     extend_sys_path(request["sys_path"])
-    result = execute(request)
+    # The agent times the start from it: the interpreter's, then the DAG file's import.
+    result = execute(request, lambda: channel.send({"type": "task_imported"}))
     channel.send(result)
     return 0 if result["type"] == "task_succeeded" else 1

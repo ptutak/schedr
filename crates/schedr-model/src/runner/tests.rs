@@ -169,6 +169,7 @@ fn task_requests_round_trip() {
 #[test]
 fn task_results_round_trip() {
     for message in [
+        RunnerMessage::TaskImported,
         RunnerMessage::TaskSucceeded {
             output: json!(3),
             outcome: "SUCCESS".into(),
