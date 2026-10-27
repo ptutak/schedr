@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use schedr_db::workers::WorkerRegistration;
+use schedr_db::workers::{WorkerRegistration, WorkerWarning};
 use schedr_db::{Database, DbError};
 use schedr_model::{SchedrVersion, WorkerState};
 use schedr_proto::convert::parsed_file_from_proto;
@@ -458,6 +458,23 @@ impl MasterCore {
                 });
             }
             worker_message::Message::Heartbeat(_) => Vec::new(),
+            // For people, like the last heartbeat: a failed write is logged, not the message's
+            // failure (the worker sends them again after its next registration).
+            worker_message::Message::Warnings(reported) => {
+                let warnings: Vec<WorkerWarning> = reported
+                    .warnings
+                    .into_iter()
+                    .map(|w| WorkerWarning {
+                        kind: w.kind,
+                        interpreter: w.interpreter,
+                        message: w.message,
+                    })
+                    .collect();
+                if let Err(error) = self.db.set_worker_warnings(worker_id, &warnings).await {
+                    tracing::warn!(worker_id, %error, "worker's warnings not recorded");
+                }
+                Vec::new()
+            }
             // A message's writes are one transaction: stored whole or not at all, with one
             // lease check and one commit (T1, 2.10b).
             worker_message::Message::CodeVersionChanged(changed) => match changed.root {

@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use schedr_model::{AttemptStatus, DagId, RunKind, RunState, TaskId, TaskInstanceState};
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_name, on_pool, optional_time, parse_time, sql};
+use crate::query::{db_time, from_json, from_name, on_pool, optional_time, parse_time, sql};
 
 #[cfg(test)]
 mod tests;
@@ -97,6 +97,10 @@ pub struct AttemptRecord {
     pub peak_memory_bytes: Option<u64>,
     /// How the worker started its process (`spawn` or `fork`); `None` until it started.
     pub start_method: Option<String>,
+    /// What its process used (its parent's view at its exit), if the worker read it.
+    pub usage: Option<schedr_model::runner::ProcessUsage>,
+    /// Whether its process dumped core.
+    pub core_dumped: bool,
 }
 
 type RunRow = (
@@ -128,6 +132,8 @@ type AttemptRow = (
     Option<i64>,
     Option<i64>,
     Option<String>,
+    Option<String>,
+    bool,
 );
 
 const RUN_COLUMNS_ONE: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
@@ -274,7 +280,7 @@ impl Database {
         const ATTEMPTS: &str = "SELECT a.id{text}, a.try_number, a.worker_id, a.status, \
             a.exit_code, a.error_kind, a.error_summary{text}, {ts<}a.assigned_at{>ts}, \
             {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts}, a.duration_ms, a.peak_memory_bytes, \
-            a.start_method FROM attempts a \
+            a.start_method, a.usage{text}, a.core_dumped FROM attempts a \
             JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 ORDER BY a.try_number";
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
@@ -330,6 +336,8 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         duration_ms,
         peak_memory,
         start_method,
+        usage,
+        core_dumped,
     ) = row;
     Ok(AttemptRecord {
         id,
@@ -347,5 +355,9 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         duration_ms: duration_ms.and_then(|ms| u64::try_from(ms).ok()),
         peak_memory_bytes: peak_memory.and_then(|bytes| u64::try_from(bytes).ok()),
         start_method,
+        usage: usage
+            .map(|json| from_json("attempts.usage", &json))
+            .transpose()?,
+        core_dumped,
     })
 }

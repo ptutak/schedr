@@ -211,6 +211,32 @@ pub struct AttemptView {
     /// the command for a command task) or `fork` (from the fork server); none until the
     /// worker reported its start.
     pub start_method: Option<String>,
+    /// What its process used, with the children it reaped (its parent's view at its exit);
+    /// none while it runs, when the worker couldn't read it, or for attempts ended by the
+    /// master.
+    pub usage: Option<UsageView>,
+    /// Whether its process dumped core (ended by a signal).
+    pub core_dumped: bool,
+}
+
+/// What an attempt's process used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UsageView {
+    /// CPU time in user mode, in microseconds.
+    pub user_cpu_micros: u64,
+    /// CPU time in the kernel, in microseconds.
+    pub system_cpu_micros: u64,
+    /// The peak resident set size, in bytes; for a forked process it includes the pages it
+    /// shares with the fork server (`peak_memory_bytes`, the watchdog's PSS, doesn't); none
+    /// for a spawned process (its memory is gone when the worker reads it).
+    pub peak_rss_bytes: Option<u64>,
+    /// Page faults that needed I/O.
+    pub major_faults: u64,
+    /// Times it gave up the CPU (waiting for I/O or a lock), with its threads and reaped
+    /// children; none for a spawned process (only its leader thread's could be read).
+    pub voluntary_context_switches: Option<u64>,
+    /// Times it was preempted; none as for `voluntary_context_switches`.
+    pub involuntary_context_switches: Option<u64>,
 }
 
 impl From<&AttemptRecord> for AttemptView {
@@ -232,6 +258,15 @@ impl From<&AttemptRecord> for AttemptView {
             duration_ms: attempt.duration_ms,
             peak_memory_bytes: attempt.peak_memory_bytes,
             start_method: attempt.start_method.clone(),
+            usage: attempt.usage.map(|u| UsageView {
+                user_cpu_micros: u.user_cpu_micros,
+                system_cpu_micros: u.system_cpu_micros,
+                peak_rss_bytes: u.peak_rss_bytes,
+                major_faults: u.major_faults,
+                voluntary_context_switches: u.voluntary_context_switches,
+                involuntary_context_switches: u.involuntary_context_switches,
+            }),
+            core_dumped: attempt.core_dumped,
         }
     }
 }
@@ -378,6 +413,20 @@ pub struct WorkerView {
     pub offline_at: Option<Timestamp>,
     /// Drained for maintenance (`schedr workers drain`): no new tasks until resumed.
     pub drained: bool,
+    /// What is wrong with it now, as it last reported (e.g. a disabled fork server).
+    #[serde(default)]
+    pub warnings: Vec<WarningView>,
+}
+
+/// Something wrong with a worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WarningView {
+    /// What kind: `fork_server_disabled`.
+    pub kind: String,
+    /// The interpreter it concerns; empty if none.
+    pub interpreter: String,
+    /// What it means for tasks.
+    pub message: String,
 }
 
 impl From<&WorkerRecord> for WorkerView {
@@ -396,6 +445,15 @@ impl From<&WorkerRecord> for WorkerView {
             last_heartbeat_at: worker.last_heartbeat_at,
             offline_at: worker.offline_at,
             drained: worker.drained,
+            warnings: worker
+                .warnings
+                .iter()
+                .map(|w| WarningView {
+                    kind: w.kind.clone(),
+                    interpreter: w.interpreter.clone(),
+                    message: w.message.clone(),
+                })
+                .collect(),
         }
     }
 }

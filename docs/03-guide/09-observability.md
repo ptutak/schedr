@@ -70,7 +70,9 @@ own clock; the runner only sends the message. A command task is not in the histo
 is `preloaded` or `bare`. `state` is `up`, `down` or `disabled`. The current state is 1 and
 the other two are 0. The three series exist from the moment the worker starts that server,
 so a server that is still starting is `down`. `interpreter` is the name in
-`[dags] interpreter`. With `fork_server` off, and on macOS, there are no series.
+`[dags] interpreter`. With `fork_server` off, and on macOS, there are no series. A server
+in state `disabled` is also a warning on that worker, shown in the API and by
+`schedr workers list` (see [The fork server](05-workers.md#the-fork-server)).
 
 `schedr_worker_fork_fallbacks_total` counts each time a fork server did not fork a Python
 task. `reason` is `disabled` (the server is disabled), `down` (it isn't taking requests),

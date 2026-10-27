@@ -478,13 +478,34 @@ async fn workers_are_listed_as_a_table() {
         .unwrap();
     assert_eq!(
         workers(&client, WorkersCommand::List, &text()).await,
-        "WORKER  STATE   RUNNING  QUEUES         LAST SEEN\n\
-         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST\n"
+        "WORKER  STATE   RUNNING  QUEUES         LAST SEEN                          WARNINGS\n\
+         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST  0\n"
+    );
+    let disabled = schedr_db::workers::WorkerWarning {
+        kind: "fork_server_disabled".to_owned(),
+        interpreter: "python".to_owned(),
+        message: "the preloaded fork server is disabled: preloading `polars` failed".to_owned(),
+    };
+    client
+        .transport()
+        .db
+        .set_worker_warnings("w1", &[disabled])
+        .await
+        .unwrap();
+    assert_eq!(
+        workers(&client, WorkersCommand::List, &text()).await,
+        "WORKER  STATE   RUNNING  QUEUES         LAST SEEN                          WARNINGS\n\
+         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST  1\n\
+         w1: the preloaded fork server is disabled: preloading `polars` failed\n"
     );
     let listed: serde_json::Value =
         serde_json::from_str(&workers(&client, WorkersCommand::List, &json_output()).await)
             .unwrap();
     assert_eq!(listed["workers"][0]["state"], "active");
+    assert_eq!(
+        listed["workers"][0]["warnings"][0]["kind"],
+        "fork_server_disabled"
+    );
 }
 
 #[tokio::test]

@@ -107,12 +107,30 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         ended_at: None,
         duration_ms: Some(1_500),
         peak_memory_bytes: Some(64 << 20),
-        start_method: Some("spawn".to_owned()),
+        start_method: Some("fork".to_owned()),
+        usage: Some(schedr_model::runner::ProcessUsage {
+            user_cpu_micros: 1,
+            system_cpu_micros: 2,
+            peak_rss_bytes: Some(3),
+            major_faults: 4,
+            voluntary_context_switches: Some(5),
+            involuntary_context_switches: Some(6),
+        }),
+        core_dumped: true,
     });
+    assert_eq!(
+        serde_json::to_value(attempt.usage).unwrap(),
+        json!({
+            "user_cpu_micros": 1, "system_cpu_micros": 2, "peak_rss_bytes": 3,
+            "major_faults": 4, "voluntary_context_switches": 5,
+            "involuntary_context_switches": 6
+        })
+    );
+    assert!(attempt.core_dumped);
     assert_eq!(attempt.status.as_deref(), Some("timed_out"));
     assert_eq!(attempt.duration_ms, Some(1_500));
     assert_eq!(attempt.peak_memory_bytes, Some(64 << 20));
-    assert_eq!(attempt.start_method.as_deref(), Some("spawn"));
+    assert_eq!(attempt.start_method.as_deref(), Some("fork"));
     assert_eq!(attempt.error_summary, Some(json!({"exception": "Timeout"})));
 
     let command = CommandView::from(&CommandRecord {

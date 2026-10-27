@@ -64,6 +64,19 @@ pub struct WorkerRecord {
     pub running: u32,
     /// Whether it is drained for maintenance (no new tasks until resumed).
     pub drained: bool,
+    /// What is wrong with it now, as it last reported.
+    pub warnings: Vec<WorkerWarning>,
+}
+
+/// Something wrong with a worker, as it reports it (e.g. a disabled fork server).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkerWarning {
+    /// What kind, e.g. `fork_server_disabled`.
+    pub kind: String,
+    /// The interpreter it concerns; empty if none.
+    pub interpreter: String,
+    /// What it means for tasks, for people.
+    pub message: String,
 }
 
 type WorkerRow = (
@@ -80,6 +93,7 @@ type WorkerRow = (
     Option<String>,
     i64,
     bool,
+    String,
 );
 
 impl Database {
@@ -129,6 +143,27 @@ impl Database {
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SEEN))
                 .bind(db_time(now))
+                .bind(worker_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// Replaces a worker's warnings with what it reported now.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_worker_warnings(
+        &self,
+        worker_id: &str,
+        warnings: &[WorkerWarning],
+    ) -> Result<(), DbError> {
+        const SET: &str = "UPDATE workers SET warnings = $1{json} WHERE worker_id = $2";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(to_json(&warnings))
                 .bind(worker_id)
                 .execute(&mut *tx)
                 .await?;
@@ -255,7 +290,7 @@ impl Database {
             w.protocol_version, w.schedr_version, w.queues{text}, w.slots, w.log_endpoint, \
             {ts<}w.registered_at{>ts}, {ts<}w.last_heartbeat_at{>ts}, {ts<}w.offline_at{>ts}, \
             (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.worker_id \
-             AND a.status IS NULL), w.drained \
+             AND a.status IS NULL), w.drained, w.warnings{text} \
             FROM workers w ORDER BY w.worker_id";
         let rows: Vec<WorkerRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WORKERS))
@@ -281,6 +316,7 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         offline,
         running,
         drained,
+        warnings,
     ) = row;
     Ok(WorkerRecord {
         id,
@@ -296,5 +332,6 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         offline_at: optional_time("workers.offline_at", offline)?,
         running: u32::try_from(running).unwrap_or(0),
         drained,
+        warnings: from_json("workers.warnings", &warnings)?,
     })
 }

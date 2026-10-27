@@ -20,7 +20,9 @@ CREATE TABLE workers (
     offline_at        TEXT,
     -- Drained for maintenance (`schedr workers drain`): no new tasks until resumed, across
     -- restarts of the worker and the master.
-    drained           INTEGER NOT NULL DEFAULT 0 CHECK (drained IN (0, 1))
+    drained           INTEGER NOT NULL DEFAULT 0 CHECK (drained IN (0, 1)),
+    -- What is wrong with it now ([{kind, interpreter, message}]), replaced by each report.
+    warnings          TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE parse_results (
@@ -135,6 +137,9 @@ CREATE TABLE attempts (
     exit_code         INTEGER,
     signal            INTEGER,
     peak_memory_bytes INTEGER,
+    -- What the process used (ProcessUsage as JSON); NULL if not read.
+    usage             TEXT,
+    core_dumped       INTEGER NOT NULL DEFAULT 0 CHECK (core_dumped IN (0, 1)),
     duration_ms       INTEGER,
     error_kind        TEXT,
     error_summary     TEXT,

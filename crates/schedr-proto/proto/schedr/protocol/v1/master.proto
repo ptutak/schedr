@@ -37,6 +37,7 @@ message WorkerMessage {
     Finished finished = 6;
     Draining draining = 7;
     Deregister deregister = 8;
+    Warnings warnings = 9;
   }
 }
 
@@ -157,6 +158,37 @@ message Finished {
   bytes error_summary_json = 10;
   // The content hash of the code the attempt ran with.
   string code_hash = 11;
+  // What the process used, with the children it reaped (its parent's view at its exit);
+  // absent if it couldn't be read.
+  optional ProcessUsage usage = 12;
+  // Whether it dumped core (ended by a signal).
+  bool core_dumped = 13;
+}
+
+message ProcessUsage {
+  uint64 user_cpu_micros = 1;
+  uint64 system_cpu_micros = 2;
+  // Absent for a spawned process (a zombie's memory is gone before it is read).
+  optional uint64 peak_rss_bytes = 3;
+  uint64 major_faults = 4;
+  // Absent for a spawned process (a zombie's /proc has its leader thread's only).
+  optional uint64 voluntary_context_switches = 5;
+  optional uint64 involuntary_context_switches = 6;
+}
+
+// What is wrong with the worker now, all of it: sent after every Register and whenever it
+// changes; each replaces the last.
+message Warnings {
+  repeated WorkerWarning warnings = 1;
+}
+
+message WorkerWarning {
+  // E.g. "fork_server_disabled".
+  string kind = 1;
+  // The interpreter it concerns, if any.
+  string interpreter = 2;
+  // What it means for tasks, for people.
+  string message = 3;
 }
 
 // SIGTERM received, or an admin drain: stop assigning to this worker.

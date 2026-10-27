@@ -36,6 +36,11 @@ pub trait Process {
     ///
     /// Returns the operating system's error for anything but a group that is gone.
     fn signal(&mut self, signal: Signal) -> io::Result<()>;
+    /// What it used and whether it dumped core, once [`Process::wait`] returned; nothing
+    /// known by default.
+    fn ended(&self) -> crate::usage::Ended {
+        crate::usage::Ended::default()
+    }
 }
 
 /// The limits of one attempt.

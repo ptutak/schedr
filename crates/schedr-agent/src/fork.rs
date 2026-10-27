@@ -26,10 +26,11 @@ use rustix::process::{Pid, kill_process_group};
 use schedr_model::runner::{
     AgentMessage, ForkRequest, ForkServerRequest, MAX_MESSAGE_SIZE, RunnerMessage, RunnerMode,
 };
+use schedr_proto::pb;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::net::unix::pipe;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 
 use crate::attempt::WorkerSetup;
@@ -40,6 +41,7 @@ use crate::output::TailBuffer;
 use crate::process::{OsProcess, ProcessSpec, collect, open_log};
 use crate::status::Termination;
 use crate::supervise::{Process, Signal};
+use crate::usage::Ended;
 
 #[cfg(test)]
 mod tests;
@@ -180,7 +182,73 @@ struct Server {
     interpreter: String,
     state: Mutex<State>,
     metrics: ForkMetrics,
+    board: Arc<WarningBoard>,
 }
+
+/// The disabled fork servers, as the worker's warnings (sent to the master).
+#[derive(Debug)]
+struct WarningBoard {
+    interpreter: String,
+    /// Whether the bare server is the only one (no preload list).
+    bare_alone: bool,
+    /// Why each disabled server is, by kind.
+    reasons: std::sync::Mutex<std::collections::BTreeMap<&'static str, String>>,
+    warnings: watch::Sender<Vec<pb::WorkerWarning>>,
+}
+
+impl WarningBoard {
+    /// Records `kind`'s state, publishing the warnings if they changed.
+    fn record(&self, kind: Kind, disabled: Option<&str>) {
+        let mut reasons = self
+            .reasons
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = match disabled {
+            Some(reason) => {
+                reasons.insert(kind.label(), reason.to_owned()).as_deref() != Some(reason)
+            }
+            None => reasons.remove(kind.label()).is_some(),
+        };
+        if changed {
+            let warnings = reasons
+                .iter()
+                .rev()
+                .map(|(label, reason)| self.warning(label, reason, &reasons))
+                .collect();
+            self.warnings.send_replace(warnings);
+        }
+    }
+
+    /// The warning for server `label`, disabled for `reason`; what it means for tasks depends
+    /// on whether the other server is disabled too (`disabled`).
+    fn warning(
+        &self,
+        label: &str,
+        reason: &str,
+        disabled: &std::collections::BTreeMap<&'static str, String>,
+    ) -> pb::WorkerWarning {
+        let other = if label == "preloaded" {
+            "bare"
+        } else {
+            "preloaded"
+        };
+        let then = if self.bare_alone || disabled.contains_key(other) {
+            "tasks are spawned"
+        } else if label == "preloaded" {
+            "tasks are forked by the bare fork server, or spawned"
+        } else {
+            "tasks the preloaded fork server can't fork are spawned"
+        };
+        pb::WorkerWarning {
+            kind: FORK_SERVER_DISABLED.to_owned(),
+            interpreter: self.interpreter.clone(),
+            message: format!("the {label} fork server is disabled: {reason}; {then}"),
+        }
+    }
+}
+
+/// The worker warning's kind for a disabled fork server.
+pub const FORK_SERVER_DISABLED: &str = "fork_server_disabled";
 
 impl Server {
     /// Moves to `state`, keeping the gauge's one-hot labels in step.
@@ -196,6 +264,11 @@ impl Server {
                 })
                 .set(value);
         }
+        let disabled = match &state {
+            State::Disabled(reason) => Some(reason.as_str()),
+            _ => None,
+        };
+        self.board.record(self.kind, disabled);
         *current = state;
     }
 }
@@ -204,6 +277,7 @@ impl Server {
 #[derive(Debug, Clone)]
 pub struct ForkServers {
     servers: Arc<Vec<Server>>,
+    warnings: watch::Receiver<Vec<pb::WorkerWarning>>,
 }
 
 /// An interpreter's fork server settings (`[interpreters.<name>]` with `fork_server = true`).
@@ -283,6 +357,13 @@ impl ForkServers {
         if setup.preload.is_empty() {
             kinds.remove(0);
         }
+        let (warnings, watching) = watch::channel(Vec::new());
+        let board = Arc::new(WarningBoard {
+            interpreter: setup.interpreter.clone(),
+            bare_alone: kinds.len() == 1,
+            reasons: std::sync::Mutex::default(),
+            warnings,
+        });
         let servers: Vec<Server> = kinds
             .iter()
             .map(|(kind, _)| Server {
@@ -290,6 +371,7 @@ impl ForkServers {
                 interpreter: setup.interpreter.clone(),
                 state: Mutex::new(State::Down),
                 metrics: metrics.clone(),
+                board: Arc::clone(&board),
             })
             .collect();
         for server in &servers {
@@ -311,7 +393,17 @@ impl ForkServers {
                 retry,
             ));
         }
-        Self { servers }
+        Self {
+            servers,
+            warnings: watching,
+        }
+    }
+
+    /// The worker's warnings about these fork servers (one per disabled server), as they
+    /// change.
+    #[must_use]
+    pub fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
+        self.warnings.clone()
     }
 
     /// The disabled fork servers and why (for the worker's warnings).
@@ -554,28 +646,7 @@ async fn fork_on(
         if let State::Up { asking, .. } = &mut *state {
             *asking = false;
         }
-        match answer {
-            Ok(Ok(RunnerMessage::Forked { id: forked })) if forked == id => {}
-            Ok(Ok(RunnerMessage::ForkFailed { id: failed, reason })) if failed == id => {
-                tracing::warn!(kind = server.kind.label(), reason, "fork failed");
-                return Err(Fallback::ForkFailed);
-            }
-            Ok(Ok(RunnerMessage::ForkServerDisabled { reason, .. })) => {
-                tracing::warn!(kind = server.kind.label(), reason, "fork server disabled");
-                // Dropping its control socket ends it; its supervisor stops for good.
-                server.set(&mut state, State::Disabled(reason));
-                return Err(Fallback::Disabled);
-            }
-            Ok(Ok(other)) => {
-                let why = format!("an answer that isn't this request's: {other:?}");
-                return Err(out_of_step(server, &mut state, &why));
-            }
-            Ok(Err(error)) => {
-                let why = format!("reading the answer: {error}");
-                return Err(out_of_step(server, &mut state, &why));
-            }
-            Err(_) => return Err(out_of_step(server, &mut state, "no answer in time")),
-        }
+        answered(server, &mut state, id, answer)?;
         // Our copies of the process's ends go here: closed, so only the process holds them.
         drop(fds);
     }
@@ -596,6 +667,7 @@ async fn fork_on(
             group,
             status: Some(status),
             ended: None,
+            usage: Ended::default(),
             stdout: tokio::spawn(collect(stdout, Arc::clone(&log), limit)),
             stderr: tokio::spawn(collect(stderr, log, limit)),
         },
@@ -607,6 +679,38 @@ async fn fork_on(
 fn tokio_stream(stream: std::os::unix::net::UnixStream) -> io::Result<UnixStream> {
     stream.set_nonblocking(true)?;
     UnixStream::from_std(stream)
+}
+
+/// What a fork server's answer to request `id` means: forked, a fallback, or the server let
+/// go (disabled, or out of step).
+fn answered(
+    server: &Server,
+    state: &mut State,
+    id: u64,
+    answer: Result<Result<RunnerMessage, ChannelError>, tokio::time::error::Elapsed>,
+) -> Result<(), Fallback> {
+    match answer {
+        Ok(Ok(RunnerMessage::Forked { id: forked })) if forked == id => Ok(()),
+        Ok(Ok(RunnerMessage::ForkFailed { id: failed, reason })) if failed == id => {
+            tracing::warn!(kind = server.kind.label(), reason, "fork failed");
+            Err(Fallback::ForkFailed)
+        }
+        Ok(Ok(RunnerMessage::ForkServerDisabled { reason, .. })) => {
+            tracing::warn!(kind = server.kind.label(), reason, "fork server disabled");
+            // Dropping its control socket ends it; its supervisor stops for good.
+            server.set(state, State::Disabled(reason));
+            Err(Fallback::Disabled)
+        }
+        Ok(Ok(other)) => {
+            let why = format!("an answer that isn't this request's: {other:?}");
+            Err(out_of_step(server, state, &why))
+        }
+        Ok(Err(error)) => {
+            let why = format!("reading the answer: {error}");
+            Err(out_of_step(server, state, &why))
+        }
+        Err(_) => Err(out_of_step(server, state, "no answer in time")),
+    }
 }
 
 /// A fork server whose control socket no longer pairs answers with requests (an answer
@@ -676,6 +780,7 @@ pub struct ForkedProcess {
     group: Pid,
     status: Option<UnixStream>,
     ended: Option<Termination>,
+    usage: Ended,
     stdout: JoinHandle<io::Result<TailBuffer>>,
     stderr: JoinHandle<io::Result<TailBuffer>>,
 }
@@ -709,7 +814,13 @@ impl Process for ForkedProcess {
         };
         let ended = loop {
             match read_message(status).await {
-                Ok(RunnerMessage::ProcessExited { code, signal, .. }) => {
+                Ok(RunnerMessage::ProcessExited {
+                    code,
+                    signal,
+                    core_dumped,
+                    usage,
+                }) => {
+                    self.usage = Ended { usage, core_dumped };
                     break match (code, signal) {
                         (Some(code), _) => Termination::Exited(code),
                         (None, Some(signal)) => Termination::Signaled(signal),
@@ -738,5 +849,9 @@ impl Process for ForkedProcess {
             Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    fn ended(&self) -> Ended {
+        self.usage
     }
 }

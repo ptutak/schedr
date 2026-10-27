@@ -1738,8 +1738,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   return in lockstep), and **starts again from 200 ms** after a session in which the master
   registered it.
 - **`GET /api/v1/workers`** and **`schedr workers list`** show every worker the master has
-  seen, gone ones included: `WORKER STATE RUNNING QUEUES LAST SEEN` (running attempts / slots;
-  `--json` for the API's JSON); a worker drained for maintenance shows `active (drained)`.
+  seen, gone ones included: `WORKER STATE RUNNING QUEUES LAST SEEN WARNINGS` (running
+  attempts / slots; the warnings counted, their messages under the table, M2.5.4b; `--json`
+  for the API's JSON); a worker drained for maintenance shows `active (drained)`.
 - **Drain on SIGTERM** (M2.6): the agent sends `Draining` (again after any reconnect),
   rejects new assignments ("draining", temporary for the master), and gives its running
   attempts until **`[worker] termination_grace_period`** (default **30 s**, Kubernetes'
@@ -2357,12 +2358,16 @@ permission to create pods.
       (14B).
     - **Usage of spawned processes** (decision 18A, 2026-10-27): the workspace forbids
       `unsafe` and no safe crate returns a child's `rusage`, so the agent reads the zombie's
-      `/proc/<pid>/stat` and `status` before reaping it (a `pidfd` and `waitid` with
-      `WNOWAIT`): CPU time (reaped children included), major faults and context switches;
-      **peak RSS is null** for a spawned process (a zombie's memory is gone; `Finished`'s
-      `peak_memory_bytes`, the watchdog's sampled PSS, covers both methods). No `pidfd` (an
-      old kernel): `usage` null. Not chosen: one audited `unsafe` module for the raw `waitid`
-      (relaxing `unsafe_code = "forbid"`); usage for forked processes only.
+      `/proc/<pid>/stat` and `status` before reaping it (`waitid` with `WNOWAIT` on the
+      blocking pool, one parked thread per running spawned process: `AsyncFd` on a `pidfd`
+      needs `unsafe` since tokio 1.54): CPU time (reaped children included) and major faults
+      (checked 2026-10-27 to match `wait4`); **peak RSS and the context switches are null**
+      for a spawned process (a zombie's memory is gone; its `status` has its leader thread's
+      context switches only, not its other threads' or reaped children's: found by Grok's
+      review of M2.5.4b, 2,711 switches reported as 24; `Finished`'s `peak_memory_bytes`, the
+      watchdog's sampled PSS, covers both methods). Unreadable: `usage` null. Not chosen: one
+      audited `unsafe` module for the raw `waitid` (relaxing `unsafe_code = "forbid"`); usage
+      for forked processes only.
     - **What survives what:** a fork server that crashes leaves its shims to `tini` (PID 1),
       and they keep reporting: running tasks and their exit statuses are unaffected. A shim
       that dies closes the status socket without `process_exited`: the agent kills the task's
@@ -2449,6 +2454,13 @@ permission to create pods.
     returns). **A disabled fork server is a worker warning** in the
     REST API's worker view and `schedr workers list` (decided 2026-10-27; M3's UI shows the same
     field), as well as a metric and a log line. Not chosen: logs and a metric only until M3.
+    **How** (M2.5.4b): the agent sends `Warnings` (all of them, `[{kind, interpreter,
+    message}]`, `kind` `fork_server_disabled`, the message saying what it means for tasks)
+    after every `Register` and whenever they change; the master replaces the worker's stored
+    list with each report (a failed write is logged, as for the heartbeat); the worker view
+    has `warnings`, and `schedr workers list` a `WARNINGS` count column with the messages
+    under the table. **Usage** (14A, 18A): `Finished` carries `usage` and `core_dumped`,
+    stored with the attempt and shown in the attempts API (`usage` null when not read).
   - **The chart turns it on** for its workers (decided 2026-10-27): `worker.forkServer`, the
     preload list defaulting to the worker image's libraries **except `polars`**, overridable
     per deployment. Polars starts threads on import (measured 2026-10-27 with Polars 2.0: two

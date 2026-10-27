@@ -28,7 +28,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
-use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, TASK_NOT_FOUND};
+use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
 use schedr_model::{AttemptStatus, Reference, SchedrVersion, TaskId, TaskInstanceState};
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, reject_reaction, run_kind_to_proto,
@@ -795,6 +795,15 @@ impl Dispatcher {
                 // 0: not measured (a worker without `/proc`, or before 2.8).
                 peak_memory_bytes: (finished.peak_memory_bytes > 0)
                     .then_some(finished.peak_memory_bytes),
+                usage: finished.usage.map(|u| ProcessUsage {
+                    user_cpu_micros: u.user_cpu_micros,
+                    system_cpu_micros: u.system_cpu_micros,
+                    peak_rss_bytes: u.peak_rss_bytes,
+                    major_faults: u.major_faults,
+                    voluntary_context_switches: u.voluntary_context_switches,
+                    involuntary_context_switches: u.involuntary_context_switches,
+                }),
+                core_dumped: finished.core_dumped,
                 duration_ms: finished.duration_ms,
                 error_kind: non_empty(&finished.error_kind),
                 error_summary,

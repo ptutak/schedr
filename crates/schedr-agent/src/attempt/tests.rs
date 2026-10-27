@@ -281,6 +281,7 @@ fn ran(
         duration: Duration::from_millis(1500),
         start: None,
         forked: false,
+        ended: crate::usage::Ended::default(),
     }
 }
 

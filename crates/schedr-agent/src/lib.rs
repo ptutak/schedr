@@ -24,4 +24,5 @@ pub mod retention;
 pub mod scan;
 pub mod status;
 pub mod supervise;
+pub mod usage;
 pub mod watch;

@@ -10,6 +10,7 @@ use schedr_model::commands::Command;
 use schedr_model::{DagId, RunState};
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Endpoint, Server};
 
@@ -528,7 +529,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
         .iter()
         .filter_map(|m| match m.message.as_ref()? {
             worker_message::Message::Register(_) => Some("register"),
-            worker_message::Message::Heartbeat(_) => None,
+            worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_) => None,
             worker_message::Message::CodeVersionChanged(_) => Some("code"),
             worker_message::Message::Started(_) => Some("started"),
             worker_message::Message::Rejected(r) => {
@@ -555,11 +556,21 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
         .collect()
 }
 
+/// The one `Rejected` among `seen`.
+fn rejection(seen: &[pb::WorkerMessage]) -> &pb::Rejected {
+    seen.iter()
+        .find_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Rejected(rejected) => Some(rejected),
+            _ => None,
+        })
+        .expect("expected Rejected")
+}
+
 #[tokio::test]
 async fn without_a_free_slot_an_assignment_is_rejected() {
     let python = task_json(&json!({"kind": "python"}));
     let script = vec![assign("a1", &python, "sync.py", false)];
-    let (seen, _) = against_script(0, Start::With(vec![]), script, |m| m.len() >= 2).await;
+    let (seen, _) = against_script(0, Start::With(vec![]), script, |m| kinds(m).len() >= 2).await;
     assert_eq!(kinds(&seen), ["register", "rejected: no slot"]);
     let worker_message::Message::Register(register) = seen[0].message.as_ref().unwrap() else {
         panic!("expected Register")
@@ -728,11 +739,9 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
 async fn an_attempt_the_journal_cant_record_is_rejected() {
     let python = task_json(&json!({"kind": "python"}));
     let script = vec![assign("a1", &python, "sync.py", false)];
-    let (seen, _) = against_script(2, Start::Unwritable, script, |m| m.len() >= 2).await;
+    let (seen, _) = against_script(2, Start::Unwritable, script, |m| kinds(m).len() >= 2).await;
     assert_eq!(kinds(&seen), ["register", "rejected: disk"]);
-    let Some(worker_message::Message::Rejected(rejected)) = seen[1].message.as_ref() else {
-        panic!("expected Rejected")
-    };
+    let rejected = rejection(&seen);
     assert!(
         rejected.detail.starts_with("can't write the journal in `"),
         "{}",
@@ -748,6 +757,45 @@ fn backoffs_have_jitter_between_half_and_all() {
     let middle = jittered(backoff, u32::MAX / 2);
     assert!(middle > Duration::from_millis(7_400) && middle < Duration::from_millis(7_600));
     assert!(FIRST_BACKOFF < MAX_BACKOFF);
+}
+
+#[tokio::test]
+async fn the_workers_warnings_go_after_register_and_on_every_change() {
+    let warning = |message: &str| pb::WorkerWarning {
+        kind: "fork_server_disabled".to_owned(),
+        interpreter: "python".to_owned(),
+        message: message.to_owned(),
+    };
+    let (report, warnings) = watch::channel(vec![warning("at the start")]);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        report.send_replace(vec![]);
+        // Kept: a dropped sender would only stop the reports.
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+    let reported = |m: &[pb::WorkerMessage]| -> Vec<Vec<String>> {
+        m.iter()
+            .filter_map(|m| match m.message.as_ref()? {
+                worker_message::Message::Warnings(w) => {
+                    Some(w.warnings.iter().map(|w| w.message.clone()).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let (seen, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        vec![],
+        |m| reported(m).len() >= 2,
+        |agent| agent.warnings = warnings,
+    )
+    .await;
+    assert_eq!(kinds(&seen)[0], "register");
+    assert_eq!(
+        reported(&seen),
+        [vec!["at the start".to_owned()], Vec::<String>::new()]
+    );
 }
 
 #[tokio::test]
@@ -890,11 +938,10 @@ async fn an_assignment_for_other_code_than_the_workers_is_rejected() {
     if let Some(master_message::Message::AssignTask(a)) = stale.message.as_mut() {
         a.expected_code_hash = "sha256:newer".to_owned();
     }
-    let (seen, _) = against_script(2, Start::With(vec![]), vec![stale], |m| m.len() >= 2).await;
+    let (seen, _) =
+        against_script(2, Start::With(vec![]), vec![stale], |m| kinds(m).len() >= 2).await;
     assert_eq!(kinds(&seen), ["register", "rejected: code"]);
-    let Some(worker_message::Message::Rejected(rejected)) = seen[1].message.as_ref() else {
-        panic!("expected Rejected")
-    };
+    let rejected = rejection(&seen);
     assert!(
         rejected.detail.starts_with("root `etl` here is at sha256:")
             && rejected.detail.ends_with(", the task expects sha256:newer"),

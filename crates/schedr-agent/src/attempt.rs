@@ -297,6 +297,8 @@ pub struct Ran {
     pub start: Option<StartTimes>,
     /// Whether it was forked from a fork server (else spawned).
     pub forked: bool,
+    /// What it used and whether it dumped core.
+    pub ended: crate::usage::Ended,
 }
 
 /// How long a Python task's process took to start, by phase.
@@ -318,6 +320,15 @@ pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
         attempt_id: attempt_id.to_owned(),
         status: attempt_status_to_proto(status).into(),
         duration_ms: Some(u64::try_from(ran.duration.as_millis()).unwrap_or(u64::MAX)),
+        usage: ran.ended.usage.map(|u| pb::ProcessUsage {
+            user_cpu_micros: u.user_cpu_micros,
+            system_cpu_micros: u.system_cpu_micros,
+            peak_rss_bytes: u.peak_rss_bytes,
+            major_faults: u.major_faults,
+            voluntary_context_switches: u.voluntary_context_switches,
+            involuntary_context_switches: u.involuntary_context_switches,
+        }),
+        core_dumped: ran.ended.core_dumped,
         ..pb::Finished::default()
     };
     match termination {

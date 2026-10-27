@@ -55,6 +55,10 @@ pub struct ProcessIdentity {
 
 /// What the journal knows about an attempt.
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one record per attempt, written once: boxing would only add an allocation"
+)]
 pub enum JournalRecord {
     /// Started; its process, once spawned and identified.
     Running(Option<ProcessIdentity>),

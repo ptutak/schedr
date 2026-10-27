@@ -29,6 +29,10 @@
             "description": "Its ID.",
             "type": "string"
           },
+          "core_dumped": {
+            "description": "Whether its process dumped core (ended by a signal).",
+            "type": "boolean"
+          },
           "duration_ms": {
             "description": "How long it ran, measured by the worker (the timestamps come from the master's wall\nclock, so don't subtract them); none while it runs or for attempts ended by the master.",
             "format": "int64",
@@ -105,6 +109,17 @@
             "minimum": 0,
             "type": "integer"
           },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UsageView",
+                "description": "What its process used, with the children it reaped (its parent's view at its exit);\nnone while it runs, when the worker couldn't read it, or for attempts ended by the\nmaster."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "worker_id": {
             "description": "The worker it ran on.",
             "type": [
@@ -116,7 +131,8 @@
         "required": [
           "attempt_id",
           "try_number",
-          "assigned_at"
+          "assigned_at",
+          "core_dumped"
         ],
         "type": "object"
       },
@@ -523,6 +539,85 @@
         },
         "type": "object"
       },
+      "UsageView": {
+        "description": "What an attempt's process used.",
+        "properties": {
+          "involuntary_context_switches": {
+            "description": "Times it was preempted; none as for `voluntary_context_switches`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "major_faults": {
+            "description": "Page faults that needed I/O.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_rss_bytes": {
+            "description": "The peak resident set size, in bytes; for a forked process it includes the pages it\nshares with the fork server (`peak_memory_bytes`, the watchdog's PSS, doesn't); none\nfor a spawned process (its memory is gone when the worker reads it).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "system_cpu_micros": {
+            "description": "CPU time in the kernel, in microseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "user_cpu_micros": {
+            "description": "CPU time in user mode, in microseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "voluntary_context_switches": {
+            "description": "Times it gave up the CPU (waiting for I/O or a lock), with its threads and reaped\nchildren; none for a spawned process (only its leader thread's could be read).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "user_cpu_micros",
+          "system_cpu_micros",
+          "major_faults"
+        ],
+        "type": "object"
+      },
+      "WarningView": {
+        "description": "Something wrong with a worker.",
+        "properties": {
+          "interpreter": {
+            "description": "The interpreter it concerns; empty if none.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What kind: `fork_server_disabled`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What it means for tasks.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "interpreter",
+          "message"
+        ],
+        "type": "object"
+      },
       "WorkerList": {
         "description": "The workers.",
         "properties": {
@@ -602,6 +697,13 @@
           "state": {
             "description": "`active`, `draining`, `disconnected`, `offline` or `lost`.",
             "type": "string"
+          },
+          "warnings": {
+            "description": "What is wrong with it now, as it last reported (e.g. a disabled fork server).",
+            "items": {
+              "$ref": "#/components/schemas/WarningView"
+            },
+            "type": "array"
           },
           "worker_id": {
             "description": "Its ID.",

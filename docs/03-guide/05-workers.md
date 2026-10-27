@@ -26,7 +26,9 @@ that beat.
 
 On start the agent recovers its journal (below), waits for each root's first hash, then
 connects and sends `Register`. That message carries its worker ID and incarnation, versions,
-queues, slots, log endpoint address, the hash of each root, and what its journal holds.
+queues, slots, log endpoint address, the hash of each root, and what its journal holds. It
+then sends `Warnings`, the whole list of its warnings, and sends that list again whenever
+the warnings change (see [The fork server](#the-fork-server)).
 
 If the connection drops, **running tasks keep running**. The agent journals what ends
 meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
@@ -64,7 +66,8 @@ was registered, the backoff starts from 200 ms again.
    SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
 5. **Result.** It is written to the journal, then sent as `Finished` until the master
-   acknowledges it with `FinishedAck`.
+   acknowledges it with `FinishedAck`. `Finished` includes `usage` and `core_dumped`
+   (below).
 
 ## The fork server
 
@@ -147,12 +150,25 @@ there is no `process_exited`.
 
 `process_exited` carries the exit code or the signal, and `core_dumped` (whether the kernel
 reported a core dump). It also carries `usage`, when that can be read: user and system CPU
-time in microseconds, the peak resident set size in bytes, major page faults, and how often
-the process gave up the CPU or was preempted. The resident size includes pages shared with
-the fork server. The watchdog's PSS counts only a share of those pages (see
-[Memory](#memory)). The figures include
-children the process had already collected. If they can't be read, `usage` is null and the
-exit status is still sent. The attempts API does not store `usage` or `core_dumped` yet.
+time in microseconds (`user_cpu_micros`, `system_cpu_micros`), the peak resident set size in
+bytes (`peak_rss_bytes`), major page faults (`major_faults`), and how often the process gave
+up the CPU or was preempted (`voluntary_context_switches`,
+`involuntary_context_switches`). The shim reads all of those fields from the kernel's
+`rusage` for the process. The resident size includes pages shared with the fork server. The
+watchdog's PSS counts only a share of those pages (see [Memory](#memory)). The figures
+include children the process had already collected. If they can't be read, `usage` is null
+and the exit status is still sent. The worker puts this `usage` and `core_dumped` on
+`Finished`. The master stores them with the attempt, and the attempts API shows them.
+`usage` is null while the attempt is still running, when it was not read, and when the
+master ended the attempt itself. `core_dumped` is false unless the process dumped core.
+
+A spawned process has no shim. Before the worker collects it, it reads the zombie's
+`/proc/<pid>/stat`. `usage` then has the user and system CPU time, including children the
+process had already collected, and the major faults, its own and those children's.
+`peak_rss_bytes` is null, because a zombie's memory is gone. Both context-switch counts are
+null, because its `status` has its leader thread's switches only, not its other threads' or
+those children's. If the zombie can't be read, `usage` is null. `core_dumped` is still
+whether the kernel reported a core dump.
 
 **The process.** stdin is `/dev/null`. stdout and stderr are the pipes it was given. Those
 descriptors are blocking, as a spawned process's pipes are. The environment is replaced with
@@ -236,14 +252,31 @@ include `reason`.
 name. The series are present from the moment the worker starts the server, so one that is
 still starting is `down`. See [Observability](09-observability.md).
 
+**Warnings.** A disabled fork server is a warning on the worker. After every registration,
+and again whenever that list changes, the worker sends `Warnings`: the whole list, so a
+server that is no longer disabled drops out, and a worker with none sends an empty list.
+One warning per disabled server. Its kind is `fork_server_disabled`, its interpreter is the
+DAG interpreter's name, and its message names the server and why it is disabled, then what
+that means for tasks. The message is `the preloaded fork server is disabled: <reason>;
+<what tasks do>`, or the same with `bare` in place of `preloaded`:
+
+| What is disabled | The message ends |
+|---|---|
+| The preloaded server, while the bare one isn't disabled | `tasks are forked by the bare fork server, or spawned` |
+| The bare server, while the preloaded one isn't disabled | `tasks the preloaded fork server can't fork are spawned` |
+| Both servers, or the bare server when it is the only one | `tasks are spawned` |
+
+A server that is down or still starting is not a warning. The log lines above, and
+`disabled` on `schedr_worker_fork_servers`, show the same servers. The master replaces the
+worker's stored list with each report and keeps that list while the worker is gone. The
+worker in the API has `warnings` (`kind`, `interpreter`, `message`). `schedr workers list`
+has a `WARNINGS` column with the count, and prints each warning's message under the table
+as `<worker>: <message>`.
+
 A forked task shares pages with its fork server, so the watchdog does not kill it on
 resident set size when PSS cannot be read (see [Memory](#memory)).
 
-**Not yet.** The shim's `usage` and `core_dumped` are reported on `process_exited` and are
-not stored; the attempts API does not show them, and a spawned process's usage is not read.
-`schedr workers list` and the worker in the API do not list a disabled server. The log and
-the `disabled` state are what shows it. A task cannot opt out of the preload or of forking.
-Parse jobs are not forked.
+**Not yet.** A task cannot opt out of the preload or of forking. Parse jobs are not forked.
 
 ## The journal
 
@@ -286,7 +319,9 @@ fires, it kills everything in the container, the agent included. So the agent en
   watchdog neither measures nor kills.
 
 Every attempt reports its peak memory, shown in the API, and its `start_method` once
-`Started` has been stored.
+`Started` has been stored. `usage`, stored with the result, is separate. For a forked
+process its peak resident size includes the fork server's pages. This peak is the watchdog's
+PSS, which counts only a share of those pages (see [The fork server](#the-fork-server)).
 
 ## Draining
 

@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
+use tokio::sync::watch;
+
 use super::*;
 
 #[test]
@@ -54,4 +56,49 @@ fn only_a_failing_import_is_retried_and_within_its_window() {
     assert!(!retried(Cause::Lasting, Duration::ZERO, window));
     // `0s`: never retried.
     assert!(!retried(Cause::Import, Duration::ZERO, Duration::ZERO));
+}
+
+#[test]
+fn a_warning_says_what_a_disabled_server_means_for_tasks() {
+    let (warnings, watching) = watch::channel(Vec::new());
+    let board = WarningBoard {
+        interpreter: "python".to_owned(),
+        bare_alone: false,
+        reasons: std::sync::Mutex::default(),
+        warnings,
+    };
+    let messages = || -> Vec<String> {
+        watching
+            .borrow()
+            .iter()
+            .map(|w| w.message.clone())
+            .collect()
+    };
+    board.record(Kind::Preloaded, Some("threads"));
+    assert_eq!(
+        messages(),
+        [
+            "the preloaded fork server is disabled: threads; tasks are forked by the bare fork \
+          server, or spawned"
+        ]
+    );
+    // Both disabled (e.g. a version mismatch): neither forks, every task is spawned.
+    board.record(Kind::Bare, Some("version"));
+    assert_eq!(
+        messages(),
+        [
+            "the preloaded fork server is disabled: threads; tasks are spawned",
+            "the bare fork server is disabled: version; tasks are spawned",
+        ]
+    );
+    board.record(Kind::Preloaded, None);
+    assert_eq!(
+        messages(),
+        [
+            "the bare fork server is disabled: version; tasks the preloaded fork server can't \
+          fork are spawned"
+        ]
+    );
+    board.record(Kind::Bare, None);
+    assert_eq!(messages(), Vec::<String>::new());
 }

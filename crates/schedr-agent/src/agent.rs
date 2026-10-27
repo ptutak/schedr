@@ -124,6 +124,11 @@ pub trait Executor: Clone + Send + Sync + 'static {
         spawned: Spawned,
     ) -> impl Future<Output = pb::Finished> + Send;
 
+    /// What is wrong with the worker now, as it changes (sent to the master); none by default.
+    fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
+        watch::channel(Vec::new()).1
+    }
+
     /// Parses `files` of the root `root` in `dir`.
     fn parse(
         &self,
@@ -193,6 +198,12 @@ pub struct ProcessExecutor {
 }
 
 impl Executor for ProcessExecutor {
+    fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
+        self.forks
+            .as_ref()
+            .map_or_else(|| watch::channel(Vec::new()).1, ForkServers::warnings)
+    }
+
     async fn run(
         &self,
         spec: AttemptSpec,
@@ -355,6 +366,8 @@ pub struct Agent<E> {
     code_hashes: BTreeMap<String, String>,
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
+    /// What is wrong with the worker now (the executor's), sent after `Register` and on change.
+    warnings: watch::Receiver<Vec<pb::WorkerWarning>>,
     heartbeat: Duration,
     /// Whether the master registered this agent in the current session.
     registered: bool,
@@ -379,9 +392,11 @@ impl<E: Executor> Agent<E> {
             .collect();
         let (done_tx, done_rx) = mpsc::unbounded_channel();
         let journal = Journal::new(settings.journal_dir.clone());
+        let warnings = executor.warnings();
         Self {
             settings,
             executor,
+            warnings,
             incarnation,
             journal,
             watchers,
@@ -688,6 +703,12 @@ impl<E: Executor> Agent<E> {
         if self.drain.is_some() {
             let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
         }
+        // All of them, after every registration: each report replaces the master's record.
+        let warnings = self.warnings.borrow_and_update().clone();
+        let _ = to_master.send(wrap(worker_message::Message::Warnings(pb::Warnings {
+            warnings,
+        })));
+        let mut warnings_open = true;
         let mut heartbeat = tokio::time::interval(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
         let mut tick = tokio::time::interval(DRAIN_TICK);
@@ -737,6 +758,16 @@ impl<E: Executor> Agent<E> {
                 }
                 _ = watch.tick() => self.watch(&to_master),
                 _ = alive.tick() => self.alive(),
+                changed = self.warnings.changed(), if warnings_open => {
+                    if changed.is_ok() {
+                        let warnings = self.warnings.borrow_and_update().clone();
+                        let report = pb::Warnings { warnings };
+                        let _ = to_master.send(wrap(worker_message::Message::Warnings(report)));
+                    } else {
+                        // No one reports any more: nothing will change.
+                        warnings_open = false;
+                    }
+                }
             }
         }
     }

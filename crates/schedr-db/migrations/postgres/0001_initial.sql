@@ -20,7 +20,9 @@ CREATE TABLE workers (
     offline_at        TIMESTAMPTZ,
     -- Drained for maintenance (`schedr workers drain`): no new tasks until resumed, across
     -- restarts of the worker and the master.
-    drained           BOOLEAN NOT NULL DEFAULT FALSE
+    drained           BOOLEAN NOT NULL DEFAULT FALSE,
+    -- What is wrong with it now ([{kind, interpreter, message}]), replaced by each report.
+    warnings          JSONB NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE parse_results (
@@ -135,6 +137,9 @@ CREATE TABLE attempts (
     exit_code         INTEGER,
     signal            INTEGER,
     peak_memory_bytes BIGINT,
+    -- What the process used (ProcessUsage as JSON); NULL if not read.
+    usage             JSONB,
+    core_dumped       BOOLEAN NOT NULL DEFAULT FALSE,
     duration_ms       BIGINT,
     error_kind        TEXT,
     error_summary     JSONB,

@@ -187,6 +187,13 @@ impl Process for TaskProcess {
             Self::Forked(process) => process.signal(signal),
         }
     }
+
+    fn ended(&self) -> crate::usage::Ended {
+        match self {
+            Self::Spawned(process) => process.ended(),
+            Self::Forked(process) => process.ended(),
+        }
+    }
 }
 
 /// Starts a Python task's runner, forked by `forks` if they can, else spawned, and completes
@@ -277,6 +284,7 @@ pub async fn run_python(
     let ((runner_result, import), supervised) =
         tokio::join!(result, supervise(&mut process, limits, stop));
     let supervised = supervised.map_err(LaunchError::Supervise)?;
+    let ended = process.ended();
     let _ = process.output().await;
     Ok(Ran {
         supervised,
@@ -288,6 +296,7 @@ pub async fn run_python(
             import,
         }),
         forked,
+        ended,
     })
 }
 
@@ -312,6 +321,7 @@ pub async fn run_command(
     let supervised = supervise(&mut process, limits, stop)
         .await
         .map_err(LaunchError::Supervise)?;
+    let ended = process.ended();
     let output = process.output().await.map_err(LaunchError::Supervise)?;
     Ok(Ran {
         supervised,
@@ -320,6 +330,7 @@ pub async fn run_command(
         start: None,
         duration: started.elapsed(),
         forked: false,
+        ended,
     })
 }
 

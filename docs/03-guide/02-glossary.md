@@ -38,7 +38,8 @@ The names used across the documentation, the API and the logs.
   `lost` or `assignment_expired`. `start_method` (`spawn` or `fork`) is set when the worker's
   `Started` is stored, and the attempts API shows it. A forked Python task is `fork`: the
   worker sends a second `Started`, and the start time stays the first one's. A spawned
-  process is `spawn`.
+  process is `spawn`. Once the result is stored, the attempts API also shows `usage` and
+  `core_dumped` (see [Workers](05-workers.md#the-fork-server)).
 
 **Fork server**
 : A runner started as `python -m schedr.runner fork_server`. It imports libraries once and

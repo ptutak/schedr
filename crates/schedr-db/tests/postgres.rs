@@ -334,6 +334,35 @@ async fn with_instances() -> (Database, String) {
 }
 
 #[tokio::test]
+async fn an_attempts_usage_and_core_dump_are_stored() {
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let end = AttemptEnd {
+        usage: Some(schedr_model::runner::ProcessUsage {
+            user_cpu_micros: 1_500_000,
+            system_cpu_micros: 250_000,
+            peak_rss_bytes: Some(80_000_000),
+            major_faults: 3,
+            voluntary_context_switches: Some(40),
+            involuntary_context_switches: Some(7),
+        }),
+        core_dumped: true,
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    };
+    assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(
+        (attempts[0].usage, attempts[0].core_dumped),
+        (end.usage, true)
+    );
+}
+
+#[tokio::test]
 async fn attempts_and_outputs_move_a_task_forward() {
     let (db, run_id) = with_instances().await;
     let ready = db.ready_instances(ts(NOW)).await.unwrap();

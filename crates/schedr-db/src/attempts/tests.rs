@@ -284,7 +284,7 @@ async fn unschedulable_instances_are_queued_again_when_asked() {
 
 #[tokio::test]
 async fn attempts_start_and_end_once() {
-    let (db, _run_id) = with_run().await;
+    let (db, run_id) = with_run().await;
     let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
         .instance_id
         .clone();
@@ -325,9 +325,20 @@ async fn attempts_start_and_end_once() {
         code_hash: Some("sha256:x".to_owned()),
         peak_memory_bytes: Some(1024),
         signal: None,
+        usage: Some(schedr_model::runner::ProcessUsage {
+            user_cpu_micros: 1_500_000,
+            system_cpu_micros: 250_000,
+            peak_rss_bytes: None,
+            major_faults: 3,
+            voluntary_context_switches: Some(40),
+            involuntary_context_switches: Some(7),
+        }),
+        core_dumped: true,
         ..AttemptEnd::by_master(AttemptStatus::Failed)
     };
     assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let stored = &db.task_attempts(&run_id, &id("extract")).await.unwrap()[0];
+    assert_eq!((stored.usage, stored.core_dumped), (end.usage, true));
     assert!(
         !db.end_attempt(
             &attempt_id,

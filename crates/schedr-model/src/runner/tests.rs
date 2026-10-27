@@ -286,10 +286,10 @@ fn fork_server_messages_have_their_wire_shapes() {
                 usage: Some(ProcessUsage {
                     user_cpu_micros: 1,
                     system_cpu_micros: 2,
-                    peak_rss_bytes: 3,
+                    peak_rss_bytes: Some(3),
                     major_faults: 4,
-                    voluntary_context_switches: 5,
-                    involuntary_context_switches: 6,
+                    voluntary_context_switches: Some(5),
+                    involuntary_context_switches: Some(6),
                 }),
             },
             json!({"type": "process_exited", "code": 0, "signal": null, "core_dumped": false, "usage": {

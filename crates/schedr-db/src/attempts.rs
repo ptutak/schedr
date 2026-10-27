@@ -82,6 +82,10 @@ pub struct AttemptEnd {
     pub signal: Option<i32>,
     /// The peak memory of its process tree.
     pub peak_memory_bytes: Option<u64>,
+    /// What its process used (its parent's view at its exit), if the worker read it.
+    pub usage: Option<schedr_model::runner::ProcessUsage>,
+    /// Whether its process dumped core.
+    pub core_dumped: bool,
     /// How long it ran, measured by the worker with a monotonic clock (the start and end
     /// timestamps come from the master's wall clock, which can step).
     pub duration_ms: Option<u64>,
@@ -102,6 +106,8 @@ impl AttemptEnd {
             exit_code: None,
             signal: None,
             peak_memory_bytes: None,
+            usage: None,
+            core_dumped: false,
             duration_ms: None,
             error_kind: None,
             error_summary: None,
@@ -361,7 +367,8 @@ impl Database {
     ) -> Result<bool, DbError> {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
-            ended_at = $8{ts}, duration_ms = $9 WHERE id = $10{uuid} AND status IS NULL";
+            ended_at = $8{ts}, duration_ms = $9, usage = $10{json}, core_dumped = $11 \
+            WHERE id = $12{uuid} AND status IS NULL";
         let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, END))
                 .bind(end.status.to_string())
@@ -379,6 +386,8 @@ impl Database {
                     end.duration_ms
                         .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX)),
                 )
+                .bind(end.usage.as_ref().map(crate::query::to_json))
+                .bind(end.core_dumped)
                 .bind(attempt_id)
                 .execute(&mut *tx)
                 .await?

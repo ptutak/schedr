@@ -174,14 +174,17 @@ pub struct ProcessUsage {
     /// CPU time in the kernel, in microseconds.
     pub system_cpu_micros: u64,
     /// The peak resident set size, in bytes. For a forked process it includes the pages it
-    /// shares with the fork server (the watchdog's PSS doesn't).
-    pub peak_rss_bytes: u64,
+    /// shares with the fork server (the watchdog's PSS doesn't); `None` for a spawned process
+    /// (its memory is gone before the agent reads its zombie).
+    pub peak_rss_bytes: Option<u64>,
     /// Page faults that needed I/O.
     pub major_faults: u64,
-    /// Times it gave up the CPU (waiting for I/O or a lock).
-    pub voluntary_context_switches: u64,
-    /// Times it was preempted.
-    pub involuntary_context_switches: u64,
+    /// Times it gave up the CPU (waiting for I/O or a lock), with its threads and reaped
+    /// children; `None` for a spawned process (its zombie's `/proc` has the leader thread's
+    /// only).
+    pub voluntary_context_switches: Option<u64>,
+    /// Times it was preempted; `None` as for `voluntary_context_switches`.
+    pub involuntary_context_switches: Option<u64>,
 }
 
 /// A parse job: the files of one root to import.

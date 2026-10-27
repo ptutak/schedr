@@ -483,10 +483,13 @@
       "description": "What a process used, with the children it reaped: its parent's view at its exit (`rusage`).",
       "properties": {
         "involuntary_context_switches": {
-          "description": "Times it was preempted.",
+          "description": "Times it was preempted; `None` as for `voluntary_context_switches`.",
           "format": "uint64",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "major_faults": {
           "description": "Page faults that needed I/O.",
@@ -495,10 +498,13 @@
           "type": "integer"
         },
         "peak_rss_bytes": {
-          "description": "The peak resident set size, in bytes. For a forked process it includes the pages it\nshares with the fork server (the watchdog's PSS doesn't).",
+          "description": "The peak resident set size, in bytes. For a forked process it includes the pages it\nshares with the fork server (the watchdog's PSS doesn't); `None` for a spawned process\n(its memory is gone before the agent reads its zombie).",
           "format": "uint64",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "system_cpu_micros": {
           "description": "CPU time in the kernel, in microseconds.",
@@ -513,19 +519,19 @@
           "type": "integer"
         },
         "voluntary_context_switches": {
-          "description": "Times it gave up the CPU (waiting for I/O or a lock).",
+          "description": "Times it gave up the CPU (waiting for I/O or a lock), with its threads and reaped\nchildren; `None` for a spawned process (its zombie's `/proc` has the leader thread's\nonly).",
           "format": "uint64",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
         "user_cpu_micros",
         "system_cpu_micros",
-        "peak_rss_bytes",
-        "major_faults",
-        "voluntary_context_switches",
-        "involuntary_context_switches"
+        "major_faults"
       ],
       "type": "object"
     },

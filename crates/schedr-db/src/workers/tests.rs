@@ -55,8 +55,31 @@ async fn a_registration_is_recorded_and_listed() {
             offline_at: None,
             running: 0,
             drained: false,
+            warnings: vec![],
         }]
     );
+}
+
+#[tokio::test]
+async fn a_workers_warnings_are_replaced_by_each_report() {
+    let db = migrated().await;
+    db.register_worker(
+        &registration("w1", "0190a0a0-0000-7000-8000-000000000001", &[]),
+        ts("2026-10-22T08:00:00Z"),
+    )
+    .await
+    .unwrap();
+    let disabled = WorkerWarning {
+        kind: "fork_server_disabled".to_owned(),
+        interpreter: "python".to_owned(),
+        message: "the preloaded fork server is disabled".to_owned(),
+    };
+    db.set_worker_warnings("w1", std::slice::from_ref(&disabled))
+        .await
+        .unwrap();
+    assert_eq!(db.workers().await.unwrap()[0].warnings, [disabled]);
+    db.set_worker_warnings("w1", &[]).await.unwrap();
+    assert_eq!(db.workers().await.unwrap()[0].warnings, []);
 }
 
 #[tokio::test]

@@ -279,6 +279,43 @@ async fn rejections_heartbeats_and_draining_are_handled() {
 }
 
 #[tokio::test]
+async fn a_workers_warnings_replace_the_last_ones() {
+    let mut core = with_dag().await;
+    let report = |messages: &[&str]| {
+        worker_message::Message::Warnings(pb::Warnings {
+            warnings: messages
+                .iter()
+                .map(|m| pb::WorkerWarning {
+                    kind: "fork_server_disabled".to_owned(),
+                    interpreter: "python".to_owned(),
+                    message: (*m).to_owned(),
+                })
+                .collect(),
+        })
+    };
+    assert_eq!(
+        core.handle("w1", report(&["a", "b"]), later(1))
+            .await
+            .unwrap(),
+        []
+    );
+    let stored = |core: &MasterCore| {
+        let db = core.db.clone();
+        async move {
+            let workers = db.workers().await.unwrap();
+            let w1 = workers.iter().find(|w| w.id == "w1").unwrap();
+            w1.warnings
+                .iter()
+                .map(|w| w.message.clone())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(stored(&core).await, ["a", "b"]);
+    core.handle("w1", report(&[]), later(2)).await.unwrap();
+    assert_eq!(stored(&core).await, Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn a_second_register_on_the_stream_is_a_bad_message() {
     let mut core = with_dag().await;
     let again = worker_message::Message::Register(register("w1", "i1", vec![]));

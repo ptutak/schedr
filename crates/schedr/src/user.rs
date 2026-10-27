@@ -98,9 +98,23 @@ pub async fn run_workers<T: Transport>(
                 .collect();
             write_table(
                 out,
-                &["WORKER", "STATE", "RUNNING", "QUEUES", "LAST SEEN"],
+                &[
+                    "WORKER",
+                    "STATE",
+                    "RUNNING",
+                    "QUEUES",
+                    "LAST SEEN",
+                    "WARNINGS",
+                ],
                 &rows,
-            )
+            )?;
+            // The warnings themselves under the table: too long for a column.
+            for worker in &workers.workers {
+                for warning in &worker.warnings {
+                    writeln!(out, "{}: {}", worker.worker_id, warning.message)?;
+                }
+            }
+            Ok(())
         }
         WorkersCommand::Drain { worker } => {
             let command = client
@@ -141,6 +155,7 @@ fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {
         format!("{}/{}", worker.running, worker.slots),
         worker.queues.join(","),
         show(worker.last_heartbeat_at, local),
+        worker.warnings.len().to_string(),
     ]
 }
 

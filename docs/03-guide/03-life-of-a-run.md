@@ -98,8 +98,8 @@ that size includes the pages it shares with the fork server.
 ## 6. The result comes back
 
 The agent records the result in its journal, then sends `Finished`: the status, the output,
-the duration and the peak memory. The master handles it as soon as it arrives, between
-rounds:
+the duration, the peak memory, `usage` and `core_dumped`. The master handles it as soon as it
+arrives, between rounds:
 
 - it stores the attempt's result and the task's new state (`success`, or `up_for_retry` /
   `failed` by the retry rules);

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 use crate::output::TailBuffer;
 use crate::status::Termination;
 use crate::supervise::{Process, Signal};
+use crate::usage::{Ended, clock_ticks, exited, zombie_usage};
 
 /// What to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,9 @@ pub struct OsProcess {
     group: Pid,
     stdout: JoinHandle<io::Result<TailBuffer>>,
     stderr: JoinHandle<io::Result<TailBuffer>>,
+    ended: Ended,
+    /// Whether its zombie was read already (`wait` may be called again).
+    read: bool,
 }
 
 /// Processes are started one at a time: a descriptor made inheritable for one child (see
@@ -104,6 +108,8 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
         .take()
         .ok_or_else(|| io::Error::other("no stderr pipe"))?;
     Ok(OsProcess {
+        ended: Ended::default(),
+        read: false,
         child,
         group,
         stdout: tokio::spawn(collect(stdout, Arc::clone(&log), spec.max_output_size)),
@@ -170,7 +176,15 @@ impl OsProcess {
 
 impl Process for OsProcess {
     async fn wait(&mut self) -> io::Result<Termination> {
+        // Its zombie is read before `wait` reaps it (decision 18A).
+        if !self.read {
+            if exited(self.group).await.is_ok() {
+                self.ended.usage = zombie_usage(Path::new("/proc"), self.id(), clock_ticks());
+            }
+            self.read = true;
+        }
         let status = self.child.wait().await?;
+        self.ended.core_dumped = status.core_dumped();
         Ok(match (status.code(), status.signal()) {
             (Some(code), _) => Termination::Exited(code),
             (None, Some(signal)) => Termination::Signaled(signal),
@@ -187,5 +201,9 @@ impl Process for OsProcess {
             Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    fn ended(&self) -> Ended {
+        self.ended
     }
 }

@@ -233,6 +233,14 @@ async fn a_task_forks_from_the_preloaded_server_and_its_pid_is_held_until_releas
     assert_eq!(output, &serde_json::json!(pid));
     assert_eq!(ran.supervised.termination, Termination::Exited(0));
     assert!(ran.start.unwrap().runner < Duration::from_secs(5));
+    // Its shim's view: CPU spent, the peak RSS (with the server's shared pages), no core.
+    let usage = ran.ended.usage.expect("the shim's usage");
+    assert!(usage.user_cpu_micros + usage.system_cpu_micros > 0);
+    assert!(
+        usage.peak_rss_bytes.is_some_and(|b| b > 1 << 20),
+        "{usage:?}"
+    );
+    assert!(!ran.ended.core_dumped);
     // Ended, but held (a zombie of its shim) until the hold goes.
     drop(ran);
     assert!(hold.is_some() && !gone(pid));
@@ -279,6 +287,22 @@ async fn a_failing_preload_disables_the_preloaded_server_and_the_bare_one_forks(
         disabled[0].1.contains("schedr_no_such_module"),
         "{disabled:?}"
     );
+    // The worker's warning says so, and what it means for tasks.
+    let warnings = forks.warnings().borrow().clone();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(
+        (warnings[0].kind.as_str(), warnings[0].interpreter.as_str()),
+        ("fork_server_disabled", "python")
+    );
+    assert!(
+        warnings[0]
+            .message
+            .starts_with("the preloaded fork server is disabled: preloading")
+            && warnings[0]
+                .message
+                .ends_with("; tasks are forked by the bare fork server, or spawned"),
+        "{warnings:?}"
+    );
 }
 
 #[tokio::test]
@@ -305,6 +329,13 @@ async fn without_a_fork_server_up_the_task_is_spawned() {
     .unwrap();
     assert!(!ran.forked);
     assert_eq!(ran.supervised.termination, Termination::Exited(0));
+    // Read from its zombie: CPU, no peak RSS (gone before it is read).
+    let usage = ran.ended.usage.expect("the zombie's usage");
+    assert!(
+        usage.user_cpu_micros + usage.system_cpu_micros > 0,
+        "{usage:?}"
+    );
+    assert_eq!(usage.peak_rss_bytes, None);
     assert_eq!(fallbacks(&metrics, "down"), 2);
 }
 
@@ -451,6 +482,8 @@ async fn a_failing_import_is_retried_and_the_server_comes_up_once_it_imports() {
     })
     .await;
     assert_eq!(forks.disabled().await, Vec::new());
+    // Its warning went when it came up.
+    assert_eq!(forks.warnings().borrow().clone(), Vec::new());
 }
 
 #[tokio::test]
@@ -464,8 +497,9 @@ async fn an_abandoned_answer_restarts_the_server_instead_of_pairing_the_next_req
     .unwrap();
     let (forks, metrics) =
         retrying_servers(python(), dir.path(), &["schedr_slow_fork"], Duration::ZERO);
-    until("the preloaded server is up", || {
-        state(&metrics, "preloaded", "up") == 1
+    // Both up: the bare one takes the request the preloaded one can't.
+    until("both servers are up", || {
+        state(&metrics, "preloaded", "up") == 1 && state(&metrics, "bare", "up") == 1
     })
     .await;
     let task = spec(
