@@ -753,6 +753,13 @@ fn out_of_step(server: &Server, state: &mut State, why: &str) -> Fallback {
     Fallback::Down
 }
 
+/// No `SIGPIPE` for a fork server that is gone: `MSG_NOSIGNAL` is Linux's (where the fork
+/// server runs); elsewhere Rust's runtime ignores `SIGPIPE` already.
+#[cfg(target_os = "linux")]
+const SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
+#[cfg(not(target_os = "linux"))]
+const SEND_FLAGS: SendFlags = SendFlags::empty();
+
 /// Sends `message` with `fds` on its first bytes (`SCM_RIGHTS`), in the channel's framing.
 async fn send_with_fds(
     stream: &mut UnixStream,
@@ -773,13 +780,8 @@ async fn send_with_fds(
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
             let mut control = SendAncillaryBuffer::new(&mut space);
             control.push(SendAncillaryMessage::ScmRights(&borrowed));
-            rustix::net::sendmsg(
-                &*stream,
-                &[IoSlice::new(&header)],
-                &mut control,
-                SendFlags::NOSIGNAL,
-            )
-            .map_err(io::Error::from)
+            rustix::net::sendmsg(&*stream, &[IoSlice::new(&header)], &mut control, SEND_FLAGS)
+                .map_err(io::Error::from)
         });
         match result {
             Ok(n) => sent = n,

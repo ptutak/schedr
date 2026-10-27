@@ -203,7 +203,7 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	helm template t charts/schedr -f charts/schedr/ci/istio-values.yaml \
 		--api-versions security.istio.io/v1 --api-versions networking.istio.io/v1 >/dev/null
 	: "worker.forkServer.preload: the list the image's build checks (images/schedr/preload.txt)"
-	uv run --no-sync python scripts/check-preload-list.py charts/schedr/values.yaml images/schedr/preload.txt
+	helm template t charts/schedr | python3 scripts/check-preload-list.py images/schedr/preload.txt
 	: "mode distributed: the roles, TLS (generated certificates checked with openssl), accounts, Istio"
 	charts/schedr/ci/test-distributed.sh
 	: "the data volume writable: fsGroup 0, except on OpenShift, which sets its own"

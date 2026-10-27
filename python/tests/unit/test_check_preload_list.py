@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
@@ -24,32 +25,41 @@ def checker() -> ModuleType:
     return module
 
 
-def write(tmp_path: Path, chart: list[str], listed: str) -> tuple[Path, Path]:
-    values = tmp_path / "values.yaml"
-    items = "".join(f"      - {m}\n" for m in chart)
-    values.write_text(f"worker:\n  forkServer:\n    preload:\n{items}")
+def manifest(*lists: list[str], name: str = "PYTHON") -> str:
+    """A rendered chart setting each list on a container, as `helm template` writes it."""
+    env = "".join(
+        f"            - name: SCHEDR_CONFIG__INTERPRETERS__{name}__PRELOAD\n"
+        f"              value: {json.dumps(json.dumps(modules, separators=(',', ':')))}\n"
+        for modules in lists
+    )
+    return f"kind: StatefulSet\nspec:\n  containers:\n          env:\n{env}"
+
+
+def listed(tmp_path: Path, text: str) -> Path:
     preload = tmp_path / "preload.txt"
-    preload.write_text(listed)
-    return values, preload
+    preload.write_text(text)
+    return preload
 
 
 def test_the_same_list_passes_comments_and_blanks_aside(tmp_path: Path) -> None:
-    values, preload = write(tmp_path, ["requests", "yaml"], "# why\n\nrequests\n  yaml  \n")
-    assert checker().main(values, preload) == 0
+    preload = listed(tmp_path, "# why\n\nrequests\n  yaml  \n  # indented\n")
+    assert checker().main(manifest(["requests", "yaml"]), preload) == 0
+    # Every container that gets it, under a renamed DAG interpreter too.
+    two = manifest(["requests", "yaml"], ["requests", "yaml"], name="ETL")
+    assert checker().main(two, preload) == 0
 
 
 @pytest.mark.parametrize(
-    ("chart", "listed"),
-    [(["requests"], "requests\nyaml\n"), (["yaml", "requests"], "requests\nyaml\n")],
+    ("chart", "says"),
+    [
+        (manifest(["requests"]), "worker.forkServer.preload is ['requests']"),
+        (manifest(["yaml", "requests"]), "worker.forkServer.preload is ['yaml', 'requests']"),
+        (manifest(["requests", "yaml"], ["requests"]), "is ['requests']"),
+        ("kind: StatefulSet\n", "sets no preload list"),
+    ],
 )
-def test_a_different_list_or_order_fails_and_says_both(
-    tmp_path: Path, chart: list[str], listed: str, capsys: pytest.CaptureFixture[str]
+def test_a_different_list_order_or_none_fails_and_says_why(
+    tmp_path: Path, chart: str, says: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    values, preload = write(tmp_path, chart, listed)
-    assert checker().main(values, preload) == 1
-    assert "worker.forkServer.preload is" in capsys.readouterr().err
-
-
-def test_this_repos_chart_and_image_agree() -> None:
-    values = ROOT / "charts" / "schedr" / "values.yaml"
-    assert checker().main(values, ROOT / "images" / "schedr" / "preload.txt") == 0
+    assert checker().main(chart, listed(tmp_path, "requests\nyaml\n")) == 1
+    assert says in capsys.readouterr().err
