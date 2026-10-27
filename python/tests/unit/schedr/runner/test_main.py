@@ -71,7 +71,7 @@ def test_parse_mode_handshakes_then_parses(
 def test_wrong_arguments_print_usage(argv: list[str]) -> None:
     code, err = run(argv, FakeAgent())
     assert code == EXIT_USAGE
-    assert err == "usage: python -m schedr.runner {parse,task}\n"
+    assert err == "usage: python -m schedr.runner {parse,task,fork_server}\n"
 
 
 def test_without_the_socket_variable_it_explains_who_starts_it() -> None:
@@ -158,3 +158,18 @@ def test_task_mode_runs_the_task_and_exits_with_its_code(
     validate_runner_message(imported)
     assert imported == {"type": "task_imported"}
     assert (result["type"], result["kind"]) == ("task_failed", None)
+
+
+def test_fork_server_mode_serves_until_the_agent_closes(
+    validate_runner_message: Callable[[Any], None],
+) -> None:
+    preload = {"type": "fork_server", "preload": ["schedr_no_such_module"]}
+    agent = FakeAgent({"type": "welcome"}, preload)
+    agent.agent._sock.shutdown(socket.SHUT_WR)
+    code, err = run(["fork_server"], agent)
+    assert (code, err) == (0, "")
+    hello, disabled = agent.messages()
+    for message in (hello, disabled):
+        validate_runner_message(message)
+    assert hello["mode"] == "fork_server"
+    assert disabled["type"] == "fork_server_disabled"

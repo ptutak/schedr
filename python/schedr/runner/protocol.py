@@ -6,6 +6,7 @@ object tagged by ``type`` (the shapes are ``schema/runner.schema.json``, generat
 """
 
 import json
+import os
 import socket
 from typing import Any
 
@@ -17,6 +18,10 @@ _HEADER = 4
 
 class ProtocolError(Exception):
     """The other side closed the connection or sent something that isn't a valid message."""
+
+
+class ChannelClosedError(ProtocolError):
+    """The other side closed the connection between messages (the fork server's way to stop)."""
 
 
 class Channel:
@@ -53,10 +58,43 @@ class Channel:
             The message, a JSON object with a string ``type``.
 
         Raises:
-            ProtocolError: If the connection closed, the size is over the limit, or the body
-                isn't a JSON object with a ``type``.
+            ChannelClosedError: If the connection closed before the message.
+            ProtocolError: If the connection closed within it, the size is over the limit, or
+                the body isn't a JSON object with a ``type``.
         """
-        size = int.from_bytes(self._read(_HEADER), "big")
+        return self.receive_with_fds(0)[0]
+
+    def receive_with_fds(self, max_fds: int) -> tuple[dict[str, Any], list[int]]:
+        """Receives one message and the descriptors sent with it (``SCM_RIGHTS``).
+
+        Args:
+            max_fds: The most descriptors accepted.
+
+        Returns:
+            The message and the received descriptors, which the caller owns.
+
+        Raises:
+            ChannelClosedError: If the connection closed before the message.
+            ProtocolError: As :meth:`receive`, or if more descriptors came than accepted (the
+                received ones are closed).
+        """
+        try:
+            header, fds, flags, _ = socket.recv_fds(self._sock, _HEADER, max_fds)
+        except ConnectionResetError as e:  # closed with our messages unread
+            raise ChannelClosedError("the other side closed the connection") from e
+        if not header:
+            raise ChannelClosedError("the other side closed the connection")
+        try:
+            if flags & socket.MSG_CTRUNC:
+                raise ProtocolError(f"more than {max_fds} descriptors came with a message")
+            return self._receive_body(header + self._read(_HEADER - len(header))), fds
+        except BaseException:
+            for fd in fds:
+                os.close(fd)
+            raise
+
+    def _receive_body(self, header: bytes) -> dict[str, Any]:
+        size = int.from_bytes(header, "big")
         if size > MAX_MESSAGE_SIZE:
             raise ProtocolError(
                 f"incoming message of {size} bytes is over the limit of {MAX_MESSAGE_SIZE} bytes"
@@ -88,7 +126,8 @@ class Channel:
 def from_fd(fd: int) -> Channel:
     """The channel on the socket the agent handed over (``SCHEDR_AGENT_FD``).
 
-    The descriptor is made non-inheritable, so processes the task starts don't get it.
+    The descriptor is made blocking (Python's socket would think it is, and a non-blocking
+    one would fail its reads), and non-inheritable, so processes the task starts don't get it.
 
     Args:
         fd: The inherited descriptor of the runner's end of the agent's socket pair.
@@ -99,6 +138,7 @@ def from_fd(fd: int) -> Channel:
     Raises:
         OSError: If the descriptor isn't an open socket.
     """
+    os.set_blocking(fd, True)  # the flag comes with the descriptor; the channel blocks
     sock = socket.socket(fileno=fd)
     sock.set_inheritable(False)
     return Channel(sock)

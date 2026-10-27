@@ -31,6 +31,8 @@ pub enum RunnerMode {
     Parse,
     /// Run one task attempt.
     Task,
+    /// Preload libraries, then fork a process per request (Linux only).
+    ForkServer,
 }
 
 /// A structured error summary: why a DAG file couldn't be imported, or why a task failed.
@@ -118,6 +120,68 @@ pub enum RunnerMessage {
         /// exception from the task's own code.
         kind: Option<String>,
     },
+    /// The fork server preloaded its libraries and is single-threaded: it takes `fork`
+    /// requests.
+    ForkServerReady,
+    /// The fork server can't be used: tasks fall back (to the bare fork server, then to
+    /// spawn). It answers every later `fork` with `fork_failed` until the agent closes the
+    /// channel (exiting with a request unread would reset the connection and could lose this
+    /// message). Also sent after a `fork_failed` when a thread appeared since the check.
+    ForkServerDisabled {
+        /// Why, e.g. a failing preload or a second thread.
+        reason: String,
+        /// The names of the threads besides the main one (`/proc/self/task/*/comm`).
+        threads: Vec<String>,
+    },
+    /// A `fork` request was carried out: the shim runs, and reports on the status socket.
+    Forked {
+        /// The request's ID.
+        id: u64,
+    },
+    /// A `fork` request failed; the task falls back.
+    ForkFailed {
+        /// The request's ID.
+        id: u64,
+        /// Why.
+        reason: String,
+    },
+    /// From the shim, on the status socket: the forked process runs in its own process group
+    /// (its ID is the PID), so the agent may signal and watch the group.
+    ProcessStarted {
+        /// The process's PID, which is also its process group's ID.
+        pid: i32,
+    },
+    /// From the shim, on the status socket: the forked process ended. The shim reaps it when
+    /// the agent closes its end, so the PID isn't reused before.
+    ProcessExited {
+        /// The exit code, if it exited.
+        code: Option<i32>,
+        /// The signal that ended it, if one did.
+        signal: Option<i32>,
+        /// Whether it dumped core (ended by a signal).
+        core_dumped: bool,
+        /// What it used, with the children it reaped; `None` if the shim couldn't read it.
+        usage: Option<ProcessUsage>,
+    },
+}
+
+/// What a process used, with the children it reaped: its parent's view at its exit (`rusage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessUsage {
+    /// CPU time in user mode, in microseconds.
+    pub user_cpu_micros: u64,
+    /// CPU time in the kernel, in microseconds.
+    pub system_cpu_micros: u64,
+    /// The peak resident set size, in bytes. For a forked process it includes the pages it
+    /// shares with the fork server (the watchdog's PSS doesn't).
+    pub peak_rss_bytes: u64,
+    /// Page faults that needed I/O.
+    pub major_faults: u64,
+    /// Times it gave up the CPU (waiting for I/O or a lock).
+    pub voluntary_context_switches: u64,
+    /// Times it was preempted.
+    pub involuntary_context_switches: u64,
 }
 
 /// A parse job: the files of one root to import.
@@ -184,6 +248,33 @@ pub struct TaskRequest {
     pub sys_path: Vec<String>,
 }
 
+/// What the fork server preloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkServerRequest {
+    /// The modules to import, in order (none for the bare fork server).
+    pub preload: Vec<String>,
+}
+
+/// A request to the fork server: start a runner process.
+///
+/// Four descriptors come with it (`SCM_RIGHTS`, on the message's first bytes), in order: the
+/// process's end of its channel, its stdout, its stderr, and the shim's end of the status
+/// socket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkRequest {
+    /// The request's ID, repeated in the answer.
+    pub id: u64,
+    /// What the process runs (`parse` or `task`); it shakes hands on its channel as a spawned
+    /// runner does.
+    pub mode: RunnerMode,
+    /// The process's whole environment.
+    pub env: std::collections::BTreeMap<String, String>,
+    /// The process's working directory.
+    pub cwd: String,
+}
+
 /// A message from the agent to the runner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -199,6 +290,10 @@ pub enum AgentMessage {
     Parse(ParseRequest),
     /// A task attempt.
     Task(Box<TaskRequest>),
+    /// The fork server's preload list (its mode's request).
+    ForkServer(ForkServerRequest),
+    /// Start a runner process (to the fork server).
+    Fork(ForkRequest),
 }
 
 /// Whether the agent accepts a runner: the versions must be equal (the binary and the

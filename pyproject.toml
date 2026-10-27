@@ -113,6 +113,9 @@ addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importli
 markers = ["integration: tests that spawn processes or touch the filesystem"]
 
 [tool.coverage.run]
+# Forked processes (the fork server's shims and children, in tests) save their data.
+patch = ["_exit", "fork", "subprocess"]
+parallel = true
 source = ["schedr"]
 branch = true
 # `python -m` entry points only call into tested code (like Rust's main.rs).

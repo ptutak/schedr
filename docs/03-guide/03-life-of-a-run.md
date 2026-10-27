@@ -88,7 +88,9 @@ imported and the arguments are built, the runner sends `task_imported` (no field
 the function; it does not send that message when the import or the arguments fail. The agent
 times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
 [Observability](09-observability.md)). The result comes back over the same local socket.
-The memory watchdog samples the group's memory every second.
+The memory watchdog samples the group's memory every second. The runner can fork a process
+from a fork server instead (see [The fork server](05-workers.md#the-fork-server)). The agent
+does not start that server yet, so every task still starts as a new process.
 
 ## 6. The result comes back
 

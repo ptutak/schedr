@@ -56,7 +56,9 @@ created). That is a missed wake, and the counter staying at zero is the healthy 
 `schedr_worker_task_start_seconds` is one histogram (10 ms to about 40 s). It is how M2.5
 judges the fork server and which libraries to preload: the same series, split by how the
 process was started, before and after. `method` is `spawn` (a new process; what workers
-record today) or `fork` (from the fork server, once that starts tasks). `phase` is `runner`
+record today) or `fork` (a process from the fork server). The runner can fork, and the agent
+does not start the server yet, so no attempt is recorded as `fork` (see
+[The fork server](05-workers.md#the-fork-server)). `phase` is `runner`
 (from starting the process to the runner's hello: the interpreter and `schedr`) or `import`
 (from sending the task to the runner's `task_imported`: the DAG file imported and the
 arguments built). The import phase is left out when that fails. The agent times both on its

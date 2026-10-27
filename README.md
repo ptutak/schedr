@@ -1,8 +1,7 @@
 # schedr
 
-A job scheduler written in Rust that runs Python scripts, Bash processes and Python DAGs.
-DAGs are written with schedr's own Python API (a compatibility layer for Airflow DAGs is
-planned for later, as a separate namespace).
+An open-source job scheduler written in Rust for running Python scripts, Bash processes, and Python DAGs.
+DAGs are defined using schedr's own Python API or an Airflow compatibility layer.
 
 ```python
 from datetime import timedelta

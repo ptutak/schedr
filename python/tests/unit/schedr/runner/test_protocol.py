@@ -1,12 +1,19 @@
 import json
 import os
 import socket
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError, from_fd
+from schedr.runner.protocol import (
+    MAX_MESSAGE_SIZE,
+    Channel,
+    ChannelClosedError,
+    ProtocolError,
+    from_fd,
+)
 
 
 @pytest.fixture
@@ -111,3 +118,72 @@ def test_from_fd_fails_for_a_descriptor_that_isnt_a_socket(tmp_path: Path) -> No
     path.write_text("x")
     with path.open() as file, pytest.raises(OSError, match="non-socket"):
         from_fd(os.dup(file.fileno()))
+
+
+def test_descriptors_sent_with_a_message_are_received(pair: tuple[Channel, socket.socket]) -> None:
+    channel, theirs = pair
+    read, write = os.pipe()
+    body = b'{"type":"fork"}'
+    socket.send_fds(theirs, [frame(body)[:2]], [write])
+    theirs.sendall(frame(body)[2:])
+    os.close(write)
+    message, fds = channel.receive_with_fds(4)
+    assert message == {"type": "fork"}
+    (received,) = fds
+    os.write(received, b"x")
+    os.close(received)
+    assert os.read(read, 1) == b"x"
+    os.close(read)
+
+
+def test_more_descriptors_than_accepted_are_closed_and_refused(
+    pair: tuple[Channel, socket.socket],
+) -> None:
+    channel, theirs = pair
+    before = len(os.listdir("/proc/self/fd"))
+    fds = [os.open(os.devnull, os.O_RDONLY) for _ in range(3)]
+    socket.send_fds(theirs, [frame(b'{"type":"fork"}')], fds)
+    for fd in fds:
+        os.close(fd)
+    with pytest.raises(ProtocolError, match="more than 1 descriptors"):
+        channel.receive_with_fds(1)
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
+def test_a_close_between_messages_is_channel_closed(pair: tuple[Channel, socket.socket]) -> None:
+    channel, theirs = pair
+    theirs.shutdown(socket.SHUT_WR)
+    with pytest.raises(ChannelClosedError):
+        channel.receive()
+
+
+def test_a_close_with_our_messages_unread_is_channel_closed(
+    pair: tuple[Channel, socket.socket],
+) -> None:
+    channel, theirs = pair
+    channel.send({"type": "hello"})
+    theirs.close()
+    with pytest.raises(ChannelClosedError):
+        channel.receive()
+
+
+def test_a_close_within_a_message_isnt_channel_closed(pair: tuple[Channel, socket.socket]) -> None:
+    channel, theirs = pair
+    theirs.sendall(frame(b'{"type":"x"}')[:2])
+    theirs.shutdown(socket.SHUT_WR)
+    with pytest.raises(ProtocolError, match="closed") as raised:
+        channel.receive()
+    assert not isinstance(raised.value, ChannelClosedError)
+
+
+def test_from_fd_makes_a_non_blocking_descriptor_blocking() -> None:
+    ours, theirs = socket.socketpair()
+    os.set_blocking(ours.fileno(), False)
+    channel = from_fd(ours.detach())
+    theirs.settimeout(5)
+    try:
+        threading.Timer(0.2, lambda: theirs.sendall(b'\x00\x00\x00\x0f{"type":"late"}')).start()
+        assert channel.receive() == {"type": "late"}  # waited instead of failing at once
+    finally:
+        channel.close()
+        theirs.close()

@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from importlib.metadata import version
 from typing import TextIO
 
+from schedr.runner.fork_server import run_fork_server
 from schedr.runner.parse import run_parse
 from schedr.runner.protocol import Channel, ProtocolError, from_fd
 from schedr.runner.task import run_task
@@ -12,7 +13,7 @@ from schedr.runner.task import run_task
 FD_ENV = "SCHEDR_AGENT_FD"
 """The environment variable with the descriptor of the socket the agent handed over."""
 
-MODES = ("parse", "task")
+MODES = ("parse", "task", "fork_server")
 """The modes the runner can be started in."""
 
 EXIT_ERROR = 1
@@ -29,7 +30,7 @@ def main(
     open_channel: Callable[[int], Channel] = from_fd,
     stderr: TextIO | None = None,
 ) -> int:
-    """Runs the runner: ``parse`` or ``task``.
+    """Runs the runner: ``parse``, ``task`` or ``fork_server``.
 
     Args:
         argv: The arguments after ``-m schedr.runner``.
@@ -80,5 +81,7 @@ def _serve(channel: Channel, mode: str, err: TextIO) -> int:
         raise ProtocolError(f"expected `{mode}`, got `{request['type']}`")
     if mode == "task":
         return run_task(channel, request)
+    if mode == "fork_server":
+        return run_fork_server(channel, request)
     run_parse(channel, request)
     return 0

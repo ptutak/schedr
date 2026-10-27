@@ -215,3 +215,99 @@ fn a_summary_schedr_writes_has_no_traceback() {
         }
     );
 }
+
+#[test]
+fn fork_server_messages_have_their_wire_shapes() {
+    let cases = [
+        (
+            AgentMessage::ForkServer(ForkServerRequest {
+                preload: vec!["pymongo".into()],
+            }),
+            json!({"type": "fork_server", "preload": ["pymongo"]}),
+        ),
+        (
+            AgentMessage::Fork(ForkRequest {
+                id: 7,
+                mode: RunnerMode::Task,
+                env: [("PATH".to_owned(), "/usr/bin".to_owned())].into(),
+                cwd: "/tmp".into(),
+            }),
+            json!({"type": "fork", "id": 7, "mode": "task", "env": {"PATH": "/usr/bin"}, "cwd": "/tmp"}),
+        ),
+    ];
+    for (message, expected) in cases {
+        assert_eq!(serde_json::to_value(&message).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<AgentMessage>(expected).unwrap(),
+            message
+        );
+    }
+    let cases = [
+        (
+            RunnerMessage::ForkServerReady,
+            json!({"type": "fork_server_ready"}),
+        ),
+        (
+            RunnerMessage::ForkServerDisabled {
+                reason: "threads".into(),
+                threads: vec!["jemalloc_bg_thd".into()],
+            },
+            json!({"type": "fork_server_disabled", "reason": "threads", "threads": ["jemalloc_bg_thd"]}),
+        ),
+        (
+            RunnerMessage::Forked { id: 7 },
+            json!({"type": "forked", "id": 7}),
+        ),
+        (
+            RunnerMessage::ForkFailed {
+                id: 7,
+                reason: "EAGAIN".into(),
+            },
+            json!({"type": "fork_failed", "id": 7, "reason": "EAGAIN"}),
+        ),
+        (
+            RunnerMessage::ProcessStarted { pid: 42 },
+            json!({"type": "process_started", "pid": 42}),
+        ),
+        (
+            RunnerMessage::ProcessExited {
+                code: None,
+                signal: Some(9),
+                core_dumped: false,
+                usage: None,
+            },
+            json!({"type": "process_exited", "code": null, "signal": 9, "core_dumped": false, "usage": null}),
+        ),
+        (
+            RunnerMessage::ProcessExited {
+                code: Some(0),
+                signal: None,
+                core_dumped: false,
+                usage: Some(ProcessUsage {
+                    user_cpu_micros: 1,
+                    system_cpu_micros: 2,
+                    peak_rss_bytes: 3,
+                    major_faults: 4,
+                    voluntary_context_switches: 5,
+                    involuntary_context_switches: 6,
+                }),
+            },
+            json!({"type": "process_exited", "code": 0, "signal": null, "core_dumped": false, "usage": {
+                "user_cpu_micros": 1, "system_cpu_micros": 2, "peak_rss_bytes": 3,
+                "major_faults": 4, "voluntary_context_switches": 5,
+                "involuntary_context_switches": 6
+            }}),
+        ),
+    ];
+    for (message, expected) in cases {
+        assert_eq!(serde_json::to_value(&message).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<RunnerMessage>(expected).unwrap(),
+            message
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(RunnerMode::ForkServer).unwrap(),
+        json!("fork_server")
+    );
+}

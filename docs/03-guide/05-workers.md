@@ -41,9 +41,10 @@ was registered, the backoff starts from 200 ms again.
 2. **Journal, then `Started`.** The attempt is written to the journal before `Started` is
    sent. That way a restarted agent always knows about an attempt the master believes is
    running. `Started` carries `start_method`: `spawn` for a new process (the interpreter, or
-   the command itself), or `fork` from the fork server (M2.5; until then every attempt is
-   `spawn`). The master stores
-   it, and the attempts API shows it from then on.
+   the command itself), or `fork` for a process from the fork server. The runner can fork.
+   The agent does not start the fork server yet, so every attempt is `spawn` (see
+   [The fork server](#the-fork-server)). The master stores it, and the attempts API shows it
+   from then on.
 3. **The process.** A Python task runs `python -m schedr.runner task`. A command runs through
    the shell when it is a string, or directly when it is a list of arguments. Each starts in
    its own process group, so cancelling or killing reaches the whole
@@ -61,6 +62,89 @@ was registered, the backoff starts from 200 ms again.
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
 5. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`.
+
+## The fork server
+
+The runner has a third mode, `python -m schedr.runner fork_server`. It imports a list of
+libraries once, then starts one process per request. The process runs the same `task` or
+`parse` code a spawned runner runs, with its own channel, log and process group. The agent
+does not start this mode. Every attempt is still `spawn`, and nothing you run changes, until
+the agent does (M2.5.4, at the end of this section).
+
+The handshake is the usual one: `hello` (the mode is `fork_server`, and the message carries
+the runner's schedr version), then `welcome`. The next message is `fork_server`, the modules
+to import, in order. The server imports them, tells the garbage collector to leave those
+objects alone (a collection in a child would otherwise copy their pages), and checks that it
+has no thread but its own. It answers `fork_server_ready`, or `fork_server_disabled` with the
+reason and the other threads' names. A disabled server stays up and answers every later
+`fork` with `fork_failed`, until the other side closes the connection: exiting while a
+request is still unread would reset the connection and can drop `fork_server_disabled`. The
+disabled answer is also what anything but Linux gets, and what a preload that raises or
+exits gets: later `fork` requests then get `fork_failed` only. A thread that appears later
+is answered `fork_failed`, and then `fork_server_disabled`.
+
+A `fork` request carries an id, the mode (`task` or `parse`), the process's environment and
+working directory, and four open files sent with the message: the process's own channel, its
+stdout, its stderr, and a status socket. The server answers `forked`, or `fork_failed` with
+the reason. Before the fork it flushes its output buffers, including C's, so text a preloaded
+library printed and never flushed is not copied into the new process.
+
+**The shim.** The server forks a shim, and the shim forks the process. The shim is not in the
+process's group, so a signal to that group does not reach the shim. The shim puts the process
+in its own group, and the process does the same. The shim sends `process_started` only after
+its own call. The message is the process ID, which is the group's ID. The shim then waits
+without collecting the process. When the process ends, the shim sends `process_exited` and
+collects the process only after the other end of the status socket closes. Until then the
+process ID stays taken, so a signal to that group cannot hit a different process that was
+later given the same ID. The shim writes nothing. If it dies, the status socket closes and
+there is no `process_exited`.
+
+`process_exited` carries the exit code or the signal, and `core_dumped` (whether the kernel
+reported a core dump). It also carries `usage`, when that can be read: user and system CPU
+time in microseconds, the peak resident set size in bytes, major page faults, and how often
+the process gave up the CPU or was preempted. The resident size includes pages shared with
+the fork server. The watchdog's PSS counts only a share of those pages (see
+[Memory](#memory)). The figures include
+children the process had already collected. If they can't be read, `usage` is null and the
+exit status is still sent. The attempts API does not store `usage` or `core_dumped` yet.
+
+**The process.** stdin is `/dev/null`. stdout and stderr are the pipes it was given. Those
+descriptors are blocking, as a spawned process's pipes are. The environment is replaced with
+the request's. The time zone, the character-type locale and the temporary directory are then
+taken from that environment again, as they are when an interpreter starts. The other locale
+categories are `C`, and an unknown locale stays `C`. The working directory is the request's.
+The standard streams are the interpreter's own, even where a preloaded library had replaced
+them. Python reseeds `random` in the child. Files a preloaded library already had open stay
+open. `logging` is left as the preload set it: a spawned process that imported the same
+library would have the same handlers, and Python rebuilds logging's locks in the child. A
+handler that writes a file keeps that file, and the forked processes share it. The process
+then runs the normal runner on its own channel. On the way out it does what an interpreter's
+shutdown does, in the same order: it waits for its threads that aren't daemons, then runs its
+own exit handlers (`atexit`, `weakref.finalize`, and `logging`'s shutdown, which flushes
+buffered handlers). The handlers the fork server registered while preloading don't run: they
+belong to the server, and one could act on the server's state. A preloaded library's exit
+handler therefore doesn't run per task, where a spawned process would run it.
+
+**If the fork server or the shim dies.** The shim is its own process. It closes the server's
+connection and then only uses the status socket, so once it exists it still sends
+`process_started` and `process_exited` if the fork server dies. The process keeps running
+too: the fork server dying does not signal it. A shim that dies does not stop the process
+either. The process is in its own group, so a signal to the shim's group does not reach it.
+The status socket closes, and there is no `process_exited`.
+
+**What the agent will do (M2.5.4).** None of this runs today. The agent will start the fork
+server with the worker, two per interpreter (one that preloads, and a bare one), send `fork`
+for an attempt, and record `start_method: fork`. It will take the process ID from
+`process_started`, and store `usage` and `core_dumped` with the attempt. A spawned process
+will get the same figures when it is collected. If the status socket closes with no
+`process_exited`, the agent will kill the process group and fail the attempt with an unknown
+status, or fall back without killing when `process_started` never arrived. A disabled server
+or a `fork_failed` falls back too: the bare fork server, then a spawned process. A crashed
+server is restarted with backoff, and attempts fall back meanwhile. A forked task whose own
+memory can't be read will not be killed on resident-set size, because that size includes the
+fork server's pages. A disabled server will be a worker warning, in `schedr workers list` and
+the worker in the API, with metrics for servers up or down and for fallbacks. On macOS the
+agent will warn and keep spawning.
 
 ## The journal
 

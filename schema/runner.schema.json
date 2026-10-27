@@ -123,6 +123,67 @@
             "sys_path"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The fork server's preload list (its mode's request).",
+          "properties": {
+            "preload": {
+              "description": "The modules to import, in order (none for the bare fork server).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "fork_server",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "preload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a runner process (to the fork server).",
+          "properties": {
+            "cwd": {
+              "description": "The process's working directory.",
+              "type": "string"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "The process's whole environment.",
+              "type": "object"
+            },
+            "id": {
+              "description": "The request's ID, repeated in the answer.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/RunnerMode",
+              "description": "What the process runs (`parse` or `task`); it shakes hands on its channel as a spawned\nrunner does."
+            },
+            "type": {
+              "const": "fork",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "mode",
+            "env",
+            "cwd"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -417,6 +478,57 @@
       ],
       "description": "One step of a path into an output: a field or key, or a list / tuple index."
     },
+    "ProcessUsage": {
+      "additionalProperties": false,
+      "description": "What a process used, with the children it reaped: its parent's view at its exit (`rusage`).",
+      "properties": {
+        "involuntary_context_switches": {
+          "description": "Times it was preempted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "major_faults": {
+          "description": "Page faults that needed I/O.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "peak_rss_bytes": {
+          "description": "The peak resident set size, in bytes. For a forked process it includes the pages it\nshares with the fork server (the watchdog's PSS doesn't).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system_cpu_micros": {
+          "description": "CPU time in the kernel, in microseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user_cpu_micros": {
+          "description": "CPU time in user mode, in microseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "voluntary_context_switches": {
+          "description": "Times it gave up the CPU (waiting for I/O or a lock).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "user_cpu_micros",
+        "system_cpu_micros",
+        "peak_rss_bytes",
+        "major_faults",
+        "voluntary_context_switches",
+        "involuntary_context_switches"
+      ],
+      "type": "object"
+    },
     "Reference": {
       "description": "A reference to data known only at run time.",
       "oneOf": [
@@ -707,6 +819,160 @@
             "error"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The fork server preloaded its libraries and is single-threaded: it takes `fork`\nrequests.",
+          "properties": {
+            "type": {
+              "const": "fork_server_ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The fork server can't be used: tasks fall back (to the bare fork server, then to\nspawn). It answers every later `fork` with `fork_failed` until the agent closes the\nchannel (exiting with a request unread would reset the connection and could lose this\nmessage). Also sent after a `fork_failed` when a thread appeared since the check.",
+          "properties": {
+            "reason": {
+              "description": "Why, e.g. a failing preload or a second thread.",
+              "type": "string"
+            },
+            "threads": {
+              "description": "The names of the threads besides the main one (`/proc/self/task/*/comm`).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "fork_server_disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "threads"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `fork` request was carried out: the shim runs, and reports on the status socket.",
+          "properties": {
+            "id": {
+              "description": "The request's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "forked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `fork` request failed; the task falls back.",
+          "properties": {
+            "id": {
+              "description": "The request's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "fork_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the shim, on the status socket: the forked process runs in its own process group\n(its ID is the PID), so the agent may signal and watch the group.",
+          "properties": {
+            "pid": {
+              "description": "The process's PID, which is also its process group's ID.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": {
+              "const": "process_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pid"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the shim, on the status socket: the forked process ended. The shim reaps it when\nthe agent closes its end, so the PID isn't reused before.",
+          "properties": {
+            "code": {
+              "description": "The exit code, if it exited.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "core_dumped": {
+              "description": "Whether it dumped core (ended by a signal).",
+              "type": "boolean"
+            },
+            "signal": {
+              "description": "The signal that ended it, if one did.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "process_exited",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProcessUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What it used, with the children it reaped; `None` if the shim couldn't read it."
+            }
+          },
+          "required": [
+            "type",
+            "core_dumped"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -721,6 +987,11 @@
         {
           "const": "task",
           "description": "Run one task attempt.",
+          "type": "string"
+        },
+        {
+          "const": "fork_server",
+          "description": "Preload libraries, then fork a process per request (Linux only).",
           "type": "string"
         }
       ]

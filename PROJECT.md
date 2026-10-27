@@ -2315,29 +2315,101 @@ permission to create pods.
     and needs no `schedr`); `command` tasks aren't Python. A task can opt out with
     **`@task(fresh_process=True)`** (also in `TaskDefaults`), for code that misbehaves after a
     fork.
-  - **Process model:** the agent starts `<interpreter> -m schedr.runner forkserver` **when the
-    worker starts** (the first task is fast; a failing preload shows at once). Per attempt the
-    agent asks it to fork; the child calls `setsid()` (its own process group, as with spawn, so
-    timeouts, cancellation and the watchdog are unchanged), gets **the agent's output pipes**
-    over the Unix socket as stdout / stderr (as spawn's pipes: the agent's log collection and
-    the kept tail are unchanged; decided 2026-10-27, replacing log file descriptors),
-    replaces its whole
-    environment with the task's clean environment, changes to the working directory, closes
-    inherited descriptors, and runs the normal runner `task` code with **its own** channel: a socket-pair end
-    the agent passes over the fork server's socket (`SCM_RIGHTS`). The agent is a **child subreaper** (`PR_SET_CHILD_SUBREAPER`) and
-    watches each child through a **`pidfd`**: signals reach the right process even if PIDs are
-    reused, and children of a fork server that dies are re-parented to the agent and keep
-    running.
+  - **Process model** (decided 2026-10-27, replacing "the agent is a child subreaper"): the
+    agent starts `<interpreter> -m schedr.runner fork_server` **when the worker starts** (the
+    first task is fast; a failing preload shows at once). It shakes hands like any runner
+    (`hello` with the mode `fork_server`, `welcome`), then sends `fork_server` with the
+    preload list; the fork server imports it, calls `gc.freeze()`, checks it is
+    single-threaded and answers `fork_server_ready` or `fork_server_disabled` (the reason and
+    the threads' names). Per attempt the agent sends **`fork`** (an ID, the runner mode, the
+    task's clean environment and working directory) with four descriptors over the socket
+    (`SCM_RIGHTS`): the task's **own channel** (a socket-pair end), **the agent's output
+    pipes** as stdout / stderr (as spawn's pipes: log collection and the kept tail are
+    unchanged; decided 2026-10-27, replacing log file descriptors) and a **status socket**.
+    The fork server answers `forked` or `fork_failed` (with the reason; tasks then fall back).
+    - **A shim per task** (decision 13A): the fork server forks a shim, the shim forks the
+      task. Both call `setpgid(task, task)` (as shells do); the shim's own call comes before
+      it reports `process_started` (the PID), so the group exists by then on the status socket; the agent records the
+      PID only then (before it, the group would still be the fork server's, and a kill or the
+      watchdog would hit the server). The shim waits for the task with `waitid(WNOWAIT)`,
+      sends `process_exited` (the exit code or the signal), and reaps the task only **after the
+      agent closes its end**: until then the zombie keeps the PID and the group, so a
+      `killpg` from the agent can't reach a reused PID. The shim isn't in the task's group:
+      the task's signals and the watchdog don't reach or count it (about 0.7 MB USS). It isn't
+      a subreaper (a task's leftover processes aren't collected, as with spawn). The fork
+      server reaps its shims (a `SIGCHLD` handler; it never ignores `SIGCHLD`, which would
+      lose its children's statuses).
+    - **The shim only observes** (decision 14A, 2026-10-27): with `process_exited` it reports
+      whether the process dumped core and **what it used** (`ProcessUsage`, the parent's
+      `rusage`, with the children it reaped: user and system CPU, peak RSS, major faults,
+      voluntary and involuntary context switches), for the Attempts tab and the attempts API
+      (M2.5.4; the agent reads the same for spawned processes with `wait4`). The peak RSS of a
+      forked process includes the pages it shares with the fork server (the watchdog's PSS
+      doesn't). Keeping the zombie rules out `wait4`, so it is the raw `waitid` system call
+      with `WNOWAIT` (through `ctypes`: Python's `os.waitid` doesn't pass the `rusage`; proved
+      2026-10-27 to give what `wait4` gives after reaping). **It must never break the shim:**
+      `ctypes` is loaded in the fork server before any fork; the call comes only after the exit
+      was seen (it returns at once); an unknown CPU architecture (the call's number is known
+      for x86-64 and arm64), a failing call or any exception gives `usage: null`, and the exit
+      status is reported regardless. The shim never kills, watches memory or handles logs:
+      those stay with the agent. Not chosen: also reporting the processes a task left running
+      (14B).
+    - **What survives what:** a fork server that crashes leaves its shims to `tini` (PID 1),
+      and they keep reporting: running tasks and their exit statuses are unaffected. A shim
+      that dies closes the status socket without `process_exited`: the agent kills the task's
+      group and records the attempt as failed with an unknown status. The agent is **not a
+      subreaper** and uses no `pidfd`: an agent adopting orphans would need a `waitpid(-1)`
+      sweep, which Grok measured stealing 38–40 of 40 tokio children's exit statuses; a
+      `pidfd` on a non-child can't give the exit status (kernel 6.6) or signal a group
+      (from 6.9), so groups are signalled with `killpg`, as for spawn. Not chosen: the fork
+      server as the task's parent (one fork fewer, about 4 ms faster: 4.1 against 8.5 ms to
+      running at p50, measured 2026-10-27, but exit statuses lost while a fork server is
+      down); the agent as subreaper (above).
+    - **The task's child process:** `setpgid(0, 0)`, not `setsid()` (a task in an orphaned
+      session discards `SIGTSTP`; spawn's `process_group(0)` is `setpgid`), the fork server's
+      `SIGCHLD` handler reset (the shim resets it; handlers a preload installed stay, as a
+      spawned process importing the same library would have them), the output pipes on descriptors 1 and 2 and `/dev/null` on 0, its environment
+      replaced, the working directory changed, the fork server's socket and the status
+      socket closed, then the normal runner code with its own channel; it ends with
+      `os._exit`. **Descriptors a preloaded library opened stay open** (decided 2026-10-27):
+      their Python objects own them, so closing the raw numbers would let a later garbage
+      collection close a file the task reopened under the same number; the task sees them as
+      if it had imported the library itself. Not chosen: closing every inherited descriptor.
+    - **The watchdog** (M2.5.4): a forked task shares the fork server's pages, so its RSS is
+      about 97 % of the server's; for a forked task whose PSS can't be read the watchdog
+      skips the kill instead of falling back to RSS.
   - **Safety checks:** after preloading, the parent must be **single-threaded** (checked in
     `/proc/self/task`; forking with threads, e.g. BLAS pools or database drivers, can deadlock
     the child). A second thread or a failing preload **disables that fork server** with a
     worker warning, and tasks **fall back** (to the bare one, then to spawn): a task never
     fails because of the fork server's setup. **Linux only:** on macOS `fork_server = true` is
     ignored with a warning (fork is unsafe there), like the memory watchdog.
-  - **State after fork:** the child reseeds `random`, resets `logging` handlers, closes the
-    parent's sockets and runs the libraries' `os.register_at_fork` handlers. The parent calls
-    **`gc.freeze()`** after preloading, so the garbage collector doesn't copy shared pages in
-    every child (keeps each task's PSS small).
+  - **State after fork:** the child is set up as a spawned interpreter would be from the
+    task's environment: `random` reseeded (Python's own at-fork handler), the time zone
+    (`time.tzset()`), `LC_CTYPE` from the environment and the other locale categories `C`,
+    `tempfile`'s cached directory cleared (`TMPDIR`), `sys.stdin` / `stdout` / `stderr` the
+    interpreter's own on descriptors 0-2 (a preloaded library may have replaced them), the
+    descriptors blocking whatever the agent made its ends; the libraries' `os.register_at_fork`
+    handlers run. Before each fork the server flushes Python's and C's stdio buffers (a
+    preloaded extension's unflushed `printf` would appear in every task's log). **`logging`
+    is left as the preload set it** (decided 2026-10-27, replacing "resets `logging`
+    handlers"): a spawned task importing the same library would have the same handlers, and
+    `logging` re-creates its locks after a fork itself. The server keeps descriptors 0-2 open
+    (`/dev/null` if it was started without one), so no received descriptor takes their
+    numbers. **Shutting down as an interpreter** (decision 15A, 2026-10-27): the process
+    ends with `os._exit` (it must never return into the fork server's code), which skips the
+    interpreter's shutdown, so it does the shutdown's steps itself, in CPython's order: it
+    waits for its threads that aren't daemons, then runs **its own** exit handlers. When it
+    starts it drops the handlers the fork server registered (`atexit._clear()`: a preloaded
+    library's handler may act on the server's state, e.g. remove a directory it made at
+    import) and keeps two per process, as every interpreter has them: `logging`'s shutdown
+    (flushes and closes the handlers) and `weakref.finalize`'s hook, for its own finalizers
+    only (the server's objects are marked not to run). The order was checked against a
+    spawned interpreter running the same code. A preloaded library's exit handler doesn't run
+    per task (in a spawned process it would). Not chosen: every inherited handler (the
+    server's state); none (a task's `atexit` flush, a thread left working, a buffering
+    `logging` handler would be lost). The parent calls **`gc.freeze()`** after preloading, so the garbage collector
+    doesn't copy shared pages in every child (keeps each task's PSS small).
   - **Crashes and versions:** a crashed fork server is restarted by the agent with backoff;
     running children are unaffected, and meanwhile tasks fall back as above. It reports its
     `schedr` version
@@ -4505,6 +4577,16 @@ Neither is a node of the graph, so neither is ever a leaf. Airflow translation: 
 compatibility (Cleanup and resources).
 
 #### Per-task cleanup
+
+**How it runs** (decision 16A, 2026-10-27): always in a **fresh process after the task's**,
+however the task ended (returned, raised or killed), through the fork server like the task
+(runner `cleanup` mode; the preloaded or bare server by the task's own `preload`, spawn as the
+fallback): about 8 ms to start instead of about a second spawned, which matters as downstream
+tasks wait for the cleanup. The cleanup's environment is the same on every path, and a task
+that broke its process (memory near the limit, threads left running) can't take its cleanup
+with it. Not chosen: running it in the task's own process when the task ended by itself (two
+paths to keep alike, the task's state, one watchdog and timeout for both); downstream not
+waiting for the cleanup (the "cleaned before the next step" guarantee).
 
 `@task(cleanup=...)`, `CommandOperator(..., cleanup=[...])`: `finally` for one task. It covers
 what schedr itself interrupts: when the agent kills a task (timeout, memory watchdog, cancel,
