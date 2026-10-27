@@ -295,6 +295,32 @@ webserver:
 
 worker:
   replicas: 2
+  # The fork server (the guide: Workers, The fork server): Python tasks and parse jobs start in
+  # a few milliseconds, forked from a process that has imported these libraries once, instead
+  # of a new interpreter importing them each time. For the distributed workers and standalone's
+  # own. `path` is the image's Python, set as the DAG interpreter (`config.DAGS__INTERPRETER`,
+  # `python` by default); an image built FROM this one keeps it. To configure that interpreter
+  # in `config` yourself, turn this off (the chart refuses both). `preload`: module names, the image's libraries except `polars`, which starts
+  # threads on import (images/schedr/preload.txt; the image's build fails on a list that
+  # leaves a thread running). Add the libraries most of your tasks import, if an image of your
+  # own adds them; never one that starts threads (the worker warns and forks without it).
+  forkServer:
+    enabled: true
+    path: /usr/local/bin/python3
+    preload:
+      - requests
+      - httpx
+      - aiohttp
+      - tenacity
+      - orjson
+      - yaml
+      - dateutil
+      - paramiko
+      - netmiko
+      - ncclient
+      - dns
+      - netaddr
+      - pymongo
   # Every task runs in a worker's container: size its memory for its slots' tasks. Task
   # budgets are (the limit − 10 %) ÷ slots ([worker] slots, 2; memory_reserve).
   resources:

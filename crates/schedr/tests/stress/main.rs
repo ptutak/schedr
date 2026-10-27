@@ -858,12 +858,25 @@ with Dag("greedy"):
 "#;
 
 /// Scenario 13: Python tasks as the load: chains of `@task` functions passing their outputs on, a
-/// Python process for each.
+/// Python process for each, spawned (a new interpreter each).
 #[test]
 fn stress_13_python_tasks() {
+    python_tasks("13_python_tasks", false);
+}
+
+/// Scenario 13, forked: the same load with the workers' fork servers on (M2.5; a short preload
+/// list, as this Python has none of the image's libraries); every task forked, and how long
+/// the starts took next to the spawned run's.
+#[test]
+fn stress_13_python_tasks_forked() {
+    python_tasks("13_python_tasks_forked", true);
+}
+
+/// Scenario 13's load, with the workers' fork servers on when `forked`.
+fn python_tasks(name: &'static str, forked: bool) {
     let mut stress = Stress::new(Some(postgres_database()));
     let size = stress.size;
-    let mut report = Report::new("13_python_tasks");
+    let mut report = Report::new(name);
     let count = size.n(20, 200);
     let dags: Vec<String> = (1..=count)
         .map(|i| {
@@ -872,8 +885,18 @@ fn stress_13_python_tasks() {
             id
         })
         .collect();
+    let python = support::python();
+    let fork_env = [
+        ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH", python.as_str()),
+        ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER", "true"),
+        (
+            "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD",
+            r#"["json", "decimal"]"#,
+        ),
+    ];
+    let workers = size.n(2, 8);
     stress.start_core("master", &[]);
-    stress.start_workers(size.n(2, 8), 4, &[]);
+    stress.start_workers(workers, 4, if forked { &fork_env } else { &[] });
     stress.wait_for_dags(count, 10 * MINUTE);
     stress.trigger(&dags, 1);
     stress.wait_for_runs(count, size.time(20 * MINUTE, 60 * MINUTE), |_| {});
@@ -883,6 +906,31 @@ fn stress_13_python_tasks() {
             "{wrong} totals wrong: outputs passed on badly"
         )]);
     }
+    let method = if forked { "fork" } else { "spawn" };
+    let attempts = stress.db.count("SELECT COUNT(*) FROM attempts");
+    let by_method = stress.db.count(&format!(
+        "SELECT COUNT(*) FROM attempts WHERE start_method = '{method}'"
+    ));
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a share of a few thousand attempts"
+    )]
+    let share = by_method as f64 / attempts.max(1) as f64;
+    report.at_least(&format!("{method}_share"), share, 0.99);
+    // The start's runner phase (to the runner's hello) on the first worker.
+    let (status, metrics) = stress.cluster.ops_get("w01", "/metrics");
+    let labels = format!("method=\"{method}\",phase=\"runner\"");
+    let name = "schedr_worker_task_start_seconds";
+    let p50 = check::labelled_quantile(&metrics, name, &labels, 0.5);
+    let p99 = check::labelled_quantile(&metrics, name, &labels, 0.99);
+    if status != 200 || p50 <= 0.0 {
+        // Read nothing: not a fast start.
+        report.broken(vec![format!(
+            "no `{method}` start times on w01 (HTTP {status})"
+        )]);
+    }
+    report.set("start_runner_p50_s", p50);
+    report.set("start_runner_p99_s", p99);
     stress.measure(&mut report, "master", 0.5);
     finish(&stress, report, &["success"]);
 }

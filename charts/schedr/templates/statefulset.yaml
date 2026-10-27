@@ -77,6 +77,9 @@ spec:
           {{- end }}
           env:
             {{- include "schedr.dagEnv" . | trim | nindent 12 }}
+            {{- with include "schedr.forkServerEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: SCHEDR_CONFIG__WORKER__DATA_DIR
               value: /var/lib/schedr
             # The pod's grace period, so the drain fits it.

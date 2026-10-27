@@ -79,7 +79,7 @@ interpreter has `fork_server = true`, and forks Python tasks and parse jobs from
 Command tasks are always a new process. A Python task can ask for the bare server only,
 or for a new process every time (below).
 
-**Turning it on.** Off by default. An interpreter written as a path spawns every task:
+**Turning it on.** Off by default in the configuration. An interpreter written as a path spawns every task:
 
 ```toml
 [interpreters]
@@ -106,7 +106,20 @@ preload = ["pandas", "sqlalchemy"]
 only. With no `preload` list, or an empty one, the worker starts only the bare server. On
 macOS the setting is ignored. The worker logs `fork_server = true is ignored: fork servers
 run on Linux only; tasks are spawned`, and every task is spawned. Forking is unsafe on
-macOS. The chart has no setting for this yet; it is the worker's configuration.
+macOS.
+
+**The chart.** The chart turns the fork server on by default for the distributed workers
+and for standalone's own worker. `worker.forkServer` has `enabled`, `path` (the image's
+Python) and `preload`. The preload list is the image's libraries except `polars`, kept in
+`images/schedr/preload.txt`. `polars` starts threads on import, so preloading it would
+disable the preloaded server; a task that uses it imports it in the child. The image's
+build fails if that list leaves a thread running. `make chart-check` fails if the chart's
+default list differs from the file. To use an interpreter of your own in `config`, turn
+`worker.forkServer.enabled` off: the chart refuses to render when both set the DAG
+interpreter. With a renamed DAG interpreter (`config.DAGS__INTERPRETER`) the chart sets
+that one, not `python`. The values, and sizing the pod for the two long-lived processes,
+are in [Deployment](10-deployment.md#the-charts-mode-distributed). A thread found when the
+server starts disables that server, as above.
 
 `[worker] fork_server_import_retry` (default `20m`) is how long, from the first failure, a
 server whose preload fails to import is started again. `0s` means that failure is not
@@ -297,11 +310,6 @@ as `<worker>: <message>`.
 
 A forked task shares pages with its fork server, so the watchdog does not kill it on
 resident set size when PSS cannot be read (see [Memory](#memory)).
-
-**Not yet.** The chart has no `worker.forkServer` value. Turning the fork server on is
-still the worker's own configuration, above. The worker image's build does not check that
-preloading its libraries leaves a single thread. A thread found when the server starts
-still disables that server, as above.
 
 ## The journal
 

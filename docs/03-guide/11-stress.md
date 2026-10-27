@@ -42,12 +42,22 @@ are in the report.
 | 10 | Soak: a steady load (3 minutes quick, an hour full) | each role's memory and open files stay flat |
 | 11 | Heavy output: big logs read through the API at once, outputs near their limit | logs complete and served in time |
 | 12 | The memory watchdog: many tasks over their budget beside normal ones | only those are killed (`oom_killed`); the workers stay |
-| 13 | Python tasks: chains of `@task` functions passing outputs on | outputs arrive right; a Python process for each task |
+| 13 | Python tasks, spawned (`13_python_tasks`): chains of `@task` functions passing outputs on | outputs arrive right; a new interpreter for each task |
+| 13 | Python tasks, forked (`13_python_tasks_forked`): the same load, the workers' fork servers on, a short preload list | every attempt forked (floor 99 %); how long the starts take |
 | 14 | Quiet DAGs: a few busy DAGs alone, then beside many daily DAGs that do not fire | how much the master's rounds grow once the quiet DAGs are quiet |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
 back.
+
+**Scenario 13** is two tests of one load: chains of `@task` functions passing outputs on, a
+Python process for each task. `13_python_tasks` spawns each task, a new interpreter every
+time. `13_python_tasks_forked` is the same load with the workers' fork servers on and a short
+preload list (`json` and `decimal`). A `total` other than 120 is broken. The forked test's
+floor is the share of attempts that were forked, at least 99 %. The spawned test has the same
+floor for attempts that were spawned. Each reads the start to the runner's hello on the first
+worker (`schedr_worker_task_start_seconds`, phase `runner`). A scrape that fails, or that has
+no such times, is broken.
 
 **Scenario 14** measures quiet DAGs (M2.5.2): how much the master's rounds grow when many
 quiet DAGs sit beside a few busy ones. Two workers of four slots run a few busy DAGs, each
@@ -89,9 +99,9 @@ and what failed, if anything. A scenario that fails also prints the logs of ever
 The first run with every scenario passing (2026-10-24, quick profile ×2: a laptop under WSL,
 Postgres and PgBouncer in containers; the disk's flush on commit dominates there, so a real
 Postgres server does better). Throughput counts successful tasks a second over the scenario;
-the round p99 is the bucket of `schedr_master_tick_duration_seconds` holding it. Rows 1–13
-are the factor-of-two buckets of that day; scenario 14 below is the M2.5.2 histogram, √2
-apart.
+the round p99 is the bucket of `schedr_master_tick_duration_seconds` holding it. Rows 1–12
+are the factor-of-two buckets of that day. Scenario 13's rows are a later run, below.
+Scenario 14 is the M2.5.2 histogram, √2 apart.
 
 | # | Scenario | Tasks | Tasks/s | Assigned → started p99 | Round p99 |
 |---|---|---|---|---|---|
@@ -107,8 +117,17 @@ apart.
 | 10 | soak (3 minutes) | 1,020 | 5.6 | 0.9 s | ≤ 1.0 s |
 | 11 | heavy output | 168 | 4.6 | 1.3 s (logs read p99 1.4 s) | ≤ 2.0 s |
 | 12 | memory watchdog | 120 (12 killed over budget) | 5.7 | 1.3 s | ≤ 1.0 s |
-| 13 | Python tasks | 640 | 11.5 | 2.4 s | ≤ 2.0 s |
+| 13 | Python tasks, spawned (`13_python_tasks`) | 640 | 12.4 | run p50 48.2 s; hello p50 0.64 s | — |
+| 13 | Python tasks, forked (`13_python_tasks_forked`) | 640 | 14.3 | run p50 41.7 s; hello p50 0.02 s, p99 0.08 s | — |
 | 14 | quiet DAGs (M2.5.2, quick ×2, 600 quiet DAGs) | — | — | — | 0.36 s alone and beside |
+
+Scenario 13's rows are the 2026-10-27 run (quick profile, this machine), not the 2026-10-24
+one. Where the other rows give assigned → started, these give the run's p50 and the start to
+the runner's hello. The hello times are the bucket of `schedr_worker_task_start_seconds`
+(phase `runner`) on the first worker. The forked run forked every attempt. Its floor is 99 %.
+A scrape that fails, or that has no such times, is broken. That scenario's first run found a
+bug, and the step fixed it: a new worker's fork servers could not start until a task had made
+its log directory.
 
 Scenario 14's row is the M2.5.2 run, not the 2026-10-24 one. The mean round was 50 ms alone
 and 51 ms beside the 600 quiet DAGs (ratio 1.04); the p99 was the same bucket, 0.36 s. All

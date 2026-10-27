@@ -32,9 +32,10 @@ every key.
   for the master and the webserver. Workers need no readiness probe: nothing connects to them
   through a Service.
 - **Memory:** a worker pod's memory limit is split between its slots (see
-  [Workers](05-workers.md#memory)); size the pod for its slots. With the fork server on,
-  the worker also keeps those long-lived processes, so size the pod for them too (see
-  [Workers](05-workers.md#the-fork-server)). The chart does not turn the fork server on.
+  [Workers](05-workers.md#memory)); size the pod for its slots. The chart turns the fork
+  server on by default, and with its preload list the worker keeps two long-lived fork
+  server processes, so size the pod for them too (see
+  [Workers](05-workers.md#the-fork-server) and below).
 
 ### The chart's `mode: distributed`
 
@@ -54,6 +55,33 @@ standalone's pod goes, the roles come (a short downtime). Standalone's volume st
 Each role has its own section (`master`, `webserver`, `worker`: `replicas`, `resources`,
 `image` for the server roles, `serviceAccountName`, `podAnnotations`, `nodeSelector`,
 `tolerations`, `affinity`); standalone keeps the top-level ones.
+
+**The fork server.** `worker.forkServer` turns it on for these workers and for standalone's
+own worker, not for the master or the webserver. It is on by default.
+
+- `enabled` is true.
+- `path` is the image's Python, `/usr/local/bin/python3`. An image built `FROM` this one
+  keeps that path; set `path` when the interpreter is somewhere else.
+- `preload` is the modules the preloaded server imports. The default is the image's
+  libraries except `polars`, kept in `images/schedr/preload.txt` (the image, below).
+  Set it to add libraries an image of your own brings in. Leave out one that starts a
+  thread: the preloaded server is then disabled, and the worker warns (see
+  [Workers](05-workers.md#the-fork-server)).
+
+The image's build imports that list and fails if a thread is still running. `make
+chart-check` fails if this default differs from the file.
+
+The chart sets that interpreter's `path`, `fork_server` and `preload`. The interpreter is
+`config.DAGS__INTERPRETER`, or `python` when that is unset; the chart uppercases the name.
+A renamed DAG interpreter is the one it sets. To use an interpreter of your own in
+`config`, turn `worker.forkServer.enabled` off. The chart refuses to render when both set
+the DAG interpreter (`config.INTERPRETERS__PYTHON`, or `INTERPRETERS__PYTHON__PATH` and
+the rest of that table; the same keys with the interpreter's name in upper case). With the
+fork server off, set `path`, `fork_server` and `preload` in `config`. Or leave the
+interpreter out of `config` and use `worker.forkServer.path`.
+
+With the default list the worker keeps two long-lived processes, the preloaded server and
+the bare one. Size the pod for them as well as its slots.
 
 **TLS between the roles:** `tls.mode: app` (the default) is schedr's own mTLS, with a
 certificate per role in a Secret of its own (`ca.crt`, `tls.crt`, `tls.key`), from, in order:
@@ -115,7 +143,7 @@ separate roles only if the load needs them (a full switch: the history stays in 
 
 **The image.** `images/schedr/Dockerfile` builds the base image (`make image`): Alpine with
 Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
-for OpenShift's arbitrary UID, and **libraries for tasks** (about 410 MB in all, Polars the
+for OpenShift's arbitrary UID, and **libraries for tasks** (about 410 MB in all, `polars` the
 largest):
 
 | For | Libraries |
@@ -126,8 +154,14 @@ largest):
 | MongoDB | `pymongo` (compiled in the image's builder stage, with its C extensions: it has no wheel for Alpine) |
 
 They are listed in `images/schedr/requirements.in` and pinned with their dependencies in
-`requirements.txt` (`make image-requirements`, no version newer than two weeks). Async
-libraries work inside a task with `asyncio.run(...)` until async task functions come (M4). Your DAGs' libraries go in an image of your own built `FROM` it:
+`requirements.txt` (`make image-requirements`, no version newer than two weeks). The
+preloaded fork server imports them except `polars`, by module name, from
+`images/schedr/preload.txt`: `yaml` for PyYAML, `dateutil` for python-dateutil, `dns` for
+dnspython, and the others under the names in the table. `polars` starts threads on import,
+so preloading it would disable that server. The image's build imports the list and fails if
+a thread is still running. Async libraries work inside a task with `asyncio.run(...)` until
+async task functions come (M4). Your DAGs' libraries go in an image of your own built
+`FROM` it:
 `examples/kubernetes/Dockerfile` does it in two stages, compiling in a builder stage what has
 no musl wheel, so no compiler ends up in your image.
 
@@ -173,6 +207,8 @@ no musl wheel, so no compiler ends up in your image.
   termination_grace_period`, so a drain always fits the pod's grace period;
 - probes on the ops port, a Service with ports named for Istio (`http-api`, `http-ops`), an
   optional `ServiceMonitor`;
+- the fork server on this pod's own worker, the same `worker.forkServer` as the
+  [distributed workers](#the-charts-mode-distributed) (on by default);
 - more settings as `config` (`WORKER__SLOTS: "4"` becomes `SCHEDR_CONFIG__WORKER__SLOTS`).
 
 **The DAGs** reach the pod in three ways: `dags.files` is a root of its own, beside
@@ -236,9 +272,10 @@ What to know:
   master](04-master.md#one-master-per-database-the-lease)); on SQLite the volume lets only
   one pod in anyway. If the master part fails (another took its lease over), the whole pod's
   process exits and Kubernetes restarts it.
-- **Memory:** the pod's limit is shared by tasks and schedr itself; task budgets are (limit −
-  25 %) ÷ slots in standalone (`[worker] memory_reserve` to change it). schedr's own process
-  used about 20–25 MiB in measurements.
+- **Memory:** the pod's limit is shared by tasks, schedr itself and, with the chart's
+  default, the two long-lived fork server processes. Task budgets are (limit − 25 %) ÷ slots
+  in standalone (`[worker] memory_reserve` to change it). schedr's own process used about
+  20–25 MiB in measurements. Size the pod for those two processes as well as the slots.
 - **Upgrades restart every role at once:** running tasks get the grace period, then are
   interrupted and run again.
 - **The REST API has no authentication** until the UI: keep the Service internal, or put it

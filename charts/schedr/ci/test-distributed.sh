@@ -26,6 +26,12 @@ has 'value: "https://t-schedr-master.ns.svc:8070"' "the workers' master URL"
 has 'value: "$(POD_NAME).t-schedr-worker.ns.svc.cluster.local"' "the workers' log address"
 has 'args: \["db", "migrate", "--wait"\]' "the master's migration"
 [ "$(grep -c '^kind: StatefulSet' "$WORK/out.yaml")" = 1 ] || fail "only the workers' StatefulSet"
+for template in worker master webserver; do
+    count=$(helm template t "$CHART" "${PG[@]}" --show-only "templates/$template.yaml" \
+        | grep -c 'SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER' || true)
+    want=$([ "$template" = worker ] && echo 1 || echo 0)
+    [ "$count" = "$want" ] || fail "the fork server on the workers only ($template: $count)"
+done
 echo "ok: the roles, their Services, the budget, an account each"
 
 # The generated certificates: one CA, the names each role is checked by, both usages.
@@ -119,4 +125,22 @@ refused "${PG[@]}" --set tls.existingSecrets.master=m
 refused "${PG[@]}" --set tls.generate=false
 refused "${PG[@]}" --set tls.mode=plain
 refused --set 'passEnv={A}' --set config.WORKER__PASS_ENV=x
-echo "ok: refused: SQLite, part of the Secrets, no certificates, an unknown mode, passEnv twice"
+refused --set config.INTERPRETERS__PYTHON=/opt/venv/bin/python
+refused --set config.INTERPRETERS__PYTHON__PATH=/opt/venv/bin/python
+refused --set config.DAGS__INTERPRETER=etl --set config.INTERPRETERS__ETL=/opt/etl/python
+echo "ok: refused: SQLite, part of the Secrets, no certificates, an unknown mode, passEnv twice,"
+echo "    the DAG interpreter configured twice"
+
+# The fork server's variables: for the DAG interpreter by its name; off when asked, even as
+# the string "false"; with the interpreter configured, only when the fork server is off.
+render --set config.DAGS__INTERPRETER=etl > "$WORK/out.yaml"
+has "SCHEDR_CONFIG__INTERPRETERS__ETL__FORK_SERVER" "the fork server for a renamed DAG interpreter"
+lacks "SCHEDR_CONFIG__INTERPRETERS__PYTHON__" "no other interpreter's fork server"
+for off in --set --set-string; do
+    render "$off" worker.forkServer.enabled=false > "$WORK/out.yaml"
+    lacks "SCHEDR_CONFIG__INTERPRETERS__" "the fork server off ($off)"
+done
+render --set worker.forkServer.enabled=false --set config.INTERPRETERS__PYTHON=/opt/venv/bin/python \
+    > "$WORK/out.yaml"
+has "SCHEDR_CONFIG__INTERPRETERS__PYTHON" "an interpreter of one's own with the fork server off"
+echo "ok: the fork server's variables: by the DAG interpreter's name, off, off as a string"

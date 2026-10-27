@@ -40,6 +40,15 @@ COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
 RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore /tmp/schedr-*.whl \
     && rm /tmp/schedr-*.whl
 
+# The fork server's preload list must leave a single thread: forking with threads can deadlock
+# the child, and the fork server would be disabled at every start. Imported here, the build
+# fails on a library that starts one (with the threads' names).
+RUN --mount=type=bind,source=images/schedr/preload.txt,target=/tmp/preload.txt \
+    python -c 'import importlib, sys, time; from schedr.runner.fork_server import thread_names; \
+mods = [m for m in (l.strip() for l in open("/tmp/preload.txt")) if m and not m.startswith("#")]; \
+[importlib.import_module(m) for m in mods]; time.sleep(1); names = thread_names(); \
+sys.exit(f"the preload list starts threads: {names}" if names else 0)'
+
 # OpenShift runs containers under an arbitrary UID in group 0: the data directory (the SQLite
 # database, task logs, the journal, the standalone lock) must be writable by group 0.
 RUN mkdir -p /var/lib/schedr \

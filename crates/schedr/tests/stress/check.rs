@@ -329,6 +329,22 @@ pub fn quantile(values: &[f64], q: f64) -> f64 {
     sorted[index.min(sorted.len() - 1)]
 }
 
+/// The `q` quantile of the series of histogram `name` with `labels` besides `le` (e.g.
+/// `method="fork",phase="runner"`), as [`histogram_quantile`] reads a plain one.
+pub fn labelled_quantile(metrics: &str, name: &str, labels: &str, q: f64) -> f64 {
+    // The bucket lines of the series with `labels` (e.g. `method="fork",phase="runner"`),
+    // as the plain histogram's: `le` first, then the labels.
+    let wanted = format!(",{labels}}}");
+    let bucket = format!("{name}_bucket{{");
+    let plain = metrics
+        .lines()
+        .filter(|line| line.starts_with(&bucket) && line.contains(&wanted))
+        .map(|line| line.replace(&wanted, "}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    histogram_quantile(&plain, name, q)
+}
+
 /// The `q` quantile of a Prometheus histogram in a `/metrics` text (`<name>_bucket{le="…"}`):
 /// the upper bound of the first bucket holding it.
 pub fn histogram_quantile(metrics: &str, name: &str, q: f64) -> f64 {

@@ -338,3 +338,27 @@ fn the_drain_times_must_fit_in_the_termination_grace_period() {
         "{error}"
     );
 }
+
+#[test]
+fn the_charts_fork_server_variables_make_an_interpreter_table() {
+    // What the chart sets for its workers (`worker.forkServer`).
+    let vars = env(&[
+        (
+            "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH",
+            "/usr/local/bin/python3",
+        ),
+        ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER", "true"),
+        (
+            "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD",
+            r#"["requests","pymongo"]"#,
+        ),
+    ]);
+    let config = load(None, &vars, &[]).unwrap();
+    let python = &config.interpreters["python"];
+    assert_eq!(
+        python.path,
+        std::path::PathBuf::from("/usr/local/bin/python3")
+    );
+    assert!(python.fork_server);
+    assert_eq!(python.preload, ["requests", "pymongo"]);
+}

@@ -787,3 +787,28 @@ async fn a_forked_parse_dropped_unfinished_is_killed() {
     drop(session);
     until("the forked runner is gone", || gone(pid)).await;
 }
+
+#[tokio::test]
+async fn the_fork_servers_start_before_the_log_directory_exists() {
+    // As on a new worker: its log directory is made by its first task.
+    let dir = root();
+    let logs = dir.path().join("logs").join("w1");
+    let metrics = ForkMetrics::default();
+    let setup = ForkSetup {
+        interpreter: "python".to_owned(),
+        process: spec(
+            python(),
+            &["-m", "schedr.runner", "fork_server"],
+            &logs,
+            "fork-server.log",
+        ),
+        preload: vec!["json".to_owned()],
+        import_retry: Duration::ZERO,
+    };
+    let _forks = ForkServers::start(&setup, &metrics);
+    until("both servers are up", || {
+        state(&metrics, "preloaded", "up") == 1 && state(&metrics, "bare", "up") == 1
+    })
+    .await;
+    assert!(logs.join("fork-server-preloaded.log").exists());
+}

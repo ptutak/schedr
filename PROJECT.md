@@ -2469,6 +2469,17 @@ permission to create pods.
     the single-thread check and turn the preloaded server off on every worker; a Polars task
     imports it in the child (~1 s). The image's build runs the same check: it imports the
     default list and fails if a thread starts, catching a library update that starts one.
+    **How** (M2.5.5b): the list is `images/schedr/preload.txt` (module names: `requests`,
+    `httpx`, `aiohttp`, `tenacity`, `orjson`, `yaml`, `dateutil`, `paramiko`, `netmiko`,
+    `ncclient`, `dns`, `netaddr`, `pymongo`; 1.7 s to import together, measured 2026-10-27,
+    one thread); the image's build imports it with schedr's own `thread_names()`;
+    `worker.forkServer` (`enabled: true`, `path: /usr/local/bin/python3`, the image's Python,
+    `preload`) sets the DAG interpreter's table form (`config.DAGS__INTERPRETER`, `python`
+    by default) through `SCHEDR_CONFIG__INTERPRETERS__<NAME>__{PATH,FORK_SERVER,PRELOAD}`, for
+    the distributed workers and standalone's own; the chart refuses to render when that
+    interpreter is also set in `config` (the chart's path would replace the one given there,
+    found by Grok's review); `make chart-check` fails if the chart's default list isn't
+    the file's (`scripts/check-preload-list.py`).
     When the check fails on a worker, the worker's warning says so, e.g. `preloaded fork
     server off (python): 3 threads after preloading (jemalloc_bg_thd, polars-ooc-clea);
     tasks fork from the bare server`, shown in the API, `schedr workers list` and M3's UI.

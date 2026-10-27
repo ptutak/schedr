@@ -1,0 +1,18 @@
+# The libraries the workers' preloaded fork server imports (the chart's worker.forkServer.preload
+# defaults to this list, checked by `make chart-check`): the image's libraries from
+# requirements.in, by module name, except `polars`, which starts threads on import (two
+# `jemalloc_bg_thd` and a `polars-ooc-clea` cleaner), so a fork server preloading it would be
+# disabled. The image's build fails if this list leaves any thread running.
+requests
+httpx
+aiohttp
+tenacity
+orjson
+yaml
+dateutil
+paramiko
+netmiko
+ncclient
+dns
+netaddr
+pymongo

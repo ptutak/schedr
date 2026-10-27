@@ -554,6 +554,22 @@ enum Started {
 
 /// Starts a fork server and has it preload `preload`.
 async fn start_server(process: &ProcessSpec, preload: &[String]) -> Result<Started, LaunchError> {
+    // Its directory and log go in the worker's log directory, which tasks create on their
+    // first run: a fork server starting before any task needs it now.
+    for dir in [
+        Some(process.working_dir.as_path()),
+        process.log_file.parent(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|source| LaunchError::Start {
+                what: format!("the fork server's directory {}", dir.display()),
+                source,
+            })?;
+    }
     let runner = match start_runner(process, RunnerMode::ForkServer, |_| {}).await {
         Ok(runner) => runner,
         Err(LaunchError::Channel(ChannelError::Refused(reason))) => {

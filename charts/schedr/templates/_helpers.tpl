@@ -296,3 +296,27 @@ where the cluster serves it (Istio 1.22 on), else v1beta1 (older Istio, OpenShif
 {{- fail "gitSync.credentials.secret is required with gitSync.credentials.type" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The fork server for the DAG interpreter (`config.DAGS__INTERPRETER`, default `python`;
+worker.forkServer): its table form through the environment, the preload list as JSON. An
+interpreter configured in `config` too is refused: the chart's path would replace it.
+*/}}
+{{- define "schedr.forkServerEnv" -}}
+{{- with .Values.worker.forkServer }}
+{{- if and .enabled (ne (toString .enabled) "false") }}
+{{- $name := (index $.Values.config "DAGS__INTERPRETER") | default "python" | upper | replace "-" "_" }}
+{{- range $key, $_ := $.Values.config }}
+{{- if or (eq $key (printf "INTERPRETERS__%s" $name)) (hasPrefix (printf "INTERPRETERS__%s__" $name) $key) }}
+{{- fail (printf "config.%s sets the DAG interpreter, which worker.forkServer sets too: set worker.forkServer.enabled=false and configure it in config (path, fork_server, preload), or drop config.%s and use worker.forkServer.path" $key $key) }}
+{{- end }}
+{{- end }}
+- name: SCHEDR_CONFIG__INTERPRETERS__{{ $name }}__PATH
+  value: {{ .path | quote }}
+- name: SCHEDR_CONFIG__INTERPRETERS__{{ $name }}__FORK_SERVER
+  value: "true"
+- name: SCHEDR_CONFIG__INTERPRETERS__{{ $name }}__PRELOAD
+  value: {{ toJson .preload | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

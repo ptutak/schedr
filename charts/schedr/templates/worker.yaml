@@ -70,6 +70,9 @@ spec:
             - name: SCHEDR_CONFIG__OPS__PORT
               value: {{ .Values.service.opsPort | quote }}
             {{- include "schedr.dagEnv" . | trim | nindent 12 }}
+            {{- with include "schedr.forkServerEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- include "schedr.tlsEnv" (list . "worker") | trim | nindent 12 }}
             {{- with include "schedr.extraEnv" . | trim }}
             {{- . | nindent 12 }}

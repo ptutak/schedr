@@ -5,3 +5,4 @@
 !dist/*.whl
 !images/schedr/requirements.txt
 !images/schedr/build-requirements.txt
+!images/schedr/preload.txt
