@@ -146,8 +146,8 @@ def _fork(
         channel.send(_failed(request_id, f"can't fork a process in mode `{mode}`"))
         return None
     if names := threads():
+        # The request's answer: one message, so the agent pairs it with this request.
         reason = _threads_reason(names)
-        channel.send(_failed(request_id, reason))
         channel.send(_disabled(reason, names))
         return reason, names
     # Or the processes would write the buffered text again: Python's buffers, and C's (a

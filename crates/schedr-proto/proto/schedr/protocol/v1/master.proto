@@ -91,7 +91,9 @@ message CodeVersionChanged {
   RootHash root = 1;
 }
 
-// The attempt was accepted and its process started.
+// The attempt was accepted and its process started. Sent before the process exists, with
+// `spawn`; a task forked from a fork server sends it again with `fork` once it runs (the master
+// keeps the first start time and takes the method).
 message Started {
   string attempt_id = 1;
   StartMethod start_method = 2;

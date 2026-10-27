@@ -12,6 +12,9 @@ pub enum Termination {
     Exited(i32),
     /// It was killed by this signal.
     Signaled(i32),
+    /// It ended, but how isn't known: a forked process whose shim died before reporting
+    /// (the agent kills its group then). It counts as a failure.
+    Unknown,
 }
 
 /// Why the agent stopped a process before it ended by itself.
@@ -34,6 +37,7 @@ impl Termination {
         match self {
             Self::Exited(code) => code,
             Self::Signaled(signal) => crate::output::signal_exit_code(signal),
+            Self::Unknown => -1,
         }
     }
 }

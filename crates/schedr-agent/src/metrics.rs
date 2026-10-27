@@ -59,6 +59,20 @@ const LOG_BYTES: MetricDoc = MetricDoc {
     labels: &[],
     help: "Bytes of logs kept, as of the last retention sweep",
 };
+const FORK_SERVERS: MetricDoc = MetricDoc {
+    name: "worker_fork_servers",
+    kind: MetricKind::Gauge,
+    labels: &["interpreter", "kind", "state"],
+    help: "Fork servers by interpreter, kind (preloaded, bare) and state (up, down, disabled): \
+        1 for each server's current state",
+};
+const FORK_FALLBACKS: MetricDoc = MetricDoc {
+    name: "worker_fork_fallbacks",
+    kind: MetricKind::Counter,
+    labels: &["interpreter", "reason"],
+    help: "Python tasks a fork server didn't fork, by interpreter and reason (disabled, down, \
+        fork_failed, shim_died); the next fork server, or spawn, starts them",
+};
 const LOG_SWEPT_BYTES: MetricDoc = MetricDoc {
     name: "worker_log_swept_bytes",
     kind: MetricKind::Counter,
@@ -76,6 +90,8 @@ pub const METRICS: &[MetricDoc] = &[
     JOURNAL_RECORDS,
     LOG_BYTES,
     LOG_SWEPT_BYTES,
+    FORK_SERVERS,
+    FORK_FALLBACKS,
 ];
 
 /// An attempt's status.
@@ -92,6 +108,26 @@ pub struct StartLabels {
     pub method: String,
     /// `runner` or `import`.
     pub phase: String,
+}
+
+/// A fork server and its state.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ForkServerLabels {
+    /// The interpreter's name.
+    pub interpreter: String,
+    /// `preloaded` or `bare`.
+    pub kind: String,
+    /// `up`, `down` or `disabled`.
+    pub state: String,
+}
+
+/// Why a fork server didn't fork a task.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ForkFallbackLabels {
+    /// The interpreter's name.
+    pub interpreter: String,
+    /// `disabled`, `down`, `fork_failed` or `shim_died`.
+    pub reason: String,
 }
 
 type StartHistograms = Family<StartLabels, Histogram, fn() -> Histogram>;
@@ -115,6 +151,8 @@ pub struct AgentMetrics {
     pub log_bytes: Gauge,
     /// Bytes of logs deleted by retention.
     pub log_swept_bytes: Counter,
+    /// The fork servers' states and fallbacks.
+    pub fork: crate::fork::ForkMetrics,
 }
 
 impl Default for AgentMetrics {
@@ -131,6 +169,7 @@ impl Default for AgentMetrics {
             journal_records: Gauge::default(),
             log_bytes: Gauge::default(),
             log_swept_bytes: Counter::default(),
+            fork: crate::fork::ForkMetrics::default(),
         }
     }
 }
@@ -159,6 +198,16 @@ impl AgentMetrics {
             LOG_SWEPT_BYTES.name,
             LOG_SWEPT_BYTES.help,
             self.log_swept_bytes.clone(),
+        );
+        r.register(
+            FORK_SERVERS.name,
+            FORK_SERVERS.help,
+            self.fork.servers.clone(),
+        );
+        r.register(
+            FORK_FALLBACKS.name,
+            FORK_FALLBACKS.help,
+            self.fork.fallbacks.clone(),
         );
     }
 

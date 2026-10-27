@@ -2068,7 +2068,8 @@ OpenShift's restricted security policy doesn't grant.
 
 - **What is measured:** the **PSS** (`/proc/<pid>/smaps_rollup`) of every process in the
   task's **process group** (what SIGTERM and SIGKILL reach), RSS (`/proc/<pid>/statm`) where
-  PSS can't be read. PSS splits shared pages between the processes sharing them, so a task
+  PSS can't be read, except for a task forked from a fork server (M2.5.4a): its RSS counts the
+  pages it shares with the server, so a sample without every PSS is skipped instead. PSS splits shared pages between the processes sharing them, so a task
   with many processes isn't counted many times, and the fork server (M2.5) needs it anyway. A
   process that leaves the group (`setsid`) isn't counted, as it isn't cancelled. Not chosen:
   RSS (shared libraries counted once per process); the tree by parent PID (the group is what
@@ -2343,7 +2344,7 @@ permission to create pods.
       whether the process dumped core and **what it used** (`ProcessUsage`, the parent's
       `rusage`, with the children it reaped: user and system CPU, peak RSS, major faults,
       voluntary and involuntary context switches), for the Attempts tab and the attempts API
-      (M2.5.4; the agent reads the same for spawned processes with `wait4`). The peak RSS of a
+      (M2.5.4b; spawned processes: 18A). The peak RSS of a
       forked process includes the pages it shares with the fork server (the watchdog's PSS
       doesn't). Keeping the zombie rules out `wait4`, so it is the raw `waitid` system call
       with `WNOWAIT` (through `ctypes`: Python's `os.waitid` doesn't pass the `rusage`; proved
@@ -2354,6 +2355,14 @@ permission to create pods.
       status is reported regardless. The shim never kills, watches memory or handles logs:
       those stay with the agent. Not chosen: also reporting the processes a task left running
       (14B).
+    - **Usage of spawned processes** (decision 18A, 2026-10-27): the workspace forbids
+      `unsafe` and no safe crate returns a child's `rusage`, so the agent reads the zombie's
+      `/proc/<pid>/stat` and `status` before reaping it (a `pidfd` and `waitid` with
+      `WNOWAIT`): CPU time (reaped children included), major faults and context switches;
+      **peak RSS is null** for a spawned process (a zombie's memory is gone; `Finished`'s
+      `peak_memory_bytes`, the watchdog's sampled PSS, covers both methods). No `pidfd` (an
+      old kernel): `usage` null. Not chosen: one audited `unsafe` module for the raw `waitid`
+      (relaxing `unsafe_code = "forbid"`); usage for forked processes only.
     - **What survives what:** a fork server that crashes leaves its shims to `tini` (PID 1),
       and they keep reporting: running tasks and their exit statuses are unaffected. A shim
       that dies closes the status socket without `process_exited`: the agent kills the task's
@@ -2375,7 +2384,7 @@ permission to create pods.
       their Python objects own them, so closing the raw numbers would let a later garbage
       collection close a file the task reopened under the same number; the task sees them as
       if it had imported the library itself. Not chosen: closing every inherited descriptor.
-    - **The watchdog** (M2.5.4): a forked task shares the fork server's pages, so its RSS is
+    - **The watchdog** (M2.5.4a): a forked task shares the fork server's pages, so its RSS is
       about 97 % of the server's; for a forked task whose PSS can't be read the watchdog
       skips the kill instead of falling back to RSS.
   - **Safety checks:** after preloading, the parent must be **single-threaded** (checked in
@@ -2410,11 +2419,21 @@ permission to create pods.
     server's state); none (a task's `atexit` flush, a thread left working, a buffering
     `logging` handler would be lost). The parent calls **`gc.freeze()`** after preloading, so the garbage collector
     doesn't copy shared pages in every child (keeps each task's PSS small).
-  - **Crashes and versions:** a crashed fork server is restarted by the agent with backoff;
-    running children are unaffected, and meanwhile tasks fall back as above. It reports its
-    `schedr` version
-    like any runner; a mismatch disables it. It can't go stale (libraries change only with the
-    image, which restarts the pod).
+  - **Crashes and versions:** a crashed fork server is restarted by the agent with backoff
+    (1 s doubling to 5 min, from 1 s again after 10 min up); running children are unaffected,
+    and meanwhile tasks fall back as above. It reports its `schedr` version like any runner; a
+    mismatch disables it. It can't go stale (libraries change only with the image, which
+    restarts the pod).
+  - **A disabled fork server** (decisions 19A and 20A, 2026-10-27): one whose **preloaded
+    library fails to import** is retried with the same backoff for
+    **`[worker] fork_server_import_retry`** (default `20m`, from the first failure; `0s`: never),
+    for what isn't ready when the pod starts (a sidecar's network, a mount); a failure still
+    there after it is lasting (a missing package, a typo), and the server stays disabled until
+    the pod restarts. Threads after preloading and a version mismatch are never retried: they
+    don't change until the image does. The log warns on the first failure and when the reason
+    changes, and once more on giving up; the metric shows `disabled` throughout. Not chosen:
+    retrying every cause (a pointless preload every 5 min for the lasting ones); no retry (a
+    passing import failure would make every task of the pod spawn for its life).
   - **Visibility:** each attempt records its **start method** (`spawn` / `fork`), shown in the
     Attempts tab and the attempts API; metrics: fork server up / down per interpreter and kind
     (preloaded / bare), process start time by start method (built first, in M2.5.1: M2 has no
@@ -2447,8 +2466,8 @@ permission to create pods.
     with the image's requirements) and the deployment's operator (their values); a DAG author
     only opts a task out (`preload=False`, `fresh_process=True`). The guide: preload a
     library that is slow to import and used by most tasks; never one that starts threads (the
-    fallback metric names it). Not chosen: `["schedr"]` only (the two servers would hardly
-    differ); off in the chart.
+    log line and the worker warning name its threads; the fallback metric gives `disabled`).
+    Not chosen: `["schedr"]` only (the two servers would hardly differ); off in the chart.
 - **Rejected:**
   - Warm worker pools (long-lived Python processes reused across tasks): globals, leaked
     memory and old code carry over between tasks; the watchdog can't tell whose task used

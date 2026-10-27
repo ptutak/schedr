@@ -145,7 +145,8 @@ had nothing to do creates nothing: a scheduled run is unique for its `planned_fo
 Messages from workers are handled as they arrive, under the same lock, in order for each
 worker. A worker's messages that are already waiting are handled together, up to 10 in one turn
 of the lock; then the round and other workers get their turns, and the rest follow in the
-worker's next turn. (Each task sends two: `Started` and `Finished`.)
+worker's next turn. (A task sends `Started` and `Finished`. A forked Python task sends
+`Started` twice, the second with `start_method` `fork`.)
 
 Each message's writes are one transaction too, stored **whole or not at all**: a `Finished`
 whose last write fails leaves nothing of it stored (the worker sends it again when it
@@ -156,7 +157,7 @@ reconnects), never an ended attempt with its run left behind.
 | `Register` | Checks the protocol version, takes over from a dead earlier stream, decides about each attempt the worker reports (continue, kill or acknowledge), and answers `Registered` with the timing settings. |
 | `Heartbeat` | Nothing more: any message renews the lease when it arrives (below). The registry's "last seen" is written at most once per heartbeat interval. |
 | `CodeVersionChanged` | Records the root's new hash, which can make it the current code and create a parse job. |
-| `Started` | Marks the task `running` and stores `start_method` (`spawn`, or `fork`). |
+| `Started` | Marks the task `running` and stores `start_method` (`spawn`, or `fork`). A later `Started` for the same attempt, while it has not ended, replaces `start_method` and keeps the first start time. |
 | `Rejected` | Puts the task back to wait, or tries another worker, depending on the reason. A rejection never uses a retry. |
 | `Finished` | Stores the result once, moves the run forward (downstream tasks become ready), finishes the run when every task has, and answers `FinishedAck`. |
 | `Draining`, `Deregister` | Stops assigning to the worker; records it `draining`, then `offline`. |

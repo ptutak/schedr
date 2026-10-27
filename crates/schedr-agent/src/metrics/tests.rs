@@ -29,6 +29,23 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
             import: None,
         },
     );
+    metrics
+        .fork
+        .servers
+        .get_or_create(&ForkServerLabels {
+            interpreter: "python".to_owned(),
+            kind: "preloaded".to_owned(),
+            state: "up".to_owned(),
+        })
+        .set(1);
+    metrics
+        .fork
+        .fallbacks
+        .get_or_create(&ForkFallbackLabels {
+            interpreter: "python".to_owned(),
+            reason: "disabled".to_owned(),
+        })
+        .inc();
     let mut out = String::new();
     encode(&mut out, &registry).unwrap();
     for name in [
@@ -43,6 +60,8 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
         "schedr_worker_journal_records 0",
         "schedr_worker_log_bytes 0",
         "schedr_worker_log_swept_bytes_total 0",
+        "schedr_worker_fork_servers{interpreter=\"python\",kind=\"preloaded\",state=\"up\"} 1",
+        "schedr_worker_fork_fallbacks_total{interpreter=\"python\",reason=\"disabled\"} 1",
     ] {
         assert!(out.contains(name), "{name}\n{out}");
     }

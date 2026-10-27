@@ -36,13 +36,16 @@ The names used across the documentation, the API and the logs.
   attempt; the retry budget counts only the attempts that used a retry. How it ended is its
   status: `success`, `failed`, `timed_out`, `oom_killed`, `cancelled`, `interrupted`,
   `lost` or `assignment_expired`. `start_method` (`spawn` or `fork`) is set when the worker's
-  `Started` is stored, and the attempts API shows it. Workers record `spawn` today.
+  `Started` is stored, and the attempts API shows it. A forked Python task is `fork`: the
+  worker sends a second `Started`, and the start time stays the first one's. A spawned
+  process is `spawn`.
 
 **Fork server**
 : A runner started as `python -m schedr.runner fork_server`. It imports libraries once and
   then starts a process per request. That process runs `task` or `parse` as a spawned runner
-  does, with its own channel, log and process group. The agent does not start one yet, so
-  attempts stay `spawn`. See [Workers](05-workers.md#the-fork-server).
+  does, with its own channel, log and process group. On Linux, a worker whose DAG interpreter
+  has `fork_server = true` starts one or two when the worker starts, and forks Python tasks
+  from them. Parse jobs stay spawned. See [Workers](05-workers.md#the-fork-server).
 
 **Shim**
 : The process a fork server puts between itself and one forked process. It reports the

@@ -45,6 +45,7 @@ use crate::attempt::{
     AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan,
 };
 use crate::drain::{Drain, DrainPeriods, DrainStep};
+use crate::fork::ForkServers;
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
@@ -106,8 +107,9 @@ pub struct AgentSettings {
     pub log_endpoint: String,
 }
 
-/// Told the identity of an attempt's process once it is spawned.
-pub type Spawned = Box<dyn FnOnce(ProcessIdentity) + Send>;
+/// Told the identity of an attempt's process once it is spawned, and whether it was forked
+/// from a fork server.
+pub type Spawned = Box<dyn FnOnce(ProcessIdentity, bool) + Send>;
 
 /// Runs attempts and parse jobs.
 pub trait Executor: Clone + Send + Sync + 'static {
@@ -186,6 +188,8 @@ pub struct ProcessExecutor {
     pub metrics: AgentMetrics,
     /// From an interrupted task's SIGTERM to its SIGKILL (`[worker] drain_terminate_period`).
     pub drain_terminate_period: Duration,
+    /// The DAG interpreter's fork servers, when it has them (`fork_server = true`, Linux).
+    pub forks: Option<ForkServers>,
 }
 
 impl Executor for ProcessExecutor {
@@ -206,7 +210,8 @@ impl Executor for ProcessExecutor {
         let oom = stop.sender();
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let mut watching = None;
-        let spawned = |pid| {
+        let mut hold = None;
+        let spawned = |pid, forked| {
             // The task's process leads its own group; watched from its first moment.
             watching = Some(watch_group(
                 self.setup.memory.clone(),
@@ -214,24 +219,34 @@ impl Executor for ProcessExecutor {
                 seen.clone(),
                 oom,
                 self.metrics.watchdog_kills.clone(),
+                forked,
             ));
             match process_identity(pid) {
-                Ok(identity) => spawned(identity),
+                Ok(identity) => spawned(identity, forked),
                 Err(error) => warn_unidentified(pid, &error),
             }
         };
         let ran = match plan {
             Plan::Python { process, request } => {
-                run_python(&process, *request, limits, stop, spawned).await
+                let forks = self.forks.as_ref();
+                run_python(&process, *request, limits, stop, forks, &mut hold, spawned).await
             }
-            Plan::Command(process) => run_command(&process, limits, stop, spawned).await,
+            Plan::Command(process) => {
+                run_command(&process, limits, stop, |pid| spawned(pid, false)).await
+            }
         };
+        // The watchdog stops first; then a forked process's hold goes, and its shim reaps it:
+        // nothing signals its group after that.
         drop(watching);
+        drop(hold);
         if let Ok(Ran {
-            start: Some(start), ..
+            start: Some(start),
+            forked,
+            ..
         }) = &ran
         {
-            self.metrics.task_started("spawn", start);
+            self.metrics
+                .task_started(if *forked { "fork" } else { "spawn" }, start);
         }
         let mut finished = match ran {
             Ok(ran) => finished(&spec.attempt_id, &ran),
@@ -315,6 +330,7 @@ enum Done {
     Spawned {
         attempt_id: String,
         identity: ProcessIdentity,
+        forked: bool,
     },
     Attempt(pb::Finished),
     Parse {
@@ -886,10 +902,11 @@ impl<E: Executor> Agent<E> {
         let done = self.done_tx.clone();
         let on_spawn = self.done_tx.clone();
         let attempt_id = spec.attempt_id.clone();
-        let spawned: Spawned = Box::new(move |identity| {
+        let spawned: Spawned = Box::new(move |identity, forked| {
             let _ = on_spawn.send(Done::Spawned {
                 attempt_id,
                 identity,
+                forked,
             });
         });
         tokio::spawn(async move {
@@ -1013,7 +1030,16 @@ impl<E: Executor> Agent<E> {
             Done::Spawned {
                 attempt_id,
                 identity,
+                forked,
             } => {
+                // `Started` went before the process existed, as `spawn`; a repeat sets the
+                // method (the master keeps the first start time).
+                if forked && let Some((to_master, _)) = &link {
+                    let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
+                        attempt_id: attempt_id.clone(),
+                        start_method: pb::StartMethod::Fork.into(),
+                    })));
+                }
                 if let Err(error) = self
                     .record(&attempt_id, JournalRecord::Running(Some(identity)))
                     .await

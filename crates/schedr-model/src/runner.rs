@@ -126,7 +126,7 @@ pub enum RunnerMessage {
     /// The fork server can't be used: tasks fall back (to the bare fork server, then to
     /// spawn). It answers every later `fork` with `fork_failed` until the agent closes the
     /// channel (exiting with a request unread would reset the connection and could lose this
-    /// message). Also sent after a `fork_failed` when a thread appeared since the check.
+    /// message). Also the answer to a `fork` when a thread appeared since the check.
     ForkServerDisabled {
         /// Why, e.g. a failing preload or a second thread.
         reason: String,

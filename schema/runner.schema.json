@@ -836,7 +836,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The fork server can't be used: tasks fall back (to the bare fork server, then to\nspawn). It answers every later `fork` with `fork_failed` until the agent closes the\nchannel (exiting with a request unread would reset the connection and could lose this\nmessage). Also sent after a `fork_failed` when a thread appeared since the check.",
+          "description": "The fork server can't be used: tasks fall back (to the bare fork server, then to\nspawn). It answers every later `fork` with `fork_failed` until the agent closes the\nchannel (exiting with a request unread would reset the connection and could lose this\nmessage). Also the answer to a `fork` when a thread appeared since the check.",
           "properties": {
             "reason": {
               "description": "Why, e.g. a failing preload or a second thread.",

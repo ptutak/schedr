@@ -41,11 +41,14 @@ was registered, the backoff starts from 200 ms again.
 2. **Journal, then `Started`.** The attempt is written to the journal before `Started` is
    sent. That way a restarted agent always knows about an attempt the master believes is
    running. `Started` carries `start_method`: `spawn` for a new process (the interpreter, or
-   the command itself), or `fork` for a process from the fork server. The runner can fork.
-   The agent does not start the fork server yet, so every attempt is `spawn` (see
-   [The fork server](#the-fork-server)). The master stores it, and the attempts API shows it
-   from then on.
-3. **The process.** A Python task runs `python -m schedr.runner task`. A command runs through
+   the command itself), or `fork` for a process from the fork server. The first `Started` is
+   `spawn`, sent before the process exists. A Python task that was forked sends a second
+   `Started` with `fork` once its process exists. The master keeps the first start time,
+   stores `fork`, and the attempts API shows `fork` from then on (see
+   [The fork server](#the-fork-server)). A command, and a Python task that was spawned, stay
+   `spawn`.
+3. **The process.** A Python task runs `python -m schedr.runner task`, forked from a fork
+   server when that server can do it, otherwise in a new process. A command runs through
    the shell when it is a string, or directly when it is a list of arguments. Each starts in
    its own process group, so cancelling or killing reaches the whole
    task, and runs in its root's directory (Python) or its DAG file's directory (commands).
@@ -67,9 +70,51 @@ was registered, the backoff starts from 200 ms again.
 
 The runner has a third mode, `python -m schedr.runner fork_server`. It imports a list of
 libraries once, then starts one process per request. The process runs the same `task` or
-`parse` code a spawned runner runs, with its own channel, log and process group. The agent
-does not start this mode. Every attempt is still `spawn`, and nothing you run changes, until
-the agent does (M2.5.4, at the end of this section).
+`parse` code a spawned runner runs, with its own channel, log and process group. On Linux
+the worker starts this mode for the interpreter `[dags] interpreter` names, when that
+interpreter has `fork_server = true`, and forks Python tasks from it. Command tasks are
+always a new process. Parse jobs are still one new process each.
+
+**Turning it on.** Off by default. An interpreter written as a path spawns every task:
+
+```toml
+[interpreters]
+python = "/usr/bin/python3"
+```
+
+To fork, that same name is a table. `path` is the executable. `preload` is the libraries
+the preloaded server imports, in that order. Preload a library that is slow to import and
+that most tasks use. Leave a library that starts a thread off the list: the preloaded
+server is then disabled until the worker process starts again, and the log's `reason`
+names the threads.
+
+```toml
+[dags]
+interpreter = "python"
+
+[interpreters.python]
+path = "/usr/bin/python3"
+fork_server = true
+preload = ["pandas", "sqlalchemy"]
+```
+
+`fork_server` on any other interpreter does nothing. Python tasks use `[dags] interpreter`
+only. With no `preload` list, or an empty one, the worker starts only the bare server. On
+macOS the setting is ignored. The worker logs `fork_server = true is ignored: fork servers
+run on Linux only; tasks are spawned`, and every task is spawned. Forking is unsafe on
+macOS. The chart has no setting for this yet; it is the worker's configuration.
+
+`[worker] fork_server_import_retry` (default `20m`) is how long, from the first failure, a
+server whose preload fails to import is started again. `0s` means that failure is not
+retried. A failed import is often something that is not ready when the pod starts (a
+sidecar's network, a mount). A failure still there after the window is lasting (a missing
+package, a typo in the list).
+
+**The servers.** On Linux the worker starts them when the worker starts. With a `preload`
+list there are two: a preloaded one, sent that list, and a bare one, sent no modules (it
+has `schedr`, and nothing else preloaded). Without a list there is only the bare one. Each
+server's own output is appended to `fork-server-preloaded.log` or `fork-server-bare.log`
+in the worker's log directory, beside the task logs.
 
 The handshake is the usual one: `hello` (the mode is `fork_server`, and the message carries
 the runner's schedr version), then `welcome`. The next message is `fork_server`, the modules
@@ -79,11 +124,12 @@ has no thread but its own. It answers `fork_server_ready`, or `fork_server_disab
 reason and the other threads' names. A disabled server stays up and answers every later
 `fork` with `fork_failed`, until the other side closes the connection: exiting while a
 request is still unread would reset the connection and can drop `fork_server_disabled`. The
-disabled answer is also what anything but Linux gets, and what a preload that raises or
-exits gets: later `fork` requests then get `fork_failed` only. A thread that appears later
-is answered `fork_failed`, and then `fork_server_disabled`.
+worker reads the answer and stops the process. The disabled answer is also what anything but
+Linux gets, and what a preload that raises or exits gets. A thread that appears later is
+answered `fork_server_disabled` for that request. The worker stops the process and does not
+start that server again.
 
-A `fork` request carries an id, the mode (`task` or `parse`), the process's environment and
+A `fork` request carries an id, the mode (the worker sends `task`), the process's environment and
 working directory, and four open files sent with the message: the process's own channel, its
 stdout, its stderr, and a status socket. The server answers `forked`, or `fork_failed` with
 the reason. Before the fork it flushes its output buffers, including C's, so text a preloaded
@@ -128,23 +174,76 @@ handler therefore doesn't run per task, where a spawned process would run it.
 **If the fork server or the shim dies.** The shim is its own process. It closes the server's
 connection and then only uses the status socket, so once it exists it still sends
 `process_started` and `process_exited` if the fork server dies. The process keeps running
-too: the fork server dying does not signal it. A shim that dies does not stop the process
-either. The process is in its own group, so a signal to the shim's group does not reach it.
-The status socket closes, and there is no `process_exited`.
+too: the fork server dying does not signal it. A shim that dies does not itself stop the
+process. The process is in its own group, so a signal to the shim's group does not reach it.
+The status socket closes, and there is no `process_exited`. What the worker does then is
+below.
 
-**What the agent will do (M2.5.4).** None of this runs today. The agent will start the fork
-server with the worker, two per interpreter (one that preloads, and a bare one), send `fork`
-for an attempt, and record `start_method: fork`. It will take the process ID from
-`process_started`, and store `usage` and `core_dumped` with the attempt. A spawned process
-will get the same figures when it is collected. If the status socket closes with no
-`process_exited`, the agent will kill the process group and fail the attempt with an unknown
-status, or fall back without killing when `process_started` never arrived. A disabled server
-or a `fork_failed` falls back too: the bare fork server, then a spawned process. A crashed
-server is restarted with backoff, and attempts fall back meanwhile. A forked task whose own
-memory can't be read will not be killed on resident-set size, because that size includes the
-fork server's pages. A disabled server will be a worker warning, in `schedr workers list` and
-the worker in the API, with metrics for servers up or down and for fallbacks. On macOS the
-agent will warn and keep spawning.
+**What the worker does with a task.** It asks the preloaded server to fork the runner, then
+the bare one (only the bare one, when that is the only server). A server that does not fork
+the task counts in `schedr_worker_fork_fallbacks_total{interpreter,reason}`, once per server:
+
+| `reason` | Why that server was skipped |
+|---|---|
+| `disabled` | It is disabled: a preload failed to import, it has another thread, or its schedr version is not the agent's. |
+| `down` | It is starting, waiting to be started again, or it did not answer the fork within 30 s (or the answer could not be paired with the request). |
+| `fork_failed` | It answered `fork_failed`. The log `fork failed` carries the reason. |
+| `shim_died` | The shim ended, or sent nothing for 30 s, before `process_started`. The worker has no process ID yet, so it does not kill anything. |
+
+When no server forks the task, the worker spawns it and `start_method` stays `spawn`. When
+one does, the worker takes the process ID from `process_started` and sends the second
+`Started` with `fork`. From then on the attempt stays with that process. A runner that
+never says hello fails the attempt with error kind `start_failed`. The worker does not
+spawn another process for it.
+
+If the status socket then closes with no `process_exited`, the worker sends SIGKILL to the
+process group. There is no exit code. When the runner sent no result, the attempt ends
+`failed` with error kind `process_status_unknown`. The error says the shim that reports the
+process ended first, and what was left of the group was killed. A task the worker had
+already stopped keeps that status (`timed_out`, `cancelled`, `interrupted` or
+`oom_killed`); the error kind is still `process_status_unknown`.
+
+**When a server stops.** A server that exits, or that cannot be started, is started again.
+The wait is 1 s, then doubles, up to 5 min. After the server has been up for 10 min, the
+next wait is 1 s again. Meanwhile tasks use the other server, then a spawned process. A
+task already forked keeps running: its shim still reports, and the server's exit does not
+signal it.
+
+A preload that fails to import disables that server. The worker starts it again on those
+same waits, while the time since the first failure is still under
+`[worker] fork_server_import_retry`. The metric stays `disabled` for the whole of that,
+including the waits. After the window the server stays disabled until the worker process
+starts again. Threads after preloading, and a schedr version that is not the agent's, are
+never started again: they are the same on every start until the image changes. So is a
+server that disables itself while handling a fork.
+
+The worker logs each of these. `kind` is `preloaded` or `bare`, and the disabled lines
+include `reason`.
+
+| Log | When |
+|---|---|
+| `fork server up` | It finished its preload and is taking requests. |
+| `fork server ended` | A running server exited. It is started again. |
+| `can't start the fork server` | It did not start, or its preload did not answer within 5 min. It is started again, and it is not disabled. |
+| `fork server disabled; retrying` | A preload import failed, and it will be tried again. Logged on the first failure, and again only when the reason changes. |
+| `fork server disabled until restart` | It will not be started again until the worker process starts again. For an import it has stopped retrying, `gave_up` is how many minutes it had been failing. |
+| `fork server disabled` | It disabled itself while handling a fork. Not started again. |
+| `fork failed` | One fork request failed. The task tries the next server, or is spawned. |
+| `fork server out of step; restarting it` | An answer could not be paired with its request. The server is dropped and started again. |
+
+`schedr_worker_fork_servers{interpreter,kind,state}` is 1 for a server's current state and
+0 for its other states (`up`, `down`, `disabled`). `interpreter` is the DAG interpreter's
+name. The series are present from the moment the worker starts the server, so one that is
+still starting is `down`. See [Observability](09-observability.md).
+
+A forked task shares pages with its fork server, so the watchdog does not kill it on
+resident set size when PSS cannot be read (see [Memory](#memory)).
+
+**Not yet.** The shim's `usage` and `core_dumped` are reported on `process_exited` and are
+not stored; the attempts API does not show them, and a spawned process's usage is not read.
+`schedr workers list` and the worker in the API do not list a disabled server. The log and
+the `disabled` state are what shows it. A task cannot opt out of the preload or of forking.
+Parse jobs are not forked.
 
 ## The journal
 
@@ -176,7 +275,10 @@ fires, it kills everything in the container, the agent included. So the agent en
   budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the
   same budget.
 - Every `[worker] memory_check_interval` (1 s) the agent measures each task's process group
-  (PSS, so shared pages aren't counted twice).
+  (PSS, so shared pages aren't counted twice). A spawned task uses resident set size (RSS)
+  for a process whose PSS can't be read. A forked task shares pages with its fork server, so
+  its RSS counts those pages and would look far bigger than the task's own memory. If a
+  process in its group has no PSS, that sample is skipped and the task is not killed for it.
 - A group over its budget gets **SIGKILL at once**: a spike can't wait for a grace period.
   The attempt ends `oom_killed` (using a retry), with "exceeded memory budget … (… used)".
 - With no limit found (cgroup v1, a Linux laptop), memory is measured but never limited.

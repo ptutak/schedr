@@ -602,13 +602,24 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "DurationText")]
     pub memory_check_interval: Duration,
+    /// How long a fork server whose preloaded library fails to import is retried (with
+    /// backoff, from the first failure), for what isn't ready when the pod starts (a
+    /// sidecar's network, a mount); `0s`: not retried. Threads after preloading and a version
+    /// mismatch are never retried (they don't change until the image does).
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub fork_server_import_retry: Duration,
 }
 
 impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
     /// (Kubernetes' default) of which the last 5 s stop and report what still runs (3 s to
     /// SIGKILL, 2 s to report), the log endpoint on port 8081 of every interface, logs kept for
-    /// 30 days, the memory budget from the pod's limit, sampled every second.
+    /// 30 days, the memory budget from the pod's limit, sampled every second, a fork server's
+    /// failing import retried for 20 minutes.
     fn default() -> Self {
         Self {
             id: None,
@@ -628,6 +639,7 @@ impl Default for WorkerSection {
             memory_budget: None,
             memory_reserve: None,
             memory_check_interval: Duration::from_secs(1),
+            fork_server_import_retry: Duration::from_mins(20),
         }
     }
 }

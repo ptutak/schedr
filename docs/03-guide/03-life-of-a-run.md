@@ -88,9 +88,12 @@ imported and the arguments are built, the runner sends `task_imported` (no field
 the function; it does not send that message when the import or the arguments fail. The agent
 times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
 [Observability](09-observability.md)). The result comes back over the same local socket.
-The memory watchdog samples the group's memory every second. The runner can fork a process
-from a fork server instead (see [The fork server](05-workers.md#the-fork-server)). The agent
-does not start that server yet, so every task still starts as a new process.
+The memory watchdog samples the group's memory every second. With `fork_server = true` on
+the DAG interpreter, a Linux worker starts that Python runner from a fork server (see
+[The fork server](05-workers.md#the-fork-server)), and the attempts API shows `start_method`
+`fork`. Otherwise, and when those servers can't fork it, the task is a new process
+(`spawn`). A forked task whose PSS can't be read is not killed on resident set size, because
+that size includes the pages it shares with the fork server.
 
 ## 6. The result comes back
 

@@ -275,6 +275,7 @@ fn master_webserver_and_worker_defaults() {
             memory_budget: None,
             memory_reserve: None,
             memory_check_interval: Duration::from_secs(1),
+            fork_server_import_retry: Duration::from_mins(20),
         }
     );
     assert_eq!(
@@ -325,6 +326,7 @@ fn reads_the_master_webserver_and_worker_sections() {
         log_max_size = "10GiB"
         memory_budget = "2GiB"
         memory_check_interval = "500ms"
+        fork_server_import_retry = "0s"
         "#,
     )
     .unwrap();
@@ -368,6 +370,7 @@ fn reads_the_master_webserver_and_worker_sections() {
         config.worker.memory_check_interval,
         Duration::from_millis(500)
     );
+    assert_eq!(config.worker.fork_server_import_retry, Duration::ZERO);
 }
 
 #[test]

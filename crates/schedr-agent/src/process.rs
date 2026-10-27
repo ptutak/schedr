@@ -71,12 +71,7 @@ pub async fn spawn(spec: &ProcessSpec) -> io::Result<OsProcess> {
 /// Returns an I/O error if the log file can't be opened, the descriptor can't be made
 /// inheritable, or the program can't be started.
 pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Result<OsProcess> {
-    let log = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&spec.log_file)
-        .await?;
-    let log = Arc::new(Mutex::new(log));
+    let log = open_log(spec).await?;
     let spawning = SPAWNING.lock().await;
     if let Some(fd) = &pass {
         rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
@@ -116,10 +111,27 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
     })
 }
 
+/// The task's log file, opened for appending, shared by its stdout and stderr collectors.
+///
+/// # Errors
+///
+/// Returns an I/O error if it can't be opened.
+pub(crate) async fn open_log(spec: &ProcessSpec) -> io::Result<SharedLog> {
+    let log = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&spec.log_file)
+        .await?;
+    Ok(Arc::new(Mutex::new(log)))
+}
+
+/// A log file written by a process's two output collectors.
+pub(crate) type SharedLog = Arc<Mutex<tokio::fs::File>>;
+
 /// Copies a pipe into the log file, keeping its tail.
-async fn collect(
+pub(crate) async fn collect(
     mut pipe: impl AsyncRead + Unpin,
-    log: Arc<Mutex<tokio::fs::File>>,
+    log: SharedLog,
     limit: usize,
 ) -> io::Result<TailBuffer> {
     let mut tail = TailBuffer::new(limit);

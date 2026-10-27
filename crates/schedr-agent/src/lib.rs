@@ -10,6 +10,7 @@ pub mod attempt;
 pub mod channel;
 pub mod drain;
 pub mod env;
+pub mod fork;
 pub mod journal;
 pub mod launch;
 pub mod logs;

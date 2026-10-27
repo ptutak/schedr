@@ -19,9 +19,12 @@ use tokio::net::UnixStream;
 
 use crate::attempt::{Ran, StartTimes};
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
+use crate::fork::{ForkServers, Forked, ForkedProcess, GroupHold};
 use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
+use crate::output::TailBuffer;
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
+use crate::status::Termination;
 use crate::supervise::{Limits, Process, Signal, Stops, supervise};
 
 /// The environment variable with the runner's descriptor of its socket to the agent.
@@ -147,8 +150,97 @@ async fn abandon(mut process: OsProcess) {
     let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
 }
 
-/// Runs a Python task: starts the runner, sends the request, and waits for its result while
-/// supervising the process; `spawned` gets the runner's process ID as soon as it runs.
+/// A task's runner process: spawned, or forked from a fork server.
+#[derive(Debug)]
+pub enum TaskProcess {
+    /// A child of the agent.
+    Spawned(OsProcess),
+    /// A child of a fork server's shim.
+    Forked(ForkedProcess),
+}
+
+impl TaskProcess {
+    /// The captured stdout and stderr, once both pipes are closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error from reading a pipe or writing the log file.
+    pub async fn output(self) -> std::io::Result<(TailBuffer, TailBuffer)> {
+        match self {
+            Self::Spawned(process) => process.output().await,
+            Self::Forked(process) => process.output().await,
+        }
+    }
+}
+
+impl Process for TaskProcess {
+    async fn wait(&mut self) -> std::io::Result<Termination> {
+        match self {
+            Self::Spawned(process) => process.wait().await,
+            Self::Forked(process) => process.wait().await,
+        }
+    }
+
+    fn signal(&mut self, signal: Signal) -> std::io::Result<()> {
+        match self {
+            Self::Spawned(process) => process.signal(signal),
+            Self::Forked(process) => process.signal(signal),
+        }
+    }
+}
+
+/// Starts a Python task's runner, forked by `forks` if they can, else spawned, and completes
+/// the handshake; `spawned` gets its process ID (and whether it was forked) as soon as it
+/// runs, and `hold` a forked one's [`GroupHold`]. A forked runner that fails the handshake
+/// isn't spawned again: it ran.
+async fn start_task_runner(
+    spec: &ProcessSpec,
+    forks: Option<&ForkServers>,
+    hold: &mut Option<GroupHold>,
+    spawned: impl FnOnce(i32, bool),
+) -> Result<(TaskProcess, UnixStream, Duration), LaunchError> {
+    let starting = Instant::now();
+    if let Some(forks) = forks
+        && let Ok(Forked {
+            process,
+            mut stream,
+            hold: held,
+        }) = forks.fork(spec, RunnerMode::Task).await
+    {
+        *hold = Some(held);
+        spawned(process.id(), true);
+        let mut process = TaskProcess::Forked(process);
+        let said = tokio::time::timeout(
+            RUNNER_START_TIMEOUT,
+            accept_runner(&mut stream, AGENT_VERSION),
+        )
+        .await;
+        let error = match said {
+            Ok(Ok(RunnerMode::Task)) => return Ok((process, stream, starting.elapsed())),
+            Ok(Ok(said)) => LaunchError::WrongMode {
+                expected: RunnerMode::Task,
+                got: said,
+            },
+            Ok(Err(error)) => error.into(),
+            Err(_) => LaunchError::NoHello(RUNNER_START_TIMEOUT),
+        };
+        let _ = process.signal(Signal::Kill);
+        let _ = process.wait().await;
+        let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+        return Err(error);
+    }
+    let runner = start_runner(spec, RunnerMode::Task, |pid| spawned(pid, false)).await?;
+    Ok((
+        TaskProcess::Spawned(runner.process),
+        runner.stream,
+        runner.hello_after,
+    ))
+}
+
+/// Runs a Python task: starts the runner (forked by `forks` when there are any and they can),
+/// sends the request, and waits for its result while supervising the process; `spawned` gets
+/// the runner's process ID, and whether it was forked, as soon as it runs. A forked process's
+/// [`GroupHold`] goes to `hold`, on every path (the caller drops it after its watchdog).
 ///
 /// # Errors
 ///
@@ -159,14 +251,14 @@ pub async fn run_python(
     request: TaskRequest,
     limits: Limits,
     stop: Stops,
-    spawned: impl FnOnce(i32),
+    forks: Option<&ForkServers>,
+    hold: &mut Option<GroupHold>,
+    spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
-    let Runner {
-        mut process,
-        mut stream,
-        hello_after,
-    } = start_runner(process, RunnerMode::Task, spawned).await?;
+    let (mut process, mut stream, hello_after) =
+        start_task_runner(process, forks, hold, spawned).await?;
+    let forked = matches!(process, TaskProcess::Forked(_));
     write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
     let sent = Instant::now();
     let result = async {
@@ -195,6 +287,7 @@ pub async fn run_python(
             runner: hello_after,
             import,
         }),
+        forked,
     })
 }
 
@@ -226,6 +319,7 @@ pub async fn run_command(
         output: Some(output),
         start: None,
         duration: started.elapsed(),
+        forked: false,
     })
 }
 
@@ -286,6 +380,7 @@ impl ParseRunner for ProcessParseRunner {
                 seen.clone(),
                 Stops::new().0,
                 self.kills.clone(),
+                false,
             ));
         })
         .await

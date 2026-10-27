@@ -32,7 +32,9 @@ every key.
   for the master and the webserver. Workers need no readiness probe: nothing connects to them
   through a Service.
 - **Memory:** a worker pod's memory limit is split between its slots (see
-  [Workers](05-workers.md#memory)); size the pod for its slots.
+  [Workers](05-workers.md#memory)); size the pod for its slots. With the fork server on,
+  the worker also keeps those long-lived processes, so size the pod for them too (see
+  [Workers](05-workers.md#the-fork-server)). The chart does not turn the fork server on.
 
 ### The chart's `mode: distributed`
 

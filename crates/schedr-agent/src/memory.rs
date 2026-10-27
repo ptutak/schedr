@@ -10,7 +10,9 @@
 //! - **The budget** per task is `[worker] memory_budget`, else (limit − 10 %) ÷ slots.
 //! - **A task's memory** is the PSS (`/proc/<pid>/smaps_rollup`) of every process in its
 //!   process group (what SIGTERM and SIGKILL reach), RSS where PSS can't be read: PSS splits
-//!   shared pages between the processes sharing them, so a tree isn't counted many times.
+//!   shared pages between the processes sharing them, so a tree isn't counted many times. Not
+//!   for a forked task: its RSS counts the pages it shares with its fork server, so a sample
+//!   without every PSS is skipped (no kill on it).
 //! - **Sampling** every `[worker] memory_check_interval` (1 s); over the budget the group is
 //!   killed at once (SIGKILL: a spike can't wait for a grace period), and the attempt ends
 //!   `oom_killed`. The highest sample is the attempt's peak memory.
@@ -130,12 +132,14 @@ pub fn budget(
     })
 }
 
-/// The memory of the processes in group `pgid`, in bytes (PSS, else RSS); 0 when none is
-/// left.
+/// The memory of the processes in group `pgid`, in bytes (PSS, else RSS where
+/// `rss_fallback`); 0 when none is left. `None` when a process's PSS can't be read and RSS
+/// mustn't stand in: a forked process's RSS counts the pages it shares with its fork server
+/// (most of the server's), so it would look far bigger than it is.
 #[must_use]
-pub fn group_memory(proc_root: &Path, pgid: i32) -> u64 {
+pub fn group_memory(proc_root: &Path, pgid: i32, rss_fallback: bool) -> Option<u64> {
     let Ok(entries) = std::fs::read_dir(proc_root) else {
-        return 0;
+        return Some(0);
     };
     let page = page_size();
     let mut total = 0;
@@ -152,9 +156,13 @@ pub fn group_memory(proc_root: &Path, pgid: i32) -> u64 {
         if process_group(&stat) != Some(pgid) {
             continue;
         }
-        total += pss(&dir).or_else(|| rss(&dir, page)).unwrap_or(0);
+        match pss(&dir) {
+            Some(bytes) => total += bytes,
+            None if rss_fallback => total += rss(&dir, page).unwrap_or(0),
+            None => return None,
+        }
     }
-    total
+    Some(total)
 }
 
 /// The process group in a `/proc/<pid>/stat` line (field 5; the command, field 2, is in
@@ -189,16 +197,26 @@ fn page_size() -> u64 {
 }
 
 /// Samples group `pgid` every `watch.interval`, recording the peak in `seen`; completes with
-/// the sample once one is over the budget (never without a budget).
-pub async fn over_budget(watch: &MemoryWatch, pgid: i32, seen: &SharedSeen) -> u64 {
+/// the sample once one is over the budget (never without a budget). A sample that can't be
+/// read (see [`group_memory`]) is skipped: no kill on a guess.
+pub async fn over_budget(
+    watch: &MemoryWatch,
+    pgid: i32,
+    seen: &SharedSeen,
+    rss_fallback: bool,
+) -> u64 {
     let mut tick = tokio::time::interval(watch.interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
         let root = watch.proc_root.clone();
-        let used = tokio::task::spawn_blocking(move || group_memory(&root, pgid))
-            .await
-            .unwrap_or(0);
+        let Some(used) =
+            tokio::task::spawn_blocking(move || group_memory(&root, pgid, rss_fallback))
+                .await
+                .unwrap_or(Some(0))
+        else {
+            continue;
+        };
         let mut record = seen.lock().unwrap_or_else(PoisonError::into_inner);
         record.peak = record.peak.max(used);
         if let Some(budget) = watch.budget
@@ -227,7 +245,8 @@ impl Drop for GroupWatch {
 /// over the budget it tells `stop` ([`StopReason::OomKilled`]), kills the group at once
 /// (SIGKILL) and counts it in `kills`. The reason goes first, so the supervisor has it before
 /// the process's end. Started as soon as the process is, it covers a runner's start and a
-/// stopped task's grace period too.
+/// stopped task's grace period too. `forked`: the group's processes share pages with a fork
+/// server, so RSS never stands in for PSS (see [`group_memory`]).
 #[must_use]
 pub fn watch_group(
     watch: MemoryWatch,
@@ -235,9 +254,10 @@ pub fn watch_group(
     seen: SharedSeen,
     stop: StopSender,
     kills: Counter,
+    forked: bool,
 ) -> GroupWatch {
     let task = tokio::spawn(async move {
-        over_budget(&watch, pgid, &seen).await;
+        over_budget(&watch, pgid, &seen, !forked).await;
         let _ = stop.send(StopReason::OomKilled);
         if let Some(group) = Pid::from_raw(pgid) {
             // A group that is gone already is fine.

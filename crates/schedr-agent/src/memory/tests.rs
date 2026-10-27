@@ -42,10 +42,29 @@ fn a_groups_memory_is_the_pss_of_its_processes_else_their_rss() {
         (200, 200, Some(5000), 1),
     ]);
     let page = page_size();
-    assert_eq!(group_memory(proc.path(), 100), 1000 * 1024 + 3 * page);
-    assert_eq!(group_memory(proc.path(), 200), 5000 * 1024);
-    assert_eq!(group_memory(proc.path(), 300), 0);
-    assert_eq!(group_memory(&proc.path().join("missing"), 100), 0);
+    assert_eq!(
+        group_memory(proc.path(), 100, true),
+        Some(1000 * 1024 + 3 * page)
+    );
+    assert_eq!(group_memory(proc.path(), 200, true), Some(5000 * 1024));
+    assert_eq!(group_memory(proc.path(), 300, true), Some(0));
+    assert_eq!(
+        group_memory(&proc.path().join("missing"), 100, true),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_forked_groups_memory_is_unknown_without_every_pss() {
+    // A forked process's RSS counts the fork server's shared pages: it never stands in.
+    let proc = fake_proc(&[
+        (100, 100, Some(1000), 1),
+        (101, 100, None, 3),
+        (200, 200, Some(5000), 1),
+    ]);
+    assert_eq!(group_memory(proc.path(), 100, false), None);
+    assert_eq!(group_memory(proc.path(), 200, false), Some(5000 * 1024));
+    assert_eq!(group_memory(proc.path(), 300, false), Some(0));
 }
 
 #[test]
@@ -162,7 +181,7 @@ async fn over_budget_records_the_peak_and_completes_past_the_budget() {
         }
     };
     let used = tokio::select! {
-        used = over_budget(&watch, 100, &seen) => used,
+        used = over_budget(&watch, 100, &seen, true) => used,
         () = grow => unreachable!(),
     };
     assert_eq!(used, 3000 * 1024);
@@ -184,8 +203,11 @@ async fn without_a_budget_it_only_measures() {
         ..MemoryWatch::default()
     };
     let seen = SharedSeen::default();
-    let waited =
-        tokio::time::timeout(Duration::from_millis(100), over_budget(&watch, 100, &seen)).await;
+    let waited = tokio::time::timeout(
+        Duration::from_millis(100),
+        over_budget(&watch, 100, &seen, true),
+    )
+    .await;
     assert!(waited.is_err());
     assert_eq!(seen.lock().unwrap().peak, 1000 * 1024);
     assert_eq!(seen.lock().unwrap().over, None);
@@ -204,7 +226,14 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
     let seen = SharedSeen::default();
     let (killed_tx, mut killed) = Stops::new();
     let kills = Counter::default();
-    let _watching = watch_group(watch.clone(), pgid, seen.clone(), killed_tx, kills.clone());
+    let _watching = watch_group(
+        watch.clone(),
+        pgid,
+        seen.clone(),
+        killed_tx,
+        kills.clone(),
+        false,
+    );
     let reason = tokio::time::timeout(Duration::from_secs(5), killed.next_reason())
         .await
         .unwrap();
@@ -229,9 +258,43 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
         SharedSeen::default(),
         quiet_tx,
         Counter::default(),
+        false,
     );
     drop(watching);
     // Dropped: the task is aborted, nothing is ever sent.
     let nothing = tokio::time::timeout(Duration::from_millis(50), quiet.next_reason()).await;
     assert!(nothing.is_err());
+}
+
+#[tokio::test]
+async fn a_forked_group_over_the_budget_by_rss_alone_isnt_killed() {
+    // PSS unreadable, RSS (shared with the fork server) far over the budget: no kill on it.
+    let pgid = i32::MAX;
+    let proc = fake_proc(&[(pgid, pgid, None, 1_000_000)]);
+    let watch = MemoryWatch {
+        budget: Some(1024),
+        interval: Duration::from_millis(5),
+        proc_root: proc.path().to_path_buf(),
+    };
+    let (stop_tx, mut stop) = Stops::new();
+    let kills = Counter::default();
+    let seen = SharedSeen::default();
+    let _forked = watch_group(
+        watch.clone(),
+        pgid,
+        seen.clone(),
+        stop_tx,
+        kills.clone(),
+        true,
+    );
+    let nothing = tokio::time::timeout(Duration::from_millis(100), stop.next_reason()).await;
+    assert!(nothing.is_err());
+    assert_eq!((kills.get(), seen.lock().unwrap().peak), (0, 0));
+    // The same group spawned: RSS stands in, and it is killed.
+    let (stop_tx, mut stop) = Stops::new();
+    let _spawned = watch_group(watch, pgid, SharedSeen::default(), stop_tx, kills, false);
+    let reason = tokio::time::timeout(Duration::from_secs(5), stop.next_reason())
+        .await
+        .unwrap();
+    assert_eq!(reason, StopReason::OomKilled);
 }

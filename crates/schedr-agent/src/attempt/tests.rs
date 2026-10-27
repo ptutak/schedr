@@ -78,6 +78,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         pass_env: vec![],
         log_dir: dir.path().join("logs"),
         memory: crate::memory::MemoryWatch::default(),
+        fork_server: None,
     };
     (dir, setup)
 }
@@ -279,6 +280,7 @@ fn ran(
         output: None,
         duration: Duration::from_millis(1500),
         start: None,
+        forked: false,
     }
 }
 
@@ -381,4 +383,21 @@ fn a_failure_before_starting_is_reported_as_failed() {
     let summary: ErrorSummary = serde_json::from_slice(&message.error_summary_json).unwrap();
     assert_eq!(summary.message, "no output of `ghost`");
     assert_eq!(message.duration_ms, None, "it never ran");
+}
+
+#[test]
+fn a_forked_task_whose_shim_died_failed_with_an_unknown_status() {
+    let message = finished("a1", &ran(Termination::Unknown, None, None));
+    assert_eq!(message.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!((message.exit_code, message.signal), (None, None));
+    assert_eq!(message.error_kind, PROCESS_STATUS_UNKNOWN);
+    let summary: ErrorSummary = serde_json::from_slice(&message.error_summary_json).unwrap();
+    assert_eq!(summary.exception, "ProcessStatusUnknown");
+    // Stopped by the agent first: its status stays, the unknown end is still explained.
+    let stopped = finished(
+        "a1",
+        &ran(Termination::Unknown, Some(StopReason::Cancelled), None),
+    );
+    assert_eq!(stopped.status, i32::from(pb::AttemptStatus::Cancelled));
+    assert_eq!(stopped.error_kind, PROCESS_STATUS_UNKNOWN);
 }

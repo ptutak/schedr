@@ -33,7 +33,8 @@ impl Executor for Fake {
         mut stop: Stops,
         spawned: Spawned,
     ) -> pb::Finished {
-        spawned(NO_PROCESS);
+        // A task named `forked` stands for one forked from a fork server.
+        spawned(NO_PROCESS, spec.task.id.as_str() == "forked");
         let status = if spec.task.id.as_str() == "wait" {
             match stop.next_reason().await {
                 StopReason::Interrupted => pb::AttemptStatus::Interrupted,
@@ -148,6 +149,7 @@ async fn world() -> World {
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
             memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -484,6 +486,7 @@ async fn against_script_with(
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
             memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -748,6 +751,42 @@ fn backoffs_have_jitter_between_half_and_all() {
 }
 
 #[tokio::test]
+async fn a_forked_attempt_sends_started_again_with_its_method() {
+    let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![],
+    }));
+    let mut forked =
+        task_json(&json!({"kind": "command", "command": {"argv": [[{"text": "true"}]]}}));
+    forked["id"] = json!("forked");
+    let script = vec![timing, assign("a1", &forked, "sync.py", false)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).len() >= 4;
+    let (seen, _) = against_script(2, Start::With(vec![]), script, done).await;
+    assert_eq!(
+        kinds(&seen),
+        ["register", "started", "started", "finished: success"]
+    );
+    let methods: Vec<_> = seen
+        .iter()
+        .filter_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Started(s) => Some(s.start_method),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            i32::from(pb::StartMethod::Spawn),
+            i32::from(pb::StartMethod::Fork)
+        ]
+    );
+}
+
+#[tokio::test]
 async fn an_attempt_assigned_again_is_ignored() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
         timing: Some(pb::Timing {
@@ -783,6 +822,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
             memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -799,11 +839,13 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
     done.send(Done::Spawned {
         attempt_id: "a1".to_owned(),
         identity: NO_PROCESS,
+        forked: false,
     })
     .unwrap();
     done.send(Done::Spawned {
         attempt_id: "a2".to_owned(),
         identity: NO_PROCESS,
+        forked: true,
     })
     .unwrap();
     let JournalRecord::Finished(finished) = success("a2") else {
@@ -983,6 +1025,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             pass_env: vec![],
             log_dir: settings_dir.path().join("logs"),
             memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -1024,6 +1067,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
             memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,

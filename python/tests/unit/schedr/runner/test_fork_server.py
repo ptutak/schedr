@@ -627,19 +627,19 @@ def test_a_thread_started_after_the_check_disables_the_fork_server(
     replies = server.replies()
     for reply in replies:
         validate_runner_message(reply)
+    # The answer to the fork that found the thread is `fork_server_disabled` alone (one
+    # message per request, so the agent pairs them).
     assert [r["type"] for r in replies] == [
         "fork_server_ready",
-        "fork_failed",
         "fork_server_disabled",
         "fork_failed",
     ]
-    assert replies[1]["id"] == 1
     assert "late-pool" in replies[1]["reason"]
-    assert replies[2]["threads"] == ["late-pool"]
+    assert replies[1]["threads"] == ["late-pool"]
     # Still answering until the agent closes: leaving a request unread would reset the
     # connection, and the agent could lose the `fork_server_disabled`.
-    assert replies[3]["id"] == 2
-    assert replies[3]["reason"].startswith("the fork server is disabled: ")
+    assert replies[2]["id"] == 2
+    assert replies[2]["reason"].startswith("the fork server is disabled: ")
 
 
 @pytest.mark.parametrize(

@@ -212,9 +212,19 @@ async fn run(
         });
     }
     let stop = stops;
-    run_python(&process, request, limits, stop, |pid| assert!(pid > 1))
-        .await
-        .unwrap()
+    run_python(
+        &process,
+        request,
+        limits,
+        stop,
+        None,
+        &mut None,
+        |pid, forked: bool| {
+            assert!(pid > 1 && !forked);
+        },
+    )
+    .await
+    .unwrap()
 }
 
 enum StopAfter {

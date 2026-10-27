@@ -34,6 +34,9 @@ pub const RENDER_FAILED: &str = "render_failed";
 /// The error kind of a Python task whose runner ended without reporting a result.
 pub const RUNNER_FAILED: &str = "runner_failed";
 
+/// The error kind of a forked task whose end isn't known: its shim ended before reporting it.
+pub const PROCESS_STATUS_UNKNOWN: &str = "process_status_unknown";
+
 /// An assignment, read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttemptSpec {
@@ -133,6 +136,8 @@ pub struct WorkerSetup {
     pub log_dir: PathBuf,
     /// How the memory watchdog watches tasks and parse runners.
     pub memory: crate::memory::MemoryWatch,
+    /// The DAG interpreter's fork servers, when it has `fork_server = true`.
+    pub fork_server: Option<crate::fork::ForkConfig>,
 }
 
 impl WorkerSetup {
@@ -290,6 +295,8 @@ pub struct Ran {
     pub duration: Duration,
     /// For a Python task that said hello: how long it took to start.
     pub start: Option<StartTimes>,
+    /// Whether it was forked from a fork server (else spawned).
+    pub forked: bool,
 }
 
 /// How long a Python task's process took to start, by phase.
@@ -316,6 +323,7 @@ pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
     match termination {
         crate::status::Termination::Exited(code) => message.exit_code = Some(code),
         crate::status::Termination::Signaled(signal) => message.signal = Some(signal),
+        crate::status::Termination::Unknown => {}
     }
     if let Some((stdout, stderr)) = &ran.output {
         let result = process_result(stdout, stderr, termination.exit_code());
@@ -344,6 +352,14 @@ pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
             RUNNER_FAILED.clone_into(&mut message.error_kind);
             message.error_summary_json =
                 summary("RunnerFailed", "the runner exited without a result");
+        }
+        (None, _) if termination == crate::status::Termination::Unknown => {
+            PROCESS_STATUS_UNKNOWN.clone_into(&mut message.error_kind);
+            message.error_summary_json = summary(
+                "ProcessStatusUnknown",
+                "the task's process ended, but how isn't known: the fork server's shim that \
+                 reports it ended first (what was left of its process group was killed)",
+            );
         }
         _ => {}
     }
