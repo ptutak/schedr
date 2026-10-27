@@ -251,8 +251,8 @@ Separate jobs. The ones that run on this machine each have a make target:
 ## Agent tooling
 
 - **Claude Code is the main agent;** Grok Build (xAI's terminal agent, on a SuperGrok or X
-  Premium+ subscription, so no per-token billing) can be its worker. How the two work
-  together is in `AI_INSTRUCTIONS.md`, Working with a worker agent.
+  Premium+ subscription, so no per-token billing) reviews, explores, hunts bugs and keeps the
+  docs up. How the two work together is in `AI_INSTRUCTIONS.md`, Working with a second agent.
 - **Set up once per machine,** not per repository: the `/grok` skill lives in
   `~/.claude/skills/grok/`. It has `SKILL.md`, `grok-turn.sh` (one headless turn, resumed by
   session ID, logs in `logs/`) and `install.sh`. Copy the folder to a new machine and run

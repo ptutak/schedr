@@ -16,8 +16,8 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 2. **Ask when there is a real choice** (see Decisions); otherwise pick the sensible default,
    say which, and go on.
 3. **Do the whole step:** code, unit tests, integration tests, docs and docstrings, generated
-   files. **Update the guide** (the hand-written pages on how the system works, see
-   `AI_SETUP.md`, Documentation) wherever the step changes what they describe: a page that
+   files (the docs can be Grok's, see Working with a second agent). **Update the guide**
+   (the hand-written pages on how the system works, see `AI_SETUP.md`, Documentation) wherever the step changes what they describe: a page that
    says something the code no longer does is a bug. Reference pages generated from the code
    need no edits, but a new setting, command, endpoint or metric needs its doc comment.
 4. **Run `make check` and `make docs`** (or the project's equivalents) and make sure both
@@ -25,8 +25,9 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    **Run the stress suite** (`make stress`, if the project has one) at the end of each
    milestone and after a step that changes the core's scheduling, database or worker code, and
    report its numbers.
-5. **Run a code review once over the whole step** (the code-review skill, `/code-review`, on
-   everything the step changed, after the checks pass). It also checks that the guide matches
+5. **Run a code review once over the whole step** (Grok's independent review, see Working
+   with a second agent; the code-review skill, `/code-review`, when Grok is unavailable) on
+   everything the step changed, after the checks pass. It also checks that the guide matches
    the change. Fix what it confirms, re-run the checks, and list in the summary what it found
    and what was fixed or left (with why). A finding outside the step's scope goes to
    `BUGS.md`.
@@ -39,16 +40,37 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    myself, often without saying so, so don't claim CI hasn't run. To know CI's state, ask me
    (I may not have `gh` installed).
 
-## Working with a worker agent (Grok)
+## Working with a second agent (Grok)
 
-A step can be handed to a second agent, Grok Build, through the `/grok` skill (set up as
-`AI_SETUP.md`, Agent tooling, says). I still talk only to you. Grok writes the code; you
-relay, decide, and check.
+A second agent, Grok Build, works through the `/grok` skill (set up as `AI_SETUP.md`, Agent
+tooling, says). I still talk only to you.
 
-- **Grok works in its own git worktree** (`<repo>-grok-<step>`, branch `grok/<step>`; one per step, so two can run side by side), approving
-  its own commands there. It never commits, pushes, or touches the main checkout. It
-  follows this file, except the code review, the summary, and committing, which are yours.
-- **Who decides:**
+- **Who does what:**
+
+  | Work | Who |
+  |---|---|
+  | Designing and implementing important changes (the step's core) | **you** |
+  | **Independent code review** of the step's diff: bugs, races, async and distributed edge cases, performance, security | **Grok**, read-only; it replaces the code-review skill (that one only when Grok is unavailable) |
+  | **Bug hunting and fixing:** root-cause analysis, reproductions, fixes (a reproducing test first, as Bugs says) | **Grok** |
+  | **Documentation:** the guide and Writing DAGs kept up with the code, after the step's code is reviewed | **Grok** |
+  | Exploring the code: call sites, dependencies, affected files, before a change | **Grok**, read-only |
+  | Tests: missing cases, generating tests for code that exists | **Grok** |
+  | External research: documentation, APIs, other tools' behaviour | **Grok** |
+  | Small well-scoped implementation, mechanical refactors and migrations | **Grok** |
+  | A second opinion on architecture | **Grok**, read-only, before I decide |
+
+- **Ask for independent analysis, never confirmation:** give Grok the diff, the code or the
+  question, not your hypothesis or your conclusions. "Review this diff" or "find why X
+  happens", not "check that the bug is Y".
+- **Grok's findings are claims:** verify each one yourself (read the code, reproduce it)
+  before applying it, and decide what to apply. Report what it found, what you confirmed,
+  what you rejected and why. A confirmed finding outside the step goes to `BUGS.md`.
+- **Grok works in its own git worktree** (`<repo>-grok-<step>`, branch `grok/<step>`; one
+  per task, so two can run side by side), approving its own commands there. For a review,
+  the worktree holds a snapshot of your uncommitted work, so Grok can run tests to back a
+  finding; a read-only task changes no files. It never commits, pushes, or touches the main
+  checkout. It follows this file, except the summary and committing, which are yours.
+- **Who decides** (when Grok writes code or docs):
 
   | Decision | Decided by |
   |---|---|
@@ -60,13 +82,12 @@ relay, decide, and check.
   yours are marked `(mine)`.
 - **Modes:** *normal* (the default) and *paranoid*, where Grok stops at every decision. Use
   paranoid for brittle work (migrations, concurrency, security, data formats) or when I ask;
-  propose it when a step looks brittle. **Split a step by risk** rather than running all of
+  propose it when a task looks brittle. **Split a task by risk** rather than running all of
   it paranoid: the brittle part (e.g. handling secrets) in paranoid mode, the rest in
   normal mode, as two tasks or two phases.
 - **Grok's "done" is a claim, not a result:** read its diff, run `make check` and
-  `make docs` yourself, run the code review, and send the findings back to Grok until it is
-  clean. Then present the summary as in "How a step goes", step 7. Check its "Small
-  decisions" list as part of the review.
+  `make docs` yourself, and check its "Small decisions" list. Code Grok wrote gets an
+  independent review too: a fresh Grok session, not the one that wrote it.
 - **When I say commit,** commit in the worktree, fast-forward the main branch to it, and
   remove the worktree.
 - Grok's blockers and requests outside its worktree (system packages, `sudo`, other

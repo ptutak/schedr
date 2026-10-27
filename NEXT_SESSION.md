@@ -165,7 +165,8 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
    - **Load makes timing tests flaky** (B21, B22): two kind clusters (`schedr-test`,
      `schedr-mesh`, podman: `KIND_EXPERIMENTAL_PROVIDER=podman kind get clusters`) and a
      second worktree building push the load average past 10.
-   - **Grok as the worker** (`~/.claude/skills/grok`): what it does well and where to look
+   - **Grok** (`~/.claude/skills/grok`; since 2026-10-27 the reviewer, bug hunter, explorer and
+     docs writer, while Claude implements the step's core): what it does well and where to look
      in review is in its SKILL.md, "What to expect from Grok"; its weekly usage, measured
      per round, in USAGE.md (about 3.5% of the week per 100 calls; 15% -> 40% on 2026-10-26).
      `grok-watch` follows the active session with Claude's prompts and diffs.
@@ -190,8 +191,9 @@ Read this file, `PROJECT.md`, `PLAN.md` and `BUGS.md` before starting.
     **Writing DAGs** (`docs/02-dags/`) wherever it changes what a DAG author can do; a new
     setting, command, endpoint or metric needs its doc comment (the reference pages are
     generated from them, and a new metric goes in its role's `METRICS` list);
-  - run the code review once over everything the step changed (the `code-review` skill),
-    including whether the guide and Writing DAGs still match.
+  - run the code review once over everything the step changed: Grok's independent review
+    (`/grok`, AI_INSTRUCTIONS.md, Working with a second agent; the `code-review` skill only
+    when Grok is unavailable), including whether the guide and Writing DAGs still match.
     Judge each finding, fix the real ones, say which you skipped and why, re-run the checks,
     and report the findings in the summary. If fixes or additions after the review are
     substantial new code, run the review again;
