@@ -371,3 +371,88 @@ async fn a_run_inserted_with_its_id_is_stored_once() {
     assert_eq!(db.insert_run_as(id, &manual).await.unwrap(), None);
     assert_eq!(db.running_count(&dag).await.unwrap(), 1);
 }
+
+/// `with_dag`'s database with a second DAG, `other`, stored too; its version's ID.
+async fn add_other(db: &Database) -> String {
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h2",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts("2026-10-01T00:00:00Z"),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let change = DagChange::Define {
+        dag: Box::new(dag("other")),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], ts("2026-10-01T00:00:00Z"))
+        .await
+        .unwrap();
+    let active = db.active_dags().await.unwrap();
+    active
+        .into_iter()
+        .find(|a| a.dag.id.as_str() == "other")
+        .unwrap()
+        .version_id
+}
+
+#[tokio::test]
+async fn the_overview_and_active_dags_of_some_dags_have_only_theirs() {
+    let (db, version) = with_dag().await;
+    let other_version = add_other(&db).await;
+    let (id, other) = (sync(), DagId::new("other").unwrap());
+    for (dag_id, version, state, at) in [
+        (&id, &version, RunState::Running, "2026-10-15T03:00:00Z"),
+        (&id, &version, RunState::Queued, "2026-10-16T03:00:00Z"),
+        (
+            &other,
+            &other_version,
+            RunState::Running,
+            "2026-10-15T04:00:00Z",
+        ),
+    ] {
+        db.insert_run(&run(dag_id, version, RunKind::Scheduled, state, at))
+            .await
+            .unwrap();
+    }
+    let all = db.run_overview().await.unwrap();
+    assert_eq!(db.run_overview_of(&[&id, &other]).await.unwrap(), all);
+    let one = db.run_overview_of(&[&id]).await.unwrap();
+    assert_eq!(
+        (one.running(&id), one.queued(&id).len(), one.running(&other)),
+        (1, 1, 0)
+    );
+    assert_eq!(one.last_scheduled(&other), None);
+    // No DAGs: nothing read, not everything.
+    assert_eq!(
+        db.run_overview_of(&[]).await.unwrap(),
+        RunOverview::default()
+    );
+
+    let ids = |active: Vec<ActiveDag>| -> Vec<String> {
+        active.into_iter().map(|a| a.dag.id.to_string()).collect()
+    };
+    assert_eq!(ids(db.active_dags_of(&[&other]).await.unwrap()), ["other"]);
+    assert_eq!(
+        ids(db.active_dags_of(&[&other, &id]).await.unwrap()),
+        ["other", "sync"]
+    );
+    assert_eq!(
+        ids(db.active_dags_of(&[]).await.unwrap()),
+        Vec::<String>::new()
+    );
+
+    // More IDs than one query names: every chunk is read.
+    let many: Vec<DagId> = (0..DAGS_PER_QUERY + 10)
+        .map(|n| DagId::new(format!("missing{n}")).unwrap())
+        .chain([id.clone()])
+        .collect();
+    let refs: Vec<&DagId> = many.iter().collect();
+    assert_eq!(db.run_overview_of(&refs).await.unwrap().running(&id), 1);
+    assert_eq!(ids(db.active_dags_of(&refs).await.unwrap()), ["sync"]);
+}

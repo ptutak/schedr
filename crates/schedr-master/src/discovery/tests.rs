@@ -60,6 +60,8 @@ async fn dags(discovery: &Discovery) -> Vec<StoredDag> {
 #[tokio::test]
 async fn a_new_hash_gets_a_parse_job_and_its_upload_defines_the_dags_paused() {
     let mut discovery = discovery().await;
+    let wakes = crate::quiet::Wakes::default();
+    discovery.set_wakes(wakes.clone());
     let job = discovery
         .root_reported("w1", key("h1"), now())
         .await
@@ -81,6 +83,9 @@ async fn a_new_hash_gets_a_parse_job_and_its_upload_defines_the_dags_paused() {
     assert_eq!(stored.len(), 1);
     assert!(stored[0].paused);
     assert_eq!(stored[0].current.as_ref().unwrap().parse_id, parse_id);
+    // The new DAG woken: the scheduler visits it without waiting for the ID check.
+    let woken: Vec<String> = wakes.take().into_keys().map(|d| d.to_string()).collect();
+    assert_eq!(woken, ["a"]);
 }
 
 #[tokio::test]

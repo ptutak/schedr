@@ -29,6 +29,7 @@ use schedr_model::runner::ParsedFile;
 use crate::catalog::{self, Source};
 use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{ParseAssignment, ParseJobs, ParseKey};
+use crate::quiet::{WakeReason, Wakes};
 use crate::validate::validate_files;
 
 #[cfg(test)]
@@ -49,6 +50,8 @@ pub struct ParseUpload {
 #[derive(Debug)]
 pub struct Discovery {
     db: Database,
+    /// Marks waking the DAGs it defines anew.
+    wakes: Wakes,
     master: SchedrVersion,
     jobs: ParseJobs,
     /// What each alive worker last reported for each root.
@@ -84,9 +87,14 @@ impl Discovery {
         self.jobs.set_metrics(metrics);
     }
 
+    /// Wakes the DAGs it defines anew (a new version, or back) through `wakes`.
+    pub fn set_wakes(&mut self, wakes: Wakes) {
+        self.wakes = wakes;
+    }
+
     /// Discovery over a database, checking DAG JSON for a master of version `master`.
     #[must_use]
-    pub const fn new(db: Database, master: SchedrVersion, jobs: ParseJobs) -> Self {
+    pub fn new(db: Database, master: SchedrVersion, jobs: ParseJobs) -> Self {
         Self {
             db,
             master,
@@ -98,6 +106,7 @@ impl Discovery {
             parses: BTreeMap::new(),
             accepted: BTreeMap::new(),
             no_parse: BTreeSet::new(),
+            wakes: Wakes::default(),
         }
     }
 
@@ -321,6 +330,11 @@ impl Discovery {
         let changes = catalog::plan(&sources, &self.db.stored_dags().await?);
         if !changes.is_empty() {
             self.db.apply_dag_changes(&changes, now).await?;
+            for change in &changes {
+                if let DagChange::Define { dag, .. } = change {
+                    self.wakes.wake(&dag.id, WakeReason::NewVersion);
+                }
+            }
         }
         Ok(changes)
     }

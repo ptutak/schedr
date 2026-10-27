@@ -38,12 +38,21 @@ fn every_metric_is_registered_as_documented() {
             decision: "applied".to_owned(),
         })
         .inc();
+    metrics.set_dags(3, 600);
+    metrics.dag_woken("timer");
     let out = text(&metrics);
     assert_eq!(
         scrape_mismatches(&out, Some("schedr"), METRICS),
         Vec::<String>::new(),
         "{out}"
     );
+    for sample in [
+        "schedr_master_dags{state=\"busy\"} 3",
+        "schedr_master_dags{state=\"quiet\"} 600",
+        "schedr_master_dag_wakes_total{reason=\"timer\"} 1",
+    ] {
+        assert!(out.contains(sample), "{sample}\n{out}");
+    }
 }
 
 #[test]

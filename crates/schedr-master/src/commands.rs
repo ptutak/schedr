@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
 use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{CommandLabels, MasterMetrics};
+use crate::quiet::WakeReason;
 use crate::scheduler::{Scheduler, SchedulerError};
 
 /// The most commands a round applies (about 8 ms each in stress runs): a burst (101 triggers
@@ -184,6 +185,13 @@ impl Commander {
             Ok(command) => command,
             Err(reason) => return Ok(Outcome::Rejected(format!("invalid command: {reason}"))),
         };
+        // A command about a DAG wakes it if quiet (unpaused, it may have runs to create).
+        if let Command::TriggerRun { dag_id, .. }
+        | Command::PauseDag { dag_id, .. }
+        | Command::UnpauseDag { dag_id } = command
+        {
+            scheduler.wakes().wake(dag_id, WakeReason::Command);
+        }
         match command {
             Command::TriggerRun {
                 dag_id,

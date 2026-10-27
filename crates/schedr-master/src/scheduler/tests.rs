@@ -277,3 +277,255 @@ async fn a_dag_catching_up_gets_at_most_so_many_runs_a_round() {
         SCHEDULED_PER_ROUND
     );
 }
+
+/// The comparison test's DAGs (PROJECT.md, "Quiet DAGs"): each kind of trigger, some quiet
+/// most of the time.
+fn timeline_dags() -> Vec<Dag> {
+    let cron = |expression: &str, catchup: bool, start: &str| {
+        json!({"kind": "cron", "expression": expression, "timezone": "UTC",
+               "catchup": catchup, "start": start})
+    };
+    let every =
+        |seconds: u64| json!({"kind": "every", "interval_ms": seconds * 1000, "catchup": false});
+    [
+        ("daily", cron("0 3 * * *", false, "2026-10-01T00:00:00Z")),
+        ("every5", every(300)),
+        ("every90", every(90)),
+        ("hourly", cron("0 * * * *", true, "2026-10-26T20:00:00Z")),
+        (
+            "once",
+            json!({"kind": "once", "at": "2026-10-27T02:30:00Z"}),
+        ),
+        ("manual", json!({"kind": "none"})),
+        ("later", cron("*/20 * * * *", false, "2026-10-01T00:00:00Z")),
+    ]
+    .into_iter()
+    .map(|(id, trigger)| {
+        let mut dag = dag(&json!({"trigger": trigger}));
+        dag.id = DagId::new(id).unwrap();
+        dag
+    })
+    .collect()
+}
+
+/// A database holding the timeline's DAGs, every one unpaused but `later`.
+async fn timeline_db() -> Database {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h1",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts("2026-10-27T00:00:00Z"),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let changes: Vec<DagChange> = timeline_dags()
+        .into_iter()
+        .map(|dag| DagChange::Define {
+            dag: Box::new(dag),
+            parse_id: parse_id.clone(),
+            pause: false,
+        })
+        .collect();
+    db.apply_dag_changes(&changes, ts("2026-10-27T00:00:00Z"))
+        .await
+        .unwrap();
+    for dag in timeline_dags().iter().filter(|d| d.id.as_str() != "later") {
+        db.set_paused(&dag.id, false).await.unwrap();
+    }
+    db
+}
+
+/// The IDs of the running runs, in one query.
+async fn running(db: &Database) -> Vec<String> {
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("expected SQLite")
+    };
+    sqlx::query_scalar("SELECT id FROM runs WHERE state = 'running'")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// Three hours of rounds every 20 s through `scheduler`: runs end 30 s after they start
+/// (waking their DAG, as execution does), `manual` is triggered twice and `later` unpaused
+/// (waking it, as the commander does). Every run at the end, without its ID.
+async fn timeline(scheduler: &Scheduler, db: &Database) -> Vec<String> {
+    timeline_marking(scheduler, db, true).await
+}
+
+/// As [`timeline`], the unpause marked only if `mark_unpause` (else a missed mark).
+async fn timeline_marking(scheduler: &Scheduler, db: &Database, mark_unpause: bool) -> Vec<String> {
+    let start = ts("2026-10-27T01:00:00Z");
+    let manual = DagId::new("manual").unwrap();
+    let later = DagId::new("later").unwrap();
+    for step in 0..=540 {
+        let now = start + jiff::SignedDuration::from_secs(step * 20);
+        match step {
+            90 | 285 => {
+                scheduler.trigger(&manual, None, "me", now).await.unwrap();
+            }
+            210 => {
+                db.set_paused(&later, false).await.unwrap();
+                if mark_unpause {
+                    scheduler.wakes().wake(&later, WakeReason::Command);
+                }
+            }
+            _ => {}
+        }
+        scheduler.pass(now).await.unwrap();
+        for run_id in running(db).await {
+            let run = db.run_record(&run_id).await.unwrap().unwrap();
+            let ran_long = run
+                .started_at
+                .is_some_and(|at| now.duration_since(at) >= jiff::SignedDuration::from_secs(30));
+            if ran_long {
+                db.finish_run(&run_id, RunState::Success, now)
+                    .await
+                    .unwrap();
+                scheduler.wakes().wake(&run.dag_id, WakeReason::RunEnded);
+            }
+        }
+    }
+    let mut runs = Vec::new();
+    for dag in timeline_dags() {
+        for run in db.dag_runs(&dag.id, None, 1000).await.unwrap() {
+            runs.push(format!(
+                "{} {} for {} at {} started {:?} ended {:?} {}",
+                run.dag_id,
+                run.kind,
+                run.planned_for,
+                run.triggered_at,
+                run.started_at,
+                run.ended_at,
+                run.state
+            ));
+        }
+    }
+    runs.sort();
+    runs
+}
+
+#[tokio::test]
+async fn quiet_dags_create_the_same_runs_at_the_same_times_as_visiting_every_dag() {
+    let every_round = QuietSettings {
+        enabled: false,
+        ..QuietSettings::default()
+    };
+    let db = timeline_db().await;
+    let full = timeline(
+        &Scheduler::with_quiet(db.clone(), every_round, Wakes::default()),
+        &db,
+    )
+    .await;
+    let db = timeline_db().await;
+    let quiet = Scheduler::with_quiet(db.clone(), QuietSettings::default(), Wakes::default());
+    let metrics = crate::metrics::MasterMetrics::default();
+    quiet.set_metrics(metrics.clone());
+    let split = timeline(&quiet, &db).await;
+    // The quiet path was taken: DAGs turned quiet and were woken by their timers and marks,
+    // and the sweep never found one a mark had missed.
+    let wakes = |reason: &str| {
+        metrics
+            .dag_wakes
+            .get_or_create(&crate::metrics::ReasonLabels {
+                reason: reason.to_owned(),
+            })
+            .get()
+    };
+    assert!(wakes("timer") > 0, "no timer wakes");
+    assert!(wakes("run_ended") + wakes("command") > 0, "no marks");
+    assert_eq!(wakes("sweep"), 0);
+    // Every DAG ran: the timeline exercises each trigger.
+    for dag in timeline_dags() {
+        assert!(
+            full.iter()
+                .any(|run| run.starts_with(&format!("{} ", dag.id))),
+            "{} never ran:\n{full:#?}",
+            dag.id
+        );
+    }
+    assert!(full.len() > 100, "{}", full.len());
+    assert_eq!(split, full);
+}
+
+#[tokio::test]
+async fn a_queued_run_wakes_its_quiet_dag_whatever_stored_it() {
+    let (scheduler, db) = scheduler_with(dag(&json!({"trigger": {"kind": "none"}}))).await;
+    db.set_paused(&sync(), false).await.unwrap();
+    let start = ts("2026-10-27T12:00:00Z");
+    let after = |seconds| start + jiff::SignedDuration::from_secs(seconds);
+    scheduler.pass(start).await.unwrap();
+    scheduler.pass(after(60)).await.unwrap();
+    // Quiet now; a chained or event run (M4) is stored queued without a mark.
+    let active = db.active_dags().await.unwrap().remove(0);
+    let times = RunTimes {
+        planned_for: after(61),
+        since: after(61),
+    };
+    let mut run = new_run(&active, RunKind::Event, times, after(61), "an event");
+    run.state = RunState::Queued;
+    let run_id = db.insert_run(&run).await.unwrap().unwrap();
+    // The next round starts it: the queued run woke its DAG.
+    let pass = scheduler.pass(after(62)).await.unwrap();
+    assert_eq!(pass.started, [run_id]);
+}
+
+#[tokio::test]
+async fn the_sweep_catches_a_missed_mark_within_the_interval() {
+    let every_round = QuietSettings {
+        enabled: false,
+        ..QuietSettings::default()
+    };
+    let db = timeline_db().await;
+    let full = timeline(
+        &Scheduler::with_quiet(db.clone(), every_round, Wakes::default()),
+        &db,
+    )
+    .await;
+    // The same timeline, the unpause's mark missed: only the sweep finds `later`.
+    let db = timeline_db().await;
+    let quiet = Scheduler::with_quiet(db.clone(), QuietSettings::default(), Wakes::default());
+    let metrics = crate::metrics::MasterMetrics::default();
+    quiet.set_metrics(metrics.clone());
+    let missed = timeline_marking(&quiet, &db, false).await;
+    let sweeps = metrics
+        .dag_wakes
+        .get_or_create(&crate::metrics::ReasonLabels {
+            reason: "sweep".to_owned(),
+        })
+        .get();
+    assert!(sweeps >= 1, "the sweep found nothing");
+    // Every other DAG's runs are the same; `later`'s first run comes at most an interval
+    // (and a round) late, for the same fire time, and the rest of its runs are the same.
+    let others = |runs: &[String]| -> Vec<String> {
+        runs.iter()
+            .filter(|r| !r.starts_with("later "))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(others(&missed), others(&full));
+    let later = |runs: &[String]| -> Vec<String> {
+        runs.iter()
+            .filter(|r| r.starts_with("later "))
+            .cloned()
+            .collect()
+    };
+    let (late, on_time) = (later(&missed), later(&full));
+    assert_eq!(late.len(), on_time.len());
+    assert_eq!(late[1..], on_time[1..]);
+    let field = |run: &str, name: &str| -> Timestamp {
+        let rest = run.split(&format!(" {name} ")).nth(1).unwrap();
+        rest.split(' ').next().unwrap().parse().unwrap()
+    };
+    assert_eq!(field(&late[0], "for"), field(&on_time[0], "for"));
+    let delay = field(&late[0], "at").duration_since(field(&on_time[0], "at"));
+    assert!(
+        delay > jiff::SignedDuration::ZERO && delay <= jiff::SignedDuration::from_secs(80),
+        "{delay:?}"
+    );
+}

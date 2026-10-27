@@ -414,12 +414,42 @@ pub struct MasterSection {
     )]
     #[schemars(with = "DurationText")]
     pub read_back_interval: Duration,
+    /// Whether rounds visit only busy DAGs and the quiet ones they wake (a run queued or
+    /// ended, a command, a new version, a fire time coming up), instead of every DAG every
+    /// round. `false` visits every DAG every round.
+    pub quiet_dags: bool,
+    /// A DAG that had a run in progress turns quiet this long after the last one (a DAG found
+    /// idle otherwise is quiet at once), unless a fire time is within `quiet_dag_wake_ahead`:
+    /// rounds then skip it until something wakes it.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub quiet_dag_after: Duration,
+    /// How long before its next fire time a quiet DAG is woken (it is busy from then on).
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub quiet_dag_wake_ahead: Duration,
+    /// Every quiet DAG is visited within this long, spread over the rounds (each visits a
+    /// slice, those visited longest ago), and every DAG's ID and version are checked against
+    /// memory this often: about the longest a missed wake can delay a DAG.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub quiet_dag_full_pass_interval: Duration,
 }
 
 impl Default for MasterSection {
     /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
     /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease; a task set aside for 60 s,
-    /// listening tried again every 30 min, a commit read back for 3 s every 500 ms.
+    /// listening tried again every 30 min, a commit read back for 3 s every 500 ms; quiet DAGs
+    /// on, quiet 60 s after a run, woken 60 s ahead, every DAG visited within 60 s.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -434,6 +464,10 @@ impl Default for MasterSection {
             listen_retry: Duration::from_mins(30),
             read_back_window: Duration::from_secs(3),
             read_back_interval: Duration::from_millis(500),
+            quiet_dags: true,
+            quiet_dag_after: Duration::from_mins(1),
+            quiet_dag_wake_ahead: Duration::from_mins(1),
+            quiet_dag_full_pass_interval: Duration::from_mins(1),
         }
     }
 }

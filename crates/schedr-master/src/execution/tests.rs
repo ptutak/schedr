@@ -157,9 +157,21 @@ async fn a_new_run_gets_its_instances_once() {
 #[tokio::test]
 async fn a_run_of_empty_tasks_finishes_when_prepared() {
     let only_empty = dag(&json!([task("start", "empty", 0)]), &json!([]));
-    let (execution, db, run_id) = with_run(only_empty, RunState::Running).await;
+    let (mut execution, db, run_id) = with_run(only_empty, RunState::Running).await;
+    let wakes = crate::quiet::Wakes::default();
+    execution.set_wakes(wakes.clone());
     execution.prepare_runs(ts(NOW)).await.unwrap();
     assert_eq!(run_state(&db, &run_id).await, RunState::Success);
+    // Its DAG woken, as any finished run's: a queued run may take its place.
+    let woken: Vec<(String, crate::quiet::WakeReason)> = wakes
+        .take()
+        .into_iter()
+        .map(|(dag, reason)| (dag.to_string(), reason))
+        .collect();
+    assert_eq!(
+        woken,
+        [("sync".to_owned(), crate::quiet::WakeReason::RunEnded)]
+    );
 }
 
 #[tokio::test]

@@ -121,6 +121,11 @@ async fn pausing_and_unpausing_change_the_dag_and_are_recorded() {
         (CommandStatus::Applied, None, Some(json!({})))
     );
     assert!(!world.paused().await);
+    // The DAG woken, in case it is quiet: unpaused, it may have runs to create.
+    assert_eq!(
+        world.scheduler.wakes().take().get(&sync()),
+        Some(&crate::quiet::WakeReason::Command)
+    );
     let record = world.db.command(&id).await.unwrap().unwrap();
     assert_eq!(record.status, CommandStatus::Applied);
 

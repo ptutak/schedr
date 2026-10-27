@@ -32,15 +32,26 @@ its Service helps nobody.
 [metrics reference](../_generated/04-reference/04-metrics.md) lists every metric, generated from
 the code. Roughly:
 
-- **master:** round durations (`schedr_master_tick_duration_seconds`), runs, tasks and workers
-  by state, tasks waiting by reason, assignments, rejections, attempts ended, parse jobs,
-  commands and how long they waited for a decision;
+- **master:** round durations (`schedr_master_tick_duration_seconds`), busy and quiet DAGs
+  (`schedr_master_dags{state}`), quiet DAGs woken (`schedr_master_dag_wakes_total{reason}`),
+  runs, tasks and workers by state, tasks waiting by reason, assignments, rejections,
+  attempts ended, parse jobs, commands and how long they waited for a decision;
 - **worker:** slots and slots used, attempts by status, how long a Python task took to start
   (`schedr_worker_task_start_seconds{method,phase}`), watchdog kills, journal records, log
   disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
 - **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
   macOS), and the build version.
+
+`schedr_master_tick_duration_seconds` has 29 buckets, each √2 times the last, from 1 ms to
+about 16 s. A round's p99 one bucket worse is about 1.4 times the previous bucket, so
+[scenario 14](11-stress.md) can tell that from a doubling. `schedr_master_dags` counts DAGs
+that can run by `state`: `busy` (visited every round) or `quiet` (visited when woken).
+`schedr_master_dag_wakes_total` counts quiet DAGs woken, by `reason`: `timer`, `command`,
+`run_queued`, `run_ended`, `new_version`, `sweep`. `sweep` increments only when the sweep or
+the ID check found the DAG with something to do (a run running or queued, or one that round
+created). That is a missed wake, and the counter staying at zero is the healthy case. See
+[Busy and quiet DAGs](04-master.md#busy-and-quiet-dags).
 
 `schedr_worker_task_start_seconds` is one histogram (10 ms to about 40 s). It is how M2.5
 judges the fork server and which libraries to preload: the same series, split by how the

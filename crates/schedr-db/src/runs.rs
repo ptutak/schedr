@@ -12,10 +12,29 @@ use schedr_model::{Dag, DagId, RunKind, RunState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_name, in_tx, on_pool, parse_time, sql};
+use crate::query::{db_time, from_name, in_tx, on_pool, parse_time, sql, sql_text};
 
 #[cfg(test)]
 mod tests;
+
+/// The most DAG IDs one query names (well under both databases' parameter limits).
+const DAGS_PER_QUERY: usize = 500;
+
+/// ` AND <column> IN ($1, …, $count)`, or nothing for no IDs.
+fn among(column: &str, count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let wanted: Vec<String> = (1..=count).map(|n| format!("${n}")).collect();
+    format!(" AND {column} IN ({})", wanted.join(", "))
+}
+
+fn dag_id_of(text: String) -> Result<DagId, DbError> {
+    DagId::new(text).map_err(|e| DbError::InvalidData {
+        what: "dag_id",
+        reason: e.to_string(),
+    })
+}
 
 /// A run to create.
 #[derive(Debug, Clone)]
@@ -233,42 +252,74 @@ impl Database {
     ///
     /// [`DbError`] if a query fails or a stored value doesn't read.
     pub async fn run_overview(&self) -> Result<RunOverview, DbError> {
-        const RUNNING: &str =
-            "SELECT dag_id, COUNT(*) FROM runs WHERE state = 'running' GROUP BY dag_id";
-        const LAST: &str = "SELECT dag_id, {ts<}MAX(planned_for){>ts} FROM runs \
-            WHERE kind = 'scheduled' GROUP BY dag_id";
-        const QUEUED: &str = "SELECT dag_id, id{text}, kind, {ts<}triggered_at{>ts} FROM runs \
-            WHERE state = 'queued' ORDER BY dag_id, triggered_at, id";
+        let mut overview = RunOverview::default();
+        self.overview_into(&mut overview, &[]).await?;
+        Ok(overview)
+    }
+
+    /// As [`Self::run_overview`], for `dags` only (a round visiting some DAGs, see PROJECT.md,
+    /// "Quiet DAGs"): its cost follows them, not every DAG. Nothing for no DAGs.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a query fails or a stored value doesn't read.
+    pub async fn run_overview_of(&self, dags: &[&DagId]) -> Result<RunOverview, DbError> {
+        let mut overview = RunOverview::default();
+        for chunk in dags.chunks(DAGS_PER_QUERY) {
+            self.overview_into(&mut overview, chunk).await?;
+        }
+        Ok(overview)
+    }
+
+    /// Adds the overview of `dags` (every DAG when empty) to `overview`.
+    async fn overview_into(
+        &self,
+        overview: &mut RunOverview,
+        dags: &[&DagId],
+    ) -> Result<(), DbError> {
         type Rows = (
             Vec<(String, i64)>,
             Vec<(String, String)>,
             Vec<(String, String, String, String)>,
         );
+        let among = among("dag_id", dags.len());
+        let running = format!(
+            "SELECT dag_id, COUNT(*) FROM runs WHERE state = 'running'{among} GROUP BY dag_id"
+        );
+        let last = format!(
+            "SELECT dag_id, {{ts<}}MAX(planned_for){{>ts}} FROM runs \
+             WHERE kind = 'scheduled'{among} GROUP BY dag_id"
+        );
+        let queued = format!(
+            "SELECT dag_id, id{{text}}, kind, {{ts<}}triggered_at{{>ts}} FROM runs \
+             WHERE state = 'queued'{among} ORDER BY dag_id, triggered_at, id"
+        );
         // One connection, one time limit, for all three.
         let (running, last, queued): Rows = on_pool!(self, |pool, backend| {
+            let mut running_query = sqlx::query_as(sql_text(backend, &running));
+            let mut last_query = sqlx::query_as(sql_text(backend, &last));
+            let mut queued_query = sqlx::query_as(sql_text(backend, &queued));
+            for dag in dags {
+                running_query = running_query.bind(dag.as_str());
+                last_query = last_query.bind(dag.as_str());
+                queued_query = queued_query.bind(dag.as_str());
+            }
             (
-                sqlx::query_as(sql(backend, RUNNING))
-                    .fetch_all(&mut *pool)
-                    .await?,
-                sqlx::query_as(sql(backend, LAST))
-                    .fetch_all(&mut *pool)
-                    .await?,
-                sqlx::query_as(sql(backend, QUEUED))
-                    .fetch_all(&mut *pool)
-                    .await?,
+                running_query.fetch_all(&mut *pool).await?,
+                last_query.fetch_all(&mut *pool).await?,
+                queued_query.fetch_all(&mut *pool).await?,
             )
         });
-        let mut overview = RunOverview {
-            running: running
-                .into_iter()
-                .map(|(dag, count)| (dag, u32::try_from(count).unwrap_or(u32::MAX)))
-                .collect(),
-            last_scheduled: last
-                .into_iter()
-                .map(|(dag, at)| Ok((dag, parse_time("runs.planned_for", &at)?)))
-                .collect::<Result<_, DbError>>()?,
-            queued: BTreeMap::new(),
-        };
+        for (dag, count) in running {
+            overview
+                .running
+                .insert(dag, u32::try_from(count).unwrap_or(u32::MAX));
+        }
+        for (dag, at) in last {
+            overview
+                .last_scheduled
+                .insert(dag, parse_time("runs.planned_for", &at)?);
+        }
         for (dag, id, kind, triggered_at) in queued {
             overview.queued.entry(dag).or_default().push(QueuedRun {
                 id,
@@ -276,7 +327,7 @@ impl Database {
                 triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
             });
         }
-        Ok(overview)
+        Ok(())
     }
 
     /// The DAG's runs not finished (`queued` or `running`), oldest first.
@@ -321,13 +372,82 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn active_dags(&self) -> Result<Vec<ActiveDag>, DbError> {
-        const ACTIVE: &str = "SELECT d.paused, {ts<}d.first_seen_at{>ts}, d.current_version_id{text} \
-            FROM dags d WHERE d.current_version_id IS NOT NULL \
-            AND d.removed_at IS NULL AND d.conflict IS NULL ORDER BY d.dag_id";
-        let rows: Vec<(bool, String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ACTIVE)).fetch_all(pool).await?
+        let mut active = Vec::new();
+        self.active_into(&mut active, &[]).await?;
+        Ok(active)
+    }
+
+    /// The DAGs with queued runs (from any source: manual, chained, event, backfill), by the
+    /// partial index of unfinished runs: what wakes a quiet DAG whatever stored the run.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored DAG ID doesn't read.
+    pub async fn dags_with_queued_runs(&self) -> Result<Vec<DagId>, DbError> {
+        const QUEUED: &str = "SELECT DISTINCT dag_id FROM runs WHERE state = 'queued'";
+        let rows: Vec<String> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, QUEUED))
+                .fetch_all(pool)
+                .await?
         });
-        let mut active = Vec::with_capacity(rows.len());
+        rows.into_iter().map(dag_id_of).collect()
+    }
+
+    /// The ID and current version of every DAG the scheduler looks at (as
+    /// [`Self::active_dags`], without their definitions): one small query, for the quiet DAGs'
+    /// check against memory.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored DAG ID doesn't read.
+    pub async fn active_dag_versions(&self) -> Result<Vec<(DagId, String)>, DbError> {
+        const VERSIONS: &str = "SELECT dag_id, current_version_id{text} FROM dags \
+            WHERE current_version_id IS NOT NULL AND removed_at IS NULL AND conflict IS NULL \
+            ORDER BY dag_id";
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, VERSIONS))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(dag, version)| Ok((dag_id_of(dag)?, version)))
+            .collect()
+    }
+
+    /// As [`Self::active_dags`], for `dags` only: those of them that can run.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn active_dags_of(&self, dags: &[&DagId]) -> Result<Vec<ActiveDag>, DbError> {
+        let mut active = Vec::new();
+        for chunk in dags.chunks(DAGS_PER_QUERY) {
+            self.active_into(&mut active, chunk).await?;
+        }
+        active.sort_by(|a, b| a.dag.id.cmp(&b.dag.id));
+        Ok(active)
+    }
+
+    /// Adds the active DAGs among `dags` (every DAG when empty) to `active`.
+    async fn active_into(
+        &self,
+        active: &mut Vec<ActiveDag>,
+        dags: &[&DagId],
+    ) -> Result<(), DbError> {
+        let text = format!(
+            "SELECT d.paused, {{ts<}}d.first_seen_at{{>ts}}, d.current_version_id{{text}} \
+             FROM dags d WHERE d.current_version_id IS NOT NULL \
+             AND d.removed_at IS NULL AND d.conflict IS NULL{} ORDER BY d.dag_id",
+            among("d.dag_id", dags.len())
+        );
+        let rows: Vec<(bool, String, String)> = on_pool!(self, |pool, backend| {
+            let mut query = sqlx::query_as(sql_text(backend, &text));
+            for dag in dags {
+                query = query.bind(dag.as_str());
+            }
+            query.fetch_all(pool).await?
+        });
+        active.reserve(rows.len());
         for (paused, first_seen, version_id) in rows {
             // The definition from the cache: parsed once per version, not every round (B13).
             let dag = self.dag_version(&version_id).await?;
@@ -338,6 +458,6 @@ impl Database {
                 dag,
             });
         }
-        Ok(active)
+        Ok(())
     }
 }

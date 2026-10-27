@@ -70,6 +70,12 @@ pub fn master_settings(config: &Config) -> Settings {
             interval: config.master.read_back_interval,
         },
         listen_retry: config.master.listen_retry,
+        quiet: schedr_master::quiet::QuietSettings {
+            enabled: config.master.quiet_dags,
+            after: config.master.quiet_dag_after,
+            wake_ahead: config.master.quiet_dag_wake_ahead,
+            full_pass_interval: config.master.quiet_dag_full_pass_interval,
+        },
     }
 }
 

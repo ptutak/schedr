@@ -624,8 +624,11 @@ fn standalone_ends_when_its_master_is_taken_over() {
 #[test]
 fn without_migrate_a_database_not_migrated_is_refused() {
     let dir = TempDir::new().unwrap();
+    // Port 0, as every standalone test: the defaults (8080, ...) may be taken on the machine
+    // running the tests (B23).
     let config = format!(
-        "[interpreters]\npython = \"{}\"\n\n[worker]\ndata_dir = \"{}\"\n",
+        "[interpreters]\npython = \"{}\"\n\n[worker]\ndata_dir = \"{}\"\nlog_port = 0\n\n\
+         [master]\ngrpc_port = 0\n\n[webserver]\nport = 0\n\n[ops]\nport = 0\n",
         python(),
         dir.path().join("data").display()
     );

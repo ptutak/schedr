@@ -281,6 +281,14 @@ async fn runs_are_created_counted_queued_and_read() {
         Some(ts("2026-10-21T01:00:00Z"))
     );
     assert_eq!(overview.queued(&sync()), waiting.as_slice());
+    // The same for one DAG named, its ID bound as a parameter.
+    let other = DagId::new("other").unwrap();
+    assert_eq!(
+        db.run_overview_of(&[&sync(), &other]).await.unwrap(),
+        overview
+    );
+    assert_eq!(db.active_dags_of(&[&sync()]).await.unwrap().len(), 1);
+    assert_eq!(db.active_dags_of(&[&other]).await.unwrap(), []);
     db.start_run(&queued, ts(NOW)).await.unwrap();
     assert_eq!(db.running_count(&sync()).await.unwrap(), 2);
 

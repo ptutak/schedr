@@ -38,6 +38,7 @@ use schedr_proto::pb;
 use crate::core::Arrivals;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{MasterMetrics, ReasonLabels};
+use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
 
 #[cfg(test)]
@@ -257,6 +258,11 @@ impl Dispatcher {
     pub fn set_metrics(&mut self, metrics: MasterMetrics) {
         self.execution.set_metrics(metrics.clone());
         self.metrics = metrics;
+    }
+
+    /// Wakes the DAGs of the runs it finishes through `wakes`.
+    pub fn set_wakes(&mut self, wakes: Wakes) {
+        self.execution.set_wakes(wakes);
     }
 
     /// A copy of what a worker's message changes in memory (worker slots, rejections, code

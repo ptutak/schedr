@@ -921,7 +921,7 @@ with Dag("{id}"):
 
 /// Scenario 14: Quiet DAGs: a few busy DAGs, measured alone and then beside many daily DAGs
 /// that don't fire meanwhile (PROJECT.md, "Quiet DAGs"). The rounds' times beside the quiet
-/// ones, over their times alone, is what M2.5.2 brings close to 1.
+/// ones, over their times alone: 7.1 before M2.5.2, at most 2 since.
 #[test]
 fn stress_14_quiet_dags() {
     let mut stress = Stress::new(Some(postgres_database()));
@@ -960,6 +960,16 @@ fn stress_14_quiet_dags() {
     let parsed = stress.wait_for_dags(busy.len() + quiet.len(), 15 * MINUTE);
     report.set("parse_quiet_s", parsed.as_secs_f64());
     unpause(&stress, &quiet);
+    // The steady state: every one of them quiet (idle, each turns quiet when next visited).
+    let unpaused = std::time::Instant::now();
+    let want = f64::from(u32::try_from(quiet.len()).unwrap());
+    stress
+        .cluster
+        .wait_for("the quiet DAGs quiet", 3 * MINUTE, || {
+            let (_, body) = stress.cluster.ops_get("master", "/metrics");
+            Rounds::scraped(&body).dags.1 >= want
+        });
+    report.set("quiet_after_unpause_s", unpaused.elapsed().as_secs_f64());
     let beside = rounds_over(&stress, &mut report, "beside_quiet", window, busy.len());
 
     report.set("quiet_dags", f64::from(u32::try_from(quiet.len()).unwrap()));
@@ -969,7 +979,19 @@ fn stress_14_quiet_dags() {
     report.set("round_mean_beside_quiet_ms", beside.mean() * 1000.0);
     report.set("round_p99_alone_s", alone.quantile(0.99));
     report.set("round_p99_beside_quiet_s", beside.quantile(0.99));
-    report.set("round_mean_ratio", beside.mean() / alone.mean().max(1e-6));
+    // Quiet DAGs (M2.5.2): the rounds beside them cost about what they cost alone (7.1 times
+    // as much before), the slowest too: the p99s are bucket edges √2 apart, so 1.5 allows one
+    // bucket worse (noise at an edge), not two (the full pass's 2x).
+    report.at_most(
+        "round_mean_ratio",
+        beside.mean() / alone.mean().max(1e-6),
+        2.0,
+    );
+    report.at_most(
+        "round_p99_ratio",
+        beside.quantile(0.99) / alone.quantile(0.99).max(1e-6),
+        1.5,
+    );
     // No quiet DAG fired.
     let fired = stress
         .db
@@ -1036,6 +1058,10 @@ fn rounds_over(
     let before = scrape();
     std::thread::sleep(window);
     let after = scrape();
+    for (at, scraped) in [("start", &before), ("end", &after)] {
+        report.set(&format!("{name}_busy_dags_at_{at}"), scraped.dags.0);
+        report.set(&format!("{name}_quiet_dags_at_{at}"), scraped.dags.1);
+    }
     let rounds = after.since(&before);
     if rounds.count < 1.0 || rounds.buckets.is_empty() {
         report.broken(vec![format!(
@@ -1061,6 +1087,8 @@ struct Rounds {
     count: f64,
     sum: f64,
     buckets: Vec<(f64, f64)>,
+    /// The busy and quiet DAGs at the scrape (`schedr_master_dags`).
+    dags: (f64, f64),
 }
 
 impl Rounds {
@@ -1087,10 +1115,18 @@ impl Rounds {
                 Some((le, count.trim().parse().ok()?))
             })
             .collect();
+        let dags = |state: &str| {
+            let prefix = format!("schedr_master_dags{{state=\"{state}\"}} ");
+            metrics
+                .lines()
+                .find_map(|line| line.strip_prefix(&prefix)?.trim().parse().ok())
+                .unwrap_or(0.0)
+        };
         Self {
             count: value("_count"),
             sum: value("_sum"),
             buckets,
+            dags: (dags("busy"), dags("quiet")),
         }
     }
 
@@ -1104,6 +1140,7 @@ impl Rounds {
                 .zip(&earlier.buckets)
                 .map(|(&(le, now), &(_, then))| (le, now - then))
                 .collect(),
+            dags: self.dags,
         }
     }
 

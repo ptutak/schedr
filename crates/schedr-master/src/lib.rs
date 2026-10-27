@@ -15,6 +15,7 @@ pub mod metrics;
 pub mod parse_jobs;
 pub mod planning;
 pub mod progress;
+pub mod quiet;
 pub mod scheduler;
 pub mod service;
 pub mod validate;

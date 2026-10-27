@@ -489,8 +489,9 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     futures. A DAG turns quiet or busy by measurement, with hysteresis; every DAG starts busy
     after a restart. Changing is safe: everything happens in the round, under the master's
     lock, and visiting a DAG twice creates nothing twice (a scheduled run is unique per
-    `planned_for`). A full pass at an interval also visits the quiet DAGs: a missed wake costs
-    at most that interval, never a run that doesn't start. A comparison test runs one
+    `planned_for`). A safety net also visits the quiet DAGs within an interval (built as a
+    sweep, below): a missed wake costs at most about that interval, never a run that doesn't
+    start. A comparison test runs one
     simulated timeline through the full round and the busy / quiet split and requires the
     same runs. **Settings** (decided 2026-10-27, all configurable, the user's):
     `[master] quiet_dag_after` (60 s: no run in progress this long, and no fire time due
@@ -500,7 +501,59 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     them), or it would still grow with the quiet ones. Not chosen: thresholds as constants; a
     `queues_` prefix (mixes with task queues, `@task(queue=...)`); a `scheduling_` prefix;
     renaming task queues (public API, Airflow's word). **Stress scenario 14** (about 1,000
-    daily DAGs and a few busy ones) measures it and tunes the classification. Not chosen: reworking the round into an
+    daily DAGs and a few busy ones) measures it and tunes the classification.
+    **Built (M2.5.2, decided 2026-10-27):**
+    - **A switch:** `[master] quiet_dags = true` (on by default); `false` visits every DAG
+      every round, as before. Not chosen: no switch (no way back short of a release).
+    - **Wake marks, in memory** (a shared set, the first reason in a round kept): a run
+      **stored queued**, found by the data rather than by its code path: each round reads the
+      DAGs with queued runs (`SELECT DISTINCT dag_id … WHERE state = 'queued'`, the partial
+      index of unfinished runs), so chained, event and backfill runs (M4) need nothing more
+      (a side note found the first build marked only the manual trigger's path); a **run ended** (`Execution::finish`, every run's end), a **command** about a DAG
+      (trigger, pause, unpause), a **new version** or a DAG back (discovery's refresh). Run-level
+      commands need none: a cancelled or retried run wakes its DAG when it ends.
+    - **The safety net is a sweep, not a full pass** (the user's choice, after a side note that
+      one full pass a minute costs today's round once a minute: over 1 % of rounds, so the p99
+      wouldn't move, and the lock held that long): each round also visits a slice of the
+      quiet DAGs, those visited longest ago (ties by ID), its size the share of the quiet
+      DAGs that the time since the last round is of `quiet_dag_full_pass_interval`, counted
+      exactly in DAG-milliseconds with the remainder carried (600 DAGs, 1 s rounds: 10 a
+      round; one DAG: once a minute; a burst of rounds sweeps the same per minute). The list
+      is rebuilt every round from memory: a DAG joining it was just visited, so it sorts
+      behind every DAG waiting, and none waits more than about one interval however many
+      join (a test adds 4 a second, 120 to 600). Plus, once per interval, an **ID check**: one
+      query of every active DAG's ID and version, without definitions or runs; a DAG memory
+      doesn't know, or of another version, is visited, and a gone one forgotten. The first
+      round of a leadership term still visits every DAG (memory is empty). Not chosen: one
+      full pass per interval (the p99 stays); a rare full pass (a missed wake costs longer).
+    - **Busy or quiet:** a visit is *active* when a run is running or queued, or the round
+      created one. A DAG seen active is busy until `quiet_dag_after` after its last active
+      visit; then quiet unless a fire time is within `quiet_dag_wake_ahead` (a paused DAG:
+      quiet without a timer). Its timer is its next fire time (from its start, within its
+      end) less `quiet_dag_wake_ahead`. **A visit finding a DAG idle, with no fire time near,
+      makes it quiet at once, whatever woke it, a DAG new to memory included** (decided
+      2026-10-27, the user's, after scenario 14 caught 600 woken DAGs busy for a minute): a
+      master's start, a deploy changing every DAG or a mass unpause costs one round visiting
+      them, not a minute of such rounds. Not chosen: busy for `quiet_dag_after` after any
+      wake (the first design's "every DAG starts busy after a restart").
+    - **Metrics:** `schedr_master_dags{state="busy"|"quiet"}` and
+      `schedr_master_dag_wakes_total{reason}` (`timer`, `command`, `run_queued`, `run_ended`,
+      `new_version`, `sweep`); `sweep` counts only a quiet DAG the sweep or the ID check found
+      with something to do: a missed mark, a bug to log.
+    - **A round reads only the DAGs it visits:** `Database::active_dags_of` and
+      `run_overview_of` (500 IDs a query), `active_dag_versions` for the check.
+    - **The comparison test:** three simulated hours of rounds every 20 s, seven DAGs (daily,
+      every 5 min, every 90 s, hourly with catch-up, `Once`, manual only, unpaused midway),
+      runs ending after 30 s, through both paths: the same runs, with the same times. It
+      also requires timer and mark wakes and no `sweep` wake; dropping the unpause's mark
+      fails it.
+    - **Scenario 14's floors:** the mean round's ratio at most 2.0 (7.1 before; 1.25 with
+      quiet DAGs on the quick profile), the p99's at most 1.5. For the latter
+      `schedr_master_tick_duration_seconds`'s buckets are √2 apart (29, 1 ms to about 16 s)
+      instead of 2x (15): one bucket worse passes (noise at an edge), two (the 2x a full pass
+      gave) fail (the user's choice after a side note: with 2x buckets no floor could guard the
+      p99, the reason the sweep was chosen). Not chosen: reporting it only; the master logging
+      each round for the scenario to read. Not chosen: reworking the round into an
     event-driven one (the user's preference: a second path beside the proven one, switched
     by measurement); two separate engines (the per-DAG logic twice, drifting apart). It
     doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the

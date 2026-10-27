@@ -24,6 +24,7 @@ use crate::dispatch::{
 };
 use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey};
+use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
 #[cfg(test)]
@@ -48,6 +49,8 @@ pub struct Settings {
     pub read_back: crate::dispatch::ReadBack,
     /// How often to try listening for commands again after it failed to start.
     pub listen_retry: Duration,
+    /// Which DAGs a round visits (`[master] quiet_dag*`).
+    pub quiet: QuietSettings,
 }
 
 impl Default for Settings {
@@ -63,6 +66,7 @@ impl Default for Settings {
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
+            quiet: QuietSettings::default(),
         }
     }
 }
@@ -190,17 +194,23 @@ impl MasterCore {
     #[must_use]
     pub fn new(db: Database, settings: Settings) -> Self {
         let arrivals = Arrivals::default();
+        // What changes runs or DAGs marks them, so the scheduler wakes them if quiet.
+        let wakes = Wakes::default();
+        let mut discovery = Discovery::new(
+            db.clone(),
+            SchedrVersion::current(),
+            ParseJobs::new(settings.parse_job_timeout),
+        );
+        discovery.set_wakes(wakes.clone());
+        let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
+            .with_code_wait(settings.code_wait)
+            .with_set_aside(settings.set_aside, settings.read_back)
+            .with_arrivals(arrivals.clone());
+        dispatcher.set_wakes(wakes.clone());
         Self {
-            discovery: Discovery::new(
-                db.clone(),
-                SchedrVersion::current(),
-                ParseJobs::new(settings.parse_job_timeout),
-            ),
-            dispatcher: Dispatcher::new(db.clone(), settings.cancel_grace)
-                .with_code_wait(settings.code_wait)
-                .with_set_aside(settings.set_aside, settings.read_back)
-                .with_arrivals(arrivals.clone()),
-            scheduler: Scheduler::new(db.clone()),
+            discovery,
+            dispatcher,
+            scheduler: Scheduler::with_quiet(db.clone(), settings.quiet, wakes),
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),
             arrivals,
@@ -218,6 +228,7 @@ impl MasterCore {
         self.dispatcher.set_metrics(metrics.clone());
         self.discovery.set_metrics(metrics.clone());
         self.commander.set_metrics(metrics.clone());
+        self.scheduler.set_metrics(metrics.clone());
         self.metrics = metrics;
         self
     }

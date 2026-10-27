@@ -208,6 +208,10 @@ fn master_webserver_and_worker_defaults() {
             listen_retry: Duration::from_mins(30),
             read_back_window: Duration::from_secs(3),
             read_back_interval: Duration::from_millis(500),
+            quiet_dags: true,
+            quiet_dag_after: Duration::from_mins(1),
+            quiet_dag_wake_ahead: Duration::from_mins(1),
+            quiet_dag_full_pass_interval: Duration::from_mins(1),
         }
     );
     let tuned = parse(
@@ -227,6 +231,26 @@ fn master_webserver_and_worker_defaults() {
             Duration::from_hours(1),
             Duration::from_secs(5),
             Duration::from_millis(250)
+        )
+    );
+    let quiet = parse(
+        "[master]\nquiet_dags = false\nquiet_dag_after = \"5m\"\nquiet_dag_wake_ahead = \"2m\"\n\
+         quiet_dag_full_pass_interval = \"30s\"\n",
+    )
+    .unwrap()
+    .master;
+    assert_eq!(
+        (
+            quiet.quiet_dags,
+            quiet.quiet_dag_after,
+            quiet.quiet_dag_wake_ahead,
+            quiet.quiet_dag_full_pass_interval
+        ),
+        (
+            false,
+            Duration::from_mins(5),
+            Duration::from_mins(2),
+            Duration::from_secs(30)
         )
     );
     assert_eq!(config.webserver.port, 8080);

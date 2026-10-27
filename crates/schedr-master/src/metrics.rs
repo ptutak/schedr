@@ -118,6 +118,21 @@ const WORKERS: MetricDoc = MetricDoc {
     help: "Workers in the registry, by state",
 };
 
+const DAGS: MetricDoc = MetricDoc {
+    name: "master_dags",
+    kind: MetricKind::Gauge,
+    labels: &["state"],
+    help: "DAGs that can run, by how rounds treat them: busy (visited every round) or quiet \
+        (visited when woken)",
+};
+const DAG_WAKES: MetricDoc = MetricDoc {
+    name: "master_dag_wakes",
+    kind: MetricKind::Counter,
+    labels: &["reason"],
+    help: "Quiet DAGs woken, by reason; sweep counts only a DAG the sweep or the ID check found with \
+        something to do (a missed wake)",
+};
+
 /// The master's metrics, as registered (under `schedr_`).
 pub const METRICS: &[MetricDoc] = &[
     TICK_DURATION,
@@ -135,6 +150,8 @@ pub const METRICS: &[MetricDoc] = &[
     COMMAND_LATENCY,
     WORKERS,
     LEADING,
+    DAGS,
+    DAG_WAKES,
 ];
 
 /// A state (of runs, tasks or workers) and, for runs, their kind.
@@ -218,6 +235,10 @@ pub struct MasterMetrics {
     pub workers: Family<StateLabels, Gauge>,
     /// 1 while this master leads (holds the lease), 0 while it waits or is paused.
     pub leading: Gauge,
+    /// DAGs that can run, by `busy` / `quiet`.
+    pub dags: Family<StateLabels, Gauge>,
+    /// Quiet DAGs woken, by reason.
+    pub dag_wakes: Family<ReasonLabels, Counter>,
     /// The label sets the gauges have had: one that is gone reads 0 rather than vanishing.
     seen: Arc<Mutex<Seen>>,
 }
@@ -233,8 +254,9 @@ struct Seen {
 impl Default for MasterMetrics {
     fn default() -> Self {
         Self {
-            // 1 ms to about 16 s.
-            tick_duration: Histogram::new(exponential_buckets(0.001, 2.0, 15)),
+            // 1 ms to about 16 s, each bucket √2 times the last: fine enough for scenario 14
+            // to tell a round's p99 one step worse from two (M2.5.2).
+            tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
             runs: Family::default(),
             runs_finished: Family::default(),
             tasks: Family::default(),
@@ -251,6 +273,8 @@ impl Default for MasterMetrics {
             command_latency: Histogram::new(exponential_buckets(0.01, 2.0, 14)),
             workers: Family::default(),
             leading: Gauge::default(),
+            dags: Family::default(),
+            dag_wakes: Family::default(),
             seen: Arc::default(),
         }
     }
@@ -308,6 +332,28 @@ impl MasterMetrics {
         );
         r.register(WORKERS.name, WORKERS.help, self.workers.clone());
         r.register(LEADING.name, LEADING.help, self.leading.clone());
+        r.register(DAGS.name, DAGS.help, self.dags.clone());
+        r.register(DAG_WAKES.name, DAG_WAKES.help, self.dag_wakes.clone());
+    }
+
+    /// Sets the busy and quiet DAGs' counts.
+    pub fn set_dags(&self, busy: usize, quiet: usize) {
+        for (state, count) in [("busy", busy), ("quiet", quiet)] {
+            self.dags
+                .get_or_create(&StateLabels {
+                    state: state.to_owned(),
+                })
+                .set(i64::try_from(count).unwrap_or(i64::MAX));
+        }
+    }
+
+    /// Counts a quiet DAG woken for `reason`.
+    pub fn dag_woken(&self, reason: &str) {
+        self.dag_wakes
+            .get_or_create(&ReasonLabels {
+                reason: reason.to_owned(),
+            })
+            .inc();
     }
 
     /// Sets the gauges taken from the database.

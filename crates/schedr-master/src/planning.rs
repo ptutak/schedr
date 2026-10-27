@@ -69,6 +69,19 @@ impl Plan<'_> {
         self.dag.trigger.start().unwrap_or(self.first_seen)
     }
 
+    /// The DAG's next fire time after `now` (from its start, if that is later), within its
+    /// end; `None` when it has no more.
+    #[must_use]
+    pub fn next_fire_after(&self, now: Timestamp) -> Option<Timestamp> {
+        let start = self.effective_start();
+        let next = if start > now {
+            self.fire_times.next_at_or_after(start)
+        } else {
+            self.fire_times.next_after(now)
+        };
+        next.filter(|t| self.dag.trigger.end().is_none_or(|end| *t <= end))
+    }
+
     /// The window of a run on a fire time: one schedule period.
     #[must_use]
     pub fn fire_time_since(&self, planned_for: Timestamp) -> Timestamp {

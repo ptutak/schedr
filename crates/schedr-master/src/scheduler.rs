@@ -1,10 +1,16 @@
 //! The scheduler pass: new scheduled runs, queued runs started, and manual runs.
 //!
-//! Each pass looks at every DAG that can run (not removed, not in conflict, with a version):
-//! an unpaused DAG gets runs for its due fire times ([`Plan::scheduled_runs`]), then queued
+//! Each pass looks at the DAGs that can run (not removed, not in conflict, with a version) that
+//! it visits: an unpaused DAG gets runs for its due fire times ([`Plan::scheduled_runs`]), then queued
 //! runs take the places left ([`runs_to_start`]). Pausing stops only the first part. Runs are
 //! stored before anything else happens to them, and a scheduled run is unique per
 //! `planned_for`, so a pass repeated after a crash creates nothing twice.
+//!
+//! Which DAGs a pass looks at is [`QuietDags`]'s choice: every DAG, or the busy ones and the
+//! quiet ones woken (see PROJECT.md, "Quiet DAGs").
+
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 use schedr_db::runs::{ActiveDag, NewRun, QueuedRun};
@@ -12,7 +18,9 @@ use schedr_db::{Database, DbError};
 use schedr_model::{DagId, RunKind, RunState};
 
 use crate::fire_times::{FireTimes, FireTimesError};
+use crate::metrics::MasterMetrics;
 use crate::planning::{ManualRunError, Plan, RunTimes, manual_planned_for, runs_to_start};
+use crate::quiet::{QuietDags, QuietSettings, Round, Visit, Visited, WakeReason, Wakes};
 
 /// The most scheduled runs a round creates for one DAG: a DAG catching up after a long pause
 /// goes over a few rounds, the earliest first (B18).
@@ -70,29 +78,99 @@ pub struct Pass {
     pub skipped: Vec<SchedulerError>,
 }
 
-/// The scheduler over a database.
+/// The scheduler over a database (cheap to clone; clones share which DAGs are quiet).
 #[derive(Debug, Clone)]
 pub struct Scheduler {
     db: Database,
+    quiet: Arc<Mutex<QuietDags>>,
+    wakes: Wakes,
 }
 
 impl Scheduler {
-    /// A scheduler storing runs in `db`.
+    /// A scheduler storing runs in `db`, with the default quiet DAG settings.
     #[must_use]
-    pub const fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database) -> Self {
+        Self::with_quiet(db, QuietSettings::default(), Wakes::default())
     }
 
-    /// One pass at `now` over every DAG that can run.
+    /// A scheduler storing runs in `db`, skipping quiet DAGs as `settings` say, woken by
+    /// `wakes` (shared with what changes runs).
+    #[must_use]
+    pub fn with_quiet(db: Database, settings: QuietSettings, wakes: Wakes) -> Self {
+        Self {
+            db,
+            quiet: Arc::new(Mutex::new(QuietDags::new(settings, wakes.clone()))),
+            wakes,
+        }
+    }
+
+    /// Counts busy and quiet DAGs, and wakes, in `metrics`.
+    pub fn set_metrics(&self, metrics: MasterMetrics) {
+        self.quiet().set_metrics(metrics);
+    }
+
+    /// The marks that wake quiet DAGs.
+    #[must_use]
+    pub const fn wakes(&self) -> &Wakes {
+        &self.wakes
+    }
+
+    fn quiet(&self) -> MutexGuard<'_, QuietDags> {
+        self.quiet.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// One pass at `now` over the DAGs that can run: every one, or the busy ones and the
+    /// quiet ones woken.
     ///
     /// # Errors
     ///
     /// [`SchedulerError::Db`] if the database fails (the pass stops; what was stored stays).
     pub async fn pass(&self, now: Timestamp) -> Result<Pass, SchedulerError> {
+        // Any queued run wakes its DAG, whatever stored it (one small query by the index of
+        // unfinished runs): no path that queues a run needs to remember a mark.
+        if self.quiet().enabled() {
+            for dag in self.db.dags_with_queued_runs().await? {
+                self.wakes.wake(&dag, WakeReason::RunQueued);
+            }
+        }
+        let round = self.quiet().round(now);
+        let result = self.visit(round, now).await;
+        if result.is_err() {
+            // Nothing the round would have changed is kept: the next one retries it.
+            self.quiet().round_failed();
+        }
+        result
+    }
+
+    /// The round's work: the DAGs `round` names visited at `now`.
+    async fn visit(&self, round: Round, now: Timestamp) -> Result<Pass, SchedulerError> {
         let mut pass = Pass::default();
-        // Every DAG's runs at once: a round costs a few queries, not three per DAG (B12).
-        let overview = self.db.run_overview().await?;
-        for active in self.db.active_dags().await? {
+        let visit = match round.visit {
+            Visit::Some(mut dags) if round.check => {
+                // Every DAG's ID and version against memory: one missed by every mark too.
+                let versions = self.db.active_dag_versions().await?;
+                dags.extend(self.quiet().checked(&versions));
+                dags.sort();
+                dags.dedup();
+                Visit::Some(dags)
+            }
+            visit => visit,
+        };
+        // The DAGs' runs at once: a round costs a few queries, not three per DAG (B12), and
+        // reads only the DAGs it visits.
+        let (overview, active_dags) = match &visit {
+            Visit::All => (self.db.run_overview().await?, self.db.active_dags().await?),
+            Visit::Some(dags) => {
+                let dags: Vec<&DagId> = dags.iter().collect();
+                (
+                    self.db.run_overview_of(&dags).await?,
+                    self.db.active_dags_of(&dags).await?,
+                )
+            }
+        };
+        let mut seen = HashSet::with_capacity(active_dags.len());
+        for active in active_dags {
+            seen.insert(active.dag.id.clone());
             let fire_times = match FireTimes::new(&active.dag.trigger) {
                 Ok(fire_times) => fire_times,
                 Err(error) => {
@@ -109,6 +187,8 @@ impl Scheduler {
                 first_seen: active.first_seen,
             };
             let mut running = overview.running(&active.dag.id);
+            let queued = overview.queued(&active.dag.id);
+            let mut new_runs = 0;
             if !active.paused {
                 let last = overview.last_scheduled(&active.dag.id);
                 // At most so many a DAG a round: a long catch-up goes over a few (B18).
@@ -120,16 +200,23 @@ impl Scheduler {
                     let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER);
                     if let Some(run_id) = self.db.insert_run(&new).await? {
                         running += 1;
+                        new_runs += 1;
                         pass.created
                             .push(created(&active, run_id, RunKind::Scheduled, times));
                     }
                 }
             }
-            pass.started.extend(
-                self.start_queued(overview.queued(&active.dag.id), &plan, running, now)
-                    .await?,
-            );
+            pass.started
+                .extend(self.start_queued(queued, &plan, running, now).await?);
+            let found = Visited {
+                version: &active.version_id,
+                active: running > 0 || new_runs > 0 || !queued.is_empty(),
+                paused: active.paused,
+                next_fire: plan.next_fire_after(now),
+            };
+            self.quiet().visited(&active.dag.id, found, now);
         }
+        self.quiet().round_done(&visit, &seen);
         Ok(pass)
     }
 
@@ -189,6 +276,7 @@ impl Scheduler {
         let times = plan.manual_times(requested, now, nearest)?;
         let mut new = new_run(&active, RunKind::Manual, times, now, user);
         new.state = RunState::Queued;
+        self.wakes.wake(dag_id, WakeReason::RunQueued);
         // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
         // run with its given ID is there already, and then that one is it.
         let run_id = run_id.map_or_else(|| uuid::Uuid::now_v7().to_string(), str::to_owned);

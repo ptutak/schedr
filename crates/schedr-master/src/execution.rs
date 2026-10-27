@@ -13,6 +13,7 @@ use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState};
 
 use crate::metrics::MasterMetrics;
 use crate::progress::{AfterAttempt, RunProgress, after_attempt};
+use crate::quiet::{WakeReason, Wakes};
 
 /// The most task instances a round creates for runs that just started (whole runs only, at
 /// least one): many runs starting at once go over a few rounds (B18).
@@ -108,6 +109,7 @@ pub enum TaskRetry {
 pub struct Execution {
     db: Database,
     metrics: MasterMetrics,
+    wakes: Wakes,
 }
 
 impl Execution {
@@ -117,7 +119,13 @@ impl Execution {
         Self {
             db,
             metrics: MasterMetrics::default(),
+            wakes: Wakes::default(),
         }
+    }
+
+    /// Wakes a finished run's DAG through `wakes` (a queued run may take its place).
+    pub fn set_wakes(&mut self, wakes: Wakes) {
+        self.wakes = wakes;
     }
 
     /// Counts finished runs in `metrics`.
@@ -135,6 +143,7 @@ impl Execution {
     ) -> Result<(), ExecutionError> {
         self.db.finish_run(run_id, result, now).await?;
         self.metrics.run_finished(dag.as_str(), &result);
+        self.wakes.wake(dag, WakeReason::RunEnded);
         Ok(())
     }
 

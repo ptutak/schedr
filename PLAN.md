@@ -214,10 +214,19 @@ and updates the guide.
 | Step | Contents | Done when |
 |---|---|---|
 | M2.5.1 | **Measure first:** a task process start-time histogram by start method (`runner`: starting the process to the runner's hello; `import`: sending the task to the DAG file imported), `start_method` in the attempts API; **stress scenario 14** (about 1,000 daily DAGs and a few busy ones) run on today's round as the baseline | scenario 14's baseline recorded; `make check`, `make docs` |
-| M2.5.2 | **Quiet DAGs:** busy and quiet DAGs in the master's memory, wake marks (run end, command, new version, unpause, timer), the full pass every `[master] quiet_dag_full_pass_interval`, `quiet_dag_after` and `quiet_dag_wake_ahead`; a round reads only the DAGs it visits (active DAGs and the run overview limited to them); the comparison test (one timeline through both paths, the same runs) | scenario 14's rounds no longer grow with the quiet DAGs |
+| M2.5.2 | **Quiet DAGs:** busy and quiet DAGs in the master's memory, wake marks (a queued run, run end, command, new version, timer), the sweep (every quiet DAG within `[master] quiet_dag_full_pass_interval`, a slice a round) and the ID check, `quiet_dags`, `quiet_dag_after` and `quiet_dag_wake_ahead`; a round reads only the DAGs it visits (active DAGs and the run overview limited to them); the comparison test (one timeline through both paths, the same runs) | scenario 14's rounds no longer grow with the quiet DAGs |
 | M2.5.3 | **Fork server, runner side:** `python -m schedr.runner forkserver`: preload, the single-thread check, `gc.freeze()`, forking on request; the child gets its channel and output pipes by `SCM_RIGHTS`, `setsid()`, its environment and directory, closes inherited descriptors, reseeds, resets logging, and runs the normal `task` / `parse` code | Python unit tests, including fork safety |
 | M2.5.4 | **Fork server, agent side:** two fork servers per interpreter started with the worker (preloaded and bare), fork requests, the fallback chain (preloaded, bare, spawn), restart with backoff, the version check, `start_method: fork`, pidfd and the child subreaper, metrics (up / down, fallbacks by reason), worker `warnings` in the REST API and `schedr workers list`, the macOS warning | tasks start forked on Linux; every fallback tested |
 | M2.5.5 | **Finish:** parse jobs through the fork server (a fresh child per job), `@task(preload=False)` and `@task(fresh_process=True)` (also in `TaskDefaults`), the chart's `worker.forkServer` (on, preload: the worker image's libraries except `polars`; the image's build fails if the list starts a thread), scenario 13 with spawn and with fork | M2.5's "done when"; the guide updated |
+
+## After M3: Grok over the whole repository
+
+Asked by the user (2026-10-27): once M3 is done, Grok reviews the **whole repository**, not
+one step's diff (it has only reviewed diffs so far), with a proof test or script per finding,
+and brings the documentation up to date with the code. Claude verifies the findings and fixes
+the confirmed ones (out-of-scope ones go to BUGS.md); the user schedules the fixes. To plan
+then: how to split the repository into review tasks (by crate or concern) to keep each Grok
+session small.
 
 ## Testing approach
 
