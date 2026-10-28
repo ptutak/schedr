@@ -46,6 +46,7 @@ fn python_task_serializes_flat_with_a_kind_tag() {
         id: id("load"),
         kind: TaskKind::Python {
             arguments: BTreeMap::from([("rows".to_owned(), Value::Ref(output_ref("extract")))]),
+            branch: false,
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::Int,
@@ -113,7 +114,8 @@ fn command_without_env_omits_it_and_python_without_arguments_defaults_them() {
     assert_eq!(
         python,
         TaskKind::Python {
-            arguments: BTreeMap::new()
+            arguments: BTreeMap::new(),
+            branch: false,
         }
     );
 }
@@ -142,6 +144,7 @@ fn references_of_a_python_task_come_from_its_arguments() {
                     Value::List(vec![Value::Ref(output_ref("y"))]),
                 ),
             ]),
+            branch: false,
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,

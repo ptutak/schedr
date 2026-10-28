@@ -152,6 +152,10 @@ pub enum TaskKind {
         /// The arguments by parameter name.
         #[serde(default)]
         arguments: BTreeMap<String, Value>,
+        /// A `@branch` task: its output is the list of the downstream task IDs it chose, and
+        /// its outgoing edges are selection edges.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        branch: bool,
     },
     /// An inline command, run by the agent.
     Command {
@@ -201,7 +205,7 @@ impl Task {
     #[must_use]
     pub fn references(&self) -> Vec<&Reference> {
         match &self.kind {
-            TaskKind::Python { arguments } => {
+            TaskKind::Python { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
             TaskKind::Command { command, env } => command

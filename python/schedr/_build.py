@@ -23,6 +23,7 @@ from schedr._model import (
     MapValue,
     OutcomeRef,
     OutputRef,
+    PythonKind,
     Reference,
     RefValue,
     ScalarType,
@@ -243,6 +244,10 @@ class DagBuilder:
                 raise ValueError(f"task `{end}` is not part of DAG `{self.dag_id}`")
         if from_ == to:
             raise ValueError(f"task `{to}` can't depend on itself")
+        task = self.tasks[from_]
+        if isinstance(task.kind, PythonKind) and task.kind.branch:
+            # Every edge out of a branch is taken only when it chose its target.
+            kind = EdgeKind.SELECTION
         edge = Edge(from_, to, kind, on)
         if edge not in self.edges:
             self.edges.append(edge)
@@ -258,7 +263,8 @@ class DagBuilder:
         while changed:
             changed = False
             for edge in self.edges:
-                if edge.to not in skippable and (edge.on or edge.from_ in skippable):
+                taken_sometimes = edge.on or edge.kind == EdgeKind.SELECTION
+                if edge.to not in skippable and (taken_sometimes or edge.from_ in skippable):
                     skippable.add(edge.to)
                     changed = True
         return skippable

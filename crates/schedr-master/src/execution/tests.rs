@@ -667,3 +667,31 @@ async fn a_reported_outcome_is_stored_and_routes_the_run() {
         ])
     );
 }
+
+#[tokio::test]
+async fn a_branchs_stored_choice_routes_the_run() {
+    let mut pick = task("pick", "python", 0);
+    pick["branch"] = json!(true);
+    let branched = dag(
+        &json!([pick, task("a", "python", 0), task("b", "python", 0)]),
+        &json!([
+            {"from": "pick", "to": "a", "kind": "selection"},
+            {"from": "pick", "to": "b", "kind": "selection"}
+        ]),
+    );
+    let (execution, db, run_id) = with_run(branched, RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "pick").await;
+    let result = AttemptResult {
+        output: Some(json!(["b"])),
+        ..ended(AttemptStatus::Success)
+    };
+    execution
+        .attempt_finished(&run_id, &id("pick"), &result, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        states(&db, &run_id).await,
+        expected(&[("a", S::Skipped), ("b", S::Queued), ("pick", S::Success)])
+    );
+}

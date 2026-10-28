@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use schedr_db::instances::{InstanceUpdate, RunTasks};
 use schedr_db::{Database, DbError};
-use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState};
+use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState, TaskKind};
 
 use crate::metrics::MasterMetrics;
 use crate::progress::{AfterAttempt, RunProgress, after_attempt};
@@ -444,8 +444,9 @@ impl Execution {
         first: Vec<InstanceUpdate>,
         now: Timestamp,
     ) -> Result<Option<RunState>, ExecutionError> {
-        let mut progress =
-            RunProgress::new(&run.dag, states_of(run)).with_outcomes(outcomes_of(run));
+        let mut progress = RunProgress::new(&run.dag, states_of(run))
+            .with_outcomes(outcomes_of(run))
+            .with_chosen(self.chosen_of(run_id, run, &first).await?);
         for change in &first {
             progress.set(&change.task_id, change.state);
             if let Some(outcome) = &change.outcome {
@@ -466,6 +467,51 @@ impl Execution {
             self.finish(run_id, &run.dag.id, result, now).await?;
         }
         Ok(result)
+    }
+}
+
+impl Execution {
+    /// What the run's `@branch` tasks chose (their outputs), for those that have succeeded or
+    /// succeed with `first`.
+    async fn chosen_of(
+        &self,
+        run_id: &str,
+        run: &RunTasks,
+        first: &[InstanceUpdate],
+    ) -> Result<BTreeMap<TaskId, Vec<TaskId>>, ExecutionError> {
+        let succeeded = |task: &TaskId| {
+            first
+                .iter()
+                .any(|c| &c.task_id == task && c.state == TaskInstanceState::Success)
+                || run
+                    .instances
+                    .iter()
+                    .any(|i| &i.task_id == task && i.state == TaskInstanceState::Success)
+        };
+        let branches: Vec<&TaskId> = run
+            .dag
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.kind, TaskKind::Python { branch: true, .. }))
+            .map(|t| &t.id)
+            .filter(|id| succeeded(id))
+            .collect();
+        if branches.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let outputs = self.db.outputs_of(run_id, &branches).await?;
+        Ok(outputs
+            .into_iter()
+            .map(|(task, output)| {
+                let chosen = output
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().and_then(|id| TaskId::new(id).ok()))
+                    .collect();
+                (task, chosen)
+            })
+            .collect())
     }
 }
 

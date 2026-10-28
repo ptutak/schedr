@@ -32,6 +32,8 @@ pub enum EdgeKind {
     Data,
     /// An order-only dependency (`>>`), no data passed.
     Order,
+    /// From a `@branch` task: taken when the branch chose the downstream task.
+    Selection,
 }
 
 /// A dependency: `to` runs after `from`, when `from` ended with one of the outcomes `on`.

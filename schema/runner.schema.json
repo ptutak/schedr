@@ -425,6 +425,11 @@
           "const": "order",
           "description": "An order-only dependency (`>>`), no data passed.",
           "type": "string"
+        },
+        {
+          "const": "selection",
+          "description": "From a `@branch` task: taken when the branch chose the downstream task.",
+          "type": "string"
         }
       ]
     },
@@ -1095,6 +1100,10 @@
               "default": {},
               "description": "The arguments by parameter name.",
               "type": "object"
+            },
+            "branch": {
+              "description": "A `@branch` task: its output is the list of the downstream task IDs it chose, and\nits outgoing edges are selection edges.",
+              "type": "boolean"
             },
             "kind": {
               "const": "python",

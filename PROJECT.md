@@ -3806,9 +3806,17 @@ User code can never change scheduling behaviour (skips, branching, retries) from
 
   **`@branch`** chooses **any subset** of its direct downstream tasks. The function returns
   **task handles** (one or a list), not task ID strings, so typos are caught at parse time. In
-  the model the branch's output is the list of task IDs; the master skips the tasks not
-  chosen. The **empty subset** is allowed: returning `[]` skips all direct downstream tasks
-  (`None` is not allowed; write `[]`).
+  the model the branch's output is the list of task IDs, and each of its outgoing edges is a
+  **selection edge**, taken when the branch chose its target. A target not chosen counts that
+  edge as skipped, like any edge not taken (decision 55B, the user's, 2026-10-28: one rule
+  for every edge): under `NoneFailed` it still runs if another of its edges succeeded, under
+  `AllSucceeded` it is skipped. The **empty subset** is allowed: returning `[]` skips the
+  direct downstream tasks that have no other edge (`None` is not allowed; write `[]`). Not
+  chosen: a target not chosen skipped outright, whatever its other edges (A: Airflow's
+  behaviour, but an exception to counting edges). For M5: Airflow skips an unchosen target
+  outright; schedr isn't Airflow one to one (the user's), so a translated `@task.branch`
+  follows this rule, and the translation's notes say so for a target with other upstream
+  tasks (give it `AllSucceeded` to be skipped whenever not chosen).
 
   ```python
   @branch
@@ -4496,7 +4504,7 @@ What each task produces:
   | Edge kind | Comes from | Counts in the trigger rule |
   |---|---|---|
   | on-outcome (incl. plain `>>` and data) | `>>`, data, `.on(...)` | taken when the upstream's outcome matches |
-  | selection | `@branch` | taken when the target was chosen |
+  | selection | `@branch` | taken when the target was chosen (not chosen: counts as skipped, 55B) |
   | requirement | `uses=` | never as a success; a failed setup → `upstream_failed`, a skipped setup → skipped |
 - **`.on(X)` is both an edge and data:** it makes the downstream task depend on that outcome
   and passes the output **narrowed** to `X` (typed `def on[T](self, kind: type[T]) ->

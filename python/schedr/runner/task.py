@@ -232,6 +232,18 @@ def find_function(request: Mapping[str, Any]) -> Callable[..., Any]:
 
     Returns:
         The task's function.
+    """
+    return find_task(request)[0]
+
+
+def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset[str]]:
+    """Imports the DAG file and finds the task's function and its direct downstream tasks.
+
+    Args:
+        request: The ``task`` message.
+
+    Returns:
+        The function, and the IDs of the tasks right after it (a branch chooses among them).
 
     Raises:
         TaskSetupError: If the DAG or the task isn't in the file.
@@ -245,10 +257,39 @@ def find_function(request: Mapping[str, Any]) -> Callable[..., Any]:
                 raise TaskSetupError(
                     f"DAG `{request['dag_id']}` has no Python task `{task_id}` (any more?)"
                 )
-            return entry.functions[task_id]
+            downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
+            return entry.functions[task_id], downstream
     raise TaskSetupError(
         f"`{dag_file['path']}` doesn't define DAG `{request['dag_id']}` (any more?)"
     )
+
+
+def chosen_ids(result: object, downstream: frozenset[str]) -> list[str]:
+    """The task IDs a ``@branch`` function's result chose.
+
+    Args:
+        result: What it returned: a task handle, or a list of them.
+        downstream: Its direct downstream tasks, the ones it may choose.
+
+    Returns:
+        The IDs, in the order returned, without repeats.
+
+    Raises:
+        CodecError: For ``None``, something that isn't a handle, or a task it can't choose.
+    """
+    if result is None:
+        raise CodecError("", "a branch returns the chosen tasks, or [] for none (not None)")
+    handles = result if isinstance(result, list | tuple) else [result]
+    chosen: list[str] = []
+    for handle in handles:
+        task_id = getattr(handle, "_schedr_task_id", None)
+        if not isinstance(task_id, str):
+            raise CodecError("", f"a branch returns task handles, got {type(handle).__name__}")
+        if task_id not in downstream:
+            raise CodecError("", f"`{task_id}` isn't right after the branch, so it can't choose it")
+        if task_id not in chosen:
+            chosen.append(task_id)
+    return chosen
 
 
 def failure(error: BaseException, kind: str | None, message: str | None = None) -> dict[str, Any]:
@@ -268,7 +309,7 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
     return {"type": "task_failed", "error": summary, "kind": kind}
 
 
-def execute(
+def execute(  # noqa: PLR0911 (a result for each way a task ends)
     request: Mapping[str, Any], imported: Callable[[], None] = lambda: None
 ) -> dict[str, Any]:
     """Runs a task request and returns the message to send.
@@ -285,7 +326,7 @@ def execute(
     outcomes = request.get("outcomes", {})
     task_id = task["id"]
     try:
-        function = find_function(request)
+        function, downstream = find_task(request)
         hints = type_hints(function, f"task `{task_id}`")
         arguments = {
             name: build(value, hints.get(name, Any), inputs, run, outcomes)
@@ -303,7 +344,13 @@ def execute(
             result = function(**arguments)
     except (Exception, SystemExit) as e:
         return failure(e, None)
-    return _stored(result, hints.get("return", Any), task)
+    if not task.get("branch"):
+        return _stored(result, hints.get("return", Any), task)
+    try:
+        chosen = chosen_ids(result, downstream)
+    except CodecError as e:
+        return failure(e, "output_not_serializable", f"`{task_id}`: {e.reason}")
+    return _stored(chosen, list[str], task)
 
 
 def outcome_of(result: object, annotation: object) -> tuple[str, object, object]:

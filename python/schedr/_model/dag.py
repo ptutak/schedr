@@ -46,6 +46,9 @@ class EdgeKind(StrEnum):
     ORDER = "order"
     """An order-only dependency (``>>``)."""
 
+    SELECTION = "selection"
+    """From a ``@branch`` task: taken when the branch chose the downstream task."""
+
 
 @dataclass(frozen=True, slots=True)
 class Edge:

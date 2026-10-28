@@ -13,7 +13,7 @@ import inspect
 import itertools
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, overload
+from typing import Any, Protocol, overload
 
 from schedr import _build
 from schedr import outcomes as _outcomes
@@ -117,6 +117,12 @@ class Output[T]:
                 f"{self!r}.on(): narrow the whole output first, e.g. `{self._task}.on(...)`"
             )
         builder = _build.require_active("`.on()`")
+        task = builder.tasks.get(self._task)
+        if task is not None and isinstance(task.kind, PythonKind) and task.kind.branch:
+            raise TypeError(
+                f"`{self._task}.on()`: a @branch task's edges are taken when it chose their "
+                "task, not on outcomes; return an outcome from a @task to route with .on()"
+            )
         spec = builder.outcomes.get(self._task, _outcomes.DEFAULT)
         return Output(self._task, on=_outcomes.names_for(spec, kinds, self._task))
 
@@ -309,13 +315,16 @@ class TaskFunction[**P, R]:
     calls the function.
     """
 
-    def __init__(self, fn: Callable[P, R], task_id: str, options: _build.TaskOptions) -> None:
+    def __init__(
+        self, fn: Callable[P, R], task_id: str, options: _build.TaskOptions, branch: bool = False
+    ) -> None:
         """Wraps ``fn`` as a task.
 
         Args:
             fn: The function.
             task_id: The task's ID.
             options: The task's own options.
+            branch: A ``@branch`` task (its output: the downstream tasks it chose).
 
         Raises:
             TypeError: If ``fn`` can't be a task (see ``@task``).
@@ -324,6 +333,7 @@ class TaskFunction[**P, R]:
         self._fn = fn
         self._task_id = task_id
         self._options = options
+        self._branch = branch
         functools.update_wrapper(self, fn)
 
     @property
@@ -350,11 +360,20 @@ class TaskFunction[**P, R]:
         except TypeError as e:
             raise TypeError(f"{where}: {e}") from None
         hints = type_hints(self._fn, where)
-        spec = _outcomes.from_return_type(hints["return"], where)
+        # A branch's output is the IDs of the tasks it chose; its outcome SUCCESS.
+        spec = (
+            _outcomes.DEFAULT
+            if self._branch
+            else _outcomes.from_return_type(hints["return"], where)
+        )
         try:
             # An Outcome enum task's output is None: the member is its outcome.
             output_type = describe(
-                None if spec.enum is not _outcomes.DefaultOutcome else hints["return"]
+                list[str]
+                if self._branch
+                else None
+                if spec.enum is not _outcomes.DefaultOutcome
+                else hints["return"]
             )
             outcome_types = (
                 {name: describe(cls) for name, cls in zip(spec.names, spec.classes, strict=True)}
@@ -375,7 +394,12 @@ class TaskFunction[**P, R]:
             for name, value in bound.arguments.items()
         }
         builder.add_task(
-            self._task_id, PythonKind(arguments), output_type, self._options, spec, outcome_types
+            self._task_id,
+            PythonKind(arguments, branch=self._branch),
+            output_type,
+            self._options,
+            spec,
+            outcome_types,
         )
         builder.functions[self._task_id] = self._fn
         for task_id, on in dict.fromkeys(upstream):
@@ -456,7 +480,9 @@ class TaskFunction[**P, R]:
         changes = _build.TaskOptions(
             retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
         )
-        return TaskFunction(self._fn, task_id or self._task_id, changes.over(self._options))
+        return TaskFunction(
+            self._fn, task_id or self._task_id, changes.over(self._options), self._branch
+        )
 
 
 @overload
@@ -538,3 +564,31 @@ def chain(*items: object) -> None:
     """
     for upstream, downstream in itertools.pairwise(items):
         _build.order(upstream, downstream, "chain()")
+
+
+class Task(Protocol):
+    """A task handle, as a ``@branch`` function returns: an output or an operator."""
+
+    @property
+    def _schedr_task_id(self) -> str: ...
+
+
+def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, list[str]]:
+    """Makes a function a branch: it chooses which of its direct downstream tasks run.
+
+    The function returns the chosen tasks' handles (one, or a list; ``[]`` for none, never
+    ``None``), e.g. ``return [to_s3, to_local]`` with ``targets(cfg) >> [to_s3, to_gcs,
+    to_local]``. Its output is their task IDs; each edge out of it is taken only when it chose
+    that task.
+
+    Args:
+        fn: The function; annotate its return as ``list[Task]`` (or ``Task``).
+
+    Returns:
+        The task function.
+
+    Raises:
+        TypeError: If the function can't be a task.
+    """
+    name: str = getattr(fn, "__name__", "")
+    return TaskFunction(fn, name, _build.TaskOptions(), branch=True)

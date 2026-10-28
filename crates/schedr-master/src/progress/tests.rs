@@ -380,3 +380,48 @@ fn an_attempt_lost_while_cancelling_is_cancelled_otherwise_it_uses_a_retry() {
     );
     assert!(after_attempt(AttemptStatus::Lost, None, 0, &settings(), false, now).uses_retry());
 }
+
+/// `pick` (a `@branch`) selecting among `a`, `b` and `c`; `c` also after `other`.
+fn branched() -> Dag {
+    let mut pick = task("pick", "python");
+    pick["branch"] = json!(true);
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "branched", "location": {"root": "etl", "path": "b.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": [pick, task("other", "empty"), task("a", "empty"), task("b", "empty"),
+                  task("c", "empty")],
+        "edges": [
+            {"from": "pick", "to": "a", "kind": "selection"},
+            {"from": "pick", "to": "b", "kind": "selection"},
+            {"from": "pick", "to": "c", "kind": "selection"},
+            {"from": "other", "to": "c", "kind": "order"}
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case(&["a", "c"], S::Success, S::Skipped, S::Success)]
+// Nothing chosen: every target's selection edge not taken; `c` still runs through `other`.
+#[case(&[], S::Skipped, S::Skipped, S::Success)]
+#[case(&["b"], S::Skipped, S::Success, S::Success)]
+fn a_branch_runs_the_targets_it_chose(
+    #[case] chosen: &[&str],
+    #[case] a: TaskInstanceState,
+    #[case] b: TaskInstanceState,
+    #[case] c: TaskInstanceState,
+) {
+    let dag = branched();
+    let mut run = RunProgress::new(&dag, BTreeMap::from([(id("pick"), S::Success)])).with_chosen(
+        BTreeMap::from([(id("pick"), chosen.iter().map(|t| id(t)).collect())]),
+    );
+    run.settle();
+    assert_eq!(
+        [
+            run.states()[&id("a")],
+            run.states()[&id("b")],
+            run.states()[&id("c")]
+        ],
+        [a, b, c]
+    );
+}

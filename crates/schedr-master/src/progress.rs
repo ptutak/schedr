@@ -167,6 +167,8 @@ pub struct RunProgress<'a> {
     states: BTreeMap<TaskId, TaskInstanceState>,
     /// The outcomes of the tasks that succeeded (`SUCCESS` where none is known).
     outcomes: BTreeMap<TaskId, String>,
+    /// What each `@branch` task that succeeded chose (its output).
+    chosen: BTreeMap<TaskId, Vec<TaskId>>,
 }
 
 impl<'a> RunProgress<'a> {
@@ -184,7 +186,15 @@ impl<'a> RunProgress<'a> {
             dag,
             states: all,
             outcomes: BTreeMap::new(),
+            chosen: BTreeMap::new(),
         }
+    }
+
+    /// The same, with what the `@branch` tasks that succeeded chose.
+    #[must_use]
+    pub fn with_chosen(mut self, chosen: BTreeMap<TaskId, Vec<TaskId>>) -> Self {
+        self.chosen = chosen;
+        self
     }
 
     /// The same, with the outcomes of the tasks that succeeded.
@@ -207,6 +217,18 @@ impl<'a> RunProgress<'a> {
             .get(&edge.from)
             .copied()
             .unwrap_or(TaskInstanceState::Scheduled);
+        if state == TaskInstanceState::Success && edge.kind == schedr_model::EdgeKind::Selection {
+            // Taken when the branch chose its target (one it chose nothing for: not taken).
+            let chosen = self
+                .chosen
+                .get(&edge.from)
+                .is_some_and(|chosen| chosen.contains(&edge.to));
+            return if chosen {
+                state
+            } else {
+                TaskInstanceState::Skipped
+            };
+        }
         if state == TaskInstanceState::Success {
             let outcome = self
                 .outcomes

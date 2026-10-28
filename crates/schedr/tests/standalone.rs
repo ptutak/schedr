@@ -434,6 +434,39 @@ with Dag("routed"):
 }
 
 #[test]
+fn a_branch_runs_only_the_targets_it_chose() {
+    let dag = r#"
+from schedr import CommandOperator, Dag, Task, branch
+
+@branch
+def targets() -> list[Task]:
+    return [to_b]
+
+with Dag("branched"):
+    chooser = targets()
+    to_a = CommandOperator("to_a", "true")
+    to_b = CommandOperator("to_b", "true")
+    chooser >> [to_a, to_b]
+"#;
+    let standalone = Standalone::start(&[("branched.py", dag)], None);
+    standalone.wait("DAG `branched`", || standalone.dag_ids() == ["branched"]);
+    let run_id = standalone.trigger("branched");
+    let run = standalone.wait_for_state(&run_id, "success");
+    assert_eq!(
+        task_states(&run),
+        pairs(&[
+            ("targets", "success"),
+            ("to_a", "skipped"),
+            ("to_b", "success")
+        ])
+    );
+    let chosen = standalone
+        .get(&format!("/api/v1/runs/{run_id}/tasks/targets/output"))
+        .unwrap();
+    assert_eq!(chosen["value"], serde_json::json!(["to_b"]), "{chosen}");
+}
+
+#[test]
 fn a_failure_is_retried_then_fails_the_run_and_its_downstream_task() {
     let dag = r#"
 from datetime import timedelta

@@ -157,9 +157,11 @@ class PythonKind:
 
     Attributes:
         arguments: The arguments by parameter name.
+        branch: A ``@branch`` task: its output is the downstream task IDs it chose.
     """
 
     arguments: Mapping[str, Value] = field(default_factory=dict)
+    branch: bool = False
 
     def references(self) -> list[Reference]:
         """The arguments' references.
@@ -173,10 +175,14 @@ class PythonKind:
         """The kind's fields as DAG JSON.
 
         Returns:
-            ``{"kind": "python", "arguments": {...}}`` with names sorted.
+            ``{"kind": "python", "arguments": {...}}`` with names sorted, and ``"branch": true``
+            for a ``@branch`` task.
         """
         arguments = {name: self.arguments[name].to_json() for name in sorted(self.arguments)}
-        return {"kind": "python", "arguments": arguments}
+        result: dict[str, Any] = {"kind": "python", "arguments": arguments}
+        if self.branch:
+            result["branch"] = True
+        return result
 
 
 @dataclass(frozen=True, slots=True)

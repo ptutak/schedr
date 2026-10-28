@@ -10,7 +10,7 @@ from schedr.context import dag_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.operators import CommandOperator, EmptyOperator
 from schedr.outcomes import DefaultOutcome, Outcome, RunIf
-from schedr.tasks import Output, chain, task
+from schedr.tasks import Output, Task, branch, chain, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
 
@@ -32,8 +32,10 @@ __all__ = [
     "Outcome",
     "Output",
     "RunIf",
+    "Task",
     "TaskDefaults",
     "Trigger",
+    "branch",
     "chain",
     "dag_ctx",
     "task",
