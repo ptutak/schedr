@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from playwright.sync_api import BrowserContext, Page, expect
 
@@ -68,3 +69,23 @@ def test_the_runs_list_shows_the_run_and_links_it(page: Page, standalone: dict[s
     expect(link).to_have_text(standalone["run"])
     link.click()
     expect(page.locator("svg.dag a.node")).to_have_count(3)
+
+
+def test_a_new_run_appears_on_its_dags_page_without_a_reload(
+    page: Page, standalone: dict[str, str], trigger: Callable[[str], None]
+) -> None:
+    dag = standalone["dag"]
+    page.goto(f"{standalone['url']}/d/default/dags/{dag}")
+    rows = page.locator("table.runs tbody tr")
+    expect(rows.first).to_be_visible()
+    before = rows.count()
+    page.evaluate("window.notReloaded = true")
+    # Live: the page follows its DAG's changes.
+    expect(page.locator("body")).to_have_attribute(
+        "sse-connect", f"/events?deployment=default&dag={dag}"
+    )
+    trigger("2026-10-16T01:00:00Z")
+    new_row = page.locator("table.runs tbody td", has_text="2026-10-16 01:00 UTC").first
+    expect(new_row).to_be_visible(timeout=15_000)
+    assert rows.count() > before
+    assert page.evaluate("window.notReloaded") is True

@@ -4,19 +4,20 @@
 
 | Link | Protocol | Opened by | Security |
 |---|---|---|---|
-| browser → web UI | HTTP, the pages | the browser | none of its own yet (see below) |
+| browser → web UI | HTTP, the pages, and long-lived streams for live updates | the browser | none of its own yet (see below) |
 | CLI → webserver | HTTP, REST API | the CLI | none of its own yet (see below) |
-| web UI → webserver | HTTP, REST API | the UI | none of its own yet (see below) |
+| web UI → webserver | HTTP, REST API, including one long-lived events stream per deployment | the UI | none of its own yet (see below) |
 | worker → master | gRPC over HTTP/2: one bidirectional stream per worker, plus unary calls | the worker | mTLS, or the mesh |
 | webserver → worker | HTTP, the log endpoint | the webserver | mTLS, or the mesh |
 | master, webserver → database | Postgres or SQLite | the role | the database's own |
 | probes, Prometheus → any role | HTTP, the ops port | them | none: it serves no data |
 
 There is no link between the master and the webserver: the database carries commands one
-way and state the other. The web UI's only link is the REST API. `schedr ui` listens on
-`[ui] port` (8082) and calls each webserver over the network. In `schedr standalone` the UI
-is on the REST API's port, and that call stays inside the process. The UI has no link to the
-master, the workers or the database.
+way and state the other. The web UI's only link is the REST API, including one long-lived
+stream of what changed per deployment (see [The events stream](#the-events-stream)). `schedr
+ui` listens on `[ui] port` (8082) and calls each webserver over the network. In `schedr
+standalone` the UI is on the REST API's port, and that call stays inside the process. The UI
+has no link to the master, the workers or the database.
 
 **Workers always connect to the master.** The master needs no address for its workers, and a
 worker only needs `[worker] master_url`. The stream stays open, so the master can still send
@@ -80,6 +81,44 @@ no credentials when it calls a webserver.
 
 The CLI sends a bearer token for such a proxy or mesh with `--token` (or `SCHEDR_TOKEN`), e.g.
 a Keycloak token that Istio checks at the gateway.
+
+## The events stream
+
+`GET /api/v1/events` is a server-sent events stream of what changed. The UI is the client. A
+browser doesn't open this path. It opens the pages, and in standalone those pages are on this
+same port. The stream carries:
+
+| Event | Data | When |
+|---|---|---|
+| `run` | `{"run_id", "dag_id"}` | That run, one of its tasks, or one of its attempts changed. |
+| `dag` | `{"dag_id"}` | That DAG changed. |
+| `workers` | `{}` | A worker registered, changed state, or was seen. A heartbeat counts as seen. |
+| `refresh` | `{}` | Anything may have changed: a change was missed, or the changes can't be followed. |
+
+No page lists the workers, so a `workers` event doesn't redraw one. A comment every 15 s
+keeps an idle stream from looking dead. The response is
+`Content-Type: text/event-stream`, with `Cache-Control: no-cache` and
+`X-Accel-Buffering: no`. The webserver follows the database once, from the first stream, and
+hands each change to every open stream. When the changes can't be followed, each stream gets
+`refresh` every 5 s (see [The master](04-master.md)). A stream more than 1,024 changes behind
+gets `refresh` instead of the ones it skipped.
+
+The UI opens one of these streams per deployment. If it drops, the UI opens it again after
+1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Each open
+page holds another stream, to the UI: `GET /events` on the UI's port (the API's port in
+standalone). While a running try's Logs tab is open, the browser holds one more,
+`GET /d/<deployment>/runs/<run>/tasks/<task>/tail`. Those two are server-sent events as well,
+with the same cache and buffering headers and a comment every 15 s. The page's stream sends
+a ping every 15 s. What the pages do with them is [Live updates](12-ui.md#live-updates).
+
+A proxy in front of the webserver, and a proxy in front of the UI, has to leave these
+responses open and send each byte on as it is written. Buffering holds the updates until the
+buffer fills. `X-Accel-Buffering: no` is nginx's switch for that. A proxy that ignores the
+header can still buffer `text/event-stream`. `Cache-Control: no-cache` tells a cache not to
+store the response. An idle timeout has to allow a stream whose only traffic for a while is
+the comment every 15 s. When a proxy in front of the UI holds the page's stream back, the
+page sees no ping. After 30 s of that it reads its live parts every 5 s instead of waiting
+for the stream.
 
 ## The API's description and Swagger UI
 

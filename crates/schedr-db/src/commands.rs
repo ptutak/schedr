@@ -85,6 +85,22 @@ impl CommandNotifications {
     }
 }
 
+/// Whether there is a connection to listen through ([`Database::checked_listener`]).
+#[derive(Debug)]
+pub(crate) enum Listening {
+    /// SQLite: nothing to listen to.
+    NotPostgres,
+    /// `[database] notifications = false`.
+    Off,
+    /// The connection passes a pooler in transaction mode, through this setting's URL.
+    Unsafe {
+        /// `url` or `notifications_url`.
+        through: &'static str,
+    },
+    /// A connection, checked.
+    Ready(PgListener),
+}
+
 /// A pending command, as the master reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingCommand {
@@ -186,16 +202,47 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the listening connection can't be opened or checked.
     pub async fn command_notifications(&self) -> Result<Option<CommandNotifications>, DbError> {
+        let mut listener = match self.checked_listener().await? {
+            Listening::NotPostgres => return Ok(None),
+            Listening::Off => {
+                tracing::info!(
+                    "notifications off (`[database] notifications = false`): new commands are \
+                     picked up by polling, every round"
+                );
+                return Ok(None);
+            }
+            Listening::Unsafe { through } => {
+                tracing::warn!(
+                    through,
+                    "the connection the master would listen through passes a connection pooler \
+                     in transaction mode (PgBouncer or similar), where listening breaks other \
+                     connections: notifications off, new commands are picked up by polling, \
+                     every round. For immediate commands set `[database] notifications_url` to \
+                     a connection straight to Postgres; `notifications = false` silences this"
+                );
+                return Ok(None);
+            }
+            Listening::Ready(listener) => listener,
+        };
+        listener.listen(COMMANDS_CHANNEL).await?;
+        Ok(Some(CommandNotifications { listener }))
+    }
+
+    /// A connection to listen through (Postgres's `LISTEN`), once it is checked not to pass a
+    /// connection pooler in transaction mode ([`listening_is_safe`]); or why there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the connection can't be opened or checked;
+    /// [`DbError::QueryTimeout`] if the check can't finish in time (the database may only be
+    /// slow: the caller polls and tries again later).
+    pub(crate) async fn checked_listener(&self) -> Result<Listening, DbError> {
         let Pool::Postgres(pool) = self.pool() else {
-            return Ok(None);
+            return Ok(Listening::NotPostgres);
         };
         let notifications = self.notifications();
         if !notifications.on {
-            tracing::info!(
-                "notifications off (`[database] notifications = false`): new commands are \
-                 picked up by polling, every round"
-            );
-            return Ok(None);
+            return Ok(Listening::Off);
         }
         let url = notifications.url.as_deref();
         let checked = self
@@ -219,7 +266,7 @@ impl Database {
             Err(error @ DbError::QueryTimeout(_)) => {
                 tracing::warn!(
                     %error,
-                    "couldn't check whether the master's connection passes a connection pooler \
+                    "couldn't check whether a listening connection passes a connection pooler \
                      in transaction mode (the database answered too slowly): polling for now"
                 );
                 return Err(error);
@@ -227,26 +274,18 @@ impl Database {
             Err(error) => return Err(error),
         };
         if !safe {
-            tracing::warn!(
-                through = if url.is_some() {
+            return Ok(Listening::Unsafe {
+                through: if url.is_some() {
                     "notifications_url"
                 } else {
                     "url"
                 },
-                "the connection the master would listen through passes a connection pooler in \
-                 transaction mode (PgBouncer or similar), where listening breaks other \
-                 connections: notifications off, new commands are picked up by polling, every \
-                 round. For immediate commands set `[database] notifications_url` to a \
-                 connection straight to Postgres; `notifications = false` silences this"
-            );
-            return Ok(None);
+            });
         }
-        let mut listener = match url {
+        Ok(Listening::Ready(match url {
             Some(url) => PgListener::connect(url).await?,
             None => PgListener::connect_with(pool).await?,
-        };
-        listener.listen(COMMANDS_CHANNEL).await?;
-        Ok(Some(CommandNotifications { listener }))
+        }))
     }
 
     /// The pending commands, oldest first.

@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -111,7 +111,22 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
             return state == "success"  # type: ignore[no-any-return]
 
         _wait("the run finished", finished, log)
-        yield {"url": server, "run": run}
+        yield {"url": server, "run": run, "dag": DAG_ID}
     finally:
         process.terminate()
         process.wait(timeout=30)
+
+
+@pytest.fixture
+def trigger(standalone: dict[str, str]) -> Callable[[str], None]:
+    """Triggers a run of the DAG for a moment (RFC 3339) through the API."""
+
+    def go(planned_for: str) -> None:
+        _api(
+            standalone["url"],
+            "POST",
+            f"/api/v1/dags/{DAG_ID}/runs",
+            {"planned_for": planned_for},
+        )
+
+    return go

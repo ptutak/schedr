@@ -8,6 +8,7 @@
 <!-- htmx swaps error answers in too (a panel that can't be shown says why); 204: nothing. -->
 <meta name="htmx-config" content='{"responseHandling": [{"code": "204", "swap": false}, {"code": "...", "swap": true}]}'>
 <script src="{{ page.base }}/assets/htmx-2.0.11.min.js" defer></script>
+<script src="{{ page.base }}/assets/htmx-ext-sse-2.2.4.js" defer></script>
 <script>
 // Before the page paints: the theme (the one chosen here before, else the system's), and the
 // browser's time zone in a cookie for the server, which shows times in UTC and in this zone.
@@ -32,6 +33,25 @@
     {% endif %}
   }
 })();
+// A live page's stream may be held back by a proxy that buffers it: when nothing (not even a
+// ping, every 15 s) has come for 30 s, its live parts are read again every 5 s.
+(function () {
+  var last = Date.now();
+  var seen = function () { last = Date.now(); };
+  document.addEventListener("htmx:sseOpen", function (event) {
+    seen();
+    ["ping", "change"].forEach(function (name) {
+      event.detail.source.addEventListener(name, seen);
+    });
+  });
+  setInterval(function () {
+    if (!document.body || !document.body.hasAttribute("sse-connect")) return;
+    if (Date.now() - last < 30000) return;
+    document.querySelectorAll('[hx-trigger="sse:change"]').forEach(function (part) {
+      htmx.trigger(part, "sse:change");
+    });
+  }, 5000);
+})();
 function schedrTheme() {
   var root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
@@ -39,7 +59,7 @@ function schedrTheme() {
 }
 </script>
 </head>
-<body>
+<body{% if page.is_live() %} hx-ext="sse" sse-connect="{{ page.events }}"{% endif %}>
 <header class="top">
   <a class="brand" href="{{ page.base }}/">schedr</a>
   <nav>

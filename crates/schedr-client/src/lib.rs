@@ -18,7 +18,10 @@ use serde::de::DeserializeOwned;
 /// This client's version (the workspace's), sent in [`CLIENT_VERSION_HEADER`].
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod stream;
 pub mod times;
+
+pub use stream::{Chunks, EventReader, ServerEvent};
 
 #[cfg(test)]
 mod tests;
@@ -112,7 +115,19 @@ pub trait Transport: Sync {
         &self,
         request: ApiRequest,
     ) -> impl Future<Output = Result<ApiResponse, ClientError>> + Send;
+
+    /// Opens `GET <path>` and reads its body as it comes (server-sent events); a transport
+    /// that can't stream says so.
+    fn open(&self, path: String) -> impl Future<Output = Result<Chunks, ClientError>> + Send {
+        let _ = path;
+        std::future::ready(Err(ClientError::Unexpected(
+            "this transport can't stream".to_owned(),
+        )))
+    }
 }
+
+/// How long a stream may stay open before the client gives up on it (and opens another).
+pub const STREAM_TIMEOUT: Duration = Duration::from_hours(24);
 
 /// Credentials the CLI sends (never validated here).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,8 +171,8 @@ pub struct HttpTransport {
 impl HttpTransport {
     /// A transport to `server` (e.g. `http://localhost:8080`) sending `auth`.
     ///
-    /// Connecting gives up after [`CONNECT_TIMEOUT`]; the request gives up after
-    /// [`REQUEST_TIMEOUT`].
+    /// Connecting gives up after [`CONNECT_TIMEOUT`]; a request gives up after
+    /// [`REQUEST_TIMEOUT`], a stream ([`Transport::open`]) after [`STREAM_TIMEOUT`].
     ///
     /// # Panics
     ///
@@ -222,6 +237,52 @@ impl Transport for HttpTransport {
             body: serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
         })
     }
+
+    async fn open(&self, path: String) -> Result<Chunks, ClientError> {
+        let url = format!("{}{path}", self.server);
+        let mut builder = self
+            .client
+            .get(&url)
+            .header(CLIENT_VERSION_HEADER, VERSION)
+            .header("accept", "text/event-stream")
+            .timeout(STREAM_TIMEOUT);
+        builder = match &self.auth {
+            Auth::None => builder,
+            Auth::Bearer(token) => builder.bearer_auth(token),
+            Auth::Basic { user, password } => builder.basic_auth(user, password.as_ref()),
+        };
+        let connect = |e: reqwest::Error| ClientError::Connect {
+            server: self.server.clone(),
+            reason: e.to_string(),
+        };
+        let mut response = builder.send().await.map_err(connect)?;
+        if !response.status().is_success() {
+            return Err(ClientError::Server {
+                status: response.status().as_u16(),
+                message: format!("the server answered {}", response.status()),
+            });
+        }
+        let (sender, chunks) = Chunks::channel();
+        let server = self.server.clone();
+        tokio::spawn(async move {
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => Ok(chunk.to_vec()),
+                    Ok(None) => return,
+                    Err(e) => Err(ClientError::Connect {
+                        server: server.clone(),
+                        reason: e.to_string(),
+                    }),
+                };
+                let failed = chunk.is_err();
+                // The reader went away, or the stream failed: done either way.
+                if sender.send(chunk).await.is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Ok(chunks)
+    }
 }
 
 /// The API in the same process: requests go straight to its router, with no network (the
@@ -278,6 +339,51 @@ impl Transport for RouterTransport {
             status,
             body: serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
         })
+    }
+
+    async fn open(&self, path: String) -> Result<Chunks, ClientError> {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+        let in_process = |reason: String| ClientError::Connect {
+            server: "the API in this process".to_owned(),
+            reason,
+        };
+        let http = axum::http::Request::builder()
+            .uri(&path)
+            .header(CLIENT_VERSION_HEADER, VERSION)
+            .header("accept", "text/event-stream")
+            .body(axum::body::Body::empty())
+            .map_err(|e| in_process(e.to_string()))?;
+        let response = self
+            .app
+            .clone()
+            .oneshot(http)
+            .await
+            .map_err(|e| in_process(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ClientError::Server {
+                status: response.status().as_u16(),
+                message: format!("the server answered {}", response.status()),
+            });
+        }
+        let mut body = response.into_body();
+        let (sender, chunks) = Chunks::channel();
+        tokio::spawn(async move {
+            while let Some(frame) = body.frame().await {
+                let chunk = match frame {
+                    Ok(frame) => match frame.into_data() {
+                        Ok(data) => Ok(data.to_vec()),
+                        Err(_) => continue,
+                    },
+                    Err(e) => Err(in_process(e.to_string())),
+                };
+                let failed = chunk.is_err();
+                if sender.send(chunk).await.is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Ok(chunks)
     }
 }
 
@@ -436,6 +542,17 @@ impl<T: Transport> Client<T> {
             None,
         )
         .await
+    }
+
+    /// `GET /api/v1/events`: what changed, as it happens (`run`, `dag`, `workers` and
+    /// `refresh` events).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the stream can't be opened.
+    pub async fn events(&self) -> Result<EventReader, ClientError> {
+        let chunks = self.transport.open("/api/v1/events".to_owned()).await?;
+        Ok(EventReader::new(chunks))
     }
 
     /// `GET /api/v1/runs/{run}`.

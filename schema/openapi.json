@@ -1084,6 +1084,23 @@
         ]
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Server-sent events: `run` (`{\"run_id\", \"dag_id\"}`), `dag` (`{\"dag_id\"}`), `workers` (`{}`) and `refresh` (`{}`: anything may have changed)"
+          }
+        },
+        "summary": "What changed, as it happens: `run`, `dag`, `workers` and `refresh` events (see the module\ndocumentation).",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "operationId": "list_all_runs",

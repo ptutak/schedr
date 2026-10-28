@@ -391,5 +391,5 @@ the log is gone.
 Logs older than `[worker] log_retention` (30 days) are deleted, and beyond
 `[worker] log_max_size` the oldest go first. The sweep runs at start and every hour; a log
 whose attempt is still in the journal is never deleted. The run page shows the end of one
-try's log, and the reason when it can't be read (see
-[The task panel](12-ui.md#the-task-panel)).
+try's log, follows the rest while the try runs, and shows the reason when the log can't be
+read (see [The task panel](12-ui.md#the-task-panel)).

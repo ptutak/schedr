@@ -90,12 +90,67 @@ fn colour(index: u16) -> u8 {
     u8::try_from(index).unwrap_or(0)
 }
 
-/// `text` with its ANSI colours as HTML spans, everything HTML-escaped.
+/// `text` with its ANSI colours as HTML spans, everything HTML-escaped (an escape sequence cut
+/// at its end is dropped).
 #[must_use]
 pub fn to_html(text: &str) -> String {
+    convert(text, Style::default()).0
+}
+
+/// A log converted part by part (the log tail): the style in force carries from one part to
+/// the next, and an escape sequence cut at a part's end waits for the rest.
+#[derive(Debug, Default)]
+pub struct Converter {
+    style: Style,
+    held: String,
+}
+
+impl Converter {
+    /// A converter at the start of a log.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next part as HTML: its spans closed at its end, the style reopened at the next
+    /// part's start.
+    pub fn push(&mut self, text: &str) -> String {
+        let mut input = std::mem::take(&mut self.held);
+        input.push_str(text);
+        let cut = incomplete_escape(&input).unwrap_or(input.len());
+        input[cut..].clone_into(&mut self.held);
+        let (html, style) = convert(&input[..cut], self.style);
+        self.style = style;
+        html
+    }
+}
+
+/// Where an escape sequence at the end of `text` starts, if it isn't complete yet.
+fn incomplete_escape(text: &str) -> Option<usize> {
+    let at = text.rfind('\u{1b}')?;
+    let rest = &text[at + 1..];
+    let mut chars = rest.chars();
+    let complete = match chars.next() {
+        None => false,
+        Some('[') => chars.any(|c| ('@'..='~').contains(&c)),
+        Some(']') => rest.contains('\u{7}'),
+        Some(c) if (' '..='/').contains(&c) => chars.any(|c| !(' '..='/').contains(&c)),
+        Some(_) => true,
+    };
+    (!complete).then_some(at)
+}
+
+/// `text` as HTML starting in `style`; and the style in force at its end.
+fn convert(text: &str, start: Style) -> (String, Style) {
     let mut out = String::with_capacity(text.len() + text.len() / 8);
-    let mut style = Style::default();
+    let mut style = start;
     let mut open = false;
+    if style != Style::default() {
+        out.push_str("<span class=\"");
+        out.push_str(&style.classes());
+        out.push_str("\">");
+        open = true;
+    }
     let mut chars = text.char_indices().peekable();
     while let Some((at, c)) = chars.next() {
         if c != '\u{1b}' {
@@ -168,5 +223,5 @@ pub fn to_html(text: &str) -> String {
     if open {
         out.push_str("</span>");
     }
-    out
+    (out, style)
 }

@@ -76,7 +76,7 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     headers: HeaderMap,
 ) -> Response {
-    let page = Page::new(&headers, ui.docs_dir.is_some());
+    let page = Page::new(&headers, ui.docs_dir.is_some()).live("kinds=dag", "/");
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
         let ui = Arc::clone(&ui);
@@ -112,7 +112,18 @@ pub async fn dag<T: Transport>(
     Path((deployment, dag_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let page = Page::new(&headers, ui.docs_dir.is_some());
+    let page = Page::new(&headers, ui.docs_dir.is_some()).live(
+        &format!(
+            "deployment={}&dag={}",
+            path_segment(&deployment),
+            path_segment(&dag_id)
+        ),
+        &format!(
+            "/d/{}/dags/{}",
+            path_segment(&deployment),
+            path_segment(&dag_id)
+        ),
+    );
     let Some(deployment) = ui.deployments.iter().find(|d| d.name == deployment) else {
         return not_found_page(
             &page,

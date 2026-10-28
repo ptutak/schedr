@@ -30,3 +30,28 @@ use super::*;
 fn ansi_becomes_spans(#[case] text: &str, #[case] html: &str) {
     assert_eq!(to_html(text), html);
 }
+
+#[test]
+fn a_tails_parts_carry_the_colour_and_a_cut_escape() {
+    let mut converter = Converter::new();
+    assert_eq!(converter.push("plain \u{1b}"), "plain ");
+    assert_eq!(converter.push("[31mred"), "<span class=\"fg-1\">red</span>");
+    // Still red in the next part, until reset.
+    assert_eq!(
+        converter.push("more\u{1b}[0m done \u{1b}[1"),
+        "<span class=\"fg-1\">more</span> done "
+    );
+    assert_eq!(
+        converter.push(";32mbold"),
+        "<span class=\"fg-2 bold\">bold</span>"
+    );
+    // An OSC cut in two, and a two-byte escape.
+    assert_eq!(
+        converter.push("\u{1b}]0;ti"),
+        "<span class=\"fg-2 bold\"></span>"
+    );
+    assert_eq!(
+        converter.push("tle\u{7}x\u{1b}(Bz"),
+        "<span class=\"fg-2 bold\">xz</span>"
+    );
+}

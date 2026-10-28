@@ -10,7 +10,7 @@ that role is run on its own (see [Deployment](10-deployment.md#running-schedr-ui
 |---|---|---|---|
 | `schedr master` | Decides everything: when runs start, which worker runs which task, what a failure means. Its scheduling loop works in [rounds](04-master.md). | Never | Reads and writes the database |
 | `schedr worker` | A Rust agent that runs tasks and parses DAG files, each in a Python or shell subprocess. Keeps task logs on its disk. | Yes, in subprocesses | A journal on its own disk; no database |
-| `schedr webserver` | The REST API that the CLI and the web UI use. Reads state from the database; turns actions into **commands** for the master. | Never | Reads the database, writes only commands |
+| `schedr webserver` | The REST API that the CLI and the web UI use. Reads state from the database and follows what changed, for the UI's live pages; turns actions into **commands** for the master. | Never | Reads the database, writes only commands |
 | `schedr ui` | The web UI over one or more deployments' webservers. Talks only to their REST APIs. See [The web UI](12-ui.md). | Never | None of its own |
 | `schedr standalone` | All of the above in one process (SQLite or Postgres): local development, or one pod in production. Serves the web UI at `/` on the REST API's port; its deployment is named `default`. | Yes | SQLite file in the data directory, or Postgres |
 
@@ -24,6 +24,7 @@ flowchart LR
     web -- "reads state,<br/>writes commands" --> db[("database<br/>Postgres / SQLite")]
     master["master"] -- "reads and writes<br/>scheduling state" --> db
     db -. "NOTIFY: new command<br/>(Postgres)" .-> master
+    db -. "NOTIFY: what changed<br/>(Postgres)" .-> web
     worker1["worker"] -- "gRPC stream<br/>(the worker connects)" --> master
     worker2["worker"] -- "gRPC stream" --> master
     web -- "HTTP: task logs" --> worker1
@@ -37,6 +38,9 @@ flowchart LR
 - **The web UI talks only to webservers**, one per deployment (one is the common case). In
   `schedr standalone` that call stays inside the process, and the browser uses the REST API's
   port. The UI never reaches the master, the workers or the database.
+- **The webserver follows what each write changed**, and the UI's pages update from that.
+  On Postgres it is notified when the writing transaction commits. On SQLite it reads a table
+  of changes. See [Live updates](12-ui.md#live-updates).
 - **Workers always open the connection to the master**, never the other way round. Each keeps
   one long-lived gRPC stream; the master sends work and cancels over it at once.
 - **The webserver reads task logs from the worker that ran the task**: logs stay on the
@@ -63,7 +67,7 @@ API, the web UI and the ops port are plain HTTP. The ops port serves no data (se
 ## Where to go next
 
 - [Writing DAGs](../02-dags/index.md) is how to define the tasks this system runs.
-- [The web UI](12-ui.md) is the pages, the themes, the times and `/docs`.
+- [The web UI](12-ui.md) is the pages and how they update, the themes, the times and `/docs`.
 - [Life of a run](03-life-of-a-run.md) follows one run through every part.
 - [The master](04-master.md) explains the scheduling loop and its rounds.
 - [Workers](05-workers.md) covers what a worker does with a task, and how it survives restarts.

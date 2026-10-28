@@ -1,10 +1,11 @@
+<div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
 <div class="panel-head" data-task="{{ task_id }}">
   <h2 class="mono">{{ task_id }}</h2>
   <span class="state {{ state }}">{{ status }}</span>
   <a class="close" href="{{ close }}" aria-label="Close the task's panel">×</a>
 </div>
 <nav class="tabs">
-  {% for tab in tabs %}<a class="tab{% if tab.open %} open{% endif %}" data-tab="{{ tab.key }}" href="{{ tab.href }}" hx-get="{{ tab.panel }}" hx-target="#task-panel" hx-push-url="{{ tab.href }}">{{ tab.label }}</a>{% endfor %}
+  {% for tab in tabs %}<a class="tab{% if tab.open %} open{% endif %}" data-tab="{{ tab.key }}" href="{{ tab.href }}" hx-get="{{ tab.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ tab.href }}">{{ tab.label }}</a>{% endfor %}
 </nav>
 <div class="tab-body">
 {% match body %}
@@ -40,13 +41,14 @@
   <pre class="output">{{ text }}</pre>
 {% when TabBody::NoOutput %}
   <p class="empty">No output (yet).</p>
-{% when TabBody::Log with { html, cut, size, running, tries } %}
-  <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
+{% when TabBody::Log with { html, cut, size, running, tries, tail } %}
+  <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
   {% if cut %}<p class="dim">Only its end is shown (the last 256 KiB).</p>{% endif %}
-  <pre class="log">{{ html|safe }}</pre>
+  <pre class="log"{% if let Some(tail) = tail %} sse-connect="{{ tail }}" sse-swap="log" hx-swap="beforeend" sse-close="end"{% endif %}>{{ html|safe }}</pre>
 {% when TabBody::NoLog(why) %}
   <p class="empty">No log to show: {{ why }}</p>
 {% when TabBody::Cleanup %}
   <p class="empty">This task has no cleanup.</p>
 {% endmatch %}
+</div>
 </div>

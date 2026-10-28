@@ -146,6 +146,7 @@ struct RunsPage {
 pub async fn list<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     query: Result<Query<ListQuery>, QueryRejection>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
 ) -> Response {
     let page = Page::new(&headers, ui.docs_dir.is_some());
@@ -153,6 +154,16 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         Ok(Query(query)) => query.normalised(),
         Err(rejection) => return bad_request_page(&page, &rejection.body_text()),
     };
+    let mut follow = "kinds=run".to_owned();
+    for (key, value) in [("deployment", &query.deployment), ("dag", &query.dag)] {
+        if let Some(value) = value {
+            let _ = write!(follow, "&{key}={}", path_segment(value));
+        }
+    }
+    let here = uri
+        .query()
+        .map_or_else(|| "/runs".to_owned(), |q| format!("/runs?{q}"));
+    let page = page.live(&follow, &here);
     let api_query = match api_query(&query) {
         Ok(q) => q,
         Err(message) => return bad_request_page(&page, &message),
@@ -394,7 +405,11 @@ pub async fn run<T: Transport>(
     query: Result<Query<RunQuery>, QueryRejection>,
     headers: HeaderMap,
 ) -> Response {
-    let page = Page::new(&headers, ui.docs_dir.is_some());
+    let page = live_run(
+        Page::new(&headers, ui.docs_dir.is_some()),
+        &deployment,
+        &run_id,
+    );
     let query = match query {
         Ok(Query(query)) => query,
         Err(rejection) => return bad_request_page(&page, &rejection.body_text()),
@@ -483,6 +498,16 @@ pub async fn run<T: Transport>(
             page,
         },
         StatusCode::OK,
+    )
+}
+
+/// A run's page live: it follows the run, and reads its live parts again without the open
+/// panel (they don't depend on it).
+fn live_run(page: Page, deployment: &str, run_id: &str) -> Page {
+    let (deployment, run_id) = (path_segment(deployment), path_segment(run_id));
+    page.live(
+        &format!("deployment={deployment}&run={run_id}"),
+        &format!("/d/{deployment}/runs/{run_id}"),
     )
 }
 
@@ -738,6 +763,8 @@ pub enum TabBody {
         running: bool,
         /// The tries.
         tries: Vec<TryLink>,
+        /// While it runs: its tail, where the log continues (23A).
+        tail: Option<String>,
     },
     /// Why there is no log to show.
     NoLog(String),
@@ -748,6 +775,9 @@ pub enum TabBody {
 #[derive(Template)]
 #[template(path = "task_panel.html")]
 struct PanelFragment {
+    /// Where the panel is read again from when its task changes; empty on the log tab (the log
+    /// streams instead).
+    refresh: String,
     task_id: String,
     status: String,
     state: String,
@@ -911,7 +941,12 @@ async fn task_panel<T: Transport>(
             open: *key == tab,
         })
         .collect();
+    let refresh = match (tab, query.try_number) {
+        ("logs", _) => String::new(),
+        (tab, _) => format!("{panel_href}?tab={tab}"),
+    };
     let fragment = PanelFragment {
+        refresh,
         task_id: task_id.to_owned(),
         status: status(task),
         state: task.state.clone(),
@@ -1011,6 +1046,9 @@ async fn log_tab<T: Transport>(
         size: bytes(part.size),
         running: part.running,
         tries,
+        tail: part
+            .running
+            .then(|| format!("{panel_href}/tail?try={shown}&from={}", part.next)),
     })
 }
 

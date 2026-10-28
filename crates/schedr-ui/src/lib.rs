@@ -18,6 +18,7 @@ mod ansi;
 mod assets;
 mod docs;
 pub mod graph;
+pub mod live;
 pub mod page;
 mod pages;
 mod runs;
@@ -47,6 +48,7 @@ pub struct Ui<T> {
 /// `/d/<deployment>/runs/<run>` (and its tasks' panels), `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
+    let relays = Arc::new(live::Relays::new(ui.deployments.len()));
     Router::new()
         .route("/", get(pages::dags::<T>))
         .route("/d/{deployment}/dags/{dag}", get(pages::dag::<T>))
@@ -60,12 +62,19 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             "/d/{deployment}/runs/{run}/tasks/{task}/output.json",
             get(runs::output_download::<T>),
         )
+        .route("/events", get(live::events::<T>))
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}/tail",
+            get(live::tail::<T>),
+        )
         .route("/assets/style.css", get(assets::style))
+        .route(assets::SSE_PATH, get(assets::sse))
         .route(assets::HTMX_PATH, get(assets::htmx))
         .route("/docs", get(docs::to_index))
         .route("/docs/", get(docs::index::<T>))
         .route("/docs/{*path}", get(docs::file::<T>))
         .fallback(pages::not_found::<T>)
+        .layer(axum::Extension(relays))
         .layer(axum::middleware::map_response(vary_on_prefix))
         .with_state(Arc::new(ui))
 }

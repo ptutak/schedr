@@ -2900,6 +2900,7 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tower",
  "tracing",
  "utoipa",
@@ -2922,6 +2923,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tower",
 ]
 
@@ -3053,7 +3055,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tower",
+ "tracing",
 ]
 
 [[package]]

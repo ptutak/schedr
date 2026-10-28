@@ -24,6 +24,12 @@ pub struct Page {
     pub zone: Option<TimeZone>,
     /// Whether the documentation is served (a link in the header).
     pub docs: bool,
+    /// The page's stream of changes (`/events?...`), with the prefix; empty: the page isn't
+    /// live.
+    pub events: String,
+    /// Where the page's live parts are read again from when something changed, with the
+    /// prefix.
+    pub refresh: String,
 }
 
 impl Page {
@@ -34,7 +40,26 @@ impl Page {
             base: prefix(headers),
             zone: zone(headers),
             docs,
+            events: String::new(),
+            refresh: String::new(),
         }
+    }
+
+    /// This page live: it follows `/events?<follow>` and reads its live parts again from
+    /// `refresh` (both without the prefix, which is added).
+    #[must_use]
+    pub fn live(self, follow: &str, refresh: &str) -> Self {
+        Self {
+            events: format!("{}/events?{follow}", self.base),
+            refresh: format!("{}{refresh}", self.base),
+            ..self
+        }
+    }
+
+    /// Whether the page is live.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        !self.events.is_empty()
     }
 
     /// Whether the browser's zone is known (the script then doesn't reload the page).

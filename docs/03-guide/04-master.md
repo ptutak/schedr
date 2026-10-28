@@ -31,6 +31,16 @@ connection straight to Postgres for listening only (checked the same way);
 database error that shows a notification where an answer was expected says that a pooler is
 the likely cause.
 
+The webserver listens the same way, for the UI's live pages (see
+[Live updates](12-ui.md#live-updates)). It uses the same check and the same
+`[database] notifications_url`. When notifications are off, or the check finds a pooler in
+transaction mode, the webserver logs `the database's changes can't be followed (notifications
+off, or a pooler in transaction mode): live pages refresh every 5 s` when the first stream
+opens, and those pages refresh on that timer instead of hearing each change. On SQLite
+neither side listens. The master's commands wait for the next round. The writes append a row
+to `changes`, and the webserver reads the new rows every second, so the pages still follow
+each change.
+
 A round does six things, in order. Each handles at most so many items a round (commands 50,
 new runs' task instances 2,000, assignments 50, expiries 50, retries 100, scheduled runs 10 a
 DAG, waiting reasons 100), the rest first in the next round, so that no round takes seconds

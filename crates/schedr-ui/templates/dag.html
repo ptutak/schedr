@@ -2,6 +2,7 @@
 {% block title %}{{ row.dag_id }} · schedr{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %}</p>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 <h1>{{ row.dag_id }} {% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}</h1>
 {% if !description.is_empty() %}<p class="description">{{ description }}</p>{% endif %}
 {% if !conflicts.is_empty() %}
@@ -38,4 +39,5 @@
   </tbody>
 </table>
 {% endif %}
+</div>
 {% endblock %}

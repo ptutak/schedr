@@ -189,3 +189,70 @@ CREATE TABLE IF NOT EXISTS master_lease (
     epoch      INTEGER NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL
 );
+
+-- What changed, for the UI's live pages (see PROJECT.md, Web UI: 34A): one notification per
+-- changed run, DAG or the workers, sent when the writing transaction commits (Postgres drops
+-- a transaction's duplicates). `run <run id> <dag id>`, `dag <dag id>`, `workers`; DAG IDs
+-- have no spaces. Statement triggers: a round updating many rows notifies each run once.
+CREATE FUNCTION schedr_runs_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('schedr_changes', 'run ' || c.id::text || ' ' || c.dag_id)
+    FROM (SELECT DISTINCT id, dag_id FROM changed) c;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER runs_inserted AFTER INSERT ON runs REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_runs_changed();
+CREATE TRIGGER runs_updated AFTER UPDATE ON runs REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_runs_changed();
+
+CREATE FUNCTION schedr_task_instances_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('schedr_changes', 'run ' || r.id::text || ' ' || r.dag_id)
+    FROM (SELECT DISTINCT run_id FROM changed) c JOIN runs r ON r.id = c.run_id;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER task_instances_inserted AFTER INSERT ON task_instances
+    REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_task_instances_changed();
+CREATE TRIGGER task_instances_updated AFTER UPDATE ON task_instances
+    REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_task_instances_changed();
+
+CREATE FUNCTION schedr_attempts_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('schedr_changes', 'run ' || r.id::text || ' ' || r.dag_id)
+    FROM (SELECT DISTINCT task_instance_id FROM changed) c
+    JOIN task_instances t ON t.id = c.task_instance_id JOIN runs r ON r.id = t.run_id;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER attempts_inserted AFTER INSERT ON attempts REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_attempts_changed();
+CREATE TRIGGER attempts_updated AFTER UPDATE ON attempts REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_attempts_changed();
+
+CREATE FUNCTION schedr_dags_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('schedr_changes', 'dag ' || c.dag_id)
+    FROM (SELECT DISTINCT dag_id FROM changed) c;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER dags_inserted AFTER INSERT ON dags REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
+CREATE TRIGGER dags_updated AFTER UPDATE ON dags REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
+
+-- Only when a row changed: a statement trigger also fires for an UPDATE matching nothing (a
+-- heartbeat of a worker not registered).
+CREATE FUNCTION schedr_workers_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM changed) THEN
+        PERFORM pg_notify('schedr_changes', 'workers');
+    END IF;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER workers_inserted AFTER INSERT ON workers REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();
+CREATE TRIGGER workers_updated AFTER UPDATE ON workers REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();
+CREATE TRIGGER workers_deleted AFTER DELETE ON workers REFERENCING OLD TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();

@@ -21,6 +21,7 @@
   <button type="submit">Filter</button>
   {% if query.deployment.is_some() || query.dag.is_some() || query.state.is_some() || query.before.is_some() %}<a href="{{ page.base }}/runs">clear</a>{% endif %}
 </form>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}. Its runs are missing from this page and from the older ones reached from it; load this page again once it answers.</div>
 {% endfor %}
@@ -49,4 +50,5 @@
 </table>
 {% endif %}
 {% if let Some(next) = next %}<p class="pager"><a class="button" href="{{ next }}">Older runs</a></p>{% endif %}
+</div>
 {% endblock %}

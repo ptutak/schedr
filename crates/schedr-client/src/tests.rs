@@ -291,3 +291,37 @@ async fn the_router_transport_calls_the_api_in_process() {
         .unwrap();
     assert_eq!((plain.status, plain.body), (200, serde_json::Value::Null));
 }
+
+#[tokio::test]
+async fn events_stream_from_the_api_in_process() {
+    use axum::response::sse::{Event, Sse};
+    let app = axum::Router::new().route(
+        "/api/v1/events",
+        axum::routing::get(|| async {
+            let events = [("run", "{\"run_id\":\"r1\"}"), ("workers", "{}")].map(|(name, data)| {
+                Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data))
+            });
+            Sse::new(tokio_stream::iter(events))
+        }),
+    );
+    let api = Client::new(RouterTransport::new(app), Duration::ZERO, Duration::ZERO);
+    let mut events = api.events().await.unwrap();
+    let mut seen = Vec::new();
+    while let Some(event) = events.next().await {
+        let event = event.unwrap();
+        seen.push((event.name, event.data));
+    }
+    assert_eq!(
+        seen,
+        [
+            ("run".to_owned(), "{\"run_id\":\"r1\"}".to_owned()),
+            ("workers".to_owned(), "{}".to_owned())
+        ]
+    );
+    // A transport that can't stream says so.
+    let scripted = client(vec![]);
+    assert!(matches!(
+        scripted.events().await,
+        Err(ClientError::Unexpected(_))
+    ));
+}

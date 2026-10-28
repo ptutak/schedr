@@ -289,11 +289,28 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
             "rejected `load` isn't unschedulable"
         ]
     );
-    assert_eq!(texts(&html, "script[src]").len(), 1);
     assert_eq!(
         attrs(&html, "script[src]", "src"),
-        ["/assets/htmx-2.0.11.min.js"]
+        [
+            "/assets/htmx-2.0.11.min.js",
+            "/assets/htmx-ext-sse-2.2.4.js"
+        ]
     );
+    // Live: it follows its run, and reads its live parts again (without the panel) on a change.
+    assert_eq!(
+        attrs(&html, "body", "sse-connect"),
+        ["/events?deployment=etl&run=r2"]
+    );
+    assert_eq!(attrs(&html, "#live-head", "hx-get"), ["/d/etl/runs/r2"]);
+    // Every change counts: a change during a read is read again after it.
+    assert_eq!(attrs(&html, "#live-head", "hx-trigger"), ["sse:change"]);
+    assert_eq!(attrs(&html, "#live-head", "hx-sync"), ["this:queue last"]);
+    assert_eq!(
+        attrs(&html, "#live-head", "hx-select-oob"),
+        ["#live-graph,#live-tasks"]
+    );
+    assert_eq!(texts(&html, "#live-graph svg.dag a.node").len(), 3);
+    assert_eq!(texts(&html, "#live-tasks table.tasks").len(), 1);
 }
 
 #[tokio::test]
@@ -305,6 +322,12 @@ async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
     assert!(!html.contains("<html"), "a fragment, not a page");
     assert_eq!(texts(&html, ".panel-head h2"), ["load"]);
     assert_eq!(attrs(&html, ".panel-head", "data-task"), ["load"]);
+    // Read again on a change, unless something else is loading into the panel; a click on a
+    // tab replaces a refresh in flight (it would swap the tab it was for).
+    assert_eq!(attrs(&html, ".panel-live", "hx-sync"), ["#task-panel:drop"]);
+    assert_eq!(attrs(&html, ".panel-live", "hx-trigger"), ["sse:change"]);
+    let tab_syncs = attrs(&html, ".tabs a.tab", "hx-sync");
+    assert_eq!(tab_syncs, ["#task-panel:replace"; 4]);
     assert_eq!(attrs(&html, ".tabs .tab.open", "data-tab"), ["attempts"]);
     assert_eq!(
         texts(&html, "table.attempts tbody td:first-child"),

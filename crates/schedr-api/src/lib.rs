@@ -12,6 +12,7 @@ use utoipa::{Modify, OpenApi};
 
 pub mod docs;
 pub mod error;
+pub mod events;
 pub mod logs;
 pub mod metrics;
 pub mod routes;
@@ -48,6 +49,7 @@ pub use state::ApiState;
         routes::retry_task,
         routes::get_command,
         routes::list_workers,
+        events::events,
         routes::drain_worker,
         routes::resume_worker,
     ),
@@ -114,6 +116,7 @@ pub fn router(state: ApiState) -> Router {
             get(routes::list_runs).post(routes::trigger_run),
         )
         .route("/api/v1/runs", get(routes::list_all_runs))
+        .route("/api/v1/events", get(events::events))
         .route("/api/v1/runs/{run_id}", get(routes::get_run))
         .route("/api/v1/runs/{run_id}/dag", get(routes::get_run_dag))
         .route(

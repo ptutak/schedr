@@ -2,6 +2,9 @@
 {% block title %}Run {{ run.run_id }} · schedr{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %} <a href="{{ dag_href }}">{{ run.dag_id }}</a> / <a href="{{ runs_href }}">runs</a></p>
+<!-- The live parts: read again together when the run changes (one request: the head swaps
+     itself, the graph and the tasks with their commands swap out of band). -->
+<div id="live-head"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live-head" hx-select-oob="#live-graph,#live-tasks" hx-swap="outerHTML"{% endif %}>
 <h1>Run <span class="mono">{{ run.run_id }}</span> <span class="state {{ run.state }}">{{ run.state }}</span></h1>
 <p class="summary">{{ summary }}</p>
 {% if code_hashes.len() > 1 %}
@@ -17,8 +20,9 @@
   {% if !started_at.is_empty() %}<dt>Started</dt><dd>{{ started_at }}</dd>{% endif %}
   {% if !ended_at.is_empty() %}<dt>Ended</dt><dd>{{ ended_at }}</dd>{% endif %}
 </dl>
+</div>
 <div class="run-view">
-  <section class="graph">
+  <section class="graph" id="live-graph">
     <div class="legend"><span class="edge-key data"></span> takes the output <span class="edge-key order"></span> runs after</div>
     {% if graph.nodes.is_empty() %}
     <p class="empty">This DAG has no tasks.</p>
@@ -31,7 +35,7 @@
       {% for edge in graph.edges %}<path class="edge {{ edge.kind }}" d="{{ edge.path }}" marker-end="url(#arrow)"></path>
       {% endfor %}
       {% for node in graph.nodes %}
-      <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}">
+      <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}">
         <title>{{ node.task_id }} · {{ node.state }}</title>
         <rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>
         <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
@@ -45,16 +49,17 @@
   <aside id="task-panel" class="panel">{% if panel.is_empty() %}<p class="empty">Choose a task to see its attempts, output and log.</p>{% else %}{{ panel|safe }}{% endif %}</aside>
 </div>
 <script>
-// The graph marks the task whose panel htmx has just shown (none after an error).
-document.addEventListener("htmx:afterSwap", function (event) {
-  if (event.detail.target.id !== "task-panel") return;
-  var head = event.detail.target.querySelector(".panel-head[data-task]");
+// The graph marks the task whose panel is shown (none after an error), after any swap: a
+// new panel, or the graph read again.
+document.addEventListener("htmx:afterSettle", function () {
+  var head = document.querySelector("#task-panel .panel-head[data-task]");
   var task = head ? head.getAttribute("data-task") : null;
   document.querySelectorAll("svg.dag a.node").forEach(function (node) {
     node.classList.toggle("selected", node.getAttribute("data-task") === task);
   });
 });
 </script>
+<div id="live-tasks">
 <h2>Tasks</h2>
 {% if tasks.is_empty() %}
 <p class="empty">No tasks yet: the run hasn't started.</p>
@@ -64,7 +69,7 @@ document.addEventListener("htmx:afterSwap", function (event) {
   <tbody>
   {% for task in tasks %}
     <tr>
-      <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-push-url="{{ task.href }}">{{ task.task_id }}</a></td>
+      <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ task.href }}">{{ task.task_id }}</a></td>
       <td><span class="state {{ task.state }}">{{ task.status }}</span></td>
       <td>{{ task.tries }}</td>
       <td class="dim">{{ task.reason }}</td>
@@ -94,4 +99,5 @@ document.addEventListener("htmx:afterSwap", function (event) {
   </tbody>
 </table>
 {% endif %}
+</div>
 {% endblock %}

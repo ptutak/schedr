@@ -176,8 +176,10 @@ no musl wheel, so no compiler ends up in your image.
   into the URL by Kubernetes (`$(SCHEDR_DB_USER)`), so they must not contain `@ : / ? # %` or
   a space; or `database.existingSecret`, a Secret holding the whole URL. Any connection pooler
   can sit in between. Behind one in transaction mode the master finds it
-  and polls for new commands (see [the master](04-master.md)); `database.notificationsUrlKey`
-  names a key of the same Secret with a URL straight to Postgres, for listening only
+  and polls for new commands, and the webserver can't follow changes for the UI, so the live
+  pages refresh every 5 s (see [the master](04-master.md)). To listen anyway,
+  `database.notificationsUrlKey` names a key of the same Secret with a URL straight to
+  Postgres. The master and the webserver both use it
   (`database.postgres.notificationsHost` with `database.postgres`);
 - **what the database user needs:** its own database only. It owns the database (so it can
   create the schema in `public`, which Postgres 15 no longer lets everyone do), and can use

@@ -1189,6 +1189,27 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     cursors weren't worth it for a degraded case); an htmx request is answered with a
     fragment, errors too (htmx is set to swap 4xx/5xx), a browser's with the whole page;
     IDs in the API are UUIDs in the 8-4-4-4-12 form, lowercased (SQLite compares text).
+  - **How M3.3 follows changes** (Claude's, 2026-10-28, within 34A and 23A): the writes
+    signal them themselves, by triggers in the migrations, so nothing in the master's code
+    has to remember to: on Postgres statement triggers on `runs`, `task_instances`,
+    `attempts`, `dags` and `workers` `NOTIFY schedr_changes` once per changed run (`run <id>
+    <dag>`), DAG (`dag <id>`) or the workers, sent at commit, a transaction's duplicates
+    dropped by Postgres; on SQLite row triggers append to a `changes` table (pruned to about
+    the last 1,000 rows) that the webserver reads every second. The webserver follows them
+    once (started by the first subscriber; listening only through a connection checked not
+    to pass a pooler in transaction mode, as the master's commands) and serves `GET
+    /api/v1/events` (`run`, `dag`, `workers`, `refresh`; a keep-alive comment every 15 s);
+    when changes can't be followed (notifications off, a pooler without
+    `notifications_url`) it sends `refresh` every 5 s, and a client that fell behind gets
+    `refresh`. The UI relays one stream per deployment (reopened after 1 s, doubling to 30
+    s, with a `refresh` once back) and gives each page its own stream (`/events?…`) of
+    `change` events for what it shows; htmx reloads the page's live parts (one request; the
+    run page's head, graph and tasks swap together, its panel on its own, the log tab
+    excepted). A running try's log is tailed by the UI (`…/tail?try=&from=`): read every
+    second from where the page's text ended, a full 64 KiB part read again at once, sent as
+    `log` events until the attempt has ended and all of it is sent (`end`). Not chosen: the
+    master sending the changes itself (every write path would have to); a `changes` table
+    on Postgres too (writes in the master's hot path).
   - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
     through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
     process over the client's in-process transport and a real API; the graph layout by
@@ -5996,6 +6017,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | REST | `axum` | tokio-native, the same stack as `tonic` |
 | web UI templates | `askama` 0.16.1 | HTML templates checked at compile time, escaping by default (M3.1, decision 26A) |
 | UI interactions | htmx 2.0.11 (2026-09-22, 0BSD), vendored as `crates/schedr-ui/assets/htmx.min.js` | partial updates without a JavaScript build (decision 26A); from npm's tarball, its sha512 integrity checked; the file's sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (M3.2b) |
+| live updates in the UI | htmx's SSE extension, `htmx-ext-sse` 2.2.4 (2025-10-18, 0BSD), vendored as `crates/schedr-ui/assets/htmx-ext-sse.js` (its readable `sse.js`) | server-sent events into htmx triggers and swaps (M3.3, 34A, 23A); from npm's tarball, its sha512 integrity checked; the file's sha256 `3b5992a541619babefc4c169505af474df5c3039da51e59b96ccf9241ecd61d2` |
 | HTML in tests | `scraper` 0.29.0 (dev only) | the UI's pages read through a real HTML parser, by CSS selectors (M3.1) |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
 | Swagger UI | `utoipa-swagger-ui` 10.0.2 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); crc32fast 1.5.3, typed-path 0.12.4 and zopfli 0.8.4 locked; zip went 8 → 9.0.5 (a major, through utoipa-swagger-ui's vendored build), which brings nix 0.31.3, a new transitive crate |

@@ -743,6 +743,55 @@ async fn a_new_command_notifies_the_listener() {
 }
 
 #[tokio::test]
+async fn writes_announce_what_changed_once_per_run_dag_and_the_workers() {
+    use schedr_db::changes::Change;
+    let (db, version) = with_dag().await;
+    let mut changes = db.changes().await.unwrap().expect("Postgres listens");
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T07:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let within = std::time::Duration::from_secs(10);
+    let next = async |changes: &mut schedr_db::changes::Changes| {
+        tokio::time::timeout(within, changes.next())
+            .await
+            .expect("changes within 10 s")
+            .unwrap()
+    };
+    let run = Change::Run {
+        run_id: run_id.clone(),
+        dag_id: sync(),
+    };
+    assert_eq!(next(&mut changes).await, std::slice::from_ref(&run));
+    // Two task instances in one statement: the run once.
+    db.create_instances(
+        &run_id,
+        &[
+            (id("extract"), TaskInstanceState::Queued),
+            (id("load"), TaskInstanceState::Scheduled),
+        ],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next(&mut changes).await, std::slice::from_ref(&run));
+    db.set_paused(&sync(), true).await.unwrap();
+    assert_eq!(next(&mut changes).await, [Change::Dag { dag_id: sync() }]);
+    // A heartbeat of a worker not registered changes nothing: no notification.
+    db.worker_seen("w1", ts(NOW)).await.unwrap();
+    let quiet = tokio::time::timeout(std::time::Duration::from_secs(2), changes.next()).await;
+    assert!(quiet.is_err(), "{quiet:?}");
+    insert_worker(&db).await;
+    assert_eq!(next(&mut changes).await, [Change::Workers]);
+}
+
+#[tokio::test]
 async fn a_burst_of_commands_is_taken_with_its_first_notification() {
     let db = fresh().await;
     let mut notifications = db.command_notifications().await.unwrap().unwrap();
@@ -1149,4 +1198,17 @@ async fn waiting_reasons_are_set_together_on_postgres() {
     let ready = db.ready_instances(ts(NOW)).await.unwrap();
     assert_eq!(ready.len(), 3);
     assert!(ready.iter().all(|r| r.queued_reason.is_some()));
+}
+
+/// A worker row, written straight to the table.
+async fn insert_worker(db: &Database) {
+    sqlx::query(AssertSqlSafe(
+        "INSERT INTO workers (worker_id, incarnation_id, state, protocol_version, \
+         schedr_version, queues, slots, log_endpoint, registered_at, last_heartbeat_at) \
+         VALUES ('w1', gen_random_uuid(), 'active', '1.0', '0.1.0', '[]', 1, 'x', now(), now())"
+            .to_owned(),
+    ))
+    .execute(admin_pool(db))
+    .await
+    .unwrap();
 }

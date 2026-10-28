@@ -7,6 +7,7 @@ use jiff::Timestamp;
 use schedr_db::Database;
 use schedr_model::SchedrVersion;
 
+use crate::events::Feed;
 use crate::logs::{HttpLogSource, LogSource};
 use crate::metrics::ApiMetrics;
 
@@ -34,6 +35,8 @@ pub struct ApiState {
     pub logs: Arc<dyn LogSource>,
     /// The webserver's metrics.
     pub metrics: ApiMetrics,
+    /// What changed, for `GET /api/v1/events`.
+    pub feed: Feed,
 }
 
 impl ApiState {
@@ -41,6 +44,7 @@ impl ApiState {
     /// workers over plain HTTP (see [`Self::with_logs`]).
     #[must_use]
     pub fn new(db: Database, identity_header: Option<String>) -> Self {
+        let feed = Feed::new(db.clone());
         Self {
             db,
             version: SchedrVersion::current(),
@@ -49,6 +53,7 @@ impl ApiState {
             clock: Timestamp::now,
             logs: Arc::new(HttpLogSource::new(None)),
             metrics: ApiMetrics::default(),
+            feed,
         }
     }
 

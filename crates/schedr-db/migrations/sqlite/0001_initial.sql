@@ -189,3 +189,62 @@ CREATE TABLE IF NOT EXISTS master_lease (
     epoch      INTEGER NOT NULL,
     expires_at TEXT NOT NULL
 );
+
+-- What changed, for the UI's live pages (see PROJECT.md, Web UI: 34A): SQLite can't notify,
+-- so the writes append here and the webserver reads what is new about once a second. As on
+-- Postgres: `run <run id> <dag id>`, `dag <dag id>`, `workers`. It keeps the last 1,000 rows
+-- or so (every 1,000th insert drops the ones before the previous thousand).
+CREATE TABLE changes (
+    seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+    change TEXT NOT NULL
+);
+CREATE TRIGGER changes_pruned AFTER INSERT ON changes WHEN NEW.seq % 1000 = 0
+BEGIN
+    DELETE FROM changes WHERE seq <= NEW.seq - 1000;
+END;
+CREATE TRIGGER runs_inserted AFTER INSERT ON runs
+BEGIN
+    INSERT INTO changes (change) VALUES ('run ' || NEW.id || ' ' || NEW.dag_id);
+END;
+CREATE TRIGGER runs_updated AFTER UPDATE ON runs
+BEGIN
+    INSERT INTO changes (change) VALUES ('run ' || NEW.id || ' ' || NEW.dag_id);
+END;
+CREATE TRIGGER task_instances_inserted AFTER INSERT ON task_instances
+BEGIN
+    INSERT INTO changes (change)
+    SELECT 'run ' || id || ' ' || dag_id FROM runs WHERE id = NEW.run_id;
+END;
+CREATE TRIGGER task_instances_updated AFTER UPDATE ON task_instances
+BEGIN
+    INSERT INTO changes (change)
+    SELECT 'run ' || id || ' ' || dag_id FROM runs WHERE id = NEW.run_id;
+END;
+CREATE TRIGGER attempts_inserted AFTER INSERT ON attempts
+BEGIN
+    INSERT INTO changes (change)
+    SELECT 'run ' || r.id || ' ' || r.dag_id FROM task_instances t JOIN runs r ON r.id = t.run_id
+    WHERE t.id = NEW.task_instance_id;
+END;
+CREATE TRIGGER attempts_updated AFTER UPDATE ON attempts
+BEGIN
+    INSERT INTO changes (change)
+    SELECT 'run ' || r.id || ' ' || r.dag_id FROM task_instances t JOIN runs r ON r.id = t.run_id
+    WHERE t.id = NEW.task_instance_id;
+END;
+CREATE TRIGGER dags_inserted AFTER INSERT ON dags
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+CREATE TRIGGER dags_updated AFTER UPDATE ON dags
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+CREATE TRIGGER workers_inserted AFTER INSERT ON workers
+BEGIN
+    INSERT INTO changes (change) VALUES ('workers');
+END;
+CREATE TRIGGER workers_updated AFTER UPDATE ON workers
+BEGIN
+    INSERT INTO changes (change) VALUES ('workers');
+END;
