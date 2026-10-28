@@ -119,4 +119,6 @@ after its last retry, `cancelled` if a user cancelled it and nothing failed, oth
 `success`.
 
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
-it from the worker that ran the attempt (see [Workers](05-workers.md)).
+it from the worker that ran the attempt (see [Workers](05-workers.md)). The
+[run page](12-ui.md#a-run) shows that run: its state, its graph, its tasks, a task's
+attempts, output and log, and the commands about it.

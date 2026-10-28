@@ -13,12 +13,16 @@ axum.workspace = true
 jiff.workspace = true
 schedr-api.workspace = true
 schedr-client.workspace = true
+schedr-model.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
 pretty_assertions.workspace = true
+proptest.workspace = true
+rstest.workspace = true
 scraper.workspace = true
 tempfile.workspace = true
 tower.workspace = true

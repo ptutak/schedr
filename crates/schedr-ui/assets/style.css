@@ -19,6 +19,12 @@
   --waiting: #8a5a00;
   --waiting-bg: #fdf1d8;
   --neutral-bg: #eceef1;
+  --edge: #8b93a0;
+  /* The 16 terminal colours of logs. */
+  --ansi-0: #1d2127; --ansi-1: #b42318; --ansi-2: #1e7b3a; --ansi-3: #8a5a00;
+  --ansi-4: #1f5fbf; --ansi-5: #8e3aa8; --ansi-6: #0f7a85; --ansi-7: #5f6773;
+  --ansi-8: #6b7280; --ansi-9: #d93a2b; --ansi-10: #2f9e52; --ansi-11: #a87400;
+  --ansi-12: #3b7de0; --ansi-13: #b45ad1; --ansi-14: #179aa6; --ansi-15: #1d2127;
   color-scheme: light;
 }
 
@@ -38,6 +44,11 @@
   --waiting: #f2c46b;
   --waiting-bg: #3a2e14;
   --neutral-bg: #2a2f37;
+  --edge: #6b7482;
+  --ansi-0: #4b5260; --ansi-1: #ff8a80; --ansi-2: #6fd28d; --ansi-3: #f2c46b;
+  --ansi-4: #7fb0ff; --ansi-5: #d79bf0; --ansi-6: #62d3dc; --ansi-7: #c9ced6;
+  --ansi-8: #7d8592; --ansi-9: #ffaba3; --ansi-10: #95e3ad; --ansi-11: #f7d78f;
+  --ansi-12: #a6c8ff; --ansi-13: #e5bdf6; --ansi-14: #92e4ea; --ansi-15: #ffffff;
   color-scheme: dark;
 }
 
@@ -127,6 +138,8 @@ dl.facts dd { margin: 0; }
 .state.queued, .state.scheduled, .state.up_for_retry, .state.unschedulable {
   background: var(--waiting-bg); color: var(--waiting);
 }
+/* Cancelled and skipped: grey, but marked (an outline), unlike a state that says nothing. */
+.state.cancelled, .state.skipped, .state.interrupted { color: var(--text); box-shadow: inset 0 0 0 1px var(--dim); }
 
 .banner {
   border-radius: 8px;
@@ -136,3 +149,82 @@ dl.facts dd { margin: 0; }
 }
 .banner.warning { background: var(--failed-bg); color: var(--failed); border-color: transparent; }
 .banner ul { margin: 6px 0 0; }
+
+/* Lists: filters and paging. */
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
+.filters label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+input, select, button, .button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+button, .button { cursor: pointer; background: var(--surface); display: inline-block; }
+button:hover, .button:hover { border-color: var(--dim); text-decoration: none; }
+.pager { margin: 12px 0; }
+h2 .more { font-size: 13px; font-weight: 400; margin-left: 8px; }
+.summary { margin: -8px 0 12px; }
+
+/* A run: its graph beside the open task's panel. */
+.run-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 40%); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .run-view { grid-template-columns: 1fr; } }
+.graph, .panel { border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.graph-scroll { overflow: auto; max-height: 70vh; }
+.legend { color: var(--dim); font-size: 13px; margin-bottom: 8px; }
+.edge-key { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--edge); vertical-align: middle; margin: 0 4px 0 12px; }
+.edge-key:first-child { margin-left: 0; }
+.edge-key.order { border-top-style: dashed; }
+svg.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+svg.dag .edge.order { stroke-dasharray: 5 4; }
+svg.dag .arrow { fill: var(--edge); }
+svg.dag .node { cursor: pointer; }
+svg.dag .box { fill: var(--neutral-bg); stroke: var(--border); stroke-width: 1.5; }
+svg.dag .node:hover .box, svg.dag .node.selected .box { stroke: var(--link); stroke-width: 2.5; }
+svg.dag .box.success { fill: var(--ok-bg); stroke: var(--ok); }
+svg.dag .box.failed, svg.dag .box.upstream_failed { fill: var(--failed-bg); stroke: var(--failed); }
+svg.dag .box.running, svg.dag .box.cleaning_up { fill: var(--running-bg); stroke: var(--running); }
+svg.dag .box.queued, svg.dag .box.scheduled, svg.dag .box.up_for_retry, svg.dag .box.unschedulable { fill: var(--waiting-bg); stroke: var(--waiting); }
+svg.dag .box.cancelled { stroke: var(--dim); }
+svg.dag .box.skipped { stroke: var(--dim); stroke-dasharray: 2 3; }
+svg.dag .box.none { fill: var(--bg); stroke-dasharray: 4 3; }
+svg.dag text { fill: var(--text); font: 13px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+svg.dag text.sub { fill: var(--dim); font: 11px system-ui, sans-serif; }
+
+.panel-head { display: flex; align-items: center; gap: 10px; }
+.panel-head h2 { margin: 0; flex: 1; overflow-wrap: anywhere; }
+.panel-head .close { font-size: 20px; color: var(--dim); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 10px 0; }
+.tabs .tab { padding: 6px 10px; border-radius: 8px 8px 0 0; color: var(--dim); }
+.tabs .tab.open { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-bottom-color: var(--surface); margin-bottom: -1px; }
+.tries .try { padding: 0 6px; }
+.tries .try.open { font-weight: 700; color: var(--text); }
+.error { color: var(--failed); }
+tr.error-row td { border-top: none; padding-top: 0; }
+pre.log, pre.output {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 60vh;
+  overflow: auto;
+  font: 12px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.decision.applied { color: var(--ok); }
+.decision.rejected { color: var(--failed); }
+.decision.pending { color: var(--waiting); }
+
+/* Logs' terminal colours and styles. */
+.fg-0 { color: var(--ansi-0); } .fg-1 { color: var(--ansi-1); } .fg-2 { color: var(--ansi-2); } .fg-3 { color: var(--ansi-3); }
+.fg-4 { color: var(--ansi-4); } .fg-5 { color: var(--ansi-5); } .fg-6 { color: var(--ansi-6); } .fg-7 { color: var(--ansi-7); }
+.fg-8 { color: var(--ansi-8); } .fg-9 { color: var(--ansi-9); } .fg-10 { color: var(--ansi-10); } .fg-11 { color: var(--ansi-11); }
+.fg-12 { color: var(--ansi-12); } .fg-13 { color: var(--ansi-13); } .fg-14 { color: var(--ansi-14); } .fg-15 { color: var(--ansi-15); }
+.bg-0 { background: var(--ansi-0); } .bg-1 { background: var(--ansi-1); } .bg-2 { background: var(--ansi-2); } .bg-3 { background: var(--ansi-3); }
+.bg-4 { background: var(--ansi-4); } .bg-5 { background: var(--ansi-5); } .bg-6 { background: var(--ansi-6); } .bg-7 { background: var(--ansi-7); }
+.bg-8 { background: var(--ansi-8); } .bg-9 { background: var(--ansi-9); } .bg-10 { background: var(--ansi-10); } .bg-11 { background: var(--ansi-11); }
+.bg-12 { background: var(--ansi-12); } .bg-13 { background: var(--ansi-13); } .bg-14 { background: var(--ansi-14); } .bg-15 { background: var(--ansi-15); }
+pre.log .bold { font-weight: 700; } pre.log .faint { opacity: 0.7; }
+pre.log .italic { font-style: italic; } pre.log .underline { text-decoration: underline; }

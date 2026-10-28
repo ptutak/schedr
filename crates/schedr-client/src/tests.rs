@@ -120,6 +120,69 @@ async fn requests_go_to_the_api_paths_with_their_bodies() {
 }
 
 #[tokio::test]
+async fn the_run_pages_reads_go_to_their_paths() {
+    let api = client(vec![
+        (200, json!({"runs": []})),
+        (200, json!({"runs": []})),
+        (200, json!({"id": "sync"})),
+        (200, json!({"commands": []})),
+        (200, json!({"outcome": "SUCCESS", "value": 3})),
+        (
+            200,
+            json!({"attempt_id": "a1", "try_number": 2, "worker_id": "w1", "from": 5,
+                   "next": 9, "size": 9, "running": false, "content": "done"}),
+        ),
+    ]);
+    api.all_runs(&AllRunsQuery::default()).await.unwrap();
+    api.all_runs(&AllRunsQuery {
+        dag: Some(schedr_model::DagId::new("etl:a/b.py#c").unwrap()),
+        state: Some(schedr_model::RunState::Failed),
+        before: Some("2026-10-15T03:00:00.5+00:00".parse().unwrap()),
+        before_run: Some("r 9".to_owned()),
+        limit: Some(20),
+    })
+    .await
+    .unwrap();
+    assert_eq!(api.run_dag("r1").await.unwrap(), json!({"id": "sync"}));
+    api.run_commands("r1").await.unwrap();
+    let output = api.output("r1", "a b").await.unwrap();
+    assert_eq!(
+        output,
+        OutputView {
+            outcome: "SUCCESS".to_owned(),
+            value: json!(3)
+        }
+    );
+    let part = api.log_part("r1", "a b", 2, 5, 4).await.unwrap();
+    assert_eq!((part.from, part.content.as_str()), (5, "done"));
+    assert_eq!(
+        api.transport().seen(),
+        [
+            (Method::Get, "/api/v1/runs".to_owned(), None),
+            (
+                Method::Get,
+                "/api/v1/runs?dag=etl%3Aa%2Fb.py%23c&state=failed\
+                 &before=2026-10-15T03%3A00%3A00.5Z&before_run=r%209&limit=20"
+                    .to_owned(),
+                None
+            ),
+            (Method::Get, "/api/v1/runs/r1/dag".to_owned(), None),
+            (Method::Get, "/api/v1/runs/r1/commands".to_owned(), None),
+            (
+                Method::Get,
+                "/api/v1/runs/r1/tasks/a%20b/output".to_owned(),
+                None
+            ),
+            (
+                Method::Get,
+                "/api/v1/runs/r1/tasks/a%20b/attempts/2/log?from=5&limit=4".to_owned(),
+                None
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn waiting_reads_the_command_back_until_it_is_decided() {
     let api = client(vec![(200, command("pending")), (200, command("applied"))]);
     let pending: CommandView = serde_json::from_value(command("pending")).unwrap();

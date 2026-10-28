@@ -108,6 +108,29 @@ jobs:
       - run: cargo nextest run --workspace -E 'kind(test) & not binary(stress)'
       - run: uv run pytest python/tests/integration examples
 
+  # The web UI in a browser (decision 27A, `make test-ui`): a standalone with the example DAG
+  # and a run, driven by Playwright's Chromium; a job of its own for the browser download.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5,
+          # and without this input it installs the tarball without checking it.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+      - run: uv sync --group ui-test --python 3.14
+      - run: uv run --no-sync playwright install --with-deps chromium
+      - run: cargo build -p schedr
+      - run: uv run --no-sync pytest python/tests/ui
+        env:
+          SCHEDR_BIN: ${{ github.workspace }}/target/debug/schedr
+
   # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on
   # any warning.
   docs:

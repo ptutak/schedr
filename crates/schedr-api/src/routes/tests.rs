@@ -336,6 +336,130 @@ async fn runs_are_listed_and_read_with_their_tasks_and_attempts() {
 }
 
 #[tokio::test]
+async fn all_runs_are_listed_filtered_and_paged() {
+    let (app, _db, run_id) = api().await;
+    let (status, body) = get(&app, "/api/v1/runs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["runs"][0]["run_id"], json!(run_id));
+    assert_eq!(body["runs"][0]["dag_id"], "sync");
+    let runs =
+        async |query: &str| get(&app, &format!("/api/v1/runs?{query}")).await.1["runs"].clone();
+    let filtered = runs("dag=sync&state=running&limit=1").await;
+    assert_eq!(filtered[0]["run_id"], json!(run_id));
+    assert_eq!(runs("dag=ghost").await, json!([]));
+    assert_eq!(runs("state=failed").await, json!([]));
+    // Triggered at NOW: not before it.
+    assert_eq!(runs(&format!("before={NOW}")).await, json!([]));
+    let later = runs("before=2026-10-21T08:00:01Z").await;
+    assert_eq!(later[0]["run_id"], json!(run_id));
+    let page = runs(&format!("before=2026-10-21T08:00:00Z&before_run={run_id}")).await;
+    assert_eq!(page, json!([]));
+    let upper = run_id.to_ascii_uppercase();
+    let page = runs(&format!("before=2026-10-21T08:00:01Z&before_run={upper}")).await;
+    assert_eq!(page[0]["run_id"], json!(run_id));
+    for bad in [
+        "before_run=0190a3e5-0000-7000-8000-000000000000",
+        "before=2026-10-21T08:00:00Z&before_run=0190a3e50-000-7000-8000-000000000000",
+        "before=2026-10-21T08:00:00Z&before_run=r1",
+        "state=done",
+        "before=soon",
+        "dag=bad%20id",
+        "limit=-1",
+        "page=2",
+    ] {
+        let (status, _) = get(&app, &format!("/api/v1/runs?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_runs_graph_output_and_commands_are_read() {
+    let (app, db, run_id) = api().await;
+    let (status, graph) = get(&app, &format!("/api/v1/runs/{run_id}/dag")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(graph["id"], "sync");
+    assert_eq!(graph["tasks"][0]["id"], "extract");
+
+    let output = format!("/api/v1/runs/{run_id}/tasks/extract/output");
+    assert_eq!(
+        get(&app, &output).await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": format!("no output of `extract` in run `{run_id}`")})
+        )
+    );
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    db.store_output(&ready[0].instance_id, "SUCCESS", &json!([1, 2]))
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&app, &output).await,
+        (
+            StatusCode::OK,
+            json!({"outcome": "SUCCESS", "value": [1, 2]})
+        )
+    );
+    let (status, _) = get(
+        &app,
+        &format!("/api/v1/runs/{run_id}/tasks/bad%20id/output"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let commands = format!("/api/v1/runs/{run_id}/commands");
+    assert_eq!(
+        get(&app, &commands).await,
+        (StatusCode::OK, json!({"commands": []}))
+    );
+    let (status, cancel) = send(
+        &app,
+        Method::POST,
+        &format!("/api/v1/runs/{run_id}/cancel"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (_, listed) = get(&app, &commands).await;
+    assert_eq!(listed["commands"], json!([cancel]));
+
+    // Upper case is the same run (Postgres compares UUIDs; SQLite the text, so the API
+    // lowercases them), and its commands are found by the ID they were written with.
+    let upper = run_id.to_ascii_uppercase();
+    let (status, by_upper) = get(&app, &format!("/api/v1/runs/{upper}/commands")).await;
+    assert_eq!((status, by_upper), (StatusCode::OK, listed));
+    let (status, run) = get(&app, &format!("/api/v1/runs/{upper}")).await;
+    assert_eq!(
+        (status, &run["run"]["run_id"]),
+        (StatusCode::OK, &json!(run_id))
+    );
+    // Hex digits and dashes in the wrong places: refused, never sent to the database.
+    let misplaced = "0190a3e50-000-7000-8000-000000000000";
+    for path in ["", "/dag", "/commands", "/tasks/extract/output", "/cancel"] {
+        let method = if path == "/cancel" {
+            Method::POST
+        } else {
+            Method::GET
+        };
+        let (status, _) = send(&app, method, &format!("/api/v1/runs/{misplaced}{path}"), "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+    let missing = "0190a3e5-0000-7000-8000-000000000000";
+    for path in ["dag", "commands", "tasks/extract/output"] {
+        let (status, body) = get(&app, &format!("/api/v1/runs/{missing}/{path}")).await;
+        assert_eq!(
+            (status, body),
+            (
+                StatusCode::NOT_FOUND,
+                json!({"error": format!("no run `{missing}`")})
+            ),
+            "{path}"
+        );
+        let (status, _) = get(&app, &format!("/api/v1/runs/not-a-run/{path}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn a_database_failure_is_a_server_error() {
     let (app, db, _run) = api().await;
     let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {

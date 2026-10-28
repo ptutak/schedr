@@ -13,6 +13,7 @@ use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use schedr_db::reads::RunFilter;
 use schedr_model::commands::Command;
 use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, TaskId};
@@ -21,8 +22,9 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
-    AttemptList, CommandView, DagList, DagView, ErrorBody, LogChunk, LogQuery, PauseRequest,
-    RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
+    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody, LogChunk,
+    LogQuery, OutputView, PauseRequest, RunDetail, RunList, RunView, RunsQuery, TaskView,
+    TriggerRequest, WorkerList, WorkerView,
 };
 
 #[cfg(test)]
@@ -185,6 +187,96 @@ pub async fn trigger_run(
     .await
 }
 
+/// Runs of every DAG, newest triggered first (then by ID); filtered by DAG and state, paged
+/// with `before` and `before_run` (the last listed run's `triggered_at` and ID).
+#[utoipa::path(get, path = "/api/v1/runs", tag = "runs",
+    params(AllRunsQuery),
+    responses((status = 200, body = RunList), (status = 400, body = ErrorBody)))]
+pub async fn list_all_runs(
+    State(state): State<ApiState>,
+    query: Result<Query<AllRunsQuery>, QueryRejection>,
+) -> ApiResult<RunList> {
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    if query.before_run.is_some() && query.before.is_none() {
+        return Err(ApiError::BadRequest(
+            "`before_run` needs `before` (the run's `triggered_at`)".to_owned(),
+        ));
+    }
+    let before_run = query
+        .before_run
+        .as_deref()
+        .map(|id| parse_uuid(id, "run"))
+        .transpose()?;
+    let runs = state
+        .db
+        .runs(&RunFilter {
+            dag_id: query.dag,
+            state: query.state,
+            before: query.before,
+            before_run,
+            limit: query.limit.unwrap_or(DEFAULT_RUNS),
+        })
+        .await?;
+    Ok(Json(RunList {
+        runs: runs.iter().map(RunView::from).collect(),
+    }))
+}
+
+/// The DAG a run ran with: its version's DAG JSON (tasks, dependencies, settings), for its
+/// graph.
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/dag", tag = "runs",
+    params(("run_id" = String, Path, description = "The run's ID")),
+    responses((status = 200, body = Object), (status = 404, body = ErrorBody)))]
+pub async fn get_run_dag(
+    State(state): State<ApiState>,
+    Path(run_id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let run_id = known_run(&state, &run_id).await?.id;
+    state
+        .db
+        .run_dag_json(&run_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("no run `{run_id}`")))
+}
+
+/// A task's stored output in a run, with its outcome; 404 while it has none.
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/output", tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "The run's ID"),
+        ("task_id" = String, Path, description = "The task's ID")
+    ),
+    responses((status = 200, body = OutputView), (status = 404, body = ErrorBody)))]
+pub async fn get_output(
+    State(state): State<ApiState>,
+    Path((run_id, task_id)): Path<(String, String)>,
+) -> ApiResult<OutputView> {
+    let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let run_id = known_run(&state, &run_id).await?.id;
+    let (outcome, value) = state
+        .db
+        .run_task_output(&run_id, &task_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no output of `{task_id}` in run `{run_id}`")))?;
+    Ok(Json(OutputView { outcome, value }))
+}
+
+/// The commands about a run, oldest first: the trigger that made it, and cancelling it or
+/// cancelling or retrying its tasks, with the master's decisions.
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/commands", tag = "runs",
+    params(("run_id" = String, Path, description = "The run's ID")),
+    responses((status = 200, body = CommandList), (status = 404, body = ErrorBody)))]
+pub async fn list_run_commands(
+    State(state): State<ApiState>,
+    Path(run_id): Path<String>,
+) -> ApiResult<CommandList> {
+    let run_id = known_run(&state, &run_id).await?.id;
+    let commands = state.db.run_commands(&run_id).await?;
+    Ok(Json(CommandList {
+        commands: commands.iter().map(CommandView::from).collect(),
+    }))
+}
+
 /// A run with its tasks.
 #[utoipa::path(get, path = "/api/v1/runs/{run_id}", tag = "runs",
     params(("run_id" = String, Path, description = "The run's ID")),
@@ -194,11 +286,12 @@ pub async fn get_run(
     Path(run_id): Path<String>,
 ) -> ApiResult<RunDetail> {
     let run = known_run(&state, &run_id).await?;
-    let tasks = state.db.run_instances(&run_id).await?;
+    let run_id = &run.id;
+    let tasks = state.db.run_instances(run_id).await?;
     Ok(Json(RunDetail {
         run: RunView::from(&run),
         tasks: tasks.iter().map(TaskView::from).collect(),
-        code_hashes: state.db.run_code_hashes(&run_id).await?,
+        code_hashes: state.db.run_code_hashes(run_id).await?,
     }))
 }
 
@@ -212,7 +305,7 @@ pub async fn cancel_run(
     Path(run_id): Path<String>,
     headers: HeaderMap,
 ) -> Accepted {
-    parse_uuid(&run_id, "run")?;
+    let run_id = parse_uuid(&run_id, "run")?;
     submit(&state, &headers, Command::CancelRun { run_id }).await
 }
 
@@ -230,7 +323,7 @@ pub async fn cancel_task(
     Path((run_id, task_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Accepted {
-    parse_uuid(&run_id, "run")?;
+    let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     submit(&state, &headers, Command::CancelTask { run_id, task_id }).await
 }
@@ -248,7 +341,7 @@ pub async fn retry_task(
     Path((run_id, task_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Accepted {
-    parse_uuid(&run_id, "run")?;
+    let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     submit(&state, &headers, Command::RetryTask { run_id, task_id }).await
 }
@@ -265,7 +358,7 @@ pub async fn list_attempts(
     Path((run_id, task_id)): Path<(String, String)>,
 ) -> ApiResult<AttemptList> {
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    known_run(&state, &run_id).await?;
+    let run_id = known_run(&state, &run_id).await?.id;
     let attempts = state.db.task_attempts(&run_id, &task_id).await?;
     Ok(Json(AttemptList {
         attempts: attempts.iter().map(Into::into).collect(),
@@ -295,7 +388,7 @@ pub async fn get_log(
 ) -> ApiResult<LogChunk> {
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
-    known_run(&state, &run_id).await?;
+    let run_id = known_run(&state, &run_id).await?.id;
     let attempt = state
         .db
         .task_attempts(&run_id, &task_id)
@@ -390,7 +483,7 @@ pub async fn get_command(
     State(state): State<ApiState>,
     Path(command_id): Path<String>,
 ) -> ApiResult<CommandView> {
-    parse_uuid(&command_id, "command")?;
+    let command_id = parse_uuid(&command_id, "command")?;
     let command = state
         .db
         .command(&command_id)
@@ -429,10 +522,10 @@ async fn known_run(
     state: &ApiState,
     run_id: &str,
 ) -> Result<schedr_db::reads::RunRecord, ApiError> {
-    parse_uuid(run_id, "run")?;
+    let run_id = parse_uuid(run_id, "run")?;
     state
         .db
-        .run_record(run_id)
+        .run_record(&run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run `{run_id}`")))
 }
@@ -441,12 +534,20 @@ fn parse_dag_id(text: &str) -> Result<DagId, ApiError> {
     DagId::new(text).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 
-/// Run and command IDs are UUIDs; anything else can't exist (and Postgres would refuse it).
-fn parse_uuid(text: &str, what: &str) -> Result<(), ApiError> {
-    let hex = text.bytes().filter(u8::is_ascii_hexdigit).count();
-    let dashes = text.bytes().filter(|b| *b == b'-').count();
-    if text.len() == 36 && hex == 32 && dashes == 4 {
-        Ok(())
+/// Run and command IDs are UUIDs, `8-4-4-4-12` hex digits; anything else can't exist (and
+/// Postgres would refuse it). Lowercased, as schedr writes them: Postgres compares UUIDs
+/// whatever their case, SQLite compares the text, and commands name runs in JSON (text on both).
+fn parse_uuid(text: &str, what: &str) -> Result<String, ApiError> {
+    let canonical = text.len() == 36
+        && text.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        });
+    if canonical {
+        Ok(text.to_ascii_lowercase())
     } else {
         Err(ApiError::BadRequest(format!("`{text}` isn't a {what} ID")))
     }

@@ -6,11 +6,12 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::{DagView, LocationView, RunView};
+use schedr_api::views::{DagView, LocationView};
 use schedr_client::times::trigger_text;
 use schedr_client::{ClientError, Transport, path_segment};
 
 use crate::page::Page;
+use crate::runs::{RunRow, run_row};
 use crate::{Deployment, Ui};
 
 /// A DAG's row in the list.
@@ -57,25 +58,8 @@ struct DagPage {
     description: String,
     conflicts: Vec<String>,
     runs: Vec<RunRow>,
-}
-
-/// A run's row on its DAG's page.
-#[derive(Debug, Clone)]
-pub struct RunRow {
-    /// Its ID.
-    pub run_id: String,
-    /// `scheduled`, `manual`, ...
-    pub kind: String,
-    /// Its state (also its CSS class).
-    pub state: String,
-    /// The moment it is for, as people read it.
-    pub planned_for: String,
-    /// When it was triggered, as people read it.
-    pub triggered_at: String,
-    /// Who or what triggered it.
-    pub triggered_by: String,
-    /// When it ended, as people read it; empty while it runs.
-    pub ended_at: String,
+    /// The runs list filtered to this DAG.
+    runs_href: String,
 }
 
 /// An error page.
@@ -146,7 +130,11 @@ pub async fn dag<T: Transport>(
         Err(error) => return unavailable_page(&page, &deployment.name, &error),
     };
     let runs = match deployment.client.runs(&dag_id, None).await {
-        Ok(list) => list.runs.iter().map(|r| run_row(&page, r)).collect(),
+        Ok(list) => list
+            .runs
+            .iter()
+            .map(|r| run_row(&page, deployment, r))
+            .collect(),
         Err(error) => return unavailable_page(&page, &deployment.name, &error),
     };
     let conflicts = dag.conflict.iter().flatten().map(location).collect();
@@ -158,6 +146,12 @@ pub async fn dag<T: Transport>(
             several: ui.deployments.len() > 1,
             conflicts,
             runs,
+            runs_href: format!(
+                "{}/runs?deployment={}&dag={}",
+                page.base,
+                path_segment(&deployment.name),
+                path_segment(&dag_id)
+            ),
             page,
         },
         StatusCode::OK,
@@ -180,23 +174,30 @@ pub async fn not_found<T>(
 
 /// A 404 page saying `message`.
 pub fn not_found_page(page: &Page, message: &str) -> Response {
-    let error = ErrorPage {
-        page,
-        title: "Not found",
-        message,
-    };
-    render(&error, StatusCode::NOT_FOUND)
+    error_page(page, "Not found", message, StatusCode::NOT_FOUND)
 }
 
 /// A 502 page: a deployment's webserver didn't answer as it should.
-fn unavailable_page(page: &Page, deployment: &str, error: &ClientError) -> Response {
+pub fn unavailable_page(page: &Page, deployment: &str, error: &ClientError) -> Response {
     let message = format!("{deployment}: {error}");
-    let error = ErrorPage {
+    error_page(
         page,
-        title: "Deployment unavailable",
-        message: &message,
-    };
-    render(&error, StatusCode::BAD_GATEWAY)
+        "Deployment unavailable",
+        &message,
+        StatusCode::BAD_GATEWAY,
+    )
+}
+
+/// An error page titled `title` saying `message`, with `status`.
+pub fn error_page(page: &Page, title: &str, message: &str, status: StatusCode) -> Response {
+    render(
+        &ErrorPage {
+            page,
+            title,
+            message,
+        },
+        status,
+    )
 }
 
 fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow {
@@ -221,25 +222,13 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
     }
 }
 
-fn run_row(page: &Page, run: &RunView) -> RunRow {
-    RunRow {
-        run_id: run.run_id.clone(),
-        kind: run.kind.clone(),
-        state: run.state.clone(),
-        planned_for: page.time(&run.planned_for),
-        triggered_at: page.time(&run.triggered_at),
-        triggered_by: run.triggered_by.clone(),
-        ended_at: run.ended_at.map(|t| page.time(&t)).unwrap_or_default(),
-    }
-}
-
 /// Where a DAG is defined, as the CLI writes it: `root:path`.
 fn location(at: &LocationView) -> String {
     format!("{}:{}", at.root, at.path)
 }
 
 /// `template` as HTML with `status`; a template that fails to render (a bug) is a 500.
-fn render(template: &impl Template, status: StatusCode) -> Response {
+pub fn render(template: &impl Template, status: StatusCode) -> Response {
     match template.render() {
         Ok(html) => (status, Html(html)).into_response(),
         Err(error) => (

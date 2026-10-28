@@ -136,6 +136,22 @@
         ],
         "type": "object"
       },
+      "CommandList": {
+        "description": "The commands about a run.",
+        "properties": {
+          "commands": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommandView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "type": "object"
+      },
       "CommandView": {
         "description": "A command: an action the master applies, then marks `applied` or `rejected`.",
         "properties": {
@@ -356,6 +372,23 @@
         ],
         "type": "object"
       },
+      "OutputView": {
+        "description": "A task's stored output in a run.",
+        "properties": {
+          "outcome": {
+            "description": "The outcome the task finished with.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value it returned, as stored."
+          }
+        },
+        "required": [
+          "outcome",
+          "value"
+        ],
+        "type": "object"
+      },
       "PauseRequest": {
         "additionalProperties": false,
         "description": "Pausing a DAG.",
@@ -397,10 +430,10 @@
         "type": "object"
       },
       "RunList": {
-        "description": "A DAG's runs.",
+        "description": "Runs.",
         "properties": {
           "runs": {
-            "description": "Newest `planned_for` first.",
+            "description": "Newest first: a DAG's by `planned_for`; the list over every DAG by `triggered_at`, then\nrun ID.",
             "items": {
               "$ref": "#/components/schemas/RunView"
             },
@@ -1051,6 +1084,85 @@
         ]
       }
     },
+    "/api/v1/runs": {
+      "get": {
+        "operationId": "list_all_runs",
+        "parameters": [
+          {
+            "description": "Only this DAG's runs.",
+            "in": "query",
+            "name": "dag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only runs in this state: `queued`, `running`, `success`, `failed` or `cancelled`.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only runs triggered before this moment: the last listed run's `triggered_at`, for the\nnext page (with `before_run`).",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "With `before`: the last listed run's ID, so runs triggered at that same moment (a\nscheduler round triggers its runs together) are listed after it, by ID, not skipped.",
+            "in": "query",
+            "name": "before_run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many (default 50, at most 500).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Runs of every DAG, newest triggered first (then by ID); filtered by DAG and state, paged\nwith `before` and `before_run` (the last listed run's `triggered_at` and ID).",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/runs/{run_id}": {
       "get": {
         "operationId": "get_run",
@@ -1126,6 +1238,86 @@
           }
         },
         "summary": "Cancel a run (`schedr runs cancel`). Applied by the master; poll the command for the\ndecision.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/commands": {
+      "get": {
+        "operationId": "list_run_commands",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The commands about a run, oldest first: the trigger that made it, and cancelling it or\ncancelling or retrying its tasks, with the master's decisions.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/dag": {
+      "get": {
+        "operationId": "get_run_dag",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The DAG a run ran with: its version's DAG JSON (tasks, dependencies, settings), for its\ngraph.",
         "tags": [
           "runs"
         ]
@@ -1315,6 +1507,55 @@
           }
         },
         "summary": "Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if\nit hasn't started; the tasks downstream of it are cancelled. Applied by the master; poll\nthe command for the decision.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/output": {
+      "get": {
+        "operationId": "get_output",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputView"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A task's stored output in a run, with its outcome; 404 while it has none.",
         "tags": [
           "runs"
         ]

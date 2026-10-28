@@ -1141,7 +1141,54 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     serves it at `/docs` when that directory exists (`[ui] docs_dir`, also to turn it off),
     linked from the header: always the running version's, offline. Not chosen: embedded in the
     binary (8-10 MB more in the binary and wheel, Sphinx before every release build); a link to
-    hosted docs (a public site per version, internet from the browser).
+    hosted docs (a public site per version, internet from the browser). The docs are part of
+    the release (decision 29A, 2026-10-28): CI's wheel and image job waits for the docs job,
+    and `make image` / `make server-image` build the docs first, so a docs warning (the build
+    is strict) blocks wheels and images until it is fixed. Not chosen: an image without docs
+    when they are missing (an empty `/docs` shipped unnoticed); reusing a stale `dist/docs`
+    locally.
+  - **Decided ahead for M3.2b-M3.6** (the user, 2026-10-28, all at once so the steps could
+    run without stopping):
+    - **The run graph flows top to bottom** (30A): layers down the page, task names at full
+      width. Not chosen: left to right (Airflow's; names squeezed, long chains scroll
+      sideways).
+    - **A task's details open in a panel beside the graph** (31A), loaded with htmx; the same
+      panel is a URL of its own (`…/runs/<run>?task=<id>`, the whole page with it open), so
+      links and reloads work. Not chosen: a page per task (the graph lost meanwhile).
+    - **One merged runs list over every deployment** (32A), with a Deployment column when
+      there are several; one cursor (`triggered_at` and run ID) pages them all, as they share
+      that order; filters apply to each. Not chosen: a list per deployment.
+    - **A task's output: the last 64 KiB** of the pretty-printed value, marked as cut, and a
+      download of the whole (33, the user's: the tail is the more valuable part). Not
+      chosen: the whole output on the page; the first 64 KiB.
+    - **Live events say only what changed** (34A): "run R of DAG D", "DAG D", "workers"; the
+      UI re-renders that part from the API. The master `NOTIFY`s on Postgres; on SQLite
+      (standalone) the webserver polls about once a second. Not chosen: events carrying the
+      new state (a second format beside the API's views).
+    - **Actions are confirmed in a small dialog of our own** (35A, an HTML `<dialog>`) saying
+      what will happen; the result shows inline: pending, then applied or rejected with the
+      master's reason. Not chosen: the browser's `confirm()`.
+    - **The UI proves itself to webservers as master and workers do, by `[tls] mode`** (36,
+      the user's): in `app` mode by **mTLS on a second webserver port** serving the whole API,
+      for `schedr ui` only (its certificate's name checked, as `worker_name` is); in `mesh`
+      mode by a **shared token** on the public port (one per deployment in `[ui]
+      deployments`, from a Secret). Only a request so proven has its forwarded user name
+      trusted; the public port is unchanged for the CLI, ingress and standalone. Not chosen:
+      the API port itself HTTPS with optional client certificates (changes how everything
+      reaches it); trusting the network.
+    - **The chart deploys `schedr ui` by default** (37A, distributed mode): one replica and a
+      Service on 8082, its deployment `default` the release's own webserver; no Ingress, as
+      for the webserver. Not chosen: off by default.
+  - **Smaller choices made building M3.2** (Claude's, 2026-10-28; to revisit if wrong):
+    the graph scrolls inside its box, no pan/zoom helper yet (the vendored one PROJECT.md
+    mentions, when a graph needs it); long edges run straight down beside each layer's boxes
+    and bend only between layers (they never cut a box); a pair of tasks joined by both data
+    and order is one line, drawn as data; the log tab shows a try's last 256 KiB from its
+    first whole line; the merged runs list says a deployment that doesn't answer is missing
+    from that page and the older ones (one cursor can't place its runs; per-deployment
+    cursors weren't worth it for a degraded case); an htmx request is answered with a
+    fragment, errors too (htmx is set to swap 4xx/5xx), a browser's with the whole page;
+    IDs in the API are UUIDs in the 8-4-4-4-12 form, lowercased (SQLite compares text).
   - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
     through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
     process over the client's in-process transport and a real API; the graph layout by
@@ -5948,6 +5995,7 @@ Rust crates chosen for the implementation (versions pinned when added):
 | gRPC | `tonic` + `prost` | see Master–worker protocol |
 | REST | `axum` | tokio-native, the same stack as `tonic` |
 | web UI templates | `askama` 0.16.1 | HTML templates checked at compile time, escaping by default (M3.1, decision 26A) |
+| UI interactions | htmx 2.0.11 (2026-09-22, 0BSD), vendored as `crates/schedr-ui/assets/htmx.min.js` | partial updates without a JavaScript build (decision 26A); from npm's tarball, its sha512 integrity checked; the file's sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (M3.2b) |
 | HTML in tests | `scraper` 0.29.0 (dev only) | the UI's pages read through a real HTML parser, by CSS selectors (M3.1) |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
 | Swagger UI | `utoipa-swagger-ui` 10.0.2 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); crc32fast 1.5.3, typed-path 0.12.4 and zopfli 0.8.4 locked; zip went 8 → 9.0.5 (a major, through utoipa-swagger-ui's vendored build), which brings nix 0.31.3, a new transitive crate |

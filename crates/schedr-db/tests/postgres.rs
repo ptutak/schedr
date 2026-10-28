@@ -11,6 +11,7 @@ use pretty_assertions::assert_eq;
 use schedr_db::attempts::AttemptEnd;
 use schedr_db::dags::{DagChange, NewParse};
 use schedr_db::instances::InstanceUpdate;
+use schedr_db::reads::RunFilter;
 use schedr_db::runs::NewRun;
 use schedr_db::{Backend, Database, SchemaStatus};
 use schedr_model::commands::{Command, CommandStatus};
@@ -331,6 +332,165 @@ async fn with_instances() -> (Database, String) {
     .await
     .unwrap();
     (db, run_id)
+}
+
+#[tokio::test]
+async fn every_dags_runs_are_listed_filtered_and_paged() {
+    let (db, run_id) = with_instances().await;
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let older = db
+        .insert_run(&run(
+            &version,
+            RunKind::Scheduled,
+            RunState::Success,
+            "2026-10-21T01:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let filter = |state, before: Option<&str>| RunFilter {
+        dag_id: Some(sync()),
+        state,
+        before: before.map(ts),
+        before_run: None,
+        limit: 10,
+    };
+    let ids =
+        |runs: Vec<schedr_db::reads::RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let all = db
+        .runs(&RunFilter {
+            limit: 10,
+            ..RunFilter::default()
+        })
+        .await;
+    assert_eq!(ids(all.unwrap()), [run_id.as_str(), older.as_str()]);
+    let done = db.runs(&filter(Some(RunState::Success), None)).await;
+    assert_eq!(ids(done.unwrap()), [older.as_str()]);
+    let next = db.runs(&filter(None, Some("2026-10-21T07:00:00Z"))).await;
+    assert_eq!(ids(next.unwrap()), [older.as_str()]);
+    let other = RunFilter {
+        dag_id: Some(DagId::new("other").unwrap()),
+        limit: 10,
+        ..RunFilter::default()
+    };
+    assert_eq!(db.runs(&other).await.unwrap(), []);
+    // Runs triggered at the same moment page by ID, none skipped.
+    let mut together = Vec::new();
+    for planned_for in ["2026-10-19T01:00:00Z", "2026-10-20T01:00:00Z"] {
+        let new = NewRun {
+            triggered_at: ts("2026-10-21T00:00:00Z"),
+            ..run(&version, RunKind::Scheduled, RunState::Queued, planned_for)
+        };
+        together.push(db.insert_run(&new).await.unwrap().unwrap());
+    }
+    let after_newer = RunFilter {
+        before: Some(ts("2026-10-21T00:00:00Z")),
+        before_run: Some(together[1].clone()),
+        limit: 10,
+        ..RunFilter::default()
+    };
+    assert_eq!(
+        ids(db.runs(&after_newer).await.unwrap()),
+        [together[0].as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_runs_graph_output_and_commands_are_read() {
+    let (db, run_id) = with_instances().await;
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let older = db
+        .insert_run(&run(
+            &version,
+            RunKind::Scheduled,
+            RunState::Success,
+            "2026-10-21T01:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let graph = db.run_dag_json(&run_id).await.unwrap().unwrap();
+    assert_eq!(graph, serde_json::to_value(dag()).unwrap());
+    let unknown = "0190a3e5-0000-7000-8000-000000000000";
+    assert_eq!(db.run_dag_json(unknown).await.unwrap(), None);
+
+    assert_eq!(
+        db.run_task_output(&run_id, &id("extract")).await.unwrap(),
+        None
+    );
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    db.store_output(&ready[0].instance_id, "SUCCESS", &json!({"rows": 3}))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.run_task_output(&run_id, &id("extract")).await.unwrap(),
+        Some(("SUCCESS".to_owned(), json!({"rows": 3})))
+    );
+
+    let trigger = db
+        .insert_command(
+            &Command::TriggerRun {
+                dag_id: sync(),
+                planned_for: None,
+            },
+            "anna",
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let result = json!({"run_id": run_id});
+    db.decide_command(
+        &trigger,
+        CommandStatus::Applied,
+        None,
+        Some(&result),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let cancel = db
+        .insert_command(
+            &Command::CancelRun {
+                run_id: run_id.clone(),
+            },
+            "anna",
+            ts("2026-10-21T08:00:01Z"),
+        )
+        .await
+        .unwrap();
+    db.insert_command(
+        &Command::CancelRun {
+            run_id: older.clone(),
+        },
+        "anna",
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let paused = db
+        .insert_command(
+            &Command::PauseDag {
+                dag_id: sync(),
+                cancel_runs: true,
+            },
+            "anna",
+            ts("2026-10-21T08:00:02Z"),
+        )
+        .await
+        .unwrap();
+    let cancelled = json!({"cancelled_runs": [older, run_id]});
+    db.decide_command(
+        &paused,
+        CommandStatus::Applied,
+        None,
+        Some(&cancelled),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let commands = db.run_commands(&run_id).await.unwrap();
+    let ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, [trigger.as_str(), cancel.as_str(), paused.as_str()]);
 }
 
 #[tokio::test]

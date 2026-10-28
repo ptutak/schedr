@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.run_id }} · schedr{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %} <a href="{{ dag_href }}">{{ run.dag_id }}</a> / <a href="{{ runs_href }}">runs</a></p>
+<h1>Run <span class="mono">{{ run.run_id }}</span> <span class="state {{ run.state }}">{{ run.state }}</span></h1>
+<p class="summary">{{ summary }}</p>
+{% if code_hashes.len() > 1 %}
+<div class="banner warning">
+  The code changed during this run: its tasks ran on {{ code_hashes.len() }} versions of it.
+  <ul>{% for hash in code_hashes %}<li class="mono">{{ hash }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<dl class="facts">
+  <dt>For</dt><dd>{{ planned_for }}</dd>
+  <dt>Kind</dt><dd>{{ run.kind }}</dd>
+  <dt>Triggered</dt><dd>{{ triggered_at }} by {{ run.triggered_by }}</dd>
+  {% if !started_at.is_empty() %}<dt>Started</dt><dd>{{ started_at }}</dd>{% endif %}
+  {% if !ended_at.is_empty() %}<dt>Ended</dt><dd>{{ ended_at }}</dd>{% endif %}
+</dl>
+<div class="run-view">
+  <section class="graph">
+    <div class="legend"><span class="edge-key data"></span> takes the output <span class="edge-key order"></span> runs after</div>
+    {% if graph.nodes.is_empty() %}
+    <p class="empty">This DAG has no tasks.</p>
+    {% else %}
+    <div class="graph-scroll">
+    <svg class="dag" width="{{ graph.width }}" height="{{ graph.height }}" viewBox="0 0 {{ graph.width }} {{ graph.height }}" role="img" aria-label="The run's tasks and their dependencies">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker>
+      </defs>
+      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}" d="{{ edge.path }}" marker-end="url(#arrow)"></path>
+      {% endfor %}
+      {% for node in graph.nodes %}
+      <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}">
+        <title>{{ node.task_id }} · {{ node.state }}</title>
+        <rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>
+        <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
+        <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{{ node.state }}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
+      </a>
+      {% endfor %}
+    </svg>
+    </div>
+    {% endif %}
+  </section>
+  <aside id="task-panel" class="panel">{% if panel.is_empty() %}<p class="empty">Choose a task to see its attempts, output and log.</p>{% else %}{{ panel|safe }}{% endif %}</aside>
+</div>
+<script>
+// The graph marks the task whose panel htmx has just shown (none after an error).
+document.addEventListener("htmx:afterSwap", function (event) {
+  if (event.detail.target.id !== "task-panel") return;
+  var head = event.detail.target.querySelector(".panel-head[data-task]");
+  var task = head ? head.getAttribute("data-task") : null;
+  document.querySelectorAll("svg.dag a.node").forEach(function (node) {
+    node.classList.toggle("selected", node.getAttribute("data-task") === task);
+  });
+});
+</script>
+<h2>Tasks</h2>
+{% if tasks.is_empty() %}
+<p class="empty">No tasks yet: the run hasn't started.</p>
+{% else %}
+<table class="list tasks">
+  <thead><tr><th>Task</th><th>State</th><th>Tries</th><th>Waiting because</th><th>Changed</th></tr></thead>
+  <tbody>
+  {% for task in tasks %}
+    <tr>
+      <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-push-url="{{ task.href }}">{{ task.task_id }}</a></td>
+      <td><span class="state {{ task.state }}">{{ task.status }}</span></td>
+      <td>{{ task.tries }}</td>
+      <td class="dim">{{ task.reason }}</td>
+      <td>{{ task.updated_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<h2>Resources</h2>
+<p class="empty">This run has no resources.</p>
+<h2>Commands</h2>
+{% if commands.is_empty() %}
+<p class="empty">No commands about this run.</p>
+{% else %}
+<table class="list commands">
+  <thead><tr><th>Asked</th><th>By</th><th>Command</th><th>Decision</th></tr></thead>
+  <tbody>
+  {% for command in commands %}
+    <tr>
+      <td>{{ command.requested_at }}</td>
+      <td>{{ command.requested_by }}</td>
+      <td class="mono">{{ command.kind }}</td>
+      <td><span class="decision {{ command.status }}">{{ command.status }}</span>{% if !command.reason.is_empty() %} <span class="dim">{{ command.reason }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

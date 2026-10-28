@@ -14,10 +14,13 @@ use axum::Router;
 use axum::routing::get;
 use schedr_client::{Client, Transport};
 
+mod ansi;
 mod assets;
 mod docs;
+pub mod graph;
 pub mod page;
 mod pages;
+mod runs;
 
 #[cfg(test)]
 mod tests;
@@ -40,13 +43,25 @@ pub struct Ui<T> {
     pub docs_dir: Option<PathBuf>,
 }
 
-/// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/assets/...`, `/docs/...`.
+/// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
+/// `/d/<deployment>/runs/<run>` (and its tasks' panels), `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
     Router::new()
         .route("/", get(pages::dags::<T>))
         .route("/d/{deployment}/dags/{dag}", get(pages::dag::<T>))
+        .route("/runs", get(runs::list::<T>))
+        .route("/d/{deployment}/runs/{run}", get(runs::run::<T>))
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}",
+            get(runs::panel::<T>),
+        )
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}/output.json",
+            get(runs::output_download::<T>),
+        )
         .route("/assets/style.css", get(assets::style))
+        .route(assets::HTMX_PATH, get(assets::htmx))
         .route("/docs", get(docs::to_index))
         .route("/docs/", get(docs::index::<T>))
         .route("/docs/{*path}", get(docs::file::<T>))

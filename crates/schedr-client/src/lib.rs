@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AttemptList, CommandView, DagList, DagView, LogChunk, PauseRequest, RunDetail, RunList,
-    TriggerRequest, WorkerList,
+    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, LogChunk, OutputView,
+    PauseRequest, RunDetail, RunList, TriggerRequest, WorkerList,
 };
 use serde::de::DeserializeOwned;
 
@@ -359,6 +359,85 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// `GET /api/v1/runs?dag=...&state=...&before=...&before_run=...&limit=...`: runs of every DAG (or one),
+    /// newest triggered first.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn all_runs(&self, query: &AllRunsQuery) -> Result<RunList, ClientError> {
+        let mut params = Vec::new();
+        if let Some(dag) = &query.dag {
+            params.push(format!("dag={}", path(dag.as_str())));
+        }
+        if let Some(state) = query.state {
+            params.push(format!("state={state}"));
+        }
+        if let Some(before) = query.before {
+            params.push(format!("before={}", path(&before.to_string())));
+        }
+        if let Some(run_id) = &query.before_run {
+            params.push(format!("before_run={}", path(run_id)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
+        self.call(Method::Get, format!("/api/v1/runs{query}"), None)
+            .await
+    }
+
+    /// `GET /api/v1/runs/{run}/dag`: the DAG JSON of the version the run ran with.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn run_dag(&self, run_id: &str) -> Result<serde_json::Value, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/runs/{}/dag", path(run_id)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/runs/{run}/commands`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn run_commands(&self, run_id: &str) -> Result<CommandList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/runs/{}/commands", path(run_id)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/runs/{run}/tasks/{task}/output` (an error with status 404 while it has
+    /// none).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn output(&self, run_id: &str, task_id: &str) -> Result<OutputView, ClientError> {
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/runs/{}/tasks/{}/output",
+                path(run_id),
+                path(task_id)
+            ),
+            None,
+        )
+        .await
+    }
+
     /// `GET /api/v1/runs/{run}`.
     ///
     /// # Errors
@@ -404,6 +483,31 @@ impl<T: Transport> Client<T> {
             Method::Get,
             format!(
                 "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log?from={from}",
+                path(run_id),
+                path(task_id)
+            ),
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::log`], at most `limit` bytes (the API's limits apply).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::log`].
+    pub async fn log_part(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        try_number: u32,
+        from: u64,
+        limit: u64,
+    ) -> Result<LogChunk, ClientError> {
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log?from={from}&limit={limit}",
                 path(run_id),
                 path(task_id)
             ),
@@ -580,7 +684,6 @@ fn to_body(value: &impl serde::Serialize) -> Result<serde_json::Value, ClientErr
     serde_json::to_value(value).map_err(|e| ClientError::Unexpected(e.to_string()))
 }
 
-/// A path segment, with the characters that would break the path escaped.
 /// `segment` as one URL path segment: everything but letters, digits and `-._~`
 /// percent-encoded (a DAG ID may hold `/`, `:` and `#`).
 #[must_use]

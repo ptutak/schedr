@@ -347,6 +347,30 @@ impl Database {
         });
         row.map(record).transpose()
     }
+
+    /// The commands about a run, oldest first: those naming it (cancel it, cancel or retry one
+    /// of its tasks), the trigger that made it (its result names it) and a pause that cancelled
+    /// it (its result lists it). `run_id` as schedr writes IDs (lowercase).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn run_commands(&self, run_id: &str) -> Result<Vec<CommandRecord>, DbError> {
+        const OF_RUN: &str = "SELECT id{text}, kind, status, reason, result{text}, \
+            requested_by, {ts<}requested_at{>ts}, {ts<}decided_at{>ts} FROM commands \
+            WHERE payload ->> 'run_id' = $1 OR result ->> 'run_id' = $1 \
+            OR (kind = 'pause_dag' AND result{text} LIKE $2) \
+            ORDER BY requested_at, commands.id";
+        let rows: Vec<RecordRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, OF_RUN))
+                .bind(run_id)
+                // A UUID has no `%` or `_`; quoted, it is one element of `cancelled_runs`.
+                .bind(format!("%\"{run_id}\"%"))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(record).collect()
+    }
 }
 
 fn record(row: RecordRow) -> Result<CommandRecord, DbError> {

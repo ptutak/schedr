@@ -20,6 +20,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+schedr-model.workspace = true
 tokio.workspace = true
 rstest.workspace = true
 pretty_assertions.workspace = true

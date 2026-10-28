@@ -99,6 +99,8 @@ CREATE TABLE runs (
 CREATE UNIQUE INDEX runs_scheduled_once ON runs (dag_id, planned_for) WHERE kind = 'scheduled';
 CREATE INDEX runs_by_dag ON runs (dag_id, planned_for);
 CREATE INDEX runs_unfinished ON runs (state) WHERE state IN ('queued', 'running');
+-- The runs list over every DAG, newest triggered first (the UI's runs page).
+CREATE INDEX runs_by_trigger ON runs (triggered_at, id);
 
 CREATE TABLE task_instances (
     id            TEXT PRIMARY KEY,
@@ -173,6 +175,10 @@ CREATE TABLE commands (
 );
 
 CREATE INDEX commands_pending ON commands (requested_at) WHERE status = 'pending';
+-- A run's commands: those naming it, the trigger that made it, the pauses that cancelled it.
+CREATE INDEX commands_by_run ON commands ((payload ->> 'run_id'));
+CREATE INDEX commands_by_result_run ON commands ((result ->> 'run_id'));
+CREATE INDEX commands_pauses ON commands (requested_at) WHERE kind = 'pause_dag';
 
 -- The master's lease: one master per database (see PROJECT.md, Components and roles:
 -- production path). Also created before the migrations (`Database::create_lease_table`), so

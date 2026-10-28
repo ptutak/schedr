@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-dist docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -97,6 +97,15 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \
 	uv run pytest python/tests/integration examples
+
+# The web UI's browser tests (decision 27A): a standalone with the example DAG and a finished
+# run, driven by Playwright's Chromium (downloaded once, into ~/.cache/ms-playwright). Kept out
+# of `check` for that download; CI runs it as a job of its own.
+test-ui:         ## Run the web UI's browser tests (Playwright, Chromium)
+	cargo build -p schedr
+	uv sync --group ui-test
+	uv run --no-sync playwright install chromium
+	SCHEDR_BIN=$(abspath target/debug/schedr) uv run --no-sync pytest python/tests/ui
 
 # A local standalone for trying things by hand (development only): the debug binary just
 # built, the Python of `uv sync` (with schedr installed) for DAG files and tasks, SQLite and the

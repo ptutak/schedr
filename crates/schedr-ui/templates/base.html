@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}schedr{% endblock %}</title>
 <link rel="stylesheet" href="{{ page.base }}/assets/style.css">
+<!-- htmx swaps error answers in too (a panel that can't be shown says why); 204: nothing. -->
+<meta name="htmx-config" content='{"responseHandling": [{"code": "204", "swap": false}, {"code": "...", "swap": true}]}'>
+<script src="{{ page.base }}/assets/htmx-2.0.11.min.js" defer></script>
 <script>
 // Before the page paints: the theme (the one chosen here before, else the system's), and the
 // browser's time zone in a cookie for the server, which shows times in UTC and in this zone.
@@ -41,6 +44,7 @@ function schedrTheme() {
   <a class="brand" href="{{ page.base }}/">schedr</a>
   <nav>
     <a href="{{ page.base }}/">DAGs</a>
+    <a href="{{ page.base }}/runs">Runs</a>
     {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}
   </nav>
   <button class="theme" type="button" onclick="schedrTheme()" aria-label="Switch between light and dark">◐</button>

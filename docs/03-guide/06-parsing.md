@@ -61,7 +61,9 @@ A run keeps the DAG version it started with, but its tasks run the newest code. 
 its file is gone from the newest code, the attempt fails (`task_not_found`,
 `dag_file_missing`), and the error says how the DAG changed after the run started. While
 workers report different hashes of a root, the master logs a warning. A run whose attempts
-ran on different code lists its hashes in the API (`code_hashes`).
+ran on different code lists its hashes in the API (`code_hashes`), in the order the run
+first used them. The run page warns and lists them when there is more than one (see
+[A run](12-ui.md#a-run)).
 
 ## Upgrades
 

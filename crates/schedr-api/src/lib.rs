@@ -36,10 +36,14 @@ pub use state::ApiState;
         routes::unpause_dag,
         routes::list_runs,
         routes::trigger_run,
+        routes::list_all_runs,
         routes::get_run,
+        routes::get_run_dag,
+        routes::list_run_commands,
         routes::cancel_run,
         routes::list_attempts,
         routes::get_log,
+        routes::get_output,
         routes::cancel_task,
         routes::retry_task,
         routes::get_command,
@@ -109,7 +113,17 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/dags/{dag_id}/runs",
             get(routes::list_runs).post(routes::trigger_run),
         )
+        .route("/api/v1/runs", get(routes::list_all_runs))
         .route("/api/v1/runs/{run_id}", get(routes::get_run))
+        .route("/api/v1/runs/{run_id}/dag", get(routes::get_run_dag))
+        .route(
+            "/api/v1/runs/{run_id}/commands",
+            get(routes::list_run_commands),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/tasks/{task_id}/output",
+            get(routes::get_output),
+        )
         .route("/api/v1/runs/{run_id}/cancel", post(routes::cancel_run))
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/attempts",

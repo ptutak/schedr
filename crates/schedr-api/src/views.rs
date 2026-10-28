@@ -9,7 +9,7 @@ use schedr_db::commands::CommandRecord;
 use schedr_db::dags::StoredDag;
 use schedr_db::reads::{AttemptRecord, InstanceRecord, RunRecord};
 use schedr_db::workers::WorkerRecord;
-use schedr_model::DagLocation;
+use schedr_model::{DagId, DagLocation, RunState};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -128,10 +128,11 @@ impl From<&RunRecord> for RunView {
     }
 }
 
-/// A DAG's runs.
+/// Runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RunList {
-    /// Newest `planned_for` first.
+    /// Newest first: a DAG's by `planned_for`; the list over every DAG by `triggered_at`, then
+    /// run ID.
     pub runs: Vec<RunView>,
 }
 
@@ -348,6 +349,49 @@ pub struct RunsQuery {
     /// At most this many (default 50, at most 500).
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+/// Which runs to list, over every DAG.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct AllRunsQuery {
+    /// Only this DAG's runs.
+    #[serde(default)]
+    #[param(value_type = Option<String>)]
+    pub dag: Option<DagId>,
+    /// Only runs in this state: `queued`, `running`, `success`, `failed` or `cancelled`.
+    #[serde(default)]
+    #[param(value_type = Option<String>)]
+    pub state: Option<RunState>,
+    /// Only runs triggered before this moment: the last listed run's `triggered_at`, for the
+    /// next page (with `before_run`).
+    #[serde(default)]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub before: Option<Timestamp>,
+    /// With `before`: the last listed run's ID, so runs triggered at that same moment (a
+    /// scheduler round triggers its runs together) are listed after it, by ID, not skipped.
+    #[serde(default)]
+    pub before_run: Option<String>,
+    /// At most this many (default 50, at most 500).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// A task's stored output in a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct OutputView {
+    /// The outcome the task finished with.
+    pub outcome: String,
+    /// The value it returned, as stored.
+    pub value: serde_json::Value,
+}
+
+/// The commands about a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CommandList {
+    /// Oldest first.
+    pub commands: Vec<CommandView>,
 }
 
 /// Which part of a log to read.

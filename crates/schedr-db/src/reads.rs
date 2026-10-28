@@ -145,7 +145,92 @@ const RUN_COLUMNS_OF_DAG: &str = "SELECT id{text}, dag_id, kind, state, {ts<}pla
     {ts<}ended_at{>ts} FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
     ORDER BY planned_for DESC, triggered_at DESC, id DESC LIMIT $3";
 
+const RUNS_FILTERED: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
+    {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
+    {ts<}ended_at{>ts} FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
+    AND ($2 IS NULL OR state = $2) AND ($3{ts} IS NULL OR triggered_at < $3{ts} \
+    OR ($5{uuid} IS NOT NULL AND triggered_at = $3{ts} AND id < $5{uuid})) \
+    ORDER BY triggered_at DESC, runs.id DESC LIMIT $4";
+
+/// Which runs [`Database::runs`] lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunFilter {
+    /// Only this DAG's.
+    pub dag_id: Option<DagId>,
+    /// Only runs in this state.
+    pub state: Option<RunState>,
+    /// Only runs listed after this point: triggered before this moment, or at it with a
+    /// lower ID than `before_run` (the next page: the last run shown's `triggered_at` and ID;
+    /// a scheduler round triggers its runs at the same moment).
+    pub before: Option<Timestamp>,
+    /// The last run shown, with `before` (ignored without it).
+    pub before_run: Option<String>,
+    /// At most this many (capped at [`MAX_RUNS`]).
+    pub limit: u32,
+}
+
 impl Database {
+    /// Runs of every DAG (or one), newest triggered first, filtered by `filter`.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, DbError> {
+        let rows: Vec<RunRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, RUNS_FILTERED))
+                .bind(filter.dag_id.as_ref().map(DagId::as_str))
+                .bind(filter.state.map(|s| s.to_string()))
+                .bind(filter.before.map(db_time))
+                .bind(i64::from(filter.limit.min(MAX_RUNS)))
+                .bind(filter.before_run.as_deref())
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(run_record).collect()
+    }
+
+    /// The DAG JSON of the version a run ran with (its graph); `None` for an unknown run.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored JSON doesn't read.
+    pub async fn run_dag_json(&self, run_id: &str) -> Result<Option<serde_json::Value>, DbError> {
+        const DAG: &str = "SELECT v.dag_json{text} FROM runs r \
+            JOIN dag_versions v ON v.id = r.dag_version_id WHERE r.id = $1{uuid}";
+        let row: Option<(String,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, DAG))
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(json,)| from_json("dag_versions.dag_json", &json))
+            .transpose()
+    }
+
+    /// A task's stored output in a run, with its outcome; `None` when it has none (yet).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored value doesn't read.
+    pub async fn run_task_output(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+    ) -> Result<Option<(String, serde_json::Value)>, DbError> {
+        const OUTPUT: &str = "SELECT o.outcome, o.value{text} FROM outputs o \
+            JOIN task_instances t ON t.id = o.task_instance_id \
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2";
+        let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, OUTPUT))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(outcome, value)| Ok((outcome, from_json("outputs.value", &value)?)))
+            .transpose()
+    }
+
     /// A DAG's runs, newest `planned_for` first, at most `limit` (capped at [`MAX_RUNS`]);
     /// only those for `planned_for` when given.
     ///

@@ -12,6 +12,8 @@ use tower::ServiceExt;
 
 use super::*;
 
+mod runs;
+
 /// A webserver's API answering from a script: path -> (status, body); anything else 404.
 #[derive(Debug, Clone, Default)]
 struct Scripted {
@@ -295,10 +297,13 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (status, _) = get(&app, "/docs", &[]).await;
     assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
     let (_, page) = get(&app, "/", &[]).await;
-    assert_eq!(attrs(&page, "header nav a", "href"), ["/", "/docs/"]);
+    assert_eq!(
+        attrs(&page, "header nav a", "href"),
+        ["/", "/runs", "/docs/"]
+    );
     // Without a directory: no link, no pages.
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
-    assert_eq!(attrs(&page, "header nav a", "href"), ["/"]);
+    assert_eq!(attrs(&page, "header nav a", "href"), ["/", "/runs"]);
 }
 
 #[tokio::test]

@@ -105,6 +105,12 @@ async fn payloads_that_dont_read_are_reported_for_rejection() {
     let pending = db.pending_commands().await.unwrap();
     assert_eq!(pending[0].id, id);
     assert!(pending[0].command.is_err());
+    // Damaged outside schedr: the index over `result` (evaluated on every write) refuses
+    // anything but JSON, so it goes first.
+    sqlx::query("DROP INDEX commands_by_result_run")
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query(AssertSqlSafe(
         "UPDATE commands SET status = 'applied', result = 'not json'".to_owned(),
     ))
@@ -153,4 +159,106 @@ async fn a_command_marked_applying_reads_so_until_decided() {
         .await
         .unwrap();
     assert_eq!(db.pending_commands().await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn a_runs_commands_are_those_naming_it_and_its_trigger() {
+    let db = migrated().await;
+    let run = "0190a3e5-0000-7000-8000-000000000001";
+    let other = "0190a3e5-0000-7000-8000-000000000002";
+    let trigger = db
+        .insert_command(
+            &Command::TriggerRun {
+                dag_id: DagId::new("sync").unwrap(),
+                planned_for: None,
+            },
+            "anna",
+            ts("2026-10-21T08:00:00Z"),
+        )
+        .await
+        .unwrap();
+    db.decide_command(
+        &trigger,
+        CommandStatus::Applied,
+        None,
+        Some(&json!({"run_id": run})),
+        ts("2026-10-21T08:00:01Z"),
+    )
+    .await
+    .unwrap();
+    let retry = db
+        .insert_command(
+            &Command::RetryTask {
+                run_id: run.to_owned(),
+                task_id: schedr_model::TaskId::new("extract").unwrap(),
+            },
+            "piotr",
+            ts("2026-10-21T08:00:03Z"),
+        )
+        .await
+        .unwrap();
+    let cancel = db
+        .insert_command(
+            &Command::CancelRun {
+                run_id: run.to_owned(),
+            },
+            "piotr",
+            ts("2026-10-21T08:00:02Z"),
+        )
+        .await
+        .unwrap();
+    db.insert_command(
+        &Command::CancelRun {
+            run_id: other.to_owned(),
+        },
+        "piotr",
+        ts("2026-10-21T08:00:02Z"),
+    )
+    .await
+    .unwrap();
+    db.insert_command(&pause(), "anna", ts("2026-10-21T08:00:02Z"))
+        .await
+        .unwrap();
+    // A pause that cancelled it (and another run) lists it in its result.
+    let paused = db
+        .insert_command(
+            &Command::PauseDag {
+                dag_id: DagId::new("sync").unwrap(),
+                cancel_runs: true,
+            },
+            "anna",
+            ts("2026-10-21T08:00:04Z"),
+        )
+        .await
+        .unwrap();
+    db.decide_command(
+        &paused,
+        CommandStatus::Applied,
+        None,
+        Some(&json!({"cancelled_runs": [other, run]})),
+        ts("2026-10-21T08:00:05Z"),
+    )
+    .await
+    .unwrap();
+
+    let commands = db.run_commands(run).await.unwrap();
+    let ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            trigger.as_str(),
+            cancel.as_str(),
+            retry.as_str(),
+            paused.as_str()
+        ]
+    );
+    assert_eq!(commands[0].result, Some(json!({"run_id": run})));
+    assert_eq!(commands[0].status, CommandStatus::Applied);
+    assert_eq!(db.run_commands(other).await.unwrap().len(), 2);
+    assert_eq!(
+        db.run_commands("0190a3e5-0000-7000-8000-000000000003")
+            .await
+            .unwrap(),
+        []
+    );
 }

@@ -2,8 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Vendored files stay byte for byte as published (their hashes are in PROJECT.md).
       - id: trailing-whitespace
+        exclude: ^crates/schedr-ui/assets/.*\.min\.js$
       - id: end-of-file-fixer
+        exclude: ^crates/schedr-ui/assets/.*\.min\.js$
       - id: check-toml
       - id: check-yaml
         # Kubernetes manifests hold several documents.

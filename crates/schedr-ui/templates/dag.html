@@ -15,7 +15,7 @@
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>
   {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
 </dl>
-<h2>Runs</h2>
+<h2>Runs <a class="more" href="{{ runs_href }}">all runs of this DAG</a></h2>
 {% if runs.is_empty() %}
 <p class="empty">No runs yet.</p>
 {% else %}
@@ -26,7 +26,7 @@
   <tbody>
   {% for run in runs %}
     <tr>
-      <td class="mono">{{ run.run_id }}</td>
+      <td class="mono"><a href="{{ run.href }}">{{ run.run_id }}</a></td>
       <td><span class="state {{ run.state }}">{{ run.state }}</span></td>
       <td>{{ run.planned_for }}</td>
       <td>{{ run.kind }}</td>

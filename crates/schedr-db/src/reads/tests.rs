@@ -121,6 +121,164 @@ async fn a_dags_runs_are_listed_newest_first_and_can_be_filtered() {
     );
 }
 
+/// Defines DAG `other` (the same tasks as `sync`) and returns its version's ID.
+async fn add_other_dag(db: &Database) -> String {
+    let mut other = dag();
+    other.id = DagId::new("other").unwrap();
+    let change = DagChange::Define {
+        dag: Box::new(other),
+        parse_id: db
+            .insert_parse(&NewParse {
+                root: "etl",
+                content_hash: "h2",
+                schedr_version: "0.1.0",
+                worker_id: "w1",
+                parsed_at: ts("2026-10-01T00:00:00Z"),
+                files: &[],
+            })
+            .await
+            .unwrap(),
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], ts("2026-10-01T00:00:00Z"))
+        .await
+        .unwrap();
+    db.active_dags()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|d| d.dag.id.as_str() == "other")
+        .unwrap()
+        .version_id
+}
+
+#[tokio::test]
+async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
+    let (db, version) = with_dag().await;
+    let other_version = add_other_dag(&db).await;
+    let first = add_run(&db, &version, "2026-10-14T03:00:00Z", RunState::Success).await;
+    let second = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Failed).await;
+    let other = db
+        .insert_run(&NewRun {
+            dag_id: &DagId::new("other").unwrap(),
+            dag_version_id: &other_version,
+            kind: RunKind::Manual,
+            state: RunState::Success,
+            planned_for: ts("2026-10-16T03:00:00Z"),
+            since: ts("2026-10-01T00:00:00Z"),
+            triggered_at: ts("2026-10-16T03:00:00Z"),
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let ids = |runs: Vec<RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let filter = |dag: Option<&str>, state, before: Option<&str>, limit| RunFilter {
+        dag_id: dag.map(|d| DagId::new(d).unwrap()),
+        state,
+        before: before.map(ts),
+        before_run: None,
+        limit,
+    };
+
+    let all = db.runs(&filter(None, None, None, 10)).await.unwrap();
+    assert_eq!(all[0].dag_id.as_str(), "other");
+    assert_eq!(ids(all), [other.as_str(), second.as_str(), first.as_str()]);
+    let sync_only = db.runs(&filter(Some("sync"), None, None, 10)).await;
+    assert_eq!(ids(sync_only.unwrap()), [second.as_str(), first.as_str()]);
+    let successes = db
+        .runs(&filter(None, Some(RunState::Success), None, 10))
+        .await;
+    assert_eq!(ids(successes.unwrap()), [other.as_str(), first.as_str()]);
+    let page = db.runs(&filter(None, None, None, 2)).await.unwrap();
+    let next = db
+        .runs(&filter(None, None, Some("2026-10-15T03:00:00Z"), 2))
+        .await;
+    assert_eq!(ids(page), [other.as_str(), second.as_str()]);
+    assert_eq!(ids(next.unwrap()), [first.as_str()]);
+    let both = db
+        .runs(&filter(Some("sync"), Some(RunState::Failed), None, 10))
+        .await;
+    assert_eq!(ids(both.unwrap()), [second.as_str()]);
+    let capped = db.runs(&filter(None, None, None, u32::MAX)).await;
+    assert_eq!(capped.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn runs_triggered_together_are_paged_by_id_none_skipped() {
+    let (db, version) = with_dag().await;
+    let together = "2026-10-21T08:00:00Z";
+    let mut created = Vec::new();
+    for planned_for in [
+        "2026-10-18T03:00:00Z",
+        "2026-10-19T03:00:00Z",
+        "2026-10-20T03:00:00Z",
+    ] {
+        let run = NewRun {
+            dag_id: &sync(),
+            dag_version_id: &version,
+            kind: RunKind::Scheduled,
+            state: RunState::Queued,
+            planned_for: ts(planned_for),
+            since: ts("2026-10-01T00:00:00Z"),
+            triggered_at: ts(together),
+            triggered_by: "scheduler",
+        };
+        created.push(db.insert_run(&run).await.unwrap().unwrap());
+    }
+    let page = |before: Option<&str>, before_run: Option<&String>| RunFilter {
+        before: before.map(ts),
+        before_run: before_run.cloned(),
+        limit: 2,
+        ..RunFilter::default()
+    };
+    let first: Vec<String> = db
+        .runs(&page(None, None))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(first, [created[2].clone(), created[1].clone()]);
+    let next = db
+        .runs(&page(Some(together), Some(&first[1])))
+        .await
+        .unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].id, created[0]);
+    // The time alone skips what is left at that moment.
+    assert_eq!(db.runs(&page(Some(together), None)).await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn a_runs_dag_and_a_tasks_output_are_read() {
+    let (db, version) = with_dag().await;
+    let run_id = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    let stored = db.run_dag_json(&run_id).await.unwrap().unwrap();
+    assert_eq!(stored, serde_json::to_value(dag()).unwrap());
+    let unknown = "0190a3e5-0000-7000-8000-000000000000";
+    assert_eq!(db.run_dag_json(unknown).await.unwrap(), None);
+
+    let now = ts("2026-10-15T03:00:01Z");
+    db.create_instances(&run_id, &[(extract(), TaskInstanceState::Queued)], now)
+        .await
+        .unwrap();
+    assert_eq!(db.run_task_output(&run_id, &extract()).await.unwrap(), None);
+    let instance = db.ready_instances(now).await.unwrap()[0]
+        .instance_id
+        .clone();
+    db.store_output(&instance, "SUCCESS", &json!({"rows": 3}))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.run_task_output(&run_id, &extract()).await.unwrap(),
+        Some(("SUCCESS".to_owned(), json!({"rows": 3})))
+    );
+    let missing = TaskId::new("load").unwrap();
+    assert_eq!(db.run_task_output(&run_id, &missing).await.unwrap(), None);
+    assert_eq!(db.run_task_output(unknown, &extract()).await.unwrap(), None);
+}
+
 #[tokio::test]
 async fn a_runs_instances_and_attempts_are_shown() {
     let (db, version) = with_dag().await;

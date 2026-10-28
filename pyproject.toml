@@ -26,6 +26,11 @@ dev = [
     "pyyaml==6.0.3",
     "jsonschema>=4.25",
 ]
+# The web UI's browser tests (`make test-ui`, decision 27A); not in `uv sync`'s default.
+ui-test = [
+    "playwright==1.64.0",
+    "pytest-playwright==0.10.0",
+]
 docs = [
     "furo>=2025.12.19",
     "myst-parser>=5.1.0",
@@ -105,7 +110,8 @@ packages = ["schedr"]
 
 # --- pytest -------------------------------------------------------------
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+# python/tests/ui needs the `ui-test` group and a browser: `make test-ui` runs it.
+testpaths = ["python/tests/unit", "python/tests/integration"]
 pythonpath = ["python"]
 # importlib: test files with the same name in different folders don't clash, and test folders
 # need no __init__.py (see PROJECT.md, Repository and tooling: Testing).
