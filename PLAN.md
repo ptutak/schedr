@@ -265,13 +265,26 @@ policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.
 `webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
 Claude, no docs round).
 
-## After M3: sign-in against LDAP
+## M6: sign-in against LDAP
 
-Planned (the user, 2026-10-28, with decision 39: no users of schedr's own): a sign-in mode of
-its own, `[*.auth] mode = "ldap"`, checking HTTP Basic credentials against the organisation's
-LDAP (a bind), with a section of its settings, for deployments without Istio/Keycloak. To decide when it starts: the settings (server URL,
-bind DN pattern or search, TLS), how the bind password reaches the pod with Helm as the only
-way in, and remembering checks as `users_file` does.
+Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode
+of its own, `[*.auth] mode = "ldap"`, checking HTTP Basic credentials against the
+organisation's directory (a bind), for deployments without Istio and Keycloak (decision 39: no
+users of schedr's own). Decisions laid out on 2026-10-28, to take when M6 starts:
+
+- **45, finding the person's entry:** A search, then bind (a service account searches
+  `(uid={user})` under a base DN, then the password is checked by binding as the DN found;
+  works with Active Directory and people in several OUs; the service account's password from
+  a Secret); B a DN template (`uid={user},ou=people,…`; no service account; fails across OUs);
+  C both.
+- **46, who may sign in:** A an optional `group_dn` (members only when set, by `memberOf` or a
+  group search); B a group required; C none (any valid account). Membership isn't a role.
+- **47, the connection:** A TLS required (`ldaps://` or StartTLS, an optional CA file; plain
+  `ldap://` only on loopback); B plain allowed with a flag and a warning.
+- **Settled by precedent:** `ldap3` 0.12.1 (checked 2026-10-28, re-check its age then); a check
+  that passed remembered 5 minutes as `basic`'s; `behind_tls_proxy` beyond loopback; the bind
+  password from a mounted Secret, never the configuration; a wrong password, an unknown user
+  and a non-member answered alike, in comparable time. Tested against an OpenLDAP container.
 
 ## Testing approach
 

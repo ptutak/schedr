@@ -609,7 +609,8 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     which has no mTLS, proves the UI's calls by the **shared token** whatever `[tls] mode`
     says (decision 36's mTLS port is a distributed webserver's, in `app` mode).
   - **Not planned: several masters on one database, each with its own workers** (the user's
-    idea, 2026-10-24, first recorded for M6; superseded the same day by the federated view
+    idea, 2026-10-24, first recorded as M6, a number LDAP sign-in has since; superseded the
+    same day by the federated view
     above, kept as the alternative should one deployment not carry a load that can't be
     split by DAG). Today one master leads
     and a standby waits. The idea: masters share the database, each leading part of the
@@ -1382,10 +1383,11 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     proved clumsy with Helm as the only way in (no kubectl, no helm-secrets). Not chosen:
     users in a database managed by admins on a Users page (`schedr ui` given a database, a
     first admin from a setup code in its log, a sign-in page and sessions). Planned instead,
-    after M3 (the user's, 2026-10-28): a mode of its own, `mode = "ldap"`, checking HTTP
-    Basic credentials against the organisation's LDAP (a bind) with a section of its settings;
-    users stay in the directory, schedr keeps none. Still open, if a deployment without Istio/Keycloak needs
-    more: the chart putting oauth2-proxy in front of the UI for any OIDC provider
+    in M6 (the user's, 2026-10-28, postponed from after M3): a mode of its own,
+    `mode = "ldap"`, checking HTTP Basic credentials against the organisation's LDAP (a bind)
+    with a section of its settings; users stay in the directory, schedr keeps none. Still
+    open, if a deployment without Istio/Keycloak needs more: the chart putting oauth2-proxy
+    in front of the UI for any OIDC provider
     (`proxy_header` behind it), or schedr speaking OIDC itself (`jwt` above).
   - **How `schedr ui` proves itself follows `[tls] mode`, as the master's and workers' links
     do** (decision 40A, the user's, 2026-10-28): in `app` mode, mTLS on the webserver's UI
@@ -6598,7 +6600,8 @@ gRPC, journal) come before breadth of features.
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; **federated from the start**: one UI over a list of deployments (one the common case; each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
-| **M6. Several masters on one database (not planned)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |
+| **M6. Sign-in against LDAP** | `[*.auth] mode = "ldap"`: HTTP Basic credentials checked against the organisation's directory (a bind), for deployments without Istio and Keycloak; users stay in the directory, schedr keeps none (decision 39); the chart's values for it, the bind password from a Secret. Decisions laid out for it (2026-10-28, the user's: postponed to M6): 45 how the person's entry is found (search then bind; a DN template; both), 46 who may sign in (an optional group; a required one; none), 47 the connection's encryption (TLS required; plain allowed with a flag) | a person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests |
+| **Several masters on one database (superseded, not a milestone)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |
 | **Later** | the "possibly later" items (e.g. time waits and pushed events, see Sensors and triggers) | — |
 
 - **The fork server is M2.5**, after M2 and before M3: everything it builds on (the watchdog,
