@@ -909,3 +909,37 @@ fn ui_port_in_mesh_is_refused_in_app_mode() {
     config.tls.mode = TlsMode::Mesh;
     assert!(check_ui_port(&config).is_ok());
 }
+
+#[tokio::test]
+async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
+    let listener = listen(loopback()).await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = watch::channel(0);
+    let served = tokio::spawn(async move {
+        let health = Health::new(Duration::from_secs(120));
+        serve_api(
+            memory_db().await,
+            (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+            (listener, None),
+            None,
+            Some(LocalUi { docs_dir: None }),
+            Observed {
+                metrics: ApiMetrics::default(),
+                health: &health,
+                ready: health.starting("webserver"),
+            },
+            stopped,
+        )
+        .await
+    });
+    // A page's stream, open (as a browser tab keeps it).
+    let stream = reqwest::get(format!("{base}/api/v1/events")).await.unwrap();
+    assert_eq!(stream.status(), reqwest::StatusCode::OK);
+    let _ = stop.send(1);
+    tokio::time::timeout(REQUESTS_GRACE + Duration::from_secs(5), served)
+        .await
+        .expect("stopped although a stream was open")
+        .unwrap()
+        .unwrap();
+    drop(stream);
+}

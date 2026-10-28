@@ -217,12 +217,12 @@ async fn a_dag_page_shows_its_facts_and_runs_in_utc_and_local_time() {
     assert_eq!(
         texts(&html, "table.runs tbody td:nth-child(3)"),
         [
-            "2026-10-15 01:00 UTC · 03:00 CEST",
-            "2026-10-15 01:00 UTC · 03:00 CEST"
+            "2026-10-15 01:00 UTC (03:00 CEST)",
+            "2026-10-15 01:00 UTC (03:00 CEST)"
         ]
     );
     // The zone is known: no reload, no "UTC only" note.
-    assert!(!html.contains("location.reload()"));
+    assert!(!html.contains("schedr-tz-reloaded"));
     assert_eq!(texts(&html, "footer.note"), Vec::<String>::new());
 }
 
@@ -234,7 +234,7 @@ async fn without_the_zone_times_are_utc_and_the_page_says_so() {
         texts(&html, "table.runs tbody td:nth-child(3)")[0],
         "2026-10-15 01:00 UTC"
     );
-    assert!(html.contains("location.reload()"));
+    assert!(html.contains("schedr-tz-reloaded"));
     assert_eq!(
         texts(&html, "footer.note"),
         ["Times in UTC (the local time zone isn't known yet)."]

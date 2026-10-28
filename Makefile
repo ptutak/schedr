@@ -111,12 +111,14 @@ test-ui:         ## Run the web UI's browser tests (Playwright, Chromium)
 # built, the Python of `uv sync` (with schedr installed) for DAG files and tasks, SQLite and the
 # worker's data in .schedr/ in this repository (git-ignored; open .schedr/schedr.db in an IDE),
 # the DAGs of DAGS (default examples/). The API on LISTEN:8080, all addresses by default so it
-# can be reached from outside WSL (it has no authentication: LISTEN=127.0.0.1 on a network you
-# don't trust; `schedr dags list` works without --server with either), ops on 8090. Ctrl-C stops
-# it; `rm -rf .schedr` starts afresh.
+# can be reached from outside WSL (it signs no one in, auth mode none: LISTEN=127.0.0.1 on a
+# network you don't trust; `schedr dags list` works without --server with either), ops on 8090.
+# Ctrl-C stops it; `rm -rf .schedr` starts afresh. Python tasks fork from a fork server as the chart's do
+# (FORK_SERVER=false: spawned, as the configuration's default; Linux only).
 DAGS ?= examples
 STANDALONE_DIR ?= .schedr
 LISTEN ?= 0.0.0.0
+FORK_SERVER ?= true
 
 standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/)
 	cargo build -p schedr
@@ -124,6 +126,8 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
 	SCHEDR_CONFIG__DATABASE__URL="sqlite://$(abspath $(STANDALONE_DIR))/schedr.db" \
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
+	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
+	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in

@@ -33,6 +33,32 @@
     {% endif %}
   }
 })();
+// A page hidden for a while closes its streams (B25): over plain HTTP/1.1 a browser opens at
+// most six connections to one host across its tabs, and a stream holds one for as long as it is
+// open, so tabs in the background would keep other pages from loading. Shown again, the page
+// reloads (its state is in its URL). Not while an action's dialog is open.
+var schedrHiddenClose = 10000;
+(function () {
+  var sources = [];
+  var timer = null;
+  var closed = false;
+  document.addEventListener("htmx:sseOpen", function (event) {
+    sources.push(event.detail.source);
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      timer = setTimeout(function () {
+        if (schedrDialogOpen() || sources.length === 0) return;
+        sources.forEach(function (source) { source.close(); });
+        sources = [];
+        closed = true;
+      }, schedrHiddenClose);
+      return;
+    }
+    clearTimeout(timer);
+    if (closed) location.reload();
+  });
+})();
 // A live page's stream may be held back by a proxy that buffers it: when nothing (not even a
 // ping, every 15 s) has come for 30 s, its live parts are read again every 5 s.
 (function () {

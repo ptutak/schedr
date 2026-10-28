@@ -254,7 +254,7 @@ async fn a_trigger_reports_the_new_run_and_warns_about_utc() {
     );
     assert!(out.starts_with("triggered run "), "{out}");
     assert!(
-        out.ends_with(" of sync for 2026-10-15 01:00 UTC · 03:00 CEST (running)\n"),
+        out.ends_with(" of sync for 2026-10-15 01:00 UTC (03:00 CEST) (running)\n"),
         "{out}"
     );
     let (json, err) = runs(&client, trigger(None), &json_output()).await;
@@ -281,7 +281,7 @@ async fn runs_are_listed_and_cancelled() {
         "{out}"
     );
     assert!(
-        lines[1].ends_with("manual  running  2026-10-15 01:00 UTC · 03:00 CEST  anonymous"),
+        lines[1].ends_with("manual  running  2026-10-15 01:00 UTC (03:00 CEST)  anonymous"),
         "{out}"
     );
     let run_id = lines[1].split_whitespace().next().unwrap().to_owned();
@@ -428,7 +428,7 @@ async fn workers_are_listed_as_a_table() {
     assert_eq!(
         workers(&client, WorkersCommand::List, &text()).await,
         "WORKER  STATE   RUNNING  QUEUES         LAST SEEN                          WARNINGS\n\
-         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST  0\n"
+         w1      active  0/4      default,large  2026-10-21 08:00 UTC (10:00 CEST)  0\n"
     );
     let disabled = schedr_db::workers::WorkerWarning {
         kind: "fork_server_disabled".to_owned(),
@@ -444,7 +444,7 @@ async fn workers_are_listed_as_a_table() {
     assert_eq!(
         workers(&client, WorkersCommand::List, &text()).await,
         "WORKER  STATE   RUNNING  QUEUES         LAST SEEN                          WARNINGS\n\
-         w1      active  0/4      default,large  2026-10-21 08:00 UTC · 10:00 CEST  1\n\
+         w1      active  0/4      default,large  2026-10-21 08:00 UTC (10:00 CEST)  1\n\
          w1: the preloaded fork server is disabled: preloading `polars` failed\n"
     );
     let listed: serde_json::Value =

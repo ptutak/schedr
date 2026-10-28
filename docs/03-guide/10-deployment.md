@@ -351,9 +351,12 @@ tasks, and everything in `.schedr/` in the repository (git-ignored): the SQLite 
 the UI at `http://<address>:8080/`, Swagger UI at `http://<address>:8080/api/v1/docs/`;
 `schedr dags list` needs no `--server` with `0.0.0.0` or `127.0.0.1`) and the ops port on
 8090. A build tree has no documentation directory at `[ui] docs_dir`'s default, so `/docs`
-appears once that key points at one (`site` after `make docs`). The API and the UI have no
-authentication: on a network you don't trust, run `make standalone LISTEN=127.0.0.1`. Ctrl-C
-stops it; `rm -rf .schedr` starts afresh.
+appears once that key points at one (`site` after `make docs`). Python tasks fork from a fork
+server, as in the chart's pods (see [The fork server](05-workers.md#the-fork-server));
+`FORK_SERVER=false` spawns them, as the configuration's default does. It signs no one in
+(auth mode `none`): on a network you don't trust, run `make standalone LISTEN=127.0.0.1`.
+Ctrl-C stops it, after cutting the pages' open event streams about 3 seconds after the stop;
+`rm -rf .schedr` starts afresh.
 
 ## Running `schedr ui`
 

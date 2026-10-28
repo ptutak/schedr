@@ -55,15 +55,15 @@ fn times_are_shown_in_utc_and_local() {
     let new_york = TimeZone::get("America/New_York").unwrap();
     assert_eq!(
         show(ts("2026-10-15T03:00:00Z"), &warsaw),
-        "2026-10-15 03:00 UTC · 05:00 CEST"
+        "2026-10-15 03:00 UTC (05:00 CEST)"
     );
     assert_eq!(
         show(ts("2026-10-15T01:00:00Z"), &new_york),
-        "2026-10-15 01:00 UTC · 2026-10-14 21:00 EDT"
+        "2026-10-15 01:00 UTC (2026-10-14 21:00 EDT)"
     );
     assert_eq!(
         show(ts("2026-12-15T03:00:15Z"), &warsaw),
-        "2026-12-15 03:00:15 UTC · 04:00:15 CET"
+        "2026-12-15 03:00:15 UTC (04:00:15 CET)"
     );
     assert_eq!(
         show(ts("2026-10-15T03:00:00Z"), &TimeZone::UTC),

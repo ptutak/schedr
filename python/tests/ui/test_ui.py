@@ -34,7 +34,7 @@ def test_times_show_in_the_browsers_zone_once_it_is_known(
     zoned = browser.new_context(timezone_id="Asia/Tokyo")
     page = zoned.new_page()
     page.goto(f"{standalone['url']}/d/default/runs/{standalone['run']}")
-    expect(page.locator("dl.facts dd").first).to_contain_text("2026-10-15 01:00 UTC · 10:00 JST")
+    expect(page.locator("dl.facts dd").first).to_contain_text("2026-10-15 01:00 UTC (10:00 JST)")
     expect(page.locator("footer.note")).to_have_count(0)
     cookies = {c["name"]: c["value"] for c in zoned.cookies()}
     assert cookies["schedr_tz"] == "Asia%2FTokyo"
@@ -146,3 +146,39 @@ def test_pausing_a_dag_turns_its_button_into_unpause_without_a_reload(
             timeout=15_000
         )
     assert page.evaluate("window.notReloaded") is True
+
+
+def _set_visibility(page: Page, state: str) -> None:
+    """Make the page's document report `state` and tell it, as switching tabs would."""
+    page.evaluate(
+        """state => {
+            Object.defineProperty(document, "visibilityState", {value: state, configurable: true});
+            document.dispatchEvent(new Event("visibilitychange"));
+        }""",
+        state,
+    )
+
+
+def test_hidden_pages_give_their_connections_back_and_reload_when_shown(
+    context: BrowserContext, standalone: dict[str, str]
+) -> None:
+    # Six live pages hold the six connections a browser opens to one host over HTTP/1.1 (B25).
+    live = f"{standalone['url']}/d/default/dags/{standalone['dag']}"
+    tabs = []
+    for _ in range(6):
+        tab = context.new_page()
+        tab.goto(live)
+        expect(tab.locator("body")).to_have_attribute("sse-connect", re.compile("/events"))
+        tab.evaluate("schedrHiddenClose = 100")
+        tabs.append(tab)
+    for tab in tabs:
+        _set_visibility(tab, "hidden")
+    # In the background they close their streams: another page loads.
+    seventh = context.new_page()
+    seventh.goto(f"{standalone['url']}/runs", timeout=10_000)
+    expect(seventh.locator("table")).to_be_visible()
+    # Shown again, a page reloads (its state is in its URL) and follows its changes again.
+    tabs[0].evaluate("window.notReloaded = true")
+    _set_visibility(tabs[0], "visible")
+    expect(tabs[0].locator("body")).to_have_attribute("sse-connect", re.compile("/events"))
+    tabs[0].wait_for_function("window.notReloaded === undefined")

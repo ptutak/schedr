@@ -68,7 +68,7 @@ impl Page {
         self.zone.is_some()
     }
 
-    /// A moment as people read it: `2026-10-15 03:00 UTC · 05:00 CEST`, UTC only until the
+    /// A moment as people read it: `2026-10-15 03:00 UTC (05:00 CEST)`, UTC only until the
     /// browser's zone is known.
     #[must_use]
     pub fn time(&self, at: &Timestamp) -> String {

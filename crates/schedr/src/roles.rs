@@ -57,6 +57,36 @@ pub async fn until(mut stop: watch::Receiver<u32>) {
     let _ = stop.wait_for(|requests| *requests > 0).await;
 }
 
+/// How long open requests get once a stop is asked for, before they are cut: an event stream
+/// never ends by itself, and a page reconnects to the next server (B26).
+pub const REQUESTS_GRACE: Duration = Duration::from_secs(3);
+
+/// `server` (shutting down gracefully on `stop`) until it ends; once `stop` asks, its open
+/// requests get [`REQUESTS_GRACE`] and are then cut.
+///
+/// # Errors
+///
+/// As the server.
+pub async fn served(
+    server: impl std::future::IntoFuture<Output = std::io::Result<()>>,
+    stop: watch::Receiver<u32>,
+) -> std::io::Result<()> {
+    let server = server.into_future();
+    tokio::pin!(server);
+    tokio::select! {
+        done = &mut server => return done,
+        () = until(stop) => {}
+    }
+    if let Ok(done) = tokio::time::timeout(REQUESTS_GRACE, server).await {
+        return done;
+    }
+    tracing::info!(
+        "open requests (the pages' event streams) cut {}s after the stop",
+        REQUESTS_GRACE.as_secs()
+    );
+    Ok(())
+}
+
 /// The master's timing, from the configuration.
 #[must_use]
 pub fn master_settings(config: &Config) -> Settings {
@@ -570,8 +600,8 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
         auth,
     });
     ready.ready();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(until(stop))
+    let server = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
+    served(server, stop)
         .await
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
 }
@@ -638,7 +668,10 @@ pub async fn serve_api(
         None => api.clone(),
     };
     let http = |e: std::io::Error| AppError::BadArgument(format!("HTTP server: {e}"));
-    let public = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
+    let public = served(
+        axum::serve(listener, app).with_graceful_shutdown(until(stop.clone())),
+        stop.clone(),
+    );
     // The UI port: the same API, its requests marked proven (decision 36): in `app` mode only
     // `schedr ui`'s certificate gets through the handshake; in `mesh` mode
     // (`ui_port_in_mesh`) the mesh's policy lets only `schedr ui` reach it (40A).
@@ -652,8 +685,11 @@ pub async fn serve_api(
         },
     ));
     let connections = incoming(ui_listener, tls, Protocol::Ui).map_err(http)?;
-    let ui_server = axum::serve(connections, proven).with_graceful_shutdown(until(stop));
-    tokio::try_join!(public.into_future(), ui_server.into_future()).map_err(http)?;
+    let ui_server = served(
+        axum::serve(connections, proven).with_graceful_shutdown(until(stop.clone())),
+        stop,
+    );
+    tokio::try_join!(public, ui_server).map_err(http)?;
     Ok(())
 }
 

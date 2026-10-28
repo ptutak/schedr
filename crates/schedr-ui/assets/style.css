@@ -108,6 +108,8 @@ table.list th, table.list td {
   vertical-align: top;
 }
 table.list th { background: var(--surface); font-weight: 600; font-size: 13px; color: var(--dim); }
+/* A time and its local time in brackets stay on one line. */
+table.list td.time { white-space: nowrap; }
 table.list tbody tr:last-child td { border-bottom: none; }
 table.list tbody tr:hover { background: var(--surface); }
 

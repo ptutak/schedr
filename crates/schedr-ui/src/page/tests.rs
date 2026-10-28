@@ -60,7 +60,7 @@ fn times_are_utc_until_the_zone_is_known_then_both() {
         &headers(&[(header::COOKIE.as_str(), "schedr_tz=Europe%2FWarsaw")]),
         false,
     );
-    assert_eq!(warsaw.time(&at), "2026-10-15 03:00 UTC · 05:00 CEST");
+    assert_eq!(warsaw.time(&at), "2026-10-15 03:00 UTC (05:00 CEST)");
 }
 
 #[test]

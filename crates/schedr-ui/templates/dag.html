@@ -39,11 +39,11 @@
     <tr>
       <td class="mono"><a href="{{ run.href }}">{{ run.run_id }}</a></td>
       <td><span class="state {{ run.state }}">{{ run.state }}</span></td>
-      <td>{{ run.planned_for }}</td>
+      <td class="time">{{ run.planned_for }}</td>
       <td>{{ run.kind }}</td>
-      <td>{{ run.triggered_at }}</td>
+      <td class="time">{{ run.triggered_at }}</td>
       <td>{{ run.triggered_by }}</td>
-      <td>{{ run.ended_at }}</td>
+      <td class="time">{{ run.ended_at }}</td>
     </tr>
   {% endfor %}
   </tbody>

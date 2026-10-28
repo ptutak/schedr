@@ -193,7 +193,7 @@ async fn the_trigger_dialog_shows_the_moment_in_both_zones() {
     let (_, now) = get(&app, "/time?for=", &zone).await;
     assert_eq!(now, "Now.");
     let (_, at) = get(&app, "/time?for=2026-10-15T01:00:00Z", &zone).await;
-    assert_eq!(at, "2026-10-15 01:00 UTC · 03:00 CEST");
+    assert_eq!(at, "2026-10-15 01:00 UTC (03:00 CEST)");
     let (_, naive) = get(&app, "/time?for=2026-10-15T01:00", &zone).await;
     assert!(naive.ends_with("(no offset given: read as UTC)"), "{naive}");
     let (_, bad) = get(&app, "/time?for=%3Cb%3E", &zone).await;

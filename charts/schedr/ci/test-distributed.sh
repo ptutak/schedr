@@ -134,6 +134,12 @@ grep -q 'ports: \["8083"\]' "$WORK/deny.yaml" || fail "mesh: the DENY on the UI 
 render -f "$CHART/ci/istio-values.yaml" --set tls.mode=mesh > "$WORK/out.yaml"
 lacks 'UI_PORT_IN_MESH' "mesh with a shared account: no trusted UI port"
 has 'name: t-schedr-ui-token' "mesh with a shared account: the token"
+notes() { helm install --dry-run t "$CHART" --namespace ns "${PG[@]}" -f "$CHART/ci/istio-values.yaml" \
+    --set tls.mode=mesh "$@" 2>&1 | sed -n '/^NOTES:/,$p'; }
+notes | grep -q "with a token the chart made, not by the mesh" \
+    || fail "mesh with a shared account: the notes say the token is used"
+! notes --set serviceAccount.create=true --set serviceAccount.name= | grep -q "not by the mesh" \
+    || fail "mesh with an account each: no note"
 echo "ok: an existing account; Istio's policies for the internal links; mTLS to the workers"
 
 # 41A: the UI signs people in as the API does, or the API is none; ui.auth empty: the webserver's.

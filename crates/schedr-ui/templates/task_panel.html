@@ -34,7 +34,7 @@
         <td class="mono">{{ attempt.worker }}</td>
         <td>{{ attempt.duration }}</td>
         <td>{{ attempt.memory }}</td>
-        <td>{{ attempt.started_at }}</td>
+        <td class="time">{{ attempt.started_at }}</td>
       </tr>
       {% if !attempt.error.is_empty() %}
       <tr class="error-row"><td></td><td colspan="5">

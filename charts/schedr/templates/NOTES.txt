@@ -23,6 +23,12 @@ No web UI here (standalone.ui: false): show it from a `schedr ui` (mode ui) else
 The web UI:
   kubectl port-forward svc/{{ $fullname }}-ui {{ .Values.service.uiPort }}
   http://127.0.0.1:{{ .Values.service.uiPort }}/
+{{- if and (eq .Values.tls.mode "mesh") .Values.istio.enabled .Values.istio.authorizationPolicy.enabled (not (include "schedr.meshUiPort" .)) (not .Values.webserver.uiTokenSecret.name) }}
+Note: the UI proves itself to the webserver with a token the chart made, not by the mesh: its
+service account is shared with another role (serviceAccount.create: true with no name gives
+each role its own). A renderer that can't read the cluster (Argo CD's helm template) makes a
+new token at each sync; give your own Secret in webserver.uiTokenSecret.name to avoid that.
+{{- end }}
 {{- end }}
 {{- with .Values.istio.virtualService }}
 {{- if .enabled }}

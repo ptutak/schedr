@@ -999,8 +999,8 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     crashing first, a broken connection) end the worker's stream, and a reconnecting worker
     gets its pending cancels again; add it if a lost cancel is ever seen.
   - **The CLI waits for the decision** by reading the command back (every 0.5 s, for up to
-    30 s), and prints the result (`triggered run … of sync for 2026-10-15 01:00 UTC · 03:00
-    CEST (running)`); a rejection is an error (exit 1) with the master's reason. When the
+    30 s), and prints the result (`triggered run … of sync for 2026-10-15 01:00 UTC (03:00
+    CEST) (running)`); a rejection is an error (exit 1) with the master's reason. When the
     master doesn't decide in time, the CLI says so and exits 1; the command stays pending
     and is applied when the master runs (it is durable).
   - No API between the webserver and the master: both are the same binary at the same version
@@ -1404,7 +1404,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     (`timestamptz` in Postgres; ISO 8601 with `Z` in SQLite), never as naive timestamps.
     Cron expressions are evaluated in their schedule's zone and converted to UTC at once.
   - **Every time shown to a person appears twice, UTC and local**, e.g.
-    `01:00 UTC · 21:00 EDT`. "Local" is: in the **UI** the browser's zone (read by a few lines
+    `01:00 UTC (21:00 EDT)`. "Local" is: in the **UI** the browser's zone (read by a few lines
     of inline JavaScript into a cookie; until then only UTC, labelled); in the **CLI** the
     machine's zone (JSON output: UTC only); in **email notifications**, which have no viewer,
     the **DAG's schedule zone**; in the **task log viewer**, the browser's zone next to the UTC

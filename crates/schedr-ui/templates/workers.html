@@ -24,7 +24,7 @@
       <td>{{ worker.queues }}</td>
       <td>{{ worker.load }}</td>
       <td class="mono">{{ worker.version }}</td>
-      <td>{{ worker.last_seen }}</td>
+      <td class="time">{{ worker.last_seen }}</td>
       <td>{% if worker.actionable %}
         {% if worker.drained %}
         {% call confirm::action("Resume", "Resume worker " ~ worker.worker_id ~ "?", "It takes tasks again.", worker.action, "", page.base) %}{% endcall %}

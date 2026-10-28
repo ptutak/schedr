@@ -3,7 +3,7 @@
 //!
 //! `--for` without an offset is **UTC**, with a warning naming the moment taken; an explicit
 //! offset is used as given. Every time shown to a person appears twice, UTC and the machine's
-//! zone (`2026-10-15 03:00 UTC · 05:00 CEST`); JSON output has UTC only.
+//! zone (`2026-10-15 03:00 UTC (05:00 CEST)`); JSON output has UTC only.
 
 use jiff::civil::{Date, DateTime};
 use jiff::tz::TimeZone;
@@ -56,7 +56,7 @@ pub fn parse_for(text: &str) -> Result<ForTime, String> {
     })
 }
 
-/// A moment in UTC and in `local`, e.g. `2026-10-15 03:00 UTC · 05:00 CEST`; the local date is
+/// A moment in UTC and in `local`, e.g. `2026-10-15 03:00 UTC (05:00 CEST)`; the local date is
 /// shown only when it differs, and the local part is left out when `local` is UTC.
 #[must_use]
 pub fn show(at: Timestamp, local: &TimeZone) -> String {
@@ -71,7 +71,7 @@ pub fn show(at: Timestamp, local: &TimeZone) -> String {
     } else {
         format!("{} ", here.strftime("%Y-%m-%d"))
     };
-    format!("{text} · {date}{} {}", clock(&here), here.strftime("%Z"))
+    format!("{text} ({date}{} {})", clock(&here), here.strftime("%Z"))
 }
 
 /// A moment in short form, where space matters: UTC, then the local zone's offset from UTC
