@@ -136,6 +136,11 @@ class Output[T]:
                 f"`{self._task}.outcome`: its outcomes are a union of classes; the value's "
                 f"class says which, so pass `{self._task}` (or narrow with `.on(...)`)"
             )
+        if _build.may_have_field(builder.tasks[self._task].output_type, "outcome"):
+            raise TypeError(
+                f"`{self._task}.outcome` is the task's outcome, but its output may also have "
+                f'a field `outcome`: write `{self._task}["outcome"]` for the field'
+            )
         return _OutcomeOutput(self._task)
 
     def __getattr__(self, name: str) -> Output[Any]:

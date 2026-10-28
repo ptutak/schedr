@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
+    DictType,
     Edge,
     EdgeKind,
     IdError,
@@ -545,6 +546,28 @@ _DAG_CTX_TYPES: dict[DagCtxField, TypeDesc] = {
 }
 
 
+def may_have_field(desc: TypeDesc, name: str) -> bool:
+    """Whether data of a type may have a field or key ``name``.
+
+    It may when its type declares one, or is a dict or ``Any`` whose keys aren't known.
+
+    Args:
+        desc: The type.
+        name: The field or key.
+
+    Returns:
+        True if it may.
+    """
+    if isinstance(desc, ScalarType):
+        return desc.name == "any"
+    if isinstance(desc, DictType):
+        return True
+    if isinstance(desc, UnionType):
+        return any(may_have_field(v, name) for v in desc.variants)
+    fields = getattr(desc, "fields", None)
+    return fields is not None and any(f.name == name for f in fields)
+
+
 def reference_label(reference: Reference) -> str:
     """A reference as written in the DAG file, for messages.
 
@@ -588,8 +611,9 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
     if reference.task not in builder.tasks:
         raise ValueError(f"task `{reference.task}` is not part of DAG `{builder.dag_id}`")
     if isinstance(reference, OutcomeRef):
-        # The outcome's name, decoded into the task's enum by the receiving parameter.
-        return ScalarType("any")
+        # The outcome's name, decoded into the task's enum by the receiving parameter (an
+        # Outcome enum is described as `str`).
+        return ScalarType("str")
     assert isinstance(reference, OutputRef)
     produced = builder.tasks[reference.task].output_type
     by_outcome = builder.outcome_types.get(reference.task, {})

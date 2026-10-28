@@ -344,3 +344,54 @@ def test_an_outcome_is_stored_by_its_members_name() -> None:
         decode("GONE", Check)
     with pytest.raises(CodecError, match="expected a member of Check"):
         encode(Other.YES, Check)
+
+
+@pytest.mark.parametrize(
+    ("returns", "refused"),
+    [
+        ("Holder", True),
+        ("dict[str, int]", True),
+        ("Any", True),
+        ("int", False),
+        ("Rows", False),
+        ("ProcessResult", False),
+    ],
+)
+def test_outcome_is_refused_where_the_output_may_have_a_field_of_that_name(
+    returns: str, refused: bool
+) -> None:
+    @dataclass
+    class Holder:
+        outcome: str
+
+    kinds = {
+        "Holder": Holder,
+        "dict[str, int]": dict[str, int],
+        "Any": Any,
+        "int": int,
+        "Rows": Rows,
+        "ProcessResult": ProcessResult,
+    }
+
+    def plain() -> Any:
+        return None
+
+    plain.__annotations__["return"] = kinds[returns]
+    with Dag("d"):
+        out = task(plain)()
+        if refused:
+            with pytest.raises(TypeError, match=r'write `plain\["outcome"\]` for the field'):
+                out.outcome  # noqa: B018 (the property raises)
+        else:
+            assert repr(out.outcome) == "Output(plain.outcome)"
+    registry.take_defined()
+
+
+def test_an_outcome_goes_only_where_a_str_or_outcome_enum_goes() -> None:
+    @task
+    def wants_int(n: int) -> None:
+        pass
+
+    with Dag("d"), pytest.raises(TypeError, match=r"expects `int`, but `check.outcome` is `str`"):
+        wants_int(check().outcome)  # type: ignore[arg-type]
+    registry.take_defined()

@@ -4537,7 +4537,11 @@ with `None`. So a parameter must allow `None` only when its reference may stand 
 (another upstream task or condition) that can run it anyway: `load(primary.on(Rows),
 mirror.on(Rows))` takes `Rows | None` twice, `load(fetch().on(Rows))` takes plain `Rows`. It is
 checked when the `with Dag(...)` block ends, so an order edge added after the call counts. An
-`Outcome` enum parameter (`react(check.outcome)`) is stored by its member's name.
+`Outcome` enum parameter (`react(check.outcome)`) is stored by its member's name. `.on` and
+`.outcome` take precedence over output fields of those names (`result["outcome"]` reaches
+the field); so that `result.outcome` never silently means the other, `.outcome` is refused on a
+task whose output may have a field or key `outcome` (one declaring it, a dict, `Any`), and is
+typed `str` (only a `str` or `Outcome` enum parameter takes it; a side agent's note).
 
 **How M4.1a stores it** (Claude's, 2026-10-28, within the design above): each task carries its
 outcomes in the DAG JSON (`outcomes: [{name, exit_code}]`, left out when it is only `SUCCESS`
