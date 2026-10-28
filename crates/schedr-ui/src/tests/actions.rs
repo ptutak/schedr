@@ -123,6 +123,8 @@ async fn an_action_shows_its_command_until_the_master_decides() {
         texts(&html, ".command"),
         ["Pause sync and cancel its runs: applied."]
     );
+    // Decided, it no longer reads itself again, and still names its command.
+    assert_eq!(attrs(&html, ".command", "data-command"), ["c1"]);
 }
 
 #[tokio::test]

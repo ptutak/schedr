@@ -41,6 +41,8 @@ struct CommandFragment {
     /// A link the result points to (a triggered run's page), with its label.
     link: Option<(String, String)>,
     poll_ms: u32,
+    /// The command's ID, whatever its state; empty when it couldn't be sent.
+    command_id: String,
 }
 
 /// Whether a POST comes from the UI's own pages (see the module documentation): a browser
@@ -233,6 +235,7 @@ pub async fn command<T: Transport>(
             reason: format!("can't read it now ({error}); trying again"),
             link: None,
             poll_ms: POLL_MS,
+            command_id,
         }),
     }
 }
@@ -310,6 +313,7 @@ fn shown<T>(
         poll,
         link,
         poll_ms: POLL_MS,
+        command_id: command.command_id.clone(),
     })
 }
 
@@ -333,6 +337,7 @@ fn failed(what: String, reason: &str) -> Response {
         poll: String::new(),
         link: None,
         poll_ms: POLL_MS,
+        command_id: String::new(),
     })
 }
 

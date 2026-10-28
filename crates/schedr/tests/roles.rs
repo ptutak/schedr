@@ -1233,12 +1233,13 @@ fn ui_call(ui: &str, path: &str, form: Option<&str>) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// The command ID in an action's fragment (its `hx-get` reads `/d/<deployment>/commands/<id>`).
+/// The command ID in an action's fragment (its `data-command`, there whether the master has
+/// decided yet or not).
 fn command_id(fragment: &str) -> String {
     fragment
-        .split("/commands/")
+        .split("data-command=\"")
         .nth(1)
-        .and_then(|rest| rest.split('?').next())
+        .and_then(|rest| rest.split('"').next())
         .unwrap_or_else(|| panic!("no command in {fragment}"))
         .to_owned()
 }
