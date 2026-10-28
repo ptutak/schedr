@@ -1103,10 +1103,23 @@ fn stress_15b_change_signals_sqlite() {
     change_signals("15b_change_signals_sqlite", Backend::Sqlite);
 }
 
+/// Scenario 15c: as 15, with scenario 13's load (Python tasks passing outputs on, spawned): a
+/// load bound by the CPU, where the triggers' work at commit competes with the tasks' starts
+/// rather than hiding behind the disk's flush as with 15's `sleep` commands.
+#[test]
+fn stress_15c_change_signals_python() {
+    change_signals("15c_change_signals_python", Backend::PostgresPython);
+}
+
+/// Scenario 15's database and load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
+    /// Postgres, scenario 1's load.
     Postgres,
+    /// SQLite through standalone, scenario 9's load.
     Sqlite,
+    /// Postgres, scenario 13's Python tasks, spawned.
+    PostgresPython,
 }
 
 fn change_signals(scenario: &'static str, backend: Backend) {
@@ -1184,12 +1197,12 @@ struct SignalRun {
     run_events: f64,
 }
 
-/// Run `number` of scenario 15's load (scenario 1's on Postgres, 9's on SQLite) on a database
+/// Run `number` of scenario 15's load (1's on Postgres, 9's on SQLite, 13's Python) on a database
 /// of its own, the change triggers `on` or not; with them on, a client follows `GET
 /// /api/v1/events` meanwhile, counting `run` events.
 fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> SignalRun {
     let mut stress = Stress::new(match backend {
-        Backend::Postgres => Some(postgres_database()),
+        Backend::Postgres | Backend::PostgresPython => Some(postgres_database()),
         Backend::Sqlite => None,
     });
     let size = stress.size;
@@ -1200,7 +1213,7 @@ fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> Sig
     let mut report = Report::new(Box::leak(name.into_boxed_str()));
     if !on {
         match backend {
-            Backend::Postgres => {
+            Backend::Postgres | Backend::PostgresPython => {
                 for table in ["runs", "task_instances", "attempts", "dags", "workers"] {
                     stress
                         .db
@@ -1213,7 +1226,7 @@ fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> Sig
         }
     }
     let master = match backend {
-        Backend::Postgres => "master",
+        Backend::Postgres | Backend::PostgresPython => "master",
         Backend::Sqlite => "standalone",
     };
     let mut dags = match backend {
@@ -1226,6 +1239,13 @@ fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> Sig
             0,
         ),
         Backend::Sqlite => command_dags(&stress, "lite", size.n(20, 100), 10, "sleep 0.1", 0),
+        Backend::PostgresPython => (1..=size.n(20, 200))
+            .map(|i| {
+                let id = format!("py{i:04}");
+                stress.write_dag(&id, &python_dag(&id));
+                id
+            })
+            .collect(),
     };
     match backend {
         Backend::Postgres => {
@@ -1246,6 +1266,11 @@ fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> Sig
             stress
                 .cluster
                 .start_args("standalone", &["standalone", "--migrate"], &env);
+        }
+        // As scenario 13: spawned, 4 slots a worker.
+        Backend::PostgresPython => {
+            stress.start_core("master", &[]);
+            stress.start_workers(size.n(2, 8), 4, &[]);
         }
     }
     stress.wait_for_dags(dags.len(), 10 * MINUTE);

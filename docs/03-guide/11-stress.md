@@ -47,6 +47,7 @@ are in the report.
 | 14 | Quiet DAGs: a few busy DAGs alone, then beside many daily DAGs that do not fire | how much the master's rounds grow once the quiet DAGs are quiet |
 | 15 | Change signals, on Postgres: scenario 1's load four times, the triggers that announce changes off, on, on, off | how the rounds and the tasks a second compare |
 | 15b | The same, on SQLite through standalone (scenario 9's load) | the same comparison |
+| 15c | The same with scenario 13's load (Python tasks, spawned): bound by the CPU, where the triggers' work at commit competes with the tasks' starts instead of hiding behind the disk | the same comparison |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
@@ -186,3 +187,63 @@ rounds costing queries per DAG and reading a wide DAG's definition per ready tas
 master blocking the takeover, SQLite writes failing with "database is locked", the master's
 `LISTEN` breaking other connections behind PgBouncer, a leaving worker's unstarted tasks
 counted as lost, and slow rounds after a burst of runs (per-round limits, batched writes).
+
+## After M3 (2026-10-28)
+
+The whole suite after M3 and the round woken by a finished task (`1e75e64`, quick profile, this
+laptop under WSL): every scenario passed.
+
+| # | Scenario | Tasks | Tasks/s | Assigned → started p99 | Round p99 |
+|---|---|---|---|---|---|
+| 1 | throughput | 2,501 | 14.6 | 3.3 s | ≤ 2.9 s |
+| 2 | command burst | — | — | commands decided p99 0.48 s | — |
+| 3 | worker churn | 330 | 8.0 | 1.8 s | ≤ 1.4 s |
+| 4 | master failover | 330 | 7.2 | 2.2 s | ≤ 1.0 s |
+| 5 | database stall | 330 | 8.7 | 3.2 s | ≤ 0.7 s |
+| 6 | through PgBouncer: failover / throughput | 330 / 2,501 | 7.0 / 15.0 | 2.3 s / 2.5 s | ≤ 1.0 s / ≤ 2.9 s |
+| 7 | rolling restart | 270 | 6.8 | 1.6 s | ≤ 0.7 s |
+| 8 | code churn | 70 changes | — | parsing caught up in 0.02 s | — |
+| 9 | standalone on SQLite | 440 | 20.6 | 1.3 s | ≤ 0.7 s |
+| 10 | soak (3 minutes) | 1,020 | 5.5 | 1.5 s | ≤ 0.7 s |
+| 11 | heavy output | 168 | 3.9 | 1.6 s (logs read p99 1.5 s) | ≤ 2.0 s |
+| 12 | memory watchdog | 120 (12 killed over budget) | 5.5 | 1.5 s | ≤ 1.0 s |
+| 13 | Python tasks, spawned | 640 | 8.6 | run p50 70 s; hello p50 1.28 s | ≤ 2.0 s |
+| 13 | Python tasks, forked | 640 | 13.4 | run p50 44.5 s; hello p50 0.04 s | ≤ 2.0 s |
+| 14 | quiet DAGs (600) | — | — | — | mean 47 ms alone, 51 ms beside (1.09×); p99 0.36 s both |
+| 15 | change signals, Postgres | — | — | — | mean 1.00×, p99 0.83×, tasks/s 0.99× |
+| 15b | change signals, SQLite | — | — | — | mean 1.11×, p99 1.17×, tasks/s 0.98× |
+
+**Only runs of one session compare.** Scenario 13 came out well below the 2026-10-27
+baseline (spawned 8.6 tasks a second against 12.4), so it was run again at each change since
+then, in the same afternoon, alternating:
+
+| Code | Spawned tasks/s | Forked tasks/s |
+|---|---|---|
+| `f0405b4`, the baseline's own code | 10.3, 8.7 | 13.2, 13.5 |
+| `0628b51`, M3.1 | 10.0, 9.7 | 13.5, 13.6 |
+| `cc2ec1c`, M3.2 (its new indexes) | 9.3, 10.6 | 14.1, 13.9 |
+| `04d083f`, M3.6 and fixes, before the round wake-up | 10.6, 9.2 | 13.2, 13.8 |
+| `c172efd`, the round wake-up | 10.5, 10.3 | 13.4, 13.9 |
+
+The baseline's own code gave the same as today's. The gap is the machine: Windows was using
+much of the CPU beside WSL that afternoon (89 % in all), and spawned Python tasks, the
+CPU-heaviest load here, lose the most. The suite's run of scenario 13 overlapped a
+documentation build, which explains its lower 8.6. On a laptop, compare runs of one session
+in alternating order; numbers from different days measure the machine as much as schedr.
+The nightly CI run, on machines of one kind, shows the trend.
+
+**The round woken by a finished task** (decision 42B) was measured the same way, before
+(`04d083f`) and after (`c172efd`), in both orders (the ratio is after over before):
+
+| Scenario | Tasks a second | Runs' p50 | Runs' p99 | Assigned → started p99 |
+|---|---|---|---|---|
+| 1, Postgres (10-task chains) | 0.92, 1.07 | 0.79, 0.93 | 1.09, 0.93 | 1.67, 0.81 |
+| 9, SQLite through standalone | 1.00, 1.05 | 0.98, 0.93 | 0.99, 0.89 | 0.97, 0.63 |
+| 13, Python tasks, spawned | 0.99, 1.11 | 1.00, 0.89 | — | 0.92, 0.85 |
+
+The runs are shorter with it (scenario 1's chains by 7-21 %), and no cost held in both
+orders: the first pair's slower starts and lower tasks a second on scenario 1 turned over in
+the second.
+
+Scenario 15c (the triggers on and off under the Python load) is new; its first result comes
+from the nightly run.
