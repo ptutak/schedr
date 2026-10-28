@@ -126,6 +126,7 @@ fn ended(status: AttemptStatus) -> AttemptResult {
         status,
         error_kind: None,
         output: None,
+        outcome: None,
     }
 }
 
@@ -609,4 +610,60 @@ async fn a_round_queues_at_most_so_many_retries_the_rest_in_the_next() {
         RETRIES_PER_ROUND
     );
     assert_eq!(execution.queue_due_retries(ts(NOW)).await.unwrap(), 5);
+}
+
+#[tokio::test]
+async fn a_reported_outcome_is_stored_and_routes_the_run() {
+    let mut fetch = task("fetch", "python", 0);
+    fetch["outcomes"] = json!([{"name": "Rows"}, {"name": "Unavailable"}]);
+    let routed = dag(
+        &json!([
+            fetch,
+            task("load", "python", 0),
+            task("report", "python", 0)
+        ]),
+        &json!([
+            {"from": "fetch", "to": "load", "kind": "data", "on": ["Rows"]},
+            {"from": "fetch", "to": "report", "kind": "data", "on": ["Unavailable"]}
+        ]),
+    );
+    let (execution, db, run_id) = with_run(routed, RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "fetch").await;
+    let result = AttemptResult {
+        output: Some(json!({"reason": "down"})),
+        outcome: Some("Unavailable".to_owned()),
+        ..ended(AttemptStatus::Success)
+    };
+    execution
+        .attempt_finished(&run_id, &id("fetch"), &result, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        states(&db, &run_id).await,
+        expected(&[
+            ("fetch", S::Success),
+            ("load", S::Skipped),
+            ("report", S::Queued)
+        ])
+    );
+    // Stored with the outcome the worker reported, as the next tasks' inputs read it.
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let fetched = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("fetch"))
+        .unwrap();
+    assert_eq!(fetched.outcome.as_deref(), Some("Unavailable"));
+    let outcomes = db
+        .upstream_outcomes(&run_id, &[&id("fetch"), &id("load")])
+        .await
+        .unwrap();
+    assert_eq!(
+        outcomes,
+        std::collections::BTreeMap::from([
+            (id("fetch"), Some("Unavailable".to_owned())),
+            (id("load"), None)
+        ])
+    );
 }

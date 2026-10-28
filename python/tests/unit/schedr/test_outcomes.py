@@ -303,7 +303,8 @@ def test_a_command_declares_outcomes_with_exit_codes(validate: Validate) -> None
     with Dag("d"):
         probe = CommandOperator("probe", "./check.sh", outcomes=Check)
         EmptyOperator("notify", run_if=RunIf.ALL_SUCCEEDED)
-        probe.output.on(Check.UNCHANGED) >> EmptyOperator("quiet")
+        probe.on(Check.UNCHANGED) >> EmptyOperator("quiet")
+        react(probe.outcome)
     model = only_dag()
     assert model.tasks[0].to_json()["outcomes"] == [
         {"name": "CHANGED", "exit_code": 0},

@@ -25,9 +25,54 @@ from schedr.runner.task import (
 )
 
 DAG = """
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from schedr import Dag, dag_ctx, task
+from schedr import Dag, Outcome, dag_ctx, task
+
+@dataclass
+class Rows:
+    rows: list[int]
+
+@dataclass
+class Gone:
+    reason: str
+
+class Check(Outcome):
+    CHANGED = 0
+    UNCHANGED = 3
+
+@dataclass
+class Primary:
+    n: int
+
+@dataclass
+class Mirror:
+    n: int
+
+@task
+def pick(value: Primary | Mirror) -> str:
+    return type(value).__name__
+
+@task
+def fetch(k: int) -> Rows | Gone | None:
+    return Rows([k]) if k > 0 else Gone("down") if k < 0 else None
+
+@task
+def check(k: int) -> Check:
+    return Check.CHANGED if k else Check.UNCHANGED
+
+@task
+def liar() -> Check:
+    return 3  # type: ignore[return-value]
+
+@task
+def take(value: Rows | Gone | None) -> str:
+    return type(value).__name__
+
+@task
+def react(outcome: Check) -> str:
+    return outcome.name
 
 @task
 def one() -> dict[str, int]:
@@ -58,6 +103,11 @@ def big() -> str:
     return "x" * 100
 
 with Dag("d"):
+    f = fetch(1)
+    take(f)
+    pick(Primary(1))
+    react(check(1).outcome)
+    liar()
     r = one()
     two(r["n"], dag_ctx.run.planned_for, t"at {dag_ctx.run.planned_for:%Y} by {dag_ctx.dag_id}")
     coll([r["n"], 2], {"k": r["n"]})
@@ -322,3 +372,43 @@ def test_run_task_sends_the_result_and_exits_with_its_code(
     finally:
         ours.close()
         theirs.close()
+
+
+@pytest.mark.parametrize(
+    ("k", "outcome", "output"),
+    [(1, "Rows", {"rows": [1]}), (-1, "Gone", {"reason": "down"}), (0, "None", None)],
+)
+def test_an_outcome_union_member_is_the_outcome_and_its_value_the_output(
+    root: Path, k: int, outcome: str, output: object
+) -> None:
+    request = request_for(root, "fetch")
+    request["task"]["arguments"] = {"k": {"literal": k}}
+    assert execute(request) == {"type": "task_succeeded", "output": output, "outcome": outcome}
+
+
+def test_an_outcome_enum_member_is_the_outcome_with_no_output(root: Path) -> None:
+    request = request_for(root, "check")
+    request["task"]["arguments"] = {"k": {"literal": 0}}
+    assert execute(request) == {"type": "task_succeeded", "output": None, "outcome": "UNCHANGED"}
+    result = execute(request_for(root, "liar"))
+    assert (result["type"], result["kind"]) == ("task_failed", "output_not_serializable")
+
+
+def test_a_union_input_is_decoded_into_the_member_its_outcome_names(root: Path) -> None:
+    # {"reason": ...} alone: the stored outcome says it is a Gone.
+    request = request_for(root, "take", {"fetch": {"reason": "down"}}, outcomes={"fetch": "Gone"})
+    assert execute(request)["output"] == "Gone"
+    request = request_for(root, "take", {"fetch": {"rows": [1]}}, outcomes={"fetch": "Rows"})
+    assert execute(request)["output"] == "Rows"
+
+
+def test_an_outcome_reaches_an_outcome_parameter_as_its_member(root: Path) -> None:
+    request = request_for(root, "react", outcomes={"check": "UNCHANGED"})
+    assert execute(request)["output"] == "UNCHANGED"
+
+
+def test_the_outcome_tells_apart_members_the_json_would_fit_alike(root: Path) -> None:
+    # {"n": 1} fits Primary and Mirror alike: only the stored outcome says it is a Mirror.
+    request = request_for(root, "pick", {"src": {"n": 1}}, outcomes={"src": "Mirror"})
+    request["task"]["arguments"] = {"value": {"ref": {"kind": "output", "task": "src"}}}
+    assert execute(request)["output"] == "Mirror"

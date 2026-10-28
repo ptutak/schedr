@@ -821,6 +821,7 @@ impl Dispatcher {
                 status,
                 error_kind: end.error_kind.clone(),
                 output,
+                outcome: non_empty(&finished.outcome),
             };
             self.record(&attempt, &end, &result, now).await?;
         }
@@ -1015,6 +1016,7 @@ impl Dispatcher {
             status: end.status,
             error_kind: end.error_kind.clone(),
             output: None,
+            outcome: None,
         };
         if self.db.end_attempt(attempt_id, &end, now).await? {
             self.metrics.attempt_ended(&end.status);
@@ -1284,6 +1286,7 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
         status,
         error_kind: None,
         output: None,
+        outcome: None,
     }
 }
 

@@ -60,6 +60,22 @@ class Operator:
         """The task's output, as a reference."""
         return Output(self._task_id)
 
+    def on(self, *members: Outcome) -> Output[Any]:
+        """The task's output, depended on only for these outcomes (see ``Output.on``).
+
+        Args:
+            *members: Members of its ``outcomes=`` enum (``DefaultOutcome.SUCCESS`` without).
+
+        Returns:
+            The narrowed reference, e.g. ``probe.on(Check.CHANGED) >> notify``.
+        """
+        return self.output.on(*members)
+
+    @property
+    def outcome(self) -> Any:
+        """The task's outcome as data, for a task taking its ``Outcome`` enum."""
+        return self.output.outcome
+
     def __rshift__(self, other: object) -> object:
         """``self >> other``: ``other`` runs after this task.
 

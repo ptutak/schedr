@@ -7,10 +7,11 @@ doesn't enforce timeouts or watch memory: the agent does (see PROJECT.md, Rust/P
 integration).
 """
 
+import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any, Union, get_args, get_origin
 
 from schedr._serialization import CodecError, check_size, decode, decode_any, encode
 from schedr._serialization.annotations import (
@@ -22,11 +23,12 @@ from schedr._serialization.annotations import (
 )
 from schedr._templates import as_text
 from schedr.context import RunValues, running
+from schedr.outcomes import from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
 from schedr.runner.protocol import Channel
 
 SUCCESS = "SUCCESS"
-"""The outcome of every successful task until outcome types arrive (milestone M4)."""
+"""The outcome of a task without outcomes of its own (``DefaultOutcome.SUCCESS``)."""
 
 
 class TaskInputError(Exception):
@@ -168,7 +170,10 @@ def build(
         if "literal" in value:
             return decode(value["literal"], annotation)
         if "ref" in value:
-            return decode(resolve(value["ref"], inputs, run, outcomes), annotation)
+            return decode(
+                resolve(value["ref"], inputs, run, outcomes),
+                _narrowed(value["ref"], annotation, outcomes),
+            )
         if "template" in value:
             return render(value["template"], inputs, run, outcomes)
         target = unwrap(annotation)
@@ -180,6 +185,25 @@ def build(
         return {k: build(v, item, inputs, run, outcomes) for k, v in value["map"].items()}
     except CodecError as e:
         raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
+
+
+def _narrowed(
+    reference: Mapping[str, Any], annotation: object, outcomes: Mapping[str, Any] | None
+) -> object:
+    """The member of a union annotation the upstream's outcome names, else the annotation.
+
+    A plain JSON object can fit several dataclasses of an outcome union: the stored outcome
+    says which one it is (only a whole output: a path reaches into one member already).
+    """
+    outcome = (outcomes or {}).get(reference.get("task", ""))
+    if reference.get("kind") != "output" or reference.get("path") or not isinstance(outcome, str):
+        return annotation
+    if get_origin(unwrap(annotation)) not in {Union, types.UnionType}:
+        return annotation
+    for member in get_args(unwrap(annotation)):
+        if getattr(get_origin(member) or member, "__name__", None) == outcome:
+            return member
+    return annotation
 
 
 def run_values(run: Mapping[str, Any]) -> RunValues:
@@ -282,8 +306,36 @@ def execute(
     return _stored(result, hints.get("return", Any), task)
 
 
+def outcome_of(result: object, annotation: object) -> tuple[str, object, object]:
+    """The outcome a returned value stands for, with the output to store and its type.
+
+    Args:
+        result: What the task's function returned.
+        annotation: Its return annotation.
+
+    Returns:
+        ``(outcome, output, type)``: an ``Outcome`` member's name with no output, an outcome
+        union member's class name (``"None"`` for ``None``) with the value, or ``SUCCESS``.
+
+    Raises:
+        CodecError: For a value that isn't one of the declared outcomes.
+    """
+    spec = from_return_type(annotation, "the task")
+    if outcome_enum(annotation) is not None:
+        if not isinstance(result, spec.enum):
+            raise CodecError("", f"expected a member of {spec.enum.__name__}, got {result!r}")
+        return result.name, None, None
+    if spec.is_union:
+        member = type(result)
+        if member not in spec.classes:
+            raise CodecError("", f"`{member.__name__}` isn't one of its outcomes")
+        return ("None" if result is None else member.__name__), result, member
+    return SUCCESS, result, annotation
+
+
 def _stored(result: object, annotation: object, task: Mapping[str, Any]) -> dict[str, Any]:
     try:
+        outcome, result, annotation = outcome_of(result, annotation)
         output = encode(result, annotation)
     except CodecError as e:
         return failure(
@@ -293,7 +345,7 @@ def _stored(result: object, annotation: object, task: Mapping[str, Any]) -> dict
         check_size(output, task["settings"]["max_output_size"])
     except CodecError as e:
         return failure(e, "output_too_large", f"the output of `{task['id']}`: {e.reason}")
-    return {"type": "task_succeeded", "output": output, "outcome": SUCCESS}
+    return {"type": "task_succeeded", "output": output, "outcome": outcome}
 
 
 def run_task(channel: Channel, request: Mapping[str, Any]) -> int:

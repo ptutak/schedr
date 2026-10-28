@@ -355,6 +355,85 @@ fn the_same_run_works_on_postgres() {
 }
 
 #[test]
+fn outcomes_route_a_run_from_python_and_from_exit_codes() {
+    let dag = r#"
+from dataclasses import dataclass
+from schedr import CommandOperator, Dag, Outcome, task
+
+@dataclass
+class Rows:
+    rows: list[int]
+
+@dataclass
+class Unavailable:
+    reason: str
+
+class Check(Outcome):
+    CHANGED = 0
+    UNCHANGED = 3
+
+@task
+def fetch() -> Rows | Unavailable:
+    return Unavailable("down")
+
+@task
+def load(data: Rows) -> int:
+    return len(data.rows)
+
+@task
+def report(why: Unavailable) -> str:
+    return why.reason
+
+@task
+def react(outcome: Check) -> str:
+    return outcome.name
+
+with Dag("routed"):
+    fetched = fetch()
+    load(fetched.on(Rows))
+    report(fetched.on(Unavailable))
+    probe = CommandOperator("probe", "exit 3", outcomes=Check)
+    probe.on(Check.CHANGED) >> CommandOperator("on_change", "true")
+    react(probe.outcome)
+"#;
+    let standalone = Standalone::start(&[("routed.py", dag)], None);
+    standalone.wait("DAG `routed`", || standalone.dag_ids() == ["routed"]);
+    let run_id = standalone.trigger("routed");
+    let run = standalone.wait_for_state(&run_id, "success");
+    assert_eq!(
+        task_states(&run),
+        pairs(&[
+            ("fetch", "success"),
+            ("load", "skipped"),
+            ("on_change", "skipped"),
+            ("probe", "success"),
+            ("react", "success"),
+            ("report", "success"),
+        ])
+    );
+    let output = |task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap()
+    };
+    // The outcome union's member reached `report` decoded; the exit code 3 is UNCHANGED.
+    assert_eq!(output("report")["value"], "down", "{}", output("report"));
+    assert_eq!(output("react")["value"], "UNCHANGED", "{}", output("react"));
+    assert_eq!(
+        output("fetch")["outcome"],
+        "Unavailable",
+        "{}",
+        output("fetch")
+    );
+    assert_eq!(
+        output("probe")["outcome"],
+        "UNCHANGED",
+        "{}",
+        output("probe")
+    );
+}
+
+#[test]
 fn a_failure_is_retried_then_fails_the_run_and_its_downstream_task() {
     let dag = r#"
 from datetime import timedelta

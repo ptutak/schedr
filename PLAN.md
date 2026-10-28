@@ -272,9 +272,10 @@ against it runs as designed, distributed and in standalone. **Planned with the u
 (2026-10-28; decisions 49-53 in PROJECT.md):** async points settled (49A), `setrlimit` through
 `schedr task-exec` (50A), this order (51A), connections' sync and async clients and `check()`
 (53); nearly all of the rest of the design is already in PROJECT.md's sections, which each step
-follows. **Reviews (52A):** each step reviewed by Grok, then a Grok docs round, then committed;
-steps built before the 2026-10-30 reset are committed after Claude's own review and go into
-the whole-repository review. The order puts the result model first (everything graph-like
+follows. **Reviews (52A, refined by the user 2026-10-28):** steps are split into small sub-steps
+(M4.1a, M4.1b, …), each committed after Claude's own review and mutation-checked tests; Grok
+reviews a batch of about five sub-steps at once, then writes the guide for them. Sub-steps
+built before the 2026-10-30 reset go into the whole-repository review. The order puts the result model first (everything graph-like
 builds on it), the agent channel before what talks over it, and the watcher host after async
 functions. Claude implements each step; Grok reviews it and updates the guide (from the
 2026-10-30 reset on).

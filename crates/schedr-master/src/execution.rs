@@ -55,6 +55,8 @@ pub struct AttemptResult {
     pub error_kind: Option<String>,
     /// The output (stored JSON) on success.
     pub output: Option<serde_json::Value>,
+    /// The outcome on success, as the worker reported it (`SUCCESS` when it named none).
+    pub outcome: Option<String>,
 }
 
 /// What recording an attempt's result did.
@@ -239,15 +241,20 @@ impl Execution {
             AfterAttempt::Requeue => (TaskInstanceState::Queued, Some(now)),
             AfterAttempt::Cancelled => (TaskInstanceState::Cancelled, None),
         };
+        let outcome = result
+            .outcome
+            .as_deref()
+            .filter(|o| !o.is_empty())
+            .unwrap_or(SUCCESS);
         if state == TaskInstanceState::Success {
             let value = result.output.clone().unwrap_or(serde_json::Value::Null);
-            self.db.store_output(&instance.id, SUCCESS, &value).await?;
+            self.db.store_output(&instance.id, outcome, &value).await?;
         }
         let first = InstanceUpdate {
             task_id: task_id.clone(),
             state,
             ready_at,
-            outcome: (state == TaskInstanceState::Success).then(|| SUCCESS.to_owned()),
+            outcome: (state == TaskInstanceState::Success).then(|| outcome.to_owned()),
             used_retry: next.uses_retry(),
         };
         let run_result = self.advance(run_id, &run, vec![first], now).await?;
