@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from playwright.sync_api import BrowserContext, Page, expect
+from playwright.sync_api import BrowserContext, Page, Route, expect
 
 
 def test_the_theme_toggle_switches_and_is_remembered(
@@ -182,3 +182,31 @@ def test_hidden_pages_give_their_connections_back_and_reload_when_shown(
     _set_visibility(tabs[0], "visible")
     expect(tabs[0].locator("body")).to_have_attribute("sse-connect", re.compile("/events"))
     tabs[0].wait_for_function("window.notReloaded === undefined")
+
+
+def test_a_live_read_answered_while_a_dialog_is_open_doesnt_replace_it(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    url = f"{standalone['url']}/d/default/dags/{standalone['dag']}"
+    page.goto(url)
+    held: list[Route] = []
+
+    def hold(route: Route) -> None:
+        held.append(route)
+
+    # The page's next live read is held in flight (as on a slow network) ...
+    page.route(url, hold)
+    page.evaluate("""htmx.trigger(document.getElementById("live"), "sse:change")""")
+    page.wait_for_function("() => document.querySelector('#live.htmx-request') !== null")
+    assert len(held) == 1
+    # ... while the user opens an action's dialog; then the read's answer arrives.
+    page.locator(".actions > button.action").first.click()
+    dialog = page.locator("dialog.confirm[open]")
+    expect(dialog).to_be_visible()
+    held[0].continue_()
+    page.unroute(url)
+    page.wait_for_function("() => document.querySelector('#live.htmx-request') === null")
+    # The dialog is still the one the user opened, and once closed the part is read again.
+    expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(dialog).to_be_hidden()

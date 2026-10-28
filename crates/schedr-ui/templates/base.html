@@ -83,6 +83,14 @@ var schedrHiddenClose = 10000;
 function schedrDialogOpen() {
   return document.querySelector("dialog[open]") !== null;
 }
+// A live read already under way when a dialog opened isn't applied either: the part is read
+// once the dialog closes (below).
+document.addEventListener("htmx:beforeSwap", function (event) {
+  var elt = event.detail.requestConfig && event.detail.requestConfig.elt;
+  if (schedrDialogOpen() && elt && elt.matches && elt.matches('[hx-trigger^="sse:change"]')) {
+    event.detail.shouldSwap = false;
+  }
+});
 document.addEventListener("close", function (event) {
   if (!event.target.matches || !event.target.matches("dialog.confirm")) return;
   document.querySelectorAll('[hx-trigger^="sse:change"]').forEach(function (part) {
