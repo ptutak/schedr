@@ -320,6 +320,14 @@ pub struct EdgeLine {
     pub path: String,
     /// `data` or `order` (its CSS class).
     pub kind: String,
+    /// The outcomes it is taken on (`Rows | Unavailable`); empty for any.
+    pub on: String,
+    /// Where its label goes: beside its end.
+    pub label_x: f64,
+    /// See `label_x`.
+    pub label_y: f64,
+    /// Whether its upstream task ended with an outcome it isn't taken on.
+    pub not_taken: bool,
 }
 
 /// The graph as drawn.
@@ -596,24 +604,8 @@ fn graph_of(
         })
         .unwrap_or_default();
     let index = |id: &str| ids.iter().position(|i| i == id);
-    // One line per pair of tasks: a pair joined both ways (data and order) is drawn as data,
-    // which already orders them.
-    let mut edges: Vec<(usize, usize, String)> = Vec::new();
-    for edge in dag["edges"].as_array().into_iter().flatten() {
-        let (Some(from), Some(to)) = (
-            edge["from"].as_str().and_then(index),
-            edge["to"].as_str().and_then(index),
-        ) else {
-            continue;
-        };
-        let kind = edge["kind"].as_str().unwrap_or("data").to_owned();
-        match edges.iter_mut().find(|(f, t, _)| (*f, *t) == (from, to)) {
-            Some(known) if kind == "data" => known.2 = kind,
-            Some(_) => {}
-            None => edges.push((from, to, kind)),
-        }
-    }
-    let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _)| (*f, *t)).collect();
+    let edges = joined_edges(dag, index);
+    let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _, _)| (*f, *t)).collect();
     let layout = graph::layout(ids.len(), &pairs);
     let nodes = ids
         .iter()
@@ -641,9 +633,28 @@ fn graph_of(
     let lines = layout
         .routes
         .iter()
-        .map(|route| EdgeLine {
-            path: path_of(&route.points),
-            kind: edges[route.edge].2.clone(),
+        .map(|route| {
+            let (from, _, kind, on) = &edges[route.edge];
+            let upstream = tasks.iter().find(|t| t.task_id == ids[*from]);
+            let not_taken = on.as_ref().is_some_and(|on| {
+                upstream.is_some_and(|t| {
+                    t.state == "skipped"
+                        || (t.state == "success"
+                            && !on.contains(t.outcome.as_ref().unwrap_or(&"SUCCESS".to_owned())))
+                })
+            });
+            let end = route.points.last().copied().unwrap_or_default();
+            EdgeLine {
+                path: path_of(&route.points),
+                kind: kind.clone(),
+                on: on
+                    .as_ref()
+                    .map(|on| fitted(&on.join(" | "), 28))
+                    .unwrap_or_default(),
+                label_x: end.0 + 6.0,
+                label_y: end.1 - 12.0,
+                not_taken,
+            }
         })
         .collect();
     Graph {
@@ -654,6 +665,54 @@ fn graph_of(
         nodes,
         edges: lines,
     }
+}
+
+/// A line of the graph: the pair's upstream and downstream tasks (by index), `data` or
+/// `order`, and the outcomes it is taken on (`None`: any).
+type Joined = (usize, usize, String, Option<Vec<String>>);
+
+/// The DAG's edges, one per pair of tasks (`index` gives a task ID's position).
+fn joined_edges(dag: &serde_json::Value, index: impl Fn(&str) -> Option<usize>) -> Vec<Joined> {
+    // One line per pair of tasks: a pair joined both ways (data and order) is drawn as data,
+    // which already orders them; its outcomes those of all its edges (none: any outcome, as
+    // soon as one edge takes any).
+    let mut edges: Vec<Joined> = Vec::new();
+    for edge in dag["edges"].as_array().into_iter().flatten() {
+        let (Some(from), Some(to)) = (
+            edge["from"].as_str().and_then(&index),
+            edge["to"].as_str().and_then(&index),
+        ) else {
+            continue;
+        };
+        let kind = edge["kind"].as_str().unwrap_or("data").to_owned();
+        let on: Vec<String> = edge["on"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|o| o.as_str().map(str::to_owned))
+            .collect();
+        let on = (!on.is_empty()).then_some(on);
+        match edges.iter_mut().find(|(f, t, _, _)| (*f, *t) == (from, to)) {
+            Some(known) => {
+                if kind == "data" {
+                    known.2 = kind;
+                }
+                known.3 = match (known.3.take(), on) {
+                    (Some(mut all), Some(more)) => {
+                        all.extend(
+                            more.into_iter()
+                                .filter(|o| !all.contains(o))
+                                .collect::<Vec<_>>(),
+                        );
+                        Some(all)
+                    }
+                    _ => None,
+                };
+            }
+            None => edges.push((from, to, kind, on)),
+        }
+    }
+    edges
 }
 
 /// An SVG path through `points`: straight down from each point, then a curve to the next.

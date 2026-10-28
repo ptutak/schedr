@@ -182,6 +182,9 @@ h2 .more { font-size: 13px; font-weight: 400; margin-left: 8px; }
 .edge-key.order { border-top-style: dashed; }
 svg.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
 svg.dag .edge.order { stroke-dasharray: 5 4; }
+/* An edge taken on some outcomes: its label; faint once its outcome didn't happen. */
+svg.dag .edge-on { font-size: 11px; fill: var(--dim); }
+svg.dag .edge.not-taken, svg.dag .edge-on.not-taken { opacity: 0.35; }
 svg.dag .arrow { fill: var(--edge); }
 svg.dag .node { cursor: pointer; }
 svg.dag .box { fill: var(--neutral-bg); stroke: var(--border); stroke-width: 1.5; }

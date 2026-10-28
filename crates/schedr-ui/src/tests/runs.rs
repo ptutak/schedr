@@ -553,3 +553,46 @@ async fn two_dependencies_between_the_same_tasks_are_one_line_drawn_as_data() {
         ["edge data", "edge order"]
     );
 }
+
+#[tokio::test]
+async fn an_edge_on_outcomes_is_labelled_and_faint_once_not_taken() {
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| *path != "/api/v1/runs/r2/dag");
+    for (path, _, value) in &mut answers {
+        if *path == "/api/v1/runs/r2" {
+            value["tasks"] = json!([
+                task("extract", "success", Some("Unavailable"), None),
+                task("load", "skipped", None, None),
+                task("report", "success", None, None),
+            ]);
+        }
+    }
+    answers.push((
+        "/api/v1/runs/r2/dag",
+        200,
+        json!({
+            "id": "sync",
+            "tasks": [{"id": "extract"}, {"id": "load"}, {"id": "report"}],
+            "edges": [
+                {"from": "extract", "to": "load", "kind": "data", "on": ["Rows"]},
+                {"from": "extract", "to": "report", "kind": "data", "on": ["Unavailable"]},
+                {"from": "extract", "to": "report", "kind": "order", "on": ["Rows"]}
+            ]
+        }),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    // One line per pair, its outcomes together; the one whose outcome didn't happen faint.
+    assert_eq!(
+        texts(&html, "svg.dag text.edge-on"),
+        ["Rows", "Unavailable | Rows"]
+    );
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge", "class"),
+        ["edge data not-taken", "edge data"]
+    );
+    assert_eq!(
+        texts(&html, "svg.dag path.edge title"),
+        ["on Rows (not taken)", "on Unavailable | Rows"]
+    );
+}

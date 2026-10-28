@@ -39,7 +39,7 @@
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker>
       </defs>
-      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}" d="{{ edge.path }}" marker-end="url(#arrow)"></path>
+      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}{% if edge.not_taken %} not-taken{% endif %}" d="{{ edge.path }}" marker-end="url(#arrow)">{% if !edge.on.is_empty() %}<title>on {{ edge.on }}{% if edge.not_taken %} (not taken){% endif %}</title>{% endif %}</path>{% if !edge.on.is_empty() %}<text class="edge-on{% if edge.not_taken %} not-taken{% endif %}" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.on }}</text>{% endif %}
       {% endfor %}
       {% for node in graph.nodes %}
       <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}">
