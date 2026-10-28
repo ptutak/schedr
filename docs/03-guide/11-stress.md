@@ -89,8 +89,10 @@ each on a database of its own, the triggers off, then on, then on, then off, so 
 over the scenario weighs on both alike. With them on, a client follows `GET /api/v1/events`,
 as a live page does, so the webserver follows the changes during the load. 15b is the same
 comparison on SQLite through `schedr standalone`, with scenario 9's load. There the triggers
-append a row to the `changes` table, and the runs without them have those triggers removed.
-The runs with them on have to deliver, on average, at least one `run` event per run.
+append a row to the `changes` table. The runs without them leave the triggers in place and
+turn off the one-row switch they read (`changes_switch`), as `[database]
+change_notifications = false` does. The runs with them on have to deliver, on average, at
+least one `run` event per run.
 
 The two runs with the triggers on are compared with the two without: the average round
 mean, the average round p99, and the average tasks a second. The scenario fails when the
@@ -174,7 +176,9 @@ Scenarios 15 and 15b's rows are the 2026-10-28 run (quick profile, four runs eac
 the 2026-10-24 one. Where the other rows give tasks a second and a round p99, these give
 the ratio of the runs with the change triggers on to the runs without: the rounds' mean,
 the rounds' p99, and the tasks a second. On Postgres that was 1.02, 1.00 and 0.97. On
-SQLite, through standalone, it was 0.94, 1.17 and 0.98.
+SQLite, through standalone, it was 0.94, 1.17 and 0.98. The tasks a second were about 2-3%
+lower with the triggers on, within the noise between runs. The triggers stay on by default
+(see [Live updates](12-ui.md#live-updates)).
 
 On the way there the suite found and the step fixed: assignments taken back though started
 (scenario 13 went from 624 expired assignments and 11 successes to 11.5 tasks a second),

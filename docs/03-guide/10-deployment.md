@@ -22,7 +22,9 @@ every key.
   with `schedr db migrate` before starting the master (it holds the master's lease while it
   migrates, so it is refused while a master runs; `--wait` waits for the lease instead), or
   start the master with **`schedr master --migrate`**, which migrates a schema that isn't up
-  to date once it holds the lease. Without either, the master refuses such a schema. The
+  to date once it holds the lease. Either way, `[database] change_notifications` is applied
+  once the lease is held, including when the schema is already up to date (see
+  [Live updates](12-ui.md#live-updates)). Without either, the master refuses such a schema. The
   **webserver waits** for a schema it can use (`/readyz` not ready, checked every 5 s), so it
   can start before the migration. SQLite works for roles on one host with a local disk.
 - **Upgrade the master first**, then the webservers and workers (see
@@ -177,7 +179,8 @@ no musl wheel, so no compiler ends up in your image.
   a space; or `database.existingSecret`, a Secret holding the whole URL. Any connection pooler
   can sit in between. Behind one in transaction mode the master finds it
   and polls for new commands, and the webserver can't follow changes for the UI, so the live
-  pages refresh every 5 s (see [the master](04-master.md)). To listen anyway,
+  pages refresh every `[webserver] refresh_interval` (15 s by default; see
+  [the master](04-master.md)). To listen anyway,
   `database.notificationsUrlKey` names a key of the same Secret with a URL straight to
   Postgres. The master and the webserver both use it
   (`database.postgres.notificationsHost` with `database.postgres`);
@@ -185,8 +188,10 @@ no musl wheel, so no compiler ends up in your image.
   create the schema in `public`, which Postgres 15 no longer lets everyone do), and can use
   PL/pgSQL (`DO` blocks: a master's lease check), which Postgres allows everyone by default; a
   server that revokes it refuses a master's writes;
-- **`migration`**, how the schema is migrated (both hold the master's lease, and change
-  nothing when the schema is up to date):
+- **`migration`**, how the schema is migrated (both hold the master's lease). When the schema
+  is already up to date they leave it, and they still apply `[database]
+  change_notifications` when the triggers differ from the setting (see
+  [Live updates](12-ui.md#live-updates)):
   - `initContainer` (the default): an init container runs `schedr db migrate --wait` before
     schedr starts, so a failed migration shows as a failed init container, and the master
     (standalone's included) refuses a schema that isn't up to date;
@@ -335,7 +340,7 @@ context whose server isn't loopback, before calling anything on that cluster.
 
 On a laptop, `schedr standalone --migrate` runs everything on localhost, with SQLite in the
 data directory (`[worker] data_dir`, else `~/.local/share/schedr`), migrating the database at
-start.
+start and applying `[database] change_notifications` once it holds the lease.
 
 In this repository, **`make standalone`** does the same for trying things by hand (development
 only): the debug binary just built, the Python environment of `uv sync` for DAG files and

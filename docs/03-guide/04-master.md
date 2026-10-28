@@ -35,11 +35,13 @@ The webserver listens the same way, for the UI's live pages (see
 [Live updates](12-ui.md#live-updates)). It uses the same check and the same
 `[database] notifications_url`. When notifications are off, or the check finds a pooler in
 transaction mode, the webserver logs `the database's changes can't be followed (notifications
-off, or a pooler in transaction mode): live pages refresh every 5 s` when the first stream
-opens, and those pages refresh on that timer instead of hearing each change. On SQLite
-neither side listens. The master's commands wait for the next round. The writes append a row
-to `changes`, and the webserver reads the new rows every second, so the pages still follow
-each change.
+off, or a pooler in transaction mode): live pages refresh every 15 s` and those pages get
+`refresh` on that timer instead of hearing each change. The number of seconds is
+`[webserver] refresh_interval` (15 s by default, at least 1 s). `[database]
+change_notifications = false` turns the change triggers off, and the pages refresh on that
+same timer. On SQLite neither side listens. The master's commands wait for the next round.
+The writes append a row to `changes`, and the webserver reads the new rows every second, so
+the pages still follow each change while those triggers are on.
 
 A round does six things, in order. Each handles at most so many items a round (commands 50,
 new runs' task instances 2,000, assignments 50, expiries 50, retries 100, scheduled runs 10 a

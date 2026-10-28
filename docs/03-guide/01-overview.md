@@ -39,8 +39,9 @@ flowchart LR
   `schedr standalone` that call stays inside the process, and the browser uses the REST API's
   port. The UI never reaches the master, the workers or the database.
 - **The webserver follows what each write changed**, and the UI's pages update from that.
-  On Postgres it is notified when the writing transaction commits. On SQLite it reads a table
-  of changes. See [Live updates](12-ui.md#live-updates).
+  The writes announce what changed, on by default. On Postgres the webserver is notified
+  when the writing transaction commits. On SQLite it reads a table of changes. Otherwise the
+  pages refresh on a timer. See [Live updates](12-ui.md#live-updates).
 - **Workers always open the connection to the master**, never the other way round. Each keeps
   one long-lived gRPC stream; the master sends work and cancels over it at once.
 - **The webserver reads task logs from the worker that ran the task**: logs stay on the

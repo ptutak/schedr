@@ -121,8 +121,9 @@ comment every 15 s keeps an idle stream from looking dead. The response is
 `Content-Type: text/event-stream`, with `Cache-Control: no-cache` and
 `X-Accel-Buffering: no`. The webserver follows the database once, from the first stream, and
 hands each change to every open stream. When the changes can't be followed, each stream gets
-`refresh` every 5 s (see [The master](04-master.md)). A stream more than 1,024 changes behind
-gets `refresh` instead of the ones it skipped.
+`refresh` every `[webserver] refresh_interval` (15 s by default; see
+[Live updates](12-ui.md#live-updates)). A stream more than 1,024 changes behind gets
+`refresh` instead of the ones it skipped.
 
 The UI opens one of these streams per deployment. If it drops, the UI opens it again after
 1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Each open
