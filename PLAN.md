@@ -265,6 +265,39 @@ policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.
 `webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
 Claude, no docs round).
 
+## M4: Native API complete
+
+Done when (PROJECT.md, Roadmap): the native API's whole design is built, so a DAG written
+against it runs as designed, distributed and in standalone. **Planned with the user
+(2026-10-28; decisions 49-53 in PROJECT.md):** async points settled (49A), `setrlimit` through
+`schedr task-exec` (50A), this order (51A), connections' sync and async clients and `check()`
+(53); nearly all of the rest of the design is already in PROJECT.md's sections, which each step
+follows. **Reviews (52A):** each step reviewed by Grok, then a Grok docs round, then committed;
+steps built before the 2026-10-30 reset are committed after Claude's own review and go into
+the whole-repository review. The order puts the result model first (everything graph-like
+builds on it), the agent channel before what talks over it, and the watcher host after async
+functions. Claude implements each step; Grok reviews it and updates the guide (from the
+2026-10-30 reset on).
+
+| Step | Contents | Done when |
+|---|---|---|
+| M4.1 | **Results and outcomes:** every task reports an (output, outcome) pair, stored per attempt, in DAG JSON (each task's outcome names), `Finished` and the database; Python outcomes (declared `Outcome` enums, unions of dataclasses / models / `None`), command exit codes as outcomes (`Outcome` `IntEnum`, `DefaultOutcome`); `.on(X)` (edge and narrowed data), `.outcome`; the edge kinds (on-outcome, selection, requirement); the trigger rules `NoneFailed` (default) and `RunIf.ALL_SUCCEEDED`, decided as soon as certain; skips and `None` data from skipped upstreams; the run result rules (PROJECT.md, Outcomes, failures and joins); the UI showing outcomes | a DAG routing on a Python outcome union, an enum and a command's exit code runs as the tables say, on SQLite and Postgres |
+| M4.2 | **`@branch` and groups:** a branch task's chosen IDs and selection edges, skips propagated; `with group(...)` (prefixed IDs, dependencies on a group, its `TaskDefaults`, `run_if`), group metadata shown in the UI's graph | a branch choosing a subset and an empty list; a group as one dependency |
+| M4.3 | **Mapping:** `.partial(...)` / `.expand(...)`, instances `map_index` 0..N-1 created once the input exists, element-wise `.on` and expansion over a mapped output, the whole output as `Output[list[T]]` (input order; `[]` for an empty expansion; `upstream_failed` on a failed instance), `[mapping] max_instances`; instances in the API and UI | a mapped task over a literal and over an upstream output, empty included, with per-instance results |
+| M4.4 | **Concurrency limits:** `Dag(max_active_tasks=)`, `@task(max_active=, max_active_per_run=)` (also operators, `TaskDefaults`), applied in the assignment's transaction, the waiting reason and its metric | limits hold under a stress scenario (no more running than allowed), reasons shown |
+| M4.5 | **The agent channel, params and `dag_ctx`:** per-call connections to the agent (`SCM_RIGHTS`), `schedr task-ctx` / `schedr dag-ctx`, `schedr.script`; `Dag(params=...)` (dataclass or model, JSON Schema in the DAG JSON), values validated by the master before a run exists (`runs trigger -p`, `--params`, the UI's form), stored with the run; `dag_ctx` references in the DAG body, values at run time, `dag_ctx.params(...)` | a Python task, a command and a plain script read the same params and run information |
+| M4.6 | **Secrets:** the secret storage abstraction, Vault (KV v2, Kubernetes auth, token renewal, cache), the `db` storage for standalone (encrypted, `SCHEDR_SECRET_KEY`) and `schedr secrets set/list/get/delete/export`; placeholders rendered by the agent, `secrets=` and `SecretPrefix` on demand, masking (`min_mask_length`, `unmasked_prefixes`), the error kinds; storage names checked at DAG validation; the chart's key and Vault role | a task reads secrets from Vault (a dev-mode container in the integration tests) and from `db`, masked in its log |
+| M4.7 | **Connections:** `@connection` generator functions, the built-in typed connections (`HTTP` and `Mongo` sync and async through httpx and pymongo, `SSH` and `SQL` sync, `Generic`) with `check()`, `CommandOperator(connections=)` variables and files, `schedr task-ctx connection`, `schedr connections check` / `test`, optional `@task(connections=[...])`, test doubles (decision 53) | the same DAG reads a connection's values from two environments' storages |
+| M4.8 | **Cleanup and resources:** per-task cleanups (`cleanup=`, the runner's `cleanup` mode through the fork server, handles registered and journaled, `cleaning_up`, `cleanup_timeout`, cleanup retries, `cleanup_anywhere`, a failed cleanup failing the run, drain timing); resources (`@resource`, `@cleanup`, `uses=`, requirement edges, static and code-less resources, `CommandResource` / `ScriptResource`, `task-ctx cleanup/resource`); the UI's shells filled (25B) | a task killed mid-way is cleaned up after, on its worker and, with `cleanup_anywhere`, after its worker was lost; a resource cleaned once after its last user |
+| M4.9 | **`schedr.toml` and `ScriptOperator`:** `SCHEDR_SCRIPT_PATH` and script roots, `[jobs.<name>]` (every key, outcomes, params, cleanup), standalone jobs (one-task DAGs, paused when first found), `ScriptOperator`, `schedr dags check` for TOML | a scheduled job and a script used from a DAG run, with params, outcomes and a cleanup |
+| M4.10 | **Async task functions:** `async def` tasks (`asyncio.run` per attempt, SIGTERM cancelling the main coroutine), async in-task calls, async cleanups and resources, optional `uvloop`, a plain call returning the coroutine, leftover tasks cancelled (49A); `async with` on connections | an async task with concurrent waits, cancelled cleanly, in tests and a run |
+| M4.11a | **Wait steps:** the watcher host (`schedr.runner watchers`, one per worker, the 30-second rule and its watchdog, its memory budget, logs per watcher), `@sensor` and `@sensor.poke`, `TimedOut`, watcher slots and placement, drain and loss | a wait step ends with a value and with `TimedOut`; a blocked loop is caught |
+| M4.11b | **Triggers:** `@trigger` and `@trigger.poke`, events (`events` table, bookmarks), event runs (`dag_ctx.event`, queueing, back-pressure), the master's trigger supervisor, restarts, manual runs with an event, the CLI, API and UI | an event-triggered DAG runs once per event, resumes from its bookmark after a restart |
+| M4.12 | **Runs between and over time:** `TriggerDagOperator` (chained runs, `wait`, cancel, cycles) and backfill (`runs backfill`, `--all`, `max_runs`, `runs cancel --backfill`, priorities) | a parent waits on a chained run; a backfill fills missing periods oldest first |
+| M4.13 | **Notifications:** channels in the server's configuration (email and webhook), `Dag(notify=...)`, the events (`RUN_FAILED` by default), fixed messages, metrics | a failed run sends one email and one webhook, a pure cancel none |
+| M4.14 | **Retention:** `[retention]` (runs, outputs, events, commands), the master's batched job, never the latest run nor an unfinished one, "output deleted by retention" | old runs and outputs go, the protected ones stay, on SQLite and Postgres |
+| M4.15 | **Per-task memory and upgrade rules:** a task's own memory budget in the API, `setrlimit` opt-in through `schedr task-exec` (50A); the upgrade rules checked against what M2 built (version gating, warnings within a major) and completed | a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers |
+
 ## M6: sign-in against LDAP
 
 Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode

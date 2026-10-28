@@ -2349,9 +2349,15 @@ OpenShift's restricted security policy doesn't grant.
   the attempt (0, not measured, as none) and shown in the API's attempts
   (`peak_memory_bytes`).
 - **`setrlimit` waits for M4,** with per-task budgets in the native API: no DAG can opt in
-  before, and setting it in the child needs `pre_exec`, which is `unsafe` (forbidden here),
-  while `prlimit` from the parent leaves the process unlimited for a moment. The
-  `AssignTask` fields stay. Watchdog metrics (kills, peak memory) come with the ops port
+  before. Setting it in the child needs `pre_exec`, which is `unsafe` (forbidden here), and
+  `prlimit` from the parent leaves the process unlimited for a moment, so (decision 50A, the
+  user's, 2026-10-28) **a limited task is started through `schedr` itself**: an internal
+  subcommand (`schedr task-exec --data-limit … -- <command>`) sets the limit on its own
+  process with safe Rust (the `rlimit` crate) and `exec`s the task, which inherits it; no
+  window without the limit, one more `exec` (about 1 ms) only for tasks that opt in. A task
+  forked from the fork server sets it in the forked child, our own code, before user code.
+  Not chosen: Python tasks only (B: commands couldn't opt in); `prlimit` from outside (C:
+  the unlimited window). The `AssignTask` fields stay. Watchdog metrics (kills, peak memory) come with the ops port
   (2.9); the watcher host's budget with M4.
 
 ### Worker environment
@@ -4597,9 +4603,14 @@ Rules:
   budget or signal-based cancel, one crash or blocking call hurts all of them; watchers accept
   this trade-off because they mostly wait, tasks don't); coroutines that suspend and resume in
   another process (a coroutine's state can't be saved).
-- **To settle in M4:** what a plain call outside a DAG returns (the coroutine, to `await` in
-  tests; `task_context` and `run_dag` support); async cleanups and resource setups /
-  cleanups; errors from tasks left running when the main coroutine returns.
+- **Settled for M4** (decision 49, the user's, 2026-10-28): a plain call of an `async def`
+  task outside a DAG returns the coroutine, to `await` in tests (`task_context` and
+  `run_dag` run it); async cleanups and resource setups / cleanups are supported like sync
+  ones; background tasks still running when the main coroutine returns are cancelled, as
+  `asyncio.run` does, their errors logged as warnings and the attempt's result unchanged
+  ("finally, not except": what the task returned is its result). Not chosen: a plain call
+  running the coroutine itself (B: no way to await it in an async test); sync-only cleanups
+  for now; a leftover task's error failing the attempt.
 
 ### Sensors and triggers
 
@@ -6682,7 +6693,7 @@ def count() -> int:
   templates; `task_context(connections={"mongodb_default": fake})` and
   `run_dag(..., connections=...)` swap a connection for a test double.
 
-**Proposed with it (to confirm):**
+**Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
 - **Declaring for an early start:** optional `@task(connections=[mongodb_default])`: the agent
   renders it before the task starts and fails fast; without it, `with` renders on first use.
   Not chosen so far: a required declaration (one more line everywhere).
@@ -6692,8 +6703,10 @@ def count() -> int:
 - **A "does it work?" hook:** an optional second function, `@mongodb_default.check` (e.g. a
   Mongo `ping`), run on a worker by `schedr connections test mongodb_default`.
 - **Arguments besides secrets:** literals, and run values (`t"{dag_ctx.run.planned_for}"`) as
-  in other templates; possibly per-deployment settings that aren't secrets (a
-  `[connections]` table in the configuration).
+  in other templates. Per-deployment settings that aren't secrets (a `[connections]` table
+  in the configuration): later, secrets and literals cover them.
+- **A missing secret:** both ways stay, `schedr connections check` before moving DAGs and a
+  default in the template (`secrets.get('path#key', '')`).
 - **Async:** `@connection` on an `async def` generator gives `async with` (with M4's async
   task functions).
 - **Airflow (M5):** `schedr.airflow`'s `Connection.get(conn_id)` and
@@ -6733,7 +6746,7 @@ def version() -> str:
 
 - **One definition, every kind of task.** A typed connection is defined once, in any `.py`
   file of the DAG folder. Python tasks (and plain scripts with `schedr.script`) enter it with
-  `with router() as client:`, getting the type's client (`requests.Session`, a paramiko
+  `with router() as client:`, getting the type's client (`httpx.Client`, a paramiko
   `SSHClient`, a pymongo `Database`, …; the library imported only on use, so `import
   schedr` stays dependency-free). Commands and scripts get the type's variables and files.
   **Custom `@connection` functions stay** for shapes of one's own, Python first; given to a
@@ -6760,14 +6773,26 @@ def version() -> str:
 
   | Type | Variables | Files | Python client |
   |---|---|---|---|
-  | `HTTP` | `_BASE_URL`, `_TOKEN` if any | `_CURL_CONFIG` (headers, CA), `_CA_FILE` if given | `requests.Session` |
+  | `HTTP` | `_BASE_URL`, `_TOKEN` if any | `_CURL_CONFIG` (headers, CA), `_CA_FILE` if given | `httpx.Client` / `httpx.AsyncClient` |
   | `SSH` | `_HOST`, `_PORT`, `_USER` | `_KEY_FILE`, `_KNOWN_HOSTS`, `_SSH_CONFIG` (host `target`) | paramiko `SSHClient` |
   | `Mongo` | `_URI`, `_DATABASE` | | pymongo `Database` |
   | `SQL` (a URL: Postgres, MySQL) | `_URL` | `_PGPASSFILE` for Postgres | a DB-API connection |
   | `Generic` (keys of one's own) | `_<KEY>` per key | | a dict |
 
   Network devices go through `SSH`. Exact names are settled when built; the table is the
-  shape. Not chosen: fewer types (HTTP, SSH, Generic), with Mongo and SQL as Generic
+  shape.
+- **Sync and async, and `check()`** (decision 53, the user's, 2026-10-28): one connection
+  definition gives the sync client with `with` and the async one with `async with`, where
+  the type has both. `Mongo`: pymongo for both (`MongoClient`, and `AsyncMongoClient`, in
+  pymongo since 4.10, replacing the deprecated motor). `HTTP`: httpx for both
+  (`httpx.Client` / `httpx.AsyncClient`, one API in both modes; the table's
+  `requests.Session` becomes `httpx.Client`). `SSH` (paramiko) and `SQL` (DB-API; async
+  drivers differ per database) sync only for now: `async with` on them is a parse error
+  saying so. `Generic` is a dict, either way. Every built-in type has a `check()`: Mongo
+  `ping`, HTTP a request to `check_path` (else connecting), SSH connecting and closing, SQL
+  `SELECT 1`; a `@connection` of one's own may add `@its_name.check`; `schedr connections
+  test <name>` runs it on a worker, sync or async as the type allows. Not chosen:
+  `requests` for sync with httpx for async (two libraries, two APIs). Not chosen: fewer types (HTTP, SSH, Generic), with Mongo and SQL as Generic
   (losing the clients and the `.pgpass` file).
 
 **Decided besides (2026-10-25):**
