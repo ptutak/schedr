@@ -110,6 +110,8 @@ table.list th, table.list td {
 table.list th { background: var(--surface); font-weight: 600; font-size: 13px; color: var(--dim); }
 /* A time and its local time in brackets stay on one line. */
 table.list td.time { white-space: nowrap; }
+/* A time in a narrow column: a line each for its date, UTC time and local time. */
+table.list td.lines { white-space: pre-line; }
 table.list tbody tr:last-child td { border-bottom: none; }
 table.list tbody tr:hover { background: var(--surface); }
 

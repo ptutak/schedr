@@ -55,6 +55,9 @@ pub struct Hub {
     /// Whether this master leads (holds the lease, see [`crate::lease`]): worker messages,
     /// registrations and uploads wait while it doesn't.
     leading: Arc<watch::Sender<bool>>,
+    /// Told when a worker's `Finished` was recorded: a round runs at once instead of at the
+    /// next tick, its downstream tasks ready (decision 42B; [`ROUND_GAP`] after the last).
+    finished: Arc<tokio::sync::Notify>,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
@@ -79,6 +82,7 @@ impl Hub {
             db: core.db().clone(),
             arrivals: core.arrivals(),
             leading: Arc::new(watch::Sender::new(true)),
+            finished: Arc::new(tokio::sync::Notify::new()),
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
@@ -244,6 +248,7 @@ impl Hub {
             Stop,
             Tick,
             Command,
+            Finished,
             NotificationsFailed(DbError),
             Alive,
             Refresh,
@@ -262,6 +267,7 @@ impl Hub {
         let mut refresh = tokio::time::interval(GAUGE_REFRESH);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut paused_until: Option<tokio::time::Instant> = None;
+        let mut last_round: Option<tokio::time::Instant> = None;
         let mut listen_again = self
             .listen_retry
             .filter(|_| notifications.is_none())
@@ -271,6 +277,7 @@ impl Hub {
             let wake = tokio::select! {
                 () = &mut stop => Wake::Stop,
                 _ = ticks.tick() => Wake::Tick,
+                () = self.finished.notified() => Wake::Finished,
                 result = next_command(notifications.as_mut(), paused_until) => match result {
                     Ok(()) => Wake::Command,
                     Err(error) => Wake::NotificationsFailed(error),
@@ -304,7 +311,7 @@ impl Hub {
                     continue;
                 }
                 // Paused: no rounds until the lease is renewed.
-                Wake::Tick | Wake::Command if !leads => continue,
+                Wake::Tick | Wake::Command | Wake::Finished if !leads => continue,
                 Wake::Refresh => {
                     self.refresh_gauges().await;
                     continue;
@@ -325,16 +332,31 @@ impl Hub {
                     paused_until = Some(tokio::time::Instant::now() + NOTIFICATION_RETRY);
                     continue;
                 }
+                Wake::Finished => {
+                    // At most one round every ROUND_GAP: under a stream of finishes each
+                    // round takes what arrived meanwhile, and the lease's renewals and the
+                    // workers' messages get their turns.
+                    if let Some(ended) = last_round {
+                        tokio::time::sleep_until(ended + ROUND_GAP).await;
+                    }
+                    ticks.reset();
+                }
                 Wake::Tick => {}
             }
-            let started = std::time::Instant::now();
-            if let Err(error) = self.tick().await {
-                tracing::error!(%error, "master tick failed");
-            }
-            self.metrics
-                .tick_duration
-                .observe(started.elapsed().as_secs_f64());
+            self.timed_tick().await;
+            last_round = Some(tokio::time::Instant::now());
         }
+    }
+
+    /// A round, its duration observed.
+    async fn timed_tick(&self) {
+        let started = std::time::Instant::now();
+        if let Err(error) = self.tick().await {
+            tracing::error!(%error, "master tick failed");
+        }
+        self.metrics
+            .tick_duration
+            .observe(started.elapsed().as_secs_f64());
     }
 
     /// Renews `leadership` every third of its period, pausing the master when its last
@@ -413,7 +435,9 @@ impl Hub {
                 let mut core = self.core.lock().await;
                 let mut next = Some(first);
                 let mut handled = 0;
+                let mut finished = false;
                 while let Some(message) = next.take() {
+                    finished |= matches!(message, worker_message::Message::Finished(_));
                     match core.handle(&worker_id, message, (self.clock)()).await {
                         Ok(out) => outgoing.extend(out),
                         Err(error) => {
@@ -424,6 +448,9 @@ impl Hub {
                     if handled < MESSAGES_PER_TURN {
                         next = queued.try_recv().ok();
                     }
+                }
+                if finished {
+                    self.finished.notify_one();
                 }
             }
             self.deliver(outgoing).await;
@@ -585,6 +612,11 @@ impl Master for Hub {
 /// gets through together, and a long queue doesn't hold rounds and other workers up for long
 /// (at most this many `Finished`, each a few writes; the rest waits for the next turn).
 pub const MESSAGES_PER_TURN: usize = 10;
+
+/// The least time between the end of a round and one a worker's `Finished` wakes (decision
+/// 42B): none when the master was idle, so a finish starts its downstream tasks at once; under
+/// a stream of finishes at most 20 rounds a second, each taking what arrived meanwhile.
+pub const ROUND_GAP: Duration = Duration::from_millis(50);
 
 /// How long the master waits before listening again after notifications failed.
 pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);

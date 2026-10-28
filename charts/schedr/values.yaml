@@ -201,6 +201,11 @@ istio:
     jwks: ""
     # The token passed on to schedr (which doesn't use it yet) instead of removed.
     forwardOriginalToken: false
+    # Claims Istio copies into request headers once the token is valid, e.g.
+    #   - {header: x-forwarded-user, claim: preferred_username}
+    # so schedr records who acted: set webserver.auth.identityHeader (and ui.auth's) to that
+    # header, with mode none. Without it actions are recorded as anonymous.
+    outputClaimToHeaders: []
   # Who may call schedr's ports. Istio denies whatever an ALLOW policy doesn't list, so this
   # one lists every port schedr serves.
   authorizationPolicy:

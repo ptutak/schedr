@@ -187,12 +187,35 @@ A standalone has no `[tls] mode`. Its pages and its API share `[webserver.auth]`
 | `tls.mode`, `tls.uiName`, `tls.existingSecrets.ui` | The UI's proof by mTLS, and its certificate |
 | `service.webserverUiPort` (8083) | `[webserver] ui_port`: in `app` mode always, in `mesh` mode with the mesh proof |
 | `istio.authorizationPolicy.ui.principals` | Other releases' `schedr ui`, let in on the mesh-proven UI port |
+| `istio.requestAuthentication.outputClaimToHeaders` | Claims Istio copies from a valid token into headers, e.g. `{header: x-forwarded-user, claim: preferred_username}`, at the API's and the UI's pods |
 | `standalone.ui` | `false`: `--no-ui` |
 
 The chart uses the mesh proof by itself in `mesh` mode when `istio.enabled` and
 `istio.authorizationPolicy.enabled` are on and the UI's service account is shared with no
 other role. It then admits only the UI's account to the port, with a DENY policy for anyone
 else, and makes no token. Otherwise it makes a token.
+
+**With Istio and Keycloak** (mode `none`), the name reaches schedr only if Istio puts it in a
+header. Istio checks the token, but copies a claim into a header only when told to. So set
+both sides, or every action is recorded as `anonymous`:
+
+```yaml
+istio:
+  requestAuthentication:
+    enabled: true
+    issuer: https://keycloak.example.com/realms/main
+    outputClaimToHeaders:
+      - {header: x-forwarded-user, claim: preferred_username}
+  authorizationPolicy:
+    enabled: true            # api.requireJwt: true, so every request carries a valid token
+webserver:
+  auth: {mode: none, identityHeader: x-forwarded-user}
+```
+
+Istio sets the header from the token it has checked, and with `api.requireJwt` every request
+needs a valid token. A copy of the header a client sends itself can't name someone else either
+way: if Istio replaces it, Istio's is the only one, and if Istio adds its own beside it, the
+header is there twice and schedr takes neither.
 
 A token the chart makes is kept on upgrades by looking up its Secret. A tool that only renders
 the chart, as Argo CD does with `helm template`, can't look it up, so each sync makes a new

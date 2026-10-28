@@ -174,6 +174,17 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   pooler and version passes; Postgres plans each query again (small, simple queries).
 - **Commands: polling is the guarantee** (every round, 1 s); `LISTEN` stays a speed-up that
   may do nothing behind transaction pooling.
+- **A finished task wakes a round** (decisions 42B and 43A, the user's, 2026-10-28): a
+  worker's `Finished`, once recorded, wakes the master's loop (a `Notify`: a burst of them is
+  one wake), which runs a round at once, so its downstream tasks are dispatched instead of up
+  to `[master] tick_interval` later on each step of a chain; at least 50 ms after the last
+  round (`ROUND_GAP`, a constant: nothing for an idle master, at most 20 rounds a second under
+  a stream of finishes, each taking what arrived meanwhile), so the lease's renewals and the
+  workers' messages keep their turns, and the database its idle load. Only `Finished`: a new
+  worker's registration waits for the next tick (rare, and more code). Not chosen: no gap (A:
+  rounds back to back under load, the risk to the lease's renewals unmeasured), a lower
+  `tick_interval` instead (C: every idle round costs too). Checked with stress scenarios 1
+  and 9, before and after.
 - **Migrations run by the lease holder,** with sqlx's own migration lock (a session advisory
   lock) off: **`schedr db migrate` takes the lease** (refused while a master or another
   migration holds it; `--wait` waits for it), and **`schedr standalone` migrates only with

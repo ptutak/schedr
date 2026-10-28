@@ -4,7 +4,7 @@ serviceAccount: {create: false, name: mesh-sa}
 istio:
   enabled: true
   virtualService: {enabled: true, gateways: [istio-system/b2b-ingress-gateway], hosts: ["*"], prefix: /service/schedr/}
-  requestAuthentication: {enabled: true, issuer: https://kc.example.com/realms/x, forwardOriginalToken: true}
+  requestAuthentication: {enabled: true, issuer: https://kc.example.com/realms/x, forwardOriginalToken: true, outputClaimToHeaders: [{header: x-forwarded-user, claim: preferred_username}]}
   authorizationPolicy:
     enabled: true
     api: {claims: {groups: [schedr-users], azp: schedr-cli}, principals: [cluster.local/ns/x/sa/y], namespaces: [tools]}

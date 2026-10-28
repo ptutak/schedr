@@ -74,6 +74,22 @@ impl Page {
     pub fn time(&self, at: &Timestamp) -> String {
         show(*at, self.zone.as_ref().unwrap_or(&TimeZone::UTC))
     }
+
+    /// As [`Self::time`], for a narrow column, in lines: the date, the UTC time, the local
+    /// time in brackets (shown by a cell with `white-space: pre-line`; non-breaking spaces
+    /// keep each line whole).
+    #[must_use]
+    pub fn narrow_time(&self, at: &Timestamp) -> String {
+        let text = self.time(at);
+        let (utc, local) = text.split_once(" (").unwrap_or((&text, ""));
+        let (date, clock) = utc.split_once(' ').unwrap_or((utc, ""));
+        let keep = |part: &str| part.replace(' ', "\u{a0}");
+        let mut lines = vec![date.to_owned(), keep(clock)];
+        if !local.is_empty() {
+            lines.push(format!("({}", keep(local)));
+        }
+        lines.join("\n")
+    }
 }
 
 /// `X-Forwarded-Prefix` when it is a plain path (`/` and letters, digits, `-`, `_`, `.`,

@@ -122,6 +122,8 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
     configured.master.grpc_port = 0;
     configured.ops.port = 0;
     configured.webserver.port = 0;
+    // Every port the system's choice: a standalone running here holds the defaults.
+    configured.worker.log_port = 0;
     configured.master.tick_interval = Duration::from_millis(50);
     let mut setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
     assert!(!setup.migrate, "migrating is asked for (`--migrate`)");
@@ -136,7 +138,9 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
         },
         stopped,
     ));
-    let listening = addresses.await.unwrap();
+    let Ok(listening) = addresses.await else {
+        panic!("standalone ended before listening: {:?}", server.await);
+    };
     assert!(banner(listening, &shown).starts_with("schedr standalone: API on http://127.0.0.1:"));
     let body: serde_json::Value = reqwest::get(format!("http://{}/api/v1/dags", listening.http))
         .await

@@ -1145,7 +1145,7 @@ fn attempt_row(page: &Page, attempt: &AttemptView) -> AttemptRow {
         memory: attempt.peak_memory_bytes.map(bytes).unwrap_or_default(),
         started_at: attempt
             .started_at
-            .map(|t| page.time(&t))
+            .map(|t| page.narrow_time(&t))
             .unwrap_or_default(),
         error,
         traceback: summary

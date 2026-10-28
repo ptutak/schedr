@@ -16,6 +16,14 @@ announced. Every notification that has arrived by then is taken by that one roun
 burst of commands costs one round, not one each. The 1 s timer starts again after a round
 woken this way.
 
+A worker's `Finished` also wakes a round, on SQLite and Postgres alike. Its downstream tasks
+are then ready and dispatched at once, not at the next tick, which spared a chain of tasks
+up to a second on each step. A round woken this way starts at least 50 ms after the previous
+round ended. An idle master runs it at once. Under a stream of finishes it runs at most 20
+rounds a second, and each round takes every finish that arrived meanwhile. That leaves the
+lease's renewals and the workers' messages their turns. Other messages (a `Started`, a
+heartbeat, a new worker registering) wait for the next tick.
+
 **Notifications behind a connection pooler.** The master listens (Postgres `LISTEN`) on a
 connection of its own. A pooler in **transaction** mode (PgBouncer and similar) can't carry
 that: it lends the server connection the master listens on to other clients, whose queries

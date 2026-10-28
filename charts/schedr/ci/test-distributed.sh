@@ -101,6 +101,8 @@ has 'principals: \["\*/ns/ns/sa/t-schedr-ui"\]' "the webserver's policy letting 
 has 'ports: \["8080", "8083"\]' "the UI's calls: the API and the UI port"
 grep -A3 '^kind: RequestAuthentication' "$WORK/out.yaml" | grep -q 'name: t-schedr-ui$' \
     || fail "tokens checked at the UI's pods too (its policy's requestPrincipals)"
+[ "$(grep -c 'claim: preferred_username' "$WORK/out.yaml")" = 2 ] \
+    || fail "the user's name copied from the token into a header at the API's and the UI's pods"
 grep -A4 -- '- tools$' "$WORK/out.yaml" | grep -q 'ports: \["8080", "8083"\]' \
     || fail "api.namespaces also on the UI port (a schedr ui elsewhere, its certificate)"
 render -f "$CHART/ci/istio-values.yaml" --set clusterDomain=corp.local > "$WORK/out.yaml"

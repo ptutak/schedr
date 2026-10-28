@@ -92,6 +92,10 @@ spec:
       jwks: {{ . | quote }}
       {{- end }}
       forwardOriginalToken: {{ .forwardOriginalToken }}
+      {{- with .outputClaimToHeaders }}
+      outputClaimToHeaders:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -83,3 +83,21 @@ fn the_zone_cookie_is_decoded_as_encode_uri_component_wrote_it() {
         assert!(with(bad).is_none(), "{bad}");
     }
 }
+
+#[test]
+fn a_narrow_time_is_a_line_each_for_the_date_utc_and_local_time() {
+    let at: Timestamp = "2026-10-15T01:00:00Z".parse().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        HeaderValue::from_static("schedr_tz=Europe%2FWarsaw"),
+    );
+    let warsaw = Page::new(&headers, false);
+    // A line each: the date, the UTC time, the local time.
+    assert_eq!(
+        warsaw.narrow_time(&at),
+        "2026-10-15\n01:00\u{a0}UTC\n(03:00\u{a0}CEST)"
+    );
+    let utc = Page::new(&HeaderMap::new(), false);
+    assert_eq!(utc.narrow_time(&at), "2026-10-15\n01:00\u{a0}UTC");
+}

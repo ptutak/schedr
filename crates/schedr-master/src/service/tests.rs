@@ -955,3 +955,153 @@ async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
     let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
 }
+
+#[tokio::test]
+async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    // `extract` then `load`.
+    let mut result = parse_result();
+    let tasks: Vec<_> = ["extract", "load"]
+        .map(|id| {
+            json!({
+                "id": id, "kind": "python",
+                "settings": {
+                    "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                    "queue": "default", "max_output_size": 1_048_576
+                },
+                "output_type": {"type": "none"}
+            })
+        })
+        .into();
+    let file: ParsedFile = serde_json::from_value(json!({
+        "path": "sync.py",
+        "dags": [{
+            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+            "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+            "tasks": tasks,
+            "edges": [{"from": "extract", "to": "load", "kind": "order"}]
+        }],
+        "error": null
+    }))
+    .unwrap();
+    result.files = vec![parsed_file_to_proto(&file)];
+    client.upload_parse_result(result).await.unwrap();
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    // Rounds a minute apart: the first one at once triggers the run and dispatches `extract`.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            hub.run(Duration::from_mins(1), None, async {
+                let _ = stopped.await;
+            })
+            .await;
+        }
+    });
+    let master_message::Message::AssignTask(extract) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    assert_eq!(extract.task_id, "extract");
+    for message in [
+        worker_message::Message::Started(pb::Started {
+            attempt_id: extract.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        }),
+        worker_message::Message::Finished(pb::Finished {
+            attempt_id: extract.attempt_id.clone(),
+            status: pb::AttemptStatus::Success.into(),
+            ..pb::Finished::default()
+        }),
+    ] {
+        to_master.send(wrap(message)).await.unwrap();
+    }
+    let finished = std::time::Instant::now();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::FinishedAck(_)
+    ));
+    // Within moments (`next` waits 5 s at most), not a minute later at the next tick.
+    let master_message::Message::AssignTask(load) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    assert_eq!(load.task_id, "load");
+    assert!(finished.elapsed() < Duration::from_secs(2));
+    let _ = stop.send(());
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
+    let (hub, _db, mut client) = connected().await;
+    let mut registry = prometheus_client::registry::Registry::default();
+    hub.metrics.register(&mut registry);
+    let (to_master, outbound) = mpsc::channel(64);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            hub.run(Duration::from_mins(1), None, async {
+                let _ = stopped.await;
+            })
+            .await;
+        }
+    });
+    // 30 finishes 10 ms apart (of attempts the master doesn't know: only their arrival
+    // matters), over 300 ms: one round each without the gap.
+    let started = std::time::Instant::now();
+    for n in 0..30 {
+        let finished = worker_message::Message::Finished(pb::Finished {
+            attempt_id: format!("unknown-{n}"),
+            status: pb::AttemptStatus::Success.into(),
+            ..pb::Finished::default()
+        });
+        to_master.send(wrap(finished)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(ROUND_GAP * 2).await;
+    let elapsed = started.elapsed();
+    let _ = stop.send(());
+    running.await.unwrap();
+    let mut text = String::new();
+    prometheus_client::encoding::text::encode(&mut text, &registry).unwrap();
+    let rounds: u128 = text
+        .lines()
+        .find_map(|line| line.strip_prefix("master_tick_duration_seconds_count "))
+        .expect("the rounds counted")
+        .parse()
+        .unwrap();
+    // The first round at once, then at most one every ROUND_GAP (and one more at the end).
+    let most = 2 + elapsed.as_millis() / ROUND_GAP.as_millis();
+    assert!(rounds >= 3, "the finishes woke rounds: {rounds}");
+    assert!(
+        rounds <= most,
+        "{rounds} rounds in {elapsed:?}, at most {most}"
+    );
+}
