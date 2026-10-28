@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}schedr{% endblock %}</title>
+<link rel="stylesheet" href="{{ page.base }}/assets/style.css">
+<script>
+// Before the page paints: the theme (the one chosen here before, else the system's), and the
+// browser's time zone in a cookie for the server, which shows times in UTC and in this zone.
+(function () {
+  var theme = null;
+  try { theme = localStorage.getItem("schedr-theme"); } catch (e) {}
+  if (theme !== "light" && theme !== "dark") {
+    theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  document.documentElement.dataset.theme = theme;
+  var zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (zone && document.cookie.indexOf("schedr_tz=" + encodeURIComponent(zone)) < 0) {
+    document.cookie = "schedr_tz=" + encodeURIComponent(zone) + "; path=/; max-age=31536000; samesite=lax";
+    {% if !page.has_zone() %}
+    // Once, so this page shows local times too (not again if the cookie can't be set).
+    try {
+      if (!sessionStorage.getItem("schedr-tz-reloaded")) {
+        sessionStorage.setItem("schedr-tz-reloaded", "1");
+        location.reload();
+      }
+    } catch (e) {}
+    {% endif %}
+  }
+})();
+function schedrTheme() {
+  var root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+  try { localStorage.setItem("schedr-theme", root.dataset.theme); } catch (e) {}
+}
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ page.base }}/">schedr</a>
+  <nav>
+    <a href="{{ page.base }}/">DAGs</a>
+    {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}
+  </nav>
+  <button class="theme" type="button" onclick="schedrTheme()" aria-label="Switch between light and dark">◐</button>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+{% if !page.has_zone() %}<footer class="note">Times in UTC (the local time zone isn't known yet).</footer>{% endif %}
+</body>
+</html>

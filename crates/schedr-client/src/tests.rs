@@ -183,3 +183,48 @@ async fn an_unreachable_server_is_a_connect_error() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn the_router_transport_calls_the_api_in_process() {
+    use axum::Json;
+    use axum::routing::{get, post};
+    let app = axum::Router::new()
+        .route(
+            "/api/v1/echo",
+            post(
+                |headers: axum::http::HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                    let version = headers[CLIENT_VERSION_HEADER].to_str().unwrap().to_owned();
+                    (
+                        axum::http::StatusCode::ACCEPTED,
+                        Json(json!({"got": body, "version": version})),
+                    )
+                },
+            ),
+        )
+        .route("/api/v1/plain", get(|| async { "not json" }));
+    let transport = RouterTransport::new(app);
+    let echoed = transport
+        .send(ApiRequest {
+            method: Method::Post,
+            path: "/api/v1/echo".to_owned(),
+            body: Some(json!({"a": 1})),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        echoed,
+        ApiResponse {
+            status: 202,
+            body: json!({"got": {"a": 1}, "version": VERSION}),
+        }
+    );
+    let plain = transport
+        .send(ApiRequest {
+            method: Method::Get,
+            path: "/api/v1/plain".to_owned(),
+            body: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!((plain.status, plain.body), (200, serde_json::Value::Null));
+}

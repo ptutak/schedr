@@ -1,5 +1,6 @@
 use pretty_assertions::assert_eq;
 use rstest::rstest;
+use serde_json::json;
 
 use super::*;
 
@@ -113,4 +114,56 @@ fn the_local_zone_comes_from_tz_or_the_system() {
     );
     let fallback = local_zone(Some("Mars/Base"));
     assert_eq!(fallback, local_zone(None));
+}
+
+#[test]
+fn triggers_are_written_as_people_write_them() {
+    let utc = TimeZone::UTC;
+    let cron = json!({"kind": "cron", "expression": "@daily", "timezone": "UTC", "catchup": false});
+    assert_eq!(trigger_text(&cron, &utc), "@daily");
+    assert_eq!(
+        trigger_text(
+            &json!({"kind": "every", "interval_ms": 5_400_000, "catchup": false}),
+            &utc
+        ),
+        "every 1h 30m"
+    );
+    assert_eq!(
+        trigger_text(
+            &json!({"kind": "every", "interval_ms": 3_600_000, "catchup": true}),
+            &utc
+        ),
+        "every 1h, catchup"
+    );
+    assert_eq!(
+        trigger_text(&json!({"kind": "once", "at": "2026-12-24T22:00:00Z"}), &utc),
+        "once at 2026-12-24 22:00Z"
+    );
+    assert_eq!(trigger_text(&json!({"kind": "none"}), &utc), "-");
+}
+
+#[test]
+fn a_triggers_window_is_shown_in_utc_with_the_local_offset() {
+    let warsaw = TimeZone::get("Europe/Warsaw").unwrap();
+    let window = json!({
+        "kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw",
+        "catchup": true, "start": "2025-12-31T23:00:00Z", "end": "2026-06-30T22:00:00Z"
+    });
+    assert_eq!(
+        trigger_text(&window, &warsaw),
+        "0 3 * * * (Europe/Warsaw), catchup, \
+         2025-12-31 23:00Z (local:+1h)..2026-06-30 22:00Z (local:+2h)"
+    );
+    let until = json!({"kind": "every", "interval_ms": 60_000, "catchup": false, "start": null,
+                       "end": "2026-12-31T00:00:00Z"});
+    assert_eq!(
+        trigger_text(&until, &TimeZone::UTC),
+        "every 1m, ..2026-12-31 00:00Z"
+    );
+    let from = json!({"kind": "cron", "expression": "@daily", "timezone": "UTC",
+                      "catchup": false, "start": "2026-01-01T00:00:00Z", "end": null});
+    assert_eq!(
+        trigger_text(&from, &TimeZone::UTC),
+        "@daily, 2026-01-01 00:00Z.."
+    );
 }

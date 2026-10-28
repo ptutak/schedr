@@ -16,6 +16,7 @@ every key.
 | `schedr master` | **exactly one** | `[database] url`, a migrated schema (or `--migrate`); its gRPC port behind a Service the workers reach |
 | `schedr webserver` | one or more | `[database] url` (it waits for the schema to be migrated); its REST port behind a Service |
 | `schedr worker` | as many as the load needs | `[worker] master_url`, the DAG code (e.g. a git-sync sidecar), a disk for its journal and logs; a StatefulSet with a headless Service, each pod's `log_address` set to its DNS name |
+| `schedr ui` | one | `[ui] deployments` (each webserver's URL); no database. Listens on `[ui] port` (8082). A chart pod for it comes in M3.6; until then, [run it yourself](#running-schedr-ui) |
 
 - **Postgres** is the database for anything spread over several hosts. Migrate the schema
   with `schedr db migrate` before starting the master (it holds the master's lease while it
@@ -29,8 +30,8 @@ every key.
 - **Workers' `terminationGracePeriodSeconds`** should match `[worker]
   termination_grace_period`, so a draining worker has the time it expects.
 - **Probes** go to the ops port: liveness on `/healthz` for every role, readiness on `/readyz`
-  for the master and the webserver. Workers need no readiness probe: nothing connects to them
-  through a Service.
+  for the master, the webserver and `schedr ui` (ready once it listens). Workers need no
+  readiness probe: nothing connects to them through a Service.
 - **Memory:** a worker pod's memory limit is split between its slots (see
   [Workers](05-workers.md#memory)); size the pod for its slots. The chart turns the fork
   server on by default, and with its preload list the worker keeps two long-lived fork
@@ -49,7 +50,7 @@ standalone's pod goes, the roles come (a short downtime). Standalone's volume st
 | Role | Kubernetes | Image | Notes |
 |---|---|---|---|
 | master | a Deployment, **1 replica, `Recreate`** | `schedr-server` (`images/schedr-server`, 44 MB, no Python) | The old master stops (giving up the lease) before the new one starts. `migration`: an init container (`db migrate --wait`) or `onStart` (`master --migrate`). Its Service `<release>-master` (gRPC 8070). |
-| webserver | a Deployment, `webserver.replicas` (1) | `schedr-server` | The API's Service `<release>` (8080). Waits for its schema, so during an upgrade the old one serves until the new one is ready. |
+| webserver | a Deployment, `webserver.replicas` (1) | `schedr-server` | The API's Service `<release>` (8080). Waits for its schema, so during an upgrade the old one serves until the new one is ready. The web UI is a separate role; the chart gains it in M3.6. |
 | workers | a **StatefulSet**, `worker.replicas` (2), one pod at a time on updates | `image` (the base image or yours) | A headless Service `<release>-worker`; each pod's `log_address` is its own DNS name; **a volume each** (`worker.persistence`: logs and the journal survive the pod moving); a PodDisruptionBudget (`worker.podDisruptionBudget`, at most 1 down); `terminationGracePeriodSeconds` mirrored into `[worker] termination_grace_period`; the DAGs (git-sync, `dags.files`) only here. |
 
 Each role has its own section (`master`, `webserver`, `worker`: `replicas`, `resources`,
@@ -278,8 +279,11 @@ What to know:
   20–25 MiB in measurements. Size the pod for those two processes as well as the slots.
 - **Upgrades restart every role at once:** running tasks get the grace period, then are
   interrupted and run again.
-- **The REST API has no authentication** until the UI: keep the Service internal, or put it
-  behind the mesh (below).
+- **The REST API and the web UI have no authentication of their own** until M3.5: keep the
+  Service internal, or put it behind the mesh (below). On this pod the UI is on the API's
+  port, so that Service is the UI too.
+- **The web UI** is at `/` on the API's port. Its deployment is named `default`. `/docs`
+  serves the image's documentation. What the pages show is [The web UI](12-ui.md).
 - `scripts/kind-standalone.sh` installs the chart on a local kind cluster on SQLite, switches
   it to Postgres with `database.postgres`, then to a URL Secret, then adds DAGs from a folder
   (a second upgrade without a restart) and from git-sync (a git server in the cluster), and
@@ -293,7 +297,7 @@ objects. The chart's `istio` values create them, each optional and off by defaul
 | Value | Creates | For |
 |---|---|---|
 | `istio.enabled` | the sidecar label and annotation, and the proxy's settings | schedr starts once its proxy is ready (it reaches the database through it), and the proxy stays until schedr's connections close. Without that, the proxy stops 5 s after SIGTERM and a drain's results never reach the database |
-| `istio.virtualService` | a VirtualService on an existing Gateway (`gateways`, `hosts`, `prefix`) | the API from outside the namespace. A `prefix` other than `/` (e.g. `/service/schedr/`) is removed before the request reaches schedr and named to it in `X-Forwarded-Prefix` |
+| `istio.virtualService` | a VirtualService on an existing Gateway (`gateways`, `hosts`, `prefix`) | the API from outside the namespace. On a standalone pod that is the web UI too, on the same port. A `prefix` other than `/` (e.g. `/service/schedr/`) is removed before the request reaches schedr and named to it in `X-Forwarded-Prefix`; the UI's links follow that header |
 | `istio.requestAuthentication` | a RequestAuthentication (`issuer`, and `jwksUri` or the keys inline in `jwks`; `forwardOriginalToken`) | tokens (JWT, e.g. Keycloak's) checked at schedr's pod. It refuses only invalid tokens: a request without one passes, unless the policy below requires one |
 | `istio.authorizationPolicy` | an ALLOW AuthorizationPolicy for schedr's pod | who may call it: anything from the same namespace (`sameNamespace`, on by default); the API with a valid token (`api.requireJwt`), carrying `api.claims` (every claim listed, each with any of its values); callers without a token by mesh identity (`api.principals`) or namespace (`api.namespaces`); the ops port from `ops.namespaces` (empty: anyone). `/api/v1/docs` and `/api/v1/openapi.json` are always open to everyone |
 | `istio.peerAuthentication` | a STRICT PeerAuthentication | mTLS required, for a namespace that doesn't already require it |
@@ -320,8 +324,9 @@ harmless otherwise. Which your cluster runs shows in the pod: `istio-proxy` amon
 containers is native, among the containers classic.
 
 `scripts/kind-mesh.sh` installs all of this on a local kind cluster with Istio
-(`REGISTRY_ONLY`; `SIDECARS=native` or `classic`) and checks it: the docs open without a token, the API refused without one,
-with a forged one and without the required group, the CLI through the gateway with
+(`REGISTRY_ONLY`; `SIDECARS=native` or `classic`) and checks it: Swagger UI opens without a
+token, the API is refused without one, with a forged one and without the required group, the
+CLI through the gateway with
 `--token`, a DAG run on Postgres migrated on start, and a pod stopped while a task runs, whose
 result still reaches the database through the sidecar. Like the other kind scripts, it refuses a
 context whose server isn't loopback, before calling anything on that cluster.
@@ -334,13 +339,48 @@ In this repository, **`make standalone`** does the same for trying things by han
 only): the debug binary just built, the Python environment of `uv sync` for DAG files and
 tasks, and everything in `.schedr/` in the repository (git-ignored): the SQLite database
 (`.schedr/schedr.db`, to open in an IDE), task logs and the journal. It runs the DAGs in
-`examples/` unless `DAGS=<directory>` says otherwise, with the API on `0.0.0.0:8080`
-(`LISTEN`, all addresses by default, so it can be reached from outside WSL, e.g. Swagger UI at
-`http://<address>:8080/api/v1/docs/`; `schedr dags list` needs no `--server` with
-`0.0.0.0` or `127.0.0.1`) and the ops
-port on 8090. The API has no authentication: on a network you don't trust, run
-`make standalone LISTEN=127.0.0.1`. Ctrl-C stops it; `rm -rf
-.schedr` starts afresh.
+`examples/` unless `DAGS=<directory>` says otherwise, with the API and the web UI on
+`0.0.0.0:8080` (`LISTEN`, all addresses by default, so it can be reached from outside WSL:
+the UI at `http://<address>:8080/`, Swagger UI at `http://<address>:8080/api/v1/docs/`;
+`schedr dags list` needs no `--server` with `0.0.0.0` or `127.0.0.1`) and the ops port on
+8090. A build tree has no documentation directory at `[ui] docs_dir`'s default, so `/docs`
+appears once that key points at one (`site` after `make docs`). The API and the UI have no
+authentication: on a network you don't trust, run `make standalone LISTEN=127.0.0.1`. Ctrl-C
+stops it; `rm -rf .schedr` starts afresh.
+
+## Running `schedr ui`
+
+`schedr ui` is the web UI as its own process, over one or more webservers. It needs no
+database and no DAG code. The server image is enough: it has the binary and the
+documentation, and this role runs no user code. The base image has them too. The chart's
+distributed mode deploys this process in M3.6. Until then, run it yourself. Standalone
+already serves the same pages on its API port, and ignores `[ui] bind`, `[ui] port` and
+`[ui] deployments`.
+
+Point each deployment at that deployment's webserver. A name is letters, digits, `-` and
+`_`, shown on the pages and used in their addresses, and each name once. With no list, or a
+name that breaks those rules, `schedr ui` refuses to start and says what to fix.
+
+```toml
+[ui]
+bind = "0.0.0.0"
+port = 8082
+
+[[ui.deployments]]
+name = "etl"
+url = "http://schedr-webserver.etl.svc:8080"
+
+[[ui.deployments]]
+name = "ml"
+url = "http://schedr-webserver.ml.svc:8080"
+```
+
+It listens on `[ui] port` (8082), on all interfaces unless `[ui] bind` says otherwise, and
+warns when that is beyond localhost: there is no authentication until M3.5. It sends no
+credentials to the webservers, so run it where those webservers allow a caller without a
+token (in the chart, the same namespace). Probes go to the ops port, as for the webserver:
+it is ready once it listens. `/docs` is the image's documentation when `[ui] docs_dir` is
+that directory. What the pages show, the themes and the times are [The web UI](12-ui.md).
 
 ## Killing the master or a worker
 

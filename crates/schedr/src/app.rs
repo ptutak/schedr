@@ -182,6 +182,7 @@ pub async fn execute(
             Box::pin(crate::roles::master(config, *migrate)).await
         }
         (Command::Webserver, None) => Box::pin(crate::roles::webserver(config)).await,
+        (Command::Ui, None) => Box::pin(crate::roles::ui(config)).await,
         (Command::Worker, None) => Box::pin(crate::roles::worker(config, env)).await,
         (
             Command::Dags {

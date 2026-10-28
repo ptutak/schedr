@@ -107,3 +107,8 @@ The names used across the documentation, the API and the logs.
 **Current code**
 : For each root, the content hash the newest code has. Only workers at that hash (or newer)
   get the root's tasks. See [Parsing and code versions](06-parsing.md).
+
+**Deployment**
+: One schedr the web UI shows: a master, workers, a webserver and a database. `schedr ui`
+  is given a list of them (`[[ui.deployments]]`: a name and the webserver's URL). Standalone
+  is one, named `default`. See [The web UI](12-ui.md).

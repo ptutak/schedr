@@ -1,0 +1,138 @@
+/* schedr's web UI: one stylesheet of our own. Plain and clear: spacing, rounded corners, and
+   colour only where it means something (states, outcomes, warnings). Two themes as CSS
+   variables, set on <html data-theme="light|dark"> by the page's script. */
+
+:root,
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f5f6f8;
+  --border: #d9dce1;
+  --text: #1d2127;
+  --dim: #5f6773;
+  --link: #1f5fbf;
+  --ok: #1e7b3a;
+  --ok-bg: #e3f4e8;
+  --failed: #b42318;
+  --failed-bg: #fbe7e5;
+  --running: #1f5fbf;
+  --running-bg: #e4edfb;
+  --waiting: #8a5a00;
+  --waiting-bg: #fdf1d8;
+  --neutral-bg: #eceef1;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #15181d;
+  --surface: #1d2128;
+  --border: #353b45;
+  --text: #e6e8eb;
+  --dim: #9aa3ae;
+  --link: #7fb0ff;
+  --ok: #6fd28d;
+  --ok-bg: #173323;
+  --failed: #ff8a80;
+  --failed-bg: #3d1d1b;
+  --running: #7fb0ff;
+  --running-bg: #1b2a44;
+  --waiting: #f2c46b;
+  --waiting-bg: #3a2e14;
+  --neutral-bg: #2a2f37;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.top .brand { font-weight: 700; color: var(--text); }
+.top nav { display: flex; gap: 16px; flex: 1; }
+.theme {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+main { padding: 16px 24px 32px; max-width: 1400px; }
+h1 { font-size: 22px; margin: 8px 0 16px; }
+h2 { font-size: 17px; margin: 24px 0 8px; }
+.crumbs { margin: 0; color: var(--dim); }
+.description { color: var(--dim); max-width: 70ch; }
+.empty, .dim, .note { color: var(--dim); }
+.note { padding: 0 24px 16px; font-size: 13px; }
+.mono, code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+
+table.list {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+table.list th, table.list td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+table.list th { background: var(--surface); font-weight: 600; font-size: 13px; color: var(--dim); }
+table.list tbody tr:last-child td { border-bottom: none; }
+table.list tbody tr:hover { background: var(--surface); }
+
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 8px; }
+dl.facts dt { color: var(--dim); }
+dl.facts dd { margin: 0; }
+
+.badge, .state, .tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--neutral-bg);
+  color: var(--dim);
+}
+.tag { font-weight: 400; margin-right: 4px; }
+.badge.active { background: var(--ok-bg); color: var(--ok); }
+.badge.paused { background: var(--waiting-bg); color: var(--waiting); }
+.badge.warning { background: var(--failed-bg); color: var(--failed); }
+
+/* Run and task states. */
+.state.success { background: var(--ok-bg); color: var(--ok); }
+.state.failed, .state.upstream_failed, .state.timed_out, .state.oom_killed, .state.lost {
+  background: var(--failed-bg); color: var(--failed);
+}
+.state.running, .state.cleaning_up { background: var(--running-bg); color: var(--running); }
+.state.queued, .state.scheduled, .state.up_for_retry, .state.unschedulable {
+  background: var(--waiting-bg); color: var(--waiting);
+}
+
+.banner {
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+}
+.banner.warning { background: var(--failed-bg); color: var(--failed); border-color: transparent; }
+.banner ul { margin: 6px 0 0; }

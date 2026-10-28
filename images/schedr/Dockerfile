@@ -40,6 +40,9 @@ COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
 RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore /tmp/schedr-*.whl \
     && rm /tmp/schedr-*.whl
 
+# The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
+COPY dist/docs /usr/share/schedr/docs
+
 # The fork server's preload list must leave a single thread: forking with threads can deadlock
 # the child, and the fork server would be disabled at every start. Imported here, the build
 # fails on a library that starts one (with the threads' names).

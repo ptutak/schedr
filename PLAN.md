@@ -221,6 +221,28 @@ and updates the guide.
 | M2.5.5a | **How tasks choose:** `@task(preload=False)` (only the bare fork server) and `@task(fresh_process=True)` (always spawned), also in `TaskDefaults` and `.override()`, as `preload` / `fresh_process` in a task's settings (DAG JSON); parse jobs through the fork servers (a fresh child per job, the preloaded server first; `schedr dags check` still spawns) | each choice and a forked parse job tested |
 | M2.5.5b | **Finish:** the chart's `worker.forkServer` (on, preload: the worker image's libraries except `polars`; the image's build fails if the list starts a thread), scenario 13 with spawn and with fork | M2.5's "done when"; the guide updated |
 
+## M3: Web UI
+
+Done when (PROJECT.md, Roadmap): the web UI shows DAGs, runs (their graph, tasks, attempts,
+outputs and logs, live), workers and commands, and takes the actions the API takes, with the
+auth modes, times in UTC and local, light and dark themes, over a list of deployments.
+
+Steps planned with the user (2026-10-27; decisions 21B-26A in PROJECT.md, Web UI): `schedr ui`,
+a role of its own talking only to webservers' JSON APIs (21B); askama and htmx (26A); a layered
+graph layout of our own (22A); the log tail polled and relayed over SSE (23A); no sessions of our
+own, actions checked by `Origin` (24A); M4's views as shells (25B); one stylesheet of our own,
+light and dark themes with a toggle (the user's). Claude implements each step; Grok reviews it
+and updates the guide.
+
+| Step | Contents | Done when |
+|---|---|---|
+| M3.1 | **Foundations:** the `schedr ui` role (a deployments list, one the common case; its own API client to the webservers; standalone serves it too), askama templates, the assets embedded in the binary (htmx vendored when first used, in M3.2), the stylesheet with light and dark themes and the toggle, times in UTC and local (the zone cookie), URLs following `X-Forwarded-Prefix`; the documentation at `/docs` from the image (28A); the DAG list and the DAG page, read-only | the UI lists DAGs and shows one, in both themes; the docs served |
+| M3.2 | **Runs:** the runs lists (all DAGs and one DAG's, filters), the run page with its SVG graph (the layered layout), the task panel (attempts, output, logs; shells for cleanup and resources), the run summary and its command history; the API endpoints these need | a run is shown whole, from the API alone |
+| M3.3 | **Live:** the master's `NOTIFY` on state changes (polling in standalone), the webserver's SSE change events (keep-alive, polling fallback), relayed by the UI; the live log tail (23A) | a run and its logs update without a reload |
+| M3.4 | **Actions:** trigger (the moment shown in both zones), cancel, pause / unpause with their confirmations, retry, drain / resume; the workers page with its warnings; the banners (database unavailable, log unavailable, cancel too late) | every API action from the UI |
+| M3.5 | **Auth modes:** `none` / `proxy_header` / `basic` with their safety rules, for the webserver and the UI; the UI's actions checked by `Origin` (24A) | each mode tested, CSRF refused |
+| M3.6 | **Federation:** several deployments in one UI: merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them; the chart's `schedr ui` Deployment and Service (distributed mode; standalone serves the UI on its API port since M3.1) | two deployments in one UI, one of them down |
+
 ## After M3: Grok over the whole repository
 
 Asked by the user (2026-10-27): once M3 is done, Grok reviews the **whole repository**, not

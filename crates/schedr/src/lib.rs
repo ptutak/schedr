@@ -13,14 +13,14 @@ use clap::error::ErrorKind;
 
 pub mod app;
 pub mod cli;
-pub mod client;
+pub use schedr_client as client;
 pub mod interpreter;
 pub mod local;
 pub mod logging;
 pub mod ops;
 pub mod roles;
 pub mod standalone;
-pub mod times;
+pub use schedr_client::times;
 pub mod user;
 
 #[cfg(test)]

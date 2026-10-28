@@ -154,6 +154,18 @@ impl Standalone {
             .flatten()
     }
 
+    /// `GET` of a web UI page (HTML); `None` unless it answers 200.
+    fn page(&self, path: &str) -> Option<String> {
+        let output = Command::new("curl")
+            .args(["-sf", &format!("{}{path}", self.api)])
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     fn dags(&self) -> Vec<(String, Value)> {
         self.cli_json(&["dags", "list"])["dags"]
             .as_array()
@@ -296,6 +308,19 @@ fn a_chain_runs_end_to_end(standalone: &Standalone) {
     assert!(
         out.contains(&run_id) && out.contains("manual") && out.contains("success"),
         "{out}"
+    );
+    // The web UI, served next to the API over the same deployment.
+    let list = standalone.page("/").expect("the UI's DAG list");
+    assert!(
+        list.contains(r#"href="/d/default/dags/chain""#) && list.contains("paused"),
+        "{list}"
+    );
+    let page = standalone
+        .page("/d/default/dags/chain")
+        .expect("the UI's DAG page");
+    assert!(
+        page.contains(&run_id) && page.contains(r#"class="state success""#),
+        "{page}"
     );
 }
 

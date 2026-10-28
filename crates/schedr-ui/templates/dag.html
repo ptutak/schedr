@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ row.dag_id }} · schedr{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %}</p>
+<h1>{{ row.dag_id }} {% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}</h1>
+{% if !description.is_empty() %}<p class="description">{{ description }}</p>{% endif %}
+{% if !conflicts.is_empty() %}
+<div class="banner warning">
+  Other files define <code>{{ row.dag_id }}</code> too; none of them runs until one is left:
+  <ul>{% for at in conflicts %}<li class="mono">{{ at }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<dl class="facts">
+  <dt>Schedule</dt><dd class="mono">{{ row.schedule }}</dd>
+  <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>
+  {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
+</dl>
+<h2>Runs</h2>
+{% if runs.is_empty() %}
+<p class="empty">No runs yet.</p>
+{% else %}
+<table class="list runs">
+  <thead>
+    <tr><th>Run</th><th>State</th><th>For</th><th>Kind</th><th>Triggered</th><th>By</th><th>Ended</th></tr>
+  </thead>
+  <tbody>
+  {% for run in runs %}
+    <tr>
+      <td class="mono">{{ run.run_id }}</td>
+      <td><span class="state {{ run.state }}">{{ run.state }}</span></td>
+      <td>{{ run.planned_for }}</td>
+      <td>{{ run.kind }}</td>
+      <td>{{ run.triggered_at }}</td>
+      <td>{{ run.triggered_by }}</td>
+      <td>{{ run.ended_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -7,14 +7,13 @@
 
 use std::io::Write;
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
 
 use crate::app::AppError;
 use crate::cli::{DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand};
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
-use crate::times::{parse_for, show, show_short};
+use crate::times::{parse_for, show, trigger_text};
 
 #[cfg(test)]
 mod tests;
@@ -389,50 +388,6 @@ fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
             ]
         })
         .collect()
-}
-
-/// A trigger as people write it: `0 3 * * * (Europe/Warsaw)`, `every 1h, catchup`,
-/// `@daily, 2025-12-31 23:00Z (local:+1h)..` (its window, either end open), `once at …`,
-/// `-`; times in UTC with
-/// `local`'s offset.
-fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
-    let time = |key: &str| {
-        trigger[key]
-            .as_str()
-            .and_then(|text| text.parse::<Timestamp>().ok())
-            .map(|at| show_short(at, local))
-    };
-    let text = match trigger["kind"].as_str() {
-        Some("cron") => {
-            let expression = trigger["expression"].as_str().unwrap_or_default();
-            match trigger["timezone"].as_str() {
-                Some("UTC") | None => expression.to_owned(),
-                Some(zone) => format!("{expression} ({zone})"),
-            }
-        }
-        Some("every") => {
-            let ms = trigger["interval_ms"].as_u64().unwrap_or(0);
-            format!(
-                "every {:#}",
-                jiff::SignedDuration::from_millis(i64::try_from(ms).unwrap_or(i64::MAX))
-            )
-        }
-        Some("once") => format!("once at {}", time("at").unwrap_or_default()),
-        _ => "-".to_owned(),
-    };
-    let mut parts = vec![text];
-    if trigger["catchup"].as_bool() == Some(true) {
-        parts.push("catchup".to_owned());
-    }
-    match (time("start"), time("end")) {
-        (None, None) => {}
-        (start, end) => parts.push(format!(
-            "{}..{}",
-            start.unwrap_or_default(),
-            end.unwrap_or_default()
-        )),
-    }
-    parts.join(", ")
 }
 
 fn run_row(run: &RunView, local: &TimeZone) -> Vec<String> {

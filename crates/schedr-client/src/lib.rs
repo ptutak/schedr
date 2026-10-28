@@ -1,4 +1,4 @@
-//! The user CLI's client of the webserver's REST API (`/api/v1`).
+//! A client of the webserver's REST API (`/api/v1`), for the user CLI and the web UI.
 //!
 //! Requests go through a [`Transport`]: HTTP in the real CLI ([`HttpTransport`]), something in
 //! process in tests. Every request carries `Schedr-Client-Version`. Actions return a command;
@@ -10,12 +10,15 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AttemptList, CommandView, DagList, LogChunk, PauseRequest, RunDetail, RunList, TriggerRequest,
-    WorkerList,
+    AttemptList, CommandView, DagList, DagView, LogChunk, PauseRequest, RunDetail, RunList,
+    TriggerRequest, WorkerList,
 };
 use serde::de::DeserializeOwned;
 
-use crate::VERSION;
+/// This client's version (the workspace's), sent in [`CLIENT_VERSION_HEADER`].
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod times;
 
 #[cfg(test)]
 mod tests;
@@ -221,6 +224,63 @@ impl Transport for HttpTransport {
     }
 }
 
+/// The API in the same process: requests go straight to its router, with no network (the
+/// web UI of `schedr standalone`, and tests).
+#[derive(Debug, Clone)]
+pub struct RouterTransport {
+    app: axum::Router,
+}
+
+impl RouterTransport {
+    /// A transport to the API served by `app` (the webserver's router).
+    #[must_use]
+    pub const fn new(app: axum::Router) -> Self {
+        Self { app }
+    }
+}
+
+impl Transport for RouterTransport {
+    async fn send(&self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+        let in_process = |reason: String| ClientError::Connect {
+            server: "the API in this process".to_owned(),
+            reason,
+        };
+        let method = match request.method {
+            Method::Get => axum::http::Method::GET,
+            Method::Post => axum::http::Method::POST,
+        };
+        let body = request.body.map_or_else(axum::body::Body::empty, |b| {
+            axum::body::Body::from(b.to_string())
+        });
+        let http = axum::http::Request::builder()
+            .method(method)
+            .uri(&request.path)
+            .header("content-type", "application/json")
+            .header(CLIENT_VERSION_HEADER, VERSION)
+            .body(body)
+            .map_err(|e| in_process(e.to_string()))?;
+        let response = self
+            .app
+            .clone()
+            .oneshot(http)
+            .await
+            .map_err(|e| in_process(e.to_string()))?;
+        let status = response.status().as_u16();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| in_process(e.to_string()))?
+            .to_bytes();
+        Ok(ApiResponse {
+            status,
+            body: serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        })
+    }
+}
+
 /// Typed calls to the API.
 #[derive(Debug, Clone)]
 pub struct Client<T> {
@@ -266,6 +326,17 @@ impl<T: Transport> Client<T> {
     /// [`ClientError`] if the request fails or the answer doesn't read.
     pub async fn dags(&self) -> Result<DagList, ClientError> {
         self.call(Method::Get, "/api/v1/dags".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/dags/{dag}`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails (a DAG that doesn't exist: the server's 404) or
+    /// the answer doesn't read.
+    pub async fn dag(&self, dag: &str) -> Result<DagView, ClientError> {
+        self.call(Method::Get, format!("/api/v1/dags/{}", path(dag)), None)
             .await
     }
 
@@ -510,6 +581,13 @@ fn to_body(value: &impl serde::Serialize) -> Result<serde_json::Value, ClientErr
 }
 
 /// A path segment, with the characters that would break the path escaped.
+/// `segment` as one URL path segment: everything but letters, digits and `-._~`
+/// percent-encoded (a DAG ID may hold `/`, `:` and `#`).
+#[must_use]
+pub fn path_segment(segment: &str) -> String {
+    path(segment)
+}
+
 fn path(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {

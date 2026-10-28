@@ -17,6 +17,8 @@ FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aa
 # tini as PID 1 forwards signals and reaps; CA certificates for Postgres over TLS and the like.
 RUN apk add --no-cache tini ca-certificates
 COPY --from=wheel /schedr /usr/local/bin/schedr
+# The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
+COPY dist/docs /usr/share/schedr/docs
 # OpenShift runs containers under an arbitrary UID in group 0: HOME writable by group 0.
 RUN mkdir -p /var/lib/schedr \
     && chgrp -R 0 /var/lib/schedr \

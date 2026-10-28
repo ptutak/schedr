@@ -162,6 +162,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
         None,
         listen(loopback()).await.unwrap(),
         None,
+        None,
         Observed {
             metrics: ApiMetrics::default(),
             health: &health,
@@ -575,4 +576,65 @@ async fn the_ops_port_is_bound_and_logged() {
     let bound = start_ops(&config, "master", ops, &stopped).await.unwrap();
     assert_ne!(bound.port(), 0);
     stop.send(1).unwrap();
+}
+
+fn ui_config(deployments: &[(&str, &str)]) -> Config {
+    let mut config = config();
+    config.ui.deployments = deployments
+        .iter()
+        .map(|(name, url)| schedr_config::config::UiDeployment {
+            name: (*name).to_owned(),
+            url: (*url).to_owned(),
+        })
+        .collect();
+    config
+}
+
+#[test]
+fn the_uis_deployments_are_named_plainly_and_once() {
+    let ok = ui_deployments(&ui_config(&[
+        ("etl", "http://etl:8080/"),
+        ("ml_2", "http://ml:8080"),
+    ]))
+    .unwrap();
+    let names: Vec<&str> = ok.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["etl", "ml_2"]);
+    assert_eq!(ok[0].client.transport().server(), "http://etl:8080");
+    for (deployments, says) in [
+        (vec![], "list them in [ui] deployments"),
+        (vec![("e/t", "http://x")], "`e/t` must be letters, digits"),
+        (vec![("", "http://x")], "`` must be letters, digits"),
+        (
+            vec![("etl", "http://a"), ("etl", "http://b")],
+            "`etl` is listed twice",
+        ),
+    ] {
+        let error = ui_deployments(&ui_config(&deployments)).unwrap_err();
+        assert!(error.to_string().contains(says), "{error}");
+    }
+}
+
+#[test]
+fn the_docs_are_served_only_from_a_directory_that_exists() {
+    let site = TempDir::new().unwrap();
+    let mut config = config();
+    config.ui.docs_dir = site.path().to_path_buf();
+    assert_eq!(docs_dir(&config), Some(site.path().to_path_buf()));
+    config.ui.docs_dir = site.path().join("missing");
+    assert_eq!(docs_dir(&config), None);
+    config.ui.docs_dir = PathBuf::new();
+    assert_eq!(docs_dir(&config), None);
+}
+
+#[test]
+fn the_ui_warns_about_itself_when_it_listens_beyond_loopback() {
+    let open = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8082);
+    let warning = no_auth_warning_for("the web UI", open, "bind 127.0.0.1").unwrap();
+    assert!(
+        warning.starts_with(
+            "the web UI has no authentication of its own (it comes with milestone M3.5)"
+        ),
+        "{warning}"
+    );
+    assert_eq!(no_auth_warning_for("the web UI", loopback(), "x"), None);
 }

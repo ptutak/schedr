@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}DAGs · schedr{% endblock %}
+{% block content %}
+<h1>DAGs</h1>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
+{% endfor %}
+{% if rows.is_empty() %}
+<p class="empty">No DAGs.</p>
+{% else %}
+<table class="list dags">
+  <thead>
+    <tr>
+      <th>DAG</th>
+      {% if several %}<th>Deployment</th>{% endif %}
+      <th>State</th>
+      <th>Schedule</th>
+      <th>Tags</th>
+      <th>Defined in</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><a href="{{ row.href }}">{{ row.dag_id }}</a>{% if row.conflict %} <span class="badge warning" title="Other files define the same ID">conflict</span>{% endif %}</td>
+      {% if several %}<td>{{ row.deployment }}</td>{% endif %}
+      <td>{% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}</td>
+      <td class="mono">{{ row.schedule }}</td>
+      <td>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</td>
+      <td class="mono dim">{{ row.location }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

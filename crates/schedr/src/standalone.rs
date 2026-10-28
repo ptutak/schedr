@@ -33,9 +33,9 @@ use tokio::sync::watch;
 use crate::app::AppError;
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
-    Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, lead, listen, lock_journal,
-    log_retention, master_settings, memory_text, no_auth_warning, run_worker, serve_api,
-    serve_master, stop_on_signal,
+    LocalUi, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, docs_dir, lead,
+    listen, lock_journal, log_retention, master_settings, memory_text, no_auth_warning, run_worker,
+    serve_api, serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -79,6 +79,8 @@ pub struct Standalone {
     pub parse_file_timeout: Duration,
     /// The header naming the user on commands.
     pub identity_header: Option<String>,
+    /// The web UI it serves next to its API.
+    pub ui: LocalUi,
     /// Whether to migrate the database at start (`--migrate`).
     pub migrate: bool,
 }
@@ -128,6 +130,9 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         parse_file_timeout: config.dags.parse_file_timeout,
         identity_header: config.webserver.auth.identity_header.clone(),
+        ui: LocalUi {
+            docs_dir: docs_dir(config),
+        },
         migrate: false,
         database_url,
         data_dir,
@@ -226,6 +231,7 @@ pub async fn run(
         setup.identity_header.clone(),
         http,
         None,
+        Some(setup.ui.clone()),
         api_observed,
         stopped.clone(),
     ));

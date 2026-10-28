@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check docs docs-dist docs-serve test test-rust test-python test-integration stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -182,11 +182,14 @@ image-requirements: ## Pin the base image's libraries (images/schedr/requirement
 
 SERVER_IMAGE ?= schedr-server:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-server-image: smoke-musl ## Build the server image (master, webserver: no Python) and smoke-test it
+docs-dist: docs    ## The documentation the images serve at /docs, into dist/docs
+	scripts/docs-dist.sh
+
+server-image: smoke-musl docs-dist ## Build the server image (master, webserver, ui: no Python) and smoke-test it
 	$(CONTAINER) build -f images/schedr-server/Dockerfile -t $(SERVER_IMAGE) .
 	scripts/smoke-server-image.sh $(CONTAINER) $(SERVER_IMAGE)
 
-image: smoke-musl ## Build the base image from the musllinux wheel and smoke-test it
+image: smoke-musl docs-dist ## Build the base image from the musllinux wheel and smoke-test it
 	$(CONTAINER) build -f images/schedr/Dockerfile -t $(IMAGE) .
 	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)
 

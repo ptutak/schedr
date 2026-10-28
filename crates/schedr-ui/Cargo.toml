@@ -1,0 +1,27 @@
+[package]
+name = "schedr-ui"
+description = "The schedr web UI: server-rendered pages over webservers' REST APIs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+askama.workspace = true
+axum.workspace = true
+jiff.workspace = true
+schedr-api.workspace = true
+schedr-client.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+scraper.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

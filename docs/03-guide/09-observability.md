@@ -19,12 +19,12 @@ was down, Kubernetes would restart the master or every worker in a loop, killing
 for nothing. So it checks only the role's own loops: the master's scheduling loop and the
 worker agent's event loop. Each **beats** on a monotonic clock, at every turn and at least
 every 5 s while it waits. A wall clock that steps can't make a loop look stuck. The webserver
-has no loop, so it is alive while it answers.
+and the web UI have no loop, so each is alive while it answers.
 
 **Readiness** waits for each part to start. The master is ready after its schema check,
 registry restore and gRPC listener; the worker after recovering its journal; the webserver
-once it listens. It doesn't check the database either: with one master, taking it out of
-its Service helps nobody.
+and the web UI once each listens. It doesn't check the database either: with one master,
+taking it out of its Service helps nobody. The web UI has no database.
 
 ## Metrics
 
@@ -42,8 +42,9 @@ the code. Roughly:
   server didn't fork (`schedr_worker_fork_fallbacks_total{interpreter,reason}`), watchdog
   kills, journal records, log disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
+- **web UI:** none of its own;
 - **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
-  macOS), and the build version.
+  macOS), and the build version. The web UI serves only these.
 
 `schedr_master_tick_duration_seconds` has 29 buckets, each √2 times the last, from 1 ms to
 about 16 s. A round's p99 one bucket worse is about 1.4 times the previous bucket, so

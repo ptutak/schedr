@@ -117,3 +117,47 @@ pub fn local_zone(tz: Option<&str>) -> TimeZone {
         .or_else(|| TimeZone::try_system().ok())
         .unwrap_or(TimeZone::UTC)
 }
+
+/// A trigger as people write it: `0 3 * * * (Europe/Warsaw)`, `every 1h, catchup`,
+/// `@daily, 2025-12-31 23:00Z (local:+1h)..` (its window, either end open), `once at …`,
+/// `-`; times in UTC with `local`'s offset. `trigger` is a DAG's trigger in DAG JSON.
+#[must_use]
+pub fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
+    let time = |key: &str| {
+        trigger[key]
+            .as_str()
+            .and_then(|text| text.parse::<Timestamp>().ok())
+            .map(|at| show_short(at, local))
+    };
+    let text = match trigger["kind"].as_str() {
+        Some("cron") => {
+            let expression = trigger["expression"].as_str().unwrap_or_default();
+            match trigger["timezone"].as_str() {
+                Some("UTC") | None => expression.to_owned(),
+                Some(zone) => format!("{expression} ({zone})"),
+            }
+        }
+        Some("every") => {
+            let ms = trigger["interval_ms"].as_u64().unwrap_or(0);
+            format!(
+                "every {:#}",
+                jiff::SignedDuration::from_millis(i64::try_from(ms).unwrap_or(i64::MAX))
+            )
+        }
+        Some("once") => format!("once at {}", time("at").unwrap_or_default()),
+        _ => "-".to_owned(),
+    };
+    let mut parts = vec![text];
+    if trigger["catchup"].as_bool() == Some(true) {
+        parts.push("catchup".to_owned());
+    }
+    match (time("start"), time("end")) {
+        (None, None) => {}
+        (start, end) => parts.push(format!(
+            "{}..{}",
+            start.unwrap_or_default(),
+            end.unwrap_or_default()
+        )),
+    }
+    parts.join(", ")
+}

@@ -37,6 +37,44 @@ fn defaults_match_the_documented_values() {
             loop_stall_timeout: Duration::from_secs(120)
         }
     );
+    assert_eq!(
+        config.ui,
+        UiSection {
+            bind: std::net::IpAddr::from([0, 0, 0, 0]),
+            port: 8082,
+            deployments: vec![],
+            docs_dir: "/usr/share/schedr/docs".into(),
+        }
+    );
+}
+
+#[test]
+fn the_uis_deployments_are_read_as_a_list() {
+    let config = parse(
+        r#"
+        [ui]
+        port = 9000
+        docs_dir = ""
+
+        [[ui.deployments]]
+        name = "etl"
+        url = "http://schedr-webserver.etl.svc:8080"
+
+        [[ui.deployments]]
+        name = "ml"
+        url = "http://schedr-webserver.ml.svc:8080"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(config.ui.port, 9000);
+    assert_eq!(config.ui.docs_dir, std::path::PathBuf::new());
+    let names: Vec<&str> = config
+        .ui
+        .deployments
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    assert_eq!(names, ["etl", "ml"]);
 }
 
 #[test]

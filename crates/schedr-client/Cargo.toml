@@ -1,0 +1,28 @@
+[package]
+name = "schedr-client"
+description = "A client of the schedr webserver's REST API, for the CLI and the web UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+tower.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+schedr-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+rstest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

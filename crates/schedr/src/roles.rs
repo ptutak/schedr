@@ -453,8 +453,112 @@ pub async fn serve_master(
     }
 }
 
+/// The deployments `[ui] deployments` names, each with a client of its webserver's API.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for none, a name that isn't letters, digits, `-` and `_`, or a
+/// name given twice.
+pub fn ui_deployments(
+    config: &Config,
+) -> Result<Vec<schedr_ui::Deployment<schedr_client::HttpTransport>>, AppError> {
+    let listed = &config.ui.deployments;
+    if listed.is_empty() {
+        return Err(AppError::BadArgument(
+            "`schedr ui` shows deployments: list them in [ui] deployments \
+             ([[ui.deployments]] name = \"etl\", url = \"http://schedr-webserver.etl.svc:8080\")"
+                .to_owned(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    listed
+        .iter()
+        .map(|d| {
+            let plain = !d.name.is_empty()
+                && d.name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !plain {
+                return Err(AppError::BadArgument(format!(
+                    "[ui] deployments: `{}` must be letters, digits, `-` and `_` (it is in the \
+                     UI's URLs)",
+                    d.name
+                )));
+            }
+            if !seen.insert(d.name.as_str()) {
+                return Err(AppError::BadArgument(format!(
+                    "[ui] deployments: `{}` is listed twice",
+                    d.name
+                )));
+            }
+            let transport = schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None);
+            Ok(schedr_ui::Deployment {
+                name: d.name.clone(),
+                client: schedr_client::Client::new(
+                    transport,
+                    schedr_client::POLL_INTERVAL,
+                    schedr_client::WAIT_TIMEOUT,
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Runs `schedr ui`: the web UI over the webservers of `[ui] deployments`, until a signal.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for bad `[ui]` settings, a port that can't be bound, or the
+/// HTTP server failing.
+pub async fn ui(config: &Config) -> Result<(), AppError> {
+    let deployments = ui_deployments(config)?;
+    let stop = stop_on_signal();
+    let health = Health::new(config.ops.loop_stall_timeout);
+    let ready = health.starting("ui");
+    let ops = Ops::new(Registry::default(), health.clone());
+    start_ops(config, "ui", ops, &stop).await?;
+    let address = SocketAddr::new(config.ui.bind, config.ui.port);
+    let listener = listen(address).await?;
+    let bound = listener.local_addr().unwrap_or(address);
+    if let Some(warning) = no_auth_warning_for("the web UI", bound, "set [ui] bind = \"127.0.0.1\"")
+    {
+        tracing::warn!("{warning}");
+    }
+    let names: Vec<&str> = deployments.iter().map(|d| d.name.as_str()).collect();
+    tracing::info!(
+        "schedr ui: on http://{bound} (deployments: {})",
+        names.join(", ")
+    );
+    let app = schedr_ui::router(schedr_ui::Ui {
+        deployments,
+        docs_dir: docs_dir(config),
+    });
+    ready.ready();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(until(stop))
+        .await
+        .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
+}
+
+/// The web UI `schedr standalone` serves next to its API, over its own deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalUi {
+    /// The documentation site, when there is one (see [`docs_dir`]).
+    pub docs_dir: Option<PathBuf>,
+}
+
+/// The name of the deployment `schedr standalone`'s UI shows (in its URLs).
+pub const LOCAL_DEPLOYMENT: &str = "default";
+
+/// `[ui] docs_dir` when it is a directory; `None` otherwise (`""`, or not there: no `/docs`).
+#[must_use]
+pub fn docs_dir(config: &Config) -> Option<PathBuf> {
+    let dir = &config.ui.docs_dir;
+    (!dir.as_os_str().is_empty() && dir.is_dir()).then(|| dir.clone())
+}
+
 /// Serves the REST API on `listener` until `stop`, reading task logs from workers (over mTLS
-/// with `tls`).
+/// with `tls`); with `ui`, the web UI too, at `/`, calling this API in process.
 ///
 /// # Errors
 ///
@@ -464,6 +568,7 @@ pub async fn serve_api(
     identity_header: Option<String>,
     listener: TcpListener,
     tls: Option<Tls>,
+    ui: Option<LocalUi>,
     observed: Observed<'_, ApiMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
@@ -471,7 +576,26 @@ pub async fn serve_api(
         .with_logs(std::sync::Arc::new(HttpLogSource::new(tls)))
         .with_metrics(observed.metrics);
     observed.ready.ready();
-    axum::serve(listener, router(state))
+    let api = router(state);
+    let app = match ui {
+        Some(local) => {
+            let client = schedr_client::Client::new(
+                schedr_client::RouterTransport::new(api.clone()),
+                schedr_client::POLL_INTERVAL,
+                schedr_client::WAIT_TIMEOUT,
+            );
+            let deployments = vec![schedr_ui::Deployment {
+                name: LOCAL_DEPLOYMENT.to_owned(),
+                client,
+            }];
+            api.merge(schedr_ui::router(schedr_ui::Ui {
+                deployments,
+                docs_dir: local.docs_dir,
+            }))
+        }
+        None => api,
+    };
+    axum::serve(listener, app)
         .with_graceful_shutdown(until(stop))
         .await
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
@@ -634,13 +758,20 @@ pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) {
 }
 
 /// The warning for the REST API listening on `address` beyond loopback: it has no
-/// authentication of its own until the UI (M3). `alternative` says how to keep it local.
+/// authentication of its own until the auth modes (M3.5). `alternative` says how to keep it
+/// local.
 #[must_use]
 pub fn no_auth_warning(address: SocketAddr, alternative: &str) -> Option<String> {
+    no_auth_warning_for("the REST API", address, alternative)
+}
+
+/// As [`no_auth_warning`], for `what` (`the REST API`, `the web UI`).
+#[must_use]
+pub fn no_auth_warning_for(what: &str, address: SocketAddr, alternative: &str) -> Option<String> {
     (!address.ip().is_loopback()).then(|| {
         format!(
-            "the REST API has no authentication of its own (it comes with the UI, milestone \
-             M3) and listens on {address}: keep it behind an authenticating proxy or mesh, or \
+            "{what} has no authentication of its own (it comes with milestone M3.5) and \
+             listens on {address}: keep it behind an authenticating proxy or mesh, or \
              {alternative}"
         )
     })
@@ -1010,6 +1141,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         config.webserver.auth.identity_header.clone(),
         listener,
         tls,
+        None,
         Observed {
             metrics,
             health: &health,

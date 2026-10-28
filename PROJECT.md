@@ -40,14 +40,15 @@ operators that run a plain Python script or a Bash script file** as a task.
 
 ### Components and roles
 
-One Rust binary, four roles:
+One Rust binary, five roles:
 
 | Role                | Runs                                                                  | User code?  |
 |---------------------|-----------------------------------------------------------------------|-------------|
 | `schedr master`     | Scheduling loop, state in Postgres, internal API for workers          | **Never.** Its image contains no user packages. |
 | `schedr worker`     | Rust agent; starts Python and Bash subprocesses for tasks and parsing | Yes, in subprocesses |
-| `schedr webserver`  | Web UI and the API used by the UI and CLI                             | **Never.**  |
-| `schedr standalone` | All of the above in one process, with SQLite                          | Yes (local development only) |
+| `schedr webserver`  | The REST API used by the web UI and the CLI                           | **Never.**  |
+| `schedr ui`         | The web UI, over one or more deployments' webservers (M3, 21B)        | **Never.**  |
+| `schedr standalone` | All of the above in one process (its UI over its own API)              | Yes (local development only) |
 
 **Running the roles separately (M2.1):**
 
@@ -574,6 +575,16 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     unavailable), paging lists merged from several, triggering a DAG of another
     deployment. Not chosen: several masters on one database (below): the same capacity
     for a far larger change.
+    **Where it lives** (decision 21B, 2026-10-27): a role of its own, **`schedr ui`**, that
+    talks only to webservers' JSON APIs, its own deployment's included (a list of
+    deployments in its configuration, one the common case); the webserver keeps serving the
+    API. Not chosen: the webserver as the federated UI too, rendering its own deployment from
+    its database and the others through their APIs (two paths to keep alike). **To settle in
+    M3.5 / M3.6:** each webserver sees the UI, not the person who clicked, so the UI passes
+    the user's name on, and a webserver must take that name only from a caller proven to be
+    the UI (its mTLS client certificate, which the deployments already issue, or a service
+    token per deployment): otherwise anyone reaching a webserver directly could claim any
+    name in the audit trail.
   - **Not planned: several masters on one database, each with its own workers** (the user's
     idea, 2026-10-24, first recorded for M6; superseded the same day by the federated view
     above, kept as the alternative should one deployment not carry a load that can't be
@@ -928,7 +939,8 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
 
 - A **web dashboard** is required: live view of what is running, and access to task logs.
 - A **CLI** is required alongside the web UI.
-- The web UI is served by a **separate process from the master scheduler** (`schedr webserver`),
+- The web UI is served by a **separate process from the master scheduler** (`schedr ui` since
+  M3, over webservers' APIs, decision 21B; `schedr standalone` serves it next to its own API),
   so the UI and the scheduler can restart, fail and scale independently.
 - **How the webserver gets state: through Postgres, for reads and actions.**
   - **Reads:** the webserver queries Postgres directly, with a **read-only database role**. The
@@ -1094,15 +1106,53 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
     are needed (with `auth.mode = "none"`). `schedr login` (fetching a token through OIDC's
     device flow): possibly later.
-- **Frontend: server-rendered HTML with htmx.** Pages are HTML rendered by the webserver from
+- **Frontend: server-rendered HTML with htmx** (confirmed 2026-10-27, decision 26A: Rust, in
+  the `schedr ui` role of the same binary; not chosen: Python, e.g. FastAPI or Flask with
+  Jinja2: a second runtime and image, the API's types duplicated, template errors at run
+  time). Pages are HTML rendered from
   Rust templates (`askama`, checked at compile time); **htmx** adds the interactive parts
   (buttons, filters, partial refreshes) and, with its SSE extension, live updates and the log
   tail.
   - **No JavaScript build:** no Node.js / npm, nothing new in CI. htmx and a small pan/zoom
     helper for the graph are vendored single files; all assets are **embedded in the `schedr`
-    binary**, so `schedr webserver` (and standalone) serves everything itself.
-  - The **DAG graph** is drawn as **SVG on the server** (a Rust graph-layout crate); logs are
-    converted from ANSI colours to HTML on the server.
+    binary**, so `schedr ui` (and standalone) serves everything itself.
+  - The **DAG graph** is drawn as **SVG on the server** with **a layered layout of our own**
+    (decision 22A, 2026-10-27: Sugiyama: layering, crossing reduction, x-placement; DAG graphs
+    here are small and layered, and edge kinds and folded nodes need control; not chosen: a
+    layout crate such as `layout-rs`); logs are converted from ANSI colours to HTML on the
+    server.
+  - **Style** (the user's, 2026-10-27): very clear, nothing fancy: divs, tables, lists,
+    dropdowns, toggles, buttons; **one stylesheet of our own** (spacing, rounded corners,
+    colour only where it means something: states, outcomes, warnings), no CSS framework.
+    **Two themes, light and dark**, as CSS variables defined once for each, switched by a
+    toggle in a corner and remembered in the browser; before a choice, the system's
+    preference.
+  - **The live log tail** (decision 23A, 2026-10-27): the server polls the worker's range
+    endpoint (`from`, about once a second while the attempt runs) and relays the new bytes to
+    the browser over SSE; no new worker endpoint. Not chosen: a streaming mode on the worker's
+    endpoint (a long-lived mTLS stream per viewer to each worker).
+  - **No sessions of our own** (decision 24A, 2026-10-27): `basic` uses the browser's Basic
+    auth, `proxy_header` the proxy's session; every action from the UI (a POST) must carry a
+    matching `Origin` / `Sec-Fetch-Site`, others are refused (CSRF). Not chosen: cookie
+    sessions with a login page and CSRF tokens.
+  - **The documentation inside the UI** (decision 28A, 2026-10-27): the image's build makes
+    the Sphinx site (the guide, DAG pages, design and generated reference; not the Rust API
+    reference nor `_sources`) into `/usr/share/schedr/docs`; `schedr ui` (and standalone's UI)
+    serves it at `/docs` when that directory exists (`[ui] docs_dir`, also to turn it off),
+    linked from the header: always the running version's, offline. Not chosen: embedded in the
+    binary (8-10 MB more in the binary and wheel, Sphinx before every release build); a link to
+    hosted docs (a public site per version, internet from the browser).
+  - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
+    through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
+    process over the client's in-process transport and a real API; the graph layout by
+    property tests over generated DAGs (no overlaps, edges downward, deterministic, crossings
+    no worse than the naive order); standalone end-to-end runs followed through the UI (SSE
+    from M3.3); **a small Playwright suite in Python** (decision 27A: the theme toggle and its
+    memory, the zone cookie, an htmx swap, a live update), run by `make test-ui` and its own CI
+    job, kept out of `make check` (the browser download). Not chosen: no browser tests.
+  - **Views for M4's features** (resources, cleanup, outcomes, mapped tasks; decision 25B,
+    2026-10-27): built in M3 as shells, the tabs and panels there with nothing to show until
+    M4 fills them. Not chosen: adding them with M4.
   - The webserver serves HTML fragments besides the JSON API used by the CLI; both use the same
     queries, so the HTML layer is thin.
   - Not chosen: a single-page app without a build step (Preact + `htm`: a JavaScript
@@ -5897,6 +5947,8 @@ Rust crates chosen for the implementation (versions pinned when added):
 | async runtime | `tokio` 1.54.1 | required by `tonic` and `axum`; 1.54.0 yanked (RUSTSEC-2026-0384); see below |
 | gRPC | `tonic` + `prost` | see Master–worker protocol |
 | REST | `axum` | tokio-native, the same stack as `tonic` |
+| web UI templates | `askama` 0.16.1 | HTML templates checked at compile time, escaping by default (M3.1, decision 26A) |
+| HTML in tests | `scraper` 0.29.0 (dev only) | the UI's pages read through a real HTML parser, by CSS selectors (M3.1) |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
 | Swagger UI | `utoipa-swagger-ui` 10.0.2 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); crc32fast 1.5.3, typed-path 0.12.4 and zopfli 0.8.4 locked; zip went 8 → 9.0.5 (a major, through utoipa-swagger-ui's vendored build), which brings nix 0.31.3, a new transitive crate |
 | JSON Schema | `schemars` | see Rust/Python integration |

@@ -37,8 +37,10 @@ pub enum Command {
     },
     /// Run a worker agent.
     Worker,
-    /// Run the webserver: web UI and the API used by the UI and CLI.
+    /// Run the webserver: the REST API used by the web UI and the CLI.
     Webserver,
+    /// Run the web UI over webservers' APIs (`[ui] deployments`).
+    Ui,
     /// Run every role in one process (SQLite or Postgres): local development, or one pod in
     /// production.
     Standalone {
@@ -426,6 +428,7 @@ impl Command {
             | Self::Master { .. }
             | Self::Worker
             | Self::Webserver
+            | Self::Ui
             | Self::Tasks { .. }
             | Self::Workers { .. } => None,
             Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
@@ -439,6 +442,7 @@ impl Command {
             Self::Master { .. } => "master",
             Self::Worker => "worker",
             Self::Webserver => "webserver",
+            Self::Ui => "ui",
             Self::Standalone { .. } => "standalone",
             Self::Db { .. } => "db",
             Self::Dags { .. } => "dags",

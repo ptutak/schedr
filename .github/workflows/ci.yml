@@ -139,6 +139,8 @@ jobs:
   # run in `schedr standalone` through the CLI.
   wheel:
     runs-on: ubuntu-latest
+    # The images carry the documentation the docs job built (served at /docs).
+    needs: docs
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -153,6 +155,11 @@ jobs:
           docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
           sh -c 'apk add --no-cache bash >/dev/null && cd /repo
           && bash scripts/smoke-wheel.sh dist/*musllinux*.whl python3'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: docs-site
+          path: site
+      - run: scripts/docs-dist.sh site
       # The base image from that wheel, run as a pod would (pushed to a registry with releases).
       - run: docker build -f images/schedr/Dockerfile -t schedr:ci .
       - run: scripts/smoke-image.sh docker schedr:ci

@@ -18,9 +18,12 @@ schedr-db = { path = "crates/schedr-db" }
 schedr-master = { path = "crates/schedr-master" }
 schedr-agent = { path = "crates/schedr-agent" }
 schedr-api = { path = "crates/schedr-api" }
+schedr-client = { path = "crates/schedr-client" }
+schedr-ui = { path = "crates/schedr-ui" }
 schedr-tls = { path = "crates/schedr-tls" }
 
 # Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
+askama = "0.16.1"
 axum = "0.8.9"
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 croner = { version = "4.0.1", default-features = false, features = ["jiff"] }
@@ -58,6 +61,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fm
 http-body-util = "0.1.5"
 insta = { version = "1.49.0", features = ["json"] }
 pretty_assertions = "1.4.1"
+scraper = "0.29.0"
 proptest = "1.12.0"
 rstest = "0.28.0"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }

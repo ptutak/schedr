@@ -48,6 +48,8 @@ pub struct Config {
     pub master: MasterSection,
     /// `[webserver]`: the REST API (and later the UI).
     pub webserver: WebserverSection,
+    /// `[ui]`: the web UI (`schedr ui`, and the one `schedr standalone` serves).
+    pub ui: UiSection,
     /// `[worker]`: this worker's identity, capacity and data directory.
     pub worker: WorkerSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
@@ -494,6 +496,46 @@ impl Default for WebserverSection {
             auth: WebserverAuthSection::default(),
         }
     }
+}
+
+/// `[ui]`: the web UI. `schedr ui` is a role of its own that talks only to webservers' REST
+/// APIs, one per deployment in `deployments` (one the common case); `schedr standalone` serves
+/// the UI too, next to its API, over its own deployment (`deployments` is not used there).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct UiSection {
+    /// The address `schedr ui` listens on (all interfaces by default).
+    pub bind: IpAddr,
+    /// The HTTP port of `schedr ui`.
+    pub port: u16,
+    /// The deployments `schedr ui` shows, in this order: each a name (shown, and in the UI's
+    /// URLs) and its webserver's URL.
+    pub deployments: Vec<UiDeployment>,
+    /// The documentation site served at `/docs` (the image's); served only when the directory
+    /// exists, `""` for none.
+    pub docs_dir: PathBuf,
+}
+
+impl Default for UiSection {
+    /// All interfaces, port 8082, no deployments, the image's documentation.
+    fn default() -> Self {
+        Self {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            port: 8082,
+            deployments: Vec::new(),
+            docs_dir: PathBuf::from("/usr/share/schedr/docs"),
+        }
+    }
+}
+
+/// A deployment `schedr ui` shows (`[[ui.deployments]]`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UiDeployment {
+    /// Its name: letters, digits, `-` and `_` (it is in the UI's URLs).
+    pub name: String,
+    /// Its webserver's URL, e.g. `http://schedr-webserver.etl.svc:8080`.
+    pub url: String,
 }
 
 /// `[webserver.auth]`: who the user is (only the identity so far; the modes come with the UI,

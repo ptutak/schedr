@@ -4,14 +4,19 @@
 
 | Link | Protocol | Opened by | Security |
 |---|---|---|---|
+| browser → web UI | HTTP, the pages | the browser | none of its own yet (see below) |
 | CLI → webserver | HTTP, REST API | the CLI | none of its own yet (see below) |
+| web UI → webserver | HTTP, REST API | the UI | none of its own yet (see below) |
 | worker → master | gRPC over HTTP/2: one bidirectional stream per worker, plus unary calls | the worker | mTLS, or the mesh |
 | webserver → worker | HTTP, the log endpoint | the webserver | mTLS, or the mesh |
 | master, webserver → database | Postgres or SQLite | the role | the database's own |
 | probes, Prometheus → any role | HTTP, the ops port | them | none: it serves no data |
 
 There is no link between the master and the webserver: the database carries commands one
-way and state the other.
+way and state the other. The web UI's only link is the REST API. `schedr ui` listens on
+`[ui] port` (8082) and calls each webserver over the network. In `schedr standalone` the UI
+is on the REST API's port, and that call stays inside the process. The UI has no link to the
+master, the workers or the database.
 
 **Workers always connect to the master.** The master needs no address for its workers, and a
 worker only needs `[worker] master_url`. The stream stays open, so the master can still send
@@ -56,12 +61,22 @@ calls then carry the webserver's identity, which the workers' policies check.
 Requests to workers **never go through an HTTP proxy**, whatever `HTTPS_PROXY` says: a proxy
 can't reach pod addresses, and in mesh mode it would bypass the mesh's policy.
 
-## The REST API has no authentication yet
+## The REST API and the web UI have no authentication yet
 
-Until the web UI (milestone M3), the webserver trusts its callers. It can record who made a
-command from a header (`[webserver.auth] identity_header`), but never uses it to allow or deny
-anything. A webserver listening beyond localhost warns about this at startup. Keep it behind an
-authenticating proxy or the mesh.
+The modes that check callers come with M3.5. Until then the webserver and the web UI trust
+whoever reaches them. Each warns at startup when it listens beyond localhost:
+
+- the webserver, on `[webserver] bind` and `port` (all interfaces, 8080): keep it behind an
+  authenticating proxy or the mesh, or set `[webserver] bind = "127.0.0.1"`;
+- `schedr ui`, on `[ui] bind` and `port` (all interfaces, 8082): the same proxy or mesh, or
+  `[ui] bind = "127.0.0.1"`;
+- `schedr standalone` with `--listen` beyond localhost. The warning names the REST API, and
+  the UI is on that same port. Without `--listen` it listens on 127.0.0.1, and there is no
+  warning.
+
+The webserver can record who made a command from a header (`[webserver.auth]
+identity_header`), and it never uses that header to allow or deny anything. `schedr ui` sends
+no credentials when it calls a webserver.
 
 The CLI sends a bearer token for such a proxy or mesh with `--token` (or `SCHEDR_TOKEN`), e.g.
 a Keycloak token that Istio checks at the gateway.
@@ -70,7 +85,9 @@ a Keycloak token that Istio checks at the gateway.
 
 Every webserver (and standalone) serves its OpenAPI description at `/api/v1/openapi.json` and
 **Swagger UI** over it at **`/api/v1/docs/`**, always: they describe the API and do nothing.
-The UI's files are built into the binary, so it needs no internet access. The description
+This is separate from the web UI's documentation at `/docs` (see
+[The web UI](12-ui.md#the-documentation)). The Swagger files are built into the binary, so the
+page needs no internet access. The description
 lists an optional bearer token: schedr checks none itself, but Swagger UI's **Authorize** button
 sends one, for a mesh or proxy that requires it. Behind a gateway that serves schedr under a
 path prefix and removes it, setting `X-Forwarded-Prefix` (as Istio's `rewrite` with a header
