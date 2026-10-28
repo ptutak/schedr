@@ -89,6 +89,18 @@ impl Db {
         })
     }
 
+    /// A statement without a result (e.g. `ALTER TABLE`).
+    pub fn execute(&self, sql: &str) {
+        let sql = AssertSqlSafe(sql.to_owned());
+        self.runtime.block_on(async {
+            match &self.pool {
+                Pool::Postgres(pool) => sqlx::query(sql).execute(pool).await.map(|_| ()),
+                Pool::Sqlite(pool) => sqlx::query(sql).execute(pool).await.map(|_| ()),
+            }
+            .unwrap();
+        });
+    }
+
     /// One text column.
     pub fn strings(&self, sql: &str) -> Vec<String> {
         let sql = AssertSqlSafe(sql.to_owned());

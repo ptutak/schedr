@@ -89,3 +89,60 @@ def test_a_new_run_appears_on_its_dags_page_without_a_reload(
     expect(new_row).to_be_visible(timeout=15_000)
     assert rows.count() > before
     assert page.evaluate("window.notReloaded") is True
+
+
+def test_a_run_is_triggered_from_its_dags_page_and_shown_until_applied(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    dag = standalone["dag"]
+    page.goto(f"{standalone['url']}/d/default/dags/{dag}")
+    page.get_by_role("button", name="Trigger").first.click()
+    dialog = page.locator("dialog.confirm[open]")
+    expect(dialog).to_be_visible()
+    dialog.locator("input[name=for]").fill("2026-10-17T01:00:00Z")
+    expect(dialog.locator(".moment")).to_contain_text("2026-10-17 01:00 UTC")
+    dialog.get_by_role("button", name="Trigger").click()
+    expect(dialog).to_be_hidden()
+    # Sent from the page itself (not refused), then read until the master applied it.
+    result = page.locator("#action-results .command").first
+    expect(result).to_contain_text("Trigger")
+    expect(result).to_have_class(re.compile(r"\bapplied\b"), timeout=15_000)
+    result.locator("a").click()
+    expect(page.locator("dl.facts dd").first).to_contain_text("2026-10-17 01:00 UTC")
+
+
+def test_an_open_dialog_survives_a_live_update(
+    page: Page, standalone: dict[str, str], trigger: Callable[[str], None]
+) -> None:
+    dag = standalone["dag"]
+    page.goto(f"{standalone['url']}/d/default/dags/{dag}")
+    rows = page.locator("table.runs tbody tr")
+    expect(rows.first).to_be_visible()
+    before = rows.count()
+    page.get_by_role("button", name="Pause").first.click()
+    dialog = page.locator("dialog.confirm[open]")
+    expect(dialog).to_be_visible()
+    # A run appears meanwhile: the page waits while the dialog is open...
+    trigger("2026-10-18T01:00:00Z")
+    page.wait_for_timeout(4_000)
+    expect(dialog).to_be_visible()
+    assert rows.count() == before
+    # ...and reads itself again once it is closed.
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(
+        page.locator("table.runs tbody td", has_text="2026-10-18 01:00 UTC").first
+    ).to_be_visible(timeout=15_000)
+
+
+def test_pausing_a_dag_turns_its_button_into_unpause_without_a_reload(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    page.goto(f"{standalone['url']}/d/default/dags/{standalone['dag']}")
+    page.evaluate("window.notReloaded = true")
+    for action, then in [("Pause", "Unpause"), ("Unpause", "Pause")]:
+        page.locator(".actions > button.action", has_text=action).click()
+        page.locator("dialog.confirm[open] button[type=submit]").click()
+        expect(page.locator(".actions > button.action", has_text=then)).to_be_visible(
+            timeout=15_000
+        )
+    assert page.evaluate("window.notReloaded") is True

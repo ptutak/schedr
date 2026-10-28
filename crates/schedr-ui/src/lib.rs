@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use schedr_client::{Client, Transport};
 
+mod actions;
 mod ansi;
 mod assets;
 mod docs;
@@ -22,6 +23,7 @@ pub mod live;
 pub mod page;
 mod pages;
 mod runs;
+mod workers;
 
 #[cfg(test)]
 mod tests;
@@ -45,7 +47,8 @@ pub struct Ui<T> {
 }
 
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
-/// `/d/<deployment>/runs/<run>` (and its tasks' panels), `/assets/...`, `/docs/...`.
+/// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/workers`, the
+/// actions (POSTs, see `actions`), `/events`, `/time`, `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
     let relays = Arc::new(live::Relays::new(ui.deployments.len()));
@@ -62,6 +65,36 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             "/d/{deployment}/runs/{run}/tasks/{task}/output.json",
             get(runs::output_download::<T>),
         )
+        .route("/workers", get(workers::list::<T>))
+        .route("/time", get(actions::time))
+        .route(
+            "/d/{deployment}/dags/{dag}/pause",
+            post(actions::pause::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/unpause",
+            post(actions::unpause::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger",
+            post(actions::trigger::<T>),
+        )
+        .route(
+            "/d/{deployment}/runs/{run}/cancel",
+            post(actions::cancel_run::<T>),
+        )
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}/{action}",
+            post(actions::task::<T>),
+        )
+        .route(
+            "/d/{deployment}/workers/{worker}/{action}",
+            post(actions::worker::<T>),
+        )
+        .route(
+            "/d/{deployment}/commands/{command}",
+            get(actions::command::<T>),
+        )
         .route("/events", get(live::events::<T>))
         .route(
             "/d/{deployment}/runs/{run}/tasks/{task}/tail",
@@ -75,14 +108,21 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route("/docs/{*path}", get(docs::file::<T>))
         .fallback(pages::not_found::<T>)
         .layer(axum::Extension(relays))
+        .layer(axum::middleware::from_fn(actions::guard))
         .layer(axum::middleware::map_response(vary_on_prefix))
         .with_state(Arc::new(ui))
 }
 
+/// Every answer varies with the prefix, and may not be shown in another site's frame (its
+/// buttons can't be clicked through one: clickjacking).
 async fn vary_on_prefix(mut response: axum::response::Response) -> axum::response::Response {
-    response.headers_mut().append(
-        axum::http::header::VARY,
-        axum::http::HeaderValue::from_static(page::PREFIX_HEADER),
+    use axum::http::{HeaderValue, header};
+    let headers = response.headers_mut();
+    headers.append(header::VARY, HeaderValue::from_static(page::PREFIX_HEADER));
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
     );
     response
 }

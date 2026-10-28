@@ -12,6 +12,7 @@ use tower::ServiceExt;
 
 use super::*;
 
+mod actions;
 mod runs;
 
 /// A webserver's API answering from a script: path -> (status, body); anything else 404.
@@ -299,11 +300,14 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (_, page) = get(&app, "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/docs/"]
+        ["/", "/runs", "/workers", "/docs/"]
     );
     // Without a directory: no link, no pages.
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
-    assert_eq!(attrs(&page, "header nav a", "href"), ["/", "/runs"]);
+    assert_eq!(
+        attrs(&page, "header nav a", "href"),
+        ["/", "/runs", "/workers"]
+    );
 }
 
 #[tokio::test]

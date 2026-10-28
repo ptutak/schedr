@@ -1,8 +1,18 @@
 {% extends "base.html" %}
+{% import "confirm.html" as confirm %}
 {% block title %}{{ row.dag_id }} · schedr{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %}</p>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div id="action-results" class="results"></div>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div class="actions">
+  {% call confirm::action("Trigger", "Trigger a run of " ~ row.dag_id ~ "?", "A manual run, for the moment given (now if none).", actions ~ "/trigger", "trigger", page.base) %}{% endcall %}
+  {% if row.paused %}
+  {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "The scheduler creates its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}
+  {% else %}
+  {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "The scheduler creates no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
+  {% endif %}
+</div>
 <h1>{{ row.dag_id }} {% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}</h1>
 {% if !description.is_empty() %}<p class="description">{{ description }}</p>{% endif %}
 {% if !conflicts.is_empty() %}

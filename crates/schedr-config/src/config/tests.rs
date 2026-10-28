@@ -198,6 +198,7 @@ fn reads_the_database_url() {
             query_timeout: Duration::from_secs(10),
             notifications: true,
             notifications_url: None,
+            change_notifications: true,
         }
     );
     let config = parse(

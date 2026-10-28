@@ -379,6 +379,8 @@ pub struct CommandRow {
 #[template(path = "run.html")]
 struct RunPage {
     page: Page,
+    /// The run's page (its actions are posted under it).
+    run_href: String,
     deployment: String,
     several: bool,
     dag_href: String,
@@ -485,6 +487,7 @@ pub async fn run<T: Transport>(
                 .map(|t| page.time(&t))
                 .unwrap_or_default(),
             summary: summary(&detail.run.state, &detail.tasks),
+            run_href: run_href.clone(),
             code_hashes: detail.code_hashes,
             commands: commands
                 .commands
@@ -782,6 +785,14 @@ struct PanelFragment {
     status: String,
     state: String,
     close: String,
+    /// The pages' prefix (the dialogs' links).
+    base: String,
+    /// Where the task's actions are posted (`.../cancel`, `.../retry`).
+    actions: String,
+    /// Whether it can be cancelled: it hasn't ended.
+    cancellable: bool,
+    /// Whether it can be retried: every eligible worker rejected it.
+    retryable: bool,
     tabs: Vec<Tab>,
     body: TabBody,
 }
@@ -951,6 +962,13 @@ async fn task_panel<T: Transport>(
         status: status(task),
         state: task.state.clone(),
         close: run_href.to_owned(),
+        base: page.base.clone(),
+        actions: panel_href.clone(),
+        cancellable: !matches!(
+            task.state.as_str(),
+            "success" | "failed" | "cancelled" | "skipped" | "upstream_failed"
+        ),
+        retryable: task.state == "unschedulable",
         tabs,
         body,
     };

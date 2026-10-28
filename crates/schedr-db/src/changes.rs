@@ -12,7 +12,7 @@ use schedr_model::DagId;
 use sqlx::postgres::PgListener;
 
 use crate::commands::Listening;
-use crate::database::{Database, DbError};
+use crate::database::{Database, DbError, Pool};
 use crate::query::{on_pool, sql};
 
 #[cfg(test)]
@@ -114,6 +114,90 @@ impl Database {
             }
         }
     }
+}
+
+/// The change triggers on Postgres, by table (`[database] change_notifications` turns them on
+/// and off: [`Database::set_change_notifications`]).
+const POSTGRES_TRIGGERS: [(&str, &str); 11] = [
+    ("runs", "runs_inserted"),
+    ("runs", "runs_updated"),
+    ("task_instances", "task_instances_inserted"),
+    ("task_instances", "task_instances_updated"),
+    ("attempts", "attempts_inserted"),
+    ("attempts", "attempts_updated"),
+    ("dags", "dags_inserted"),
+    ("dags", "dags_updated"),
+    ("workers", "workers_inserted"),
+    ("workers", "workers_updated"),
+    ("workers", "workers_deleted"),
+];
+
+impl Database {
+    /// Whether the writes announce their changes (the change triggers are on): on Postgres all
+    /// of them enabled, on SQLite the `changes_switch` row.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn change_notifications(&self) -> Result<bool, DbError> {
+        match self.pool() {
+            Pool::Postgres(pool) => {
+                let names: Vec<&str> = triggers().map(|(_, name)| name).collect();
+                let on: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM pg_trigger WHERE tgname = ANY($1) AND tgenabled <> 'D'",
+                )
+                .bind(&names)
+                .fetch_one(pool)
+                .await?;
+                Ok(usize::try_from(on).is_ok_and(|on| on == names.len()))
+            }
+            Pool::Sqlite(pool) => {
+                let on: i64 = sqlx::query_scalar("SELECT notify FROM changes_switch")
+                    .fetch_one(pool)
+                    .await?;
+                Ok(on != 0)
+            }
+        }
+    }
+
+    /// Turns the change triggers on or off (`[database] change_notifications`), only if they
+    /// aren't so already; whether anything changed. On Postgres it alters the tables (a brief
+    /// exclusive lock on each): `schedr db migrate` and `--migrate` call it, holding the
+    /// master's lease, never a running master.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails.
+    pub async fn set_change_notifications(&self, on: bool) -> Result<bool, DbError> {
+        if self.change_notifications().await? == on {
+            return Ok(false);
+        }
+        match self.pool() {
+            Pool::Postgres(pool) => {
+                let verb = if on { "ENABLE" } else { "DISABLE" };
+                let mut tx = pool.begin().await?;
+                for (table, name) in triggers() {
+                    let statement = format!("ALTER TABLE {table} {verb} TRIGGER {name}");
+                    sqlx::query(sqlx::AssertSqlSafe(statement))
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                tx.commit().await?;
+            }
+            Pool::Sqlite(pool) => {
+                sqlx::query("UPDATE changes_switch SET notify = $1")
+                    .bind(i64::from(on))
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// [`POSTGRES_TRIGGERS`] (fixed names: formatting them into SQL is safe).
+fn triggers() -> impl Iterator<Item = (&'static str, &'static str)> {
+    POSTGRES_TRIGGERS.into_iter()
 }
 
 impl Changes {

@@ -4,7 +4,8 @@
 //!
 //! Events: `run` (`{"run_id", "dag_id"}`: the run, its tasks or attempts), `dag`
 //! (`{"dag_id"}`), `workers` (`{}`), and `refresh` (`{}`: anything may have changed, when
-//! changes were missed or can't be followed; then about every [`REFRESH_INTERVAL`]). A comment
+//! changes were missed or can't be followed; then every `[webserver] refresh_interval`, 15 s
+//! by default). A comment
 //! every [`KEEP_ALIVE`] keeps idle connections open through proxies.
 //!
 //! One follower per webserver reads the database's changes ([`Database::changes`]), started
@@ -27,8 +28,13 @@ use crate::state::ApiState;
 #[cfg(test)]
 mod tests;
 
-/// How often `refresh` is sent when the database's changes can't be followed.
-pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// How often `refresh` is sent when the database's changes can't be followed, unless set
+/// otherwise (`[webserver] refresh_interval`).
+pub const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
+
+/// How often a follower checks that the database still announces its changes (turned off by
+/// `schedr db migrate` meanwhile, the pages are refreshed instead).
+const RECHECK: Duration = Duration::from_secs(60);
 
 /// How often an idle connection gets a comment.
 pub const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -52,6 +58,7 @@ pub enum Live {
 #[derive(Debug, Clone)]
 pub struct Feed {
     db: Database,
+    refresh: Duration,
     sender: Arc<OnceLock<broadcast::Sender<Live>>>,
 }
 
@@ -61,7 +68,17 @@ impl Feed {
     pub fn new(db: Database) -> Self {
         Self {
             db,
+            refresh: REFRESH_INTERVAL,
             sender: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// This feed sending `refresh` every `interval` when changes can't be followed.
+    #[must_use]
+    pub fn with_refresh(self, interval: Duration) -> Self {
+        Self {
+            refresh: interval.max(Duration::from_secs(1)),
+            ..self
         }
     }
 
@@ -71,7 +88,7 @@ impl Feed {
         self.sender
             .get_or_init(|| {
                 let (sender, _) = broadcast::channel(BACKLOG);
-                tokio::spawn(follow(self.db.clone(), sender.clone()));
+                tokio::spawn(follow(self.db.clone(), sender.clone(), self.refresh));
                 sender
             })
             .subscribe()
@@ -81,39 +98,75 @@ impl Feed {
 /// Reads the database's changes for as long as the webserver runs, sending each; when they
 /// can't be followed, `refresh` every [`REFRESH_INTERVAL`] instead. A failure is `refresh`, then
 /// another try.
-async fn follow(db: Database, sender: broadcast::Sender<Live>) {
+async fn follow(db: Database, sender: broadcast::Sender<Live>, refresh: Duration) {
     loop {
-        match db.changes().await {
-            Ok(Some(mut changes)) => loop {
-                match changes.next().await {
-                    Ok(batch) => {
-                        for change in batch {
-                            let live = match change {
-                                Change::Missed => Live::Refresh,
-                                change => Live::Change(change),
-                            };
-                            // No one listening is fine.
-                            let _ = sender.send(live);
+        let on = match db.change_notifications().await {
+            Ok(on) => on,
+            Err(error) => {
+                tracing::warn!(%error, "can't read whether the database announces its changes");
+                tokio::time::sleep(RETRY).await;
+                continue;
+            }
+        };
+        let changes = if on { db.changes().await } else { Ok(None) };
+        match changes {
+            Ok(Some(mut changes)) => {
+                let mut check =
+                    tokio::time::interval_at(tokio::time::Instant::now() + RECHECK, RECHECK);
+                loop {
+                    tokio::select! {
+                        batch = changes.next() => match batch {
+                            Ok(batch) => {
+                                for change in batch {
+                                    let live = match change {
+                                        Change::Missed => Live::Refresh,
+                                        change => Live::Change(change),
+                                    };
+                                    // No one listening is fine.
+                                    let _ = sender.send(live);
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "following the database's changes failed");
+                                let _ = sender.send(Live::Refresh);
+                                tokio::time::sleep(RETRY).await;
+                                break;
+                            }
+                        },
+                        _ = check.tick() => {
+                            // Turned off meanwhile (`schedr db migrate`): no more changes will
+                            // come, so the pages are refreshed instead.
+                            if matches!(db.change_notifications().await, Ok(false)) {
+                                let _ = sender.send(Live::Refresh);
+                                break;
+                            }
                         }
                     }
-                    Err(error) => {
-                        tracing::warn!(%error, "following the database's changes failed");
-                        let _ = sender.send(Live::Refresh);
-                        tokio::time::sleep(RETRY).await;
-                        break;
-                    }
                 }
-            },
+            }
             Ok(None) => {
-                tracing::info!(
-                    "the database's changes can't be followed (notifications off, or a pooler \
-                     in transaction mode): live pages refresh every {} s",
-                    REFRESH_INTERVAL.as_secs()
-                );
-                let mut ticks = tokio::time::interval(REFRESH_INTERVAL);
+                if on {
+                    tracing::info!(
+                        "the database's changes can't be followed (notifications off, or a \
+                         pooler in transaction mode): live pages refresh every {} s",
+                        refresh.as_secs()
+                    );
+                } else {
+                    tracing::info!(
+                        "the database doesn't announce its changes (`[database] \
+                         change_notifications = false`): live pages refresh every {} s",
+                        refresh.as_secs()
+                    );
+                }
+                let mut ticks =
+                    tokio::time::interval_at(tokio::time::Instant::now() + refresh, refresh);
                 loop {
                     ticks.tick().await;
                     let _ = sender.send(Live::Refresh);
+                    // Turned on meanwhile: followed from now on.
+                    if !on && matches!(db.change_notifications().await, Ok(true)) {
+                        break;
+                    }
                 }
             }
             Err(error) => {

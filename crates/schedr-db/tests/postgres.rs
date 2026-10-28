@@ -792,6 +792,53 @@ async fn writes_announce_what_changed_once_per_run_dag_and_the_workers() {
 }
 
 #[tokio::test]
+async fn the_switch_disables_and_enables_the_change_triggers() {
+    use schedr_db::changes::Change;
+    let (db, version) = with_dag().await;
+    assert!(
+        db.change_notifications().await.unwrap(),
+        "on after the migration"
+    );
+    assert!(!db.set_change_notifications(true).await.unwrap());
+    let mut changes = db.changes().await.unwrap().expect("Postgres listens");
+    assert!(db.set_change_notifications(false).await.unwrap());
+    assert!(!db.change_notifications().await.unwrap());
+    db.insert_run(&run(
+        &version,
+        RunKind::Manual,
+        RunState::Queued,
+        "2026-10-21T07:00:00Z",
+    ))
+    .await
+    .unwrap()
+    .unwrap();
+    let quiet = tokio::time::timeout(std::time::Duration::from_secs(2), changes.next()).await;
+    assert!(quiet.is_err(), "off: nothing announced, {quiet:?}");
+    assert!(db.set_change_notifications(true).await.unwrap());
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Queued,
+            "2026-10-21T08:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let announced = tokio::time::timeout(std::time::Duration::from_secs(10), changes.next())
+        .await
+        .expect("on again: announced")
+        .unwrap();
+    assert_eq!(
+        announced,
+        [Change::Run {
+            run_id,
+            dag_id: sync()
+        }]
+    );
+}
+
+#[tokio::test]
 async fn a_burst_of_commands_is_taken_with_its_first_notification() {
     let db = fresh().await;
     let mut notifications = db.command_notifications().await.unwrap().unwrap();

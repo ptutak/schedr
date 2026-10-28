@@ -160,3 +160,34 @@ async fn rows_pruned_unread_from_an_empty_table_are_reported_missed_too() {
         [Change::Workers, Change::Missed]
     );
 }
+
+#[tokio::test]
+async fn the_switch_stops_and_starts_the_sqlite_changes() {
+    let (db, version) = with_dag().await;
+    assert!(
+        db.change_notifications().await.unwrap(),
+        "on after the migration"
+    );
+    // Already on: nothing to change.
+    assert!(!db.set_change_notifications(true).await.unwrap());
+    assert!(db.set_change_notifications(false).await.unwrap());
+    assert!(!db.change_notifications().await.unwrap());
+    let rows = |db: &Database| {
+        let db = db.clone();
+        async move {
+            let crate::database::Pool::Sqlite(pool) = db.pool() else {
+                panic!("expected SQLite")
+            };
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM changes")
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+    };
+    let before = rows(&db).await;
+    add_run(&db, &version, "2026-10-14T03:00:00Z").await;
+    assert_eq!(rows(&db).await, before, "off: nothing recorded");
+    assert!(db.set_change_notifications(true).await.unwrap());
+    add_run(&db, &version, "2026-10-15T03:00:00Z").await;
+    assert_eq!(rows(&db).await, before + 1, "on again: recorded");
+}

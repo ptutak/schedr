@@ -198,53 +198,59 @@ CREATE TABLE changes (
     seq    INTEGER PRIMARY KEY AUTOINCREMENT,
     change TEXT NOT NULL
 );
+-- Whether the writes record their changes (`[database] change_notifications`, set by
+-- `schedr db migrate` and `--migrate`): read by each trigger below, one row.
+CREATE TABLE changes_switch (
+    notify INTEGER NOT NULL
+);
+INSERT INTO changes_switch (notify) VALUES (1);
 CREATE TRIGGER changes_pruned AFTER INSERT ON changes WHEN NEW.seq % 1000 = 0
 BEGIN
     DELETE FROM changes WHERE seq <= NEW.seq - 1000;
 END;
-CREATE TRIGGER runs_inserted AFTER INSERT ON runs
+CREATE TRIGGER runs_inserted AFTER INSERT ON runs WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('run ' || NEW.id || ' ' || NEW.dag_id);
 END;
-CREATE TRIGGER runs_updated AFTER UPDATE ON runs
+CREATE TRIGGER runs_updated AFTER UPDATE ON runs WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('run ' || NEW.id || ' ' || NEW.dag_id);
 END;
-CREATE TRIGGER task_instances_inserted AFTER INSERT ON task_instances
+CREATE TRIGGER task_instances_inserted AFTER INSERT ON task_instances WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change)
     SELECT 'run ' || id || ' ' || dag_id FROM runs WHERE id = NEW.run_id;
 END;
-CREATE TRIGGER task_instances_updated AFTER UPDATE ON task_instances
+CREATE TRIGGER task_instances_updated AFTER UPDATE ON task_instances WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change)
     SELECT 'run ' || id || ' ' || dag_id FROM runs WHERE id = NEW.run_id;
 END;
-CREATE TRIGGER attempts_inserted AFTER INSERT ON attempts
+CREATE TRIGGER attempts_inserted AFTER INSERT ON attempts WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change)
     SELECT 'run ' || r.id || ' ' || r.dag_id FROM task_instances t JOIN runs r ON r.id = t.run_id
     WHERE t.id = NEW.task_instance_id;
 END;
-CREATE TRIGGER attempts_updated AFTER UPDATE ON attempts
+CREATE TRIGGER attempts_updated AFTER UPDATE ON attempts WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change)
     SELECT 'run ' || r.id || ' ' || r.dag_id FROM task_instances t JOIN runs r ON r.id = t.run_id
     WHERE t.id = NEW.task_instance_id;
 END;
-CREATE TRIGGER dags_inserted AFTER INSERT ON dags
+CREATE TRIGGER dags_inserted AFTER INSERT ON dags WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
 END;
-CREATE TRIGGER dags_updated AFTER UPDATE ON dags
+CREATE TRIGGER dags_updated AFTER UPDATE ON dags WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
 END;
-CREATE TRIGGER workers_inserted AFTER INSERT ON workers
+CREATE TRIGGER workers_inserted AFTER INSERT ON workers WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('workers');
 END;
-CREATE TRIGGER workers_updated AFTER UPDATE ON workers
+CREATE TRIGGER workers_updated AFTER UPDATE ON workers WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('workers');
 END;

@@ -273,16 +273,23 @@ pub struct DatabaseSection {
     /// come from `SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL`, never the file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notifications_url: Option<String>,
+    /// Whether the writes announce what changed, for the web UI's live pages (triggers in the
+    /// database; about 2-3% of the master's throughput under heavy load, measured by stress
+    /// scenarios 15 and 15b). Applied by `schedr db migrate` and `--migrate`, not by a running
+    /// master. Off: the pages refresh every `[webserver] refresh_interval` instead.
+    pub change_notifications: bool,
 }
 
 impl Default for DatabaseSection {
-    /// No URL, queries limited to 10 s, notifications on (through the main URL).
+    /// No URL, queries limited to 10 s, notifications on (through the main URL), changes
+    /// announced.
     fn default() -> Self {
         Self {
             url: None,
             query_timeout: Duration::from_secs(10),
             notifications: true,
             notifications_url: None,
+            change_notifications: true,
         }
     }
 }
@@ -483,16 +490,27 @@ pub struct WebserverSection {
     pub bind: IpAddr,
     /// The HTTP port of the REST API (and later the UI).
     pub port: u16,
+    /// How often the web UI's live pages are told to read themselves again when the
+    /// database's changes can't be followed (`[database] change_notifications = false`, or no
+    /// listening connection).
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub refresh_interval: Duration,
     /// `[webserver.auth]`: who the user is.
     pub auth: WebserverAuthSection,
 }
 
 impl Default for WebserverSection {
-    /// All interfaces, port 8080.
+    /// All interfaces, port 8080, live pages refreshed every 15 s when changes can't be
+    /// followed.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8080,
+            refresh_interval: Duration::from_secs(15),
             auth: WebserverAuthSection::default(),
         }
     }

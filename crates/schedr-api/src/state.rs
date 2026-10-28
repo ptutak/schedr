@@ -63,6 +63,16 @@ impl ApiState {
         Self { metrics, ..self }
     }
 
+    /// This state's live pages refreshed every `interval` when the database's changes can't be
+    /// followed (`[webserver] refresh_interval`).
+    #[must_use]
+    pub fn with_refresh(self, interval: std::time::Duration) -> Self {
+        Self {
+            feed: Feed::new(self.db.clone()).with_refresh(interval),
+            ..self
+        }
+    }
+
     /// This state reading logs from `logs` (over TLS in `app` mode).
     #[must_use]
     pub fn with_logs(self, logs: Arc<dyn LogSource>) -> Self {

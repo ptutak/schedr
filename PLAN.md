@@ -242,7 +242,7 @@ and updates the guide.
 | M3.3 | **Live:** the master's `NOTIFY` on state changes (polling in standalone), the webserver's SSE change events (keep-alive, polling fallback), relayed by the UI; the live log tail (23A) | a run and its logs update without a reload |
 | M3.4 | **Actions:** trigger (the moment shown in both zones), cancel, pause / unpause with their confirmations, retry, drain / resume; the workers page with its warnings; the banners (database unavailable, log unavailable, cancel too late) | every API action from the UI |
 | M3.5 | **Auth modes:** `none` / `proxy_header` / `basic` with their safety rules, for the webserver and the UI; the UI's actions checked by `Origin` (24A) | each mode tested, CSRF refused |
-| M3.6 | **Federation:** several deployments in one UI: merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them; the chart's `schedr ui` Deployment and Service (distributed mode; standalone serves the UI on its API port since M3.1) | two deployments in one UI, one of them down |
+| M3.6 | **Federation, in production:** several deployments in one UI, any mix of standalones on SQLite, standalones on Postgres and distributed ones (the user, 2026-10-28: the way from a federation of standalones on SQLite to Postgres to distributed, a deployment at a time, every stage possible); merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them (the token for standalones); standalone without its own UI (`schedr standalone --no-ui`); the chart deploys `schedr ui` with distributed (37A) and **alone**, over a list of deployments in other releases or namespaces | one UI over a standalone on SQLite, a standalone on Postgres and a distributed deployment, one of them down; the chart renders each shape |
 
 ## After M3: Grok over the whole repository
 
@@ -252,6 +252,9 @@ and brings the documentation up to date with the code. Claude verifies the findi
 the confirmed ones (out-of-scope ones go to BUGS.md); the user schedules the fixes. To plan
 then: how to split the repository into review tasks (by crate or concern) to keep each Grok
 session small.
+
+**When** (the user, 2026-10-28): after Grok's weekly allowance resets, **Friday 2026-10-30 at
+9:00** (at 86% after M3.4; the rest of the week goes to M3.5's and M3.6's reviews and docs).
 
 ## Testing approach
 

@@ -205,27 +205,10 @@ impl Stress {
     /// Throughput and latencies of what ran, into `report`, with their floors: at least
     /// `min_tasks_per_s` successful tasks a second.
     pub fn measure(&self, report: &mut Report, master: &str, min_tasks_per_s: f64) {
-        let successes = self
-            .db
-            .count("SELECT COUNT(*) FROM attempts WHERE status = 'success'");
-        let span = self.db.floats(&format!(
-            "SELECT MAX({}) - MIN({}) FROM attempts",
-            self.db.epoch("ended_at"),
-            self.db.epoch("assigned_at")
-        ));
-        let span = span.first().copied().unwrap_or(0.0).max(0.001);
-        report.set("tasks", f64::from(u32::try_from(successes).unwrap()));
-        report.at_least(
-            "tasks_per_s",
-            f64::from(u32::try_from(successes).unwrap()) / span,
-            min_tasks_per_s,
-        );
-        let starts = self.db.floats(&format!(
-            "SELECT ({}) - ({}) FROM attempts WHERE started_at IS NOT NULL",
-            self.db.epoch("started_at"),
-            self.db.epoch("assigned_at")
-        ));
-        report.at_most("assigned_to_started_p99_s", quantile(&starts, 0.99), 30.0);
+        let done = self.throughput();
+        report.set("tasks", done.tasks);
+        report.at_least("tasks_per_s", done.tasks_per_s, min_tasks_per_s);
+        report.at_most("assigned_to_started_p99_s", done.start_p99_s, 30.0);
         let runs = self.db.floats(&format!(
             "SELECT ({}) - ({}) FROM runs WHERE ended_at IS NOT NULL",
             self.db.epoch("ended_at"),
@@ -240,6 +223,40 @@ impl Stress {
                 histogram_quantile(&metrics, "schedr_master_tick_duration_seconds", 0.99),
                 5.0,
             );
+        }
+    }
+}
+
+/// What the tasks did, from the database: how many succeeded, how many a second (from the
+/// first assignment to the last end), and the p99 from assigned to started.
+#[derive(Debug, Clone, Copy)]
+pub struct Throughput {
+    pub tasks: f64,
+    pub tasks_per_s: f64,
+    pub start_p99_s: f64,
+}
+
+impl Stress {
+    pub fn throughput(&self) -> Throughput {
+        let successes = self
+            .db
+            .count("SELECT COUNT(*) FROM attempts WHERE status = 'success'");
+        let span = self.db.floats(&format!(
+            "SELECT MAX({}) - MIN({}) FROM attempts",
+            self.db.epoch("ended_at"),
+            self.db.epoch("assigned_at")
+        ));
+        let span = span.first().copied().unwrap_or(0.0).max(0.001);
+        let tasks = f64::from(u32::try_from(successes).unwrap());
+        let starts = self.db.floats(&format!(
+            "SELECT ({}) - ({}) FROM attempts WHERE started_at IS NOT NULL",
+            self.db.epoch("started_at"),
+            self.db.epoch("assigned_at")
+        ));
+        Throughput {
+            tasks,
+            tasks_per_s: tasks / span,
+            start_p99_s: quantile(&starts, 0.99),
         }
     }
 }

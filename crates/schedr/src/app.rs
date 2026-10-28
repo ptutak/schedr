@@ -134,8 +134,8 @@ pub async fn run_db(
             crate::roles::migrate_leased(
                 url,
                 config.database.query_timeout,
-                config.master.lease_period,
-                wait,
+                (config.master.lease_period, wait),
+                config.database.change_notifications,
             )
             .await?;
             writeln!(out, "migrated {}: schema up to date", redact_password(url))?;

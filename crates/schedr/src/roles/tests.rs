@@ -159,7 +159,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
     );
     let api = serve_api(
         memory_db().await,
-        None,
+        (None, Duration::from_secs(15)),
         listen(loopback()).await.unwrap(),
         None,
         None,
@@ -263,7 +263,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
     let db = Database::connect(&url).await.unwrap();
     let (_stop, stopped) = watch::channel(0);
     let period = Duration::from_secs(30);
-    let Err(error) = lead(&db, &url, (period, false), stopped.clone(), "master").await else {
+    let Err(error) = lead(&db, &url, (period, false, true), stopped.clone(), "master").await else {
         panic!("a schema not migrated was accepted");
     };
     assert_eq!(
@@ -271,12 +271,21 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
         "the database schema is uninitialized: run `schedr db migrate`, or start master with \
          `--migrate`"
     );
-    let leading = lead(&db, &url, (period, true), stopped, "master")
+    // Migrated with `[database] change_notifications = false`: the switch applied with it.
+    let leading = lead(&db, &url, (period, true, false), stopped.clone(), "master")
         .await
         .unwrap();
     let leadership = leading.expect("not stopped").await;
     assert!(db.schema_status().await.unwrap().is_usable());
     assert!(leadership.epoch() > 0);
+    assert!(!db.change_notifications().await.unwrap());
+    leadership.release().await;
+    // `--migrate` again on the schema as it is, the setting back on: applied once leading.
+    let leading = lead(&db, &url, (period, true, true), stopped, "master")
+        .await
+        .unwrap();
+    let _leadership = leading.expect("not stopped").await;
+    assert!(db.change_notifications().await.unwrap());
 }
 
 #[test]

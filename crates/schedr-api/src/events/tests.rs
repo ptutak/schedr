@@ -143,3 +143,52 @@ fn every_change_has_its_event() {
         );
     }
 }
+
+#[tokio::test]
+async fn with_the_switch_off_pages_are_refreshed_and_turning_it_on_is_followed() {
+    let (db, version) = with_dag().await;
+    db.set_change_notifications(false).await.unwrap();
+    let state = ApiState::new(db.clone(), None).with_refresh(std::time::Duration::from_secs(1));
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    // Off: a refresh every interval.
+    assert_eq!(
+        read_events(&mut body, 1).await,
+        [("refresh".to_owned(), "{}".to_owned())]
+    );
+    // Turned on (`schedr db migrate`): noticed at the next tick, then each change followed.
+    db.set_change_notifications(true).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2_500)).await;
+    let run_id = db
+        .insert_run(&NewRun {
+            dag_id: &DagId::new("sync").unwrap(),
+            dag_version_id: &version,
+            kind: RunKind::Manual,
+            state: RunState::Queued,
+            planned_for: ts("2026-10-14T03:00:00Z"),
+            since: ts("2026-10-01T00:00:00Z"),
+            triggered_at: ts("2026-10-14T03:00:00Z"),
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    // Refreshes until it noticed, then the run.
+    let run = (
+        "run".to_owned(),
+        json!({"run_id": run_id, "dag_id": "sync"}).to_string(),
+    );
+    let mut seen = Vec::new();
+    while !seen.contains(&run) {
+        assert!(seen.len() < 5, "{seen:?}");
+        seen.extend(read_events(&mut body, 1).await);
+    }
+}

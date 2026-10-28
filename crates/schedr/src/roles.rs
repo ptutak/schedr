@@ -565,7 +565,7 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
 /// [`AppError::BadArgument`] if the HTTP server fails.
 pub async fn serve_api(
     db: Database,
-    identity_header: Option<String>,
+    (identity_header, refresh): (Option<String>, Duration),
     listener: TcpListener,
     tls: Option<Tls>,
     ui: Option<LocalUi>,
@@ -573,6 +573,7 @@ pub async fn serve_api(
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     let state = ApiState::new(db, identity_header)
+        .with_refresh(refresh)
         .with_logs(std::sync::Arc::new(HttpLogSource::new(tls)))
         .with_metrics(observed.metrics);
     observed.ready.ready();
@@ -871,13 +872,23 @@ pub type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Leadership> + Send>
 pub async fn lead(
     db: &Database,
     url: &str,
-    (period, migrate): (Duration, bool),
+    (period, migrate, change_notifications): (Duration, bool, bool),
     shutdown: watch::Receiver<u32>,
     role: &'static str,
 ) -> Result<Option<LeaseFuture>, AppError> {
     let status = db.schema_status().await?;
     if status.is_usable() {
-        return Ok(Some(Box::pin(take_lease(db.clone(), period, role))));
+        let db = db.clone();
+        return Ok(Some(Box::pin(async move {
+            let lead = take_lease(db.clone(), period, role).await;
+            // `--migrate` on an up-to-date schema: the switch only, holding the lease.
+            if migrate
+                && let Err(error) = apply_change_notifications(&db, change_notifications).await
+            {
+                tracing::warn!(%error, "couldn't apply `[database] change_notifications`");
+            }
+            lead
+        })));
     }
     if !migrate {
         return Err(AppError::BadArgument(format!(
@@ -889,7 +900,7 @@ pub async fn lead(
     let Some(lead) = until_stopped(lease, shutdown).await else {
         return Ok(None);
     };
-    let lead = migrate_holding(lead, &unlimited(url, db).await?).await?;
+    let lead = migrate_holding(lead, &unlimited(url, db).await?, change_notifications).await?;
     Ok(Some(Box::pin(std::future::ready(lead))))
 }
 
@@ -916,8 +927,8 @@ pub async fn until_stopped<T>(
 pub async fn migrate_leased(
     url: &str,
     query_timeout: Duration,
-    period: Duration,
-    wait: bool,
+    (period, wait): (Duration, bool),
+    change_notifications: bool,
 ) -> Result<(), AppError> {
     let db = Database::connect_with_timeout(url, query_timeout).await?;
     let unlimited = unlimited(url, &db).await?;
@@ -938,7 +949,7 @@ pub async fn migrate_leased(
                 )
             })?
     };
-    let lead = migrate_holding(lead, &unlimited).await?;
+    let lead = migrate_holding(lead, &unlimited, change_notifications).await?;
     lead.release().await;
     Ok(())
 }
@@ -963,13 +974,18 @@ pub async fn unlimited(url: &str, limited: &Database) -> Result<Database, AppErr
 ///
 /// [`AppError::Db`] if the migration fails, [`AppError::BadArgument`] if another master took
 /// the lease over meanwhile.
-pub async fn migrate_holding(mut lead: Leadership, db: &Database) -> Result<Leadership, AppError> {
+pub async fn migrate_holding(
+    mut lead: Leadership,
+    db: &Database,
+    change_notifications: bool,
+) -> Result<Leadership, AppError> {
     let migration = db.migrate_as_lease_holder();
     tokio::pin!(migration);
     loop {
         tokio::select! {
             migrated = &mut migration => {
                 migrated?;
+                apply_change_notifications(db, change_notifications).await?;
                 return Ok(lead);
             }
             () = tokio::time::sleep(lead.period() / 3) => {
@@ -979,6 +995,22 @@ pub async fn migrate_holding(mut lead: Leadership, db: &Database) -> Result<Lead
             }
         }
     }
+}
+
+/// Turns the database's change triggers on or off as `[database] change_notifications` says
+/// (decision 38A'), logging a change; done where migrations are, holding the master's lease.
+///
+/// # Errors
+///
+/// [`AppError::Db`] if the statements fail.
+pub async fn apply_change_notifications(db: &Database, on: bool) -> Result<(), AppError> {
+    if db.set_change_notifications(on).await? {
+        tracing::info!(
+            "the database's change notifications turned {} (`[database] change_notifications`)",
+            if on { "on" } else { "off" }
+        );
+    }
+    Ok(())
 }
 
 /// `schedr master`: the gRPC service and the loop, until Ctrl-C or SIGTERM.
@@ -998,7 +1030,11 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     start_ops(config, "master", Ops::new(registry, health.clone()), &stop).await?;
     let db = connect_database(config, "master").await?;
     let url = config.database.url.as_deref().unwrap_or_default();
-    let period = (config.master.lease_period, migrate);
+    let period = (
+        config.master.lease_period,
+        migrate,
+        config.database.change_notifications,
+    );
     let Some(leadership) = lead(&db, url, period, stop.clone(), "master").await? else {
         return Ok(());
     };
@@ -1138,7 +1174,10 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     watch_tls(tls.as_ref(), config, &stop);
     serve_api(
         db,
-        config.webserver.auth.identity_header.clone(),
+        (
+            config.webserver.auth.identity_header.clone(),
+            config.webserver.refresh_interval,
+        ),
         listener,
         tls,
         None,

@@ -1,0 +1,30 @@
+{#- An action behind a confirmation dialog of our own (35A): the button opens it; it says what
+    will happen; Confirm posts the form with htmx and the command's fragment goes to the top of
+    the page's results (#action-results). `fields`: the form's own fields, by kind: "" none,
+    "pause" (also cancel its runs), "trigger" (the moment, shown in both zones as it is typed;
+    `base` is the pages' prefix). The dialog closes on its form's own answer only (a request
+    from inside it, the moment's preview, bubbles up to the form too), and the preview swaps
+    its own way (it would inherit the form's). The live parts around a dialog pass nothing on
+    (`hx-disinherit`), or their `hx-select` would empty its answers. One submit at a time: a second click while the
+    first is on its way is dropped, and the button disabled meanwhile. -#}
+{% macro action(label, title, text, post, fields, base) %}
+<button type="button" class="action" onclick="this.nextElementSibling.showModal()">{{ label }}</button>
+<dialog class="confirm">
+  <form hx-post="{{ post }}" hx-target="#action-results" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="find button[type=submit]" hx-on::after-request="if (event.detail.elt === this) this.closest('dialog').close()">
+    <h3>{{ title }}</h3>
+    <p>{{ text }}</p>
+    {% if fields == "pause" %}
+    <label class="check"><input type="checkbox" name="cancel_runs"> Also cancel its queued and running runs</label>
+    {% else if fields == "trigger" %}
+    <label class="field">For <input name="for" placeholder="now" size="28" autocomplete="off"
+      hx-get="{{ base }}/time" hx-trigger="input changed delay:300ms" hx-target="next .moment" hx-swap="innerHTML" hx-sync="this:replace"></label>
+    <p class="moment dim">Now.</p>
+    <p class="dim">A date-time with its offset (<code>2026-10-15T03:00:00+02:00</code>), one without (read as UTC), or a date (midnight UTC).</p>
+    {% endif %}
+    <div class="buttons">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="primary">{{ label }}</button>
+    </div>
+  </form>
+</dialog>
+{% endmacro %}

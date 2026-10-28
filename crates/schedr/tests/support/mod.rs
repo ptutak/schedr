@@ -337,7 +337,8 @@ impl Cluster {
             });
             found.unwrap()
         };
-        let ops = bound("ops on http://");
+        // Standalone's banner goes on after it: `ops on http://<address>, data in ...`.
+        let ops = bound("ops on http://").trim_end_matches(',').to_owned();
         let (grpc_port, api) = match role {
             // Only the master started as `master`: another one may not listen yet (a standby,
             // a master waiting for its database); see `Self::grpc_port_of`.

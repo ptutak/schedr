@@ -77,7 +77,27 @@ whoever reaches them. Each warns at startup when it listens beyond localhost:
 
 The webserver can record who made a command from a header (`[webserver.auth]
 identity_header`), and it never uses that header to allow or deny anything. `schedr ui` sends
-no credentials when it calls a webserver.
+no credentials when it calls a webserver, so a command it sends is recorded as `anonymous`
+until the auth modes pass the user's name on (M3.5).
+
+Anyone who can open the UI can take an action. Two limits keep another site from doing that
+with a visitor's browser.
+
+**An action is taken only from the UI's own pages.** A POST from anywhere else is refused
+(403), the page says "Refused: actions are taken only from schedr's own pages.", and nothing
+is sent to the webserver. A browser sends `Sec-Fetch-Site`. `same-origin`, from the UI's own
+page, and `none`, from an address the user typed, are taken. `cross-site` and `same-site`
+are refused, and an `Origin` that names this UI doesn't change that. A browser that sends
+no `Sec-Fetch-Site` is taken only when its `Origin` names the same host as the request. That
+host is `X-Forwarded-Host` when the request carries it (a proxy in front puts the public
+host there), and otherwise `Host`. The default ports are left out of the comparison (`:443`
+for an `https` origin, `:80` for `http`), and case is ignored. A request with neither header
+is refused. Opening a page is a GET, and GETs aren't checked.
+
+**The UI's pages can't be shown in another site's frame.** Every answer from the UI carries
+`X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`, so a page's
+buttons can't be clicked through another site's frame. Standalone serves the pages on the
+API's port, and those answers carry the same headers.
 
 The CLI sends a bearer token for such a proxy or mesh with `--token` (or `SCHEDR_TOKEN`), e.g.
 a Keycloak token that Istio checks at the gateway.
@@ -95,8 +115,9 @@ same port. The stream carries:
 | `workers` | `{}` | A worker registered, changed state, or was seen. A heartbeat counts as seen. |
 | `refresh` | `{}` | Anything may have changed: a change was missed, or the changes can't be followed. |
 
-No page lists the workers, so a `workers` event doesn't redraw one. A comment every 15 s
-keeps an idle stream from looking dead. The response is
+The [Workers](12-ui.md#workers) page lists them, and a `workers` event makes that page read
+itself again. No other page lists the workers, so no other page redraws for that event. A
+comment every 15 s keeps an idle stream from looking dead. The response is
 `Content-Type: text/event-stream`, with `Cache-Control: no-cache` and
 `X-Accel-Buffering: no`. The webserver follows the database once, from the first stream, and
 hands each change to every open stream. When the changes can't be followed, each stream gets

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "confirm.html" as confirm %}
+{% block title %}Workers · schedr{% endblock %}
+{% block content %}
+<h1>Workers</h1>
+<div id="action-results" class="results"></div>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
+{% endfor %}
+{% if rows.is_empty() %}
+<p class="empty">No workers.</p>
+{% else %}
+<table class="list workers">
+  <thead>
+    <tr><th>Worker</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>Queues</th><th>Running</th><th>Version</th><th>Last seen</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for worker in rows %}
+    <tr>
+      <td class="mono">{{ worker.worker_id }}</td>
+      {% if several %}<td>{{ worker.deployment }}</td>{% endif %}
+      <td><span class="state {{ worker.state }}">{{ worker.state }}</span>{% if worker.drained %} <span class="badge paused">drained</span>{% endif %}</td>
+      <td>{{ worker.queues }}</td>
+      <td>{{ worker.load }}</td>
+      <td class="mono">{{ worker.version }}</td>
+      <td>{{ worker.last_seen }}</td>
+      <td>{% if worker.actionable %}
+        {% if worker.drained %}
+        {% call confirm::action("Resume", "Resume worker " ~ worker.worker_id ~ "?", "It takes tasks again.", worker.action, "", page.base) %}{% endcall %}
+        {% else %}
+        {% call confirm::action("Drain", "Drain worker " ~ worker.worker_id ~ "?", "It takes no new tasks; the ones it runs finish. Kept across its restarts until it is resumed.", worker.action, "", page.base) %}{% endcall %}
+        {% endif %}
+      {% endif %}</td>
+    </tr>
+    {% if !worker.warnings.is_empty() %}
+    <tr class="error-row"><td></td><td colspan="{% if several %}7{% else %}6{% endif %}">{% for warning in worker.warnings %}<div class="warning-text">{{ warning }}</div>{% endfor %}</td></tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+</div>
+{% endblock %}

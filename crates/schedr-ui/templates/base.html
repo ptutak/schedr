@@ -47,11 +47,22 @@
   setInterval(function () {
     if (!document.body || !document.body.hasAttribute("sse-connect")) return;
     if (Date.now() - last < 30000) return;
-    document.querySelectorAll('[hx-trigger="sse:change"]').forEach(function (part) {
+    document.querySelectorAll('[hx-trigger^="sse:change"]').forEach(function (part) {
       htmx.trigger(part, "sse:change");
     });
   }, 5000);
 })();
+// While an action's dialog is open the live parts aren't read again (it would be swapped away
+// under the user); once it closes they are, for what changed meanwhile.
+function schedrDialogOpen() {
+  return document.querySelector("dialog[open]") !== null;
+}
+document.addEventListener("close", function (event) {
+  if (!event.target.matches || !event.target.matches("dialog.confirm")) return;
+  document.querySelectorAll('[hx-trigger^="sse:change"]').forEach(function (part) {
+    htmx.trigger(part, "sse:change");
+  });
+}, true);
 function schedrTheme() {
   var root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
@@ -65,6 +76,7 @@ function schedrTheme() {
   <nav>
     <a href="{{ page.base }}/">DAGs</a>
     <a href="{{ page.base }}/runs">Runs</a>
+    <a href="{{ page.base }}/workers">Workers</a>
     {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}
   </nav>
   <button class="theme" type="button" onclick="schedrTheme()" aria-label="Switch between light and dark">◐</button>

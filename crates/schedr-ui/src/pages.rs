@@ -60,6 +60,8 @@ struct DagPage {
     runs: Vec<RunRow>,
     /// The runs list filtered to this DAG.
     runs_href: String,
+    /// Where its actions are posted (`.../pause`, `.../trigger`).
+    actions: String,
 }
 
 /// An error page.
@@ -159,6 +161,12 @@ pub async fn dag<T: Transport>(
             runs,
             runs_href: format!(
                 "{}/runs?deployment={}&dag={}",
+                page.base,
+                path_segment(&deployment.name),
+                path_segment(&dag_id)
+            ),
+            actions: format!(
+                "{}/d/{}/dags/{}",
                 page.base,
                 path_segment(&deployment.name),
                 path_segment(&dag_id)

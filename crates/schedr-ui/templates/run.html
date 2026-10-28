@@ -1,12 +1,19 @@
 {% extends "base.html" %}
+{% import "confirm.html" as confirm %}
 {% block title %}Run {{ run.run_id }} · schedr{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %} <a href="{{ dag_href }}">{{ run.dag_id }}</a> / <a href="{{ runs_href }}">runs</a></p>
 <!-- The live parts: read again together when the run changes (one request: the head swaps
      itself, the graph and the tasks with their commands swap out of band). -->
-<div id="live-head"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live-head" hx-select-oob="#live-graph,#live-tasks" hx-swap="outerHTML"{% endif %}>
+<div id="action-results" class="results"></div>
+<div id="live-head"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live-head" hx-select-oob="#live-graph,#live-tasks" hx-swap="outerHTML"{% endif %}>
 <h1>Run <span class="mono">{{ run.run_id }}</span> <span class="state {{ run.state }}">{{ run.state }}</span></h1>
 <p class="summary">{{ summary }}</p>
+{% if run.state == "queued" || run.state == "running" %}
+<div class="actions">
+  {% call confirm::action("Cancel run", "Cancel run " ~ run.run_id ~ "?", "Its running tasks are stopped and the rest cancelled; a task already ended keeps its result.", run_href ~ "/cancel", "", page.base) %}{% endcall %}
+</div>
+{% endif %}
 {% if code_hashes.len() > 1 %}
 <div class="banner warning">
   The code changed during this run: its tasks ran on {{ code_hashes.len() }} versions of it.

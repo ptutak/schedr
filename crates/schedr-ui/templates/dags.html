@@ -2,7 +2,7 @@
 {% block title %}DAGs · schedr{% endblock %}
 {% block content %}
 <h1>DAGs</h1>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}</div>
 {% endfor %}

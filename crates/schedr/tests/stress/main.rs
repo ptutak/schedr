@@ -1084,6 +1084,242 @@ fn unpause(stress: &Stress, dags: &[String]) {
 }
 
 /// How long the rounds settle before a window: the unpause commands just sent each woke one.
+/// Scenario 15: What announcing changes costs the master (M3.3; PROJECT.md, "How M3.3 follows
+/// changes"), on Postgres: scenario 1's load four times, each on a database of its own, the
+/// triggers that announce what changed off, on, on, off (so a drift over the scenario, other
+/// load on the machine, weighs on both alike); with them on a client follows the webserver's
+/// events (as a live page does, so the notifications are listened to). The rounds' mean and
+/// p99 and the tasks a second, with over without.
+#[test]
+fn stress_15_change_signals() {
+    change_signals("15_change_signals", Backend::Postgres);
+}
+
+/// Scenario 15b: as 15, on SQLite through `schedr standalone` (scenario 9's load), the
+/// triggers there writing the `changes` table: switched off for the runs without, as
+/// `[database] change_notifications = false` leaves them (each still reads the switch).
+#[test]
+fn stress_15b_change_signals_sqlite() {
+    change_signals("15b_change_signals_sqlite", Backend::Sqlite);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Postgres,
+    Sqlite,
+}
+
+fn change_signals(scenario: &'static str, backend: Backend) {
+    let runs: Vec<(bool, SignalRun)> = [false, true, true, false]
+        .into_iter()
+        .enumerate()
+        .map(|(i, on)| (on, signal_load(scenario, i + 1, backend, on)))
+        .collect();
+    let mut report = Report::new(scenario);
+    let mean = |on: bool, value: &dyn Fn(&SignalRun) -> f64| {
+        let values: Vec<f64> = runs
+            .iter()
+            .filter(|(o, _)| *o == on)
+            .map(|(_, r)| value(r))
+            .collect();
+        values.iter().sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap())
+    };
+    let round_mean = |r: &SignalRun| r.rounds.mean();
+    let round_p99 = |r: &SignalRun| r.rounds.quantile(0.99);
+    let tasks_per_s = |r: &SignalRun| r.done.tasks_per_s;
+    let start_p99 = |r: &SignalRun| r.done.start_p99_s;
+    for (name, on) in [("without", false), ("with", true)] {
+        report.set(
+            &format!("round_mean_{name}_ms"),
+            mean(on, &round_mean) * 1000.0,
+        );
+        report.set(&format!("round_p99_{name}_s"), mean(on, &round_p99));
+        report.set(&format!("tasks_per_s_{name}"), mean(on, &tasks_per_s));
+        report.set(
+            &format!("assigned_to_started_p99_{name}_s"),
+            mean(on, &start_p99),
+        );
+    }
+    for (i, (on, run)) in runs.iter().enumerate() {
+        let name = if *on { "with" } else { "without" };
+        report.set(
+            &format!("run{}_{name}_round_mean_ms", i + 1),
+            run.rounds.mean() * 1000.0,
+        );
+        report.set(
+            &format!("run{}_{name}_tasks_per_s", i + 1),
+            run.done.tasks_per_s,
+        );
+    }
+    // The triggers did announce: each run's changes reached the client.
+    let events_per_run = mean(true, &|r| r.run_events / r.runs);
+    report.at_least("run_events_with_per_run", events_per_run, 1.0);
+    // Measured 2026-10-28 (quick, four runs each): on Postgres 1.02 / 1.00 / 0.97, on SQLite
+    // 0.94 / 1.17 / 0.98, all within run-to-run noise (two runs alike differed by 8%). The
+    // limits catch a change that makes announcing expensive, not the noise: the p99s are
+    // bucket edges √2 apart, so 1.5 allows one bucket worse.
+    report.at_most(
+        "round_mean_ratio",
+        mean(true, &round_mean) / mean(false, &round_mean).max(1e-6),
+        1.15,
+    );
+    report.at_most(
+        "round_p99_ratio",
+        mean(true, &round_p99) / mean(false, &round_p99).max(1e-6),
+        1.5,
+    );
+    report.at_least(
+        "tasks_per_s_ratio",
+        mean(true, &tasks_per_s) / mean(false, &tasks_per_s).max(1e-6),
+        0.9,
+    );
+    report.finish(String::new);
+}
+
+/// One run of scenario 15's load, and what it measured.
+struct SignalRun {
+    rounds: Rounds,
+    done: load::Throughput,
+    runs: f64,
+    run_events: f64,
+}
+
+/// Run `number` of scenario 15's load (scenario 1's on Postgres, 9's on SQLite) on a database
+/// of its own, the change triggers `on` or not; with them on, a client follows `GET
+/// /api/v1/events` meanwhile, counting `run` events.
+fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> SignalRun {
+    let mut stress = Stress::new(match backend {
+        Backend::Postgres => Some(postgres_database()),
+        Backend::Sqlite => None,
+    });
+    let size = stress.size;
+    let name = format!(
+        "{scenario}_run{number}_{}",
+        if on { "with" } else { "without" }
+    );
+    let mut report = Report::new(Box::leak(name.into_boxed_str()));
+    if !on {
+        match backend {
+            Backend::Postgres => {
+                for table in ["runs", "task_instances", "attempts", "dags", "workers"] {
+                    stress
+                        .db
+                        .execute(&format!("ALTER TABLE {table} DISABLE TRIGGER USER"));
+                }
+            }
+            // As `[database] change_notifications = false` leaves it: the triggers there, each
+            // reading the switch.
+            Backend::Sqlite => stress.db.execute("UPDATE changes_switch SET notify = 0"),
+        }
+    }
+    let master = match backend {
+        Backend::Postgres => "master",
+        Backend::Sqlite => "standalone",
+    };
+    let mut dags = match backend {
+        Backend::Postgres => command_dags(
+            &stress,
+            "many",
+            size.n(50, 1000),
+            size.n(10, 15),
+            "sleep 0.1",
+            0,
+        ),
+        Backend::Sqlite => command_dags(&stress, "lite", size.n(20, 100), 10, "sleep 0.1", 0),
+    };
+    match backend {
+        Backend::Postgres => {
+            dags.extend(command_dags(
+                &stress,
+                "wide",
+                1,
+                size.n(200, 5000),
+                "sleep 0.1",
+                0,
+            ));
+            stress.start_core("master", &[]);
+            stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
+        }
+        Backend::Sqlite => {
+            let mut env = load::ROLE_ENV.to_vec();
+            env.push(("SCHEDR_CONFIG__WORKER__SLOTS", "8"));
+            stress
+                .cluster
+                .start_args("standalone", &["standalone", "--migrate"], &env);
+        }
+    }
+    stress.wait_for_dags(dags.len(), 10 * MINUTE);
+    let scrape = |stress: &Stress| {
+        let (status, body) = stress.cluster.ops_get(master, "/metrics");
+        assert_eq!(status, 200, "{master}'s metrics: {body}");
+        Rounds::scraped(&body)
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let follower = on.then(|| follow_events(&stress.cluster.api, Arc::clone(&stop)));
+    let before = scrape(&stress);
+    stress.trigger(&dags, 1);
+    stress.wait_for_runs(dags.len(), size.time(20 * MINUTE, 90 * MINUTE), |_| {});
+    let rounds = scrape(&stress).since(&before);
+    stop.store(true, Ordering::Relaxed);
+    let run_events = follower.map_or(0.0, |f| f.join().unwrap());
+    let done = stress.throughput();
+    report.set("tasks_per_s", done.tasks_per_s);
+    report.set("round_mean_ms", rounds.mean() * 1000.0);
+    report.set("run_events", run_events);
+    let runs = f64::from(u32::try_from(stress.db.runs()).unwrap());
+    finish(&stress, report, &["success"]);
+    SignalRun {
+        rounds,
+        done,
+        runs,
+        run_events,
+    }
+}
+
+/// Follows the webserver's `GET /api/v1/events` (the API's `http://host:port`) until `stop`,
+/// counting its `run` events.
+fn follow_events(api: &str, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<f64> {
+    use std::io::{Read as _, Write as _};
+    let address = api
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned();
+    std::thread::spawn(move || {
+        let mut stream = std::net::TcpStream::connect(&address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /api/v1/events HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
+        )
+        .unwrap();
+        let (mut events, mut tail) = (0_u32, Vec::new());
+        let mut buffer = [0_u8; 16 * 1024];
+        while !stop.load(Ordering::Relaxed) {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    // Counted over what was read, with the end of the last read in front (an
+                    // event's name cut between reads).
+                    tail.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&tail).into_owned();
+                    let whole = text.rfind('\n').map_or(0, |at| at + 1);
+                    events += u32::try_from(text[..whole].matches("event: run").count()).unwrap();
+                    tail = text.as_bytes()[whole..].to_vec();
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(e) => panic!("the events stream failed: {e}"),
+            }
+        }
+        f64::from(events)
+    })
+}
+
 const SETTLE: Duration = Duration::from_secs(20);
 
 /// The master's rounds over the next `window` (named `name`), after [`SETTLE`]: the

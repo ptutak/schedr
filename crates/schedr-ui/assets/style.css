@@ -228,3 +228,29 @@ pre.log, pre.output {
 .bg-12 { background: var(--ansi-12); } .bg-13 { background: var(--ansi-13); } .bg-14 { background: var(--ansi-14); } .bg-15 { background: var(--ansi-15); }
 pre.log .bold { font-weight: 700; } pre.log .faint { opacity: 0.7; }
 pre.log .italic { font-style: italic; } pre.log .underline { text-decoration: underline; }
+
+/* Actions: a button opens its dialog; the commands it sends are listed above the page. */
+.actions { display: flex; gap: 8px; margin: 0 0 12px; }
+button.primary { background: var(--link); border-color: var(--link); color: var(--bg); }
+dialog.confirm {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  max-width: 480px;
+  background: var(--bg);
+  color: var(--text);
+}
+dialog.confirm::backdrop { background: rgb(0 0 0 / 0.4); }
+dialog.confirm h3 { margin: 0 0 8px; font-size: 17px; }
+dialog.confirm .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+dialog.confirm label.field, dialog.confirm label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.results:empty { display: none; }
+.results { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+.command { border-radius: 8px; padding: 8px 12px; border: 1px solid var(--border); background: var(--surface); }
+.command.pending { border-color: var(--waiting); }
+.command.applied { border-color: var(--ok); }
+.command.rejected, .command.failed { border-color: var(--failed); color: var(--failed); }
+.warning-text { color: var(--waiting); }
+.state.active { background: var(--ok-bg); color: var(--ok); }
+.state.draining, .state.disconnected { background: var(--waiting-bg); color: var(--waiting); }
+.state.lost { background: var(--failed-bg); color: var(--failed); }

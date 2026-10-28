@@ -585,6 +585,17 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     the UI (its mTLS client certificate, which the deployments already issue, or a service
     token per deployment): otherwise anyone reaching a webserver directly could claim any
     name in the audit trail.
+    **Federations of standalones, in production** (the user, 2026-10-28, for M3.6): the UI
+    must take any mix of deployments: standalones on SQLite, standalones on Postgres,
+    distributed ones. The way in production goes from a federation of standalones on SQLite,
+    to standalones on Postgres, to distributed deployments, a deployment at a time, every
+    stage possible and mixed stages too (a deployment moving from SQLite to Postgres starts
+    afresh: its history stays behind, accepted). So: standalone can run **without its own
+    UI** (`schedr standalone --no-ui`, the user's pick over a setting: only its API on that
+    port, one deployment of a central `schedr ui`); **`schedr ui` deploys alone** from the chart, over a list of
+    deployments (standalone or distributed, in other releases or namespaces); a standalone,
+    which has no mTLS, proves the UI's calls by the **shared token** whatever `[tls] mode`
+    says (decision 36's mTLS port is a distributed webserver's, in `app` mode).
   - **Not planned: several masters on one database, each with its own workers** (the user's
     idea, 2026-10-24, first recorded for M6; superseded the same day by the federated view
     above, kept as the alternative should one deployment not carry a load that can't be
@@ -1210,6 +1221,35 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     `log` events until the attempt has ended and all of it is sent (`end`). Not chosen: the
     master sending the changes itself (every write path would have to); a `changes` table
     on Postgres too (writes in the master's hot path).
+  - **How M3.4 takes actions** (Claude's, 2026-10-28, within 35A and 24A): each action is a
+    button opening a `<dialog>` that says what will happen (pause offers "also cancel its
+    queued and running runs"; trigger takes the moment in `--for`'s forms, previewed in UTC
+    and the browser's zone as it is typed); confirming posts the form with htmx, the UI sends
+    the API's command and answers with the command's fragment at the top of the page's
+    results, which reads the command again every second until the master has decided
+    (applied, with a link to a triggered run; rejected, with the master's reason, e.g. a
+    cancel too late; or not sent, with why). Buttons only where the state allows: Trigger
+    and Pause / Unpause on a DAG's page, Cancel on a queued or running run, Cancel on a task
+    that hasn't ended and Retry on an unschedulable one (in its panel), Drain / Resume on the
+    workers page (a new page, every deployment's workers with their warnings, live). The
+    Origin check of 24A came with the first POST, here, not with M3.5: a POST is taken only
+    with `Sec-Fetch-Site: same-origin` (or `none`), or without it an `Origin` whose host is
+    the request's (`X-Forwarded-Host` behind a proxy); anything else is 403. Commands are
+    recorded as `anonymous` until M3.5 passes the user's name on.
+  - **Live updates on by default, with a switch** (decision 38A', the user's, 2026-10-28,
+    after measuring): stress scenarios 15 (Postgres) and 15b (SQLite through standalone) run
+    scenario 1's and 9's loads four times, the change triggers off, on, on, off: with them
+    on, the rounds' mean 1.02 and 0.94 times, the tasks a second 0.97 and 0.98 times those
+    without, within run-to-run noise (a first run, without then with on a busy machine, had
+    shown 9%). So the triggers stay on by default, standalone included; `[database]
+    change_notifications = false` turns them off, applied by `schedr db migrate` (and
+    `standalone --migrate`), never by the master (disabled on Postgres, dropped on SQLite);
+    the webserver follows what the database does (the triggers' state), and with them off
+    sends `refresh` every `[webserver] refresh_interval` (15 s). Not chosen: off by default
+    with live updates opt-in (B, the cautious one, picked first on the 9%); the master
+    sending one notification per round itself, no triggers (C: cheapest "on", but every
+    write path must report its runs); the webserver polling a "changed since" query (D:
+    indexes on every write, or table scans).
   - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
     through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
     process over the client's in-process transport and a real API; the graph layout by

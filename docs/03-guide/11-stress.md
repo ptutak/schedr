@@ -38,13 +38,15 @@ are in the report.
 | 6 | Scenarios 1 and 4 through PgBouncer in transaction pooling | the lease and the commands need nothing of a database session |
 | 7 | Rolling restart: workers stopped with SIGTERM one after another | draining under load; no task fails |
 | 8 | Code churn: many DAG files, changed every few seconds while runs go on | parsing keeps up; runs succeed |
-| 9 | Standalone on SQLite under load | no "database is locked" |
+| 9 | Standalone on SQLite under load | no "database is locked"; the master's round time |
 | 10 | Soak: a steady load (3 minutes quick, an hour full) | each role's memory and open files stay flat |
 | 11 | Heavy output: big logs read through the API at once, outputs near their limit | logs complete and served in time |
 | 12 | The memory watchdog: many tasks over their budget beside normal ones | only those are killed (`oom_killed`); the workers stay |
 | 13 | Python tasks, spawned (`13_python_tasks`): chains of `@task` functions passing outputs on | outputs arrive right; a new interpreter for each task |
 | 13 | Python tasks, forked (`13_python_tasks_forked`): the same load, the workers' fork servers on, a short preload list | every attempt forked (floor 99 %); how long the starts take |
 | 14 | Quiet DAGs: a few busy DAGs alone, then beside many daily DAGs that do not fire | how much the master's rounds grow once the quiet DAGs are quiet |
+| 15 | Change signals, on Postgres: scenario 1's load four times, the triggers that announce changes off, on, on, off | how the rounds and the tasks a second compare |
+| 15b | The same, on SQLite through standalone (scenario 9's load) | the same comparison |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
@@ -80,6 +82,30 @@ not two. The report `target/stress/14_quiet_dags.json` records `quiet_dags`,
 `round_p99_beside_quiet_s`), `round_mean_ratio` and `round_p99_ratio` (beside / alone), and
 the busy and quiet gauges at the start and end of each window.
 
+**Scenarios 15 and 15b** measure what announcing changes costs the master. The triggers that
+tell the webserver what changed are part of the schema (see
+[Live updates](12-ui.md#live-updates)). 15 runs scenario 1's load on Postgres, four times,
+each on a database of its own, the triggers off, then on, then on, then off, so a drift
+over the scenario weighs on both alike. With them on, a client follows `GET /api/v1/events`,
+as a live page does, so the webserver follows the changes during the load. 15b is the same
+comparison on SQLite through `schedr standalone`, with scenario 9's load. There the triggers
+append a row to the `changes` table, and the runs without them have those triggers removed.
+The runs with them on have to deliver, on average, at least one `run` event per run.
+
+The two runs with the triggers on are compared with the two without: the average round
+mean, the average round p99, and the average tasks a second. The scenario fails when the
+mean with them on is over 1.15 times the mean without, the p99 over 1.5 times, or the tasks
+a second under 0.9 times. The p99 is a bucket edge, and those buckets are √2 apart, so 1.5
+allows one bucket worse and not two. The report `target/stress/15_change_signals.json`
+(and `15b_change_signals_sqlite.json`) records each side's round mean
+(`round_mean_without_ms`, `round_mean_with_ms`), round p99 (`round_p99_without_s`,
+`round_p99_with_s`) and tasks a second (`tasks_per_s_without`, `tasks_per_s_with`), the
+three ratios (`round_mean_ratio`, `round_p99_ratio`, `tasks_per_s_ratio`), the p99 from
+assigned to started (`assigned_to_started_p99_without_s`,
+`assigned_to_started_p99_with_s`), the `run` events per run
+(`run_events_with_per_run`), and each of the four runs (`run1_without_round_mean_ms`,
+`run2_with_tasks_per_s`, and the same for the other runs).
+
 ## Running it
 
 ```bash
@@ -101,7 +127,8 @@ Postgres and PgBouncer in containers; the disk's flush on commit dominates there
 Postgres server does better). Throughput counts successful tasks a second over the scenario;
 the round p99 is the bucket of `schedr_master_tick_duration_seconds` holding it. Rows 1–12
 are the factor-of-two buckets of that day. Scenario 13's rows are a later run, below.
-Scenario 14 is the M2.5.2 histogram, √2 apart.
+Scenario 14 is the M2.5.2 histogram, √2 apart. Scenarios 15 and 15b are the 2026-10-28
+ratios of the runs with the change triggers on to the runs without, below.
 
 | # | Scenario | Tasks | Tasks/s | Assigned → started p99 | Round p99 |
 |---|---|---|---|---|---|
@@ -113,13 +140,15 @@ Scenario 14 is the M2.5.2 histogram, √2 apart.
 | 6 | through PgBouncer: failover / throughput | 330 / 2,501 | 7.2 / 14.9 | 2.3 s / 2.4 s | ≤ 2.0 s / ≤ 4.1 s |
 | 7 | rolling restart | 270 | 6.4 | 2.2 s | ≤ 2.0 s |
 | 8 | code churn | 70 runs | — | — | — |
-| 9 | standalone on SQLite | 440 | 20.0 | 1.4 s | — |
+| 9 | standalone on SQLite | 440 | 20.0 | 1.4 s | — (not measured; see below) |
 | 10 | soak (3 minutes) | 1,020 | 5.6 | 0.9 s | ≤ 1.0 s |
 | 11 | heavy output | 168 | 4.6 | 1.3 s (logs read p99 1.4 s) | ≤ 2.0 s |
 | 12 | memory watchdog | 120 (12 killed over budget) | 5.7 | 1.3 s | ≤ 1.0 s |
 | 13 | Python tasks, spawned (`13_python_tasks`) | 640 | 12.4 | run p50 48.2 s; hello p50 0.64 s | — |
 | 13 | Python tasks, forked (`13_python_tasks_forked`) | 640 | 14.3 | run p50 41.7 s; hello p50 0.02 s, p99 0.08 s | — |
 | 14 | quiet DAGs (M2.5.2, quick ×2, 600 quiet DAGs) | — | — | — | 0.36 s alone and beside |
+| 15 | change signals, Postgres (2026-10-28, quick, four runs) | — | — | — | mean 1.02×, p99 1.00×, tasks/s 0.97× |
+| 15b | change signals, SQLite through standalone (2026-10-28, quick, four runs) | — | — | — | mean 0.94×, p99 1.17×, tasks/s 0.98× |
 
 Scenario 13's rows are the 2026-10-27 run (quick profile, this machine), not the 2026-10-24
 one. Where the other rows give assigned → started, these give the run's p50 and the start to
@@ -129,11 +158,23 @@ A scrape that fails, or that has no such times, is broken. That scenario's first
 bug, and the step fixed it: a new worker's fork servers could not start until a task had made
 its log directory.
 
+Scenario 9's round time was not measured on 2026-10-24. Standalone's banner continues
+after the ops address (`, data in …`), and the harness kept that comma, so the scrape of
+`/metrics` read nothing. The comma is dropped now. Scenario 9 reads
+`schedr_master_tick_duration_seconds` from standalone's ops port, as the other scenarios
+read it from the master, and the round's p99 has to be at most 5 s.
+
 Scenario 14's row is the M2.5.2 run, not the 2026-10-24 one. The mean round was 50 ms alone
 and 51 ms beside the 600 quiet DAGs (ratio 1.04); the p99 was the same bucket, 0.36 s. All
 600 were quiet 0.03 s after their unpause. Before M2.5.2, on the same shape of run, the mean
 was 41 ms alone and 291 ms beside (ratio 7.1), and the p99 was ≤ 0.512 s alone and ≤ 1.024 s
 beside.
+
+Scenarios 15 and 15b's rows are the 2026-10-28 run (quick profile, four runs each), not
+the 2026-10-24 one. Where the other rows give tasks a second and a round p99, these give
+the ratio of the runs with the change triggers on to the runs without: the rounds' mean,
+the rounds' p99, and the tasks a second. On Postgres that was 1.02, 1.00 and 0.97. On
+SQLite, through standalone, it was 0.94, 1.17 and 0.98.
 
 On the way there the suite found and the step fixed: assignments taken back though started
 (scenario 13 went from 624 expired assignments and 11 successes to 11.5 tasks a second),

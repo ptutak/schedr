@@ -555,6 +555,20 @@ impl<T: Transport> Client<T> {
         Ok(EventReader::new(chunks))
     }
 
+    /// `GET /api/v1/commands/{command}`: a command and the master's decision.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn command(&self, command_id: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/commands/{}", path(command_id)),
+            None,
+        )
+        .await
+    }
+
     /// `GET /api/v1/runs/{run}`.
     ///
     /// # Errors

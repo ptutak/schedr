@@ -1,9 +1,20 @@
-<div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
+{% import "confirm.html" as confirm %}
+<div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
 <div class="panel-head" data-task="{{ task_id }}">
   <h2 class="mono">{{ task_id }}</h2>
   <span class="state {{ state }}">{{ status }}</span>
   <a class="close" href="{{ close }}" aria-label="Close the task's panel">×</a>
 </div>
+{% if cancellable || retryable %}
+<div class="actions">
+  {% if cancellable %}
+  {% call confirm::action("Cancel task", "Cancel task " ~ task_id ~ "?", "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of it are cancelled.", actions ~ "/cancel", "", base) %}{% endcall %}
+  {% endif %}
+  {% if retryable %}
+  {% call confirm::action("Retry", "Retry task " ~ task_id ~ "?", "Every worker that could run it rejected it; it is queued again, for every worker.", actions ~ "/retry", "", base) %}{% endcall %}
+  {% endif %}
+</div>
+{% endif %}
 <nav class="tabs">
   {% for tab in tabs %}<a class="tab{% if tab.open %} open{% endif %}" data-tab="{{ tab.key }}" href="{{ tab.href }}" hx-get="{{ tab.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ tab.href }}">{{ tab.label }}</a>{% endfor %}
 </nav>

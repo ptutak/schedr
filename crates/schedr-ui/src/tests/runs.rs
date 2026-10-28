@@ -303,7 +303,10 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
     );
     assert_eq!(attrs(&html, "#live-head", "hx-get"), ["/d/etl/runs/r2"]);
     // Every change counts: a change during a read is read again after it.
-    assert_eq!(attrs(&html, "#live-head", "hx-trigger"), ["sse:change"]);
+    assert_eq!(
+        attrs(&html, "#live-head", "hx-trigger"),
+        ["sse:change[!schedrDialogOpen()]"]
+    );
     assert_eq!(attrs(&html, "#live-head", "hx-sync"), ["this:queue last"]);
     assert_eq!(
         attrs(&html, "#live-head", "hx-select-oob"),
@@ -325,7 +328,10 @@ async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
     // Read again on a change, unless something else is loading into the panel; a click on a
     // tab replaces a refresh in flight (it would swap the tab it was for).
     assert_eq!(attrs(&html, ".panel-live", "hx-sync"), ["#task-panel:drop"]);
-    assert_eq!(attrs(&html, ".panel-live", "hx-trigger"), ["sse:change"]);
+    assert_eq!(
+        attrs(&html, ".panel-live", "hx-trigger"),
+        ["sse:change[!schedrDialogOpen()]"]
+    );
     let tab_syncs = attrs(&html, ".tabs a.tab", "hx-sync");
     assert_eq!(tab_syncs, ["#task-panel:replace"; 4]);
     assert_eq!(attrs(&html, ".tabs .tab.open", "data-tab"), ["attempts"]);

@@ -79,6 +79,10 @@ pub struct Standalone {
     pub parse_file_timeout: Duration,
     /// The header naming the user on commands.
     pub identity_header: Option<String>,
+    /// How often live pages refresh when the database's changes can't be followed.
+    pub refresh: Duration,
+    /// Whether the writes announce their changes (applied with `--migrate`).
+    pub change_notifications: bool,
     /// The web UI it serves next to its API.
     pub ui: LocalUi,
     /// Whether to migrate the database at start (`--migrate`).
@@ -130,6 +134,8 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         parse_file_timeout: config.dags.parse_file_timeout,
         identity_header: config.webserver.auth.identity_header.clone(),
+        refresh: config.webserver.refresh_interval,
+        change_notifications: config.database.change_notifications,
         ui: LocalUi {
             docs_dir: docs_dir(config),
         },
@@ -137,6 +143,14 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         database_url,
         data_dir,
     })
+}
+
+impl Standalone {
+    /// How it takes the master's lease ([`lead`]): its period, `--migrate`, and the change
+    /// notifications to apply with a migration.
+    const fn lease(&self) -> (Duration, bool, bool) {
+        (self.lease_period, self.migrate, self.change_notifications)
+    }
 }
 
 /// Runs standalone until asked to stop (`shutdown` counts the requests): its worker drains
@@ -153,6 +167,7 @@ pub async fn run(
     listening: impl FnOnce(Listening),
     shutdown: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
+    let lease = setup.lease();
     let io = |what: &str, e: std::io::Error| AppError::BadArgument(format!("{what}: {e}"));
     tokio::fs::create_dir_all(&setup.data_dir)
         .await
@@ -195,7 +210,7 @@ pub async fn run(
     let leading = lead(
         &db,
         &setup.database_url,
-        (setup.lease_period, setup.migrate),
+        lease,
         shutdown.clone(),
         "standalone",
     );
@@ -228,7 +243,7 @@ pub async fn run(
     });
     let api = Box::pin(serve_api(
         db,
-        setup.identity_header.clone(),
+        (setup.identity_header.clone(), setup.refresh),
         http,
         None,
         Some(setup.ui.clone()),
