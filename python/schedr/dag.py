@@ -21,6 +21,7 @@ from schedr._model import (
     registry,
     validate_dag_id,
 )
+from schedr.outcomes import RunIf
 from schedr.triggers import Cron, Every, Once, Trigger
 
 
@@ -38,6 +39,7 @@ class TaskDefaults:
             bare one, for code that misbehaves next to the preloaded libraries).
         fresh_process: Python tasks are always a new process, never forked (for code that
             misbehaves after a fork).
+        run_if: When tasks run, from their upstream edges (default ``RunIf.NONE_FAILED``).
     """
 
     retries: int | None = None
@@ -47,6 +49,7 @@ class TaskDefaults:
     max_output_size: int | None = None
     preload: bool | None = None
     fresh_process: bool | None = None
+    run_if: RunIf | None = None
 
     def options(self) -> _build.TaskOptions:
         """These defaults as task options.
@@ -62,6 +65,7 @@ class TaskDefaults:
             max_output_size=self.max_output_size,
             preload=self.preload,
             fresh_process=self.fresh_process,
+            run_if=self.run_if,
         )
 
 
@@ -158,6 +162,7 @@ class Dag:
         cycle = builder.find_cycle()
         if cycle is not None:
             raise ValueError(f"DAG `{self.dag_id}` has a dependency cycle: {' -> '.join(cycle)}")
+        builder.check_nones()
         self._check_since(builder)
         self.model = DagModel(
             id=self.dag_id,

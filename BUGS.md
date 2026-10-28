@@ -36,8 +36,12 @@ bug, the entry is removed, saying why in the commit.
   tests, 99 Rust integration tests, 27 Python integration tests, then `make docs`).
 - **Suspect:** the 8 s grace under load, the same kind of limit as B21 (a bound that is
   long enough until the machine is busy). Not fixed.
-- **Next:** if it happens again, look at the grace and what the worker was doing in those
-  8 s. One miss is not enough to change the limit.
+- **Seen again:** 2026-10-28, `make check` during M4.1b (the same message, `None`: the
+  worker hadn't ended at all). Alone it passed three times in about 10.5 s, so it is the
+  load again, not a hang. Two misses in three days.
+- **Next:** look at the grace and what the worker was doing in those 8 s (its log in the
+  test's output shows the drain's steps), then decide whether the limit or the drain is
+  what's slow under load.
 
 ## B4: `runs trigger` in a roles integration test got no result once
 

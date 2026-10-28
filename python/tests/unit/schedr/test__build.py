@@ -174,7 +174,7 @@ def test_to_value_keeps_references_visible_in_containers() -> None:
     assert _build.to_value([Output("a"), 2], "x", upstream) == ListValue(
         [RefValue(OutputRef("a")), LiteralValue(2)]
     )
-    assert upstream == ["extract", "a"]
+    assert upstream == [("extract", ()), ("a", ())]
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ def test_to_template() -> None:
     assert _build.to_template(FakeRef(DagCtxRef(DagCtxField.SINCE)), "x", upstream) == Template(
         [TemplateRef(DagCtxRef(DagCtxField.SINCE))]
     )
-    assert upstream == ["a"]
+    assert upstream == [("a", ())]
     with pytest.raises(TypeError, match="x: expected a string, a t-string or a reference, got int"):
         _build.to_template(5, "x", upstream)
 
@@ -317,7 +317,7 @@ def test_to_value_turns_t_strings_into_templates() -> None:
             "plain": TemplateValue(Template(["x"])),
         }
     )
-    assert upstream == ["n"]
+    assert upstream == [("n", ())]
     assert _build.templates_in(value) == [
         Template(["count=", TemplateRef(OutputRef("n"))]),
         Template(["x"]),
@@ -358,7 +358,7 @@ def test_to_template_accepts_t_strings() -> None:
     assert _build.to_template(t"n={out}", "w", upstream) == Template(
         ["n=", TemplateRef(OutputRef("n"))]
     )
-    assert upstream == ["n"]
+    assert upstream == [("n", ())]
 
 
 def test_strftime_specs_need_dates() -> None:

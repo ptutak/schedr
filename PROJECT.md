@@ -4530,6 +4530,15 @@ from it counts as not taken.
 | `x(cmd.outcome)` | any outcome | `Output[Check]` | the member | n/a |
 | `x(g.on(None))` | `None` | `Output[None]` | `None` | data rule (useful only for order) |
 
+**When `None` can reach a parameter** (Claude's, 2026-10-28, refining the data rule above with a
+side agent's note): under `NoneFailed`, a task whose every edge isn't taken is skipped, not run
+with `None`. So a parameter must allow `None` only when its reference may stand for `None`
+(narrowed with `.on(...)`, or to a task that may be skipped) **and** the task has another edge
+(another upstream task or condition) that can run it anyway: `load(primary.on(Rows),
+mirror.on(Rows))` takes `Rows | None` twice, `load(fetch().on(Rows))` takes plain `Rows`. It is
+checked when the `with Dag(...)` block ends, so an order edge added after the call counts. An
+`Outcome` enum parameter (`react(check.outcome)`) is stored by its member's name.
+
 **How M4.1a stores it** (Claude's, 2026-10-28, within the design above): each task carries its
 outcomes in the DAG JSON (`outcomes: [{name, exit_code}]`, left out when it is only `SUCCESS`
 on exit code 0), an edge its condition (`on: [names]`, left out for any outcome), a reference

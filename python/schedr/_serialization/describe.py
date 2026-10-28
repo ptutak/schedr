@@ -31,6 +31,7 @@ from schedr._serialization.annotations import (
     type_hints,
     unwrap,
 )
+from schedr.outcomes import Outcome
 from schedr.types import ProcessResult
 
 _SCALARS: dict[object, ScalarName] = {
@@ -66,12 +67,15 @@ def describe(annotation: object) -> TypeDesc:
     return _describe(annotation, frozenset())
 
 
-def _describe(annotation: object, seen: frozenset[type]) -> TypeDesc:  # noqa: PLR0911
+def _describe(annotation: object, seen: frozenset[type]) -> TypeDesc:  # noqa: PLR0911, PLR0912
     annotation = unwrap(annotation)
     if annotation is Any:
         return ScalarType("any")
     if annotation is None:
         return ScalarType("none")
+    if isinstance(annotation, type) and issubclass(annotation, Outcome):
+        # An outcome is stored by its member's name.
+        return ScalarType("str")
     if annotation is ProcessResult:
         return ScalarType("process_result")
     if annotation in _SCALARS:

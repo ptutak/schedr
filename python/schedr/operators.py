@@ -17,12 +17,12 @@ from schedr._model import (
     CommandKind,
     EdgeKind,
     EmptyKind,
-    OutputRef,
     ScalarType,
     ShellCommand,
     Template,
 )
 from schedr._templates import is_tstring, to_template
+from schedr.outcomes import Outcome, RunIf, for_command
 from schedr.tasks import Output
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -120,6 +120,10 @@ class CommandOperator(Operator):
         timeout: The attempt's timeout.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes (per stream).
+        outcomes: An ``Outcome`` enum: its members' values are the exit codes meaning them
+            (each a success with that outcome, any other code a failure). Default: ``SUCCESS``
+            on 0.
+        run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -138,11 +142,13 @@ class CommandOperator(Operator):
         timeout: timedelta | None = None,
         queue: str | None = None,
         max_output_size: int | None = None,
+        outcomes: type[Outcome] | None = None,
+        run_if: RunIf | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
         self._task_id = task_id
-        upstream: list[str] = []
+        upstream: list[_build.Upstream] = []
         where = f"task `{task_id}`"
         line: ShellCommand | ArgvCommand
         if isinstance(command, str):
@@ -150,8 +156,7 @@ class CommandOperator(Operator):
         elif is_tstring(command):
             line = ShellCommand(to_template(command, where, shell=True))  # type: ignore[arg-type]
             for ref in line.template.references():
-                if isinstance(ref, OutputRef):
-                    upstream.append(ref.task)
+                _build.note_upstream(ref, upstream)
         elif isinstance(command, Sequence):
             line = ArgvCommand(
                 [
@@ -168,12 +173,15 @@ class CommandOperator(Operator):
             variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
         for template in [*line.templates(), *variables.values()]:
             _build.check_template_references(builder, template, where)
-        options = _build.TaskOptions(retries, retry_delay, timeout, queue, max_output_size)
-        builder.add_task(
-            task_id, CommandKind(line, variables), ScalarType("process_result"), options
+        options = _build.TaskOptions(
+            retries, retry_delay, timeout, queue, max_output_size, run_if=run_if
         )
-        for up in dict.fromkeys(upstream):
-            builder.add_edge(up, task_id, EdgeKind.DATA)
+        spec = for_command(outcomes, where)
+        builder.add_task(
+            task_id, CommandKind(line, variables), ScalarType("process_result"), options, spec
+        )
+        for up, on in dict.fromkeys(upstream):
+            builder.add_edge(up, task_id, EdgeKind.DATA, on)
 
     @property
     def stdout(self) -> Output[str]:
@@ -191,13 +199,17 @@ class EmptyOperator(Operator):
 
     Args:
         task_id: The task's ID.
+        run_if: When it completes, from its upstream edges (default ``RunIf.NONE_FAILED``);
+            a join of branches that must all succeed takes ``RunIf.ALL_SUCCEEDED``.
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
     """
 
-    def __init__(self, task_id: str) -> None:
+    def __init__(self, task_id: str, *, run_if: RunIf | None = None) -> None:
         """Records the empty task in the DAG being defined."""
         builder = _build.require_active("EmptyOperator")
         self._task_id = task_id
-        builder.add_task(task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions())
+        builder.add_task(
+            task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions(run_if=run_if)
+        )

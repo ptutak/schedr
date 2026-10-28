@@ -25,10 +25,13 @@ class OutputRef:
     Attributes:
         task: The upstream task's ID.
         path: Field names and list / tuple indexes into the output; empty for all of it.
+        on: The outcomes it was narrowed to (``.on(...)``); empty for any. On another
+            outcome, or a skipped upstream task, it stands for ``None``.
     """
 
     task: str
     path: Sequence[str | int] = ()
+    on: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         """Validates the task ID and the path.
@@ -48,12 +51,42 @@ class OutputRef:
         """The reference as DAG JSON.
 
         Returns:
-            ``{"kind": "output", "task": ..., "path": [...]}`` (``path`` only if not empty).
+            ``{"kind": "output", "task": ..., "path": [...], "on": [...]}`` (``path`` and
+            ``on`` only if not empty).
         """
         result: dict[str, Any] = {"kind": "output", "task": self.task}
         if self.path:
             result["path"] = list(self.path)
+        if self.on:
+            result["on"] = list(self.on)
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeRef:
+    """An upstream task's outcome itself (``.outcome``), as its name.
+
+    Attributes:
+        task: The upstream task's ID.
+    """
+
+    task: str
+
+    def __post_init__(self) -> None:
+        """Validates the task ID.
+
+        Raises:
+            IdError: If it is invalid.
+        """
+        validate_task_id(self.task)
+
+    def to_json(self) -> dict[str, Any]:
+        """The reference as DAG JSON.
+
+        Returns:
+            ``{"kind": "outcome", "task": ...}``.
+        """
+        return {"kind": "outcome", "task": self.task}
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +108,7 @@ class DagCtxRef:
         return {"kind": "dag_ctx", "field": self.field.value}
 
 
-type Reference = OutputRef | DagCtxRef
+type Reference = OutputRef | OutcomeRef | DagCtxRef
 """Any reference."""
 
 

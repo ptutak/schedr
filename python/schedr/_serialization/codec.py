@@ -29,6 +29,7 @@ from schedr._serialization.annotations import (
     type_hints,
     unwrap,
 )
+from schedr.outcomes import Outcome
 
 TAGS = frozenset({"$datetime", "$date", "$timedelta", "$tuple"})
 """The keys of tagged values."""
@@ -78,6 +79,10 @@ def encode(value: object, annotation: object, at: str = "") -> Any:  # noqa: PLR
     annotation = unwrap(annotation)
     if annotation is Any:
         return encode_any(value, at)
+    if isinstance(annotation, type) and issubclass(annotation, Outcome):
+        if not isinstance(value, annotation):
+            raise CodecError(at, f"expected a member of {annotation.__name__}, got {value!r}")
+        return value.name
     if annotation is None:
         if value is not None:
             raise CodecError(at, f"expected None, got {_type_of(value)}")
@@ -289,6 +294,10 @@ def decode(data: Any, annotation: object, at: str = "") -> Any:  # noqa: PLR0911
     annotation = unwrap(annotation)
     if annotation is Any:
         return decode_any(data, at)
+    if isinstance(annotation, type) and issubclass(annotation, Outcome):
+        if not isinstance(data, str) or data not in annotation.__members__:
+            raise CodecError(at, f"`{data}` isn't one of {annotation.__name__}'s outcomes")
+        return annotation[data]
     if annotation is None:
         if data is not None:
             raise CodecError(at, f"expected None, got {_type_of(data)}")

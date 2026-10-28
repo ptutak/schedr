@@ -18,6 +18,10 @@ DEFAULT_RETRY_DELAY_MS = 5 * 60 * 1000
 """The default delay between attempts in milliseconds (5 minutes)."""
 
 
+DEFAULT_OUTCOMES: tuple[tuple[str, int | None], ...] = (("SUCCESS", 0),)
+"""A task's outcomes when it declares none: ``SUCCESS``, exit code 0 for a command."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskSettings:
     """A task's settings, resolved from its own arguments and the defaults that apply.
@@ -31,6 +35,7 @@ class TaskSettings:
         preload: A Python task forks from the preloaded fork server (``False``: only from the
             bare one).
         fresh_process: A Python task is always a new process, never forked.
+        run_if: Its trigger rule, ``none_failed`` or ``all_succeeded``.
     """
 
     retries: int = 0
@@ -40,6 +45,7 @@ class TaskSettings:
     max_output_size: int = DEFAULT_MAX_OUTPUT_SIZE
     preload: bool = True
     fresh_process: bool = False
+    run_if: str = "none_failed"
 
     def __post_init__(self) -> None:
         """Checks that the numbers are in range.
@@ -54,14 +60,17 @@ class TaskSettings:
             raise ValueError(f"timeout must be positive, got {self.timeout_ms} ms")
         if not self.queue:
             raise ValueError("queue must not be empty")
+        if self.run_if not in {"none_failed", "all_succeeded"}:
+            raise ValueError(f"run_if must be none_failed or all_succeeded, got {self.run_if!r}")
 
     def to_json(self) -> dict[str, Any]:
         """The settings as DAG JSON.
 
         Returns:
-            Every setting, ``timeout_ms`` as ``null`` when unset.
+            Every setting, ``timeout_ms`` as ``null`` when unset; ``run_if`` only when not
+            the default.
         """
-        return {
+        result: dict[str, Any] = {
             "retries": self.retries,
             "retry_delay_ms": self.retry_delay_ms,
             "timeout_ms": self.timeout_ms,
@@ -70,6 +79,9 @@ class TaskSettings:
             "preload": self.preload,
             "fresh_process": self.fresh_process,
         }
+        if self.run_if != "none_failed":
+            result["run_if"] = self.run_if
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,12 +246,14 @@ class Task:
         kind: Its kind and what it runs.
         output_type: The type of its output.
         settings: Its resolved settings.
+        outcomes: Its outcomes, each a name and, for a command, the exit code meaning it.
     """
 
     id: str
     kind: TaskKind
     output_type: TypeDesc
     settings: TaskSettings = field(default_factory=TaskSettings)
+    outcomes: tuple[tuple[str, int | None], ...] = DEFAULT_OUTCOMES
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -261,11 +275,18 @@ class Task:
         """The task as DAG JSON (the kind's fields are flattened into it).
 
         Returns:
-            ``{"id": ..., "kind": ..., ..., "settings": ..., "output_type": ...}``.
+            ``{"id": ..., "kind": ..., ..., "settings": ..., "output_type": ...,
+            "outcomes": [...]}`` (``outcomes`` only when not just ``SUCCESS`` on exit 0).
         """
-        return {
+        result: dict[str, Any] = {
             "id": self.id,
             **self.kind.to_json(),
             "settings": self.settings.to_json(),
             "output_type": self.output_type.to_json(),
         }
+        if self.outcomes != DEFAULT_OUTCOMES:
+            result["outcomes"] = [
+                {"name": name} if code is None else {"name": name, "exit_code": code}
+                for name, code in self.outcomes
+            ]
+        return result

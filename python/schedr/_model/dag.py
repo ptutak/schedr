@@ -55,11 +55,13 @@ class Edge:
         from_: The upstream task's ID.
         to: The downstream task's ID.
         kind: Why the dependency exists.
+        on: The upstream outcomes it is taken on (``.on(...)``); empty for any.
     """
 
     from_: str
     to: str
     kind: EdgeKind
+    on: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validates both task IDs.
@@ -74,9 +76,12 @@ class Edge:
         """The edge as DAG JSON.
 
         Returns:
-            ``{"from": ..., "to": ..., "kind": ...}``.
+            ``{"from": ..., "to": ..., "kind": ..., "on": [...]}`` (``on`` only if not empty).
         """
-        return {"from": self.from_, "to": self.to, "kind": self.kind.value}
+        result: dict[str, Any] = {"from": self.from_, "to": self.to, "kind": self.kind.value}
+        if self.on:
+            result["on"] = list(self.on)
+        return result
 
 
 @dataclass(frozen=True, slots=True)

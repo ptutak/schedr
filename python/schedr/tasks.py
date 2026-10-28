@@ -16,9 +16,11 @@ from datetime import timedelta
 from typing import Any, overload
 
 from schedr import _build
+from schedr import outcomes as _outcomes
 from schedr._model import (
     EdgeKind,
     LiteralValue,
+    OutcomeRef,
     OutputRef,
     PythonKind,
     Reference,
@@ -50,24 +52,91 @@ class Output[T]:
     the master extracts them when it builds the downstream task's inputs.
     """
 
-    __slots__ = ("_path", "_task")
+    __slots__ = ("_on", "_path", "_task")
 
-    def __init__(self, task_id: str, path: tuple[str | int, ...] = ()) -> None:
+    def __init__(
+        self, task_id: str, path: tuple[str | int, ...] = (), on: tuple[str, ...] = ()
+    ) -> None:
         """References ``task_id``'s output at ``path``.
 
         Args:
             task_id: The task that produces the output.
             path: Fields, keys and indexes into it.
+            on: The outcomes it is narrowed to (``.on(...)``); empty for any.
         """
         self._task = task_id
         self._path = path
+        self._on = on
 
     @property
     def _schedr_task_id(self) -> str:
         return self._task
 
+    @property
+    def _schedr_on(self) -> tuple[str, ...]:
+        return self._on
+
     def _schedr_reference(self) -> Reference:
-        return OutputRef(self._task, self._path)
+        return OutputRef(self._task, self._path, self._on)
+
+    @overload
+    def on[U](self, kind: type[U], /) -> Output[U]: ...
+
+    @overload
+    def on[U, V](self, kind: type[U], other: type[V], /) -> Output[U | V]: ...
+
+    @overload
+    def on(self, kind: None, /) -> Output[None]: ...
+
+    @overload
+    def on(self, *members: _outcomes.Outcome) -> Output[T]: ...
+
+    def on(self, *kinds: Any) -> Output[Any]:
+        """Depends on the task only when it ends with one of these outcomes.
+
+        The output is narrowed to them: ``load(fetch().on(Rows))``,
+        ``check.on(Check.CHANGED) >> notify``.
+
+        An edge whose outcome didn't happen isn't taken: under ``RunIf.NONE_FAILED`` the
+        downstream task gets ``None`` for it (its parameter must allow ``None``), under
+        ``RunIf.ALL_SUCCEEDED`` it is skipped.
+
+        Args:
+            *kinds: Classes (or ``None``) of the task's outcome union, or members of its
+                ``Outcome`` enum.
+
+        Returns:
+            The narrowed reference.
+
+        Raises:
+            TypeError: For an outcome the task doesn't have, or ``.on()`` on a part of the
+                output (narrow first: ``f.on(Rows).rows``).
+        """
+        if self._path or self._on:
+            raise TypeError(
+                f"{self!r}.on(): narrow the whole output first, e.g. `{self._task}.on(...)`"
+            )
+        builder = _build.require_active("`.on()`")
+        spec = builder.outcomes.get(self._task, _outcomes.DEFAULT)
+        return Output(self._task, on=_outcomes.names_for(spec, kinds, self._task))
+
+    @property
+    def outcome(self) -> _OutcomeOutput:
+        """The task's outcome itself as data: pass it to a task taking its ``Outcome`` enum.
+
+        Raises:
+            TypeError: On a task whose outcomes are a union of classes (the value's class
+                already says which), or on a part of the output.
+        """
+        if self._path or self._on:
+            raise TypeError(f"{self!r}.outcome: take it from the whole output")
+        builder = _build.require_active("`.outcome`")
+        if builder.outcomes.get(self._task, _outcomes.DEFAULT).is_union:
+            raise TypeError(
+                f"`{self._task}.outcome`: its outcomes are a union of classes; the value's "
+                f"class says which, so pass `{self._task}` (or narrow with `.on(...)`)"
+            )
+        return _OutcomeOutput(self._task)
 
     def __getattr__(self, name: str) -> Output[Any]:
         """References a field of the output.
@@ -83,7 +152,7 @@ class Output[T]:
         """
         if name.startswith("_"):
             raise AttributeError(name)
-        return Output(self._task, (*self._path, name))
+        return Output(self._task, (*self._path, name), self._on)
 
     def __getitem__(self, key: str | int) -> Output[Any]:
         """References a key or an index of the output.
@@ -102,7 +171,7 @@ class Output[T]:
             raise TypeError(f"output keys are str or int, got {type(key).__name__}")
         if isinstance(key, int) and key < 0:
             raise ValueError(f"output index {key}: negative indexes aren't supported")
-        return Output(self._task, (*self._path, key))
+        return Output(self._task, (*self._path, key), self._on)
 
     def __rshift__(self, other: object) -> object:
         """``self >> other``: ``other`` runs after this task.
@@ -166,8 +235,29 @@ class Output[T]:
 
     def __repr__(self) -> str:
         """A readable form, e.g. ``Output(extract.rows[0])``."""
+        on = f".on({', '.join(self._on)})" if self._on else ""
         path = "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in self._path)
-        return f"Output({self._task}{path})"
+        return f"Output({self._task}{on}{path})"
+
+
+class _OutcomeOutput:
+    """A task's outcome as data (``task.outcome``), a reference in the DAG body."""
+
+    __slots__ = ("_task",)
+
+    def __init__(self, task_id: str) -> None:
+        self._task = task_id
+
+    @property
+    def _schedr_task_id(self) -> str:
+        return self._task
+
+    def _schedr_reference(self) -> Reference:
+        return OutcomeRef(self._task)
+
+    def __repr__(self) -> str:
+        """A readable form, e.g. ``Output(check.outcome)``."""
+        return f"Output({self._task}.outcome)"
 
 
 _STARS: dict[inspect._ParameterKind, str] = {
@@ -255,32 +345,52 @@ class TaskFunction[**P, R]:
         except TypeError as e:
             raise TypeError(f"{where}: {e}") from None
         hints = type_hints(self._fn, where)
+        spec = _outcomes.from_return_type(hints["return"], where)
         try:
-            output_type = describe(hints["return"])
+            # An Outcome enum task's output is None: the member is its outcome.
+            output_type = describe(
+                None if spec.enum is not _outcomes.DefaultOutcome else hints["return"]
+            )
+            outcome_types = (
+                {name: describe(cls) for name, cls in zip(spec.names, spec.classes, strict=True)}
+                if spec.is_union
+                else {}
+            )
         except TypeModelError as e:
             raise TypeModelError(f"{where}: return type `{label(hints['return'])}`: {e}") from None
-        upstream: list[str] = []
+        upstream: list[_build.Upstream] = []
         arguments = {
             name: self._argument(
-                builder, value, hints.get(name, Any), f"{where}, argument `{name}`", upstream
+                builder,
+                (self._task_id, value),
+                hints.get(name, Any),
+                f"{where}, argument `{name}`",
+                upstream,
             )
             for name, value in bound.arguments.items()
         }
-        builder.add_task(self._task_id, PythonKind(arguments), output_type, self._options)
+        builder.add_task(
+            self._task_id, PythonKind(arguments), output_type, self._options, spec, outcome_types
+        )
         builder.functions[self._task_id] = self._fn
-        for task_id in dict.fromkeys(upstream):
-            builder.add_edge(task_id, self._task_id, EdgeKind.DATA)
+        for task_id, on in dict.fromkeys(upstream):
+            builder.add_edge(task_id, self._task_id, EdgeKind.DATA, on)
         return Output(self._task_id)
 
     @staticmethod
     def _argument(
         builder: _build.DagBuilder,
-        value: object,
+        task_value: tuple[str, object],
         annotation: object,
         where: str,
-        upstream: list[str],
+        upstream: list[_build.Upstream],
     ) -> Value:
-        """Converts one argument, checking it against its parameter's type."""
+        """Converts one argument of a task, checking it against its parameter's type.
+
+        A reference is also queued for the ``None`` check, made once the DAG is complete
+        (see ``DagBuilder.check_nones``).
+        """
+        task_id, value = task_value
         try:
             expected = describe(annotation)
         except TypeModelError as e:
@@ -293,6 +403,9 @@ class TaskFunction[**P, R]:
         if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
             raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
         if isinstance(converted, RefValue):
+            if isinstance(converted.reference, OutputRef):
+                # Whether it may get None is known once the DAG is complete.
+                builder.none_checks.append((task_id, where, converted.reference, expected))
             produced = _build.reference_type(builder, converted.reference, where)
             if not is_assignable(produced, expected):
                 raise TypeError(
@@ -317,6 +430,7 @@ class TaskFunction[**P, R]:
         max_output_size: int | None = None,
         preload: bool | None = None,
         fresh_process: bool | None = None,
+        run_if: _outcomes.RunIf | None = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -329,12 +443,13 @@ class TaskFunction[**P, R]:
             max_output_size: Overrides the output size limit.
             preload: Overrides whether it forks from the preloaded fork server.
             fresh_process: Overrides whether it is always a new process.
+            run_if: Overrides its trigger rule.
 
         Returns:
             A new task function; this one is unchanged.
         """
         changes = _build.TaskOptions(
-            retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process
+            retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
         )
         return TaskFunction(self._fn, task_id or self._task_id, changes.over(self._options))
 
@@ -354,6 +469,7 @@ def task[**P, R](
     max_output_size: int | None = None,
     preload: bool | None = None,
     fresh_process: bool | None = None,
+    run_if: _outcomes.RunIf | None = None,
 ) -> Callable[[Callable[P, R]], TaskFunction[P, R]]: ...
 
 
@@ -369,6 +485,7 @@ def task[**P, R](
     max_output_size: int | None = None,
     preload: bool | None = None,
     fresh_process: bool | None = None,
+    run_if: _outcomes.RunIf | None = None,
 ) -> TaskFunction[P, R] | Callable[[Callable[P, R]], TaskFunction[P, R]]:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -388,6 +505,8 @@ def task[**P, R](
             libraries.
         fresh_process: Always a new process, never forked, for code that misbehaves after a
             fork.
+        run_if: When it runs, from its upstream edges: ``RunIf.NONE_FAILED`` (the default)
+            or ``RunIf.ALL_SUCCEEDED``.
 
     Returns:
         The task function, or a decorator making one.
@@ -396,7 +515,7 @@ def task[**P, R](
         TypeError: If the function can't be a task.
     """
     options = _build.TaskOptions(
-        retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process
+        retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
     )
 
     def decorate(function: Callable[P, R]) -> TaskFunction[P, R]:

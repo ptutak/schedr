@@ -20,6 +20,7 @@ from schedr._model import (
     ListValue,
     LiteralValue,
     MapValue,
+    OutcomeRef,
     OutputRef,
     Reference,
     RefValue,
@@ -35,9 +36,19 @@ from schedr._model import (
     Value,
     validate_task_id,
 )
-from schedr._serialization import CodecError, encode_any, follow_path, type_name
+from schedr._serialization import (
+    CodecError,
+    encode_any,
+    follow_path,
+    is_assignable,
+    type_name,
+)
 from schedr._templates import is_tstring
 from schedr._templates import to_template as tstring_to_template
+from schedr.outcomes import DEFAULT, OutcomeSpec, RunIf
+
+type Upstream = tuple[str, tuple[str, ...]]
+"""An upstream task a value references, with the outcomes its edge is taken on (``()``: any)."""
 
 
 class HasReference(Protocol):
@@ -72,6 +83,7 @@ class TaskOptions:
         max_output_size: The output size limit in bytes.
         preload: A Python task forks from the preloaded fork server.
         fresh_process: A Python task is always a new process.
+        run_if: Its trigger rule.
     """
 
     retries: int | None = None
@@ -81,6 +93,7 @@ class TaskOptions:
     max_output_size: int | None = None
     preload: bool | None = None
     fresh_process: bool | None = None
+    run_if: RunIf | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -101,6 +114,7 @@ class TaskOptions:
             ),
             preload=base.preload if self.preload is None else self.preload,
             fresh_process=base.fresh_process if self.fresh_process is None else self.fresh_process,
+            run_if=base.run_if if self.run_if is None else self.run_if,
         )
 
     def settings(self) -> TaskSettings:
@@ -129,6 +143,7 @@ class TaskOptions:
             fresh_process=(
                 defaults.fresh_process if self.fresh_process is None else self.fresh_process
             ),
+            run_if=defaults.run_if if self.run_if is None else self.run_if.value,
         )
 
 
@@ -171,9 +186,19 @@ class DagBuilder:
         self.tasks: dict[str, Task] = {}
         self.edges: list[Edge] = []
         self.functions: dict[str, Callable[..., Any]] = {}
+        self.outcomes: dict[str, OutcomeSpec] = {}
+        self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
+        # Arguments that take a reference, checked once the DAG is complete (check_nones).
+        self.none_checks: list[tuple[str, str, OutputRef, TypeDesc]] = []
 
     def add_task(
-        self, task_id: str, kind: TaskKind, output_type: TypeDesc, options: TaskOptions
+        self,
+        task_id: str,
+        kind: TaskKind,
+        output_type: TypeDesc,
+        options: TaskOptions,
+        outcomes: OutcomeSpec = DEFAULT,
+        outcome_types: Mapping[str, TypeDesc] | None = None,
     ) -> None:
         """Adds a task with its settings resolved against the DAG's defaults.
 
@@ -182,6 +207,9 @@ class DagBuilder:
             kind: Its kind.
             output_type: The type of its output.
             options: Its own options.
+            outcomes: Its outcomes.
+            outcome_types: For an outcome union, each outcome's type (what ``.on()`` narrows
+                to).
 
         Raises:
             IdError: If a task with this ID already exists, or the ID is invalid.
@@ -193,15 +221,18 @@ class DagBuilder:
                 "different ID (`task_id=` for operators, `.override(task_id=...)` for @task)"
             )
         settings = options.over(self.defaults).settings()
-        self.tasks[task_id] = Task(task_id, kind, output_type, settings)
+        self.tasks[task_id] = Task(task_id, kind, output_type, settings, outcomes.declared())
+        self.outcomes[task_id] = outcomes
+        self.outcome_types[task_id] = dict(outcome_types or {})
 
-    def add_edge(self, from_: str, to: str, kind: EdgeKind) -> None:
-        """Adds a dependency, once.
+    def add_edge(self, from_: str, to: str, kind: EdgeKind, on: tuple[str, ...] = ()) -> None:
+        """Adds a dependency, once for each outcome condition.
 
         Args:
             from_: The upstream task's ID.
             to: The downstream task's ID.
             kind: Why the dependency exists.
+            on: The upstream outcomes it is taken on; empty for any.
 
         Raises:
             ValueError: For a task depending on itself or on a task of another DAG.
@@ -211,9 +242,53 @@ class DagBuilder:
                 raise ValueError(f"task `{end}` is not part of DAG `{self.dag_id}`")
         if from_ == to:
             raise ValueError(f"task `{to}` can't depend on itself")
-        edge = Edge(from_, to, kind)
+        edge = Edge(from_, to, kind, on)
         if edge not in self.edges:
             self.edges.append(edge)
+
+    def may_skip(self) -> set[str]:
+        """The tasks that may be skipped: with an edge on a condition, or under one that may be.
+
+        Returns:
+            Their IDs.
+        """
+        skippable: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for edge in self.edges:
+                if edge.to not in skippable and (edge.on or edge.from_ in skippable):
+                    skippable.add(edge.to)
+                    changed = True
+        return skippable
+
+    def check_nones(self) -> None:
+        """Checks, once the DAG is complete, that every parameter that may get ``None`` allows it.
+
+        Under ``RunIf.NONE_FAILED`` a reference whose edge isn't taken (narrowed with
+        ``.on()`` to an outcome that didn't happen, or to a task that was skipped) passes
+        ``None``; that happens only when the task runs anyway, through another edge (a
+        different upstream task or condition). A task with no such edge is skipped instead.
+
+        Raises:
+            TypeError: For a parameter that may get ``None`` and doesn't allow it.
+        """
+        skippable = self.may_skip()
+        for task_id, where, reference, expected in self.none_checks:
+            if self.tasks[task_id].settings.run_if != RunIf.NONE_FAILED:
+                continue
+            if not (reference.on or reference.task in skippable):
+                continue
+            own = (reference.task, tuple(reference.on))
+            if not any(e.to == task_id and (e.from_, e.on) != own for e in self.edges):
+                continue
+            if not is_assignable(ScalarType("none"), expected):
+                raise TypeError(
+                    f"{where}: `{reference_label(reference)}` is None when its edge isn't "
+                    f"taken and the task runs through another; allow None "
+                    f"(`{type_name(expected)} | None`), or give the task "
+                    "run_if=RunIf.ALL_SUCCEEDED (skipped instead)"
+                )
 
     def find_cycle(self) -> list[str] | None:
         """A dependency cycle, if there is one.
@@ -297,10 +372,17 @@ def require_active(what: str) -> DagBuilder:
     return builder
 
 
-def _note_upstream(reference: Reference, upstream: list[str]) -> None:
-    """Records the upstream task of an output reference."""
+def note_upstream(reference: Reference, upstream: list[Upstream]) -> None:
+    """Records the upstream task of an output or outcome reference, with its condition.
+
+    Args:
+        reference: The reference.
+        upstream: Receives ``(task, on)``.
+    """
     if isinstance(reference, OutputRef):
-        upstream.append(reference.task)
+        upstream.append((reference.task, tuple(reference.on)))
+    elif isinstance(reference, OutcomeRef):
+        upstream.append((reference.task, ()))
 
 
 def _hides_tstring(value: object) -> bool:
@@ -333,13 +415,13 @@ def templates_in(value: Value) -> list[Template]:
     return []
 
 
-def to_value(value: object, where: str, upstream: list[str]) -> Value:  # noqa: PLR0911
+def to_value(value: object, where: str, upstream: list[Upstream]) -> Value:  # noqa: PLR0911
     """Converts an argument to a DAG JSON value.
 
     Args:
         value: The argument as written in the DAG file.
         where: The argument's name, for messages.
-        upstream: Receives the IDs of the upstream tasks whose outputs ``value`` references.
+        upstream: Receives the upstream tasks whose outputs ``value`` references.
 
     Returns:
         The value, keeping references visible inside lists and dicts.
@@ -350,12 +432,12 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:  # noqa: 
     """
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
-        _note_upstream(reference, upstream)
+        note_upstream(reference, upstream)
         return RefValue(reference)
     if is_tstring(value):
         template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
         for ref in template.references():
-            _note_upstream(ref, upstream)
+            note_upstream(ref, upstream)
         return TemplateValue(template)
     if isinstance(value, Mapping):
         items: dict[str, Value] = {}
@@ -385,7 +467,7 @@ def to_value(value: object, where: str, upstream: list[str]) -> Value:  # noqa: 
         raise TypeError(f"{where}: {e.reason}") from None
 
 
-def to_template(value: object, where: str, upstream: list[str]) -> Template:
+def to_template(value: object, where: str, upstream: list[Upstream]) -> Template:
     """Converts one command-line argument or environment value to a template.
 
     Args:
@@ -403,12 +485,12 @@ def to_template(value: object, where: str, upstream: list[str]) -> Template:
         return Template([value])
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
-        _note_upstream(reference, upstream)
+        note_upstream(reference, upstream)
         return Template([TemplateRef(reference)])
     if is_tstring(value):
         template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
         for ref in template.references():
-            _note_upstream(ref, upstream)
+            note_upstream(ref, upstream)
         return template
     raise TypeError(
         f"{where}: expected a string, a t-string or a reference, got {type(value).__name__}"
@@ -442,14 +524,16 @@ def order(upstream: object, downstream: object, what: str) -> None:
     """Records order-only dependencies: every downstream task runs after every upstream one.
 
     Args:
-        upstream: Tasks, outputs, or lists of them.
+        upstream: Tasks, outputs (``f.on(X)`` too: then on those outcomes), or lists of them.
         downstream: Tasks, outputs, or lists of them.
         what: The operator, for messages.
     """
     builder = require_active(f"`{what}`")
-    for up in task_ids_of(upstream, what):
+    ups: Sequence[object] = upstream if isinstance(upstream, list | tuple) else [upstream]
+    for item, up in zip(ups, task_ids_of(upstream, what), strict=True):
+        on = tuple(getattr(item, "_schedr_on", ()))
         for down in task_ids_of(downstream, what):
-            builder.add_edge(up, down, EdgeKind.ORDER)
+            builder.add_edge(up, down, EdgeKind.ORDER, on)
 
 
 _DAG_CTX_TYPES: dict[DagCtxField, TypeDesc] = {
@@ -473,9 +557,12 @@ def reference_label(reference: Reference) -> str:
     if isinstance(reference, DagCtxRef):
         name = reference.field.value
         return "dag_ctx.dag_id" if name == "dag_id" else f"dag_ctx.run.{name.removeprefix('run_')}"
+    if isinstance(reference, OutcomeRef):
+        return f"{reference.task}.outcome"
     assert isinstance(reference, OutputRef)
+    on = f".on({', '.join(reference.on)})" if reference.on else ""
     path = "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in reference.path)
-    return f"{reference.task}{path}"
+    return f"{reference.task}{on}{path}"
 
 
 _RENDERABLE = frozenset({"any", "str", "int", "float", "bool", "datetime", "date", "timedelta"})
@@ -498,10 +585,23 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
     """
     if isinstance(reference, DagCtxRef):
         return _DAG_CTX_TYPES[reference.field]
-    assert isinstance(reference, OutputRef)
     if reference.task not in builder.tasks:
         raise ValueError(f"task `{reference.task}` is not part of DAG `{builder.dag_id}`")
+    if isinstance(reference, OutcomeRef):
+        # The outcome's name, decoded into the task's enum by the receiving parameter.
+        return ScalarType("any")
+    assert isinstance(reference, OutputRef)
     produced = builder.tasks[reference.task].output_type
+    by_outcome = builder.outcome_types.get(reference.task, {})
+    if reference.on and by_outcome:
+        narrowed = [by_outcome[name] for name in reference.on]
+        produced = narrowed[0] if len(narrowed) == 1 else UnionType(tuple(narrowed))
+    elif by_outcome and reference.path:
+        raise TypeError(
+            f"{where}: `{reference_label(reference)}`: the output of `{reference.task}` is one of "
+            f"its outcomes ({', '.join(by_outcome)}); narrow it first, e.g. "
+            f"`{reference.task}.on({next(iter(by_outcome))}).{reference.path[0]}`"
+        )
     found = follow_path(produced, tuple(reference.path))
     if found is None:
         raise TypeError(
