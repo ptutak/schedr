@@ -431,10 +431,12 @@ class TaskFunction[**P, R]:
             _build.check_template_references(builder, template, where)
         if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
             raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
+        # Whether a reference may get None is known once the DAG is complete.
+        builder.none_checks.extend(
+            (task_id, where, reference, at)
+            for reference, at in _build.typed_references(converted, expected)
+        )
         if isinstance(converted, RefValue):
-            if isinstance(converted.reference, OutputRef):
-                # Whether it may get None is known once the DAG is complete.
-                builder.none_checks.append((task_id, where, converted.reference, expected))
             produced = _build.reference_type(builder, converted.reference, where)
             if not is_assignable(produced, expected):
                 raise TypeError(

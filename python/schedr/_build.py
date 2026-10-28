@@ -191,7 +191,7 @@ class DagBuilder:
         self.outcomes: dict[str, OutcomeSpec] = {}
         self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
         # Arguments that take a reference, checked once the DAG is complete (check_nones).
-        self.none_checks: list[tuple[str, str, OutputRef, TypeDesc]] = []
+        self.none_checks: list[tuple[str, str, OutputRef | OutcomeRef, TypeDesc]] = []
 
     def add_task(
         self,
@@ -253,7 +253,11 @@ class DagBuilder:
             self.edges.append(edge)
 
     def may_skip(self) -> set[str]:
-        """The tasks that may be skipped: with an edge on a condition, or under one that may be.
+        """The tasks that may be skipped, by their own rule over edges that may not be taken.
+
+        An edge may not be taken when it has a condition (an outcome, a branch's choice) or its
+        upstream task may be skipped. Under ``RunIf.NONE_FAILED`` a task is skipped only when
+        every edge is, under ``RunIf.ALL_SUCCEEDED`` when any one is.
 
         Returns:
             Their IDs.
@@ -262,10 +266,17 @@ class DagBuilder:
         changed = True
         while changed:
             changed = False
-            for edge in self.edges:
-                taken_sometimes = edge.on or edge.kind == EdgeKind.SELECTION
-                if edge.to not in skippable and (taken_sometimes or edge.from_ in skippable):
-                    skippable.add(edge.to)
+            for task_id, task in self.tasks.items():
+                incoming = [e for e in self.edges if e.to == task_id]
+                if task_id in skippable or not incoming:
+                    continue
+                not_taken = [
+                    bool(e.on) or e.kind == EdgeKind.SELECTION or e.from_ in skippable
+                    for e in incoming
+                ]
+                every = task.settings.run_if == RunIf.NONE_FAILED
+                if all(not_taken) if every else any(not_taken):
+                    skippable.add(task_id)
                     changed = True
         return skippable
 
@@ -274,7 +285,8 @@ class DagBuilder:
 
         Under ``RunIf.NONE_FAILED`` a reference whose edge isn't taken (narrowed with
         ``.on()`` to an outcome that didn't happen, or to a task that was skipped) passes
-        ``None``; that happens only when the task runs anyway, through another edge (a
+        ``None``, as does an outcome reference to a task that was skipped, at any depth of an
+        argument; that happens only when the task runs anyway, through another edge (a
         different upstream task or condition). A task with no such edge is skipped instead.
 
         Raises:
@@ -282,11 +294,14 @@ class DagBuilder:
         """
         skippable = self.may_skip()
         for task_id, where, reference, expected in self.none_checks:
+            if task_id not in self.tasks:
+                continue  # Its definition failed (the error was caught in the DAG block).
             if self.tasks[task_id].settings.run_if != RunIf.NONE_FAILED:
                 continue
-            if not (reference.on or reference.task in skippable):
+            on = tuple(reference.on) if isinstance(reference, OutputRef) else ()
+            if not (on or reference.task in skippable):
                 continue
-            own = (reference.task, tuple(reference.on))
+            own = (reference.task, on)
             if not any(e.to == task_id and (e.from_, e.on) != own for e in self.edges):
                 continue
             if not is_assignable(ScalarType("none"), expected):
@@ -402,6 +417,46 @@ def _hides_tstring(value: object) -> bool:
             for f in dataclasses.fields(value)
         )
     return False
+
+
+def typed_references(
+    value: Value, expected: TypeDesc
+) -> list[tuple[OutputRef | OutcomeRef, TypeDesc]]:
+    """The output and outcome references inside a value, each with the type expected there.
+
+    Args:
+        value: A DAG JSON value.
+        expected: The type it is passed as.
+
+    Returns:
+        The references at any depth, in order, with the type of the place each one fills (an
+        element's type from its container's; ``Any`` where that can't be told).
+    """
+    match value:
+        case RefValue(reference=OutputRef() | OutcomeRef() as reference):
+            return [(reference, expected)]
+        case ListValue(items=items):
+            return [
+                found
+                for index, item in enumerate(items)
+                for found in typed_references(item, _element_type(expected, index))
+            ]
+        case MapValue(entries=entries):
+            return [
+                found
+                for key in sorted(entries)
+                for found in typed_references(entries[key], _element_type(expected, key))
+            ]
+    return []
+
+
+def _element_type(container: TypeDesc, step: str | int) -> TypeDesc:
+    """The type of one element of a container type (of each form a union allows)."""
+    variants = container.variants if isinstance(container, UnionType) else (container,)
+    found = [t for v in variants if (t := follow_path(v, (step,))) is not None]
+    if not found:
+        return ScalarType("any")
+    return found[0] if len(found) == 1 else UnionType(tuple(found))
 
 
 def templates_in(value: Value) -> list[Template]:

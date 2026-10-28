@@ -99,11 +99,12 @@ fn reference_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<S
                     "task `{}` uses the output of `{upstream}`, which isn't a task of the DAG",
                     task.id
                 ));
-            } else if !dag
-                .edges
-                .iter()
-                .any(|e| e.kind == EdgeKind::Data && &e.from == upstream && e.to == task.id)
-            {
+            } else if !dag.edges.iter().any(|e| {
+                // A branch's output reaches its targets along their selection edges.
+                matches!(e.kind, EdgeKind::Data | EdgeKind::Selection)
+                    && &e.from == upstream
+                    && e.to == task.id
+            }) {
                 problems.push(format!(
                     "task `{}` uses the output of `{upstream}` without a data edge from it",
                     task.id

@@ -19,6 +19,8 @@ INT, STR, FLOAT, BOOL, NONE, ANY = (
 )
 ROWS = DataclassType("Rows", [Field("rows", ListType(STR)), Field("n", INT)])
 ROW = TypedDictType("Row", [Field("id", INT)])
+ROW_COUNT = DataclassType("RowCount", [Field("n", INT)])
+GONE = DataclassType("Gone", [Field("n", FLOAT)])
 
 
 @pytest.mark.parametrize(
@@ -59,6 +61,11 @@ def test_type_name(desc: TypeDesc, text: str) -> None:
         (ScalarType("process_result"), ("nope",), None),
         (ANY, ("a", 0, "b"), ANY),
         (INT, ("a",), None),
+        # Into a union: a part every member has.
+        (UnionType([ROWS, ROW_COUNT]), ("n",), INT),
+        (UnionType([ROWS, GONE]), ("n",), UnionType((INT, FLOAT))),
+        (UnionType([ROWS, NONE]), ("n",), None),
+        (UnionType([ROWS, ROW]), ("n",), None),
     ],
 )
 def test_follow_path(

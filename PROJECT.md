@@ -3938,9 +3938,9 @@ with Dag(
     [load, refresh_meta] >> publish      # with ALL_SUCCEEDED: skipped too
     ```
 
-  - Both decide **as soon as the result is certain**, as Airflow does: the first failure makes
-    the task `upstream_failed` without waiting for the others; for `AllSucceeded`, the first
-    failure or skip decides.
+  - Both decide **as soon as the result is certain**: the first failure makes
+    the task `upstream_failed` without waiting for the others; for `AllSucceeded`, a skip
+    decides once no other edge can still fail (a failure wins).
 
     | Upstream tasks…                    | `NoneFailed`                          | `AllSucceeded`    |
     |------------------------------------|---------------------------------------|-------------------|
@@ -3980,8 +3980,8 @@ with Dag(
   - The result is set when **every task and every cleanup has finished**; independent parts of
     the graph keep running after a failure (no fail-fast; the UI may show "will fail" earlier).
   - **Not Airflow's leaf rule** (the run fails only if a leaf task failed), which turns runs
-    green that hid a failure: a task failing behind a join already skipped (`AllSucceeded`
-    decides on the first skip); a failed cleanup (not in the graph); a cleanup leaf that
+    green that hid a failure: a task failing behind a join Airflow already skipped (its
+    `all_success` decides on the first skip); a failed cleanup (not in the graph); a cleanup leaf that
     succeeded after the work failed. Migrated DAGs differ only in such cases.
   - **Runs cancelled by a user:** running attempts are cancelled (SIGTERM, then SIGKILL) and
     their per-task cleanups run; tasks not started become `cancelled`; resource cleanups run if

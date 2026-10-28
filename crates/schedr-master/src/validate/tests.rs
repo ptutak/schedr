@@ -158,6 +158,11 @@ fn outputs_are_used_only_along_data_edges() {
         problems(&json!({"edges": [edge("extract", "load", "order")]})),
         ["task `load` uses the output of `extract` without a data edge from it"]
     );
+    // A branch's targets read what it chose along their selection edges.
+    assert_eq!(
+        problems(&json!({"edges": [edge("extract", "load", "selection")]})),
+        Vec::<String>::new()
+    );
     let tasks = json!([
         task("extract", &json!({})),
         task(

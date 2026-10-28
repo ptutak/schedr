@@ -291,6 +291,86 @@ def test_a_task_after_one_that_may_be_skipped_passes_none_through_another_edge()
     registry.take_defined()
 
 
+@task
+def judge(outcome: Check, n: int) -> None:
+    pass
+
+
+@task
+def judge_any(outcome: Check | None, n: int) -> None:
+    pass
+
+
+@task
+def total(values: list[int], n: int) -> None:
+    pass
+
+
+@task
+def total_any(values: list[int | None], n: int) -> None:
+    pass
+
+
+@task
+def by_name(values: dict[str, Rows], n: int) -> None:
+    pass
+
+
+def test_none_is_checked_for_outcome_references_and_at_any_depth() -> None:
+    def judged(judge: Any) -> None:
+        checked = check()
+        fetch().on(Unavailable) >> checked
+        judge(checked.outcome, count())
+
+    cases = [
+        (judged, judge, judge_any, r"argument `outcome`: `check.outcome` is None"),
+        (
+            lambda total: total([load_strict(fetch().on(Rows))], count()),
+            total,
+            total_any,
+            r"argument `values`: `load_strict` is None",
+        ),
+        (
+            lambda by_name: by_name({"a": fetch().on(Rows)}, count()),
+            by_name,
+            None,
+            r"argument `values`: `fetch.on\(Rows\)` is None",
+        ),
+    ]
+    for define, strict, lenient, message in cases:
+        # Checked when the DAG block ends.
+        with pytest.raises(TypeError, match=message), Dag("d"):
+            define(strict)
+        registry.take_defined()
+        if lenient is not None:
+            with Dag("d"):
+                define(lenient)
+            registry.take_defined()
+
+
+def test_a_task_with_an_edge_always_taken_isnt_skipped_under_none_failed() -> None:
+    @task
+    def keep(rows: Rows | None, n: int) -> int:
+        return n
+
+    @task
+    def publish(kept: int, n: int) -> None:
+        pass
+
+    def define(rule: RunIf) -> None:
+        with Dag("d"):
+            n = count()
+            publish(keep.override(run_if=rule)(fetch().on(Rows), n), n)
+
+    # `keep` runs in every run that `count` succeeds in: `kept` is never None.
+    define(RunIf.NONE_FAILED)
+    registry.take_defined()
+    # Under ALL_SUCCEEDED, `keep` is skipped without Rows, and `publish` runs through `count`.
+    with pytest.raises(TypeError, match=r"argument `kept`: `keep` is None"):
+        define(RunIf.ALL_SUCCEEDED)
+    registry.take_defined()
+
+
 def test_order_edges_take_conditions_too() -> None:
     with Dag("d"):
         fetched = fetch()

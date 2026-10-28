@@ -3,6 +3,8 @@
 Paths into outputs, and whether an upstream output fits a parameter.
 """
 
+from collections.abc import Sequence
+
 from schedr._model import (
     DataclassType,
     DictType,
@@ -81,12 +83,26 @@ def follow_path(desc: TypeDesc, path: tuple[str | int, ...]) -> TypeDesc | None:
                 found = item
             case TupleType(items=items), int():
                 found = items[step] if step < len(items) else None
+            case UnionType(variants=variants), _:
+                # There in every member (`.on(Rows, Unavailable).source`): any of their types.
+                parts = [follow_path(v, (step,)) for v in variants]
+                found = None if None in parts else _union_of(parts)
             case _:
                 found = None
         if found is None:
             return None
         desc = found
     return desc
+
+
+def _union_of(types: Sequence[TypeDesc | None]) -> TypeDesc:
+    """One type, or the union of the different ones."""
+    distinct: list[TypeDesc] = []
+    for t in types:
+        assert t is not None
+        if t not in distinct:
+            distinct.append(t)
+    return distinct[0] if len(distinct) == 1 else UnionType(tuple(distinct))
 
 
 def is_assignable(source: TypeDesc, target: TypeDesc) -> bool:  # noqa: PLR0911

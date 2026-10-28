@@ -9,6 +9,29 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B28: the master doesn't check that selection edges come only from `@branch` tasks (Suspected)
+
+- **Found:** 2026-10-28, while fixing Grok's review of M4.1a-M4.2a. `dag_problems`
+  (`crates/schedr-master/src/validate.rs`) checks edges' ends and data edges for references,
+  but not an edge's kind against its upstream: a hand-written or old DAG JSON can have a
+  selection edge from a plain task, or a plain edge from a branch. The Python API never
+  writes either (`DagBuilder.add_edge`).
+- **Effect:** a selection edge from a plain task is taken only when that task's output
+  happens to read as a list of IDs naming the target (`Execution::chosen_of`); otherwise its
+  target is skipped as not chosen.
+- **To confirm:** a master test settling a run whose plain task has a selection edge.
+  **A fix:** refuse both shapes in `dag_problems`.
+
+## B27: a reference inside a list or dict argument isn't checked against the element's type
+
+- **Found:** 2026-10-28, while fixing Grok's review of M4.1a-M4.2a. `_argument`
+  (`python/schedr/tasks.py`) checks only a top-level reference against the parameter's type;
+  references in a container are checked only for their path. Shown: `total([name()])` with
+  `total(values: list[int])` and `name() -> str` parses; the run then fails with
+  `input_mismatch`, not retried.
+- **A fix:** check each reference against the type `_build.typed_references` already gives
+  it (the None check's walk), as the top-level one is.
+
 ## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
 
 - **Found:** 2026-10-27, by Grok's review of M2.5.4a (by reading; not executed). The agent
