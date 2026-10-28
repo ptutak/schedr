@@ -299,6 +299,44 @@ functions. Claude implements each step; Grok reviews it and updates the guide (f
 | M4.14 | **Retention:** `[retention]` (runs, outputs, events, commands), the master's batched job, never the latest run nor an unfinished one, "output deleted by retention" | old runs and outputs go, the protected ones stay, on SQLite and Postgres |
 | M4.15 | **Per-task memory and upgrade rules:** a task's own memory budget in the API, `setrlimit` opt-in through `schedr task-exec` (50A); the upgrade rules checked against what M2 built (version gating, warnings within a major) and completed | a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers |
 
+## M4.5: Batched worker messages
+
+Done when: a worker's turn of messages (up to `MESSAGES_PER_TURN`) is stored in **one
+transaction**: one lease check and one commit fsync per turn instead of one per message, a
+failed message undone alone, and the measured lock and commit time per turn lower than M4's.
+
+Planned with the user (2026-10-28; decision 54 in PROJECT.md, "T1b"), between M4 and M5. It
+builds on T1 (one transaction per message), `Dispatcher::memory` / `restore` (a message
+rolled back puts memory back) and D1 (a commit cut off is read back). **A savepoint per
+message:** `SAVEPOINT` before each message, `ROLLBACK TO` and its own memory snapshot restored
+when it fails, `RELEASE` when it succeeds, one `COMMIT` for the turn. **When the commit itself
+fails** (the lease lost, the connection gone, a time limit): the memory as the turn found it
+is restored and the turn's messages are redone one by one, one transaction each, as today
+(the user's fallback). Not chosen: rolling back the whole turn on any message's failure and
+redoing it one by one (a bad message costs N+1 transactions).
+
+What each message does in a turn:
+
+| Message | Today | In a turn's transaction | When it fails | When the commit fails |
+|---|---|---|---|---|
+| **Started** | own transaction, memory snapshot, read back (D1) | joins it, behind a savepoint; `arrivals.start_handled` after the commit | `ROLLBACK TO`, its memory restored | the turn's memory restored, redone alone |
+| **Finished** | same; its `FinishedAck` also when the read-back finds it stored | joins it, behind a savepoint; ack sent, metrics counted and wakes fired after the commit | `ROLLBACK TO`, its memory restored | the same; nothing counted twice |
+| **Rejected** | same | joins it, behind a savepoint | `ROLLBACK TO`, its memory restored | the same |
+| **CodeVersionChanged** | own transaction, no memory snapshot | **ends the batch** (what came before is committed), then alone as today, unless its memory (worker version, parse jobs) joins the snapshot | as today | as today |
+| **Heartbeat** | `worker_seen` outside any transaction, a failure ignored | **outside**, after the commit (for people) | nothing to undo | nothing to undo |
+| **Warnings** | written outside any transaction, a failure ignored | **outside**, after the commit | nothing to undo | nothing to undo |
+| **Draining** | memory (dispatcher, discovery) and a write, no transaction | **ends the batch**, then alone as today | as today | as today |
+| **Deregister** | `forget`: memory, connections, writes | **ends the batch**, then alone as today | as today | as today |
+
+A commit cut off is read back once for the turn: it lands whole or not at all, so one
+message's attempt answers for all.
+
+| Step | Contents | Done when |
+|---|---|---|
+| M4.5.1 | **Measure first:** per-turn timings (waiting for the core lock, handling, the commit) and the messages per turn as metrics; the assign-to-started gap split into its parts (Grok's 2026-10-28 investigation: rounds holding the lock); a stress baseline (scenario chosen with the user, run only with their go) | the baseline recorded |
+| M4.5.2 | **Savepoints in `schedr-db`:** `Database::savepoint` inside an open scope (Postgres and SQLite), `ROLLBACK TO` clearing the scope's `broken` mark, `RELEASE`; a failed statement behind a savepoint no longer voids the transaction | unit tests on both databases, including a failed statement undone alone |
+| M4.5.3 | **Turns in one transaction:** the turn loop (`service.rs`) wrapped in one transaction, a savepoint and memory snapshot per message, the batch ended at `CodeVersionChanged`, `Draining` and `Deregister`, heartbeats and warnings after the commit; metrics, wakes and `arrivals` deferred to after the commit; the fallback when the commit fails; the read-back once per turn | a failed message undone alone while the others are stored; a commit failure redone one by one; no metric counted twice; the baseline's measurements lower |
+
 ## M6: sign-in against LDAP
 
 Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode

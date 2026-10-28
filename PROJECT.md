@@ -370,6 +370,17 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
       `Finished`, `CodeVersionChanged`; heartbeats write at most once): stored whole or not
       at all, one lease check and one commit per message instead of one per write. Before, a
       failure partway left part stored (B7's rules then repaired it).
+    - **T1b (planned, M4.5): a turn of messages is one transaction** (decision 54, the
+      user's, 2026-10-28): a worker's messages handled in one turn of the core lock share one
+      transaction, each behind a `SAVEPOINT` with its memory snapshot (a failed message is
+      rolled back to its savepoint and its memory restored; the others stay), one commit for
+      the turn. When the commit fails, the turn's memory is restored and its messages are
+      redone one by one as in T1. Metrics, wakes and replies come after the commit;
+      heartbeats and warnings are written outside it; `CodeVersionChanged`, `Draining` and
+      `Deregister` end the batch and are handled alone (PLAN.md, M4.5, has the table per
+      message). Not chosen: rolling the whole turn back on any message's failure and redoing
+      it one by one (a bad message costs N+1 transactions); per-task-ID transactions (a
+      turn's messages rarely share a task).
     - **T2: a round's assignments are one transaction** (`Dispatcher::assign_into`): stored
       together; on a failure the slots they reserved are given back and their `AssignTask`
       messages dropped, and the step **falls back to one transaction per task** (A+B, decided
@@ -6643,6 +6654,7 @@ gRPC, journal) come before breadth of features.
 | **M2.5. Fork server and quiet DAGs** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Quiet DAGs** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; **federated from the start**: one UI over a list of deployments (one the common case; each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
+| **M4.5. Batched worker messages** | a worker's turn of messages in one transaction, a savepoint per message, the turn redone one by one when its commit fails (decision 54, T1b); measured first (per-turn lock and commit times) | one lease check and one commit per turn; a failed message undone alone; lock and commit time per turn lower than M4's |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **M6. Sign-in against LDAP** | `[*.auth] mode = "ldap"`: HTTP Basic credentials checked against the organisation's directory (a bind), for deployments without Istio and Keycloak; users stay in the directory, schedr keeps none (decision 39); the chart's values for it, the bind password from a Secret. Decisions laid out for it (2026-10-28, the user's: postponed to M6): 45 how the person's entry is found (search then bind; a DN template; both), 46 who may sign in (an optional group; a required one; none), 47 the connection's encryption (TLS required; plain allowed with a flag) | a person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests |
 | **Several masters on one database (superseded, not a milestone)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |
