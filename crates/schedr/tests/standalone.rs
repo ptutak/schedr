@@ -532,7 +532,7 @@ fn listen_opens_the_api_beyond_loopback() {
     assert!(standalone.get("/api/v1/dags").is_some());
     let log = standalone.log();
     assert!(
-        log.contains("the REST API has no authentication of its own"),
+        log.contains("the REST API signs no one in (auth mode `none`)"),
         "{log}"
     );
     // The ops port listens there too (probes come from outside the pod), for every part.
@@ -675,4 +675,13 @@ fn without_migrate_a_database_not_migrated_is_refused() {
         ),
         "{err}"
     );
+}
+
+#[test]
+fn no_ui_serves_only_the_api() {
+    // A federation of standalones: one `schedr ui` elsewhere shows them all.
+    let standalone = Standalone::start_with(&[("chain.py", CHAIN)], None, &["--no-ui"]);
+    assert!(standalone.get("/api/v1/dags").is_some());
+    assert_eq!(standalone.page("/"), None);
+    assert_eq!(standalone.page("/runs"), None);
 }

@@ -24,7 +24,7 @@ use schedr_agent::memory::STANDALONE_RESERVE;
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::LogRetention;
 use schedr_api::metrics::ApiMetrics;
-use schedr_config::Config;
+use schedr_config::{AuthMode, AuthSection, Config};
 use schedr_db::Database;
 use schedr_master::core::Settings;
 use schedr_master::metrics::MasterMetrics;
@@ -34,8 +34,8 @@ use crate::app::AppError;
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
     LocalUi, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, docs_dir, lead,
-    listen, lock_journal, log_retention, master_settings, memory_text, no_auth_warning, run_worker,
-    serve_api, serve_master, stop_on_signal,
+    listen, lock_journal, log_retention, master_settings, memory_text, no_auth_warning, role_auth,
+    run_worker, serve_api, serve_master, stop_on_signal,
 };
 
 #[cfg(test)]
@@ -77,14 +77,17 @@ pub struct Standalone {
     pub agent: AgentSettings,
     /// How long one DAG file may take to import.
     pub parse_file_timeout: Duration,
-    /// The header naming the user on commands.
-    pub identity_header: Option<String>,
+    /// Who the user is (`[webserver.auth]`).
+    pub auth: AuthSection,
+    /// The token a UI elsewhere presents to pass users' names on (`[webserver] ui_token_file`:
+    /// a federation of standalones, decision 36).
+    pub ui_token_file: Option<PathBuf>,
     /// How often live pages refresh when the database's changes can't be followed.
     pub refresh: Duration,
     /// Whether the writes announce their changes (applied with `--migrate`).
     pub change_notifications: bool,
-    /// The web UI it serves next to its API.
-    pub ui: LocalUi,
+    /// The web UI it serves next to its API; none with `--no-ui`.
+    pub ui: Option<LocalUi>,
     /// Whether to migrate the database at start (`--migrate`).
     pub migrate: bool,
 }
@@ -133,12 +136,13 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         tick: config.master.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         parse_file_timeout: config.dags.parse_file_timeout,
-        identity_header: config.webserver.auth.identity_header.clone(),
+        auth: config.webserver.auth.clone(),
+        ui_token_file: config.webserver.ui_token_file.clone(),
         refresh: config.webserver.refresh_interval,
         change_notifications: config.database.change_notifications,
-        ui: LocalUi {
+        ui: Some(LocalUi {
             docs_dir: docs_dir(config),
-        },
+        }),
         migrate: false,
         database_url,
         data_dir,
@@ -151,6 +155,24 @@ impl Standalone {
     const fn lease(&self) -> (Duration, bool, bool) {
         (self.lease_period, self.migrate, self.change_notifications)
     }
+}
+
+/// Standalone's listeners (gRPC, HTTP, logs, ops) and where they listen.
+async fn bind(setup: &Standalone) -> Result<([tokio::net::TcpListener; 4], Listening), AppError> {
+    let io = |what: &str, e: std::io::Error| AppError::BadArgument(format!("{what}: {e}"));
+    let grpc = listen(setup.grpc).await?;
+    let http = listen(setup.http).await?;
+    let logs = listen(setup.logs).await?;
+    let ops = listen(setup.ops).await?;
+    let addresses = Listening {
+        ops: ops.local_addr().map_err(|e| io("ops address", e))?,
+        grpc: grpc.local_addr().map_err(|e| io("gRPC address", e))?,
+        http: http.local_addr().map_err(|e| io("HTTP address", e))?,
+        logs: logs
+            .local_addr()
+            .map_err(|e| io("log endpoint address", e))?,
+    };
+    Ok(([grpc, http, logs, ops], addresses))
 }
 
 /// Runs standalone until asked to stop (`shutdown` counts the requests): its worker drains
@@ -174,18 +196,13 @@ pub async fn run(
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
     let _lock = lock_data_dir(&setup.data_dir)?;
     let _journal_lock = lock_journal(&setup.agent)?;
-    let grpc = listen(setup.grpc).await?;
-    let http = listen(setup.http).await?;
-    let logs = listen(setup.logs).await?;
-    let ops = listen(setup.ops).await?;
-    let addresses = Listening {
-        ops: ops.local_addr().map_err(|e| io("ops address", e))?,
-        grpc: grpc.local_addr().map_err(|e| io("gRPC address", e))?,
-        http: http.local_addr().map_err(|e| io("HTTP address", e))?,
-        logs: logs
-            .local_addr()
-            .map_err(|e| io("log endpoint address", e))?,
-    };
+    let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
+    let auth = role_auth(
+        "webserver",
+        &setup.auth,
+        addresses.http,
+        setup.ui_token_file.as_deref(),
+    )?;
     listening(addresses);
     let mut agent = setup.agent;
     agent.log_endpoint = format!("http://{}", addresses.logs);
@@ -243,10 +260,10 @@ pub async fn run(
     });
     let api = Box::pin(serve_api(
         db,
-        (setup.identity_header.clone(), setup.refresh),
-        http,
+        (auth, setup.refresh),
+        (http, None),
         None,
-        Some(setup.ui.clone()),
+        setup.ui.clone(),
         api_observed,
         stopped.clone(),
     ));
@@ -396,11 +413,14 @@ pub async fn command(
     config: &Config,
     env: &BTreeMap<String, String>,
     listen: Option<IpAddr>,
-    migrate: bool,
+    (migrate, no_ui): (bool, bool),
 ) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let mut setup = plan(config, env)?;
     setup.migrate = migrate;
+    if no_ui {
+        setup.ui = None;
+    }
     if let Some(address) = listen {
         // Probes and scrapes come from outside the pod too.
         setup.http.set_ip(address);
@@ -410,8 +430,9 @@ pub async fn command(
     run(
         setup,
         |listening| {
-            if let Some(warning) =
-                no_auth_warning(listening.http, "reach it with kubectl port-forward")
+            if shown.auth.mode == AuthMode::None
+                && let Some(warning) =
+                    no_auth_warning(listening.http, "reach it with kubectl port-forward")
             {
                 tracing::warn!("{warning}");
             }

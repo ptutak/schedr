@@ -159,7 +159,7 @@ impl Cluster {
              [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
              heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\nlease_period = \"15s\"\n\n\
              [database]\nquery_timeout = \"5s\"\n\n\
-             [webserver]\nbind = \"127.0.0.1\"\nport = 0\n\n\
+             [webserver]\nbind = \"127.0.0.1\"\nport = 0\nui_port = 0\n\n\
              [ops]\nbind = \"127.0.0.1\"\nport = 0\n\n\
              [tls]\nmode = \"mesh\"\n",
             python = python(),

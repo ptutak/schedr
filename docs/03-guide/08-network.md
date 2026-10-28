@@ -62,45 +62,183 @@ calls then carry the webserver's identity, which the workers' policies check.
 Requests to workers **never go through an HTTP proxy**, whatever `HTTPS_PROXY` says: a proxy
 can't reach pod addresses, and in mesh mode it would bypass the mesh's policy.
 
-## The REST API and the web UI have no authentication yet
+## Sign-in
 
-The modes that check callers come with M3.5. Until then the webserver and the web UI trust
-whoever reaches them. Each warns at startup when it listens beyond localhost:
+schedr records who took each action, on the command (its `requested_by`), and shows it in
+the UI. It never uses the name to allow or deny anything: there are no roles, and whoever is
+signed in can do everything. Who may reach schedr at all is decided in front of it, by the
+mesh, the network or a sign-in proxy. schedr keeps no users of its own: no user database, no
+Users page, no sessions (decision 39).
 
-- the webserver, on `[webserver] bind` and `port` (all interfaces, 8080): keep it behind an
-  authenticating proxy or the mesh, or set `[webserver] bind = "127.0.0.1"`;
-- `schedr ui`, on `[ui] bind` and `port` (all interfaces, 8082): the same proxy or mesh, or
-  `[ui] bind = "127.0.0.1"`;
-- `schedr standalone` with `--listen` beyond localhost. The warning names the REST API, and
-  the UI is on that same port. Without `--listen` it listens on 127.0.0.1, and there is no
-  warning.
+Three links are involved, each set on its own:
 
-The webserver can record who made a command from a header (`[webserver.auth]
-identity_header`), and it never uses that header to allow or deny anything. `schedr ui` sends
-no credentials when it calls a webserver, so a command it sends is recorded as `anonymous`
-until the auth modes pass the user's name on (M3.5).
+- **a browser at the web UI**, by `[ui.auth]` (a standalone's own pages: `[webserver.auth]`);
+- **`schedr ui` at a webserver**, by `[tls] mode`: how the UI proves it is `schedr ui`, so
+  the webserver takes the name it passes on;
+- **the CLI or Swagger UI at the API**, by `[webserver.auth]`.
 
-Anyone who can open the UI can take an action. Two limits keep another site from doing that
-with a visitor's browser.
+### `[webserver.auth]` and `[ui.auth]`
 
-**An action is taken only from the UI's own pages.** A POST from anywhere else is refused
-(403), the page says "Refused: actions are taken only from schedr's own pages.", and nothing
-is sent to the webserver. A browser sends `Sec-Fetch-Site`. `same-origin`, from the UI's own
-page, and `none`, from an address the user typed, are taken. `cross-site` and `same-site`
-are refused, and an `Origin` that names this UI doesn't change that. A browser that sends
-no `Sec-Fetch-Site` is taken only when its `Origin` names the same host as the request. That
-host is `X-Forwarded-Host` when the request carries it (a proxy in front puts the public
-host there), and otherwise `Host`. The default ports are left out of the comparison (`:443`
-for an `https` origin, `:80` for `http`), and case is ignored. A request with neither header
-is refused. Opening a page is a GET, and GETs aren't checked.
+The same keys in both sections.
+
+| Key | Values | Default | What it does |
+|---|---|---|---|
+| `mode` | `none`, `proxy_header`, `basic` | `none` | How the user is known (below). |
+| `identity_header` | a header name | unset; `x-forwarded-user` in `proxy_header` | `none`: the user's name when the header is there (e.g. set by Istio from a Keycloak token), else `anonymous`. `proxy_header`: required, set by the sign-in proxy. |
+| `users_file` | a path | unset | `basic`: `name:bcrypt-hash` lines, from a Secret (never in the configuration). Read again when it changes. |
+| `behind_tls_proxy` | bool | `false` | `basic` beyond a loopback address: TLS is ended in front. Without it schedr refuses to start, as passwords would cross the network in the clear. |
+| `allow_remote` | bool | `false` | `proxy_header` beyond a loopback address: only the proxy can reach schedr. Without it schedr refuses to start, as anyone reaching it around the proxy could name any user. |
+
+| `mode` | Who signs people in | For |
+|---|---|---|
+| `none` | Whatever is in front (the mesh, the network). The name comes from `identity_header` if set, else it is `anonymous`. | Istio with Keycloak; a laptop. |
+| `proxy_header` | A sign-in proxy in front (oauth2-proxy, OpenShift's oauth-proxy, …), which sets the header. | Kubernetes without a mesh, with any identity provider. |
+| `basic` | schedr: HTTP Basic against `users_file`. | A lab, a single machine. |
+
+A sign-in against LDAP (`mode = "ldap"`) is planned.
+
+In every mode, a header sent twice names no one, and a name with control characters or over
+256 characters isn't taken.
+
+#### The users file
+
+One line per user, `name:bcrypt-hash`. Blank lines and `#` comments are skipped. The
+passwords themselves are never stored. `scripts/users-file.py` asks for each password and
+writes the file and a Kubernetes Secret holding it:
+
+```bash
+scripts/users-file.py --out ~/schedr-users anna ben
+kubectl apply -f ~/schedr-users/users-secret.yaml   # or the chart's auth.usersSecret
+```
+
+A running schedr looks at the file every 5 seconds and reads it again when it has changed.
+A changed password or a removed user then takes effect, and checks remembered from the old
+file are forgotten. A Secret's mounted file is updated by Kubernetes within about a minute.
+A file that can't be read or doesn't parse leaves the users as they were and is logged as an
+error, and it is tried again 5 seconds later. An empty file signs no one in.
+
+bcrypt is slow on purpose (about 0.25 s at cost 12), and every request carries the password,
+since there are no sessions. So a check that passed is remembered for 5 minutes, by a keyed
+hash of the name and password, never the password itself. A failed check isn't remembered.
+An unknown name takes as long as a known one.
+
+### How `schedr ui` proves itself to a webserver
+
+A webserver takes the name the UI passes on (`X-Schedr-User`) only from a caller it knows is
+`schedr ui`. Anyone else's `X-Schedr-User` is ignored. A UI it can't recognise is treated as
+any other caller: it is recorded as `anonymous`, or refused in `proxy_header` and `basic`.
+
+| Proof | Webserver | `schedr ui` | Used |
+|---|---|---|---|
+| mTLS on the UI port | `[webserver] ui_port` (8083) in `[tls] mode = "app"`; the client certificate must name `[tls] ui_name` (`schedr-ui`). | `[[ui.deployments]] url = "https://<webserver>:8083"` and its own `[tls]` certificate. | Distributed, `app` mode. |
+| The mesh on the UI port | `[webserver] ui_port` in plain HTTP with `ui_port_in_mesh = true` in `[tls] mode = "mesh"`: a mesh policy lets only `schedr ui` reach it. | `url = "http://<webserver>:8083"`. | Distributed, `mesh` mode with Istio's AuthorizationPolicy. |
+| A shared token | `[webserver] ui_token_file`: at least 16 characters, read again when it changes. | `[[ui.deployments]] token_file`: the same token, sent in `X-Schedr-Ui-Token`. | Standalones in a federation; `mesh` mode without Istio's policy. |
+| In-process | Nothing to set. | Nothing to set. | A standalone's own UI. |
+
+The UI port follows `[tls] mode` as the links between the master and the workers do. In
+`app` mode schedr's own mTLS guards it. In `mesh` mode the mesh does, and nothing in schedr
+does. So `ui_port_in_mesh` is off by default, is refused in `app` mode, and logs a warning
+when it is on.
+
+### Which combinations are allowed
+
+`[tls] mode` decides only the UI's proof, `[ui.auth]` only the browser's sign-in at the UI,
+and `[webserver.auth]` only callers of the API directly. The UI must sign people in as the
+API does, or the API's mode is `none`, kept internal, with people coming through the UI
+(decision 41A). For a distributed release with its UI, the chart refuses the other pairs.
+For a `schedr ui` over other releases, nothing sees both sides, so it is the rule to follow.
+
+| `tls.mode` | `webserver.auth` | `ui.auth` | Browser → UI | UI → webserver | CLI → API | For |
+|---|---|---|---|---|---|---|
+| app | none | none | Open; the name from `identity_header` | mTLS | Open | Behind a mesh or network that signs people in |
+| app | none | proxy_header | The sign-in proxy | mTLS | Open, kept internal | People through the UI only |
+| app | none | basic | The users file | mTLS | Open, kept internal | A lab, people through the UI only |
+| app | proxy_header | proxy_header | The sign-in proxy | mTLS | The sign-in proxy | Kubernetes without a mesh |
+| app | basic | basic | The users file | mTLS | The users file (`--user`) | A lab, a small team |
+| mesh | none | none | Istio (Keycloak's token); the name from `identity_header` | The mesh on the UI port, else the token | Istio (`--token`) | **Istio with Keycloak** |
+| mesh | none | proxy_header | The sign-in proxy | The mesh, else the token | Open, kept internal | People through the UI only |
+| mesh | none | basic | The users file | The mesh, else the token | Open, kept internal | A lab in a mesh |
+| mesh | proxy_header | proxy_header | The sign-in proxy | The mesh, else the token | The sign-in proxy | A mesh without Istio's token check |
+| mesh | basic | basic | The users file | The mesh, else the token | The users file (`--user`) | A lab in a mesh |
+
+Refused: a UI open in front of an API that asks for a sign-in (`none` at the UI with
+`proxy_header` or `basic` at the API), as anyone could act through the UI. Also refused: two
+sources of people (`proxy_header` at one and `basic` at the other), which would show one
+person under two names.
+
+A standalone has no `[tls] mode`. Its pages and its API share `[webserver.auth]`. A
+`schedr ui` elsewhere that shows it proves itself with the token:
+
+| `webserver.auth` | Its pages and API | A `schedr ui` elsewhere |
+|---|---|---|
+| none | Open (keep it on localhost) | The token passes the name on; without it, `anonymous` |
+| proxy_header | The sign-in proxy | The token; without it, refused |
+| basic | The users file | The token; without it, refused |
+
+### In the chart
+
+| Value | Becomes |
+|---|---|
+| `webserver.auth.{mode, identityHeader, behindTlsProxy, allowRemote}` | `[webserver.auth]` of the webserver and the standalone |
+| `webserver.auth.usersSecret.{name, key}` | The users file, mounted from that Secret |
+| `ui.auth.*` (the same keys) | `[ui.auth]` of the chart's `schedr ui`; `mode` empty: `webserver.auth`'s |
+| `webserver.uiTokenSecret.{name, key}` | `[webserver] ui_token_file`. In `mesh` mode with the UI and no mesh proof, the chart makes the token itself and keeps it on upgrades. |
+| `ui.deployments[].{name, url, tokenSecret}` | `[[ui.deployments]]` and their token files |
+| `tls.mode`, `tls.uiName`, `tls.existingSecrets.ui` | The UI's proof by mTLS, and its certificate |
+| `service.webserverUiPort` (8083) | `[webserver] ui_port`: in `app` mode always, in `mesh` mode with the mesh proof |
+| `istio.authorizationPolicy.ui.principals` | Other releases' `schedr ui`, let in on the mesh-proven UI port |
+| `standalone.ui` | `false`: `--no-ui` |
+
+The chart uses the mesh proof by itself in `mesh` mode when `istio.enabled` and
+`istio.authorizationPolicy.enabled` are on and the UI's service account is shared with no
+other role. It then admits only the UI's account to the port, with a DENY policy for anyone
+else, and makes no token. Otherwise it makes a token.
+
+A token the chart makes is kept on upgrades by looking up its Secret. A tool that only renders
+the chart, as Argo CD does with `helm template`, can't look it up, so each sync makes a new
+token. Both sides read the new one within about a minute. To avoid the rotation, use the mesh
+proof, or give a Secret of your own in `webserver.uiTokenSecret.name`.
+
+### Another site acting through a visitor's browser
+
+A browser attaches credentials it remembers (Basic, a proxy's cookie) to any site's form, so
+two limits keep another site from acting as the person signed in.
+
+**A write is taken only from schedr's own pages.** A browser sends `Sec-Fetch-Site`.
+`same-origin`, from schedr's own page, and `none`, from an address the user typed, are taken.
+`cross-site` and `same-site` are refused, and an `Origin` that names this host doesn't change
+that. A browser that sends no `Sec-Fetch-Site` is taken only when its `Origin` names the same
+host as the request. That host is `X-Forwarded-Host` when the request carries it (a proxy in
+front puts the public host there), and otherwise `Host`. The default ports are left out of
+the comparison (`:443` for an `https` origin, `:80` for `http`), and case is ignored.
+
+- **The UI's actions:** a POST failing this is refused (403). The page says "Refused: actions
+  are taken only from schedr's own pages.", and nothing is sent to the webserver. A POST with
+  neither header is refused.
+- **The API:** a write (anything but GET, HEAD and OPTIONS) that a browser marks as from
+  another site is refused (403). A request with neither header comes from no browser (the
+  CLI, `schedr ui`) and passes.
+
+Opening a page is a GET, and GETs aren't checked.
 
 **The UI's pages can't be shown in another site's frame.** Every answer from the UI carries
 `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`, so a page's
 buttons can't be clicked through another site's frame. Standalone serves the pages on the
 API's port, and those answers carry the same headers.
 
-The CLI sends a bearer token for such a proxy or mesh with `--token` (or `SCHEDR_TOKEN`), e.g.
-a Keycloak token that Istio checks at the gateway.
+### Startup warnings
+
+With `mode = "none"`, a role listening beyond localhost warns that it signs no one in:
+
+- the webserver, on `[webserver] bind` and `port` (all interfaces, 8080);
+- `schedr ui`, on `[ui] bind` and `port` (all interfaces, 8082);
+- `schedr standalone` with `--listen` beyond localhost (its pages are on the API's port).
+
+Keep such a role behind the mesh, the network or a sign-in proxy, or bind it to `127.0.0.1`.
+
+The CLI sends a bearer token for a proxy or mesh in front with `--token` (or `SCHEDR_TOKEN`),
+e.g. a Keycloak token that Istio checks. With `basic` it sends `--user`, with the password
+from `SCHEDR_PASSWORD`.
 
 ## The events stream
 

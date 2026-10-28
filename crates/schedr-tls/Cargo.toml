@@ -16,6 +16,7 @@ axum.workspace = true
 rcgen = { workspace = true, optional = true }
 hyper-util.workspace = true
 rustls.workspace = true
+rustls-webpki.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true

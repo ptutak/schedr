@@ -12,8 +12,8 @@ pub mod sources;
 pub mod units;
 
 pub use config::{
-    Config, DagsSection, DatabaseSection, Interpreter, LogFormat, LogSection, OpsSection,
-    ScriptsSection, TlsMode, TlsSection, config_schema, url_has_password,
+    AuthMode, AuthSection, Config, DagsSection, DatabaseSection, Interpreter, LogFormat,
+    LogSection, OpsSection, ScriptsSection, TlsMode, TlsSection, config_schema, url_has_password,
 };
 pub use loader::{ConfigError, load};
 pub use roots::{PathList, Root, RootError};

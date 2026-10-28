@@ -2,6 +2,9 @@
 //!
 //! - **Servers** (the master's gRPC, a worker's log endpoint) present their certificate and
 //!   require a client certificate signed by the CA.
+//! - **The webserver's UI port** (`[webserver] ui_port`) requires, beyond that, a client
+//!   certificate naming `[tls] ui_name`: only `schedr ui` may pass users' names on there
+//!   (decision 36); any other certificate fails the handshake.
 //! - **Clients** present their certificate. A worker checks that the master's certificate
 //!   names the host of `[worker] master_url`; the webserver checks that a worker's names
 //!   `[tls] worker_name`, whatever address it reached the worker at (workers are reached by
@@ -18,6 +21,7 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::WebPkiClientVerifier;
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, ServerConfig, SignatureScheme};
 
 #[cfg(test)]
@@ -87,6 +91,9 @@ pub enum TlsError {
     /// `[tls] worker_name` isn't a DNS name or an IP address.
     #[error("[tls] worker_name `{0}` isn't a DNS name or an IP address")]
     WorkerName(String),
+    /// `[tls] ui_name` isn't a DNS name or an IP address.
+    #[error("[tls] ui_name `{0}` isn't a DNS name or an IP address")]
+    UiName(String),
 }
 
 impl TlsFiles {
@@ -123,6 +130,12 @@ pub struct Configs {
     /// The webserver's connections to workers (ALPN `http/1.1`; the name checked is
     /// `[tls] worker_name`).
     pub worker_client: Arc<ClientConfig>,
+    /// The webserver's UI port (ALPN `http/1.1`; the client's certificate must name
+    /// `[tls] ui_name`).
+    pub ui_server: Arc<ServerConfig>,
+    /// `schedr ui`'s connections to webservers' UI ports (ALPN `http/1.1`; the webserver's
+    /// name is the URL's host).
+    pub api_client: Arc<ClientConfig>,
 }
 
 /// The aws-lc-rs provider every configuration uses.
@@ -141,10 +154,12 @@ pub fn provider() -> Arc<CryptoProvider> {
 pub fn build(
     contents: &Contents,
     files: &TlsFiles,
-    worker_name: &str,
+    (worker_name, ui_name): (&str, &str),
 ) -> Result<Configs, TlsError> {
     let worker_name = ServerName::try_from(worker_name.to_owned())
         .map_err(|_| TlsError::WorkerName(worker_name.to_owned()))?;
+    let ui_name = ServerName::try_from(ui_name.to_owned())
+        .map_err(|_| TlsError::UiName(ui_name.to_owned()))?;
     let roots = Arc::new(roots(&contents.ca, &files.ca)?);
     let chain = certificates(&contents.cert, "cert", &files.cert)?;
     let key = PrivateKeyDer::from_pem_slice(&contents.key).map_err(|e| TlsError::Invalid {
@@ -173,11 +188,11 @@ pub fn build(
             path: files.ca.clone(),
             reason: e.to_string(),
         })?;
-    let server = |alpn: &[u8]| {
+    let server = |alpn: &[u8], verifier: Arc<dyn ClientCertVerifier>| {
         let mut config = ServerConfig::builder_with_provider(provider.clone())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(pair)?
-            .with_client_cert_verifier(client_verifier.clone())
+            .with_client_cert_verifier(verifier)
             .with_single_cert(chain.clone(), key.clone_key())
             .map_err(pair)?;
         config.alpn_protocols = vec![alpn.to_vec()];
@@ -198,11 +213,17 @@ pub fn build(
         inner: server_verifier.clone(),
         name: worker_name,
     });
+    let ui_only = Arc::new(NamedClient {
+        inner: client_verifier.clone(),
+        name: ui_name,
+    });
     Ok(Configs {
-        grpc_server: server(ALPN_H2)?,
-        http_server: server(ALPN_HTTP1)?,
-        grpc_client: client(ALPN_H2, server_verifier)?,
+        grpc_server: server(ALPN_H2, client_verifier.clone())?,
+        http_server: server(ALPN_HTTP1, client_verifier)?,
+        grpc_client: client(ALPN_H2, server_verifier.clone())?,
         worker_client: client(ALPN_HTTP1, named)?,
+        ui_server: server(ALPN_HTTP1, ui_only)?,
+        api_client: client(ALPN_HTTP1, server_verifier)?,
     })
 }
 
@@ -235,6 +256,60 @@ fn roots(pem: &[u8], path: &Path) -> Result<RootCertStore, TlsError> {
         })?;
     }
     Ok(roots)
+}
+
+/// Checks a client's certificate as the CA's verifier does, and that it names `name`.
+#[derive(Debug)]
+struct NamedClient {
+    inner: Arc<dyn ClientCertVerifier>,
+    name: ServerName<'static>,
+}
+
+impl ClientCertVerifier for NamedClient {
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        self.inner.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        let verified = self
+            .inner
+            .verify_client_cert(end_entity, intermediates, now)?;
+        let certificate = webpki::EndEntityCert::try_from(end_entity)
+            .map_err(|e| rustls::Error::General(format!("the client's certificate: {e}")))?;
+        certificate
+            .verify_is_valid_for_subject_name(&self.name)
+            .map_err(|_| {
+                rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName)
+            })?;
+        Ok(verified)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
 }
 
 /// Checks a server's certificate against a fixed name instead of the one connected to.

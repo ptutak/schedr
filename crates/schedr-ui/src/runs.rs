@@ -178,10 +178,10 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
             continue;
         }
         let (ui, api_query) = (Arc::clone(&ui), api_query.clone());
-        asked.spawn(async move {
+        asked.spawn(schedr_client::for_same_user(async move {
             let answer = ui.deployments[index].client.all_runs(&api_query).await;
             (index, answer)
-        });
+        }));
     }
     let mut answers = asked.join_all().await;
     answers.sort_by_key(|(index, _)| *index);

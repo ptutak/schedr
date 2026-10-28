@@ -1,16 +1,36 @@
+{{- $fullname := include "schedr.fullname" . -}}
+{{- if eq .Values.mode "ui" -}}
+schedr {{ .Chart.AppVersion }}, mode ui: the web UI over {{ len .Values.ui.deployments }} deployment(s) ({{ range $i, $d := .Values.ui.deployments }}{{ if $i }}, {{ end }}{{ $d.name }}{{ end }}).
+
+{{- $uiAuth := include "schedr.uiAuth" . | fromJson }}
+Sign-in: {{ $uiAuth.mode }}{{ if eq $uiAuth.mode "none" }} (keep it internal, or behind an authenticating proxy or mesh){{ end }}. From your machine:
+  kubectl port-forward svc/{{ $fullname }}-ui {{ .Values.service.uiPort }}
+  http://127.0.0.1:{{ .Values.service.uiPort }}/
+{{- else -}}
 schedr {{ .Chart.AppVersion }}, mode {{ .Values.mode }}{{ if eq .Values.mode "distributed" }} ({{ .Values.worker.replicas }} workers, TLS {{ .Values.tls.mode }}){{ end }}, on {{ if .Values.database.postgres.host }}Postgres at {{ .Values.database.postgres.host }} (user and password from Secret {{ .Values.database.postgres.existingSecret }}){{ else if .Values.database.existingSecret }}Postgres (Secret {{ .Values.database.existingSecret }}){{ else }}SQLite in its volume{{ end }}.
 
-The REST API has no authentication of its own until the UI: keep it internal{{ if .Values.istio.authorizationPolicy.enabled }} (Istio's policy decides who reaches it){{ end }}. From your machine:
-  kubectl port-forward svc/{{ include "schedr.fullname" . }} {{ .Values.service.apiPort }}
+Sign-in: {{ .Values.webserver.auth.mode }}{{ if eq .Values.webserver.auth.mode "none" }} (keep the API internal, or behind an authenticating proxy or mesh{{ if .Values.istio.authorizationPolicy.enabled }}: Istio's policy decides who reaches it{{ end }}){{ end }}. From your machine:
+  kubectl port-forward svc/{{ $fullname }} {{ .Values.service.apiPort }}
   schedr dags list --server http://127.0.0.1:{{ .Values.service.apiPort }}
 Swagger UI: http://127.0.0.1:{{ .Values.service.apiPort }}/api/v1/docs/
+{{- if eq .Values.mode "standalone" }}
+{{- if .Values.standalone.ui }}
+The web UI: http://127.0.0.1:{{ .Values.service.apiPort }}/
+{{- else }}
+No web UI here (standalone.ui: false): show it from a `schedr ui` (mode ui) elsewhere.
+{{- end }}
+{{- else if include "schedr.uiDeployed" . }}
+The web UI:
+  kubectl port-forward svc/{{ $fullname }}-ui {{ .Values.service.uiPort }}
+  http://127.0.0.1:{{ .Values.service.uiPort }}/
+{{- end }}
 {{- with .Values.istio.virtualService }}
 {{- if .enabled }}
 {{- $host := first .hosts }}
 {{- $host = ternary "<host>" $host (contains "*" $host) }}
 {{- $url := printf "https://%s%s" $host (trimSuffix "/" (.prefix | default "/")) }}
 
-Through the gateway: {{ $url }}/api/v1/docs/
+Through the gateway: {{ $url }}/ (the UI), {{ $url }}/api/v1/docs/
   schedr dags list --server {{ $url }}{{ if $.Values.istio.authorizationPolicy.api.requireJwt }} --token "$TOKEN"{{ end }}
 {{- end }}
 {{- end }}
@@ -18,9 +38,10 @@ Through the gateway: {{ $url }}/api/v1/docs/
 
 Moved here from standalone? Its volume stays (logs, an old SQLite file): delete it when no
 longer needed with
-  kubectl delete pvc data-{{ include "schedr.fullname" . }}-0
+  kubectl delete pvc data-{{ $fullname }}-0
 {{- if and (eq .Values.tls.mode "app") .Values.tls.generate (not .Values.tls.existingSecrets.master) (not .Values.tls.certManager.issuerRef.name) }}
-Certificates were generated (Secrets {{ include "schedr.fullname" . }}-{master,webserver,worker}-tls, 10 years); to
+Certificates were generated (Secrets {{ $fullname }}-{master,webserver,worker{{ if include "schedr.uiDeployed" . }},ui{{ end }}}-tls, 10 years); to
 rotate them, delete those Secrets and upgrade.
+{{- end }}
 {{- end }}
 {{- end }}

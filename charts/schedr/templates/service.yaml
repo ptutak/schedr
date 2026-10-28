@@ -1,4 +1,5 @@
 {{- include "schedr.checkMode" . -}}
+{{- if ne .Values.mode "ui" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -23,3 +24,16 @@ spec:
     - name: http-ops
       port: {{ .Values.service.opsPort }}
       targetPort: http-ops
+    {{- if and (eq .Values.mode "distributed") (eq .Values.tls.mode "app") }}
+    # The webserver's port for a web UI alone, this release's or another's (mTLS: passed
+    # through by a sidecar).
+    - name: tls-ui
+      port: {{ .Values.service.webserverUiPort }}
+      targetPort: tls-ui
+    {{- else if include "schedr.meshUiPort" . }}
+    # The webserver's port for a web UI alone, admitted by Istio's policy only (40A).
+    - name: http-ui
+      port: {{ .Values.service.webserverUiPort }}
+      targetPort: http-ui
+    {{- end }}
+{{- end }}

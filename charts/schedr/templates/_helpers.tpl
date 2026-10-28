@@ -31,10 +31,13 @@ app.kubernetes.io/instance: {{ $ctx.Release.Name }}
 app.kubernetes.io/component: {{ index . 1 }}
 {{- end -}}
 
-{{/* standalone or distributed; distributed needs Postgres. */}}
+{{/* standalone, distributed or ui; distributed needs Postgres, ui its deployments. */}}
 {{- define "schedr.checkMode" -}}
-{{- if not (has .Values.mode (list "standalone" "distributed")) -}}
-{{- fail (printf "mode %q isn't one of \"standalone\", \"distributed\"" .Values.mode) -}}
+{{- if not (has .Values.mode (list "standalone" "distributed" "ui")) -}}
+{{- fail (printf "mode %q isn't one of \"standalone\", \"distributed\", \"ui\"" .Values.mode) -}}
+{{- end -}}
+{{- if and (eq .Values.mode "ui") (not .Values.ui.deployments) -}}
+{{- fail "mode ui shows deployments: list them in ui.deployments (name, url, and tokenSecret where there is no mTLS)" -}}
 {{- end -}}
 {{- if and (eq .Values.mode "distributed") (not (or .Values.database.postgres.host .Values.database.existingSecret)) -}}
 {{- fail "mode distributed needs Postgres: set database.postgres.host (or database.existingSecret); SQLite is for one pod" -}}
@@ -241,6 +244,73 @@ parse as gRPC or HTTP.
   value: /etc/schedr/tls/tls.key
 - name: SCHEDR_CONFIG__TLS__WORKER_NAME
   value: {{ $ctx.Values.tls.workerName | quote }}
+- name: SCHEDR_CONFIG__TLS__UI_NAME
+  value: {{ $ctx.Values.tls.uiName | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Whether `schedr ui` is deployed: mode ui, or mode distributed with ui.enabled. */}}
+{{- define "schedr.uiDeployed" -}}
+{{- if or (eq .Values.mode "ui") (and (eq .Values.mode "distributed") .Values.ui.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The Secret holding the token a web UI presents to the webserver (webserver.uiTokenSecret.name;
+else, in mode distributed with the UI in tls.mode mesh, the one the chart makes), or nothing.
+*/}}
+{{- define "schedr.uiTokenSecret" -}}
+{{- if .Values.webserver.uiTokenSecret.name -}}
+{{- .Values.webserver.uiTokenSecret.name -}}
+{{- else if and (include "schedr.uiDeployed" .) (eq .Values.mode "distributed") (eq .Values.tls.mode "mesh") (not (include "schedr.meshUiPort" .)) -}}
+{{- printf "%s-ui-token" (include "schedr.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A role's sign-in (the argument: the root context, the auth values, and the configuration's
+section: WEBSERVER or UI), as env; the users file from usersSecret, mounted at
+/etc/schedr/users (schedr.authVolume).
+*/}}
+{{- define "schedr.authEnv" -}}
+{{- $auth := index . 1 -}}
+{{- $section := index . 2 -}}
+{{- if not (has $auth.mode (list "none" "proxy_header" "basic")) -}}
+{{- fail (printf "%s auth.mode %q isn't one of \"none\", \"proxy_header\", \"basic\"" (lower $section) $auth.mode) -}}
+{{- end -}}
+{{- if and (eq $auth.mode "basic") (not $auth.usersSecret.name) -}}
+{{- fail (printf "%s auth.mode basic needs auth.usersSecret.name (a Secret of `name:bcrypt-hash` lines)" (lower $section)) -}}
+{{- end }}
+- name: SCHEDR_CONFIG__{{ $section }}__AUTH__MODE
+  value: {{ $auth.mode | quote }}
+{{- with $auth.identityHeader }}
+- name: SCHEDR_CONFIG__{{ $section }}__AUTH__IDENTITY_HEADER
+  value: {{ . | quote }}
+{{- end }}
+{{- if eq $auth.mode "basic" }}
+- name: SCHEDR_CONFIG__{{ $section }}__AUTH__USERS_FILE
+  value: /etc/schedr/users/{{ $auth.usersSecret.key }}
+{{- end }}
+- name: SCHEDR_CONFIG__{{ $section }}__AUTH__BEHIND_TLS_PROXY
+  value: {{ $auth.behindTlsProxy | quote }}
+- name: SCHEDR_CONFIG__{{ $section }}__AUTH__ALLOW_REMOTE
+  value: {{ $auth.allowRemote | quote }}
+{{- end -}}
+
+{{/* The users Secret's volume for `basic` (the argument: the auth values), or nothing. */}}
+{{- define "schedr.authVolume" -}}
+{{- if eq .mode "basic" }}
+- name: users
+  secret:
+    secretName: {{ .usersSecret.name }}
+{{- end }}
+{{- end -}}
+
+{{/* Its mount (the argument: the auth values), or nothing. */}}
+{{- define "schedr.authMount" -}}
+{{- if eq .mode "basic" }}
+- name: users
+  mountPath: /etc/schedr/users
+  readOnly: true
 {{- end }}
 {{- end -}}
 
@@ -251,12 +321,14 @@ parse as gRPC or HTTP.
 {{- fail (printf "tls.mode %q isn't one of \"app\", \"mesh\"" $tls.mode) -}}
 {{- end -}}
 {{- if eq $tls.mode "app" -}}
+{{- $roles := list "master" "webserver" "worker" -}}
+{{- if and (eq .Values.mode "distributed") (include "schedr.uiDeployed" .) }}{{ $roles = append $roles "ui" }}{{ end -}}
 {{- $given := 0 -}}
-{{- range $role := list "master" "webserver" "worker" -}}
+{{- range $role := $roles -}}
 {{- if index $tls.existingSecrets $role }}{{ $given = add1 $given }}{{ end -}}
 {{- end -}}
-{{- if and (gt $given 0) (lt $given 3) -}}
-{{- fail "tls.existingSecrets: set all three (master, webserver, worker), or none" -}}
+{{- if and (gt $given 0) (lt $given (len $roles)) -}}
+{{- fail (printf "tls.existingSecrets: set all of %s, or none" (join ", " $roles)) -}}
 {{- end -}}
 {{- if and (eq $given 0) (not $tls.certManager.issuerRef.name) (not $tls.generate) -}}
 {{- fail "tls.mode app needs certificates: tls.existingSecrets, tls.certManager.issuerRef, or tls.generate (or tls.mode mesh behind a service mesh)" -}}
@@ -320,3 +392,43 @@ interpreter configured in `config` too is refused: the chart's path would replac
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/* A list's items quoted and comma-separated ("8080", "8083"), for a YAML flow list. */}}
+{{- define "schedr.quotedList" -}}
+{{- $quoted := list -}}
+{{- range . }}{{ $quoted = append $quoted (. | toString | quote) }}{{ end -}}
+{{- join ", " $quoted -}}
+{{- end -}}
+
+{{/*
+Whether the webserver's UI port trusts the mesh (decision 40A: [webserver] ui_port_in_mesh):
+mode distributed in tls.mode mesh with Istio's AuthorizationPolicy, the UI's account shared with
+no other role, so the policy can admit only the UI's pods there. Else, in mesh
+mode, the UI proves itself by the token.
+*/}}
+{{- define "schedr.meshUiPort" -}}
+{{- $istio := .Values.istio -}}
+{{- $others := list -}}
+{{- range $role := list "master" "webserver" "worker" -}}
+{{- $others = append $others (include "schedr.roleServiceAccount" (list $ $role)) -}}
+{{- end -}}
+{{- $uiAccount := include "schedr.roleServiceAccount" (list . "ui") -}}
+{{- if and (eq .Values.mode "distributed") (eq .Values.tls.mode "mesh") $istio.enabled $istio.authorizationPolicy.enabled (not (has $uiAccount $others)) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The UI's sign-in: ui.auth, or webserver.auth when ui.auth.mode is empty (one sign-in for the
+release). In mode distributed with the UI, only the pairs of decision 41A: the same mode as the
+webserver's, or any with the webserver's none (its API kept internal).
+*/}}
+{{- define "schedr.uiAuth" -}}
+{{- $auth := .Values.ui.auth -}}
+{{- if not $auth.mode }}{{ $auth = .Values.webserver.auth }}{{ end -}}
+{{- if and (eq .Values.mode "distributed") (include "schedr.uiDeployed" .) -}}
+{{- $api := .Values.webserver.auth.mode -}}
+{{- if not (or (eq $api "none") (eq $api $auth.mode)) -}}
+{{- fail (printf "ui.auth.mode %s with webserver.auth.mode %s: the UI must sign people in as the API does, or the API be none (kept internal; decision 41A). Leave ui.auth.mode empty for the webserver's" $auth.mode $api) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $auth -}}
+{{- end -}}

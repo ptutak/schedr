@@ -325,3 +325,74 @@ async fn events_stream_from_the_api_in_process() {
         Err(ClientError::Unexpected(_))
     ));
 }
+
+#[tokio::test]
+async fn the_ui_passes_on_its_token_and_the_persons_name() {
+    use axum::http::HeaderMap;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let seen = std::sync::Arc::clone(&seen);
+        move |headers: HeaderMap| {
+            let seen = std::sync::Arc::clone(&seen);
+            async move {
+                let value = |name: &str| headers.get(name).map(|v| v.to_str().unwrap().to_owned());
+                seen.lock().unwrap().push((
+                    value(schedr_api::auth::UI_TOKEN_HEADER),
+                    value(schedr_api::auth::USER_HEADER),
+                ));
+                axum::Json(json!({"dags": []}))
+            }
+        }
+    };
+    let app = axum::Router::new().route("/api/v1/dags", axum::routing::get(record));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let transport = HttpTransport::new(&format!("http://{address}"), Auth::None).with_ui_token(
+        std::sync::Arc::new(schedr_api::auth::Followed::fixed(
+            "0123456789abcdef".to_owned(),
+        )),
+    );
+    let api = Client::new(transport, Duration::ZERO, Duration::ZERO);
+    USER.scope("anna".to_owned(), api.dags()).await.unwrap();
+    // Outside a page (the relays' streams): no one named.
+    api.dags().await.unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (Some("0123456789abcdef".to_owned()), Some("anna".to_owned())),
+            (Some("0123456789abcdef".to_owned()), None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_api_in_process_takes_its_ui_as_proven() {
+    use axum::Extension;
+    use axum::http::HeaderMap;
+    let app = axum::Router::new().route(
+        "/api/v1/dags",
+        axum::routing::get(
+            |proven: Option<Extension<schedr_api::auth::ProvenUi>>, headers: HeaderMap| async move {
+                let user = headers
+                    .get(schedr_api::auth::USER_HEADER)
+                    .map(|v| v.to_str().unwrap().to_owned());
+                axum::Json(json!({"dags": [], "proven": proven.is_some(), "user": user}))
+            },
+        ),
+    );
+    let transport = RouterTransport::new(app);
+    let request = || ApiRequest {
+        method: Method::Get,
+        path: "/api/v1/dags".to_owned(),
+        body: None,
+    };
+    let answer = USER
+        .scope("anna".to_owned(), transport.send(request()))
+        .await
+        .unwrap();
+    assert_eq!(
+        (answer.body["proven"].clone(), answer.body["user"].clone()),
+        (json!(true), json!("anna"))
+    );
+}

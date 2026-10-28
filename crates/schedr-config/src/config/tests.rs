@@ -44,6 +44,7 @@ fn defaults_match_the_documented_values() {
             port: 8082,
             deployments: vec![],
             docs_dir: "/usr/share/schedr/docs".into(),
+            auth: AuthSection::default(),
         }
     );
 }
@@ -325,6 +326,7 @@ fn master_webserver_and_worker_defaults() {
             cert: None,
             key: None,
             worker_name: "schedr-worker".into(),
+            ui_name: "schedr-ui".into(),
             reload_interval: Duration::from_secs(30),
         }
     );
@@ -434,6 +436,7 @@ fn reads_the_tls_section() {
             cert: Some("/etc/schedr/tls/tls.crt".into()),
             key: Some("/etc/schedr/tls/tls.key".into()),
             worker_name: "worker.schedr".into(),
+            ui_name: "schedr-ui".into(),
             reload_interval: Duration::from_mins(1),
         }
     );

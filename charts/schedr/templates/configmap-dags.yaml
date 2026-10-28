@@ -1,4 +1,4 @@
-{{- if .Values.dags.files }}
+{{- if and .Values.dags.files (ne .Values.mode "ui") }}
 # The DAG files of dags.files (charts/schedr/dags-values.sh), each under its own name: a flat
 # folder, so the pod's spec doesn't list them. A fixed name, and no checksum on the pod: adding,
 # changing or removing a file reaches the mounted files without restarting schedr.

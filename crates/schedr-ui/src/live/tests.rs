@@ -78,6 +78,7 @@ fn app(streams: Streams) -> axum::Router {
             client: Client::new(streams, Duration::ZERO, Duration::ZERO),
         }],
         docs_dir: None,
+        auth: schedr_api::auth::Auth::default(),
     })
 }
 

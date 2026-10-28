@@ -68,13 +68,13 @@ spec:
         - name: schedr
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if eq .Values.migration "onStart" }}
-          # Migrated by schedr itself once it holds the master's lease, only when the schema
-          # isn't up to date.
-          args: ["standalone", "--listen", "0.0.0.0", "--migrate"]
-          {{- else }}
-          args: ["standalone", "--listen", "0.0.0.0"]
-          {{- end }}
+          {{- $args := list "standalone" "--listen" "0.0.0.0" }}
+          {{- /* Migrated by schedr itself once it holds the master's lease, only when the
+          schema isn't up to date. */}}
+          {{- if eq .Values.migration "onStart" }}{{ $args = append $args "--migrate" }}{{ end }}
+          {{- /* The API only: one deployment of a `schedr ui` elsewhere. */}}
+          {{- if not .Values.standalone.ui }}{{ $args = append $args "--no-ui" }}{{ end }}
+          args: {{ toJson $args }}
           env:
             {{- include "schedr.dagEnv" . | trim | nindent 12 }}
             {{- with include "schedr.forkServerEnv" . | trim }}
@@ -90,6 +90,11 @@ spec:
             - name: SCHEDR_CONFIG__WEBSERVER__PORT
               value: {{ .Values.service.apiPort | quote }}
             {{- include "schedr.databaseEnv" . | trim | nindent 12 }}
+            {{- include "schedr.authEnv" (list . .Values.webserver.auth "WEBSERVER") | trim | nindent 12 }}
+            {{- if .Values.webserver.uiTokenSecret.name }}
+            - name: SCHEDR_CONFIG__WEBSERVER__UI_TOKEN_FILE
+              value: /etc/schedr/ui-token/{{ .Values.webserver.uiTokenSecret.key }}
+            {{- end }}
           ports:
             - name: http-api
               containerPort: {{ .Values.service.apiPort }}
@@ -121,10 +126,23 @@ spec:
             {{- with include "schedr.dagMounts" . | trim }}
             {{- . | nindent 12 }}
             {{- end }}
+            {{- if .Values.webserver.uiTokenSecret.name }}
+            - name: ui-token
+              mountPath: /etc/schedr/ui-token
+              readOnly: true
+            {{- end }}
+            {{- include "schedr.authMount" .Values.webserver.auth | trim | nindent 12 }}
         {{- with include "schedr.gitSync" . | trim }}
         {{- . | nindent 8 }}
         {{- end }}
-      {{- with include "schedr.dagVolumes" . | trim }}
+      {{- $volumes := include "schedr.dagVolumes" . | trim }}
+      {{- if .Values.webserver.uiTokenSecret.name }}
+      {{- $volumes = printf "%s\n- name: ui-token\n  secret:\n    secretName: %s" $volumes .Values.webserver.uiTokenSecret.name | trim }}
+      {{- end }}
+      {{- with include "schedr.authVolume" .Values.webserver.auth | trim }}
+      {{- $volumes = printf "%s\n%s" $volumes . | trim }}
+      {{- end }}
+      {{- with $volumes }}
       volumes:
         {{- . | nindent 8 }}
       {{- end }}

@@ -1,9 +1,17 @@
 # schedr's chart. The API's Swagger UI is at /api/v1/docs.
 # - standalone: every role (master, API, worker) in one pod, on SQLite or Postgres: the start.
 # - distributed: the master, the webserver and the workers in pods of their own, on Postgres
-#   (the sections master, webserver and worker below). Moving there is one upgrade with
-#   mode: distributed on the same Postgres; the other values mean the same in both modes.
+#   (the sections master, webserver and worker below), and the web UI in one more (ui.enabled).
+#   Moving there is one upgrade with mode: distributed on the same Postgres; the other values
+#   mean the same in both modes.
+# - ui: the web UI alone (`schedr ui`), over the deployments listed in ui.deployments, e.g. a
+#   federation of standalones (standalone.ui: false) and distributed releases elsewhere.
 mode: standalone
+
+# mode standalone: whether its pod serves the web UI at / next to its API (false: the API
+# only, one deployment of a `schedr ui` elsewhere).
+standalone:
+  ui: true
 
 image:
   # The image running tasks (standalone's pod, distributed's workers): the schedr base image,
@@ -130,9 +138,14 @@ env: []
 
 service:
   type: ClusterIP
-  # The REST API: no authentication of its own until the UI (milestone M3): keep it internal,
-  # or behind an authenticating proxy or mesh.
+  # The REST API (and standalone's UI): who may use it is webserver.auth's (none by default:
+  # keep it internal, or behind an authenticating proxy or mesh).
   apiPort: 8080
+  # The web UI's own pods (mode distributed with ui.enabled, mode ui).
+  uiPort: 8082
+  # mode distributed, tls.mode app: the webserver's port for the web UI alone (mTLS, the UI's
+  # certificate checked), where the UI passes users' names on.
+  webserverUiPort: 8083
   # /healthz, /readyz, /metrics (plain HTTP; nothing else is served there).
   opsPort: 8090
   # Distributed: the master's gRPC port (workers connect), a worker's log endpoint (the
@@ -211,6 +224,12 @@ istio:
     # them from inside the pod).
     ops:
       namespaces: []
+    # tls.mode mesh: the webserver's UI port trusts the mesh (decision 40A), so this policy
+    # admits only schedr ui there (its own account, and a DENY for anyone else); no token.
+    # Other releases' schedr ui allowed there too: their mesh identities
+    # (cluster.local/ns/<namespace>/sa/<account>).
+    ui:
+      principals: []
     # /api/v1/docs (Swagger UI) and /api/v1/openapi.json are open to everyone, without a
     # token: they describe the API and do nothing. Calls made from the page need a token
     # (its "Authorize" button) like any other.
@@ -275,6 +294,25 @@ master:
   affinity: {}
 
 webserver:
+  # Who the user is (also standalone's: its API and UI). mode: none (whoever reaches it; the
+  # name from identityHeader if set, e.g. x-forwarded-user from a mesh), proxy_header (an SSO
+  # proxy in front sets identityHeader, x-forwarded-user by default; allowRemote: only the
+  # proxy reaches it), or basic (users from usersSecret, a key of `name:bcrypt-hash` lines;
+  # behindTlsProxy: TLS ends in front). schedr refuses an unsafe combination at start.
+  auth:
+    mode: none
+    identityHeader: ""
+    usersSecret:
+      name: ""
+      key: users
+    behindTlsProxy: false
+    allowRemote: false
+  # The token a web UI elsewhere presents to pass users' names on (a Secret's key), where
+  # there is no mTLS: a standalone in a federation, a distributed release in mesh mode. In
+  # mode distributed with ui.enabled and tls.mode mesh, the chart makes one when none is set.
+  uiTokenSecret:
+    name: ""
+    key: token
   # Holds no state: more replicas just share the requests.
   replicas: 1
   image:
@@ -344,6 +382,48 @@ worker:
   tolerations: []
   affinity: {}
 
+# The web UI as a role of its own (`schedr ui`): mode ui, and mode distributed while enabled.
+ui:
+  # mode distributed: deployed over the release's own webserver (decision 37A).
+  enabled: true
+  # mode ui: the deployments it shows, in this order. Each: name (letters, digits, - and _;
+  # in the UI's URLs), url (its API: a standalone's or a webserver's port; https:// for a
+  # webserver's UI port over mTLS, with tls.mode app and the UI's certificate), and
+  # tokenSecret (that deployment's webserver.uiTokenSecret, where there is no mTLS), e.g.
+  #   - name: etl
+  #     url: http://schedr.etl.svc.cluster.local:8080
+  #     tokenSecret: {name: schedr-ui-tokens, key: etl}
+  # mode distributed adds the release's own webserver first, as `default`.
+  deployments: []
+  # Who the person using it is, as in webserver.auth. mode empty: webserver.auth's (one
+  # sign-in for the release). With mode distributed only the same mode as the webserver's, or
+  # any with the webserver's none (its API kept internal; decision 41A).
+  auth:
+    mode: ""
+    identityHeader: ""
+    usersSecret:
+      name: ""
+      key: users
+    behindTlsProxy: false
+    allowRemote: false
+  replicas: 1
+  # Without Python: the schedr server image, with the documentation at /docs.
+  image:
+    repository: schedr-server
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  serviceAccountName: ""
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # mode distributed: mutual TLS between the roles (standalone never uses it).
 tls:
   # app: schedr's own mTLS; mesh: plain traffic for a service mesh that encrypts it (Istio),
@@ -357,6 +437,8 @@ tls:
     master: ""
     webserver: ""
     worker: ""
+    # The web UI's (mode distributed with ui.enabled): naming tls.uiName.
+    ui: ""
   # - cert-manager, from this issuer (e.g. {name: my-ca, kind: ClusterIssuer});
   certManager:
     issuerRef: {}
@@ -368,6 +450,9 @@ tls:
   generate: true
   # The name in the workers' certificate, checked by the webserver ([tls] worker_name).
   workerName: schedr-worker
+  # The name in the web UI's certificate, checked by the webserver on its UI port
+  # ([tls] ui_name).
+  uiName: schedr-ui
 
 podAnnotations: {}
 podLabels: {}

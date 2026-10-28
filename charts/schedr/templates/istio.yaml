@@ -6,6 +6,16 @@
 {{- /* The pod serving the API: standalone's, or the webserver's. */}}
 {{- $apiSelector := include "schedr.selector" . }}
 {{- if $distributed }}{{ $apiSelector = include "schedr.roleSelector" (list . "webserver") }}{{ end }}
+{{- /* The UI's own pods (distributed's, or mode ui's): the UI at the root, an API under /api/. */}}
+{{- $ui := include "schedr.uiDeployed" . }}
+{{- $uiSelector := include "schedr.roleSelector" (list . "ui") }}
+{{- /* An API of this release's own (not in mode ui). */}}
+{{- $api := ne .Values.mode "ui" }}
+{{- /* The API's ports: in distributed's tls.mode app also the UI port, for a schedr ui proven
+by its certificate (this release's or another's). */}}
+{{- $apiPorts := list .Values.service.apiPort }}
+{{- if and $distributed (eq .Values.tls.mode "app") }}{{ $apiPorts = append $apiPorts .Values.service.webserverUiPort }}{{ end }}
+{{- $apiPortList := include "schedr.quotedList" $apiPorts }}
 {{- with $istio.virtualService }}
 {{- if .enabled }}
 {{- if not (and .hosts .gateways) }}
@@ -24,14 +34,22 @@ spec:
   gateways:
     {{- toYaml .gateways | nindent 4 }}
   {{- $prefix := trimSuffix "/" (.prefix | default "/") }}
+  {{- $routes := list (list "/" $fullname $.Values.service.apiPort) }}
+  {{- if not $api }}
+  {{- $routes = list (list "/" (printf "%s-ui" $fullname) $.Values.service.uiPort) }}
+  {{- else if $ui }}
+  {{- $routes = list (list "/api/" $fullname $.Values.service.apiPort) (list "/" (printf "%s-ui" $fullname) $.Values.service.uiPort) }}
+  {{- end }}
   http:
+    {{- range $route := $routes }}
     - match:
         - uri:
-            prefix: {{ printf "%s/" $prefix | quote }}
+            prefix: {{ printf "%s%s" $prefix (index $route 0) | quote }}
       {{- if $prefix }}
-      # The prefix removed, and named for schedr (Swagger UI and the API's description keep it).
+      # The prefix removed, and named for schedr (Swagger UI, the API's description and the
+      # UI's links keep it).
       rewrite:
-        uri: /
+        uri: {{ index $route 0 | quote }}
       headers:
         request:
           set:
@@ -39,24 +57,32 @@ spec:
       {{- end }}
       route:
         - destination:
-            host: {{ $fullname }}.{{ $.Release.Namespace }}.svc.cluster.local
+            host: {{ index $route 1 }}.{{ $.Release.Namespace }}.svc.{{ $.Values.clusterDomain }}
             port:
-              number: {{ $.Values.service.apiPort }}
+              number: {{ index $route 2 }}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- with $istio.requestAuthentication }}
 {{- if .enabled }}
+{{- /* On the pods people reach: the API's and the UI's (a policy's requestPrincipals is filled
+only where a RequestAuthentication applies). */}}
+{{- $targets := list }}
+{{- if $api }}{{ $targets = append $targets (list $fullname $apiSelector) }}{{ end }}
+{{- if $ui }}{{ $targets = append $targets (list (printf "%s-ui" $fullname) $uiSelector) }}{{ end }}
+{{- range $target := $targets }}
+{{- with $istio.requestAuthentication }}
 ---
 apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
 kind: RequestAuthentication
 metadata:
-  name: {{ $fullname }}
+  name: {{ index $target 0 }}
   labels:
     {{- include "schedr.labels" $ | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      {{- $apiSelector | nindent 6 }}
+      {{- index $target 1 | nindent 6 }}
   jwtRules:
     - issuer: {{ required "istio.requestAuthentication.issuer is required with istio.requestAuthentication.enabled" .issuer | quote }}
       {{- with .jwksUri }}
@@ -68,8 +94,11 @@ spec:
       forwardOriginalToken: {{ .forwardOriginalToken }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- end }}
 {{- with $istio.authorizationPolicy }}
 {{- if .enabled }}
+{{- if $api }}
 ---
 apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
 kind: AuthorizationPolicy
@@ -101,7 +130,7 @@ spec:
             requestPrincipals: ["*"]
       to:
         - operation:
-            ports: [{{ $.Values.service.apiPort | quote }}]
+            ports: [{{ $apiPortList }}]
       {{- with .claims }}
       when:
         {{- range $claim, $values := . }}
@@ -111,7 +140,8 @@ spec:
         {{- end }}
       {{- end }}
     {{- if or .principals .namespaces }}
-    # The API without a token, for these callers.
+    # The API without a token, for these callers{{ if gt (len $apiPorts) 1 }} (a schedr ui among
+    # them also on the UI port, proven there by its certificate){{ end }}.
     - from:
         {{- with .principals }}
         - source:
@@ -125,16 +155,110 @@ spec:
         {{- end }}
       to:
         - operation:
-            ports: [{{ $.Values.service.apiPort | quote }}]
+            ports: [{{ $apiPortList }}]
     {{- end }}
     {{- else }}
     # The API: for everyone (no token required).
     - to:
         - operation:
-            ports: [{{ $.Values.service.apiPort | quote }}]
+            ports: [{{ $apiPortList }}]
     {{- end }}
+    {{- end }}
+    {{- if include "schedr.meshUiPort" $ }}
+    {{- with .ui.principals }}
+    # Other releases' schedr ui, to the UI port trusting the mesh (40A).
+    - from:
+        - source:
+            principals:
+              {{- toYaml . | nindent 14 }}
+      to:
+        - operation:
+            ports: [{{ $.Values.service.webserverUiPort | quote }}]
+    {{- end }}
+    {{- end }}
+    {{- if and $ui $distributed }}
+    # The web UI's calls, to the API (its token) and to the UI port (its certificate).
+    - from:
+        - source:
+            {{- if include "schedr.accountsPerRole" $ }}
+            principals: [{{ printf "*/ns/%s/sa/%s" $.Release.Namespace (include "schedr.roleServiceAccount" (list $ "ui")) | quote }}]
+            {{- else }}
+            namespaces: [{{ $.Release.Namespace | quote }}]
+            {{- end }}
+      to:
+        - operation:
+            ports: [{{ $.Values.service.apiPort | quote }}, {{ $.Values.service.webserverUiPort | quote }}]
     {{- end }}
     {{- include "schedr.istioOpsRule" $ | trim | nindent 4 }}
+{{- if include "schedr.meshUiPort" $ }}
+---
+# The webserver's UI port trusts the mesh (40A): nothing in schedr guards it, so anyone but
+# schedr ui is refused there, whatever the ALLOW rules (the namespace's own included) say.
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-webserver-ui-port
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- $apiSelector | nindent 6 }}
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notPrincipals:
+              - {{ printf "*/ns/%s/sa/%s" $.Release.Namespace (include "schedr.roleServiceAccount" (list $ "ui")) | quote }}
+              {{- range .ui.principals }}
+              - {{ . | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports: [{{ $.Values.service.webserverUiPort | quote }}]
+{{- end }}
+{{- end }}
+{{- if $ui }}
+---
+# The web UI's pods: as the API (a valid token{{ if .api.claims }} with the claims{{ end }}, unless
+# requireJwt is false), on the UI's port.
+apiVersion: {{ include "schedr.istioApi" (list "security" $) }}
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-ui
+  labels:
+    {{- include "schedr.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- $uiSelector | nindent 6 }}
+  action: ALLOW
+  rules:
+    {{- with include "schedr.istioSameNamespaceRule" $ | trim }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- if .api.requireJwt }}
+    - from:
+        - source:
+            requestPrincipals: ["*"]
+      to:
+        - operation:
+            ports: [{{ $.Values.service.uiPort | quote }}]
+      {{- with .api.claims }}
+      when:
+        {{- range $claim, $values := . }}
+        - key: request.auth.claims[{{ $claim }}]
+          values:
+            {{- toYaml (kindIs "slice" $values | ternary $values (list $values)) | nindent 12 }}
+        {{- end }}
+      {{- end }}
+    {{- else }}
+    - to:
+        - operation:
+            ports: [{{ $.Values.service.uiPort | quote }}]
+    {{- end }}
+    {{- include "schedr.istioOpsRule" $ | trim | nindent 4 }}
+{{- end }}
 {{- if $distributed }}
 {{- /* The internal links: by account when every role has its own, else by namespace. */}}
 {{- $perRole := include "schedr.accountsPerRole" $ }}
@@ -188,6 +312,8 @@ spec:
       {{- /* Every role's pods. */}}
       app.kubernetes.io/name: {{ $.Chart.Name }}
       app.kubernetes.io/instance: {{ $.Release.Name }}
+      {{- else if not $api }}
+      {{- $uiSelector | nindent 6 }}
       {{- else }}
       {{- include "schedr.selector" $ | nindent 6 }}
       {{- end }}

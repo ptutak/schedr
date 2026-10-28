@@ -304,6 +304,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcrypt"
+version = "0.19.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0cd0bd35a28836d528d2b58ad499bc3c5641d59379421b1be9eeb0c2f2b912a"
+dependencies = [
+ "base64 0.23.1",
+ "blowfish",
+ "getrandom 0.4.3",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,6 +375,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "blowfish"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62ce3946557b35e71d1bbe07ec385073ce9eda05043f95de134eb578fcf1a298"
+dependencies = [
+ "byteorder",
+ "cipher",
 ]
 
 [[package]]
@@ -455,6 +478,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "rand_core",
+]
+
+[[package]]
+name = "cipher"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+dependencies = [
+ "crypto-common 0.2.2",
+ "inout",
 ]
 
 [[package]]
@@ -1566,6 +1599,15 @@ name = "inlinable_string"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8fae54786f62fb2918dcfae3d568594e50eb9b5c25bf04371af6fe7516452fb"
+
+[[package]]
+name = "inout"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b5cf4372d022092674a83b8febf5865f7a573cc0c5baec5e49c879b6a20978f"
+dependencies = [
+ "hybrid-array",
+]
 
 [[package]]
 name = "ipnet"
@@ -2817,6 +2859,7 @@ name = "schedr"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bcrypt",
  "clap",
  "http-body-util",
  "jiff",
@@ -2886,18 +2929,22 @@ name = "schedr-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
+ "bcrypt",
  "http-body-util",
  "jiff",
  "pretty_assertions",
  "prometheus-client",
  "reqwest",
  "rstest",
+ "schedr-config",
  "schedr-db",
  "schedr-model",
  "schedr-tls",
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -2919,6 +2966,7 @@ dependencies = [
  "rstest",
  "schedr-api",
  "schedr-model",
+ "schedr-tls",
  "serde",
  "serde_json",
  "thiserror",
@@ -3025,6 +3073,7 @@ dependencies = [
  "rcgen",
  "rstest",
  "rustls",
+ "rustls-webpki",
  "schedr-tls",
  "tempfile",
  "thiserror",
@@ -3042,6 +3091,7 @@ version = "0.1.0"
 dependencies = [
  "askama",
  "axum",
+ "bcrypt",
  "http-body-util",
  "jiff",
  "pretty_assertions",
@@ -3049,6 +3099,7 @@ dependencies = [
  "rstest",
  "schedr-api",
  "schedr-client",
+ "schedr-config",
  "schedr-model",
  "scraper",
  "serde",

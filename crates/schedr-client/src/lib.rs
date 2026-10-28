@@ -126,6 +126,30 @@ pub trait Transport: Sync {
     }
 }
 
+tokio::task_local! {
+    /// The person a request is made for (the web UI sets it for each page it serves): sent
+    /// as `X-Schedr-User`, which a webserver takes only from a caller proven to be the UI
+    /// (see `schedr_api::auth`).
+    pub static USER: String;
+}
+
+/// `work` made for the same person as the current request: [`USER`] doesn't follow a spawned
+/// task by itself, so a page asking several deployments at once carries it over.
+pub fn for_same_user<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    let user = current_user();
+    async move {
+        match user {
+            Some(user) => USER.scope(user, work).await,
+            None => work.await,
+        }
+    }
+}
+
+/// The person the current request is made for, if [`USER`] is set.
+fn current_user() -> Option<String> {
+    USER.try_with(Clone::clone).ok()
+}
+
 /// How long a stream may stay open before the client gives up on it (and opens another).
 pub const STREAM_TIMEOUT: Duration = Duration::from_hours(24);
 
@@ -160,12 +184,20 @@ impl Auth {
     }
 }
 
+/// An mTLS client and the material generation it was built from.
+type CachedClient = std::sync::Arc<std::sync::Mutex<(u64, reqwest::Client)>>;
+
 /// The API over HTTP.
 #[derive(Debug, Clone)]
 pub struct HttpTransport {
     client: reqwest::Client,
     server: String,
     auth: Auth,
+    /// The token presented to prove the calls are the web UI's (`X-Schedr-Ui-Token`).
+    ui_token: Option<schedr_api::auth::UiToken>,
+    /// mTLS with this role's certificate (a webserver's UI port), and the client built from
+    /// it, by the material's generation (rebuilt when the files change).
+    tls: Option<(schedr_tls::Tls, CachedClient)>,
 }
 
 impl HttpTransport {
@@ -189,7 +221,71 @@ impl HttpTransport {
             client,
             server: server.trim_end_matches('/').to_owned(),
             auth,
+            ui_token: None,
+            tls: None,
         }
+    }
+
+    /// This transport reaching its server over mTLS with `tls`'s certificate (`schedr ui` to
+    /// a webserver's UI port, decision 36); the server's certificate must name the URL's host.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::new`].
+    #[must_use]
+    pub fn with_tls(self, tls: schedr_tls::Tls) -> Self {
+        let client = mtls_client(&tls);
+        let cached = std::sync::Arc::new(std::sync::Mutex::new((tls.generation(), client)));
+        Self {
+            tls: Some((tls, cached)),
+            ..self
+        }
+    }
+
+    /// The HTTP client to use now: the plain one, or the mTLS one of the material in use.
+    fn http(&self) -> reqwest::Client {
+        let Some((tls, cached)) = &self.tls else {
+            return self.client.clone();
+        };
+        let generation = tls.generation();
+        let mut cached = cached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cached.0 != generation {
+            *cached = (generation, mtls_client(tls));
+        }
+        cached.1.clone()
+    }
+
+    /// This transport presenting `token` as the web UI's (where there is no mTLS: decision 36),
+    /// as it is at each request (a token file followed).
+    #[must_use]
+    pub fn with_ui_token(self, token: schedr_api::auth::UiToken) -> Self {
+        Self {
+            ui_token: Some(token),
+            ..self
+        }
+    }
+
+    /// The headers every request carries: the version, the credentials, the UI's token and
+    /// the person it is made for.
+    fn headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        builder = builder.header(CLIENT_VERSION_HEADER, VERSION);
+        builder = match &self.auth {
+            Auth::None => builder,
+            Auth::Bearer(token) => builder.bearer_auth(token),
+            Auth::Basic { user, password } => builder.basic_auth(user, password.as_ref()),
+        };
+        if let Some(token) = &self.ui_token {
+            builder = builder.header(
+                schedr_api::auth::UI_TOKEN_HEADER,
+                token.current().0.as_str(),
+            );
+        }
+        if let Some(user) = current_user() {
+            builder = builder.header(schedr_api::auth::USER_HEADER, user);
+        }
+        builder
     }
 }
 
@@ -210,16 +306,11 @@ impl HttpTransport {
 impl Transport for HttpTransport {
     async fn send(&self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
         let url = format!("{}{}", self.server, request.path);
-        let mut builder = match request.method {
-            Method::Get => self.client.get(&url),
-            Method::Post => self.client.post(&url),
-        }
-        .header(CLIENT_VERSION_HEADER, VERSION);
-        builder = match &self.auth {
-            Auth::None => builder,
-            Auth::Bearer(token) => builder.bearer_auth(token),
-            Auth::Basic { user, password } => builder.basic_auth(user, password.as_ref()),
-        };
+        let client = self.http();
+        let mut builder = self.headers(match request.method {
+            Method::Get => client.get(&url),
+            Method::Post => client.post(&url),
+        });
         if let Some(body) = &request.body {
             builder = builder.json(body);
         }
@@ -240,17 +331,12 @@ impl Transport for HttpTransport {
 
     async fn open(&self, path: String) -> Result<Chunks, ClientError> {
         let url = format!("{}{path}", self.server);
-        let mut builder = self
-            .client
-            .get(&url)
-            .header(CLIENT_VERSION_HEADER, VERSION)
-            .header("accept", "text/event-stream")
-            .timeout(STREAM_TIMEOUT);
-        builder = match &self.auth {
-            Auth::None => builder,
-            Auth::Bearer(token) => builder.bearer_auth(token),
-            Auth::Basic { user, password } => builder.basic_auth(user, password.as_ref()),
-        };
+        let builder = self.headers(
+            self.http()
+                .get(&url)
+                .header("accept", "text/event-stream")
+                .timeout(STREAM_TIMEOUT),
+        );
         let connect = |e: reqwest::Error| ClientError::Connect {
             server: self.server.clone(),
             reason: e.to_string(),
@@ -285,6 +371,16 @@ impl Transport for HttpTransport {
     }
 }
 
+/// An HTTP client presenting `tls`'s certificate (its `api_client` configuration).
+fn mtls_client(tls: &schedr_tls::Tls) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .tls_backend_preconfigured((*tls.api_client()).clone())
+        .build()
+        .expect("the HTTP client builds with its timeouts and TLS configuration")
+}
+
 /// The API in the same process: requests go straight to its router, with no network (the
 /// web UI of `schedr standalone`, and tests).
 #[derive(Debug, Clone)]
@@ -315,13 +411,14 @@ impl Transport for RouterTransport {
         let body = request.body.map_or_else(axum::body::Body::empty, |b| {
             axum::body::Body::from(b.to_string())
         });
-        let http = axum::http::Request::builder()
-            .method(method)
-            .uri(&request.path)
-            .header("content-type", "application/json")
-            .header(CLIENT_VERSION_HEADER, VERSION)
-            .body(body)
-            .map_err(|e| in_process(e.to_string()))?;
+        let http = in_process_request(
+            axum::http::Request::builder()
+                .method(method)
+                .uri(&request.path)
+                .header("content-type", "application/json"),
+        )
+        .body(body)
+        .map_err(|e| in_process(e.to_string()))?;
         let response = self
             .app
             .clone()
@@ -348,12 +445,13 @@ impl Transport for RouterTransport {
             server: "the API in this process".to_owned(),
             reason,
         };
-        let http = axum::http::Request::builder()
-            .uri(&path)
-            .header(CLIENT_VERSION_HEADER, VERSION)
-            .header("accept", "text/event-stream")
-            .body(axum::body::Body::empty())
-            .map_err(|e| in_process(e.to_string()))?;
+        let http = in_process_request(
+            axum::http::Request::builder()
+                .uri(&path)
+                .header("accept", "text/event-stream"),
+        )
+        .body(axum::body::Body::empty())
+        .map_err(|e| in_process(e.to_string()))?;
         let response = self
             .app
             .clone()
@@ -385,6 +483,19 @@ impl Transport for RouterTransport {
         });
         Ok(chunks)
     }
+}
+
+/// A request to the API in this process: the version, the person it is made for, and marked
+/// as the UI's, proven by coming from inside the process (an extension: nothing from the
+/// network can set it; see `schedr_api::auth`).
+fn in_process_request(builder: axum::http::request::Builder) -> axum::http::request::Builder {
+    let mut builder = builder
+        .header(CLIENT_VERSION_HEADER, VERSION)
+        .extension(schedr_api::auth::ProvenUi);
+    if let Some(user) = current_user() {
+        builder = builder.header(schedr_api::auth::USER_HEADER, user);
+    }
+    builder
 }
 
 /// Typed calls to the API.

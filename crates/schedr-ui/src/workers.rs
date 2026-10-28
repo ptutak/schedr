@@ -59,7 +59,9 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
         let ui = Arc::clone(&ui);
-        asked.spawn(async move { (index, ui.deployments[index].client.workers().await) });
+        asked.spawn(schedr_client::for_same_user(async move {
+            (index, ui.deployments[index].client.workers().await)
+        }));
     }
     let mut answers = asked.join_all().await;
     answers.sort_by_key(|(index, _)| *index);

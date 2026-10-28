@@ -17,7 +17,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
 
 fn tls(ca: &TestCa, dir: &TempDir, prefix: &str, names: &[&str]) -> Tls {
-    Tls::load(ca.write(dir.path(), prefix, names), "schedr-worker").unwrap()
+    Tls::load(
+        ca.write(dir.path(), prefix, names),
+        "schedr-worker",
+        "schedr-ui",
+    )
+    .unwrap()
 }
 
 /// A gRPC server with no services on a free port, over `tls`: its address.
@@ -109,7 +114,7 @@ async fn a_worker_from_another_ca_is_refused_by_the_master() {
     // It trusts the master's CA, but its own certificate comes from another one.
     let foreign = TestCa::new("someone else").write(dir.path(), "foreign", &["schedr-worker"]);
     std::fs::write(&foreign.ca, ca.pem()).unwrap();
-    let worker = Tls::load(foreign, "schedr-worker").unwrap();
+    let worker = Tls::load(foreign, "schedr-worker", "schedr-ui").unwrap();
     // TLS 1.3: the client finishes its side of the handshake, and the master's refusal (an
     // alert) arrives with the first read.
     let tcp = TcpStream::connect(address).await.unwrap();
@@ -199,7 +204,7 @@ async fn rotated_certificates_are_used_by_new_connections() {
     // The master starts on the old CA's certificate and trusts both CAs' clients.
     let files = old.write(dir.path(), "master", &["127.0.0.1"]);
     std::fs::write(&files.ca, format!("{}{}", old.pem(), new.pem())).unwrap();
-    let master = Tls::load(files.clone(), "schedr-worker").unwrap();
+    let master = Tls::load(files.clone(), "schedr-worker", "schedr-ui").unwrap();
     let address = grpc_server(Some(master.clone())).await;
     // The worker knows only the new CA.
     let worker = tls(&new, &dir, "worker", &["schedr-worker"]);
@@ -259,6 +264,41 @@ async fn a_master_that_never_answers_the_handshake_times_out() {
     let error = channel(&url, Some(&worker)).await.unwrap_err();
     assert!(
         error.contains("didn't complete the TLS handshake"),
+        "{error}"
+    );
+}
+
+/// An HTTP endpoint answering `ok` on a free port, over `tls`'s UI port configuration.
+async fn ui_port(tls: Tls) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let incoming = incoming(listener, Some(tls), Protocol::Ui).unwrap();
+    let address = incoming.local_addr();
+    tokio::spawn(async move {
+        axum::serve(incoming, Router::new().route("/", get(|| async { "ok" })))
+            .await
+            .unwrap();
+    });
+    address
+}
+
+#[tokio::test]
+async fn a_webservers_ui_port_takes_only_the_uis_certificate() {
+    let dir = TempDir::new().unwrap();
+    let ca = TestCa::new("schedr CA");
+    let webserver = tls(&ca, &dir, "webserver", &["127.0.0.1"]);
+    let address = ui_port(webserver).await;
+    // The UI's certificate names `schedr-ui`: through, the webserver checked by its address.
+    let ui = tls(&ca, &dir, "ui", &["schedr-ui"]);
+    let response = get_over_tls(ui.api_client(), address, "127.0.0.1")
+        .await
+        .unwrap();
+    assert!(response.ends_with("ok"), "{response}");
+    // A worker's certificate, from the same CA: refused (it may not pass names on).
+    let worker = tls(&ca, &dir, "worker", &["schedr-worker"]);
+    let refused = get_over_tls(worker.api_client(), address, "127.0.0.1").await;
+    let error = refused.unwrap_err().to_string();
+    assert!(
+        error.contains("NotValidForName") || error.contains("BadCertificate"),
         "{error}"
     );
 }

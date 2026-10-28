@@ -169,12 +169,19 @@ pub async fn execute(
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
         // Boxed: the roles' futures are large, and only one of them ever runs.
-        (Command::Standalone { listen, migrate }, None) => {
+        (
+            Command::Standalone {
+                listen,
+                migrate,
+                no_ui,
+            },
+            None,
+        ) => {
             Box::pin(crate::standalone::command(
                 &local_config(config, env)?,
                 env,
                 *listen,
-                *migrate,
+                (*migrate, *no_ui),
             ))
             .await
         }

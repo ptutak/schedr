@@ -242,7 +242,7 @@ and updates the guide.
 | M3.3 | **Live:** the master's `NOTIFY` on state changes (polling in standalone), the webserver's SSE change events (keep-alive, polling fallback), relayed by the UI; the live log tail (23A) | a run and its logs update without a reload |
 | M3.4 | **Actions:** trigger (the moment shown in both zones), cancel, pause / unpause with their confirmations, retry, drain / resume; the workers page with its warnings; the banners (database unavailable, log unavailable, cancel too late) | every API action from the UI |
 | M3.5 | **Auth modes:** `none` / `proxy_header` / `basic` with their safety rules, for the webserver and the UI; the UI's actions checked by `Origin` (24A) | each mode tested, CSRF refused |
-| M3.6 | **Federation, in production:** several deployments in one UI, any mix of standalones on SQLite, standalones on Postgres and distributed ones (the user, 2026-10-28: the way from a federation of standalones on SQLite to Postgres to distributed, a deployment at a time, every stage possible); merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them (the token for standalones); standalone without its own UI (`schedr standalone --no-ui`); the chart deploys `schedr ui` with distributed (37A) and **alone**, over a list of deployments in other releases or namespaces | one UI over a standalone on SQLite, a standalone on Postgres and a distributed deployment, one of them down; the chart renders each shape |
+| M3.6 | **Federation, in production:** several deployments in one UI, any mix of standalones on SQLite, standalones on Postgres and distributed ones (the user, 2026-10-28: the way from a federation of standalones on SQLite to Postgres to distributed, a deployment at a time, every stage possible); merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them (the token for standalones); standalone without its own UI (`schedr standalone --no-ui`); the chart deploys `schedr ui` with distributed (37A) and **alone**, over a list of deployments in other releases or namespaces; the chart's values for M3.5's sign-in (the auth sections, the users file and tokens from Secrets, the webserver's UI port and the UI's certificate) | one UI over a standalone on SQLite, a standalone on Postgres and a distributed deployment, one of them down; the chart renders each shape |
 
 ## After M3: Grok over the whole repository
 
@@ -255,6 +255,23 @@ session small.
 
 **When** (the user, 2026-10-28): after Grok's weekly allowance resets, **Friday 2026-10-30 at
 9:00** (at 86% after M3.4; the rest of the week goes to M3.5's and M3.6's reviews and docs).
+
+**Not yet reviewed, so first in it** (the user, 2026-10-28: committed before a review, to be
+reviewed there): what was built after Grok's M3.6 review — the fixes of its findings (the
+followed users and token files, the lease given back on a failed migration, the chart's Istio
+objects for `mode: ui` and the UI's pods, the UI port kept for other UIs, a `default` listed
+twice), decision 40A (`[webserver] ui_port_in_mesh`, the chart's mesh proof and its DENY
+policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.auth` taking
+`webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
+Claude, no docs round).
+
+## After M3: sign-in against LDAP
+
+Planned (the user, 2026-10-28, with decision 39: no users of schedr's own): a sign-in mode of
+its own, `[*.auth] mode = "ldap"`, checking HTTP Basic credentials against the organisation's
+LDAP (a bind), with a section of its settings, for deployments without Istio/Keycloak. To decide when it starts: the settings (server URL,
+bind DN pattern or search, TLS), how the bind password reaches the pod with Helm as the only
+way in, and remembering checks as `users_file` does.
 
 ## Testing approach
 

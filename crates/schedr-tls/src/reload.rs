@@ -25,6 +25,7 @@ pub struct Tls {
 struct Inner {
     files: TlsFiles,
     worker_name: String,
+    ui_name: String,
     state: RwLock<State>,
 }
 
@@ -49,18 +50,20 @@ pub enum Reload {
 }
 
 impl Tls {
-    /// Reads `files`; workers' certificates must name `worker_name`.
+    /// Reads `files`; workers' certificates must name `worker_name`, `schedr ui`'s
+    /// `ui_name` (on a webserver's UI port).
     ///
     /// # Errors
     ///
     /// [`TlsError`] if the files can't be read or used.
-    pub fn load(files: TlsFiles, worker_name: &str) -> Result<Self, TlsError> {
+    pub fn load(files: TlsFiles, worker_name: &str, ui_name: &str) -> Result<Self, TlsError> {
         let contents = files.read()?;
-        let configs = build(&contents, &files, worker_name)?;
+        let configs = build(&contents, &files, (worker_name, ui_name))?;
         Ok(Self {
             inner: Arc::new(Inner {
                 files,
                 worker_name: worker_name.to_owned(),
+                ui_name: ui_name.to_owned(),
                 state: RwLock::new(State {
                     contents,
                     configs,
@@ -104,6 +107,18 @@ impl Tls {
         self.configs().worker_client
     }
 
+    /// A webserver's UI port configuration (only `schedr ui`'s certificate passes).
+    #[must_use]
+    pub fn ui_server(&self) -> Arc<ServerConfig> {
+        self.configs().ui_server
+    }
+
+    /// `schedr ui`'s client configuration towards webservers' UI ports.
+    #[must_use]
+    pub fn api_client(&self) -> Arc<ClientConfig> {
+        self.configs().api_client
+    }
+
     /// How many times the material changed (clients built from it are rebuilt when it does).
     #[must_use]
     pub fn generation(&self) -> u64 {
@@ -126,7 +141,8 @@ impl Tls {
             if contents == state.contents {
                 return Ok(None);
             }
-            let configs = build(&contents, &self.inner.files, &self.inner.worker_name)?;
+            let names = (self.inner.worker_name.as_str(), self.inner.ui_name.as_str());
+            let configs = build(&contents, &self.inner.files, names)?;
             Ok(Some((contents, configs)))
         });
         match built {

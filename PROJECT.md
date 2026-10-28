@@ -83,9 +83,10 @@ One Rust binary, five roles:
   error rather than a worker retrying forever. Each role's startup line says which (`(mTLS)`
   or `(plain: tls mode `mesh`)`). The plain-text warning of M2.1 is gone: plain traffic now
   means a mesh was declared.
-- **The REST API has no authentication of its own until M3:** a webserver listening beyond
-  loopback warns at startup to keep it behind an authenticating proxy or mesh (the main
-  deployment, `auth.mode = "none"` behind Istio), or to bind 127.0.0.1.
+- **Sign-in is a mode** (M3.5, see Authentication below): `none` by default (the main
+  deployment, behind Istio), where a webserver or UI listening beyond loopback warns at
+  startup to keep it behind an authenticating proxy or mesh, or to bind 127.0.0.1;
+  `proxy_header` and `basic`, refused at startup where they would be unsafe.
 - **SIGTERM or Ctrl-C stops a role** (the server stops accepting, the loop ends; a worker
   drains first, see Worker lifecycle), handled from the role's first moment.
   A master whose gRPC server fails ends with the error, instead of running a loop no worker
@@ -1243,13 +1244,48 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     without, within run-to-run noise (a first run, without then with on a busy machine, had
     shown 9%). So the triggers stay on by default, standalone included; `[database]
     change_notifications = false` turns them off, applied by `schedr db migrate` (and
-    `standalone --migrate`), never by the master (disabled on Postgres, dropped on SQLite);
+    `--migrate`, holding the lease: a master doesn't lead when it can't be applied), never by
+    a running master (disabled on Postgres, a switch row the triggers read on SQLite);
     the webserver follows what the database does (the triggers' state), and with them off
     sends `refresh` every `[webserver] refresh_interval` (15 s). Not chosen: off by default
     with live updates opt-in (B, the cautious one, picked first on the 9%); the master
     sending one notification per round itself, no triggers (C: cheapest "on", but every
     write path must report its runs); the webserver polling a "changed since" query (D:
     indexes on every write, or table scans).
+  - **How M3.5 signs people in** (Claude's, 2026-10-28, within the auth modes above and
+    decision 36): one `[*.auth]` section for the webserver and the UI (`mode`,
+    `identity_header`, `users_file`, `behind_tls_proxy`, `allow_remote`); standalone's UI,
+    on its API's port, signs in by `[webserver.auth]`. The safety rules refuse to start:
+    `proxy_header` beyond a loopback address without `allow_remote`, `basic` there without
+    `behind_tls_proxy`. `basic`'s users are `name:bcrypt-hash` lines in `users_file`, a file
+    mounted from a Secret (not an environment variable: one way, not two); bcrypt is slow on
+    purpose and every request carries the credentials (no sessions, 24A), so a check that
+    passed is remembered 5 minutes by a keyed hash (random key per process; never the
+    password), a failed one never; an unknown name is checked against a real dummy hash at
+    the file's highest cost (about the time a known one takes). The file is followed: looked
+    at every 5 s and read again when it changed (a changed password or a removed user takes
+    effect, what was remembered forgotten); one that can't be read or doesn't parse leaves
+    the users as they were (logged as an error: a mistake in the deployment, the user's call,
+    2026-10-28), while an empty one, deliberately, signs no one in. A header sent twice
+    (a client's, then a proxy's appended) names no one: the identity header, `X-Schedr-User`,
+    the token, `Authorization`. The API refuses (403) a write a browser marks as from another
+    site (`Sec-Fetch-Site`, else `Origin` against the host, as the UI's actions, 24A): a
+    browser attaches remembered Basic credentials to any site's form; requests no browser
+    header marks (the CLI, `schedr ui`) pass. The UI passes the person's name on in `X-Schedr-User`, taken
+    by a webserver only from a proven UI: its certificate naming `[tls] ui_name`
+    (`schedr-ui`) on `[webserver] ui_port` (8083, `app` mode: a server configuration whose
+    client verifier also checks that name, so any other certificate fails the handshake;
+    the same API there, its requests marked proven); the token of `[webserver]
+    ui_token_file` in `X-Schedr-Ui-Token` (at least 16 characters, compared in time depending
+    only on the token's length; per deployment `[[ui.deployments]] token_file`; it opens the
+    API, not standalone's own pages); or being in-process (standalone's own UI: a request
+    extension no client can set). Anyone else's `X-Schedr-User` is
+    ignored. The name travels from the UI's page to its calls in a task-local
+    (`schedr_client::USER`), carried into the tasks a page spawns to ask several
+    deployments. The API's description and Swagger UI stay open (2.11a); the UI's assets
+    too (its sign-in page uses them). `schedr ui` loads certificates only when a deployment
+    is reached over mTLS (`https://`), as `app` is the default mode; its client is rebuilt
+    when the files rotate.
   - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
     through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
     process over the client's in-process transport and a real API; the graph layout by
@@ -1306,7 +1342,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   |---|---|---|
   | **`none`** | schedr trusts whoever reaches it | behind a mesh that authenticates (the main deployment: Istio + Keycloak, the whole namespace trusted); standalone (localhost) |
   | **`proxy_header`** | an SSO proxy in front (`oauth2-proxy`, OpenShift `oauth-proxy`, …) logs users in and passes `X-Forwarded-User`; schedr trusts it | Kubernetes without a mesh, with any identity provider |
-  | **`basic`** | HTTP Basic against users in the configuration; bcrypt hashes from an environment variable or a mounted Secret, never the config file | small setups without an identity provider (a VM, Docker Compose, a lab server) |
+  | **`basic`** | HTTP Basic against users in `users_file` (`name:bcrypt-hash` lines, mounted from a Secret, never the config file) | small setups without an identity provider (a VM, Docker Compose, a lab server) |
 
   - **No roles:** an authenticated user can do everything (trigger, cancel, drain, …);
     restricting that is the job of whatever is in front.
@@ -1320,8 +1356,48 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     (passwords would cross the network in the clear).
   - **Not built** (possibly later, for deployments that need them): `jwt` (schedr validating
     OIDC tokens itself), roles mapped from groups, per-DAG permissions (Airflow's
-    `access_control` is already kept as metadata), schedr-issued API tokens, user management
-    in the UI.
+    `access_control` is already kept as metadata), schedr-issued API tokens.
+  - **No users of our own: ruled out deliberately** (decision 39, the user's, 2026-10-28).
+    schedr keeps no user database and manages no users: no Users page, no admin role, no
+    passwords set in the UI, no first-admin bootstrap, no sessions of its own (24A stands).
+    People are managed where the organisation already manages them, its identity provider
+    (Keycloak behind Istio in the main deployment: `none` with `identity_header`, or
+    `proxy_header` behind an SSO proxy), and `basic`'s `users_file` stays what it is: for
+    labs and single machines (made with `scripts/users-file.py`). Why: comparable tools
+    (Dagster, Temporal, Argo Workflows) leave identity to SSO, and those that own it (Airflow's
+    Flask-AppBuilder, moved out of its core in Airflow 3) carry it as a large part of their
+    own; owning it means password resets, sessions, lockouts, an admin role and their audit
+    for good, for the rare deployment without any identity provider. Weighed after the file
+    proved clumsy with Helm as the only way in (no kubectl, no helm-secrets). Not chosen:
+    users in a database managed by admins on a Users page (`schedr ui` given a database, a
+    first admin from a setup code in its log, a sign-in page and sessions). Planned instead,
+    after M3 (the user's, 2026-10-28): a mode of its own, `mode = "ldap"`, checking HTTP
+    Basic credentials against the organisation's LDAP (a bind) with a section of its settings;
+    users stay in the directory, schedr keeps none. Still open, if a deployment without Istio/Keycloak needs
+    more: the chart putting oauth2-proxy in front of the UI for any OIDC provider
+    (`proxy_header` behind it), or schedr speaking OIDC itself (`jwt` above).
+  - **How `schedr ui` proves itself follows `[tls] mode`, as the master's and workers' links
+    do** (decision 40A, the user's, 2026-10-28): in `app` mode, mTLS on the webserver's UI
+    port (36); in `mesh` mode with Istio's AuthorizationPolicy, the same port in plain HTTP,
+    trusting the mesh (`[webserver] ui_port_in_mesh = true`, refused in `app` mode, a warning
+    at start): the chart sets it when the UI's account is shared with no other role, admits
+    the UI's account there (and `istio.authorizationPolicy.ui.principals`, other releases'
+    UIs), and adds a DENY policy for anyone else on that port, as the namespace-wide rule
+    would let any pod in; then no token is made. The token stays for the rest: standalones
+    in a federation, `mesh` mode without Istio's policy or with a shared account. Why: the
+    chart's generated token is remade at every `helm template`, so Argo CD (the user's
+    deployments) would rotate it at each sync. Not chosen: keeping the token with Argo's
+    `ignoreDifferences` on its Secret (B: configuration outside the chart), the token from
+    Vault (C).
+  - **The UI signs people in as the API does, or the API is `none`** (decision 41A, the
+    user's, 2026-10-28): of `webserver.auth` × `ui.auth`, only the same mode for both, or any
+    UI mode with the API's `none` (the API kept internal, people through the UI). Refused:
+    an open UI before a guarded API (anyone acts through the UI), and two identity sources
+    (SSO for one, a users file for the other: one person under two names). The chart refuses
+    the others for a distributed release with its UI, and `ui.auth.mode` left empty takes
+    `webserver.auth`'s (one sign-in for the release); for `schedr ui` over other releases the
+    rule is the guide's advice, as nothing sees both. Not chosen: one sign-in only (B, which
+    loses the internal-API setup), everything allowed with warnings (C).
 - **Times and time zones: the server works only in UTC; people see UTC and local.**
   - **Server side:** the database, the scheduler, the API, JSON and schedr's own logs use
     UTC. Times are **always stored with their zone** even though it is always UTC
@@ -6058,6 +6134,8 @@ Rust crates chosen for the implementation (versions pinned when added):
 | web UI templates | `askama` 0.16.1 | HTML templates checked at compile time, escaping by default (M3.1, decision 26A) |
 | UI interactions | htmx 2.0.11 (2026-09-22, 0BSD), vendored as `crates/schedr-ui/assets/htmx.min.js` | partial updates without a JavaScript build (decision 26A); from npm's tarball, its sha512 integrity checked; the file's sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (M3.2b) |
 | live updates in the UI | htmx's SSE extension, `htmx-ext-sse` 2.2.4 (2025-10-18, 0BSD), vendored as `crates/schedr-ui/assets/htmx-ext-sse.js` (its readable `sse.js`) | server-sent events into htmx triggers and swaps (M3.3, 34A, 23A); from npm's tarball, its sha512 integrity checked; the file's sha256 `3b5992a541619babefc4c169505af474df5c3039da51e59b96ccf9241ecd61d2` |
+| password hashes (`basic` auth) | `bcrypt` 0.19.3 (2026-07-27), `base64` 0.23.1 (already in the lock, for Basic credentials) | the hashes PROJECT.md's `basic` mode keeps in a Secret; verification only (M3.5); brings blowfish 0.10.0, cipher 0.5.2, inout 0.2.5 (a 9-day patch on 0.2: meets the library-age rule) |
+| making the users file (`scripts/users-file.py`) | Python `bcrypt` 5.0.0 (2025-09-25), the script's own inline dependency (`uv run --script`), not the package's | the `name:bcrypt-hash` lines and a Secret holding them, from names with passwords asked for or `name:password` lines on stdin (the user's request, 2026-10-28); no htpasswd needed |
 | HTML in tests | `scraper` 0.29.0 (dev only) | the UI's pages read through a real HTML parser, by CSS selectors (M3.1) |
 | OpenAPI from Rust types | `utoipa` | derives next to serde |
 | Swagger UI | `utoipa-swagger-ui` 10.0.2 (`axum`, `vendored`: `utoipa-swagger-ui-vendored` 0.2.0) | the UI's files in the binary, no download at build time (2.11a); crc32fast 1.5.3, typed-path 0.12.4 and zopfli 0.8.4 locked; zip went 8 → 9.0.5 (a major, through utoipa-swagger-ui's vendored build), which brings nix 0.31.3, a new transitive crate |

@@ -43,31 +43,11 @@ struct CommandFragment {
     poll_ms: u32,
 }
 
-/// Whether a POST comes from the UI's own pages (see the module documentation).
+/// Whether a POST comes from the UI's own pages (see the module documentation): a browser
+/// must say so.
 #[must_use]
 pub fn same_origin(headers: &HeaderMap) -> bool {
-    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-    if let Some(site) = header("sec-fetch-site") {
-        return site == "same-origin" || site == "none";
-    }
-    let Some(origin) = header(header::ORIGIN.as_str()) else {
-        return false;
-    };
-    let host = header("x-forwarded-host").or_else(|| header(header::HOST.as_str()));
-    let (scheme, origin_host) = origin.split_once("://").unwrap_or(("", origin));
-    let without_default_port = |host: &str| {
-        let default = match scheme {
-            "https" => ":443",
-            "http" => ":80",
-            _ => return host.to_ascii_lowercase(),
-        };
-        host.strip_suffix(default)
-            .unwrap_or(host)
-            .to_ascii_lowercase()
-    };
-    host.is_some_and(|host| {
-        without_default_port(host) == without_default_port(origin_host.trim_end_matches('/'))
-    })
+    schedr_api::auth::browser_same_origin(headers) == Some(true)
 }
 
 /// Refuses POSTs from elsewhere (a layer on the UI's router).

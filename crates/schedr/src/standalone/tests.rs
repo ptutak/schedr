@@ -74,7 +74,7 @@ fn everything_listens_on_localhost_with_the_configured_settings() {
     let setup = plan(&configured, &env(&[("HOME", "/h"), ("HOSTNAME", "pod-1")])).unwrap();
     assert_eq!(setup.grpc.to_string(), "127.0.0.1:9070");
     assert_eq!(setup.http.to_string(), "127.0.0.1:9080");
-    assert_eq!(setup.identity_header.as_deref(), Some("x-user"));
+    assert_eq!(setup.auth.identity_header.as_deref(), Some("x-user"));
     assert_eq!(setup.tick, Duration::from_secs(1));
     assert_eq!(setup.master.lease_timeout, Duration::from_secs(60));
     assert_eq!(setup.agent.worker_id, "pod-1");

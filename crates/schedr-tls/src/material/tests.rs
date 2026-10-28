@@ -12,7 +12,12 @@ fn files(dir: &TempDir) -> TlsFiles {
 fn builds_every_configuration_with_its_alpn() {
     let dir = TempDir::new().unwrap();
     let files = files(&dir);
-    let configs = build(&files.read().unwrap(), &files, "schedr-worker").unwrap();
+    let configs = build(
+        &files.read().unwrap(),
+        &files,
+        ("schedr-worker", "schedr-ui"),
+    )
+    .unwrap();
     assert_eq!(configs.grpc_server.alpn_protocols, [ALPN_H2.to_vec()]);
     assert_eq!(configs.http_server.alpn_protocols, [ALPN_HTTP1.to_vec()]);
     assert_eq!(configs.grpc_client.alpn_protocols, [ALPN_H2.to_vec()]);
@@ -45,7 +50,9 @@ fn a_file_without_a_certificate_or_key_is_named() {
         ..good.clone()
     };
     assert_eq!(
-        build(&no_ca, &files, "w").unwrap_err().to_string(),
+        build(&no_ca, &files, ("w", "schedr-ui"))
+            .unwrap_err()
+            .to_string(),
         format!("[tls] ca `{}` holds no certificate", files.ca.display())
     );
     let no_cert = Contents {
@@ -53,14 +60,18 @@ fn a_file_without_a_certificate_or_key_is_named() {
         ..good.clone()
     };
     assert_eq!(
-        build(&no_cert, &files, "w").unwrap_err().to_string(),
+        build(&no_cert, &files, ("w", "schedr-ui"))
+            .unwrap_err()
+            .to_string(),
         format!("[tls] cert `{}` holds no certificate", files.cert.display())
     );
     let no_key = Contents {
         key: good.cert.clone(),
         ..good
     };
-    let error = build(&no_key, &files, "w").unwrap_err().to_string();
+    let error = build(&no_key, &files, ("w", "schedr-ui"))
+        .unwrap_err()
+        .to_string();
     assert!(
         error.starts_with(&format!(
             "[tls] key `{}` holds no usable private key",
@@ -79,7 +90,9 @@ fn a_key_of_another_certificate_is_refused() {
         key: other.key.into_bytes(),
         ..files.read().unwrap()
     };
-    let error = build(&contents, &files, "w").unwrap_err().to_string();
+    let error = build(&contents, &files, ("w", "schedr-ui"))
+        .unwrap_err()
+        .to_string();
     assert!(
         error.starts_with(&format!(
             "[tls] cert `{}` and key `{}` can't be used together: ",
@@ -94,7 +107,7 @@ fn a_key_of_another_certificate_is_refused() {
 fn a_worker_name_must_be_a_name() {
     let dir = TempDir::new().unwrap();
     let files = files(&dir);
-    let error = build(&files.read().unwrap(), &files, "not a name!")
+    let error = build(&files.read().unwrap(), &files, ("not a name!", "schedr-ui"))
         .unwrap_err()
         .to_string();
     assert_eq!(

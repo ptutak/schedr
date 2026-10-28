@@ -27,3 +27,7 @@ dist/
 
 .python-version
 .editorconfig
+
+# Files of scripts/users-file.py, if it is pointed here: hashes of passwords.
+/users
+/users-secret.yaml

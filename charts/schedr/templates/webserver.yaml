@@ -1,6 +1,11 @@
 {{- if eq .Values.mode "distributed" }}
 {{- $fullname := include "schedr.fullname" . }}
 {{- $w := .Values.webserver }}
+{{- /* app mode: the UI port, for this release's schedr ui or another's (decision 36). */}}
+{{- $uiPort := eq .Values.tls.mode "app" }}
+{{- /* mesh mode with Istio's policy: the UI port trusting the mesh (40A). */}}
+{{- $meshUiPort := include "schedr.meshUiPort" . }}
+{{- $token := include "schedr.uiTokenSecret" . }}
 # schedr webserver: the REST API (and the UI, milestone M3), reading the database and task
 # logs from workers. Holds no state. Started before the master has migrated, it waits for the
 # schema (not ready meanwhile), so during an upgrade the old one serves until the new is ready.
@@ -50,11 +55,31 @@ spec:
               value: {{ .Values.service.opsPort | quote }}
             {{- include "schedr.tlsEnv" (list . "webserver") | trim | nindent 12 }}
             {{- include "schedr.databaseEnv" . | trim | nindent 12 }}
+            {{- include "schedr.authEnv" (list . $w.auth "WEBSERVER") | trim | nindent 12 }}
+            {{- if or $uiPort $meshUiPort }}
+            - name: SCHEDR_CONFIG__WEBSERVER__UI_PORT
+              value: {{ .Values.service.webserverUiPort | quote }}
+            {{- end }}
+            {{- if $meshUiPort }}
+            - name: SCHEDR_CONFIG__WEBSERVER__UI_PORT_IN_MESH
+              value: "true"
+            {{- end }}
+            {{- if $token }}
+            - name: SCHEDR_CONFIG__WEBSERVER__UI_TOKEN_FILE
+              value: /etc/schedr/ui-token/{{ $w.uiTokenSecret.key }}
+            {{- end }}
           ports:
             - name: http-api
               containerPort: {{ .Values.service.apiPort }}
             - name: http-ops
               containerPort: {{ .Values.service.opsPort }}
+            {{- if $uiPort }}
+            - name: tls-ui
+              containerPort: {{ .Values.service.webserverUiPort }}
+            {{- else if $meshUiPort }}
+            - name: http-ui
+              containerPort: {{ .Values.service.webserverUiPort }}
+            {{- end }}
           # Ready once its schema is usable and the API listens.
           readinessProbe:
             httpGet:
@@ -73,18 +98,30 @@ spec:
           {{- end }}
           resources:
             {{- toYaml $w.resources | nindent 12 }}
-          {{- if eq .Values.tls.mode "app" }}
           volumeMounts:
+            {{- if eq .Values.tls.mode "app" }}
             - name: tls
               mountPath: /etc/schedr/tls
               readOnly: true
-          {{- end }}
-      {{- if eq .Values.tls.mode "app" }}
+            {{- end }}
+            {{- if $token }}
+            - name: ui-token
+              mountPath: /etc/schedr/ui-token
+              readOnly: true
+            {{- end }}
+            {{- include "schedr.authMount" $w.auth | trim | nindent 12 }}
       volumes:
+        {{- if eq .Values.tls.mode "app" }}
         - name: tls
           secret:
             secretName: {{ include "schedr.tlsSecret" (list . "webserver") }}
-      {{- end }}
+        {{- end }}
+        {{- if $token }}
+        - name: ui-token
+          secret:
+            secretName: {{ $token }}
+        {{- end }}
+        {{- include "schedr.authVolume" $w.auth | trim | nindent 8 }}
       {{- with $w.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

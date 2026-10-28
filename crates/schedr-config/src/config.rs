@@ -499,8 +499,23 @@ pub struct WebserverSection {
     )]
     #[schemars(with = "DurationText")]
     pub refresh_interval: Duration,
+    /// The port serving the whole API to `schedr ui` alone, its calls there passing the user's
+    /// name on (decision 36): in `[tls] mode = "app"` over mTLS (its certificate must name
+    /// `[tls] ui_name`); in `mesh` mode only with `ui_port_in_mesh`. Elsewhere the UI proves
+    /// itself by `ui_token_file`.
+    pub ui_port: u16,
+    /// In `[tls] mode = "mesh"`: serve `ui_port` in plain HTTP, trusting the mesh to let only
+    /// `schedr ui` reach it (Istio's `AuthorizationPolicy` admitting only its account: decision
+    /// 40A), as the mesh is trusted with the master's and workers' links. Nothing in schedr
+    /// guards that port then: without such a policy, whoever reaches it could name any user.
+    pub ui_port_in_mesh: bool,
+    /// A file holding the token `schedr ui` presents (`X-Schedr-Ui-Token`) to prove its calls,
+    /// where there is no mTLS: `mesh` mode, and standalone (decision 36); mounted from a
+    /// Secret. None: no caller is trusted that way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_token_file: Option<PathBuf>,
     /// `[webserver.auth]`: who the user is.
-    pub auth: WebserverAuthSection,
+    pub auth: AuthSection,
 }
 
 impl Default for WebserverSection {
@@ -511,7 +526,10 @@ impl Default for WebserverSection {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8080,
             refresh_interval: Duration::from_secs(15),
-            auth: WebserverAuthSection::default(),
+            ui_port: 8083,
+            ui_port_in_mesh: false,
+            ui_token_file: None,
+            auth: AuthSection::default(),
         }
     }
 }
@@ -532,6 +550,8 @@ pub struct UiSection {
     /// The documentation site served at `/docs` (the image's); served only when the directory
     /// exists, `""` for none.
     pub docs_dir: PathBuf,
+    /// `[ui.auth]`: who the person using the UI is (as `[webserver.auth]`).
+    pub auth: AuthSection,
 }
 
 impl Default for UiSection {
@@ -542,6 +562,7 @@ impl Default for UiSection {
             port: 8082,
             deployments: Vec::new(),
             docs_dir: PathBuf::from("/usr/share/schedr/docs"),
+            auth: AuthSection::default(),
         }
     }
 }
@@ -552,19 +573,51 @@ impl Default for UiSection {
 pub struct UiDeployment {
     /// Its name: letters, digits, `-` and `_` (it is in the UI's URLs).
     pub name: String,
-    /// Its webserver's URL, e.g. `http://schedr-webserver.etl.svc:8080`.
+    /// Its webserver's URL, e.g. `http://schedr-webserver.etl.svc:8080`; with
+    /// `https://`, its `[webserver] ui_port` over mTLS (this role's `[tls]` certificate).
     pub url: String,
+    /// A file holding the token this UI presents to it (its `[webserver] ui_token_file`'s),
+    /// where there is no mTLS: a webserver in `mesh` mode, a standalone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
 }
 
-/// `[webserver.auth]`: who the user is (only the identity so far; the modes come with the UI,
-/// milestone M3).
+/// `[webserver.auth]` and `[ui.auth]`: who the user is (see PROJECT.md, Authentication: as
+/// little as possible in schedr). The name is recorded on commands, never used to allow or
+/// deny anything; there are no roles.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub struct WebserverAuthSection {
-    /// The header naming the user, recorded on commands (e.g. `x-forwarded-user`); never used
-    /// to allow or deny anything.
+pub struct AuthSection {
+    /// How the user is known.
+    pub mode: AuthMode,
+    /// `none`: a header naming the user, recorded if present (e.g. `x-forwarded-user`, set
+    /// by a mesh from its token); `proxy_header`: the header the SSO proxy sets, required
+    /// (`x-forwarded-user` when not set).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_header: Option<String>,
+    /// `basic`: a file of `name:bcrypt-hash` lines (mounted from a Secret; never in the
+    /// configuration itself).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub users_file: Option<PathBuf>,
+    /// `basic` beyond a loopback address: TLS is ended by a proxy in front (passwords would
+    /// otherwise cross the network in the clear: refused without it).
+    pub behind_tls_proxy: bool,
+    /// `proxy_header` beyond a loopback address: everything reaching it comes through the
+    /// proxy (anything reaching it around the proxy could name any user: refused without it).
+    pub allow_remote: bool,
+}
+
+/// `[webserver.auth] mode`, `[ui.auth] mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMode {
+    /// Whoever reaches it: access is decided in front (a mesh, the namespace).
+    #[default]
+    None,
+    /// An SSO proxy in front logs users in and names them in a header.
+    ProxyHeader,
+    /// HTTP Basic against `users_file`.
+    Basic,
 }
 
 /// `[worker]`.
@@ -734,6 +787,9 @@ pub struct TlsSection {
     /// The name the webserver expects in workers' certificates, whatever address it reaches
     /// them at.
     pub worker_name: String,
+    /// The name a webserver expects in `schedr ui`'s certificate on its `[webserver] ui_port`
+    /// (decision 36: only a caller so proven may pass a user's name on).
+    pub ui_name: String,
     /// How often the files are read again for a change.
     #[serde(
         deserialize_with = "deserialize_duration",
@@ -744,7 +800,8 @@ pub struct TlsSection {
 }
 
 impl Default for TlsSection {
-    /// `app` mode, no files yet, workers named `schedr-worker`, files read every 30 s.
+    /// `app` mode, no files yet, workers named `schedr-worker`, the UI `schedr-ui`, files read
+    /// every 30 s.
     fn default() -> Self {
         Self {
             mode: TlsMode::App,
@@ -752,6 +809,7 @@ impl Default for TlsSection {
             cert: None,
             key: None,
             worker_name: "schedr-worker".to_owned(),
+            ui_name: "schedr-ui".to_owned(),
             reload_interval: Duration::from_secs(30),
         }
     }

@@ -149,7 +149,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
         Duration::from_millis(10),
         listen(loopback()).await.unwrap(),
         None,
-        take_lease(db, Duration::from_secs(15), "master"),
+        async { Ok(take_lease(db, Duration::from_secs(15), "master").await) },
         Observed {
             metrics: MasterMetrics::default(),
             health: &health,
@@ -159,8 +159,8 @@ async fn the_master_and_the_api_serve_until_stopped() {
     );
     let api = serve_api(
         memory_db().await,
-        (None, Duration::from_secs(15)),
-        listen(loopback()).await.unwrap(),
+        (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+        (listen(loopback()).await.unwrap(), None),
         None,
         None,
         Observed {
@@ -275,7 +275,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
     let leading = lead(&db, &url, (period, true, false), stopped.clone(), "master")
         .await
         .unwrap();
-    let leadership = leading.expect("not stopped").await;
+    let leadership = leading.expect("not stopped").await.unwrap();
     assert!(db.schema_status().await.unwrap().is_usable());
     assert!(leadership.epoch() > 0);
     assert!(!db.change_notifications().await.unwrap());
@@ -284,7 +284,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
     let leading = lead(&db, &url, (period, true, true), stopped, "master")
         .await
         .unwrap();
-    let _leadership = leading.expect("not stopped").await;
+    let _leadership = leading.expect("not stopped").await.unwrap();
     assert!(db.change_notifications().await.unwrap());
 }
 
@@ -468,13 +468,11 @@ fn an_open_api_is_warned_about_with_its_address() {
     assert_eq!(no_auth_warning(loopback(), "x"), None);
     let open = SocketAddr::from(([0, 0, 0, 0], 8080));
     let warning = no_auth_warning(open, "bind 127.0.0.1").unwrap();
-    assert!(
-        warning.starts_with("the REST API has no authentication of its own"),
-        "{warning}"
-    );
-    assert!(
-        warning.ends_with("listens on 0.0.0.0:8080: keep it behind an authenticating proxy or mesh, or bind 127.0.0.1"),
-        "{warning}"
+    assert_eq!(
+        warning,
+        "the REST API signs no one in (auth mode `none`) and listens on 0.0.0.0:8080: keep it \
+         behind an authenticating proxy or mesh, use the `proxy_header` or `basic` mode, or bind \
+         127.0.0.1"
     );
 }
 
@@ -594,6 +592,7 @@ fn ui_config(deployments: &[(&str, &str)]) -> Config {
         .map(|(name, url)| schedr_config::config::UiDeployment {
             name: (*name).to_owned(),
             url: (*url).to_owned(),
+            token_file: None,
         })
         .collect();
     config
@@ -601,10 +600,10 @@ fn ui_config(deployments: &[(&str, &str)]) -> Config {
 
 #[test]
 fn the_uis_deployments_are_named_plainly_and_once() {
-    let ok = ui_deployments(&ui_config(&[
-        ("etl", "http://etl:8080/"),
-        ("ml_2", "http://ml:8080"),
-    ]))
+    let ok = ui_deployments(
+        &ui_config(&[("etl", "http://etl:8080/"), ("ml_2", "http://ml:8080")]),
+        None,
+    )
     .unwrap();
     let names: Vec<&str> = ok.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(names, ["etl", "ml_2"]);
@@ -618,7 +617,7 @@ fn the_uis_deployments_are_named_plainly_and_once() {
             "`etl` is listed twice",
         ),
     ] {
-        let error = ui_deployments(&ui_config(&deployments)).unwrap_err();
+        let error = ui_deployments(&ui_config(&deployments), None).unwrap_err();
         assert!(error.to_string().contains(says), "{error}");
     }
 }
@@ -640,10 +639,273 @@ fn the_ui_warns_about_itself_when_it_listens_beyond_loopback() {
     let open = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8082);
     let warning = no_auth_warning_for("the web UI", open, "bind 127.0.0.1").unwrap();
     assert!(
-        warning.starts_with(
-            "the web UI has no authentication of its own (it comes with milestone M3.5)"
-        ),
+        warning.starts_with("the web UI signs no one in (auth mode `none`)"),
         "{warning}"
     );
     assert_eq!(no_auth_warning_for("the web UI", loopback(), "x"), None);
+}
+
+#[test]
+fn sign_in_modes_are_refused_where_they_would_be_unsafe() {
+    use schedr_config::{AuthMode, AuthSection};
+    let open = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let proxy = AuthSection {
+        mode: AuthMode::ProxyHeader,
+        ..AuthSection::default()
+    };
+    // Beyond loopback, a proxy's header could be forged by anyone reaching it around the proxy.
+    let error = role_auth("webserver", &proxy, open, None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("could name any user"), "{error}");
+    assert!(role_auth("webserver", &proxy, loopback(), None).is_ok());
+    let trusted = AuthSection {
+        allow_remote: true,
+        ..proxy
+    };
+    assert!(role_auth("webserver", &trusted, open, None).is_ok());
+    // Basic over plain HTTP beyond loopback: refused unless TLS is ended in front.
+    let dir = TempDir::new().unwrap();
+    let users = dir.path().join("users");
+    std::fs::write(
+        &users,
+        format!("anna:{}\n", bcrypt::hash("secret", 4).unwrap()),
+    )
+    .unwrap();
+    let basic = AuthSection {
+        mode: AuthMode::Basic,
+        users_file: Some(users),
+        ..AuthSection::default()
+    };
+    let error = role_auth("ui", &basic, open, None).unwrap_err().to_string();
+    assert!(error.contains("[ui.auth] mode = \"basic\""), "{error}");
+    assert!(error.contains("in the clear"), "{error}");
+    let behind = AuthSection {
+        behind_tls_proxy: true,
+        ..basic
+    };
+    assert!(role_auth("ui", &behind, open, None).is_ok());
+}
+
+#[test]
+fn the_uis_token_is_read_and_must_be_long_enough() {
+    let dir = TempDir::new().unwrap();
+    let token = dir.path().join("token");
+    std::fs::write(&token, "short\n").unwrap();
+    let section = schedr_config::AuthSection::default();
+    let error = role_auth("webserver", &section, loopback(), Some(&token))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("shorter than 16 characters"), "{error}");
+    std::fs::write(&token, "0123456789abcdef0123\n").unwrap();
+    assert!(role_auth("webserver", &section, loopback(), Some(&token)).is_ok());
+    let missing = dir.path().join("missing");
+    let error = role_auth("webserver", &section, loopback(), Some(&missing))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ui_token_file"), "{error}");
+}
+
+#[test]
+fn a_deployment_over_mtls_needs_the_uis_certificate() {
+    let error = ui_deployments(&ui_config(&[("etl", "https://etl:8083")]), None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("reached over mTLS"), "{error}");
+    assert!(error.contains("[tls] ui_name"), "{error}");
+}
+
+#[tokio::test]
+async fn standalones_pages_want_a_sign_in_and_its_api_no_other_sites_writes() {
+    use schedr_config::{AuthMode, AuthSection};
+    let dir = TempDir::new().unwrap();
+    let users = dir.path().join("users");
+    std::fs::write(
+        &users,
+        format!("anna:{}\n", bcrypt::hash("secret", 4).unwrap()),
+    )
+    .unwrap();
+    let section = AuthSection {
+        mode: AuthMode::Basic,
+        users_file: Some(users),
+        ..AuthSection::default()
+    };
+    let token = "0123456789abcdef0123";
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, format!("{token}\n")).unwrap();
+    let auth = schedr_api::auth::Auth::from_config(
+        &section,
+        Some(schedr_api::auth::read_ui_token(&token_file).unwrap()),
+    )
+    .unwrap();
+    let listener = listen(loopback()).await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = watch::channel(0);
+    let health = Health::new(Duration::from_secs(120));
+    let api = tokio::spawn(async move {
+        let health = Health::new(Duration::from_secs(120));
+        serve_api(
+            memory_db().await,
+            (auth, Duration::from_secs(15)),
+            (listener, None),
+            None,
+            Some(LocalUi { docs_dir: None }),
+            Observed {
+                metrics: ApiMetrics::default(),
+                health: &health,
+                ready: health.starting("webserver"),
+            },
+            stopped,
+        )
+        .await
+    });
+    drop(health);
+    let http = reqwest::Client::new();
+    // The UI's token opens the API, not the pages: they want the person's password.
+    let page = http
+        .get(format!("{base}/"))
+        .header("x-schedr-ui-token", token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let dags = http
+        .get(format!("{base}/api/v1/dags"))
+        .header("x-schedr-ui-token", token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dags.status(), reqwest::StatusCode::OK);
+    // A form on another site, the browser attaching Anna's remembered credentials: refused.
+    let drain = |site: &'static str| {
+        http.post(format!("{base}/api/v1/workers/w1/drain"))
+            .basic_auth("anna", Some("secret"))
+            .header("sec-fetch-site", site)
+            .send()
+    };
+    assert_eq!(
+        drain("cross-site").await.unwrap().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        drain("same-origin").await.unwrap().status(),
+        reqwest::StatusCode::ACCEPTED
+    );
+    let _ = stop.send(1);
+    api.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn migrate_fails_when_the_switch_cant_be_applied_to_an_up_to_date_schema() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("schedr.db").display());
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    // The switch's row gone: applying it fails.
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("a SQLite file")
+    };
+    sqlx::query("DELETE FROM changes_switch")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (_stop, stopped) = watch::channel(0);
+    let period = Duration::from_secs(30);
+    let leading = lead(&db, &url, (period, true, false), stopped, "master")
+        .await
+        .unwrap()
+        .expect("not stopped");
+    assert!(
+        leading.await.is_err(),
+        "a master led on a switch not applied"
+    );
+    // The lease was given back: another takes it at once.
+    let other = tokio::time::timeout(
+        Duration::from_secs(5),
+        take_lease(db.clone(), period, "master"),
+    )
+    .await
+    .expect("the lease was released");
+    other.release().await;
+}
+
+#[tokio::test]
+async fn a_failed_migration_gives_the_lease_back() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", tmp.path().join("schedr.db").display());
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    // The switch's row gone: `schedr db migrate` fails applying it.
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("a SQLite file")
+    };
+    sqlx::query("DELETE FROM changes_switch")
+        .execute(pool)
+        .await
+        .unwrap();
+    let period = Duration::from_secs(30);
+    let migrated = migrate_leased(&url, Duration::from_secs(5), (period, false), false).await;
+    assert!(migrated.is_err());
+    // Given back: taken at once, not after the period.
+    let taken = Leadership::try_take(db, "master".to_owned(), period)
+        .await
+        .unwrap();
+    assert!(taken.is_some(), "the lease stayed held");
+}
+
+#[tokio::test]
+async fn in_mesh_mode_the_ui_port_takes_the_uis_name_and_the_api_port_doesnt() {
+    let listener = listen(loopback()).await.unwrap();
+    let ui_listener = listen(loopback()).await.unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    let ui = format!("http://{}", ui_listener.local_addr().unwrap());
+    let (stop, stopped) = watch::channel(0);
+    let served = tokio::spawn(async move {
+        let health = Health::new(Duration::from_secs(120));
+        serve_api(
+            memory_db().await,
+            (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+            (listener, Some(ui_listener)),
+            None,
+            None,
+            Observed {
+                metrics: ApiMetrics::default(),
+                health: &health,
+                ready: health.starting("webserver"),
+            },
+            stopped,
+        )
+        .await
+    });
+    let http = reqwest::Client::new();
+    let drain = async |base: &str| -> serde_json::Value {
+        http.post(format!("{base}/api/v1/workers/w1/drain"))
+            .header("x-schedr-user", "anna")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    };
+    // Plain HTTP on the UI port (the mesh's policy admits only `schedr ui` there): proven.
+    assert_eq!(drain(&ui).await["requested_by"], "anna");
+    // The API's port: anyone's claim ignored.
+    assert_eq!(drain(&api).await["requested_by"], "anonymous");
+    let _ = stop.send(1);
+    served.await.unwrap().unwrap();
+}
+
+#[test]
+fn ui_port_in_mesh_is_refused_in_app_mode() {
+    let mut config = config();
+    config.tls.mode = TlsMode::App;
+    config.webserver.ui_port_in_mesh = true;
+    let error = check_ui_port(&config).unwrap_err().to_string();
+    assert!(
+        error.contains("ui_port_in_mesh is for [tls] mode = \"mesh\""),
+        "{error}"
+    );
+    config.tls.mode = TlsMode::Mesh;
+    assert!(check_ui_port(&config).is_ok());
 }

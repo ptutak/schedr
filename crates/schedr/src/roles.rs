@@ -31,10 +31,11 @@ use schedr_agent::memory::{
 };
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::retention::{LogRetention, sweep_logs};
+use schedr_api::auth::Auth;
 use schedr_api::logs::HttpLogSource;
 use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
-use schedr_config::{Config, MemoryReserve, TlsMode};
+use schedr_config::{AuthMode, AuthSection, Config, MemoryReserve, TlsMode};
 use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::lease::{Leadership, Renewal};
@@ -303,7 +304,7 @@ pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
         cert: file(&config.tls.cert, "cert")?,
         key: file(&config.tls.key, "key")?,
     };
-    Tls::load(files, &config.tls.worker_name)
+    Tls::load(files, &config.tls.worker_name, &config.tls.ui_name)
         .map(Some)
         .map_err(|e| AppError::BadArgument(e.to_string()))
 }
@@ -387,14 +388,14 @@ pub async fn serve_master(
     tick: Duration,
     listener: TcpListener,
     tls: Option<Tls>,
-    leadership: impl Future<Output = Leadership>,
+    leadership: impl Future<Output = Result<Leadership, AppError>>,
     observed: Observed<'_, MasterMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
     // Nothing of the master's before the lease: a standby waits here, its readiness
     // "starting".
     let leadership = tokio::select! {
-        taken = leadership => taken,
+        taken = leadership => taken?,
         () = until(stop.clone()) => return Ok(()),
     };
     tracing::info!(
@@ -457,10 +458,12 @@ pub async fn serve_master(
 ///
 /// # Errors
 ///
-/// [`AppError::BadArgument`] for none, a name that isn't letters, digits, `-` and `_`, or a
-/// name given twice.
+/// [`AppError::BadArgument`] for none, a name that isn't letters, digits, `-` and `_`, a name
+/// given twice, an unreadable token file, or an `https://` URL (a webserver's UI port, over
+/// mTLS) without `tls`.
 pub fn ui_deployments(
     config: &Config,
+    tls: Option<&Tls>,
 ) -> Result<Vec<schedr_ui::Deployment<schedr_client::HttpTransport>>, AppError> {
     let listed = &config.ui.deployments;
     if listed.is_empty() {
@@ -491,7 +494,28 @@ pub fn ui_deployments(
                     d.name
                 )));
             }
-            let transport = schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None);
+            let mut transport =
+                schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None);
+            if let Some(path) = &d.token_file {
+                let token = schedr_api::auth::read_ui_token(path).map_err(|e| {
+                    AppError::BadArgument(format!(
+                        "[ui] deployments: `{}`'s token_file: {e}",
+                        d.name
+                    ))
+                })?;
+                transport = transport.with_ui_token(token);
+            }
+            if d.url.starts_with("https://") {
+                let tls = tls.ok_or_else(|| {
+                    AppError::BadArgument(format!(
+                        "[ui] deployments: `{}` is reached over mTLS (https://): set [tls] \
+                         mode = \"app\" with this UI's certificate ([tls] ca, cert, key), \
+                         named [tls] ui_name for the webserver",
+                        d.name
+                    ))
+                })?;
+                transport = transport.with_tls(tls.clone());
+            }
             Ok(schedr_ui::Deployment {
                 name: d.name.clone(),
                 client: schedr_client::Client::new(
@@ -511,8 +535,16 @@ pub fn ui_deployments(
 /// [`AppError::BadArgument`] for bad `[ui]` settings, a port that can't be bound, or the
 /// HTTP server failing.
 pub async fn ui(config: &Config) -> Result<(), AppError> {
-    let deployments = ui_deployments(config)?;
+    // Certificates only where a deployment is reached over mTLS (`app` is the default mode).
+    let mtls = config
+        .ui
+        .deployments
+        .iter()
+        .any(|d| d.url.starts_with("https://"));
+    let tls = if mtls { role_tls(config)? } else { None };
+    let deployments = ui_deployments(config, tls.as_ref())?;
     let stop = stop_on_signal();
+    watch_tls(tls.as_ref(), config, &stop);
     let health = Health::new(config.ops.loop_stall_timeout);
     let ready = health.starting("ui");
     let ops = Ops::new(Registry::default(), health.clone());
@@ -520,7 +552,10 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let address = SocketAddr::new(config.ui.bind, config.ui.port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);
-    if let Some(warning) = no_auth_warning_for("the web UI", bound, "set [ui] bind = \"127.0.0.1\"")
+    let auth = role_auth("ui", &config.ui.auth, bound, None)?;
+    if config.ui.auth.mode == AuthMode::None
+        && let Some(warning) =
+            no_auth_warning_for("the web UI", bound, "set [ui] bind = \"127.0.0.1\"")
     {
         tracing::warn!("{warning}");
     }
@@ -532,6 +567,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let app = schedr_ui::router(schedr_ui::Ui {
         deployments,
         docs_dir: docs_dir(config),
+        auth,
     });
     ready.ready();
     axum::serve(listener, app)
@@ -565,16 +601,19 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
 /// [`AppError::BadArgument`] if the HTTP server fails.
 pub async fn serve_api(
     db: Database,
-    (identity_header, refresh): (Option<String>, Duration),
-    listener: TcpListener,
+    (auth, refresh): (Auth, Duration),
+    (listener, ui_port): (TcpListener, Option<TcpListener>),
     tls: Option<Tls>,
     ui: Option<LocalUi>,
     observed: Observed<'_, ApiMetrics>,
     stop: watch::Receiver<u32>,
 ) -> Result<(), AppError> {
-    let state = ApiState::new(db, identity_header)
+    // Its pages ask the person to sign in: the UI's token opens only the API.
+    let ui_auth = auth.without_ui_token();
+    let state = ApiState::new(db, None)
+        .with_auth(auth)
         .with_refresh(refresh)
-        .with_logs(std::sync::Arc::new(HttpLogSource::new(tls)))
+        .with_logs(std::sync::Arc::new(HttpLogSource::new(tls.clone())))
         .with_metrics(observed.metrics);
     observed.ready.ready();
     let api = router(state);
@@ -589,17 +628,33 @@ pub async fn serve_api(
                 name: LOCAL_DEPLOYMENT.to_owned(),
                 client,
             }];
-            api.merge(schedr_ui::router(schedr_ui::Ui {
+            // One port: its pages sign in as its API does (`[webserver.auth]`).
+            api.clone().merge(schedr_ui::router(schedr_ui::Ui {
                 deployments,
                 docs_dir: local.docs_dir,
+                auth: ui_auth,
             }))
         }
-        None => api,
+        None => api.clone(),
     };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(until(stop))
-        .await
-        .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
+    let http = |e: std::io::Error| AppError::BadArgument(format!("HTTP server: {e}"));
+    let public = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
+    // The UI port: the same API, its requests marked proven (decision 36): in `app` mode only
+    // `schedr ui`'s certificate gets through the handshake; in `mesh` mode
+    // (`ui_port_in_mesh`) the mesh's policy lets only `schedr ui` reach it (40A).
+    let Some(ui_listener) = ui_port else {
+        return public.await.map_err(http);
+    };
+    let proven = api.layer(axum::middleware::map_request(
+        |mut request: axum::extract::Request| async move {
+            request.extensions_mut().insert(schedr_api::auth::ProvenUi);
+            request
+        },
+    ));
+    let connections = incoming(ui_listener, tls, Protocol::Ui).map_err(http)?;
+    let ui_server = axum::serve(connections, proven).with_graceful_shutdown(until(stop));
+    tokio::try_join!(public.into_future(), ui_server.into_future()).map_err(http)?;
+    Ok(())
 }
 
 /// How a part of a role is observed: its metrics (registered by the caller), the health it
@@ -771,11 +826,55 @@ pub fn no_auth_warning(address: SocketAddr, alternative: &str) -> Option<String>
 pub fn no_auth_warning_for(what: &str, address: SocketAddr, alternative: &str) -> Option<String> {
     (!address.ip().is_loopback()).then(|| {
         format!(
-            "{what} has no authentication of its own (it comes with milestone M3.5) and \
-             listens on {address}: keep it behind an authenticating proxy or mesh, or \
-             {alternative}"
+            "{what} signs no one in (auth mode `none`) and listens on {address}: keep it \
+             behind an authenticating proxy or mesh, use the `proxy_header` or `basic` mode, \
+             or {alternative}"
         )
     })
+}
+
+/// Who the user is for the role `what` (`webserver`, `ui`) listening on `address`, by
+/// `section`; a UI trusted by the token in `ui_token_file`. The safety rules (see PROJECT.md,
+/// Authentication): `proxy_header` beyond a loopback address only with `allow_remote`
+/// (anything reaching it around the proxy could name any user), `basic` only with
+/// `behind_tls_proxy` (passwords would cross the network in the clear).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when a rule refuses it, or the token or users can't be read.
+pub fn role_auth(
+    what: &str,
+    section: &AuthSection,
+    address: SocketAddr,
+    ui_token_file: Option<&std::path::Path>,
+) -> Result<Auth, AppError> {
+    let remote = !address.ip().is_loopback();
+    match section.mode {
+        AuthMode::ProxyHeader if remote && !section.allow_remote => {
+            return Err(AppError::BadArgument(format!(
+                "[{what}.auth] mode = \"proxy_header\" on {address}, beyond a loopback address: \
+                 anything reaching it around the sign-in proxy could name any user. Listen on \
+                 127.0.0.1 behind the proxy, or set [{what}.auth] allow_remote = true when only \
+                 the proxy can reach it"
+            )));
+        }
+        AuthMode::Basic if remote && !section.behind_tls_proxy => {
+            return Err(AppError::BadArgument(format!(
+                "[{what}.auth] mode = \"basic\" on {address}, beyond a loopback address, over \
+                 plain HTTP: passwords would cross the network in the clear. End TLS in a proxy \
+                 in front and set [{what}.auth] behind_tls_proxy = true, or listen on 127.0.0.1"
+            )));
+        }
+        _ => {}
+    }
+    let token = ui_token_file
+        .map(|path| {
+            schedr_api::auth::read_ui_token(path)
+                .map_err(|e| AppError::BadArgument(format!("[webserver] ui_token_file: {e}")))
+        })
+        .transpose()?;
+    Auth::from_config(section, token)
+        .map_err(|e| AppError::BadArgument(format!("[{what}.auth] {e}")))
 }
 
 /// Checks `[worker] master_url` and returns its host: an `https://` URL with a host in `app`
@@ -858,17 +957,18 @@ pub async fn take_lease(db: Database, period: Duration, role: &'static str) -> L
 }
 
 /// The master's lease, being taken (see [`take_lease`]).
-pub type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Leadership> + Send>>;
+pub type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Result<Leadership, AppError>> + Send>>;
 
 /// The master's lease for `role` (`master` or `standalone`), being taken while the role's
 /// other parts start when the schema is usable; else, with `--migrate`, taken now (a standby
 /// waits) and the schema migrated by its holder. `None` when a shutdown is asked for while
-/// waiting.
+/// waiting. With `--migrate`, `[database] change_notifications` is applied by the holder.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] for a schema to migrate without `--migrate`, as
-/// [`migrate_holding`], or [`AppError::Db`] if the schema can't be read.
+/// [`migrate_holding`], or [`AppError::Db`] if the schema can't be read; the lease future
+/// fails (the lease released) when the switch can't be applied to an up-to-date schema.
 pub async fn lead(
     db: &Database,
     url: &str,
@@ -881,13 +981,15 @@ pub async fn lead(
         let db = db.clone();
         return Ok(Some(Box::pin(async move {
             let lead = take_lease(db.clone(), period, role).await;
-            // `--migrate` on an up-to-date schema: the switch only, holding the lease.
+            // `--migrate` on an up-to-date schema: the switch only, holding the lease; failing
+            // as a migration does.
             if migrate
                 && let Err(error) = apply_change_notifications(&db, change_notifications).await
             {
-                tracing::warn!(%error, "couldn't apply `[database] change_notifications`");
+                lead.release().await;
+                return Err(error);
             }
-            lead
+            Ok(lead)
         })));
     }
     if !migrate {
@@ -901,7 +1003,7 @@ pub async fn lead(
         return Ok(None);
     };
     let lead = migrate_holding(lead, &unlimited(url, db).await?, change_notifications).await?;
-    Ok(Some(Box::pin(std::future::ready(lead))))
+    Ok(Some(Box::pin(std::future::ready(Ok(lead)))))
 }
 
 /// `work`'s output, or `None` once a shutdown is asked for.
@@ -972,8 +1074,8 @@ pub async fn unlimited(url: &str, limited: &Database) -> Result<Database, AppErr
 ///
 /// # Errors
 ///
-/// [`AppError::Db`] if the migration fails, [`AppError::BadArgument`] if another master took
-/// the lease over meanwhile.
+/// [`AppError::Db`] if the migration fails (the lease given back), [`AppError::BadArgument`]
+/// if another master took the lease over meanwhile.
 pub async fn migrate_holding(
     mut lead: Leadership,
     db: &Database,
@@ -984,8 +1086,16 @@ pub async fn migrate_holding(
     loop {
         tokio::select! {
             migrated = &mut migration => {
-                migrated?;
-                apply_change_notifications(db, change_notifications).await?;
+                let applied = match migrated {
+                    Ok(()) => apply_change_notifications(db, change_notifications).await,
+                    Err(error) => Err(error.into()),
+                };
+                // Failing, the lease given back at once: a retry, or a master, needn't wait for
+                // it to expire.
+                if let Err(error) = applied {
+                    lead.release().await;
+                    return Err(error);
+                }
                 return Ok(lead);
             }
             () = tokio::time::sleep(lead.period() / 3) => {
@@ -1144,6 +1254,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
     check_timeouts(config)?;
+    check_ui_port(config)?;
     let health = Health::new(config.ops.loop_stall_timeout);
     let ready = health.starting("webserver");
     let metrics = ApiMetrics::default();
@@ -1164,7 +1275,15 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);
-    if let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"") {
+    let auth = role_auth(
+        "webserver",
+        &config.webserver.auth,
+        bound,
+        config.webserver.ui_token_file.as_deref(),
+    )?;
+    if config.webserver.auth.mode == AuthMode::None
+        && let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"")
+    {
         tracing::warn!("{warning}");
     }
     tracing::info!(
@@ -1172,13 +1291,35 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         links_text(tls.as_ref())
     );
     watch_tls(tls.as_ref(), config, &stop);
+    let ui_port = match (&tls, config.webserver.ui_port_in_mesh) {
+        (Some(_), _) => {
+            let address = SocketAddr::new(config.webserver.bind, config.webserver.ui_port);
+            let ui_listener = listen(address).await?;
+            tracing::info!(
+                "schedr webserver: the API for `schedr ui` on https://{} (mTLS, its \
+                 certificate naming `{}`)",
+                ui_listener.local_addr().unwrap_or(address),
+                config.tls.ui_name
+            );
+            Some(ui_listener)
+        }
+        (None, true) => {
+            let address = SocketAddr::new(config.webserver.bind, config.webserver.ui_port);
+            let ui_listener = listen(address).await?;
+            tracing::warn!(
+                "schedr webserver: the API for `schedr ui` on http://{} trusting the mesh \
+                 (`[webserver] ui_port_in_mesh`): only a mesh policy keeps others from naming \
+                 any user there",
+                ui_listener.local_addr().unwrap_or(address)
+            );
+            Some(ui_listener)
+        }
+        (None, false) => None,
+    };
     serve_api(
         db,
-        (
-            config.webserver.auth.identity_header.clone(),
-            config.webserver.refresh_interval,
-        ),
-        listener,
+        (auth, config.webserver.refresh_interval),
+        (listener, ui_port),
         tls,
         None,
         Observed {
@@ -1189,6 +1330,23 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         stop,
     )
     .await
+}
+
+/// Checks that `[webserver] ui_port_in_mesh` is set only in `[tls] mode = "mesh"`.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] in `app` mode, where the UI port proves `schedr ui` by its
+/// certificate.
+pub fn check_ui_port(config: &Config) -> Result<(), AppError> {
+    if config.webserver.ui_port_in_mesh && config.tls.mode == TlsMode::App {
+        return Err(AppError::BadArgument(
+            "[webserver] ui_port_in_mesh is for [tls] mode = \"mesh\": in \"app\" mode the UI \
+             port proves `schedr ui` by its certificate"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// `schedr worker`: the agent connected to `[worker] master_url`, until Ctrl-C or SIGTERM.

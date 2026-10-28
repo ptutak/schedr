@@ -53,6 +53,10 @@ pub enum Command {
         /// own (the Helm chart's init container).
         #[arg(long)]
         migrate: bool,
+        /// Serve only the API on its port, not the web UI: one deployment of a `schedr ui`
+        /// elsewhere (a federation of standalones).
+        #[arg(long)]
+        no_ui: bool,
     },
     /// Manage the database schema.
     Db {

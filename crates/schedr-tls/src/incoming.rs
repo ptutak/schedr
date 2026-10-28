@@ -40,6 +40,9 @@ pub enum Protocol {
     Grpc,
     /// HTTP/1.1 (a worker's log endpoint).
     Http,
+    /// HTTP/1.1 for `schedr ui` alone (a webserver's UI port: the client's certificate must
+    /// name `[tls] ui_name`).
+    Ui,
 }
 
 /// An accepted connection.
@@ -176,6 +179,7 @@ async fn accept_loop(
         let config = match protocol {
             Protocol::Grpc => tls.grpc_server(),
             Protocol::Http => tls.http_server(),
+            Protocol::Ui => tls.ui_server(),
         };
         let accepted = accepted.clone();
         tokio::spawn(async move {

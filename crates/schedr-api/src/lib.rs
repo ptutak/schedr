@@ -10,6 +10,7 @@ use axum::routing::{get, post};
 use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityRequirement, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
+pub mod auth;
 pub mod docs;
 pub mod error;
 pub mod events;
@@ -158,6 +159,11 @@ pub fn router(state: ApiState) -> Router {
         .route(DOCS_PATH, get(docs::redirect))
         .route("/api/v1/docs/", get(docs::file))
         .route("/api/v1/docs/{*path}", get(docs::file))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require,
+        ))
+        .layer(axum::middleware::from_fn(auth::refuse_cross_site))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             version::versions,

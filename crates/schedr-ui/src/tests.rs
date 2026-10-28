@@ -98,6 +98,7 @@ fn ui(deployments: Vec<Deployment<Scripted>>) -> axum::Router {
     router(Ui {
         deployments,
         docs_dir: None,
+        auth: schedr_api::auth::Auth::default(),
     })
 }
 
@@ -285,6 +286,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let app = router(Ui {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
+        auth: schedr_api::auth::Auth::default(),
     });
     let (status, html) = get(&app, "/docs/", &[]).await;
     assert_eq!(
@@ -403,6 +405,7 @@ async fn every_deployment_is_asked_at_once() {
     let app = router(Ui {
         deployments: vec![slow("a"), slow("b"), slow("c")],
         docs_dir: None,
+        auth: schedr_api::auth::Auth::default(),
     });
     let started = std::time::Instant::now();
     let (status, _) = get(&app, "/", &[]).await;
@@ -422,6 +425,7 @@ async fn every_answer_varies_with_the_prefix_and_docs_redirect_temporarily() {
     let app = router(Ui {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
+        auth: schedr_api::auth::Auth::default(),
     });
     for path in ["/", "/assets/style.css", "/docs/", "/docs", "/no/such/page"] {
         let response = app
@@ -438,4 +442,69 @@ async fn every_answer_varies_with_the_prefix_and_docs_redirect_temporarily() {
             assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         }
     }
+}
+
+/// A webserver recording who each call was made for (the UI's signed-in user).
+#[derive(Debug, Clone, Default)]
+struct Recording {
+    users: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl Transport for Recording {
+    async fn send(&self, _request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        tokio::task::yield_now().await;
+        let user = schedr_client::USER.try_with(Clone::clone).ok();
+        self.users.lock().unwrap().push(user);
+        Ok(ApiResponse {
+            status: 200,
+            body: json!({"dags": []}),
+        })
+    }
+}
+
+#[tokio::test]
+async fn the_ui_signs_people_in_and_passes_their_name_on() {
+    use schedr_config::{AuthMode, AuthSection};
+    let dir = tempfile::tempdir().unwrap();
+    let users = dir.path().join("users");
+    std::fs::write(
+        &users,
+        format!("anna:{}\n", bcrypt::hash("secret", 4).unwrap()),
+    )
+    .unwrap();
+    let section = AuthSection {
+        mode: AuthMode::Basic,
+        users_file: Some(users),
+        ..AuthSection::default()
+    };
+    let recording = Recording::default();
+    let app = router(Ui {
+        deployments: vec![Deployment {
+            name: "etl".to_owned(),
+            client: Client::new(recording.clone(), Duration::ZERO, Duration::ZERO),
+        }],
+        docs_dir: None,
+        auth: schedr_api::auth::Auth::from_config(&section, None).unwrap(),
+    });
+    // Not signed in: asked to, and nothing is asked of the webserver.
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().contains_key("www-authenticate"));
+    assert_eq!(recording.users.lock().unwrap().len(), 0);
+    // Asked by htmx: a fragment.
+    let (status, html) = get(&app, "/runs", &[("hx-request", "true")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!html.contains("<html"), "{html}");
+    // The stylesheet is anyone's (the sign-in page needs it).
+    let (status, _) = get(&app, "/assets/style.css", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    // Signed in: the page, its calls made for anna.
+    let basic = "Basic YW5uYTpzZWNyZXQ=";
+    let (status, _) = get(&app, "/", &[("authorization", basic)]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(*recording.users.lock().unwrap(), [Some("anna".to_owned())]);
 }

@@ -1,0 +1,214 @@
+{{- if include "schedr.uiDeployed" . }}
+{{- include "schedr.checkMode" . -}}
+{{- $fullname := include "schedr.fullname" . }}
+{{- $u := .Values.ui }}
+{{- $uiAuth := include "schedr.uiAuth" . | fromJson }}
+{{- $distributed := eq .Values.mode "distributed" }}
+{{- $ns := .Release.Namespace }}
+{{- $api := printf "%s.%s.svc.%s" $fullname $ns .Values.clusterDomain }}
+{{- /* The deployments it shows: in mode distributed, the release's own first. */}}
+{{- $deployments := list }}
+{{- if $distributed }}
+{{- if eq .Values.tls.mode "app" }}
+{{- $deployments = append $deployments (dict "name" "default" "url" (printf "https://%s:%v" $api .Values.service.webserverUiPort)) }}
+{{- else if include "schedr.meshUiPort" . }}
+{{- $deployments = append $deployments (dict "name" "default" "url" (printf "http://%s:%v" $api .Values.service.webserverUiPort)) }}
+{{- else }}
+{{- $deployments = append $deployments (dict "name" "default" "url" (printf "http://%s:%v" $api .Values.service.apiPort) "tokenSecret" (dict "name" (include "schedr.uiTokenSecret" .) "key" .Values.webserver.uiTokenSecret.key)) }}
+{{- end }}
+{{- end }}
+{{- $deployments = concat $deployments $u.deployments }}
+{{- $names := list }}
+{{- range $deployments }}
+{{- if has .name $names }}{{ fail (printf "ui.deployments: `%s` is listed twice%s" .name (ternary " (mode distributed shows the release's own webserver as `default`)" "" (eq .name "default"))) }}{{ end }}
+{{- $names = append $names .name }}
+{{- end }}
+{{- $mtls := false }}
+{{- range $deployments }}
+{{- if not (and .name .url) }}{{ fail "every ui.deployments item needs a name and a url" }}{{ end }}
+{{- if hasPrefix "https://" .url }}{{ $mtls = true }}{{ end }}
+{{- end }}
+{{- if and $mtls (ne .Values.tls.mode "app") }}
+{{- fail "ui.deployments: an https:// url is a webserver's UI port over mTLS: it needs tls.mode app and the UI's certificate" }}
+{{- end }}
+{{- if and $mtls (not $distributed) (not .Values.tls.existingSecrets.ui) }}
+{{- fail "mode ui with an https:// deployment needs the UI's certificate: tls.existingSecrets.ui (keys ca.crt, tls.crt, tls.key; naming tls.uiName)" }}
+{{- end }}
+---
+# `schedr ui`'s configuration: the deployments it shows (lists can't be environment
+# variables). Tokens and passwords aren't here: they are files from Secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-ui
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    {{- range $i, $d := $deployments }}
+    [[ui.deployments]]
+    name = {{ $d.name | quote }}
+    url = {{ $d.url | quote }}
+    {{- if and $d.tokenSecret $d.tokenSecret.name }}
+    token_file = {{ printf "/etc/schedr/ui-tokens/%d/%s" $i $d.tokenSecret.key | quote }}
+    {{- end }}
+    {{- end }}
+---
+# schedr ui: the web UI over the deployments' webservers. Holds no state.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-ui
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $u.replicas }}
+  selector:
+    matchLabels:
+      {{- include "schedr.roleSelector" (list . "ui") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "schedr.roleSelector" (list . "ui") | nindent 8 }}
+        {{- if .Values.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- /* A new configuration rolls the pods. */}}
+      {{- $annotations := merge (dict "checksum/config" (toJson $deployments | sha256sum)) (deepCopy ($u.podAnnotations | default dict)) }}
+      {{- with include "schedr.podAnnotations" (list . $annotations) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ ternary (include "schedr.roleServiceAccount" (list . "ui")) (include "schedr.serviceAccountName" .) $distributed }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "schedr.podSecurityContext" . | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: schedr
+          image: "{{ $u.image.repository }}:{{ $u.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $u.image.pullPolicy }}
+          args: ["--config", "/etc/schedr/ui/config.toml", "ui"]
+          env:
+            - name: SCHEDR_CONFIG__UI__PORT
+              value: {{ .Values.service.uiPort | quote }}
+            - name: SCHEDR_CONFIG__OPS__PORT
+              value: {{ .Values.service.opsPort | quote }}
+            {{- include "schedr.authEnv" (list . $uiAuth "UI") | trim | nindent 12 }}
+            {{- if $mtls }}
+            {{- include "schedr.tlsEnv" (list . "ui") | trim | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http-ui
+              containerPort: {{ .Values.service.uiPort }}
+            - name: http-ops
+              containerPort: {{ .Values.service.opsPort }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http-ops
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ops
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $u.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/schedr/ui
+              readOnly: true
+            {{- range $i, $d := $deployments }}
+            {{- if and $d.tokenSecret $d.tokenSecret.name }}
+            - name: token-{{ $i }}
+              mountPath: /etc/schedr/ui-tokens/{{ $i }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if $mtls }}
+            - name: tls
+              mountPath: /etc/schedr/tls
+              readOnly: true
+            {{- end }}
+            {{- include "schedr.authMount" $uiAuth | trim | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-ui
+        {{- range $i, $d := $deployments }}
+        {{- if and $d.tokenSecret $d.tokenSecret.name }}
+        - name: token-{{ $i }}
+          secret:
+            secretName: {{ $d.tokenSecret.name }}
+            items:
+              - key: {{ $d.tokenSecret.key }}
+                path: {{ $d.tokenSecret.key }}
+        {{- end }}
+        {{- end }}
+        {{- if $mtls }}
+        - name: tls
+          secret:
+            secretName: {{ include "schedr.tlsSecret" (list . "ui") }}
+        {{- end }}
+        {{- include "schedr.authVolume" $uiAuth | trim | nindent 8 }}
+      {{- with $u.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $u.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $u.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-ui
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "schedr.roleSelector" (list . "ui") | nindent 4 }}
+  # Named for Istio's protocol detection.
+  ports:
+    - name: http-ui
+      port: {{ .Values.service.uiPort }}
+      targetPort: http-ui
+    - name: http-ops
+      port: {{ .Values.service.opsPort }}
+      targetPort: http-ops
+{{- $token := include "schedr.uiTokenSecret" . }}
+{{- if and $token (not .Values.webserver.uiTokenSecret.name) }}
+---
+# The token the UI presents to the release's webserver (tls.mode mesh: no mTLS to prove it),
+# made once and kept on upgrades (Helm's lookup: only when Helm talks to the cluster).
+{{- $existing := lookup "v1" "Secret" $ns $token }}
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: {{ $token }}
+  labels:
+    {{- include "schedr.labels" . | nindent 4 }}
+data:
+  {{ .Values.webserver.uiTokenSecret.key }}: {{ (index (($existing | default dict).data | default dict) .Values.webserver.uiTokenSecret.key) | default (randAlphaNum 48 | b64enc) }}
+{{- end }}
+{{- end }}

@@ -8,10 +8,13 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+base64.workspace = true
+bcrypt.workspace = true
 prometheus-client.workspace = true
 axum.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
+schedr-config.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true
 schedr-tls.workspace = true
@@ -28,6 +31,7 @@ utoipa-swagger-ui.workspace = true
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 rstest.workspace = true
+tempfile.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tower.workspace = true

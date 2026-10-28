@@ -27,6 +27,8 @@ proptest.workspace = true
 rstest.workspace = true
 scraper.workspace = true
 tempfile.workspace = true
+bcrypt.workspace = true
+schedr-config.workspace = true
 tower.workspace = true
 
 [lints]

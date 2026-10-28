@@ -20,5 +20,12 @@ fn write_puts_the_files_where_tls_files_say() {
     assert_eq!(files.ca, dir.path().join("master-ca.crt"));
     assert_eq!(files.cert, dir.path().join("master.crt"));
     assert_eq!(files.key, dir.path().join("master.key"));
-    assert!(build(&files.read().unwrap(), &files, "schedr-worker").is_ok());
+    assert!(
+        build(
+            &files.read().unwrap(),
+            &files,
+            ("schedr-worker", "schedr-ui")
+        )
+        .is_ok()
+    );
 }

@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use axum::http::HeaderMap;
 use jiff::Timestamp;
 use schedr_db::Database;
 use schedr_model::SchedrVersion;
 
+use crate::auth::Auth;
 use crate::events::Feed;
 use crate::logs::{HttpLogSource, LogSource};
 use crate::metrics::ApiMetrics;
@@ -14,8 +14,7 @@ use crate::metrics::ApiMetrics;
 #[cfg(test)]
 mod tests;
 
-/// The user name recorded on commands when no identity is known.
-pub const ANONYMOUS: &str = "anonymous";
+pub use crate::auth::ANONYMOUS;
 
 /// The webserver's shared state.
 #[derive(Debug, Clone)]
@@ -26,9 +25,8 @@ pub struct ApiState {
     pub version: SchedrVersion,
     /// The server's full version, sent in `Schedr-Server-Version`.
     pub version_text: &'static str,
-    /// The header naming the user, recorded on commands for audit (`[webserver.auth]
-    /// identity_header`, e.g. `x-forwarded-user`); never used to allow or deny anything.
-    pub identity_header: Option<String>,
+    /// Who the user is (`[webserver.auth]`, and the UI's proof: see [`crate::auth`]).
+    pub auth: Auth,
     /// The clock (replaced in tests).
     pub clock: fn() -> Timestamp,
     /// Where task logs come from (the workers).
@@ -49,7 +47,7 @@ impl ApiState {
             db,
             version: SchedrVersion::current(),
             version_text: env!("CARGO_PKG_VERSION"),
-            identity_header,
+            auth: Auth::identity(identity_header),
             clock: Timestamp::now,
             logs: Arc::new(HttpLogSource::new(None)),
             metrics: ApiMetrics::default(),
@@ -73,21 +71,15 @@ impl ApiState {
         }
     }
 
+    /// This state telling who the user is by `auth`.
+    #[must_use]
+    pub fn with_auth(self, auth: Auth) -> Self {
+        Self { auth, ..self }
+    }
+
     /// This state reading logs from `logs` (over TLS in `app` mode).
     #[must_use]
     pub fn with_logs(self, logs: Arc<dyn LogSource>) -> Self {
         Self { logs, ..self }
-    }
-
-    /// The user a request comes from: the identity header's value, or `anonymous`.
-    #[must_use]
-    pub fn user(&self, headers: &HeaderMap) -> String {
-        self.identity_header
-            .as_deref()
-            .and_then(|name| headers.get(name))
-            .and_then(|value| value.to_str().ok())
-            .filter(|name| !name.is_empty())
-            .unwrap_or(ANONYMOUS)
-            .to_owned()
     }
 }

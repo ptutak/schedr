@@ -19,6 +19,12 @@ pub enum ApiError {
     /// No such DAG, run or command.
     #[error("{0}")]
     NotFound(String),
+    /// Not signed in (see [`crate::auth`]).
+    #[error("{0}")]
+    Unauthorized(String),
+    /// Refused whoever asks (a write from another site's page).
+    #[error("{0}")]
+    Forbidden(String),
     /// Something the request needs can't be reached now (a worker holding a log).
     #[error("{0}")]
     Unavailable(String),
@@ -34,6 +40,8 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

@@ -9,6 +9,22 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B25: a seventh live page doesn't load over plain HTTP (the browser's six connections)
+
+- **Seen:** 2026-10-28, by the user (`make standalone`, Chrome: a page "Stalled" about 13 s,
+  the event stream "Pending"); reproduced with Playwright's Chromium against a standalone:
+  six tabs on `/` load in under 0.2 s each, a seventh doesn't load within 60 s.
+- **Cause:** every live page holds its event stream (`GET /events`, server-sent events) open
+  for as long as it is shown, a run page with a log tail two. Over HTTP/1.1 a browser opens at
+  most six connections to one host, across all its tabs, so once six streams are open every
+  other request to schedr waits for one to close. The server answers at once (3 ms to the
+  stream's first byte, 8 ms for `/runs`). Over HTTP/2 (TLS ended by an ingress or a proxy in
+  front, as in production) the streams share one connection and this doesn't happen.
+- **A fix:** a page that isn't visible closes its stream (`visibilitychange`) and reads its
+  live parts again when shown, so only the tabs being looked at hold one; or one stream for
+  all of a browser's tabs (a SharedWorker); and the log tail read by polling instead of a
+  second stream. **To show it:** the Playwright suite opening seven tabs.
+
 ## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
 
 - **Found:** 2026-10-27, by Grok's review of M2.5.4a (by reading; not executed). The agent

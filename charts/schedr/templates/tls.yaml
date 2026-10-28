@@ -7,12 +7,19 @@ names tls.workerName (the webserver checks it); every one has serverAuth and cli
 {{- $tls := .Values.tls }}
 {{- if and (eq .Values.mode "distributed") (eq $tls.mode "app") (not $tls.existingSecrets.master) }}
 {{- $fullname := include "schedr.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- /* The webserver's: also the release's Service, where the UI reaches its UI port. */}}
 {{- $names := dict
   "master" (fromJsonArray (include "schedr.masterHosts" .))
-  "webserver" (list (printf "%s-webserver" $fullname))
+  "webserver" (list (printf "%s-webserver" $fullname) $fullname (printf "%s.%s" $fullname $ns) (printf "%s.%s.svc" $fullname $ns) (printf "%s.%s.svc.%s" $fullname $ns .Values.clusterDomain))
   "worker" (list $tls.workerName) }}
+{{- $roles := list "master" "webserver" "worker" }}
+{{- if include "schedr.uiDeployed" . }}
+{{- $_ := set $names "ui" (list $tls.uiName) }}
+{{- $roles = append $roles "ui" }}
+{{- end }}
 {{- if $tls.certManager.issuerRef.name }}
-{{- range $role := list "master" "webserver" "worker" }}
+{{- range $role := $roles }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -36,7 +43,7 @@ cluster); if one is missing, or the names the certificates must carry have chang
 under a new CA, so they always match. */}}
 {{- $fingerprint := toJson $names | sha256sum }}
 {{- $found := dict }}
-{{- range $role := list "master" "webserver" "worker" }}
+{{- range $role := $roles }}
 {{- $secret := lookup "v1" "Secret" $.Release.Namespace (include "schedr.tlsSecret" (list $ $role)) }}
 {{- $annotations := ($secret.metadata | default dict).annotations | default dict }}
 {{- if and $secret (index ($secret.data | default dict) "ca.crt") (eq (index $annotations "schedr.io/certificate-names" | default "") $fingerprint) }}
@@ -44,17 +51,17 @@ under a new CA, so they always match. */}}
 {{- end }}
 {{- end }}
 {{- $data := dict }}
-{{- if eq (len $found) 3 }}
+{{- if eq (len $found) (len $roles) }}
 {{- $data = $found }}
 {{- else }}
 {{- $ca := genCA (printf "%s-ca" $fullname) 3650 }}
-{{- range $role := list "master" "webserver" "worker" }}
+{{- range $role := $roles }}
 {{- $hosts := index $names $role }}
 {{- $cert := genSignedCert (first $hosts) nil $hosts 3650 $ca }}
 {{- $_ := set $data $role (dict "ca.crt" ($ca.Cert | b64enc) "tls.crt" ($cert.Cert | b64enc) "tls.key" ($cert.Key | b64enc)) }}
 {{- end }}
 {{- end }}
-{{- range $role := list "master" "webserver" "worker" }}
+{{- range $role := $roles }}
 ---
 apiVersion: v1
 kind: Secret

@@ -1214,3 +1214,129 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     let (_, metrics) = cluster.ops_get("master-2", "/metrics");
     assert!(metrics.contains("schedr_master_leading 1"), "{metrics}");
 }
+
+/// `curl` of the UI at `ui`: `POST` when `form` is given (an action from its own page, as
+/// `x-forwarded-user` names the person); the body.
+fn ui_call(ui: &str, path: &str, form: Option<&str>) -> String {
+    let mut command = Command::new("curl");
+    command.args([
+        "-s",
+        "-H",
+        "x-forwarded-user: anna",
+        "-H",
+        "sec-fetch-site: same-origin",
+    ]);
+    if let Some(form) = form {
+        command.args(["-X", "POST", "--data", form]);
+    }
+    let output = command.arg(format!("{ui}{path}")).output().unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The command ID in an action's fragment (its `hx-get` reads `/d/<deployment>/commands/<id>`).
+fn command_id(fragment: &str) -> String {
+    fragment
+        .split("/commands/")
+        .nth(1)
+        .and_then(|rest| rest.split('?').next())
+        .unwrap_or_else(|| panic!("no command in {fragment}"))
+        .to_owned()
+}
+
+#[test]
+fn one_ui_shows_a_federation_of_standalones_and_a_distributed_deployment() {
+    // Standalones on SQLite and on Postgres: their APIs only, trusting the UI's token.
+    let token = "federation-token-0123456789";
+    let standalone = |database: Option<String>| {
+        let mut cluster = Cluster::new(database, "100ms");
+        let file = cluster.root().parent().unwrap().join("ui-token");
+        std::fs::write(&file, token).unwrap();
+        cluster.start_args(
+            "standalone",
+            &["standalone", "--migrate", "--no-ui"],
+            &[(
+                "SCHEDR_CONFIG__WEBSERVER__UI_TOKEN_FILE",
+                file.to_str().unwrap(),
+            )],
+        );
+        cluster
+    };
+    let lite = standalone(None);
+    let pg = standalone(Some(postgres_database()));
+    // A distributed one, whose webserver wasn't given the token.
+    let mut distributed = Cluster::new(Some(postgres_database()), "100ms");
+    distributed.up();
+    // The UI over the three, and a fourth that is down; the person named by a header.
+    let dir = tempfile::TempDir::new().unwrap();
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, token).unwrap();
+    let deployment = |name: &str, url: &str| {
+        format!(
+            "[[ui.deployments]]\nname = \"{name}\"\nurl = \"{url}\"\ntoken_file = \"{}\"\n\n",
+            token_file.display()
+        )
+    };
+    let config = format!(
+        "[ui]\nbind = \"127.0.0.1\"\nport = 0\ndocs_dir = \"\"\n\n\
+         [ui.auth]\nidentity_header = \"x-forwarded-user\"\n\n\
+         [ops]\nbind = \"127.0.0.1\"\nport = 0\n\n{}{}{}{}",
+        deployment("lite", &lite.api),
+        deployment("pg", &pg.api),
+        deployment("dist", &distributed.api),
+        deployment("gone", "http://127.0.0.1:9"),
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let log = dir.path().join("ui.log");
+    let mut ui_process = Command::new(BINARY)
+        .arg("--config")
+        .arg(dir.path().join("config.toml"))
+        .arg("ui")
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdout(std::fs::File::create(&log).unwrap())
+        .stderr(std::fs::File::options().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let ui = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if let Some(address) = text
+            .split("schedr ui: on http://")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+        {
+            break format!("http://{address}");
+        }
+        assert!(Instant::now() < deadline, "no banner: {text}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Every deployment's DAG in one list (with a Deployment column), the one down named.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let list = loop {
+        let page = ui_call(&ui, "/", None);
+        let shown = ["lite", "pg", "dist"]
+            .iter()
+            .all(|d| page.contains(&format!("href=\"/d/{d}/dags/chain\"")));
+        if shown {
+            break page;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "not every deployment's DAG: {page}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(list.contains("Unavailable: gone:"), "{list}");
+    assert!(list.contains("<th>Deployment</th>"), "{list}");
+    // An action goes to its deployment. A standalone trusts the UI's token: the person's
+    // name is recorded; the distributed webserver doesn't: anonymous.
+    let paused = ui_call(&ui, "/d/lite/dags/chain/pause", Some(""));
+    let command = lite.api_get(&format!("/api/v1/commands/{}", command_id(&paused)));
+    assert_eq!(command.unwrap()["requested_by"], "anna", "{paused}");
+    let paused = ui_call(&ui, "/d/dist/dags/chain/pause", Some(""));
+    let command = distributed.api_get(&format!("/api/v1/commands/{}", command_id(&paused)));
+    assert_eq!(command.unwrap()["requested_by"], "anonymous", "{paused}");
+    ui_process.kill().unwrap();
+    ui_process.wait().unwrap();
+    drop((lite, pg, distributed));
+}

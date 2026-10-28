@@ -10,7 +10,7 @@ fn setup() -> (TempDir, TestCa, Tls) {
     let dir = TempDir::new().unwrap();
     let ca = TestCa::new("schedr test CA");
     let files = ca.write(dir.path(), "role", &["schedr-master"]);
-    let tls = Tls::load(files, "schedr-worker").unwrap();
+    let tls = Tls::load(files, "schedr-worker", "schedr-ui").unwrap();
     (dir, ca, tls)
 }
 
@@ -38,7 +38,7 @@ fn load_fails_on_a_missing_file() {
         cert: dir.path().join("tls.crt"),
         key: dir.path().join("tls.key"),
     };
-    let error = Tls::load(files, "w").unwrap_err().to_string();
+    let error = Tls::load(files, "w", "schedr-ui").unwrap_err().to_string();
     assert!(error.starts_with("can't read [tls] ca"), "{error}");
 }
 

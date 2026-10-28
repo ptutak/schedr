@@ -8,16 +8,17 @@
     reason = "handler docs become OpenAPI descriptions; errors are listed as responses"
 )]
 
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
+use axum::{Extension, Json};
 use schedr_db::reads::RunFilter;
 use schedr_model::commands::Command;
 use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, TaskId};
 
+use crate::auth::User;
 use crate::error::ApiError;
 use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
@@ -69,9 +70,9 @@ pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList
 pub async fn drain_worker(
     State(state): State<ApiState>,
     Path(worker_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
-    submit(&state, &headers, Command::DrainWorker { worker_id }).await
+    submit(&state, &user, Command::DrainWorker { worker_id }).await
 }
 
 /// Let a drained worker take tasks again (`schedr workers resume`). Applied by the master;
@@ -82,9 +83,9 @@ pub async fn drain_worker(
 pub async fn resume_worker(
     State(state): State<ApiState>,
     Path(worker_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
-    submit(&state, &headers, Command::ResumeWorker { worker_id }).await
+    submit(&state, &user, Command::ResumeWorker { worker_id }).await
 }
 
 /// One DAG.
@@ -108,14 +109,14 @@ pub async fn get_dag(
 pub async fn pause_dag(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
     body: Bytes,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
     let request: PauseRequest = optional_body(&body)?;
     submit(
         &state,
-        &headers,
+        &user,
         Command::PauseDag {
             dag_id,
             cancel_runs: request.cancel_runs,
@@ -131,10 +132,10 @@ pub async fn pause_dag(
 pub async fn unpause_dag(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
-    submit(&state, &headers, Command::UnpauseDag { dag_id }).await
+    submit(&state, &user, Command::UnpauseDag { dag_id }).await
 }
 
 /// A DAG's runs, newest first.
@@ -171,14 +172,14 @@ pub async fn list_runs(
 pub async fn trigger_run(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
     body: Bytes,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
     let request: TriggerRequest = optional_body(&body)?;
     submit(
         &state,
-        &headers,
+        &user,
         Command::TriggerRun {
             dag_id,
             planned_for: request.planned_for,
@@ -303,10 +304,10 @@ pub async fn get_run(
 pub async fn cancel_run(
     State(state): State<ApiState>,
     Path(run_id): Path<String>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
-    submit(&state, &headers, Command::CancelRun { run_id }).await
+    submit(&state, &user, Command::CancelRun { run_id }).await
 }
 
 /// Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if
@@ -321,11 +322,11 @@ pub async fn cancel_run(
 pub async fn cancel_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    submit(&state, &headers, Command::CancelTask { run_id, task_id }).await
+    submit(&state, &user, Command::CancelTask { run_id, task_id }).await
 }
 
 /// Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the
@@ -339,11 +340,11 @@ pub async fn cancel_task(
 pub async fn retry_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
-    headers: HeaderMap,
+    Extension(user): Extension<User>,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    submit(&state, &headers, Command::RetryTask { run_id, task_id }).await
+    submit(&state, &user, Command::RetryTask { run_id, task_id }).await
 }
 
 /// The attempts of a run's task, oldest first.
@@ -492,10 +493,10 @@ pub async fn get_command(
     Ok(Json(CommandView::from(&command)))
 }
 
-async fn submit(state: &ApiState, headers: &HeaderMap, command: Command) -> Accepted {
+async fn submit(state: &ApiState, user: &User, command: Command) -> Accepted {
     let id = state
         .db
-        .insert_command(&command, &state.user(headers), (state.clock)())
+        .insert_command(&command, &user.0, (state.clock)())
         .await?;
     let record = state
         .db

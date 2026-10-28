@@ -44,6 +44,8 @@ pub struct Ui<T> {
     pub deployments: Vec<Deployment<T>>,
     /// Where the documentation site is (`[ui] docs_dir`); none: no `/docs`.
     pub docs_dir: Option<PathBuf>,
+    /// Who the person using it is (`[ui.auth]`; standalone's: `[webserver.auth]`, one port).
+    pub auth: schedr_api::auth::Auth,
 }
 
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
@@ -52,6 +54,7 @@ pub struct Ui<T> {
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
     let relays = Arc::new(live::Relays::new(ui.deployments.len()));
+    let state = Arc::new(ui);
     Router::new()
         .route("/", get(pages::dags::<T>))
         .route("/d/{deployment}/dags/{dag}", get(pages::dag::<T>))
@@ -108,9 +111,51 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route("/docs/{*path}", get(docs::file::<T>))
         .fallback(pages::not_found::<T>)
         .layer(axum::Extension(relays))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            signed_in::<T>,
+        ))
         .layer(axum::middleware::from_fn(actions::guard))
         .layer(axum::middleware::map_response(vary_on_prefix))
-        .with_state(Arc::new(ui))
+        .with_state(state)
+}
+
+/// Who the person is, by the UI's `auth` (refused: 401, a sign-in prompt in `basic` mode),
+/// their name carried to the webservers with every call made for this request
+/// ([`schedr_client::USER`]). The stylesheet and scripts are served to anyone (the sign-in
+/// page needs them).
+async fn signed_in<T: Transport>(
+    axum::extract::State(ui): axum::extract::State<Arc<Ui<T>>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    if request.uri().path().starts_with("/assets/") {
+        return next.run(request).await;
+    }
+    match ui.auth.user(request.headers(), false) {
+        Ok(user) => schedr_client::USER.scope(user, next.run(request)).await,
+        Err(refused) => {
+            let page = page::Page::new(request.headers(), ui.docs_dir.is_some());
+            let htmx = request.headers().contains_key("hx-request");
+            ui.auth.refusal(&refused, |message| {
+                if htmx {
+                    axum::response::Html(format!(
+                        "<div class=\"banner warning\"><strong>Not signed in</strong>: {}</div>",
+                        ansi::to_html(message)
+                    ))
+                    .into_response()
+                } else {
+                    pages::error_page(
+                        &page,
+                        "Not signed in",
+                        message,
+                        axum::http::StatusCode::UNAUTHORIZED,
+                    )
+                }
+            })
+        }
+    }
 }
 
 /// Every answer varies with the prefix, and may not be shown in another site's frame (its

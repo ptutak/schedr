@@ -44,6 +44,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+bcrypt.workspace = true
 sqlx.workspace = true
 schedr-tls = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
