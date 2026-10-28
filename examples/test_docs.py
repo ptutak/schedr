@@ -45,5 +45,9 @@ def test_doc_example_runs(path: Path) -> None:
     for dag in _load(path):
         result = run_dag(path, dag.id, for_=FOR)
         assert result.state == "success", dag.id
-        failed = [task.task_id for task in result.tasks.values() if task.state != "success"]
-        assert failed == [], dag.id
+        ended = [
+            (task.task_id, task.state)
+            for task in result.tasks.values()
+            if task.state not in {"success", "skipped"}
+        ]
+        assert ended == [], dag.id

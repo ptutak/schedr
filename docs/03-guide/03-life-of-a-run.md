@@ -25,8 +25,8 @@ sequenceDiagram
     W->>M: Started
     W->>W: run the task (a subprocess)
     W->>W: journal "finished"
-    W->>M: Finished (status, output)
-    M->>DB: store result, load becomes ready
+    W->>M: Finished (status, output, outcome)
+    M->>DB: store result and outcome, load becomes ready
     M->>W: FinishedAck
     Note over M: next round: assign load
     M->>W: AssignTask (load, with extract's output)
@@ -100,12 +100,15 @@ shares with the fork server.
 ## 6. The result comes back
 
 The agent records the result in its journal, then sends `Finished`: the status, the output,
-the duration, the peak memory, `usage` and `core_dumped`. The master handles it as soon as it
-arrives, between rounds:
+the outcome (on success), the duration, the peak memory, `usage` and `core_dumped`. The
+master handles it as soon as it arrives, between rounds:
 
 - it stores the attempt's result and the task's new state (`success`, or `up_for_retry` /
   `failed` by the retry rules);
-- it moves the run forward: `load`'s upstream condition is met, so `load` becomes `queued`;
+- on success it stores the output with its outcome (the name the worker reported, or
+  `SUCCESS` when the worker named none);
+- it moves the run forward: each downstream task is decided by its incoming edges and
+  `run_if`, as soon as that result is certain, so `load` becomes `queued`;
 - it answers `FinishedAck`, and the agent deletes the journal file.
 
 Delivery is at least once. A worker that doesn't get the acknowledgement sends `Finished`
@@ -113,10 +116,21 @@ again, and the master acknowledges the repeat without storing it twice.
 
 ## 7. The next task, and the end
 
-The next round assigns `load`. Its `AssignTask` carries `extract`'s output as input. When
-every task instance has a final state, the run gets its result: `failed` if a task failed
-after its last retry, `cancelled` if a user cancelled it and nothing failed, otherwise
-`success`.
+The next round assigns `load`. Its `AssignTask` carries `extract`'s output as input, and
+the outcomes of the upstream tasks `load` uses (`""` for a skipped one). A task whose
+edges and `run_if` are already decided is skipped or `upstream_failed` without being
+assigned: an edge not taken (`.on(...)` whose outcome didn't happen, a `@branch` that
+didn't choose that target, or a skipped upstream task) counts as skipped;
+`RunIf.NONE_FAILED` (the default) still runs when another edge succeeded, and
+`RunIf.ALL_SUCCEEDED` skips. A failure on any edge makes the task `upstream_failed` as
+soon as that failure is known. [The master](04-master.md#when-a-task-is-ready) is the
+rule; [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG declares it.
+
+When every task instance has a final state, the run gets its result: `failed` if a task
+failed after its last retry, `cancelled` if a user cancelled it and nothing failed,
+otherwise `success`. A skipped task leaves the run `success`. `upstream_failed` is a
+consequence of the original failure, which already makes the run `failed`. Independent
+parts of the graph keep running after a failure.
 
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
 it from the worker that ran the attempt (see [Workers](05-workers.md)). The

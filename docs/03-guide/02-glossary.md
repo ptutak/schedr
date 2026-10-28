@@ -29,7 +29,23 @@ The names used across the documentation, the API and the logs.
 : One task of one run. States: `scheduled`, `queued`, `unschedulable`, `running`,
   `cleaning_up` (its process ended and its own cleanup runs; it still holds the slot; comes
   with cleanups), `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`,
-  `upstream_failed`.
+  `upstream_failed`. On success it has an **outcome**.
+
+**Outcome**
+: Which kind of success a finished task had. A name (`SUCCESS`, `Rows`, `CHANGED`).
+  Stored with the attempt's output. Shown on the run graph when it is something other
+  than `SUCCESS`. [Routing by outcome](../02-dags/08-outcomes.md).
+
+**Selection edge**
+: An edge from a `@branch` task to one of its direct downstream tasks. Taken when the
+  branch chose that target; otherwise it counts as skipped, like any edge not taken.
+
+**run_if** (trigger rule)
+: When a task runs, from the states of its incoming edges. `RunIf.NONE_FAILED` (the
+  default): runs when every edge that wasn't skipped succeeded and at least one did;
+  skipped when every edge was skipped; `upstream_failed` as soon as one failed.
+  `RunIf.ALL_SUCCEEDED`: runs only when every edge succeeded; any skip skips it.
+  [The master](04-master.md#when-a-task-is-ready).
 
 **Attempt** (try)
 : One try of a task instance on one worker, with its own ID. Its try number counts every

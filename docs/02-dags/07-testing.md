@@ -115,8 +115,11 @@ to an hour; a task's own `timeout` stops that task sooner.
 
 `--json` prints the run, the file that defined the DAG (`location`), and each task's
 `state`, `outcome`, `try_number`, `output`, `attempts` and `log`. A successful task's
-`outcome` is `SUCCESS`. Datetimes, dates, durations and tuples in `output` use the tags
-in [What a task may return](02-tasks.md#what-a-task-may-return).
+`outcome` is the outcome name (`SUCCESS` when the task has no outcomes of its own). A
+skipped or failed task's is `null`; the table prints `-` for those. Datetimes, dates,
+durations and tuples in `output` use the tags in
+[What a task may return](02-tasks.md#what-a-task-may-return).
+[Routing by outcome](08-outcomes.md) is what the `OUTCOME` column shows.
 
 `-p` / `--param`, `--secret` and `--task` are accepted and then report that they are not
 implemented yet (milestone M4). Run parameters, secrets and running one task are
@@ -154,8 +157,8 @@ Both times must be aware datetimes, and `since` must not be after `planned_for`.
 
 | `TaskResult` | |
 |---|---|
-| `state` | Where the task ended, such as `success`, `failed`, `upstream_failed`. |
-| `outcome` | `SUCCESS` when it succeeded. |
+| `state` | Where the task ended, such as `success`, `failed`, `skipped`, `upstream_failed`. |
+| `outcome` | The outcome name when it succeeded (`SUCCESS` when the task has no outcomes of its own). |
 | `try_number` | The last try. `0` if it never ran. |
 | `output` | The output decoded with the task's return type. A command's is a `ProcessResult`. An empty task's is `None`. |
 | `output_json` | The output as stored. |

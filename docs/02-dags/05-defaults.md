@@ -20,17 +20,19 @@ timeout and no retries, and keeps the DAG's `retry_delay` and `max_output_size`.
 | `max_output_size` | 1 MiB | How large the stored output may be. `KiB` and `MiB` are the sizes in bytes (`8 * MiB`). For a command the limit is per stream. |
 | `preload` | `True` | A Python task forks from the preloaded fork server. `False` forks only from the bare one, for code that misbehaves next to the preloaded libraries. |
 | `fresh_process` | `False` | A Python task is always a new process, never forked, for code that misbehaves after a fork. `True` wins when `preload` is also set. |
+| `run_if` | `RunIf.NONE_FAILED` | When the task runs, from its upstream edges. `RunIf.ALL_SUCCEEDED` runs only if every edge succeeded. [Routing by outcome](08-outcomes.md). |
 
 A duration is a `timedelta` of whole milliseconds. `retry_delay` must not be negative.
 `timeout` must be positive. `retries` and `max_output_size` must not be negative, and
 `queue` must not be empty. `retries`, `retry_delay`, `timeout`, `queue` and
 `max_output_size` exist on `@task`, `.override(...)` and `CommandOperator`. `preload` and
-`fresh_process` exist on `@task`, `.override(...)` and `TaskDefaults(...)`. A task's own
-argument wins over the DAG's `defaults`. Both are stored on the task as `preload` and
-`fresh_process`. They matter for a Python task only. A command always starts a new process,
-and `CommandOperator` does not take them. A `TaskDefaults` value is still stored on every
-task, including a command and an `EmptyOperator`. `EmptyOperator` takes only its ID; the
-master completes it, and no worker is involved.
+`fresh_process` exist on `@task`, `.override(...)` and `TaskDefaults(...)`; they are stored
+on the task and matter for a Python task only. A command always starts a new process, and
+`CommandOperator` does not take them. `run_if` exists on all of those and on
+`EmptyOperator`. A task's own argument wins over the DAG's `defaults`. A `TaskDefaults`
+value is still stored on every task, including a command and an `EmptyOperator`.
+`EmptyOperator` takes its ID and `run_if`; the master completes it, and no worker is
+involved.
 
 A task runs on a worker that serves its queue
 ([Configuration](../_generated/04-reference/01-configuration.md), `[worker] queues`). With
@@ -45,16 +47,18 @@ kinds fails the task.
 
 | The attempt ended | What happens |
 |---|---|
-| `failed` (the function raised, or a command exited with something other than 0), `timed_out`, `oom_killed`, `lost` | Retried while `retries` last, after `retry_delay`. Then the task fails. |
+| `failed` (the function raised, or a command exited with a code that is not a declared success), `timed_out`, `oom_killed`, `lost` | Retried while `retries` last, after `retry_delay`. Then the task fails. |
 | `interrupted` (the worker was drained), `assignment_expired` | Run again, without using a retry. |
 | `cancelled` | Not retried. |
 | An error certain to repeat: inputs or an output that is too large, a template that cannot be rendered, a return value that cannot be stored, inputs that do not match the task | Not retried. |
 
-A task downstream of a failure ends `upstream_failed` and does not run. Tasks that do not
-depend on it keep running. The run ends `failed`.
+A task downstream of a failure ends `upstream_failed` and does not run. An edge that
+wasn't taken counts as skipped; [Routing by outcome](08-outcomes.md) is when that skips
+the downstream task or still runs it. Tasks that do not depend on the failure keep
+running. The run ends `failed`.
 
-A task that succeeds has the outcome `SUCCESS` in the report (`schedr dags test` prints it
-in the `OUTCOME` column). Routing a DAG by outcome is
-[Outcomes, failures and joins](../_generated/05-design/07-python-api-structure.md#outcomes-failures-and-joins).
+A task that succeeds has an outcome in the report (`schedr dags test` prints it in the
+`OUTCOME` column): `SUCCESS` when the task has no outcomes of its own, otherwise the
+name it declared. [Routing by outcome](08-outcomes.md) is how a DAG routes on that name.
 [State and failures](../03-guide/07-failures.md#retries) is the full list of what each
 stopped process becomes.

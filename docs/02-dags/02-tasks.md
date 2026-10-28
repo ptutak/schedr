@@ -29,9 +29,10 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 | Calling it twice | The second call needs another ID: `load.override(task_id="load_again")(names)`. The same ID twice is `` task ID `load` is defined twice in DAG `tasks_demo` ``. |
 | `async def` | A `TypeError`. Async tasks, sensors and event triggers are [Async task functions](../_generated/05-design/07-python-api-structure.md#async-task-functions) and [Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers). |
 
-`@task(timeout=..., retries=...)` sets that task's options. `.override(...)` returns a new
-task function and leaves the original unchanged. The options are
-[Defaults and retries](05-defaults.md). Each Python task runs in its own process. Leave the
+`@task(timeout=..., retries=..., run_if=...)` sets that task's options. `.override(...)`
+returns a new task function and leaves the original unchanged. The options are
+[Defaults and retries](05-defaults.md) and [Routing by outcome](08-outcomes.md). Each
+Python task runs in its own process. Leave the
 start as it is for a task that can share the worker's preloaded libraries. Set
 `preload=False` when the task misbehaves next to those libraries: it still forks, but only
 from the bare fork server. Set `fresh_process=True` when the task misbehaves after a fork:
@@ -41,7 +42,7 @@ and `TaskDefaults(...)`, and the task's own argument wins. What the worker does 
 
 ## Commands
 
-`CommandOperator(task_id, command, *, env=...)` runs one process.
+`CommandOperator(task_id, command, *, env=..., outcomes=...)` runs one process.
 
 | `command` | How it runs |
 |---|---|
@@ -53,13 +54,15 @@ An element, and a value in `env`, may be a string, a t-string or a reference suc
 `t"echo loaded {count} in $REGION"`, `{count}` is the task's output and `$REGION` is the
 shell, from `env`.
 
-Exit code 0 is success. Any other exit code, or a signal, fails the attempt. The output is
-a `ProcessResult`: `stdout`, `stderr`, `exit_code`, `stdout_truncated`,
-`stderr_truncated`. `announce.stdout` and `announce.stderr` are references to those
-strings. The size limit applies to each stream.
+Without `outcomes=`, exit code 0 is success (`DefaultOutcome.SUCCESS`). With
+`outcomes=`, a declared exit code is success with that outcome; any other code, or a
+signal, fails the attempt. [Routing by outcome](08-outcomes.md) is the enum and
+`.on(...)`. The output is a `ProcessResult`: `stdout`, `stderr`, `exit_code`,
+`stdout_truncated`, `stderr_truncated`. `announce.stdout` and `announce.stderr` are
+references to those strings. The size limit applies to each stream.
 
-`EmptyOperator(task_id)` has no output. The master marks it successful when its upstream
-tasks have succeeded, and no worker runs it.
+`EmptyOperator(task_id, *, run_if=...)` has no output. The master completes it when its
+upstream edges allow it to run, and no worker runs it.
 
 ## What a task may return
 
@@ -79,11 +82,13 @@ import error naming the part. The same types are what one task may pass to anoth
 | `Literal[...]` | `str`, `int`, `bool` or `None`. |
 | A dataclass or a `TypedDict` | Its fields. A dataclass matches by its class name and fields; the stored JSON is the fields. `InitVar` and `field(init=False)` are refused. A class that refers to itself is refused. |
 | `ProcessResult` | `stdout`, `stderr`, `exit_code`, `stdout_truncated`, `stderr_truncated`. |
-| `A \| B` | Either type. |
+| `A \| B` | Either type. Two or more dataclasses (or `None`) is an outcome union; `int \| str` is ordinary data with outcome `SUCCESS`. |
+| A subclass of `Outcome` | No output (`None`); the member is the outcome. |
 | `Any` | No parse-time check. The returned value still has to be one of the rows above. |
 
 `set` and `frozenset` are refused (use `list`). `bytes` is refused (encode it, for example
-base64 in a `str`).
+base64 in a `str`). Outcome unions, `Outcome` enums and `.on(...)` are
+[Routing by outcome](08-outcomes.md).
 
 ## IDs
 

@@ -109,7 +109,7 @@ pub enum RunnerMessage {
     TaskSucceeded {
         /// The output as stored JSON (tagged extra types).
         output: serde_json::Value,
-        /// The outcome's name (`SUCCESS` until outcome types arrive, milestone M4).
+        /// The outcome's name: `SUCCESS`, an outcome union member's class name, or an `Outcome` member's name.
         outcome: String,
     },
     /// The task failed: an exception, or an output that can't be stored.

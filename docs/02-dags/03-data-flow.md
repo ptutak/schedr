@@ -18,6 +18,7 @@ downstream task's inputs. A key is a `str` or an `int`; a negative index is a
 |---|---|
 | An argument of a `@task` call | A data edge. The downstream task waits for that output. Lists, tuples and dict values are searched, at any depth. |
 | A command string, a list element or an `env` value | A data edge, the same way. |
+| `x.on(Kind)` | A data or order edge taken only on that outcome. [Routing by outcome](08-outcomes.md). |
 | `a >> b`, `b << a`, or `chain(a, b)` | An order-only edge. `b` waits for `a` and receives nothing from it. |
 | `a >> [b, c]`, `[a, b] >> c` | An edge from every task on the left to every task on the right. |
 | `chain(a, [b, c], d)` | `a >> [b, c] >> d`. |
@@ -49,9 +50,11 @@ The part is checked against the upstream return type at import.
 | `tuple[A, B]` | An index that exists. |
 | `Any` | Anything; the part stays `Any`. |
 | `ProcessResult` | `stdout`, `stderr`, `exit_code`, `stdout_truncated`, `stderr_truncated`. |
+| An outcome union (`Rows \| Unavailable`) | A field of a member, after `.on(Rows)`: `batch.on(Rows).rows`. |
 
 A mismatch is a `TypeError` naming the argument and both types. There is no coercion
-except `int` for `float`.
+except `int` for `float`. When the upstream return type is an outcome union, name the
+member first: `batch.on(Rows).rows`.
 
 ## t-strings
 
@@ -70,9 +73,11 @@ t-string nested in another, or used as a dict key, is a `TypeError`.
 
 ## When a task does not run
 
-A task runs after every upstream task has succeeded. If one of them fails, this task ends
-`upstream_failed` and does not run. Tasks with no dependency on the failure keep running.
+A task runs when its incoming edges and `run_if` allow it
+([Routing by outcome](08-outcomes.md)). If an upstream task fails, this task ends
+`upstream_failed` and does not run. An edge that wasn't taken (`.on(...)` whose outcome
+didn't happen, or a `@branch` that didn't choose this task) counts as skipped. Tasks with
+no dependency on the failure keep running.
 [Defaults and retries](05-defaults.md) is what a failure does to the task that failed.
-Choosing a task by its outcome, branching, task groups and mapped tasks are
-[Outcomes, failures and joins](../_generated/05-design/07-python-api-structure.md#outcomes-failures-and-joins)
-and [Native API](../_generated/05-design/07-python-api-structure.md#native-api).
+Task groups and mapped tasks are
+[Native API](../_generated/05-design/07-python-api-structure.md#native-api).

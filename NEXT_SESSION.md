@@ -37,13 +37,10 @@ Today's commits, oldest first:
 
 ## Open when this session ended
 
-- **Grok's docs round for M4.1a-M4.2a** (outcomes and `@branch` in Writing DAGs and the
-  guide): fresh session `bdf356db-9847-4784-9c40-b51886b5297b` in the worktree
-  `/home/ptutak/Git/schedr-grok-assign-start` (detached at `835ad4d`; pyenv
-  `schedr-grok-assign-start`). If it hasn't been brought back yet: read its reply
-  (`~/.claude/skills/grok/logs/bdf356db-*.json`, or resume the session), read its diff
-  (`git -C <worktree> diff`; check every claim against the code), apply it to the main
-  checkout, `make docs` and the docs example tests, commit and push.
+- **Grok's docs round for M4.1a-M4.2a is done and checked** (session `bdf356db`): a new page
+  `docs/02-dags/08-outcomes.md` with `examples/docs/outcomes.py`, and the guide's life of a
+  run, master, UI and glossary. One wrong claim corrected (run creation doesn't decide
+  waiting tasks). If it isn't committed yet, it waits for the user's acceptance.
 - **Grok's budget:** 98% of the week used (plus $5 of credits). The reset is **Friday
   2026-10-30 9:00**. Ask the user for the weekly % after each round and log it in
   `~/.claude/skills/grok/USAGE.md` (commit and push that repository).
@@ -57,7 +54,8 @@ Today's commits, oldest first:
   and a preload list in `make standalone`.
 - **Bugs:** B22 (a draining worker missed its grace under load) seen twice; B27 (references
   inside containers not type-checked, reproduced) and B28 (selection edges from plain tasks
-  not refused, suspected) are new.
+  not refused, suspected) and B29 (an unchosen branch edge isn't faint on the graph,
+  suspected) are new.
 
 ## How we work now (2026-10-28)
 
@@ -69,7 +67,10 @@ Today's commits, oldest first:
 - **Decisions:** numbered (the next is **56**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
-- **Pushing:** the user authorized pushing this work to `main`; check CI with `gh run list`.
+- **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
+  work commits and pushes only when the user accepted that in advance and no relevant
+  decision is waiting for them; otherwise stop before the commit. Check CI with
+  `gh run list`.
 - **Stress tests:** never run `make stress` (or a scenario) without the user asking.
 - **Processes:** kill only your own (no broad `pkill`).
 - **Checks:** `SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python
@@ -94,7 +95,7 @@ Today's commits, oldest first:
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B29); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B30); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.

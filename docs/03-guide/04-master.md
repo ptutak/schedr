@@ -61,7 +61,7 @@ and holds up the workers' messages and the lease:
 | 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again. |
 | 3 | **Scheduler** | Visits the [busy DAGs](#busy-and-quiet-dags) every round and the quiet ones woken this round (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), and starts queued runs while the DAG is under `max_active_runs`. |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started; queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
+| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than 10 minutes to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
 
@@ -160,6 +160,23 @@ A failed scheduler pass puts the marks back and does not move the sweep or the I
 forward ([above](#rounds)), so the next round tries that visit again. Visiting a DAG that
 had nothing to do creates nothing: a scheduled run is unique for its `planned_for`.
 
+## When a task is ready
+
+Trigger rules count **edges**. An edge counts as its upstream task's state, except one
+whose upstream succeeded with an outcome the edge isn't taken on (`.on(...)`), or a
+selection edge whose `@branch` did not choose that target: those count as skipped. A
+skipped upstream task skips every edge from it.
+
+`RunIf.NONE_FAILED` (the default): the task is ready when every edge that wasn't skipped
+succeeded and at least one did (or it has none); skipped when all its edges were skipped;
+`upstream_failed` as soon as one failed. `RunIf.ALL_SUCCEEDED`: ready when every edge
+succeeded; `upstream_failed` as soon as one failed; otherwise skipped when one was
+skipped, once no other edge can still fail. The first failure wins without waiting for
+the rest. [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG sets the rule.
+
+An empty task the rule marks ready is completed by the master (`success`, outcome
+`SUCCESS`); no worker is assigned.
+
 ## Between rounds: messages from workers
 
 Messages from workers are handled as they arrive, under the same lock, in order for each
@@ -180,7 +197,7 @@ reconnects), never an ended attempt with its run left behind.
 | `CodeVersionChanged` | Records the root's new hash, which can make it the current code and create a parse job. |
 | `Started` | Marks the task `running` and stores `start_method` (`spawn`, or `fork`). A later `Started` for the same attempt, while it has not ended, replaces `start_method` and keeps the first start time. |
 | `Rejected` | Puts the task back to wait, or tries another worker, depending on the reason. A rejection never uses a retry. |
-| `Finished` | Stores the result once, including `usage` and `core_dumped`, moves the run forward (downstream tasks become ready), finishes the run when every task has, and answers `FinishedAck`. `usage` is null when the worker did not read it. |
+| `Finished` | Stores the result once, including the outcome on success, `usage` and `core_dumped`, moves the run forward (downstream tasks become ready, skipped or `upstream_failed` by their edges and `run_if`), finishes the run when every task has, and answers `FinishedAck`. `usage` is null when the worker did not read it. |
 | `Draining`, `Deregister` | Stops assigning to the worker; records it `draining`, then `offline`. |
 
 **The lease counts from when a message arrives, not when it is handled.** Each worker's stream

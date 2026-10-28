@@ -9,6 +9,16 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B29: a `@branch` edge to a target it didn't choose isn't faint on the run graph (Suspected)
+
+- **Found:** 2026-10-28, by Grok while writing the docs for M4.1a-M4.2a (by reading).
+  `joined_edges` (`crates/schedr-ui/src/runs.rs`) marks an edge "not taken" only when it has
+  an `on` list; a selection edge has none, so an unchosen target's line stays solid (its box
+  shows `skipped`). The guide (12-ui) describes it as it is.
+- **To confirm:** a UI test rendering a run whose branch chose one of two targets. **A fix:**
+  mark a selection edge not taken once its branch succeeded without choosing the target
+  (the branch's stored output), and say so in the guide.
+
 ## B28: the master doesn't check that selection edges come only from `@branch` tasks (Suspected)
 
 - **Found:** 2026-10-28, while fixing Grok's review of M4.1a-M4.2a. `dag_problems`
