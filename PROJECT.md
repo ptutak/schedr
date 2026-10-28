@@ -4530,6 +4530,18 @@ from it counts as not taken.
 | `x(cmd.outcome)` | any outcome | `Output[Check]` | the member | n/a |
 | `x(g.on(None))` | `None` | `Output[None]` | `None` | data rule (useful only for order) |
 
+**How M4.1a stores it** (Claude's, 2026-10-28, within the design above): each task carries its
+outcomes in the DAG JSON (`outcomes: [{name, exit_code}]`, left out when it is only `SUCCESS`
+on exit code 0), an edge its condition (`on: [names]`, left out for any outcome), a reference
+the same (`{"kind": "output", ..., "on": [...]}`), `.outcome` a reference of its own
+(`{"kind": "outcome", "task": ...}`), and a task its rule in its settings (`run_if`, left out
+for `none_failed`): all additive, so a DAG JSON of before reads as before. The master sends
+the outcomes of the upstream tasks a task uses with its assignment (`upstream_outcomes`,
+`""` for a skipped one); the agent (commands) and the runner (Python) resolve a reference
+whose edge wasn't taken, or to a skipped task, as `null`, and one to a task in neither as a
+missing input, as before. A command's exit code is a success when one of its outcomes
+declares it, and that outcome is its own; any other code fails.
+
 Rules:
 
 - **Trigger rules count edges, not tasks:** an edge not taken counts as skipped, so

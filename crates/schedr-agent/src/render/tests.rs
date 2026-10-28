@@ -28,6 +28,7 @@ fn ctx() -> RenderContext {
 
 fn output(task: &str, path: Vec<PathElem>) -> Reference {
     Reference::Output {
+        on: Vec::new(),
         task: TaskId::new(task).unwrap(),
         path,
     }
@@ -330,4 +331,59 @@ fn an_empty_argument_list_has_no_program() {
 fn argument_list_errors_are_reported() {
     let line = CommandLine::Argv(vec![Template(vec![part(output("missing", vec![]), None)])]);
     assert!(command_line(&line, &ctx()).is_err());
+}
+
+fn narrowed(task: &str, on: &[&str]) -> Reference {
+    Reference::Output {
+        task: TaskId::new(task).unwrap(),
+        path: vec![field("rows")],
+        on: on.iter().map(|o| (*o).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn a_reference_whose_edge_wasnt_taken_stands_for_null() {
+    let mut ctx = ctx();
+    ctx.outcomes.insert("extract".into(), json!("Rows"));
+    // Taken: the value.
+    assert_eq!(
+        resolve(&narrowed("extract", &["Rows"]), &ctx).unwrap(),
+        &json!([{"id": "a b"}, {"id": "c"}])
+    );
+    assert!(resolve(&narrowed("extract", &["Unavailable", "Rows"]), &ctx).is_ok());
+    // Another outcome: null, without reading the output.
+    assert_eq!(
+        resolve(&narrowed("extract", &["Unavailable"]), &ctx).unwrap(),
+        &Value::Null
+    );
+    // A skipped upstream: null for any reference to it, narrowed or not.
+    ctx.outcomes.insert("gone".into(), Value::Null);
+    assert_eq!(
+        resolve(&output("gone", vec![]), &ctx).unwrap(),
+        &Value::Null
+    );
+    assert_eq!(
+        resolve(&narrowed("gone", &["Rows"]), &ctx).unwrap(),
+        &Value::Null
+    );
+    // Neither outcome nor output known: still a missing input.
+    assert_eq!(
+        resolve(&output("unknown", vec![]), &ctx).unwrap_err(),
+        RenderError::MissingInput("unknown".into())
+    );
+}
+
+#[test]
+fn an_outcome_reference_is_the_outcomes_name() {
+    let mut ctx = ctx();
+    ctx.outcomes.insert("check".into(), json!("CHANGED"));
+    let outcome = |task: &str| Reference::Outcome {
+        task: TaskId::new(task).unwrap(),
+    };
+    assert_eq!(resolve(&outcome("check"), &ctx).unwrap(), &json!("CHANGED"));
+    assert_eq!(reference_label(&outcome("check")), "check.outcome");
+    assert_eq!(
+        resolve(&outcome("other"), &ctx).unwrap_err(),
+        RenderError::MissingInput("other.outcome".into())
+    );
 }

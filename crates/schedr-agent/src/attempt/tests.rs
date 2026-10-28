@@ -30,6 +30,15 @@ fn command_task(command: &serde_json::Value, env: &serde_json::Value) -> serde_j
     task(&json!({"kind": "command", "command": command, "env": env}))
 }
 
+/// A command declaring no outcomes: `SUCCESS` on exit code 0.
+fn plain_task() -> Task {
+    serde_json::from_value(command_task(
+        &json!({"shell": [{"text": "true"}]}),
+        &json!({}),
+    ))
+    .unwrap()
+}
+
 fn assign(task: &serde_json::Value) -> pb::AssignTask {
     pb::AssignTask {
         attempt_id: "a1".to_owned(),
@@ -60,6 +69,7 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         cancel_grace_ms: 30_000,
         memory_budget_bytes: 0,
         setrlimit: false,
+        upstream_outcomes: std::collections::HashMap::new(),
     }
 }
 
@@ -291,7 +301,11 @@ fn a_python_task_reports_the_runners_result() {
         output: json!([1, 2]),
         outcome: "SUCCESS".to_owned(),
     };
-    let message = finished("a1", &ran(Termination::Exited(0), None, Some(success)));
+    let message = finished(
+        "a1",
+        &plain_task(),
+        &ran(Termination::Exited(0), None, Some(success)),
+    );
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Success));
     assert_eq!(message.output_json, b"[1,2]");
     assert_eq!(
@@ -312,7 +326,11 @@ fn a_python_task_reports_the_runners_result() {
         error: error.clone(),
         kind: Some("input_mismatch".to_owned()),
     };
-    let message = finished("a1", &ran(Termination::Exited(1), None, Some(failure)));
+    let message = finished(
+        "a1",
+        &plain_task(),
+        &ran(Termination::Exited(1), None, Some(failure)),
+    );
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(message.error_kind, "input_mismatch");
     assert_eq!(
@@ -323,16 +341,25 @@ fn a_python_task_reports_the_runners_result() {
 
 #[test]
 fn a_runner_without_a_result_or_stopped_by_the_agent_says_so() {
-    let silent = finished("a1", &ran(Termination::Exited(0), None, None));
+    let silent = finished(
+        "a1",
+        &plain_task(),
+        &ran(Termination::Exited(0), None, None),
+    );
     assert_eq!(silent.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(silent.error_kind, RUNNER_FAILED);
     let timed_out = finished(
         "a1",
+        &plain_task(),
         &ran(Termination::Signaled(15), Some(StopReason::TimedOut), None),
     );
     assert_eq!(timed_out.status, i32::from(pb::AttemptStatus::TimedOut));
     assert_eq!((timed_out.signal, timed_out.exit_code), (Some(15), None));
-    let crashed = finished("a1", &ran(Termination::Signaled(11), None, None));
+    let crashed = finished(
+        "a1",
+        &plain_task(),
+        &ran(Termination::Signaled(11), None, None),
+    );
     assert_eq!(crashed.status, i32::from(pb::AttemptStatus::Failed));
     let cancelled = RunnerMessage::TaskFailed {
         error: ErrorSummary {
@@ -344,6 +371,7 @@ fn a_runner_without_a_result_or_stopped_by_the_agent_says_so() {
     };
     let message = finished(
         "a1",
+        &plain_task(),
         &ran(
             Termination::Exited(1),
             Some(StopReason::Cancelled),
@@ -360,7 +388,7 @@ fn a_command_reports_its_process_result() {
     let stderr = TailBuffer::new(100);
     let mut success = ran(Termination::Exited(0), None, None);
     success.output = Some((stdout.clone(), stderr.clone()));
-    let message = finished("a1", &success);
+    let message = finished("a1", &plain_task(), &success);
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Success));
     let output: serde_json::Value = serde_json::from_slice(&message.output_json).unwrap();
     assert_eq!(
@@ -369,7 +397,7 @@ fn a_command_reports_its_process_result() {
     );
     let mut failure = ran(Termination::Exited(2), None, None);
     failure.output = Some((stdout, stderr));
-    let message = finished("a1", &failure);
+    let message = finished("a1", &plain_task(), &failure);
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(message.output_json, Vec::<u8>::new());
     let result: serde_json::Value = serde_json::from_slice(&message.error_summary_json).unwrap();
@@ -388,7 +416,7 @@ fn a_failure_before_starting_is_reported_as_failed() {
 
 #[test]
 fn a_forked_task_whose_shim_died_failed_with_an_unknown_status() {
-    let message = finished("a1", &ran(Termination::Unknown, None, None));
+    let message = finished("a1", &plain_task(), &ran(Termination::Unknown, None, None));
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!((message.exit_code, message.signal), (None, None));
     assert_eq!(message.error_kind, PROCESS_STATUS_UNKNOWN);
@@ -397,8 +425,35 @@ fn a_forked_task_whose_shim_died_failed_with_an_unknown_status() {
     // Stopped by the agent first: its status stays, the unknown end is still explained.
     let stopped = finished(
         "a1",
+        &plain_task(),
         &ran(Termination::Unknown, Some(StopReason::Cancelled), None),
     );
     assert_eq!(stopped.status, i32::from(pb::AttemptStatus::Cancelled));
     assert_eq!(stopped.error_kind, PROCESS_STATUS_UNKNOWN);
+}
+
+#[test]
+fn a_commands_exit_code_names_its_outcome() {
+    let mut declared = command_task(&json!({"shell": [{"text": "./check.sh"}]}), &json!({}));
+    declared["outcomes"] = json!([
+        {"name": "CHANGED", "exit_code": 0},
+        {"name": "UNCHANGED", "exit_code": 3}
+    ]);
+    let task: Task = serde_json::from_value(declared).unwrap();
+    let with_code = |code| {
+        let mut ran = ran(Termination::Exited(code), None, None);
+        ran.output = Some((TailBuffer::new(100), TailBuffer::new(100)));
+        finished("a1", &task, &ran)
+    };
+    let changed = with_code(0);
+    assert_eq!(changed.status, i32::from(pb::AttemptStatus::Success));
+    assert_eq!(changed.outcome, "CHANGED");
+    // A declared non-zero code is a success with its outcome, not a failure.
+    let unchanged = with_code(3);
+    assert_eq!(unchanged.status, i32::from(pb::AttemptStatus::Success));
+    assert_eq!(unchanged.outcome, "UNCHANGED");
+    // An undeclared one fails, 1 as any other.
+    let other = with_code(1);
+    assert_eq!(other.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!(other.outcome, "");
 }

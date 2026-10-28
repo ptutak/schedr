@@ -245,6 +245,10 @@ pub struct TaskRequest {
     pub task: crate::task::Task,
     /// The upstream outputs the task uses, by task ID, as stored JSON.
     pub inputs: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The upstream tasks' outcomes, by task ID: a name, or `null` for a skipped one (its
+    /// references stand for `None`).
+    #[serde(default)]
+    pub outcomes: std::collections::BTreeMap<String, serde_json::Value>,
     /// The run information.
     pub run: RunInfo,
     /// Directories put first on `sys.path` (every DAG root).

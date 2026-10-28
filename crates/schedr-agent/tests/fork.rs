@@ -184,6 +184,7 @@ fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
             .cloned()
             .unwrap(),
         inputs: BTreeMap::new(),
+        outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
             dag_id: "sync".to_owned(),
             run_id: "r1".to_owned(),

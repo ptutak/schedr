@@ -16,11 +16,13 @@ fn empty_task(name: &str) -> Task {
         kind: TaskKind::Empty,
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,
+        outcomes: crate::default_outcomes(),
     }
 }
 
 fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
     Edge {
+        on: Vec::new(),
         from: id(from),
         to: id(to),
         kind,
@@ -91,6 +93,7 @@ fn round_trips_through_json() {
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,
+        outcomes: crate::default_outcomes(),
     });
     let json = serde_json::to_string(&original).unwrap();
     assert_eq!(serde_json::from_str::<Dag>(&json).unwrap(), original);

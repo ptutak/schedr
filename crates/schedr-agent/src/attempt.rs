@@ -52,6 +52,8 @@ pub struct AttemptSpec {
     pub run: RunInfo,
     /// The upstream outputs the task uses, by task ID.
     pub inputs: BTreeMap<String, Value>,
+    /// The upstream tasks' outcomes, by task ID: a name, or `null` for a skipped one.
+    pub outcomes: BTreeMap<String, Value>,
     /// The time between SIGTERM and SIGKILL when it is stopped.
     pub cancel_grace: Duration,
 }
@@ -110,6 +112,18 @@ impl AttemptSpec {
                 map_index: u32::try_from(assign.map_index).ok(),
             },
             inputs,
+            outcomes: assign
+                .upstream_outcomes
+                .iter()
+                .map(|(task, outcome)| {
+                    let outcome = if outcome.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(outcome.clone())
+                    };
+                    (task.clone(), outcome)
+                })
+                .collect(),
             cancel_grace: Duration::from_millis(assign.cancel_grace_ms),
         })
     }
@@ -241,6 +255,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                     dag_id: spec.run.dag_id.clone(),
                     task: spec.task.clone(),
                     inputs: spec.inputs.clone(),
+                    outcomes: spec.outcomes.clone(),
                     run: spec.run.clone(),
                     sys_path: setup.sys_path(),
                 }),
@@ -255,6 +270,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                 &spec.run.since.to_string(),
             );
             ctx.inputs.clone_from(&spec.inputs);
+            ctx.outcomes.clone_from(&spec.outcomes);
             let (program, args) =
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
             let task_env = env
@@ -311,11 +327,18 @@ pub struct StartTimes {
     pub import: Option<Duration>,
 }
 
-/// The `Finished` message for an attempt that ran.
+/// The `Finished` message for an attempt of `task` that ran. A command succeeds with an exit
+/// code of one of its outcomes (`SUCCESS` for 0 unless it declares others), which becomes its
+/// outcome; any other code is a failure.
 #[must_use]
-pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
+pub fn finished(attempt_id: &str, task: &Task, ran: &Ran) -> pb::Finished {
     let termination = ran.supervised.termination;
-    let status = attempt_status(termination, ran.supervised.stopped, &[0]);
+    let success_codes: Vec<i32> = if ran.output.is_some() {
+        task.outcomes.iter().filter_map(|o| o.exit_code).collect()
+    } else {
+        vec![0]
+    };
+    let status = attempt_status(termination, ran.supervised.stopped, &success_codes);
     let mut message = pb::Finished {
         attempt_id: attempt_id.to_owned(),
         status: attempt_status_to_proto(status).into(),
@@ -341,7 +364,9 @@ pub fn finished(attempt_id: &str, ran: &Ran) -> pb::Finished {
         let bytes = serde_json::to_vec(&result).unwrap_or_default();
         if status == AttemptStatus::Success {
             message.output_json = bytes;
-            "SUCCESS".clone_into(&mut message.outcome);
+            task.outcome_of_exit(termination.exit_code())
+                .unwrap_or(schedr_model::DEFAULT_OUTCOME)
+                .clone_into(&mut message.outcome);
         } else {
             message.error_summary_json = bytes;
         }

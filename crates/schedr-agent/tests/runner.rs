@@ -185,6 +185,7 @@ fn request(dir: &Path, dag: &Dag, task: &str, inputs: serde_json::Value) -> Task
                 ghost
             }),
         inputs: serde_json::from_value(inputs).unwrap(),
+        outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
             dag_id: "sync".to_owned(),
             run_id: "r1".to_owned(),

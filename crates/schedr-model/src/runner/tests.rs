@@ -139,6 +139,7 @@ fn request() -> TaskRequest {
         }))
         .unwrap(),
         inputs: [("extract".to_owned(), json!([1, 2]))].into(),
+        outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
             dag_id: "sync".into(),
             run_id: "0192c4e1".into(),

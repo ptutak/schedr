@@ -123,6 +123,29 @@ def test_resolve_gives_run_fields_and_output_paths() -> None:
     }
 
 
+def test_a_reference_whose_edge_wasnt_taken_is_none() -> None:
+    inputs = {"fetch": {"rows": [1, 2]}}
+    outcomes = {"fetch": "Rows", "gone": None}
+    narrowed = {"kind": "output", "task": "fetch", "path": ["rows"], "on": ["Rows"]}
+    # Taken: the value.
+    assert resolve(narrowed, inputs, RUN, outcomes) == [1, 2]
+    # Another outcome: None, without reading the output.
+    assert resolve({**narrowed, "on": ["Unavailable"]}, inputs, RUN, outcomes) is None
+    # A skipped upstream: None, narrowed or not.
+    assert resolve({"kind": "output", "task": "gone"}, inputs, RUN, outcomes) is None
+    assert resolve({**narrowed, "task": "gone"}, inputs, RUN, outcomes) is None
+    # Neither known: still a missing input.
+    with pytest.raises(TaskInputError, match="the output of `other` isn't among"):
+        resolve({"kind": "output", "task": "other"}, inputs, RUN, outcomes)
+
+
+def test_an_outcome_reference_is_the_outcomes_name() -> None:
+    outcomes = {"check": "CHANGED"}
+    assert resolve({"kind": "outcome", "task": "check"}, {}, RUN, outcomes) == "CHANGED"
+    with pytest.raises(TaskInputError, match="the outcome of `other` isn't among"):
+        resolve({"kind": "outcome", "task": "other"}, {}, RUN, outcomes)
+
+
 @pytest.mark.parametrize(
     ("reference", "message"),
     [

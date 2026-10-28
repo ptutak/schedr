@@ -3,9 +3,14 @@
 //!
 //! Pure rules over task instance states; [`crate::execution`] stores what they decide.
 //!
-//! - A task is **ready** when every upstream task that wasn't skipped succeeded and at least
-//!   one did (or it has none); **skipped** when all its upstream tasks were skipped;
-//!   **upstream failed** as soon as one upstream task failed.
+//! - Trigger rules count **edges**: an edge counts as its upstream task's state, except one
+//!   whose upstream succeeded with an outcome the edge isn't taken on (`.on(...)`), which
+//!   counts as skipped.
+//! - `NoneFailed` (the default): a task is **ready** when every edge that wasn't skipped
+//!   succeeded and at least one did (or it has none); **skipped** when all its edges were
+//!   skipped; **upstream failed** as soon as one failed. `AllSucceeded`: ready when every edge
+//!   succeeded; upstream failed as soon as one failed; otherwise skipped when one was skipped,
+//!   once none can fail any more.
 //! - An attempt that failed **uses a retry**; with retries left the task waits `retry_delay`
 //!   (`up_for_retry`), otherwise it fails. Failures certain to repeat are never retried. An
 //!   attempt interrupted by draining or never started runs again without using a retry.
@@ -17,7 +22,8 @@ use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_model::{
-    AttemptStatus, Dag, RetryRule, RunState, TaskId, TaskInstanceState, TaskKind, TaskSettings,
+    AttemptStatus, DEFAULT_OUTCOME, Dag, RetryRule, RunIf, RunState, TaskId, TaskInstanceState,
+    TaskKind, TaskSettings,
 };
 
 #[cfg(test)]
@@ -44,7 +50,8 @@ pub enum Readiness {
     Wait,
     /// It can run.
     Ready,
-    /// Every upstream task was skipped.
+    /// The edges' skips decide it is skipped (all of them with `NoneFailed`, any with
+    /// `AllSucceeded`).
     Skip,
     /// An upstream task failed.
     UpstreamFailed,
@@ -52,23 +59,28 @@ pub enum Readiness {
     Cancel,
 }
 
-/// `NoneFailed` over the states of a task's upstream tasks.
+/// The trigger rule `rule` over the states of a task's edges (an edge not taken counts as
+/// skipped).
 #[must_use]
-pub fn readiness(upstream: &[TaskInstanceState]) -> Readiness {
+pub fn readiness(edges: &[TaskInstanceState], rule: RunIf) -> Readiness {
     use TaskInstanceState as S;
-    if upstream
+    if edges
         .iter()
         .any(|s| matches!(s, S::Failed | S::UpstreamFailed))
     {
         return Readiness::UpstreamFailed;
     }
-    if upstream.contains(&S::Cancelled) {
+    if edges.contains(&S::Cancelled) {
         return Readiness::Cancel;
     }
-    if upstream.iter().any(|s| !s.is_final()) {
+    if edges.iter().any(|s| !s.is_final()) {
         return Readiness::Wait;
     }
-    if !upstream.is_empty() && upstream.iter().all(|s| *s == S::Skipped) {
+    let skipped = match rule {
+        RunIf::NoneFailed => !edges.is_empty() && edges.iter().all(|s| *s == S::Skipped),
+        RunIf::AllSucceeded => edges.contains(&S::Skipped),
+    };
+    if skipped {
         return Readiness::Skip;
     }
     Readiness::Ready
@@ -153,6 +165,8 @@ pub fn run_result(states: &[TaskInstanceState]) -> Option<RunState> {
 pub struct RunProgress<'a> {
     dag: &'a Dag,
     states: BTreeMap<TaskId, TaskInstanceState>,
+    /// The outcomes of the tasks that succeeded (`SUCCESS` where none is known).
+    outcomes: BTreeMap<TaskId, String>,
 }
 
 impl<'a> RunProgress<'a> {
@@ -166,7 +180,43 @@ impl<'a> RunProgress<'a> {
             .map(|t| (t.id.clone(), TaskInstanceState::Scheduled))
             .collect();
         all.extend(states);
-        Self { dag, states: all }
+        Self {
+            dag,
+            states: all,
+            outcomes: BTreeMap::new(),
+        }
+    }
+
+    /// The same, with the outcomes of the tasks that succeeded.
+    #[must_use]
+    pub fn with_outcomes(mut self, outcomes: BTreeMap<TaskId, String>) -> Self {
+        self.outcomes = outcomes;
+        self
+    }
+
+    /// Records a task's outcome (after an attempt that succeeded).
+    pub fn set_outcome(&mut self, task: &TaskId, outcome: &str) {
+        self.outcomes.insert(task.clone(), outcome.to_owned());
+    }
+
+    /// The state an edge into a task counts as: its upstream task's, or skipped when the
+    /// upstream succeeded with an outcome the edge isn't taken on.
+    fn edge_state(&self, edge: &schedr_model::Edge) -> TaskInstanceState {
+        let state = self
+            .states
+            .get(&edge.from)
+            .copied()
+            .unwrap_or(TaskInstanceState::Scheduled);
+        if state == TaskInstanceState::Success {
+            let outcome = self
+                .outcomes
+                .get(&edge.from)
+                .map_or(DEFAULT_OUTCOME, String::as_str);
+            if !edge.taken_on(outcome) {
+                return TaskInstanceState::Skipped;
+            }
+        }
+        state
     }
 
     /// Every task's state.
@@ -192,18 +242,12 @@ impl<'a> RunProgress<'a> {
                 if self.states[&task.id] != TaskInstanceState::Scheduled {
                     continue;
                 }
-                let upstream: Vec<TaskInstanceState> = self
+                let edges: Vec<TaskInstanceState> = self
                     .dag
-                    .upstream_of(&task.id)
-                    .into_iter()
-                    .map(|id| {
-                        self.states
-                            .get(id)
-                            .copied()
-                            .unwrap_or(TaskInstanceState::Scheduled)
-                    })
+                    .edges_into(&task.id)
+                    .map(|edge| self.edge_state(edge))
                     .collect();
-                let next = match readiness(&upstream) {
+                let next = match readiness(&edges, task.settings.run_if) {
                     Readiness::Wait => continue,
                     Readiness::Ready if task.kind == TaskKind::Empty => TaskInstanceState::Success,
                     Readiness::Ready => TaskInstanceState::Queued,

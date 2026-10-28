@@ -270,6 +270,9 @@ message AssignTask {
   uint64 cancel_grace_ms = 11;
   uint64 memory_budget_bytes = 12;
   bool setrlimit = 13;
+  // The outcomes of the upstream tasks the task uses, by task ID; "" for one that was
+  // skipped (its edges count as not taken: a reference to it stands for null).
+  map<string, string> upstream_outcomes = 14;
 }
 
 message AssignParse {

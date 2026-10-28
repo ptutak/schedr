@@ -34,7 +34,7 @@ pub enum EdgeKind {
     Order,
 }
 
-/// A dependency: `to` runs after `from`.
+/// A dependency: `to` runs after `from`, when `from` ended with one of the outcomes `on`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
@@ -44,6 +44,18 @@ pub struct Edge {
     pub to: TaskId,
     /// Why the dependency exists.
     pub kind: EdgeKind,
+    /// The upstream outcomes the edge is taken on (`.on(...)`); empty for any outcome. An edge
+    /// not taken counts as skipped in the downstream task's trigger rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on: Vec<String>,
+}
+
+impl Edge {
+    /// Whether the edge is taken by an upstream task that succeeded with `outcome`.
+    #[must_use]
+    pub fn taken_on(&self, outcome: &str) -> bool {
+        self.on.is_empty() || self.on.iter().any(|on| on == outcome)
+    }
 }
 
 /// A DAG: its identity, trigger, tasks and dependencies.
@@ -79,6 +91,12 @@ impl Dag {
     #[must_use]
     pub fn task(&self, id: &TaskId) -> Option<&Task> {
         self.tasks.iter().find(|t| &t.id == id)
+    }
+
+    /// The edges into `id`, in order (one upstream task may have several, on different
+    /// outcomes).
+    pub fn edges_into<'a>(&'a self, id: &'a TaskId) -> impl Iterator<Item = &'a Edge> + 'a {
+        self.edges.iter().filter(move |e| &e.to == id)
     }
 
     /// The tasks `id` directly depends on, in edge order, without repeats.

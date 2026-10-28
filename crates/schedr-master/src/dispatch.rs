@@ -638,6 +638,8 @@ impl Dispatcher {
             return Ok(());
         };
         let inputs = upstream_inputs(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+        let outcomes =
+            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
         if inputs.len() > MAX_INPUTS {
             self.end(
                 &attempt_id,
@@ -651,7 +653,13 @@ impl Dispatcher {
         }
         self.workers.reserve(&worker_id, &attempt_id, now);
         tally.assigned += 1;
-        let message = self.assign_message(ready, &worker_id, &attempt_id, try_number, inputs);
+        let message = self.assign_message(
+            ready,
+            &worker_id,
+            &attempt_id,
+            try_number,
+            (inputs, outcomes),
+        );
         outgoing.push(Outgoing {
             worker_id,
             message: pb::MasterMessage {
@@ -1211,7 +1219,7 @@ impl Dispatcher {
         worker_id: &str,
         attempt_id: &str,
         try_number: u32,
-        inputs: Vec<u8>,
+        (inputs, outcomes): (Vec<u8>, BTreeMap<String, String>),
     ) -> pb::AssignTask {
         let task = ready.dag.task(&ready.task_id);
         let external = inputs.len() > INLINE_INPUTS_LIMIT;
@@ -1253,6 +1261,7 @@ impl Dispatcher {
             cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
             memory_budget_bytes: 0,
             setrlimit: false,
+            upstream_outcomes: outcomes.into_iter().collect(),
         }
     }
 }
@@ -1359,6 +1368,34 @@ pub async fn attempt_inputs(
     Ok(Some(
         upstream_inputs(db, &run.dag, &attempt.run_id, &attempt.task_id).await?,
     ))
+}
+
+/// The outcomes of the upstream tasks the task uses (`""` for a skipped one), for
+/// `AssignTask`: `.on(...)` references and `.outcome` read them.
+async fn upstream_outcomes(
+    db: &Database,
+    dag: &schedr_model::Dag,
+    run_id: &str,
+    task_id: &TaskId,
+) -> Result<BTreeMap<String, String>, DispatchError> {
+    let Some(task) = dag.task(task_id) else {
+        return Ok(BTreeMap::new());
+    };
+    let used: BTreeSet<&TaskId> = task
+        .references()
+        .into_iter()
+        .filter_map(Reference::upstream_task)
+        .collect();
+    if used.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let wanted: Vec<&TaskId> = used.into_iter().collect();
+    Ok(db
+        .upstream_outcomes(run_id, &wanted)
+        .await?
+        .into_iter()
+        .map(|(task, outcome)| (task.to_string(), outcome.unwrap_or_default()))
+        .collect())
 }
 
 /// The upstream outputs the task uses, as JSON (`{task_id: output}`).

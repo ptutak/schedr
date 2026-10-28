@@ -54,6 +54,15 @@ pub enum Reference {
         /// The path into the output; empty for the whole output.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         path: Vec<PathElem>,
+        /// The outcomes it was narrowed to (`.on(...)`); empty for any. On another outcome,
+        /// or a skipped upstream task, it stands for `null`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        on: Vec<String>,
+    },
+    /// An upstream task's outcome itself (`.outcome`), as its name.
+    Outcome {
+        /// The upstream task.
+        task: TaskId,
     },
     /// A field of the run's context.
     DagCtx {
@@ -67,7 +76,7 @@ impl Reference {
     #[must_use]
     pub fn upstream_task(&self) -> Option<&TaskId> {
         match self {
-            Self::Output { task, .. } => Some(task),
+            Self::Output { task, .. } | Self::Outcome { task } => Some(task),
             Self::DagCtx { .. } => None,
         }
     }

@@ -37,21 +37,32 @@ class TaskSetupError(Exception):
     """The task can't be started: its DAG or function isn't in the DAG file."""
 
 
-def resolve(reference: Mapping[str, Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) -> Any:
+def resolve(
+    reference: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None = None,
+) -> Any:
     """The stored value a reference stands for.
 
     Args:
-        reference: A reference as stored (``{"kind": "output", "task": ..., "path": [...]}``
-            or ``{"kind": "dag_ctx", "field": ...}``).
+        reference: A reference as stored (``{"kind": "output", "task": ..., "path": [...],
+            "on": [...]}``, ``{"kind": "outcome", "task": ...}`` or ``{"kind": "dag_ctx",
+            "field": ...}``).
         inputs: The upstream outputs, by task ID, as stored JSON.
         run: The request's run information.
+        outcomes: The upstream tasks' outcomes, by task ID: a name, or ``None`` for one that
+            was skipped.
 
     Returns:
-        The stored value (``planned_for`` / ``since`` tagged as ``$datetime``).
+        The stored value (``planned_for`` / ``since`` tagged as ``$datetime``); ``None`` for
+        a reference whose edge wasn't taken (its upstream skipped, or narrowed by ``.on()``
+        to outcomes that didn't happen); the outcome's name for an ``outcome`` reference.
 
     Raises:
         TaskInputError: For a missing input or path, or a truncated stream.
     """
+    outcomes = outcomes or {}
     if reference["kind"] == "dag_ctx":
         field = reference["field"]
         values = {
@@ -63,6 +74,16 @@ def resolve(reference: Mapping[str, Any], inputs: Mapping[str, Any], run: Mappin
         }
         return values[field]
     task = reference["task"]
+    if reference["kind"] == "outcome":
+        if task not in outcomes:
+            raise TaskInputError(f"the outcome of `{task}` isn't among the task's inputs")
+        return outcomes[task]
+    if task in outcomes:
+        outcome = outcomes[task]
+        on = reference.get("on", [])
+        # Skipped, or another outcome than the edge is taken on: the data rule's `None`.
+        if outcome is None or (on and outcome not in on):
+            return None
     if task not in inputs:
         raise TaskInputError(f"the output of `{task}` isn't among the task's inputs")
     value = inputs[task]
@@ -84,13 +105,19 @@ def resolve(reference: Mapping[str, Any], inputs: Mapping[str, Any], run: Mappin
     return value
 
 
-def render(parts: list[Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) -> str:
+def render(
+    parts: list[Any],
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None = None,
+) -> str:
     """Renders a stored template to text, the way the agent renders command lines.
 
     Args:
         parts: The template's parts (``{"text": ...}`` and ``{"ref": {...}}``).
         inputs: The upstream outputs.
         run: The run information.
+        outcomes: The upstream tasks' outcomes (see :func:`resolve`).
 
     Returns:
         The text.
@@ -104,7 +131,7 @@ def render(parts: list[Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) 
             out.append(part["text"])
             continue
         reference = part["ref"]
-        value = decode_any(resolve(reference, inputs, run))
+        value = decode_any(resolve(reference, inputs, run, outcomes))
         spec = reference.get("format")
         if value is None or isinstance(value, list | dict | tuple):
             raise TaskInputError(f"a {type(value).__name__} can't be rendered into text")
@@ -116,7 +143,11 @@ def render(parts: list[Any], inputs: Mapping[str, Any], run: Mapping[str, Any]) 
 
 
 def build(
-    value: Mapping[str, Any], annotation: object, inputs: Mapping[str, Any], run: Mapping[str, Any]
+    value: Mapping[str, Any],
+    annotation: object,
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None = None,
 ) -> Any:
     """An argument's Python value from its stored form, decoded against the parameter type.
 
@@ -125,6 +156,7 @@ def build(
         annotation: The parameter's annotation.
         inputs: The upstream outputs.
         run: The run information.
+        outcomes: The upstream tasks' outcomes (see :func:`resolve`).
 
     Returns:
         The value to pass.
@@ -136,16 +168,16 @@ def build(
         if "literal" in value:
             return decode(value["literal"], annotation)
         if "ref" in value:
-            return decode(resolve(value["ref"], inputs, run), annotation)
+            return decode(resolve(value["ref"], inputs, run, outcomes), annotation)
         if "template" in value:
-            return render(value["template"], inputs, run)
+            return render(value["template"], inputs, run, outcomes)
         target = unwrap(annotation)
         args = get_args(target)
         if "list" in value:
             item = args[0] if get_origin(target) in SEQUENCE_ORIGINS and args else Any
-            return [build(v, item, inputs, run) for v in value["list"]]
+            return [build(v, item, inputs, run, outcomes) for v in value["list"]]
         item = args[1] if get_origin(target) in MAPPING_ORIGINS and args else Any
-        return {k: build(v, item, inputs, run) for k, v in value["map"].items()}
+        return {k: build(v, item, inputs, run, outcomes) for k, v in value["map"].items()}
     except CodecError as e:
         raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
 
@@ -226,12 +258,13 @@ def execute(
         ``task_succeeded`` with the encoded output, or ``task_failed``.
     """
     task, inputs, run = request["task"], request["inputs"], request["run"]
+    outcomes = request.get("outcomes", {})
     task_id = task["id"]
     try:
         function = find_function(request)
         hints = type_hints(function, f"task `{task_id}`")
         arguments = {
-            name: build(value, hints.get(name, Any), inputs, run)
+            name: build(value, hints.get(name, Any), inputs, run, outcomes)
             for name, value in task.get("arguments", {}).items()
         }
     except TaskSetupError as e:

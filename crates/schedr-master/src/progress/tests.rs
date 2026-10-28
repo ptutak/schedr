@@ -68,7 +68,95 @@ fn none_failed_decides_as_soon_as_it_is_certain(
     #[case] upstream: &[TaskInstanceState],
     #[case] expected: Readiness,
 ) {
-    assert_eq!(readiness(upstream), expected);
+    assert_eq!(readiness(upstream, RunIf::NoneFailed), expected);
+}
+
+#[rstest]
+#[case(&[], Readiness::Ready)]
+#[case(&[S::Success, S::Success], Readiness::Ready)]
+// One skip: skipped, where NoneFailed would run.
+#[case(&[S::Success, S::Skipped], Readiness::Skip)]
+#[case(&[S::Skipped, S::Skipped], Readiness::Skip)]
+// A skip isn't certain while another edge could still fail (a failure wins).
+#[case(&[S::Skipped, S::Running], Readiness::Wait)]
+#[case(&[S::Skipped, S::Failed], Readiness::UpstreamFailed)]
+#[case(&[S::Running, S::UpstreamFailed], Readiness::UpstreamFailed)]
+#[case(&[S::Cancelled, S::Success], Readiness::Cancel)]
+fn all_succeeded_runs_only_when_every_edge_succeeded(
+    #[case] upstream: &[TaskInstanceState],
+    #[case] expected: Readiness,
+) {
+    assert_eq!(readiness(upstream, RunIf::AllSucceeded), expected);
+}
+
+/// `fetch` (`-> Rows | Unavailable`) feeding `load` on `Rows`, `report_outage` on
+/// `Unavailable`, and `both` on both (two edges from one task); `both_strict` the same
+/// under `AllSucceeded`.
+fn routed() -> Dag {
+    let mut fetch = task("fetch", "python");
+    fetch["outcomes"] = json!([{"name": "Rows"}, {"name": "Unavailable"}]);
+    let mut both_strict = task("both_strict", "empty");
+    both_strict["settings"]["run_if"] = json!("all_succeeded");
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "routed", "location": {"root": "etl", "path": "routed.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": [
+            fetch, task("load", "empty"), task("report_outage", "empty"),
+            task("both", "empty"), both_strict
+        ],
+        "edges": [
+            {"from": "fetch", "to": "load", "kind": "data", "on": ["Rows"]},
+            {"from": "fetch", "to": "report_outage", "kind": "data", "on": ["Unavailable"]},
+            {"from": "fetch", "to": "both", "kind": "data", "on": ["Rows"]},
+            {"from": "fetch", "to": "both", "kind": "data", "on": ["Unavailable"]},
+            {"from": "fetch", "to": "both_strict", "kind": "data", "on": ["Rows"]},
+            {"from": "fetch", "to": "both_strict", "kind": "data", "on": ["Unavailable"]}
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case("Rows", S::Success, S::Skipped)]
+#[case("Unavailable", S::Skipped, S::Success)]
+fn edges_are_taken_on_their_outcomes(
+    #[case] outcome: &str,
+    #[case] load: TaskInstanceState,
+    #[case] report_outage: TaskInstanceState,
+) {
+    let dag = routed();
+    let mut run = RunProgress::new(&dag, BTreeMap::from([(id("fetch"), S::Success)]))
+        .with_outcomes(BTreeMap::from([(id("fetch"), outcome.to_owned())]));
+    run.settle();
+    assert_eq!(run.states()[&id("load")], load);
+    assert_eq!(run.states()[&id("report_outage")], report_outage);
+    // Two edges, one taken: NoneFailed runs it, AllSucceeded skips it (edges are counted).
+    assert_eq!(run.states()[&id("both")], S::Success);
+    assert_eq!(run.states()[&id("both_strict")], S::Skipped);
+    assert_eq!(run.result(), Some(RunState::Success));
+}
+
+#[test]
+fn an_outcome_set_after_an_attempt_routes_the_downstream_tasks() {
+    let dag = routed();
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    run.settle();
+    run.set(&id("fetch"), S::Success);
+    run.set_outcome(&id("fetch"), "Unavailable");
+    let changed = run.settle();
+    assert!(changed.contains(&(id("load"), S::Skipped)), "{changed:?}");
+    assert!(
+        changed.contains(&(id("report_outage"), S::Success)),
+        "{changed:?}"
+    );
+}
+
+#[test]
+fn a_task_without_outcomes_takes_plain_edges_on_success() {
+    // No outcome recorded: SUCCESS, which a plain edge (any outcome) takes.
+    let dag = dag();
+    let mut run = RunProgress::new(&dag, BTreeMap::from([(id("start"), S::Success)]));
+    assert_eq!(run.settle(), changes(&[("extract", S::Queued)]));
 }
 
 #[test]

@@ -46,6 +46,58 @@ pub struct TaskSettings {
     /// fork). Not for other tasks.
     #[serde(default)]
     pub fresh_process: bool,
+    /// When it runs, from its upstream edges (its trigger rule).
+    #[serde(default, skip_serializing_if = "RunIf::is_default")]
+    pub run_if: RunIf,
+}
+
+/// A task's trigger rule: what its upstream edges must have done for it to run (see
+/// PROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunIf {
+    /// Every edge that wasn't skipped succeeded, and at least one did: skipped when all were
+    /// skipped, `upstream_failed` when one failed.
+    #[default]
+    NoneFailed,
+    /// Every edge succeeded: `upstream_failed` when one failed, otherwise skipped when one
+    /// was skipped.
+    AllSucceeded,
+}
+
+impl RunIf {
+    /// Whether it is the default, [`RunIf::NoneFailed`].
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::NoneFailed
+    }
+}
+
+/// One of a task's outcomes: its name, and for a `command` task the exit code meaning it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeDecl {
+    /// The name (an `Outcome` enum member's, a class's, or `None`).
+    pub name: String,
+    /// A `command` task's exit code for it; none for other tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+/// The outcome of a task without outcomes of its own (`DefaultOutcome.SUCCESS`).
+pub const DEFAULT_OUTCOME: &str = "SUCCESS";
+
+/// A task's outcomes when it declares none: `SUCCESS`, exit code 0 for a command.
+#[must_use]
+pub fn default_outcomes() -> Vec<OutcomeDecl> {
+    vec![OutcomeDecl {
+        name: DEFAULT_OUTCOME.to_owned(),
+        exit_code: Some(0),
+    }]
+}
+
+fn is_default_outcomes(outcomes: &Vec<OutcomeDecl>) -> bool {
+    *outcomes == default_outcomes()
 }
 
 const fn yes() -> bool {
@@ -65,6 +117,7 @@ impl Default for TaskSettings {
             max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
             preload: true,
             fresh_process: false,
+            run_if: RunIf::NoneFailed,
         }
     }
 }
@@ -124,6 +177,23 @@ pub struct Task {
     pub settings: TaskSettings,
     /// The type of its output (`process_result` for commands, `none` for empty tasks).
     pub output_type: TypeDesc,
+    /// The outcomes it may end with (see PROJECT.md, Task results and outcomes).
+    #[serde(
+        default = "default_outcomes",
+        skip_serializing_if = "is_default_outcomes"
+    )]
+    pub outcomes: Vec<OutcomeDecl>,
+}
+
+impl Task {
+    /// The outcome a `command` task's exit code means, if it declared it.
+    #[must_use]
+    pub fn outcome_of_exit(&self, code: i32) -> Option<&str> {
+        self.outcomes
+            .iter()
+            .find(|o| o.exit_code == Some(code))
+            .map(|o| o.name.as_str())
+    }
 }
 
 impl Task {

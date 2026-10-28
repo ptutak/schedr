@@ -62,7 +62,14 @@ pub struct RenderContext {
     pub dag_ctx: BTreeMap<DagCtxField, Value>,
     /// The upstream outputs the task uses, by task ID, as stored JSON.
     pub inputs: BTreeMap<String, Value>,
+    /// The outcomes of the upstream tasks it uses, by task ID, as JSON strings; `null` for one
+    /// that was skipped (each of its edges counts as not taken). A task missing here is
+    /// neither: its reference fails as a missing input.
+    pub outcomes: BTreeMap<String, Value>,
 }
+
+/// What a reference stands for when its edge wasn't taken (the data rule: `None`).
+static NOT_TAKEN: Value = Value::Null;
 
 impl RenderContext {
     /// A context with the run's fields; `planned_for` and `since` are RFC 3339 instants.
@@ -77,6 +84,7 @@ impl RenderContext {
                 (DagCtxField::Since, json!({"$datetime": since})),
             ]),
             inputs: BTreeMap::new(),
+            outcomes: BTreeMap::new(),
         }
     }
 }
@@ -93,7 +101,8 @@ pub fn reference_label(reference: &Reference) -> String {
             let name = name.as_str().unwrap_or_default().trim_start_matches("run_");
             format!("dag_ctx.run.{name}")
         }
-        Reference::Output { task, path } => {
+        Reference::Outcome { task } => format!("{task}.outcome"),
+        Reference::Output { task, path, .. } => {
             let mut label = task.to_string();
             for step in path {
                 match step {
@@ -124,7 +133,20 @@ pub fn resolve<'a>(
             .dag_ctx
             .get(field)
             .ok_or_else(|| RenderError::MissingInput(reference_label(reference))),
-        Reference::Output { task, path } => {
+        Reference::Outcome { task } => match ctx.outcomes.get(task.as_str()) {
+            Some(Value::Null) => Ok(&NOT_TAKEN),
+            Some(outcome) => Ok(outcome),
+            None => Err(RenderError::MissingInput(reference_label(reference))),
+        },
+        Reference::Output { task, path, on } => {
+            match ctx.outcomes.get(task.as_str()) {
+                // Skipped: every edge from it counts as not taken.
+                Some(Value::Null) => return Ok(&NOT_TAKEN),
+                Some(Value::String(outcome)) if !on.is_empty() && !on.contains(outcome) => {
+                    return Ok(&NOT_TAKEN);
+                }
+                _ => {}
+            }
             let mut value = ctx
                 .inputs
                 .get(task.as_str())

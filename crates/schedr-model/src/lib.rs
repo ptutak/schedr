@@ -22,7 +22,10 @@ pub mod version;
 pub use dag::{Dag, DagLocation, Edge, EdgeKind};
 pub use ids::{DagId, IdError, TaskId};
 pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
-pub use task::{CommandLine, Task, TaskKind, TaskSettings};
+pub use task::{
+    CommandLine, DEFAULT_OUTCOME, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,
+    default_outcomes,
+};
 pub use trigger::Trigger;
 pub use types::{Field, TypeDesc};
 pub use value::{DagCtxField, PathElem, Reference, Template, TemplatePart, TemplateRef, Value};

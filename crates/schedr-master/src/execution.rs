@@ -304,7 +304,8 @@ impl Execution {
                 run_result: Some(RunState::Cancelled),
             });
         }
-        let mut progress = RunProgress::new(&run.dag, states_of(&run));
+        let mut progress =
+            RunProgress::new(&run.dag, states_of(&run)).with_outcomes(outcomes_of(&run));
         let (changes, running) = progress.cancel();
         let updates: Vec<InstanceUpdate> = changes.iter().map(|(id, s)| update(id, *s)).collect();
         self.db.update_instances(run_id, &updates, now).await?;
@@ -436,9 +437,13 @@ impl Execution {
         first: Vec<InstanceUpdate>,
         now: Timestamp,
     ) -> Result<Option<RunState>, ExecutionError> {
-        let mut progress = RunProgress::new(&run.dag, states_of(run));
+        let mut progress =
+            RunProgress::new(&run.dag, states_of(run)).with_outcomes(outcomes_of(run));
         for change in &first {
             progress.set(&change.task_id, change.state);
+            if let Some(outcome) = &change.outcome {
+                progress.set_outcome(&change.task_id, outcome);
+            }
         }
         let mut updates = first;
         for (task_id, state) in progress.settle() {
@@ -455,6 +460,13 @@ impl Execution {
         }
         Ok(result)
     }
+}
+
+fn outcomes_of(run: &RunTasks) -> BTreeMap<TaskId, String> {
+    run.instances
+        .iter()
+        .filter_map(|i| Some((i.task_id.clone(), i.outcome.clone()?)))
+        .collect()
 }
 
 fn states_of(run: &RunTasks) -> BTreeMap<TaskId, TaskInstanceState> {

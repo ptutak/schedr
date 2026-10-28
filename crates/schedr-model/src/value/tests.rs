@@ -10,6 +10,7 @@ fn task(id: &str) -> TaskId {
 
 fn output(id: &str, path: Vec<PathElem>) -> Reference {
     Reference::Output {
+        on: Vec::new(),
         task: task(id),
         path,
     }

@@ -93,6 +93,12 @@
               "description": "The upstream outputs the task uses, by task ID, as stored JSON.",
               "type": "object"
             },
+            "outcomes": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "The upstream tasks' outcomes, by task ID: a name, or `null` for a skipped one (its\nreferences stand for `None`).",
+              "type": "object"
+            },
             "run": {
               "$ref": "#/$defs/RunInfo",
               "description": "The run information."
@@ -378,7 +384,7 @@
     },
     "Edge": {
       "additionalProperties": false,
-      "description": "A dependency: `to` runs after `from`.",
+      "description": "A dependency: `to` runs after `from`, when `from` ended with one of the outcomes `on`.",
       "properties": {
         "from": {
           "$ref": "#/$defs/TaskId",
@@ -387,6 +393,13 @@
         "kind": {
           "$ref": "#/$defs/EdgeKind",
           "description": "Why the dependency exists."
+        },
+        "on": {
+          "description": "The upstream outcomes the edge is taken on (`.on(...)`); empty for any outcome. An edge\nnot taken counts as skipped in the downstream task's trigger rule.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "to": {
           "$ref": "#/$defs/TaskId",
@@ -460,6 +473,28 @@
         "name",
         "type",
         "required"
+      ],
+      "type": "object"
+    },
+    "OutcomeDecl": {
+      "additionalProperties": false,
+      "description": "One of a task's outcomes: its name, and for a `command` task the exit code meaning it.",
+      "properties": {
+        "exit_code": {
+          "description": "A `command` task's exit code for it; none for other tasks.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name (an `Outcome` enum member's, a class's, or `None`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     },
@@ -545,12 +580,37 @@
               "const": "output",
               "type": "string"
             },
+            "on": {
+              "description": "The outcomes it was narrowed to (`.on(...)`); empty for any. On another outcome,\nor a skipped upstream task, it stands for `null`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "path": {
               "description": "The path into the output; empty for the whole output.",
               "items": {
                 "$ref": "#/$defs/PathElem"
               },
               "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskId",
+              "description": "The upstream task."
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An upstream task's outcome itself (`.outcome`), as its name.",
+          "properties": {
+            "kind": {
+              "const": "outcome",
+              "type": "string"
             },
             "task": {
               "$ref": "#/$defs/TaskId",
@@ -580,6 +640,21 @@
             "field"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "RunIf": {
+      "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\nPROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
+      "oneOf": [
+        {
+          "const": "none_failed",
+          "description": "Every edge that wasn't skipped succeeded, and at least one did: skipped when all were\nskipped, `upstream_failed` when one failed.",
+          "type": "string"
+        },
+        {
+          "const": "all_succeeded",
+          "description": "Every edge succeeded: `upstream_failed` when one failed, otherwise skipped when one\nwas skipped.",
+          "type": "string"
         }
       ]
     },
@@ -1075,6 +1150,13 @@
           "$ref": "#/$defs/TaskId",
           "description": "The task's ID, unique within its DAG."
         },
+        "outcomes": {
+          "description": "The outcomes it may end with (see PROJECT.md, Task results and outcomes).",
+          "items": {
+            "$ref": "#/$defs/OutcomeDecl"
+          },
+          "type": "array"
+        },
         "output_type": {
           "$ref": "#/$defs/TypeDesc",
           "description": "The type of its output (`process_result` for commands, `none` for empty tasks)."
@@ -1132,6 +1214,10 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "run_if": {
+          "$ref": "#/$defs/RunIf",
+          "description": "When it runs, from its upstream edges (its trigger rule)."
         },
         "timeout_ms": {
           "description": "The attempt's timeout in milliseconds; `None` for no timeout.",
@@ -1199,12 +1285,37 @@
               "const": "output",
               "type": "string"
             },
+            "on": {
+              "description": "The outcomes it was narrowed to (`.on(...)`); empty for any. On another outcome,\nor a skipped upstream task, it stands for `null`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "path": {
               "description": "The path into the output; empty for the whole output.",
               "items": {
                 "$ref": "#/$defs/PathElem"
               },
               "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskId",
+              "description": "The upstream task."
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An upstream task's outcome itself (`.outcome`), as its name.",
+          "properties": {
+            "kind": {
+              "const": "outcome",
+              "type": "string"
             },
             "task": {
               "$ref": "#/$defs/TaskId",

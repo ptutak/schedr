@@ -418,6 +418,43 @@ impl Database {
             .collect()
     }
 
+    /// What `tasks` of a run ended with, for a task that uses them: by task ID, the outcome
+    /// of one that succeeded, `None` for one that was skipped (each of its edges counts as
+    /// not taken). Tasks in any other state are left out.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn upstream_outcomes(
+        &self,
+        run_id: &str,
+        tasks: &[&TaskId],
+    ) -> Result<BTreeMap<TaskId, Option<String>>, DbError> {
+        let mut outcomes = BTreeMap::new();
+        for chunk in tasks.chunks(OUTPUTS_PER_QUERY) {
+            let wanted: Vec<String> = (2..chunk.len() + 2).map(|n| format!("${n}")).collect();
+            let text = format!(
+                "SELECT task_id, state, outcome FROM task_instances \
+                 WHERE run_id = $1{{uuid}} AND state IN ('success', 'skipped') \
+                 AND task_id IN ({})",
+                wanted.join(", ")
+            );
+            let rows: Vec<(String, String, Option<String>)> = on_pool!(self, |pool, backend| {
+                let mut query = sqlx::query_as(sql_text(backend, &text)).bind(run_id);
+                for task in chunk {
+                    query = query.bind(task.as_str());
+                }
+                query.fetch_all(pool).await?
+            });
+            for (task_id, state, outcome) in rows {
+                let outcome = (state == "success")
+                    .then(|| outcome.unwrap_or_else(|| schedr_model::DEFAULT_OUTCOME.to_owned()));
+                outcomes.insert(task_id_of(task_id)?, outcome);
+            }
+        }
+        Ok(outcomes)
+    }
+
     /// The outputs stored for `tasks` of a run, by task ID: what one task gets as inputs,
     /// without reading every other task's (a wide DAG's assignment read the whole run's, B18).
     ///

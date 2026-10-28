@@ -262,7 +262,7 @@ impl Executor for ProcessExecutor {
                 .task_started(if *forked { "fork" } else { "spawn" }, start);
         }
         let mut finished = match ran {
-            Ok(ran) => finished(&spec.attempt_id, &ran),
+            Ok(ran) => finished(&spec.attempt_id, &spec.task, &ran),
             Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),
         };
         let seen = *seen.lock().unwrap_or_else(PoisonError::into_inner);

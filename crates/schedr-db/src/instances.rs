@@ -41,6 +41,8 @@ pub struct StoredInstance {
     pub ready_at: Option<Timestamp>,
     /// Whether a user asked to cancel it (`schedr tasks cancel`).
     pub cancel_requested: bool,
+    /// Its outcome, once it succeeded.
+    pub outcome: Option<String>,
 }
 
 /// A run with its task instances.
@@ -73,7 +75,16 @@ pub struct InstanceUpdate {
     pub used_retry: bool,
 }
 
-type InstanceRow = (String, String, String, i32, i32, Option<String>, bool);
+type InstanceRow = (
+    String,
+    String,
+    String,
+    i32,
+    i32,
+    Option<String>,
+    bool,
+    Option<String>,
+);
 /// A run's state, whether it is being cancelled, its DAG version and its parse's version.
 type RunRow = (String, bool, String, String);
 
@@ -188,7 +199,7 @@ impl Database {
             p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
-            {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL FROM task_instances \
+            {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome FROM task_instances \
             WHERE run_id = $1{uuid} ORDER BY task_id";
         let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
             let run = sqlx::query_as(sql(backend, RUN))
@@ -478,7 +489,7 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
 }
 
 fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
-    let (id, task_id, state, try_number, retries_used, ready_at, cancel_requested) = row;
+    let (id, task_id, state, try_number, retries_used, ready_at, cancel_requested, outcome) = row;
     Ok(StoredInstance {
         id,
         task_id: task_id_of(task_id)?,
@@ -489,5 +500,6 @@ fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
             .map(|t| parse_time("task_instances.ready_at", &t))
             .transpose()?,
         cancel_requested,
+        outcome,
     })
 }
