@@ -120,7 +120,7 @@ STANDALONE_DIR ?= .schedr
 LISTEN ?= 0.0.0.0
 FORK_SERVER ?= true
 
-standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/)
+standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/); the UI's Docs from site/ once `make docs` built it
 	cargo build -p schedr
 	mkdir -p $(STANDALONE_DIR)
 	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
@@ -128,6 +128,7 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+	$(if $(wildcard site/index.html),SCHEDR_CONFIG__UI__DOCS_DIR="$(abspath site)") \
 	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
