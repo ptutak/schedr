@@ -275,8 +275,8 @@ class Task:
         """The task as DAG JSON (the kind's fields are flattened into it).
 
         Returns:
-            ``{"id": ..., "kind": ..., ..., "settings": ..., "output_type": ...,
-            "outcomes": [...]}`` (``outcomes`` only when not just ``SUCCESS`` on exit 0).
+            ``{"id": ..., "kind": ..., ..., "settings": ..., "output_type": ...}``, with
+            ``"outcomes": [...]`` when they aren't just ``SUCCESS`` on exit 0.
         """
         result: dict[str, Any] = {
             "id": self.id,
