@@ -117,3 +117,43 @@ fn a_waiting_job_goes_to_the_next_worker_that_reports_the_hash() {
     let assigned = jobs.request(key("h1"), "w2", at(0)).unwrap();
     assert_eq!(assigned.worker_id, "w2");
 }
+
+#[test]
+fn a_retry_waits_its_delay_then_goes_to_another_worker_and_the_delay_doubles() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    let first = jobs.request(key("h1"), "w1", at(0)).unwrap();
+    let both: BTreeSet<String> = ["w1".to_owned(), "w2".to_owned()].into();
+    jobs.retry(key("h1"), both.clone(), Some("w1"), at(10));
+    assert!(jobs.has(&key("h1")));
+    // Not before its delay, whether asked by a report or by the round's expiry.
+    assert_eq!(jobs.request(key("h1"), "w1", at(39)), None);
+    assert_eq!(jobs.expire(at(39)), []);
+    let [retry] = jobs.expire(at(40)).try_into().unwrap();
+    assert_ne!(retry.job_id, first.job_id);
+    assert_eq!((retry.worker_id.as_str(), retry.key), ("w2", key("h1")));
+    // Failing again: twice the delay; the only candidate gets it even if it failed.
+    jobs.retry(key("h1"), ["w2".to_owned()].into(), Some("w2"), at(50));
+    assert_eq!(jobs.expire(at(109)), []);
+    let [again] = jobs.expire(at(110)).try_into().unwrap();
+    assert_eq!(again.worker_id, "w2");
+    // Never longer than the longest delay.
+    for _ in 0..10 {
+        jobs.retry(key("h1"), both.clone(), None, at(0));
+    }
+    let longest = i64::try_from(MAX_RETRY_DELAY.as_secs()).unwrap();
+    assert_eq!(jobs.expire(at(longest - 1)), []);
+    assert_eq!(jobs.expire(at(longest)).len(), 1);
+    // A stored parse ends it as any job.
+    assert!(jobs.finish(&key("h1")).is_some());
+    assert!(!jobs.has(&key("h1")));
+}
+
+#[test]
+fn a_due_retry_goes_to_the_first_worker_reporting_the_hash() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    // A restarted master: no candidate known yet, the report brings one.
+    jobs.retry(key("h1"), BTreeSet::new(), None, at(0));
+    assert_eq!(jobs.expire(at(100)), []);
+    let job = jobs.request(key("h1"), "w3", at(100)).unwrap();
+    assert_eq!(job.worker_id, "w3");
+}

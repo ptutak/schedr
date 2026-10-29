@@ -2,7 +2,7 @@
 {% block title %}Import errors · schedr{% endblock %}
 {% block content %}
 <h1>Import errors</h1>
-<p class="dim">Files of each DAG root's current code that failed to import. A DAG defined in such a file keeps its last good version in the DAG list and its schedule, but its tasks run the current code, where the file doesn't import, so they fail until it is fixed. Fix the file and sync the root, and its entry goes.</p>
+<p class="dim">Files of each DAG root's current code that failed to import. A DAG defined in such a file keeps its last good version in the DAG list, but it is held: the scheduler creates no runs of it, its queued runs wait, and it can't be triggered, until the file is fixed. A timeout or a runner that died holds nothing: the file is parsed again, and its DAGs keep running their last good version meanwhile. Fix the file and sync the root, and its entry goes.</p>
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}</div>
 {% endfor %}

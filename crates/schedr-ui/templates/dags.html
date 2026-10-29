@@ -26,7 +26,7 @@
     <tr>
       <td><a href="{{ row.href }}">{{ row.dag_id }}</a>{% if row.conflict %} <span class="badge warning" title="Other files define the same ID">conflict</span>{% endif %}</td>
       {% if several %}<td>{{ row.deployment }}</td>{% endif %}
-      <td>{% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}</td>
+      <td>{% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}{% if let Some(why) = row.held %} <span class="badge warning" title="{{ why }}">held</span>{% endif %}</td>
       <td class="mono">{{ row.schedule }}</td>
       <td>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</td>
       <td class="mono dim">{{ row.location }}</td>

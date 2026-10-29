@@ -14,6 +14,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use schedr_db::reads::RunFilter;
+use schedr_db::runs::Held;
 use schedr_model::commands::Command;
 use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, TaskId};
@@ -42,19 +43,21 @@ type Accepted = Result<(StatusCode, Json<CommandView>), ApiError>;
     responses((status = 200, body = DagList)))]
 pub async fn list_dags(State(state): State<ApiState>) -> ApiResult<DagList> {
     let dags = state.db.stored_dags().await?;
+    let held = Held::by_file(&state.db.current_import_errors().await?);
     Ok(Json(DagList {
         dags: dags
             .iter()
             .filter(|d| !d.removed)
-            .map(DagView::from)
+            .map(|d| DagView::of(d, &held))
             .collect(),
     }))
 }
 
 /// The files of each DAG root's current code that failed to import (decision 66). A DAG
-/// defined in such a file keeps its last good version (still listed and scheduled), but its
-/// tasks run the current code and fail until the file is fixed; fixing it and syncing the root
-/// makes the entry go.
+/// defined in such a file keeps its last good version (still listed) but is held: no run is
+/// created and manual triggers are refused until the file is fixed (decision 72). A timeout or
+/// a runner that died holds nothing: the file is parsed again (72.2). Fixing the file and
+/// syncing the root makes the entry go.
 #[utoipa::path(get, path = "/api/v1/import-errors", tag = "dags",
     responses((status = 200, body = ImportErrorList)))]
 pub async fn list_import_errors(State(state): State<ApiState>) -> ApiResult<ImportErrorList> {
@@ -110,7 +113,9 @@ pub async fn get_dag(
     Path(dag_id): Path<String>,
 ) -> ApiResult<DagView> {
     let dag_id = parse_dag_id(&dag_id)?;
-    Ok(Json(DagView::from(&known_dag(&state, &dag_id).await?)))
+    let dag = known_dag(&state, &dag_id).await?;
+    let held = Held::by_file(&state.db.current_import_errors().await?);
+    Ok(Json(DagView::of(&dag, &held)))
 }
 
 /// Pause a DAG: the scheduler creates no runs of it (optionally cancelling those in

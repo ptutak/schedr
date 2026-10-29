@@ -48,7 +48,34 @@ pub struct ErrorSummary {
     pub traceback: String,
 }
 
+/// The exception name of the import error the agent records for a file that took longer than
+/// the parse timeout.
+pub const PARSE_TIMEOUT_EXCEPTION: &str = "ParseTimeout";
+
+/// The exception name of the import error the agent records for a file whose runner died.
+pub const RUNNER_DIED_EXCEPTION: &str = "RunnerDied";
+
+/// The exception name of the import error the agent records for a file whose parse result
+/// (all its DAGs' JSON together) is larger than the master accepts (B35).
+pub const PARSE_RESULT_TOO_LARGE_EXCEPTION: &str = "ParseResultTooLarge";
+
+/// The exception name of the import error the master records for a file that imported but
+/// defines a DAG its checks refuse.
+pub const INVALID_DAG_EXCEPTION: &str = "InvalidDag";
+
+/// The exception name of the import error the master records for a file whose path isn't
+/// inside its root.
+pub const INVALID_PATH_EXCEPTION: &str = "InvalidPath";
+
 impl ErrorSummary {
+    /// Whether it is a **transient** import error (decision 72.2): the agent stopped the file
+    /// (a timeout, a runner that died), so the code itself may be fine. Such a file is parsed
+    /// again, and doesn't hold its DAGs.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        self.exception == PARSE_TIMEOUT_EXCEPTION || self.exception == RUNNER_DIED_EXCEPTION
+    }
+
     /// The JSON text of a summary schedr itself wrote (no traceback), e.g. when the agent
     /// lost the runner or the master lost the worker.
     #[must_use]

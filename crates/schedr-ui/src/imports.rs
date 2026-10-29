@@ -124,7 +124,7 @@ pub async fn notice<T: Transport + Send + Sync + 'static>(
                 &format!("{n} files")
             };
             Html(format!(
-                r#"<div class="banner warning">{files} failed to import: their DAGs keep their last good version, but their tasks fail until the file is fixed (<a href="{}/import-errors">see import errors</a>)</div>"#,
+                r#"<div class="banner warning">{files} failed to import: their DAGs are held (no runs) until the file is fixed (a timeout is parsed again) (<a href="{}/import-errors">see import errors</a>)</div>"#,
                 page.base
             ))
             .into_response()

@@ -248,6 +248,17 @@
               "null"
             ]
           },
+          "held": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeldView",
+                "description": "Why it is held, while its file fails to import in its root's current code (decision\n72): the scheduler creates no runs of it and manual triggers are refused until it\nimports again. Not set for a timeout or a runner that died (the file is parsed again)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "location": {
             "oneOf": [
               {
@@ -295,6 +306,34 @@
         },
         "required": [
           "error"
+        ],
+        "type": "object"
+      },
+      "HeldView": {
+        "description": "Why a DAG is held: its file's import error. The error is the **file's**, so every DAG of\nthe file is held (decision 72.3).",
+        "properties": {
+          "exception": {
+            "description": "The error's exception class name, e.g. `ModuleNotFoundError`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "The error's message.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file, relative to its root.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "What happened and what to do, for people: that the file failed (not only this DAG),\nwhy, and how to fix it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "path",
+          "exception",
+          "message"
         ],
         "type": "object"
       },
@@ -1185,7 +1224,7 @@
             }
           }
         },
-        "summary": "The files of each DAG root's current code that failed to import (decision 66). A DAG\ndefined in such a file keeps its last good version (still listed and scheduled), but its\ntasks run the current code and fail until the file is fixed; fixing it and syncing the root\nmakes the entry go.",
+        "summary": "The files of each DAG root's current code that failed to import (decision 66). A DAG\ndefined in such a file keeps its last good version (still listed) but is held: no run is\ncreated and manual triggers are refused until the file is fixed (decision 72). A timeout or\na runner that died holds nothing: the file is parsed again (72.2). Fixing the file and\nsyncing the root makes the entry go.",
         "tags": [
           "dags"
         ]

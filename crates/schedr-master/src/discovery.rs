@@ -24,7 +24,7 @@ use jiff::Timestamp;
 use schedr_db::dags::{DagChange, NewParse, StoredParse};
 use schedr_db::{Database, DbError};
 use schedr_model::SchedrVersion;
-use schedr_model::runner::ParsedFile;
+use schedr_model::runner::{ErrorSummary, ParsedFile};
 
 use crate::catalog::{self, Source};
 use crate::metrics::MasterMetrics;
@@ -152,7 +152,8 @@ impl Discovery {
                 .db
                 .find_parse(&key.root, &key.content_hash, &key.schedr_version)
                 .await?;
-            if found.is_none() {
+            // No parse yet, or a retry planned (decision 72.2).
+            if found.is_none() || self.jobs.has(&key) {
                 jobs.extend(self.jobs.request(key, worker_id, now));
             }
         }
@@ -267,7 +268,18 @@ impl Discovery {
             .find_parse(&key.root, &key.content_hash, &key.schedr_version)
             .await?;
         Ok(match found {
-            Some(_) => None,
+            Some(_) if self.no_parse.contains(worker_id) => None,
+            // A retry planned (decision 72.2): one more worker that can take it.
+            Some(_) if self.jobs.has(&key) => self.jobs.request(key, worker_id, now),
+            Some(parse_id) => {
+                // After a master restart, a parse that failed transiently isn't planned again
+                // yet.
+                if any_transient(&self.db.parse_files(&parse_id).await?) {
+                    let candidates = self.candidates(&key);
+                    self.jobs.retry(key, candidates, None, now);
+                }
+                None
+            }
             None if self.no_parse.contains(worker_id) => {
                 self.jobs.wait(key);
                 None
@@ -291,9 +303,24 @@ impl Discovery {
         Ok(())
     }
 
+    /// The workers that report `key` and take parse jobs.
+    fn candidates(&self, key: &ParseKey) -> BTreeSet<String> {
+        self.reports
+            .iter()
+            .filter(|(worker, roots)| {
+                !self.no_parse.contains(*worker) && roots.get(&key.root) == Some(key)
+            })
+            .map(|(worker, _)| worker.clone())
+            .collect()
+    }
+
     /// Stores an uploaded parse (after validation) and finishes its job. If it is the parse of
     /// the root's reported hash, it becomes current and the DAG list is updated. Returns the
     /// stored parse's ID.
+    ///
+    /// When `key` has a stored parse, the upload is a **retry** (decision 72.2): it replaces
+    /// only the stored files that failed transiently, so a file that loaded once keeps its
+    /// result. Files that (still) failed transiently get another retry, after a delay.
     ///
     /// # Errors
     ///
@@ -309,21 +336,65 @@ impl Discovery {
             self.master,
             self.max_message_size,
         );
-        let parse_id = self
+        let key = &upload.key;
+        let stored = self
             .db
-            .insert_parse(&NewParse {
-                root: &upload.key.root,
-                content_hash: &upload.key.content_hash,
-                schedr_version: &upload.key.schedr_version,
-                worker_id: &upload.worker_id,
-                parsed_at: now,
-                files: &files,
-            })
+            .find_parse(&key.root, &key.content_hash, &key.schedr_version)
             .await?;
-        self.jobs.finish(&upload.key);
+        let (parse_id, files, retried) = if let Some(parse_id) = stored {
+            let before = self.db.parse_files(&parse_id).await?;
+            let replaced = retried_files(&before, files);
+            self.db.replace_parse_files(&parse_id, &replaced).await?;
+            let files = self.db.parse_files(&parse_id).await?;
+            (parse_id, files, !replaced.is_empty())
+        } else {
+            let parse_id = self
+                .db
+                .insert_parse(&NewParse {
+                    root: &key.root,
+                    content_hash: &key.content_hash,
+                    schedr_version: &key.schedr_version,
+                    worker_id: &upload.worker_id,
+                    parsed_at: now,
+                    files: &files,
+                })
+                .await?;
+            (parse_id, files, false)
+        };
+        let failed: Vec<&str> = files
+            .iter()
+            .filter(|f| f.error.as_ref().is_some_and(ErrorSummary::is_transient))
+            .map(|f| f.path.as_str())
+            .collect();
+        if failed.is_empty() {
+            self.jobs.finish(key);
+        } else {
+            let candidates = self.candidates(key);
+            self.jobs
+                .retry(key.clone(), candidates, Some(&upload.worker_id), now);
+            tracing::warn!(
+                root = key.root.as_str(),
+                content_hash = key.content_hash.as_str(),
+                worker_id = upload.worker_id.as_str(),
+                files = failed.join(", "),
+                "files failed to import transiently (a timeout or a runner that died): parsed \
+                 again later; their DAGs keep their last good version meanwhile, so a file \
+                 that keeps failing doesn't take effect (see the import errors)"
+            );
+        }
         self.parses
-            .remove(&(upload.key.root.clone(), upload.key.content_hash.clone()));
-        self.decide(&upload.key.root, now).await?;
+            .remove(&(key.root.clone(), key.content_hash.clone()));
+        self.decide(&key.root, now).await?;
+        // A retry changes the files of a parse that may already be current: `decide` sees no
+        // new parse then.
+        if retried
+            && self
+                .current
+                .get(&key.root)
+                .is_some_and(|c| c.parse_id == parse_id)
+        {
+            self.refresh(now).await?;
+        }
         Ok(parse_id)
     }
 
@@ -472,6 +543,29 @@ impl Discovery {
         }
         Ok(())
     }
+}
+
+/// Whether any of `files` failed transiently (decision 72.2).
+fn any_transient(files: &[ParsedFile]) -> bool {
+    files
+        .iter()
+        .any(|f| f.error.as_ref().is_some_and(ErrorSummary::is_transient))
+}
+
+/// Of a retry's `files`, those that replace the stored ones (`before`): where the stored file
+/// failed transiently (or is missing), and the retry's result differs.
+fn retried_files(before: &[ParsedFile], files: Vec<ParsedFile>) -> Vec<ParsedFile> {
+    let before: BTreeMap<&str, &ParsedFile> = before.iter().map(|f| (f.path.as_str(), f)).collect();
+    files
+        .into_iter()
+        .filter(|file| match before.get(file.path.as_str()) {
+            None => true,
+            Some(old) => {
+                old.error.as_ref().is_some_and(ErrorSummary::is_transient)
+                    && (old.dags != file.dags || old.error != file.error)
+            }
+        })
+        .collect()
 }
 
 /// The parse to use of a hash's `parses`: the one of the newest schedr version among

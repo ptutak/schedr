@@ -292,6 +292,40 @@ impl Database {
         Ok(existing.unwrap_or(id))
     }
 
+    /// Replaces files of a stored parse (a re-parse of files that failed transiently,
+    /// decision 72.2): each of `files` takes the place of the stored file at its path.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn replace_parse_files(
+        &self,
+        parse_id: &str,
+        files: &[ParsedFile],
+    ) -> Result<(), DbError> {
+        const DELETE: &str =
+            "DELETE FROM parse_files WHERE parse_result_id = $1{uuid} AND path = $2";
+        const FILE: &str = "INSERT INTO parse_files (parse_result_id, path, dags, error) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json})";
+        in_tx!(self, BATCH_LIMITS, |tx, backend| {
+            for file in files {
+                sqlx::query(sql(backend, DELETE))
+                    .bind(parse_id)
+                    .bind(&file.path)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query(sql(backend, FILE))
+                    .bind(parse_id)
+                    .bind(&file.path)
+                    .bind(to_json(&file.dags))
+                    .bind(file.error.as_ref().map(to_json))
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        });
+        Ok(())
+    }
+
     /// The files of a stored parse, in path order.
     ///
     /// # Errors

@@ -456,3 +456,40 @@ async fn the_overview_and_active_dags_of_some_dags_have_only_theirs() {
     assert_eq!(db.run_overview_of(&refs).await.unwrap().running(&id), 1);
     assert_eq!(ids(db.active_dags_of(&refs).await.unwrap()), ["sync"]);
 }
+
+#[test]
+fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
+    let held = |exception: &str| {
+        Held {
+            path: "etl/all.py".to_owned(),
+            exception: exception.to_owned(),
+            message: "the details".to_owned(),
+        }
+        .reason("sync")
+    };
+    let too_large = held("ParseResultTooLarge");
+    for part in [
+        "DAG `sync` is held, no runs are created and it can't be triggered",
+        "the parse result of its file `etl/all.py` (the JSON of all the file's DAGs together, \
+         not of `sync` alone) is too large",
+        "move large DAGs to files of their own",
+        "[master] grpc_max_message_size",
+    ] {
+        assert!(too_large.contains(part), "{part}\n{too_large}");
+    }
+    let invalid = held("InvalidDag");
+    assert!(
+        invalid.contains("Every DAG of the file is held while one is invalid"),
+        "{invalid}"
+    );
+    assert!(
+        invalid.contains("move it to a file of its own"),
+        "{invalid}"
+    );
+    assert!(held("InvalidPath").contains("isn't inside its root"));
+    assert!(
+        held("SyntaxError").contains("fails to import (SyntaxError: the details)"),
+        "{}",
+        held("SyntaxError")
+    );
+}

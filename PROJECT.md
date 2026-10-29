@@ -1447,8 +1447,8 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
 
 Asked by the user (2026-10-29): a place in the UI for the DAG files that failed to import.
 - **What is shown** (decision 66, the user's: A): the files of each root's **current** parse
-  that failed (their DAGs keep their last good version, listed and scheduled, but their tasks
-  run the current code and fail until the file is fixed; see DAG code delivery), with the
+  that failed (their DAGs keep their last good version, listed but **held**: no runs until the
+  file is fixed, decision 72; see DAG code delivery), with the
   root, the hash, when and by which
   worker it was parsed, the exception, message and traceback. The master writes each root's
   current parse to `current_parses` when it decides it (from what alive workers report), so
@@ -1576,6 +1576,54 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   error shown; it doesn't remove them. This covers a broken push and a DAG that doesn't parse
   with a new major version of schedr alike. A DAG defined in another file in the meantime
   counts as a second place (a conflict) until the broken file is fixed or removed.
+- **A DAG whose file fails to import is held** (decision 72, the user's, 2026-10-29: B):
+  its tasks would run the current code, where the file doesn't import, so every run would
+  fail. While the file has an import error in its root's **current** parse:
+  - **no run is created:** nothing is stored, and its fire times count as missed (as when
+    paused); once the file imports again, its trigger's `catchup` decides about them;
+  - **a manual trigger is refused:** the command is `rejected` with the reason ("DAG `sync`
+    is held: `sync.py` fails to import (ModuleNotFoundError: …); fix the file first");
+  - **its queued runs wait** until the hold lifts (72.1, the user's: A); runs already
+    running go on.
+  - Shown as `held` in the API (`DagView.held`: the file, exception and message), a badge,
+    a banner and a disabled Trigger in the UI, a `HELD` column in `schedr dags list`, the
+    gauge `master_dags{state="held"}`, and a log line when a hold starts and when it lifts.
+    Backfills, chained runs and event-triggered runs follow the same rule when they come
+    (M4.11b, M4.12).
+  - Not chosen: A keep creating runs that fail (the behaviour before: noisy, and retries
+    burn); C pause the DAG automatically (changes a setting the user owns, and the user must
+    remember to unpause it).
+- **Transient parse failures** (decision 72.2, the user's, 2026-10-29): a file the agent
+  stopped, `ParseTimeout` (it took longer than the parse timeout, e.g. on a busy worker) or
+  `RunnerDied`, says nothing about the code.
+  - **They hold nothing:** a DAG already known keeps running its last good version; a file
+    parsed for the first time defines no DAG yet, so there is nothing to run until it loads
+    (the import error is listed).
+  - **They are retried every time, without a limit:** a parse with such files gets another
+    parse job for the same code, after 30 s, doubling with each retry up to 10 min, given to
+    another worker reporting that code when there is one. A retry replaces only the files
+    that failed transiently (a file that loaded keeps its result); the DAG list is worked out
+    again. A restarted master plans the retry when a worker reports the code again.
+  - A file that keeps timing out never takes effect (its DAGs stay on their last good
+    version): each failure logs a warning naming the files, and the import error stays
+    listed.
+  - Not chosen: holding on transient errors (a one-off timeout would stop a healthy DAG until
+    the next commit, since each code version was parsed once); a retry limit (the user:
+    retried every time).
+- **schedr's own rejections hold too** (decision 72.3, the user's, 2026-10-30: B):
+  `InvalidDag` (the file imports, but the master's checks refuse a DAG of it), `InvalidPath`
+  and `ParseResultTooLarge` (the JSON of all the file's DAGs together is past
+  `[master] grpc_max_message_size`) are not parsed again (the same code gives the same
+  result) and hold **every DAG of the file**: the master never got the new definitions, and
+  running the new code with the last good version's structure and arguments could quietly
+  use stale data. The error is the **file's**, so the reason shown (API `held.reason`, the
+  UI's banner and the disabled Trigger's tooltip, a refused trigger, `schedr dags list`)
+  says so and what to do: fix the invalid DAG or move it to a file of its own; move large
+  DAGs to their own files, keep large data out of DAG arguments, or raise the setting.
+  - Not chosen: A not holding them (new code on old arguments, silently); C holding only
+    the rejected DAGs and letting the file's others run (per-DAG validation results, a change
+    to the stored parse data, and the catalog's conflicts and removals for partly valid
+    files; the user can move the neighbours to files of their own instead).
 - **How the DAG list is worked out:** the master stores each parse **as the worker reported
   it** (table `parse_files`: per file, its DAGs or its import error) and, whenever a root's
   current parse changes, works the DAG list out again from the current parse of **every**

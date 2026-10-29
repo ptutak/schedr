@@ -161,6 +161,84 @@ async fn manual_runs_of_a_paused_dag_run_and_wait_for_a_place() {
     assert_eq!(db.queued_runs(&sync()).await.unwrap(), []);
 }
 
+/// Makes a parse of `hash` whose `a.py` (the DAG's file) fails with `exception`, or loads,
+/// `etl`'s current parse.
+async fn current_parse(db: &Database, hash: &str, exception: Option<&str>) {
+    let file = schedr_model::runner::ParsedFile {
+        path: "a.py".to_owned(),
+        dags: Vec::new(),
+        error: exception.map(|e| schedr_model::runner::ErrorSummary {
+            exception: e.to_owned(),
+            message: "No module named 'pandas'".to_owned(),
+            traceback: String::new(),
+        }),
+        warnings: Vec::new(),
+    };
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: hash,
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts("2026-10-20T00:00:00Z"),
+            files: &[file],
+        })
+        .await
+        .unwrap();
+    db.set_current_parse("etl", &parse_id, ts("2026-10-20T00:00:00Z"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_dag_whose_file_fails_to_import_is_held() {
+    let (scheduler, db) = scheduler_with(dag(&json!({}))).await;
+    // One run running, one queued (before the hold).
+    let now = ts("2026-10-21T08:00:00Z");
+    scheduler.trigger(&sync(), None, "anna", now).await.unwrap();
+    let queued = scheduler.trigger(&sync(), None, "anna", now).await.unwrap();
+    current_parse(&db, "h2", Some("ModuleNotFoundError")).await;
+    execute(
+        &db,
+        "UPDATE runs SET state = 'success' WHERE state = 'running'",
+    )
+    .await;
+
+    // The queued run waits (72.1), and a manual trigger is refused.
+    let pass = scheduler.pass(now).await.unwrap();
+    assert_eq!((planned(&pass), pass.started), (vec![], vec![]));
+    assert_eq!(db.queued_runs(&sync()).await.unwrap().len(), 1);
+    let error = scheduler
+        .trigger(&sync(), None, "anna", now)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "DAG `sync` is held, no runs are created and it can't be triggered: its file `a.py` \
+         fails to import (ModuleNotFoundError: No module named 'pandas'), so its tasks couldn't \
+         run. Every DAG of the file is held until it imports"
+    );
+
+    // A transient error holds nothing (72.2): the queued run starts.
+    current_parse(&db, "h3", Some("ParseTimeout")).await;
+    let pass = scheduler.pass(now).await.unwrap();
+    assert_eq!(pass.started, [queued.run_id]);
+    execute(
+        &db,
+        "UPDATE runs SET state = 'success' WHERE state = 'running'",
+    )
+    .await;
+
+    // Unpaused, held over a fire time: missed (no catchup); fixed, the next one runs.
+    db.set_paused(&sync(), false).await.unwrap();
+    current_parse(&db, "h4", Some("ModuleNotFoundError")).await;
+    let pass = scheduler.pass(ts("2026-10-22T03:30:00Z")).await.unwrap();
+    assert_eq!(planned(&pass), Vec::<String>::new());
+    current_parse(&db, "h5", None).await;
+    let pass = scheduler.pass(ts("2026-10-22T04:00:00Z")).await.unwrap();
+    assert_eq!(planned(&pass), ["2026-10-22T03:00:00Z"]);
+}
+
 #[tokio::test]
 async fn scheduled_runs_take_a_freed_place_before_queued_ones() {
     let (scheduler, db) = scheduler_with(dag(&json!({}))).await;

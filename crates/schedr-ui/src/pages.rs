@@ -33,6 +33,9 @@ pub struct DagRow {
     pub location: String,
     /// Whether other files define the same ID.
     pub conflict: bool,
+    /// Why it is held, while its file fails to import (decision 72): no runs are created and
+    /// it can't be triggered.
+    pub held: Option<String>,
 }
 
 /// `GET /`: the DAGs of every deployment, by ID.
@@ -240,6 +243,7 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
         tags: dag.tags.clone(),
         location: dag.location.as_ref().map(location).unwrap_or_default(),
         conflict: dag.conflict.as_ref().is_some_and(|c| !c.is_empty()),
+        held: dag.held.as_ref().map(|h| h.reason.clone()),
     }
 }
 

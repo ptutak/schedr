@@ -18,10 +18,10 @@ use crate::fire_times::FireTimes;
 mod tests;
 
 /// The exception name of the import error recorded for a file with an invalid DAG.
-pub const INVALID_DAG_EXCEPTION: &str = "InvalidDag";
+pub const INVALID_DAG_EXCEPTION: &str = schedr_model::runner::INVALID_DAG_EXCEPTION;
 
 /// The exception name of the import error recorded for a path outside its root.
-pub const INVALID_PATH_EXCEPTION: &str = "InvalidPath";
+pub const INVALID_PATH_EXCEPTION: &str = schedr_model::runner::INVALID_PATH_EXCEPTION;
 
 /// What is wrong with a DAG parsed from `root`:`path`; empty when it is valid.
 #[must_use]

@@ -1262,7 +1262,7 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
         path: file.path,
         dag_json: Vec::new(),
         import_error: Some(pb::ImportError {
-            exception: "ParseResultTooLarge".to_owned(),
+            exception: schedr_model::runner::PARSE_RESULT_TOO_LARGE_EXCEPTION.to_owned(),
             message,
             traceback: String::new(),
         }),

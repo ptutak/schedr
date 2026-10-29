@@ -48,9 +48,13 @@ pub async fn run_dags<T: Transport>(
             }
             write_table(
                 out,
-                &["DAG", "PAUSED", "TRIGGER", "DEFINED IN"],
+                &["DAG", "PAUSED", "HELD", "TRIGGER", "DEFINED IN"],
                 &dag_rows(&dags.dags, &output.local),
             )?;
+            // Why each held DAG gets no runs, and what to do (decision 72.3).
+            for held in dags.dags.iter().filter_map(|d| d.held.as_ref()) {
+                writeln!(out, "\n{}", held.reason)?;
+            }
         }
         DagsCommand::Pause { dag } => {
             let command = client
@@ -381,6 +385,11 @@ fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
             vec![
                 dag.dag_id.clone(),
                 if dag.paused { "yes" } else { "no" }.to_owned(),
+                // Held while its file fails to import (decision 72): the error's class (the
+                // message is on the UI's Import errors page).
+                dag.held
+                    .as_ref()
+                    .map_or_else(|| "no".to_owned(), |h| format!("yes: {}", h.exception)),
                 dag.trigger
                     .as_ref()
                     .map_or_else(String::new, |t| trigger_text(t, local)),

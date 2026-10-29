@@ -581,3 +581,125 @@ async fn a_draining_worker_takes_no_parse_jobs_and_hands_its_own_over() {
     assert_eq!(assigned, [("w1", "h3")]);
     assert_eq!(discovery.allow_parsing("w1", now()).await.unwrap(), []);
 }
+
+/// `upload`, with `path` failing with `exception` instead.
+fn failing(mut upload: ParseUpload, path: &str, exception: &str) -> ParseUpload {
+    upload.files.push(ParsedFile {
+        path: path.to_owned(),
+        dags: Vec::new(),
+        error: Some(schedr_model::runner::ErrorSummary {
+            exception: exception.to_owned(),
+            message: "importing the file took longer than the parse timeout of 30 s".to_owned(),
+            traceback: String::new(),
+        }),
+        warnings: Vec::new(),
+    });
+    upload
+}
+
+fn later(seconds: i64) -> Timestamp {
+    now() + jiff::SignedDuration::from_secs(seconds)
+}
+
+#[tokio::test]
+async fn a_file_that_timed_out_is_parsed_again_and_only_its_result_replaced() {
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    // `b.py` timed out on w1 (a first parse: it defines nothing yet).
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    let parse_id = discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    let ids = |stored: Vec<StoredDag>| -> Vec<String> {
+        stored.iter().map(|d| d.dag_id.to_string()).collect()
+    };
+    assert_eq!(ids(dags(&discovery).await), ["a"]);
+    assert!(discovery.jobs().has(&key("h1")), "a retry planned");
+    assert_eq!(discovery.jobs_mut().expire(later(29)), []);
+    let [retry] = discovery.jobs_mut().expire(later(30)).try_into().unwrap();
+    assert_eq!(
+        retry.worker_id, "w2",
+        "another worker than the one that timed out"
+    );
+
+    // The retry: `b.py` loads, `a.py` timed out this time and keeps its earlier result.
+    let mut again = upload("h1", vec![("b.py", vec![dag("b", "b.py", 1)])]);
+    again.worker_id = "w2".to_owned();
+    let again = failing(again, "a.py", "ParseTimeout");
+    assert_eq!(
+        discovery.parse_uploaded(again, later(31)).await.unwrap(),
+        parse_id,
+        "the same parse, its files replaced"
+    );
+    assert!(!discovery.jobs().has(&key("h1")), "nothing failed any more");
+    let files = discovery.db.parse_files(&parse_id).await.unwrap();
+    assert!(files.iter().all(|f| f.error.is_none()), "{files:?}");
+    assert_eq!(ids(dags(&discovery).await), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn a_known_dag_keeps_its_version_through_a_timeout_and_a_restart_plans_the_retry() {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    let good = discovery
+        .parse_uploaded(
+            upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]),
+            now(),
+        )
+        .await
+        .unwrap();
+    discovery
+        .root_reported("w1", key("h2"), now())
+        .await
+        .unwrap();
+    discovery
+        .parse_uploaded(failing(upload("h2", vec![]), "a.py", "RunnerDied"), now())
+        .await
+        .unwrap();
+    let stored = &dags(&discovery).await[0];
+    assert!(!stored.removed);
+    assert_eq!(stored.current.as_ref().unwrap().parse_id, good);
+    // Not held: a transient error (decision 72.2).
+    let errors = discovery.db.current_import_errors().await.unwrap();
+    assert_eq!(errors.len(), 1);
+    assert!(schedr_db::runs::Held::by_file(&errors).is_empty());
+
+    // A restarted master knows of no retry until the worker reports the code again.
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    assert_eq!(
+        restarted
+            .registered("w1", vec![key("h2")], later(60))
+            .await
+            .unwrap(),
+        []
+    );
+    assert!(restarted.jobs().has(&key("h2")));
+    let [retry] = restarted.jobs_mut().expire(later(90)).try_into().unwrap();
+    assert_eq!(retry.worker_id, "w1", "the only worker gets it again");
+    let fixed = restarted
+        .parse_uploaded(
+            upload("h2", vec![("a.py", vec![dag("a", "a.py", 2)])]),
+            later(91),
+        )
+        .await
+        .unwrap();
+    let stored = &restarted.db.stored_dags().await.unwrap()[0];
+    assert_eq!(stored.current.as_ref().unwrap().parse_id, fixed);
+    assert_eq!(
+        stored.current.as_ref().unwrap().dag.max_active_runs,
+        Some(2)
+    );
+}

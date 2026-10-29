@@ -17,10 +17,10 @@ use crate::channel::ChannelError;
 mod tests;
 
 /// The exception name of the import error recorded for a file that timed out.
-pub const TIMEOUT_EXCEPTION: &str = "ParseTimeout";
+pub const TIMEOUT_EXCEPTION: &str = schedr_model::runner::PARSE_TIMEOUT_EXCEPTION;
 
 /// The exception name of the import error recorded for a file whose runner died.
-pub const RUNNER_DIED_EXCEPTION: &str = "RunnerDied";
+pub const RUNNER_DIED_EXCEPTION: &str = schedr_model::runner::RUNNER_DIED_EXCEPTION;
 
 /// Why a parse job couldn't be finished.
 #[derive(Debug, thiserror::Error)]

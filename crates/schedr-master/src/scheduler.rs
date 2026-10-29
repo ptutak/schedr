@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
-use schedr_db::runs::{ActiveDag, NewRun, QueuedRun};
+use schedr_db::runs::{ActiveDag, Held, NewRun, QueuedRun};
 use schedr_db::{Database, DbError};
 use schedr_model::{DagId, RunKind, RunState};
 
@@ -40,6 +40,15 @@ pub enum SchedulerError {
     /// The DAG doesn't exist, was removed, is in conflict or has no version.
     #[error("DAG `{0}` can't run: it doesn't exist, was removed or is in conflict")]
     NotRunnable(DagId),
+    /// The DAG's file fails to import in its root's current parse (decision 72): no run is
+    /// created until it imports again.
+    #[error("{}", held.reason(dag_id.as_str()))]
+    Held {
+        /// The DAG.
+        dag_id: DagId,
+        /// Why.
+        held: Held,
+    },
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
@@ -189,7 +198,10 @@ impl Scheduler {
             let mut running = overview.running(&active.dag.id);
             let queued = overview.queued(&active.dag.id);
             let mut new_runs = 0;
-            if !active.paused {
+            // Held (decision 72): its fire times create nothing (missed, as when paused) and
+            // its queued runs wait.
+            let held = active.held.as_ref();
+            if !active.paused && held.is_none() {
                 let last = overview.last_scheduled(&active.dag.id);
                 // At most so many a DAG a round: a long catch-up goes over a few (B18).
                 for times in plan
@@ -206,12 +218,17 @@ impl Scheduler {
                     }
                 }
             }
-            pass.started
-                .extend(self.start_queued(queued, &plan, running, now).await?);
+            if held.is_none() {
+                pass.started
+                    .extend(self.start_queued(queued, &plan, running, now).await?);
+            }
+            let why = held.map(|h| h.reason(active.dag.id.as_str()));
             let found = Visited {
                 version: &active.version_id,
                 active: running > 0 || new_runs > 0 || !queued.is_empty(),
+                // Not paused when held: visited at its fire times, to see the hold lift.
                 paused: active.paused,
+                held: why.as_deref(),
                 next_fire: plan.next_fire_after(now),
             };
             self.quiet().visited(&active.dag.id, found, now);
@@ -226,7 +243,8 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// [`SchedulerError::NotRunnable`], [`SchedulerError::ManualRun`] for a time in the future,
+    /// [`SchedulerError::NotRunnable`], [`SchedulerError::Held`] while its file fails to
+    /// import, [`SchedulerError::ManualRun`] for a time in the future,
     /// [`SchedulerError::FireTimes`] or [`SchedulerError::Db`].
     ///
     pub async fn trigger(
@@ -261,6 +279,12 @@ impl Scheduler {
             .into_iter()
             .find(|d| &d.dag.id == dag_id)
             .ok_or_else(|| SchedulerError::NotRunnable(dag_id.clone()))?;
+        if let Some(held) = active.held {
+            return Err(SchedulerError::Held {
+                dag_id: dag_id.clone(),
+                held,
+            });
+        }
         let fire_times =
             FireTimes::new(&active.dag.trigger).map_err(|error| SchedulerError::FireTimes {
                 dag_id: dag_id.clone(),

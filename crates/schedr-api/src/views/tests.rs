@@ -30,7 +30,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
         }),
     };
     assert_eq!(
-        serde_json::to_value(DagView::from(&stored)).unwrap(),
+        serde_json::to_value(DagView::of(&stored, &HashMap::new())).unwrap(),
         json!({
             "dag_id": "sync", "paused": true,
             "location": {"root": "etl", "path": "a.py"}, "conflict": null,
@@ -38,7 +38,24 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
                 "kind": "every", "interval_ms": 60_000, "catchup": false,
                 "start": null, "end": null
             },
-            "description": "Daily sync", "tags": ["team-a"]
+            "description": "Daily sync", "tags": ["team-a"], "held": null
+        })
+    );
+    // Its file fails to import in the current code: held, with the error (decision 72).
+    let held = Held {
+        path: "a.py".to_owned(),
+        exception: "ModuleNotFoundError".to_owned(),
+        message: "No module named 'pandas'".to_owned(),
+    };
+    let by_file = HashMap::from([(("etl".to_owned(), "a.py".to_owned()), held)]);
+    assert_eq!(
+        serde_json::to_value(DagView::of(&stored, &by_file).held).unwrap(),
+        json!({
+            "path": "a.py", "exception": "ModuleNotFoundError",
+            "message": "No module named 'pandas'",
+            "reason": "DAG `sync` is held, no runs are created and it can't be triggered: its \
+                file `a.py` fails to import (ModuleNotFoundError: No module named 'pandas'), so \
+                its tasks couldn't run. Every DAG of the file is held until it imports"
         })
     );
     let conflict = StoredDag {
@@ -49,7 +66,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
         }]),
         ..stored
     };
-    let view = DagView::from(&conflict);
+    let view = DagView::of(&conflict, &by_file);
     assert_eq!(
         (view.location, view.trigger, view.tags),
         (None, None, vec![])

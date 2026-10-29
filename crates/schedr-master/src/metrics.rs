@@ -123,7 +123,7 @@ const DAGS: MetricDoc = MetricDoc {
     kind: MetricKind::Gauge,
     labels: &["state"],
     help: "DAGs that can run, by how rounds treat them: busy (visited every round) or quiet \
-        (visited when woken)",
+        (visited when woken); held: those whose file fails to import (no runs until it does)",
 };
 const DAG_WAKES: MetricDoc = MetricDoc {
     name: "master_dag_wakes",
@@ -336,9 +336,9 @@ impl MasterMetrics {
         r.register(DAG_WAKES.name, DAG_WAKES.help, self.dag_wakes.clone());
     }
 
-    /// Sets the busy and quiet DAGs' counts.
-    pub fn set_dags(&self, busy: usize, quiet: usize) {
-        for (state, count) in [("busy", busy), ("quiet", quiet)] {
+    /// Sets the busy, quiet and held DAGs' counts (held ones count as busy or quiet too).
+    pub fn set_dags(&self, busy: usize, quiet: usize, held: usize) {
+        for (state, count) in [("busy", busy), ("quiet", quiet), ("held", held)] {
             self.dags
                 .get_or_create(&StateLabels {
                     state: state.to_owned(),

@@ -4,7 +4,7 @@
 //! that crashes after creating one can't create it twice; manual, backfill, chained and event runs
 //! are exempt (see PROJECT.md, Runs: manual runs, backfill and pausing).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -105,12 +105,88 @@ impl RunOverview {
 pub struct ActiveDag {
     /// Whether it is paused (no new scheduled runs; queued runs still start).
     pub paused: bool,
+    /// Why it is held, when the file defining it fails to import in its root's current parse
+    /// (decision 72): no run is created or started, and manual triggers are refused.
+    pub held: Option<Held>,
     /// When the master first stored it.
     pub first_seen: Timestamp,
     /// Its current version's ID.
     pub version_id: String,
     /// Its current version.
     pub dag: Arc<Dag>,
+}
+
+/// Why a DAG is held: its file's import error in its root's current parse (decision 72).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    /// The file, relative to its root.
+    pub path: String,
+    /// The error's exception class name.
+    pub exception: String,
+    /// The error's message.
+    pub message: String,
+}
+
+impl Held {
+    /// Why `dag_id` gets no runs, for people (the API, the UI, a refused trigger, the log):
+    /// it is the DAG's **file** that failed, so every DAG of the file is held, and what to do
+    /// about it (decisions 72, 72.3).
+    #[must_use]
+    pub fn reason(&self, dag_id: &str) -> String {
+        use schedr_model::runner::{
+            INVALID_DAG_EXCEPTION, INVALID_PATH_EXCEPTION, PARSE_RESULT_TOO_LARGE_EXCEPTION,
+        };
+        let path = &self.path;
+        let message = &self.message;
+        let what = match self.exception.as_str() {
+            PARSE_RESULT_TOO_LARGE_EXCEPTION => format!(
+                "the parse result of its file `{path}` (the JSON of all the file's DAGs \
+                 together, not of `{dag_id}` alone) is too large for the master: {message}. \
+                 Every DAG of the file is held until it fits: move large DAGs to files of their \
+                 own, keep large data out of the DAGs' arguments (load it when the task runs), \
+                 or raise [master] grpc_max_message_size"
+            ),
+            INVALID_DAG_EXCEPTION => format!(
+                "its file `{path}` imports, but defines a DAG the master's checks refuse \
+                 ({message}). Every DAG of the file is held while one is invalid: fix that DAG, \
+                 or move it to a file of its own"
+            ),
+            INVALID_PATH_EXCEPTION => format!(
+                "its file `{path}` isn't inside its root ({message}). Every DAG of the file is \
+                 held until it is"
+            ),
+            exception => format!(
+                "its file `{path}` fails to import ({exception}: {message}), so its tasks \
+                 couldn't run. Every DAG of the file is held until it imports"
+            ),
+        };
+        format!("DAG `{dag_id}` is held, no runs are created and it can't be triggered: {what}")
+    }
+    /// The current parses' import errors by (root, path), the files whose DAGs are held: a
+    /// transient error (a timeout, a runner that died) holds nothing, since the file is parsed
+    /// again and its DAGs keep their last good version meanwhile (decision 72.2).
+    #[must_use]
+    pub fn by_file(errors: &[crate::dags::ImportErrorRecord]) -> HashMap<(String, String), Self> {
+        errors
+            .iter()
+            .filter(|e| !e.error.is_transient())
+            .map(|e| {
+                let held = Self {
+                    path: e.path.clone(),
+                    exception: e.error.exception.clone(),
+                    message: e.error.message.clone(),
+                };
+                ((e.root.clone(), e.path.clone()), held)
+            })
+            .collect()
+    }
+
+    /// Whether `dag`'s file is among `held` files, and why.
+    #[must_use]
+    pub fn of(dag: &Dag, held: &HashMap<(String, String), Self>) -> Option<Self> {
+        held.get(&(dag.location.root.clone(), dag.location.path.clone()))
+            .cloned()
+    }
 }
 
 impl Database {
@@ -448,11 +524,14 @@ impl Database {
             query.fetch_all(pool).await?
         });
         active.reserve(rows.len());
+        // Usually none: a small query, once a round (decision 72).
+        let held = Held::by_file(&self.current_import_errors().await?);
         for (paused, first_seen, version_id) in rows {
             // The definition from the cache: parsed once per version, not every round (B13).
             let dag = self.dag_version(&version_id).await?;
             active.push(ActiveDag {
                 paused,
+                held: Held::of(&dag, &held),
                 first_seen: parse_time("dags.first_seen_at", &first_seen)?,
                 version_id,
                 dag,

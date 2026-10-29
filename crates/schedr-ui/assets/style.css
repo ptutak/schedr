@@ -167,6 +167,7 @@ input, select, button, .button {
 }
 button, .button { cursor: pointer; background: var(--surface); display: inline-block; }
 button:hover, .button:hover { border-color: var(--dim); text-decoration: none; }
+button:disabled { cursor: not-allowed; color: var(--dim); border-color: var(--border); }
 .pager { margin: 12px 0; }
 h2 .more { font-size: 13px; font-weight: 400; margin-left: 8px; }
 .summary { margin: -8px 0 12px; }

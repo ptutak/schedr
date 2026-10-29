@@ -1,5 +1,7 @@
 //! Parse jobs: each (root, content hash, schedr version) is parsed once, by one worker that
-//! reported it.
+//! reported it. A parse whose files failed **transiently** (a timeout, a runner that died) is
+//! parsed again (decision 72.2), after a delay that doubles with each retry up to
+//! [`MAX_RETRY_DELAY`], preferring another worker: without a limit, since the code may be fine.
 //!
 //! Jobs live in the master's memory: after a restart, workers report their hashes again and a
 //! hash with no stored parse gets a new job. A job whose worker is lost, or that isn't
@@ -20,6 +22,12 @@ mod tests;
 /// How long a worker has for a parse job before it goes to another worker (or the same one
 /// again, if no other reported the hash).
 pub const PARSE_JOB_TIMEOUT: Duration = Duration::from_mins(10);
+
+/// The delay before the first retry of a parse that failed transiently.
+pub const FIRST_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// The longest delay between two retries of a parse that keeps failing transiently.
+pub const MAX_RETRY_DELAY: Duration = Duration::from_mins(10);
 
 /// What a parse job parses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,6 +58,12 @@ struct Job {
     candidates: BTreeSet<String>,
     /// When it was created (for its duration).
     created: Instant,
+    /// A retry: not handed out before this time.
+    not_before: Option<Timestamp>,
+    /// A retry: the worker whose parse failed, the last one to get it if others can.
+    failed_on: Option<String>,
+    /// How many times the parse was retried (for the delay).
+    retries: u32,
 }
 
 /// The parse jobs not finished yet.
@@ -90,7 +104,7 @@ impl ParseJobs {
             .entry(key.clone())
             .or_insert_with(|| new_job(metrics));
         job.candidates.insert(worker_id.to_owned());
-        if job.worker.is_some() {
+        if job.worker.is_some() || job.not_before.is_some_and(|at| at > now) {
             return None;
         }
         job.worker = Some((worker_id.to_owned(), now));
@@ -119,6 +133,41 @@ impl ParseJobs {
         Some(job.id)
     }
 
+    /// The stored parse of `key` has files that failed transiently (on `failed_on`, if known):
+    /// a retry is planned, for the `candidates` (the workers reporting the key), handed out by
+    /// [`Self::expire`] once its delay is over. A job of `key` is finished first.
+    pub fn retry(
+        &mut self,
+        key: ParseKey,
+        candidates: BTreeSet<String>,
+        failed_on: Option<&str>,
+        now: Timestamp,
+    ) {
+        // The first retry when the job failing wasn't one itself.
+        let retries = self
+            .jobs
+            .get(&key)
+            .filter(|job| job.not_before.is_some())
+            .map_or(0, |job| job.retries + 1);
+        self.finish(&key);
+        let delay = FIRST_RETRY_DELAY
+            .saturating_mul(2_u32.saturating_pow(retries.min(16)))
+            .min(MAX_RETRY_DELAY);
+        let delay = jiff::SignedDuration::try_from(delay).unwrap_or(jiff::SignedDuration::MAX);
+        let mut job = new_job(&self.metrics);
+        job.candidates = candidates;
+        job.not_before = Some(now.saturating_add(delay).unwrap_or(Timestamp::MAX));
+        job.failed_on = failed_on.map(str::to_owned);
+        job.retries = retries;
+        self.jobs.insert(key, job);
+    }
+
+    /// Whether `key` has a job (a retry included).
+    #[must_use]
+    pub fn has(&self, key: &ParseKey) -> bool {
+        self.jobs.contains_key(key)
+    }
+
     /// A worker is gone: it is no longer a candidate, and its jobs go to other candidates
     /// (or wait for one).
     pub fn worker_lost(&mut self, worker_id: &str, now: Timestamp) -> Vec<ParseAssignment> {
@@ -137,11 +186,23 @@ impl ParseJobs {
     }
 
     /// Jobs not finished within the timeout go to the next candidate after their worker (the
-    /// same worker if it is the only one).
+    /// same worker if it is the only one); retries whose delay is over go to a candidate other
+    /// than the worker that failed, if there is one.
     pub fn expire(&mut self, now: Timestamp) -> Vec<ParseAssignment> {
         let mut assignments = Vec::new();
         for (key, job) in &mut self.jobs {
             let Some((worker, since)) = &job.worker else {
+                if job.not_before.is_some_and(|at| at <= now) {
+                    let next = job
+                        .candidates
+                        .iter()
+                        .find(|c| job.failed_on.as_ref() != Some(*c))
+                        .or_else(|| job.candidates.iter().next())
+                        .cloned();
+                    if let Some(next) = next {
+                        assignments.push(assign(key, job, next, now));
+                    }
+                }
                 continue;
             };
             if now.duration_since(*since).unsigned_abs() < self.timeout {
@@ -192,5 +253,8 @@ fn new_job(metrics: &MasterMetrics) -> Job {
         worker: None,
         candidates: BTreeSet::new(),
         created: Instant::now(),
+        not_before: None,
+        failed_on: None,
+        retries: 0,
     }
 }

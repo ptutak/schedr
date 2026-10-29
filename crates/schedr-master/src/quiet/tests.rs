@@ -22,12 +22,14 @@ fn id(name: &str) -> DagId {
 struct Found {
     active: bool,
     paused: bool,
+    held: Option<&'static str>,
     next_fire: Option<Timestamp>,
 }
 
 const IDLE: Found = Found {
     active: false,
     paused: false,
+    held: None,
     next_fire: None,
 };
 
@@ -78,6 +80,7 @@ fn round(
                 version,
                 active: f.active,
                 paused: f.paused,
+                held: f.held,
                 next_fire: f.next_fire,
             };
             quiet.visited(&id(&name), visited, now);
@@ -335,6 +338,34 @@ fn dags_that_cant_run_any_more_are_forgotten() {
         some(&["a", "b"])
     );
     assert_eq!(counts(&metrics), (1, 0));
+}
+
+#[test]
+fn held_dags_are_counted_while_held_and_forgotten_when_gone() {
+    let (mut quiet, _, metrics) = quiet_dags();
+    let held = |metrics: &MasterMetrics| {
+        metrics
+            .dags
+            .get_or_create(&StateLabels {
+                state: "held".to_owned(),
+            })
+            .get()
+    };
+    let broken = Found {
+        held: Some("`a.py` fails to import"),
+        ..RUNNING // queued runs waiting: visited every round
+    };
+    let dags = v1(&["a", "b"]);
+    round(&mut quiet, at(0), &dags, |_| broken);
+    assert_eq!(held(&metrics), 2);
+    // `b` fixed; `a` still held, counted once.
+    round(&mut quiet, at(1), &dags, |n| {
+        if n == "a" { broken } else { RUNNING }
+    });
+    assert_eq!(held(&metrics), 1);
+    // `b` removed, `a` fixed: none counted.
+    round(&mut quiet, at(2), &v1(&["a"]), |_| IDLE);
+    assert_eq!(held(&metrics), 0);
 }
 
 #[test]

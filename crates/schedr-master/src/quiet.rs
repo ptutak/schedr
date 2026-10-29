@@ -135,8 +135,10 @@ pub struct Visited<'a> {
     pub version: &'a str,
     /// A run is in progress, or the round created or started one.
     pub active: bool,
-    /// It is paused (its fire times create nothing).
+    /// It is paused, or held (its fire times create nothing).
     pub paused: bool,
+    /// Why it is held, when its file failed (decision 72): [`schedr_db::runs::Held::reason`].
+    pub held: Option<&'a str>,
     /// Its next fire time after now, if it has one.
     pub next_fire: Option<Timestamp>,
 }
@@ -168,6 +170,8 @@ struct Entry {
 pub struct QuietDags {
     settings: QuietSettings,
     dags: HashMap<DagId, Entry>,
+    /// The DAGs held now (decision 72), to log a hold when it starts and when it lifts.
+    held: HashSet<DagId>,
     /// Why each quiet DAG of the current round was visited.
     woken: HashMap<DagId, WakeReason>,
     /// When the last round was (`None` before the first: it visits every DAG).
@@ -191,6 +195,7 @@ impl QuietDags {
         Self {
             settings,
             dags: HashMap::new(),
+            held: HashSet::new(),
             woken: HashMap::new(),
             last_round: None,
             checked_at: None,
@@ -332,6 +337,7 @@ impl QuietDags {
 
     /// Notes what the round at `now` found of `dag`.
     pub fn visited(&mut self, dag: &DagId, found: Visited<'_>, now: Timestamp) {
+        self.note_held(dag, found.held);
         if !self.settings.enabled {
             return;
         }
@@ -367,8 +373,25 @@ impl QuietDags {
         self.dags.insert(dag.clone(), entry);
     }
 
+    /// Logs a DAG's hold when it starts and when it lifts (not every round).
+    fn note_held(&mut self, dag: &DagId, held: Option<&str>) {
+        match held {
+            Some(why) if self.held.insert(dag.clone()) => tracing::warn!(
+                dag_id = dag.as_str(),
+                why,
+                "DAG held (its file failed); no run is created or started until the file is fixed"
+            ),
+            None if self.held.remove(dag) => tracing::info!(
+                dag_id = dag.as_str(),
+                "DAG no longer held: its file imports again; missed fire times follow its \
+                 catchup setting"
+            ),
+            _ => {}
+        }
+    }
+
     /// After a round: forgets the visited DAGs that can't run any more (removed, in
-    /// conflict), `seen` being those that can, and counts busy and quiet DAGs.
+    /// conflict), `seen` being those that can, and counts busy, quiet and held DAGs.
     pub fn round_done(&mut self, visited: &Visit, seen: &HashSet<DagId>) {
         if let Some(pending) = self.pending.take() {
             self.last_round = Some(pending.round_at);
@@ -376,10 +399,14 @@ impl QuietDags {
             self.sweep_credit = pending.sweep_credit;
         }
         match visited {
-            Visit::All => self.dags.retain(|dag, _| seen.contains(dag)),
+            Visit::All => {
+                self.dags.retain(|dag, _| seen.contains(dag));
+                self.held.retain(|dag| seen.contains(dag));
+            }
             Visit::Some(dags) => {
                 for dag in dags.iter().filter(|dag| !seen.contains(*dag)) {
                     self.dags.remove(dag);
+                    self.held.remove(dag);
                 }
             }
         }
@@ -393,7 +420,7 @@ impl QuietDags {
         } else {
             seen.len()
         };
-        self.metrics.set_dags(busy, quiet);
+        self.metrics.set_dags(busy, quiet, self.held.len());
     }
 
     /// The quiet state of a DAG with nothing in progress, unless a fire time is within

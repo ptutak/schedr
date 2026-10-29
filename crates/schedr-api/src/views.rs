@@ -4,10 +4,13 @@
 //! changes only on purpose (within `/api/v1`, additively). Times are UTC, RFC 3339; kinds and
 //! states are their model names (clients treat them as open: new values may appear).
 
+use std::collections::HashMap;
+
 use jiff::Timestamp;
 use schedr_db::commands::CommandRecord;
 use schedr_db::dags::StoredDag;
 use schedr_db::reads::{AttemptRecord, InstanceRecord, RunRecord};
+use schedr_db::runs::Held;
 use schedr_db::workers::WorkerRecord;
 use schedr_model::{DagId, DagLocation, RunState};
 use serde::{Deserialize, Serialize};
@@ -59,10 +62,32 @@ pub struct DagView {
     pub description: Option<String>,
     /// Its tags.
     pub tags: Vec<String>,
+    /// Why it is held, while its file fails to import in its root's current code (decision
+    /// 72): the scheduler creates no runs of it and manual triggers are refused until it
+    /// imports again. Not set for a timeout or a runner that died (the file is parsed again).
+    pub held: Option<HeldView>,
 }
 
-impl From<&StoredDag> for DagView {
-    fn from(dag: &StoredDag) -> Self {
+/// Why a DAG is held: its file's import error. The error is the **file's**, so every DAG of
+/// the file is held (decision 72.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct HeldView {
+    /// What happened and what to do, for people: that the file failed (not only this DAG),
+    /// why, and how to fix it.
+    pub reason: String,
+    /// The file, relative to its root.
+    pub path: String,
+    /// The error's exception class name, e.g. `ModuleNotFoundError`.
+    pub exception: String,
+    /// The error's message.
+    pub message: String,
+}
+
+impl DagView {
+    /// The view of `dag`, held if its file is among `held` ([`Held::by_file`] of the current
+    /// import errors).
+    #[must_use]
+    pub fn of(dag: &StoredDag, held: &HashMap<(String, String), Held>) -> Self {
         let current = dag.current.as_ref().map(|c| &c.dag);
         Self {
             dag_id: dag.dag_id.to_string(),
@@ -75,6 +100,12 @@ impl From<&StoredDag> for DagView {
             trigger: current.and_then(|d| serde_json::to_value(&d.trigger).ok()),
             description: current.and_then(|d| d.description.clone()),
             tags: current.map(|d| d.tags.clone()).unwrap_or_default(),
+            held: current.and_then(|d| Held::of(d, held)).map(|h| HeldView {
+                reason: h.reason(dag.dag_id.as_str()),
+                path: h.path,
+                exception: h.exception,
+                message: h.message,
+            }),
         }
     }
 }

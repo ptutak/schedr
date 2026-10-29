@@ -190,8 +190,8 @@ async fn dags_are_listed_as_a_table() {
     let client = world(false).await;
     assert_eq!(
         dags(&client, DagsCommand::List, &text()).await,
-        "DAG   PAUSED  TRIGGER                    DEFINED IN\n\
-         sync  yes     0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
+        "DAG   PAUSED  HELD  TRIGGER                    DEFINED IN\n\
+         sync  yes     no    0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
     );
     let listed: serde_json::Value =
         serde_json::from_str(&dags(&client, DagsCommand::List, &json_output()).await).unwrap();
@@ -384,15 +384,41 @@ fn a_dag_in_conflict_says_so() {
         trigger: None,
         description: None,
         tags: vec![],
+        held: None,
+    };
+    let held = DagView {
+        dag_id: "sync".to_owned(),
+        conflict: None,
+        location: Some(schedr_api::views::LocationView {
+            root: "etl".to_owned(),
+            path: "sync.py".to_owned(),
+        }),
+        held: Some(schedr_api::views::HeldView {
+            reason: String::new(),
+            path: "sync.py".to_owned(),
+            exception: "ModuleNotFoundError".to_owned(),
+            message: "No module named 'pandas'".to_owned(),
+        }),
+        ..dag.clone()
     };
     assert_eq!(
-        dag_rows(&[dag], &TimeZone::UTC),
-        [vec![
-            "dup".to_owned(),
-            "no".to_owned(),
-            String::new(),
-            "CONFLICT: 2 places".to_owned()
-        ]]
+        dag_rows(&[dag, held], &TimeZone::UTC),
+        [
+            vec![
+                "dup".to_owned(),
+                "no".to_owned(),
+                "no".to_owned(),
+                String::new(),
+                "CONFLICT: 2 places".to_owned()
+            ],
+            vec![
+                "sync".to_owned(),
+                "no".to_owned(),
+                "yes: ModuleNotFoundError".to_owned(),
+                String::new(),
+                "etl:sync.py".to_owned()
+            ]
+        ]
     );
 }
 
