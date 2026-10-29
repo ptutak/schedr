@@ -1443,6 +1443,22 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   browser **falls back to polling** (every few seconds) when no event, not even a keep-alive,
   has arrived for ~30 s.
 
+#### Import errors (M4.2c)
+
+Asked by the user (2026-10-29): a place in the UI for the DAG files that failed to import.
+- **What is shown** (decision 66, the user's: A): the files of each root's **current** parse
+  that failed (their DAGs aren't in the DAG list), with the root, the hash, when and by which
+  worker it was parsed, the exception, message and traceback. The master writes each root's
+  current parse to `current_parses` when it decides it (from what alive workers report), so
+  the API (`GET /api/v1/import-errors`) shows exactly what is in effect without deciding
+  again. Not chosen: B the history of earlier parses too (more API and UI).
+- **Where** (decision 67, the user's: A): a page of its own, "Import errors", beside DAGs,
+  Runs and Workers, merged across deployments; a count in the navigation and a notice on the
+  DAG list, both loaded after the page (htmx), so no page waits for them. Not chosen: B a tab
+  on the DAG list.
+- **Errors only** (decision 68, the user's: A): parse warnings (a `TypingHint`) stay a `dags
+  check` matter (57.4); nothing more is uploaded. Not chosen: B uploading and storing them.
+
 ### Task logs
 
 - Task logs are **stored on the worker's local disk** and **served by the worker itself** over

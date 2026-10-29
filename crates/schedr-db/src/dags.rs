@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
-use schedr_model::runner::ParsedFile;
+use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{Dag, DagId, DagLocation};
 use uuid::Uuid;
 
@@ -104,6 +104,28 @@ type DagRow = (
     Option<String>,
     Option<String>,
 );
+
+/// A file of a root's current parse that failed to import (decision 66).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportErrorRecord {
+    /// The DAG root.
+    pub root: String,
+    /// The root's content hash the parse is of.
+    pub content_hash: String,
+    /// The schedr version of the worker that parsed it.
+    pub schedr_version: String,
+    /// The worker that parsed it.
+    pub worker_id: String,
+    /// When the parse was stored.
+    pub parsed_at: Timestamp,
+    /// The file, relative to the root.
+    pub path: String,
+    /// Why it failed.
+    pub error: ErrorSummary,
+}
+
+/// A row of [`Database::current_import_errors`]'s query.
+type ImportErrorRow = (String, String, String, String, String, String, String);
 
 /// A stored parse of a (root, content hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +318,65 @@ impl Database {
                     warnings: Vec::new(),
                 })
             })
+            .collect()
+    }
+
+    /// Records `parse_id` as `root`'s current parse (the master's decision), at `now`.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_current_parse(
+        &self,
+        root: &str,
+        parse_id: &str,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const SET: &str = "INSERT INTO current_parses (root, parse_result_id, decided_at) \
+            VALUES ($1, $2{uuid}, $3{ts}) ON CONFLICT (root) DO UPDATE SET \
+            parse_result_id = excluded.parse_result_id, decided_at = excluded.decided_at";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(root)
+                .bind(parse_id)
+                .bind(db_time(now))
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// The files of each root's current parse that failed to import, by root and path
+    /// (decision 66).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if a stored error or time
+    /// doesn't read back.
+    pub async fn current_import_errors(&self) -> Result<Vec<ImportErrorRecord>, DbError> {
+        const ERRORS: &str = "SELECT c.root, r.content_hash, r.schedr_version, r.worker_id, \
+            {ts<}r.parsed_at{>ts}, f.path, f.error{text} \
+            FROM current_parses c \
+            JOIN parse_results r ON r.id = c.parse_result_id \
+            JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
+            WHERE f.error IS NOT NULL ORDER BY c.root, f.path";
+        let rows: Vec<ImportErrorRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, ERRORS)).fetch_all(pool).await?
+        });
+        rows.into_iter()
+            .map(
+                |(root, content_hash, schedr_version, worker_id, parsed_at, path, error)| {
+                    Ok(ImportErrorRecord {
+                        root,
+                        content_hash,
+                        schedr_version,
+                        worker_id,
+                        parsed_at: parse_time("parse_results.parsed_at", &parsed_at)?,
+                        path,
+                        error: from_json("parse_files.error", &error)?,
+                    })
+                },
+            )
             .collect()
     }
 

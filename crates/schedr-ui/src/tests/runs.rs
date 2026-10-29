@@ -721,3 +721,66 @@ async fn a_dags_groups_are_drawn_as_labelled_boxes_around_their_tasks() {
     let node_at = html.find("class=\"node").unwrap();
     assert!(group_at < node_at);
 }
+
+fn import_error(path: &str) -> Value {
+    json!({
+        "root": "etl", "path": path, "content_hash": "sha256:9f1c2b3a4d5e6f708192",
+        "parsed_at": "2026-10-29T10:42:00Z", "worker_id": "w1", "schedr_version": "0.1.0",
+        "exception": "ModuleNotFoundError", "message": "No module named 'pandas'",
+        "traceback": "  File \"broken.py\", line 1"
+    })
+}
+
+#[tokio::test]
+async fn import_errors_are_listed_counted_in_the_nav_and_noticed_on_the_dag_list() {
+    let etl = scripted(&[(
+        "/api/v1/import-errors",
+        200,
+        json!({"errors": [import_error("broken.py"), import_error("other.py")]}),
+    )]);
+    let ml = scripted(&[("/api/v1/import-errors", 200, json!({"errors": []}))]);
+    let app = ui(vec![deployment("etl", etl), deployment("ml", ml)]);
+    let (status, html) = get(&app, "/import-errors", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        texts(&html, "table.import-errors td.mono"),
+        ["etl", "broken.py", "etl", "other.py"]
+    );
+    assert_eq!(
+        texts(&html, "table.import-errors .error-kind"),
+        ["ModuleNotFoundError", "ModuleNotFoundError"]
+    );
+    assert_eq!(
+        texts(&html, "table.import-errors .sub"),
+        ["9f1c2b3a4d5e · w1", "9f1c2b3a4d5e · w1"]
+    );
+    assert_eq!(
+        texts(&html, "pre.traceback")[0],
+        "File \"broken.py\", line 1"
+    );
+    let (_, count) = get(&app, "/import-errors/count", &[]).await;
+    assert_eq!(count, r#"<span class="count failed">2</span>"#);
+    let (_, notice) = get(&app, "/import-errors/notice", &[]).await;
+    assert!(notice.contains("2 files failed to import"), "{notice}");
+    assert!(notice.contains(r#"href="/import-errors""#), "{notice}");
+}
+
+#[tokio::test]
+async fn without_import_errors_the_nav_and_dag_list_say_nothing() {
+    let etl = scripted(&[("/api/v1/import-errors", 200, json!({"errors": []}))]);
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/import-errors", &[]).await;
+    assert_eq!(texts(&html, "p.empty"), ["No import errors."]);
+    assert_eq!(get(&app, "/import-errors/count", &[]).await.1, "");
+    assert_eq!(get(&app, "/import-errors/notice", &[]).await.1, "");
+    // A deployment that is down is said so, and the others still counted.
+    let down = ui(vec![deployment(
+        "etl",
+        Scripted {
+            answers: BTreeMap::new(),
+            down: true,
+        },
+    )]);
+    let (_, html) = get(&down, "/import-errors", &[]).await;
+    assert!(texts(&html, ".banner.warning")[0].starts_with("Unavailable: etl"));
+}

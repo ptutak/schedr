@@ -373,3 +373,30 @@ async fn a_switch_to_a_hash_makes_it_the_most_recent_and_a_first_report_only_rec
         t("2026-10-23T00:00:00Z")
     );
 }
+
+#[tokio::test]
+async fn the_current_parses_import_errors_are_listed_and_replaced_by_the_next_current_one() {
+    let db = migrated().await;
+    assert_eq!(db.current_import_errors().await.unwrap(), vec![]);
+    let broken = store_parse(&db, "h1", &files()).await;
+    // A parse that isn't current shows nothing.
+    assert_eq!(db.current_import_errors().await.unwrap(), vec![]);
+    db.set_current_parse("etl", &broken, now()).await.unwrap();
+    let errors = db.current_import_errors().await.unwrap();
+    assert_eq!(
+        errors,
+        [ImportErrorRecord {
+            root: "etl".to_owned(),
+            content_hash: "h1".to_owned(),
+            schedr_version: "0.1.0".to_owned(),
+            worker_id: "w1".to_owned(),
+            parsed_at: now(),
+            path: "bad.py".to_owned(),
+            error: files()[1].error.clone().unwrap(),
+        }]
+    );
+    // The fixed code's parse becomes current: its root has no errors any more.
+    let fixed = store_parse(&db, "h2", &files()[..1]).await;
+    db.set_current_parse("etl", &fixed, now()).await.unwrap();
+    assert_eq!(db.current_import_errors().await.unwrap(), vec![]);
+}

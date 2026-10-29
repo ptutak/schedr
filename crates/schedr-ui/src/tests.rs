@@ -302,13 +302,13 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (_, page) = get(&app, "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/workers", "/docs/"]
+        ["/", "/runs", "/workers", "/import-errors", "/docs/"]
     );
     // Without a directory: no link, no pages.
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/workers"]
+        ["/", "/runs", "/workers", "/import-errors"]
     );
 }
 

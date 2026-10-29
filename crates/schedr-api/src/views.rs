@@ -502,6 +502,53 @@ impl From<&WorkerRecord> for WorkerView {
     }
 }
 
+/// A file of a DAG root's current code that failed to import (decision 66).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImportErrorView {
+    /// The DAG root.
+    pub root: String,
+    /// The file, relative to the root.
+    pub path: String,
+    /// The root's content hash that was parsed.
+    pub content_hash: String,
+    /// When it was parsed.
+    pub parsed_at: Timestamp,
+    /// The worker that parsed it.
+    pub worker_id: String,
+    /// That worker's schedr version.
+    pub schedr_version: String,
+    /// The exception's class name (`ParseTimeout`, `RunnerDied` or `ParseResultTooLarge` when
+    /// the worker stopped the file; `InvalidDag` when the master refused a DAG).
+    pub exception: String,
+    /// The message.
+    pub message: String,
+    /// The traceback's last lines.
+    pub traceback: String,
+}
+
+impl From<&schedr_db::dags::ImportErrorRecord> for ImportErrorView {
+    fn from(record: &schedr_db::dags::ImportErrorRecord) -> Self {
+        Self {
+            root: record.root.clone(),
+            path: record.path.clone(),
+            content_hash: record.content_hash.clone(),
+            parsed_at: record.parsed_at,
+            worker_id: record.worker_id.clone(),
+            schedr_version: record.schedr_version.clone(),
+            exception: record.error.exception.clone(),
+            message: record.error.message.clone(),
+            traceback: record.error.traceback.clone(),
+        }
+    }
+}
+
+/// The import errors of each DAG root's current code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImportErrorList {
+    /// By root, then path.
+    pub errors: Vec<ImportErrorView>,
+}
+
 /// The workers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerList {

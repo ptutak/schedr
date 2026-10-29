@@ -463,6 +463,10 @@ impl Discovery {
             schedr_version: parse.schedr_version.parse().ok(),
         };
         if self.current.get(root) != Some(&current) {
+            // Written down for the API's import errors (decision 66).
+            self.db
+                .set_current_parse(root, &current.parse_id, now)
+                .await?;
             self.current.insert(root.to_owned(), current);
             self.refresh(now).await?;
         }

@@ -56,6 +56,15 @@ CREATE TABLE parse_files (
     PRIMARY KEY (parse_result_id, path)
 );
 
+-- Each root's current parse, as the master decided it (from what alive workers report; see
+-- PROJECT.md, Code versions and change detection): written so the API can show its import
+-- errors (decision 66) without deciding again.
+CREATE TABLE current_parses (
+    root            TEXT PRIMARY KEY,
+    parse_result_id TEXT NOT NULL REFERENCES parse_results (id) ON DELETE CASCADE,
+    decided_at      TEXT NOT NULL
+);
+
 CREATE TABLE dags (
     dag_id             TEXT PRIMARY KEY,
     paused             INTEGER NOT NULL DEFAULT 1 CHECK (paused IN (0, 1)),

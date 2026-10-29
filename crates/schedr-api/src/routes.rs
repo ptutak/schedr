@@ -23,9 +23,9 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody, LogChunk,
-    LogQuery, OutputView, PauseRequest, RunDetail, RunList, RunView, RunsQuery, TaskView,
-    TriggerRequest, WorkerList, WorkerView,
+    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody,
+    ImportErrorList, ImportErrorView, LogChunk, LogQuery, OutputView, PauseRequest, RunDetail,
+    RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
 };
 
 #[cfg(test)]
@@ -48,6 +48,17 @@ pub async fn list_dags(State(state): State<ApiState>) -> ApiResult<DagList> {
             .filter(|d| !d.removed)
             .map(DagView::from)
             .collect(),
+    }))
+}
+
+/// The files of each DAG root's current code that failed to import: their DAGs aren't in
+/// the DAG list (decision 66). Fixing a file and syncing the root makes its entry go.
+#[utoipa::path(get, path = "/api/v1/import-errors", tag = "dags",
+    responses((status = 200, body = ImportErrorList)))]
+pub async fn list_import_errors(State(state): State<ApiState>) -> ApiResult<ImportErrorList> {
+    let errors = state.db.current_import_errors().await?;
+    Ok(Json(ImportErrorList {
+        errors: errors.iter().map(ImportErrorView::from).collect(),
     }))
 }
 

@@ -298,6 +298,76 @@
         ],
         "type": "object"
       },
+      "ImportErrorList": {
+        "description": "The import errors of each DAG root's current code.",
+        "properties": {
+          "errors": {
+            "description": "By root, then path.",
+            "items": {
+              "$ref": "#/components/schemas/ImportErrorView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors"
+        ],
+        "type": "object"
+      },
+      "ImportErrorView": {
+        "description": "A file of a DAG root's current code that failed to import (decision 66).",
+        "properties": {
+          "content_hash": {
+            "description": "The root's content hash that was parsed.",
+            "type": "string"
+          },
+          "exception": {
+            "description": "The exception's class name (`ParseTimeout`, `RunnerDied` or `ParseResultTooLarge` when\nthe worker stopped the file; `InvalidDag` when the master refused a DAG).",
+            "type": "string"
+          },
+          "message": {
+            "description": "The message.",
+            "type": "string"
+          },
+          "parsed_at": {
+            "description": "When it was parsed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file, relative to the root.",
+            "type": "string"
+          },
+          "root": {
+            "description": "The DAG root.",
+            "type": "string"
+          },
+          "schedr_version": {
+            "description": "That worker's schedr version.",
+            "type": "string"
+          },
+          "traceback": {
+            "description": "The traceback's last lines.",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "The worker that parsed it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "content_hash",
+          "parsed_at",
+          "worker_id",
+          "schedr_version",
+          "exception",
+          "message",
+          "traceback"
+        ],
+        "type": "object"
+      },
       "LocationView": {
         "description": "Where a DAG is defined.",
         "properties": {
@@ -1098,6 +1168,26 @@
         "summary": "What changed, as it happens: `run`, `dag`, `workers` and `refresh` events (see the module\ndocumentation).",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/api/v1/import-errors": {
+      "get": {
+        "operationId": "list_import_errors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportErrorList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The files of each DAG root's current code that failed to import: their DAGs aren't in\nthe DAG list (decision 66). Fixing a file and syncing the root makes its entry go.",
+        "tags": [
+          "dags"
         ]
       }
     },

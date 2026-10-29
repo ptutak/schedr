@@ -111,6 +111,7 @@ function schedrTheme() {
     <a href="{{ page.base }}/">DAGs</a>
     <a href="{{ page.base }}/runs">Runs</a>
     <a href="{{ page.base }}/workers">Workers</a>
+    <a href="{{ page.base }}/import-errors">Import errors <span hx-get="{{ page.base }}/import-errors/count" hx-trigger="load" hx-swap="outerHTML"></span></a>
     {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}
   </nav>
   <button class="theme" type="button" onclick="schedrTheme()" aria-label="Switch between light and dark">◐</button>

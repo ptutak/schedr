@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Import errors · schedr{% endblock %}
+{% block content %}
+<h1>Import errors</h1>
+<p class="dim">Files of each DAG root's current code that failed to import. Their DAGs aren't in the DAG list; fix the file and sync the root, and its entry goes.</p>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
+{% endfor %}
+{% if rows.is_empty() %}
+<p class="empty">No import errors.</p>
+{% else %}
+<table class="list import-errors">
+  <thead>
+    <tr>{% if several %}<th>Deployment</th>{% endif %}<th>Root</th><th>File</th><th>Error</th><th>Parsed</th></tr>
+  </thead>
+  <tbody>
+  {% for error in rows %}
+    <tr>
+      {% if several %}<td>{{ error.deployment }}</td>{% endif %}
+      <td class="mono">{{ error.root }}</td>
+      <td class="mono">{{ error.path }}</td>
+      <td><span class="error-kind">{{ error.exception }}</span>: {{ error.message }}{% if !error.traceback.is_empty() %}<details><summary>Traceback</summary><pre class="traceback">{{ error.traceback }}</pre></details>{% endif %}</td>
+      <td class="time">{{ error.parsed_at }}<div class="sub mono">{{ error.hash }} · {{ error.worker_id }}</div></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

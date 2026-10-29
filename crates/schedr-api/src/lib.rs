@@ -50,6 +50,7 @@ pub use state::ApiState;
         routes::retry_task,
         routes::get_command,
         routes::list_workers,
+        routes::list_import_errors,
         events::events,
         routes::drain_worker,
         routes::resume_worker,
@@ -147,6 +148,7 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/commands/{command_id}", get(routes::get_command))
         .route("/api/v1/workers", get(routes::list_workers))
+        .route("/api/v1/import-errors", get(routes::list_import_errors))
         .route(
             "/api/v1/workers/{worker_id}/drain",
             post(routes::drain_worker),

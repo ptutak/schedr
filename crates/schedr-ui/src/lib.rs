@@ -19,6 +19,7 @@ mod ansi;
 mod assets;
 mod docs;
 pub mod graph;
+mod imports;
 pub mod live;
 pub mod page;
 mod pages;
@@ -69,6 +70,9 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             get(runs::output_download::<T>),
         )
         .route("/workers", get(workers::list::<T>))
+        .route("/import-errors", get(imports::list::<T>))
+        .route("/import-errors/count", get(imports::nav_count::<T>))
+        .route("/import-errors/notice", get(imports::notice::<T>))
         .route("/time", get(actions::time))
         .route(
             "/d/{deployment}/dags/{dag}/pause",

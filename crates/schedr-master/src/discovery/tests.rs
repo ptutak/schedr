@@ -212,6 +212,19 @@ async fn an_invalid_dag_is_stored_as_an_import_error_and_keeps_the_last_good_ver
     let stored = &dags(&discovery).await[0];
     assert!(!stored.removed);
     assert_eq!(stored.current.as_ref().unwrap().parse_id, good);
+    // The newest parse is the root's current one, so its error is listed for the API.
+    let errors = discovery.db.current_import_errors().await.unwrap();
+    assert_eq!(
+        errors
+            .iter()
+            .map(|e| (
+                e.content_hash.as_str(),
+                e.path.as_str(),
+                e.error.exception.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [("h2", "a.py", INVALID_DAG_EXCEPTION)]
+    );
 }
 
 #[tokio::test]

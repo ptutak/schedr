@@ -760,3 +760,45 @@ async fn an_attempt_that_never_started_has_no_log() {
         )
     );
 }
+
+#[tokio::test]
+async fn the_current_codes_import_errors_are_listed() {
+    let (app, db, _) = api().await;
+    let (status, body) = get(&app, "/api/v1/import-errors").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"errors": []}));
+    let files = [schedr_model::runner::ParsedFile {
+        path: "broken.py".to_owned(),
+        dags: vec![],
+        error: Some(schedr_model::runner::ErrorSummary {
+            exception: "ModuleNotFoundError".to_owned(),
+            message: "No module named 'pandas'".to_owned(),
+            traceback: "  File \"broken.py\", line 1".to_owned(),
+        }),
+        warnings: Vec::new(),
+    }];
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h2",
+            schedr_version: "0.1.0",
+            worker_id: "w2",
+            parsed_at: ts(NOW),
+            files: &files,
+        })
+        .await
+        .unwrap();
+    db.set_current_parse("etl", &parse_id, ts(NOW))
+        .await
+        .unwrap();
+    let (_, body) = get(&app, "/api/v1/import-errors").await;
+    assert_eq!(
+        body,
+        json!({"errors": [{
+            "root": "etl", "path": "broken.py", "content_hash": "h2",
+            "parsed_at": NOW, "worker_id": "w2", "schedr_version": "0.1.0",
+            "exception": "ModuleNotFoundError", "message": "No module named 'pandas'",
+            "traceback": "  File \"broken.py\", line 1"
+        }]})
+    );
+}

@@ -184,6 +184,24 @@ async fn parses_and_the_dag_list_are_stored() {
     let mut expected = files();
     expected.sort_by(|a, b| a.path.cmp(&b.path));
     assert_eq!(db.parse_files(&parse_id).await.unwrap(), expected);
+    // The current parse's import errors (decision 66).
+    db.set_current_parse("etl", &parse_id, ts(NOW))
+        .await
+        .unwrap();
+    db.set_current_parse("etl", &parse_id, ts(NOW))
+        .await
+        .unwrap();
+    let errors = db.current_import_errors().await.unwrap();
+    let failed: Vec<&ParsedFile> = expected.iter().filter(|f| f.error.is_some()).collect();
+    assert_eq!(
+        errors.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        failed.iter().map(|f| f.path.as_str()).collect::<Vec<_>>()
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.parsed_at == ts(NOW) && e.worker_id == "w1")
+    );
 
     let stored = db.stored_dags().await.unwrap();
     assert!(stored[0].paused);

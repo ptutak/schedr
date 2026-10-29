@@ -66,7 +66,7 @@ Today's commits, oldest first:
   be planned then. No batch reviews of about five sub-steps. Read-only with throwaway proof
   tests. Claude writes the guide for each step. Every Grok finding is verified before
   acting; the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **64**), lettered options, the recommended one first,
+- **Decisions:** numbered (the next is **69**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
@@ -192,11 +192,9 @@ Today's commits, oldest first:
 
 ## In progress at the end of 2026-10-29 (uncommitted)
 
-- **M4.2b (groups)** is built (decisions 56A, 64, 65): the model and checks, `schedr.group`,
-  the run graph's clustered boxes (`layout_grouped`). Its commit is the next step.
-- **Docs of M4.2b go to a Grok session** (the user, 2026-10-29), not Claude.
-- **Next after M4.2b: M4.2c, an import/parse errors tab in the UI** (the user's request): no
-  API or UI shows them today (`schedr-db` `parse_files` stores them). Decisions to ask: which
-  parse's errors (each root's current), where the tab lives, whether warnings are uploaded.
+- **M4.2b (groups)** committed (`8f7a6d7`); **M4.2c (import errors page)** built (decisions
+  66-68). Next: M4.3 (mapping).
+- **Docs of M4.2b and M4.2c go to a Grok session** (the user, 2026-10-29), not Claude:
+  Writing DAGs' groups page, the guide's UI page (group boxes, the import errors page).
 - **One `/code-review` over the session's work is still owed** (the user: later).
 - Until Friday 9:00, code reviews are Claude's own (`/code-review`), not Grok's.
