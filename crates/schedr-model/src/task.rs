@@ -187,6 +187,9 @@ pub struct Task {
         skip_serializing_if = "is_default_outcomes"
     )]
     pub outcomes: Vec<OutcomeDecl>,
+    /// The group it belongs to (the innermost), if any (decision 64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 impl Task {

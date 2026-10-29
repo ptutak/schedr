@@ -685,3 +685,39 @@ async fn a_branchs_edge_to_a_target_it_didnt_choose_is_faint() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_dags_groups_are_drawn_as_labelled_boxes_around_their_tasks() {
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| *path != "/api/v1/runs/r2/dag");
+    answers.push((
+        "/api/v1/runs/r2/dag",
+        200,
+        json!({
+            "id": "sync",
+            "groups": [{"id": "load"}, {"id": "load.eu", "parent": "load"}],
+            "tasks": [
+                {"id": "extract"},
+                {"id": "load.eu.x", "group": "load.eu"},
+                {"id": "load.y", "group": "load"},
+                {"id": "report"}
+            ],
+            "edges": [
+                {"from": "extract", "to": "load.eu.x", "kind": "data"},
+                {"from": "load.eu.x", "to": "load.y", "kind": "data"},
+                {"from": "load.y", "to": "report", "kind": "order"}
+            ]
+        }),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(texts(&html, "svg.dag text.group-label"), ["load", "eu"]);
+    assert_eq!(
+        texts(&html, "svg.dag g.group title"),
+        ["group load", "group load.eu"]
+    );
+    // Boxes come before the tasks, so tasks are drawn over them.
+    let group_at = html.find("class=\"group\"").unwrap();
+    let node_at = html.find("class=\"node").unwrap();
+    assert!(group_at < node_at);
+}

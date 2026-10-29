@@ -3932,6 +3932,29 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     whose in-group upstream was skipped still runs on the outer edge, and Airflow's
     translation would need a rule of its own); C every task for `x >> group` and the leaves
     for `group >> y` (neither rule's simplicity).
+  - **Built in M4.2b** (2026-10-29): `with group("load", defaults=TaskDefaults(...),
+    run_if=...) as load:` (`schedr.group`, a `Group` handle); a group's name is one ID part;
+    it may not repeat in its parent nor be a task's ID; a dependency written while the group
+    is open is made when it closes; the same `@task` function in two groups needs no
+    `.override()`.
+  - **In DAG JSON** (decision 64, the user's, 2026-10-29: A): a top-level `groups` list
+    (`{id, parent}`, outer before inner) and an optional `group` on each task (its innermost
+    group), both left out when empty; the master checks them (unique, parents declared, no
+    cycle, each task's group declared) and otherwise ignores them. Membership is explicit, so
+    M5's `prefix_group_id=False` can be represented. Not chosen: B membership from the ID's
+    prefix (nothing to store, but `prefix_group_id=False` can't be said, and a group holding
+    only nested groups has no record).
+  - **On the run graph** (decision 65, the user's, 2026-10-29: A): clustered boxes. Each layer
+    is ordered group by group (sibling groups in one fixed order in every layer, so boxes
+    never swap sides; tasks outside groups fall between them by barycenter), a long edge's
+    points belong to the innermost group both its ends share, and after the x fit everything
+    moves right only: an item that must be left of a group's box (before its members, or up
+    to the last item of an earlier group in a layer without them) moves the whole group right,
+    any other item inside a box moves right of it. A box is its members and nested boxes, with
+    padding and a label band; the gap between layers grows with the deepest nesting. Property
+    tests check that a box holds its tasks and no other, nested boxes sit inside their
+    parent's, and nothing overlaps. Not chosen: B bounding boxes over the unchanged layout (a
+    box may enclose other tasks); C labels without boxes.
 - **Mapping keeps Airflow's names**, `.partial(...)` / `.expand(...)`, so both APIs share one
   mental model (e.g. `load_file.partial(bucket="raw").expand(path=files)`). Which mapping
   features beyond that: see Airflow compatibility (Dynamic task mapping), decided for both

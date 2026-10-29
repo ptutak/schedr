@@ -56,6 +56,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             problems.push(format!("task `{}` is defined more than once", task.id));
         }
     }
+    group_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
@@ -66,6 +67,52 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         ));
     }
     problems
+}
+
+/// Groups (decision 64): unique, each parent a group of the DAG, no group inside itself, and
+/// each task's group declared.
+fn group_problems(dag: &Dag, problems: &mut Vec<String>) {
+    let mut parents: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for group in &dag.groups {
+        if parents
+            .insert(group.id.as_str(), group.parent.as_deref())
+            .is_some()
+        {
+            problems.push(format!("group `{}` is defined more than once", group.id));
+        }
+    }
+    for group in &dag.groups {
+        if let Some(parent) = &group.parent
+            && !parents.contains_key(parent.as_str())
+        {
+            problems.push(format!(
+                "group `{}`: its parent `{parent}` isn't a group of the DAG",
+                group.id
+            ));
+        }
+        // Up the chain of parents: back to this group is a cycle.
+        let mut at = group.parent.as_deref();
+        for _ in 0..parents.len() {
+            match at {
+                Some(id) if id == group.id => {
+                    problems.push(format!("group `{}` is nested inside itself", group.id));
+                    break;
+                }
+                Some(id) => at = parents.get(id).copied().flatten(),
+                None => break,
+            }
+        }
+    }
+    for task in &dag.tasks {
+        if let Some(group) = &task.group
+            && !parents.contains_key(group.as_str())
+        {
+            problems.push(format!(
+                "task `{}`: its group `{group}` isn't a group of the DAG",
+                task.id
+            ));
+        }
+    }
 }
 
 fn edge_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String>) {

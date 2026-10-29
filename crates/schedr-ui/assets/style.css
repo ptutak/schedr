@@ -180,6 +180,8 @@ h2 .more { font-size: 13px; font-weight: 400; margin-left: 8px; }
 .edge-key { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--edge); vertical-align: middle; margin: 0 4px 0 12px; }
 .edge-key:first-child { margin-left: 0; }
 .edge-key.order { border-top-style: dashed; }
+svg.dag .group-box { fill: var(--neutral-bg); fill-opacity: 0.45; stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 6 4; }
+svg.dag text.group-label { fill: var(--dim); font: 600 11px system-ui, sans-serif; letter-spacing: 0.02em; }
 svg.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
 svg.dag .edge.order { stroke-dasharray: 5 4; }
 /* An edge taken on some outcomes: its label; faint once its outcome didn't happen. */

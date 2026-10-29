@@ -88,6 +88,30 @@ class Edge:
 
 
 @dataclass(frozen=True, slots=True)
+class Group:
+    """A group of tasks (decision 64): a name for some of a DAG's tasks, for the UI and API.
+
+    Attributes:
+        id: The group's ID (``load``, ``load.eu`` when nested).
+        parent: The group it is nested in, if any.
+    """
+
+    id: str
+    parent: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        """The group as DAG JSON.
+
+        Returns:
+            ``{"id": ...}``, with ``"parent"`` when nested.
+        """
+        result: dict[str, Any] = {"id": self.id}
+        if self.parent is not None:
+            result["parent"] = self.parent
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class Dag:
     """A DAG: its identity, trigger, tasks and dependencies.
 
@@ -102,6 +126,7 @@ class Dag:
         description: Shown in the UI.
         tags: Shown in the UI and used for filtering.
         produced_by: The schedr version producing this JSON (the installed one by default).
+        groups: The task groups, outer before inner.
     """
 
     id: str
@@ -114,6 +139,7 @@ class Dag:
     description: str | None = None
     tags: Sequence[str] = ()
     produced_by: SchedrVersion = field(default_factory=SchedrVersion.current)
+    groups: Sequence[Group] = ()
 
     def __post_init__(self) -> None:
         """Validates the DAG ID, unique task IDs, edges between known tasks and the limits.
@@ -161,4 +187,6 @@ class Dag:
             "tasks": [t.to_json() for t in self.tasks],
             "edges": [e.to_json() for e in self.edges],
         }
+        if self.groups:
+            result["groups"] = [g.to_json() for g in self.groups]
         return result

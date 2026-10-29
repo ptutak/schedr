@@ -360,7 +360,9 @@ class TaskFunction[**P, R]:
         builder = _build.active()
         if builder is None:
             return self._fn(*args, **kwargs)
-        where = f"task `{self._task_id}`"
+        # Inside groups, the ID carries their prefix (decision 56A).
+        task_id = builder.qualified(self._task_id)
+        where = f"task `{task_id}`"
         try:
             bound = self._signature.bind(*args, **kwargs)
         except TypeError as e:
@@ -392,7 +394,7 @@ class TaskFunction[**P, R]:
         arguments = {
             name: self._argument(
                 builder,
-                (self._task_id, value),
+                (task_id, value),
                 hints.get(name, Any),
                 f"{where}, argument `{name}`",
                 upstream,
@@ -400,18 +402,18 @@ class TaskFunction[**P, R]:
             for name, value in bound.arguments.items()
         }
         builder.add_task(
-            self._task_id,
+            task_id,
             PythonKind(arguments, branch=self._branch),
             output_type,
             self._options,
             spec,
             outcome_types,
         )
-        builder.functions[self._task_id] = self._fn
-        for task_id, on in dict.fromkeys(upstream):
-            builder.add_edge(task_id, self._task_id, EdgeKind.DATA, on)
+        builder.functions[task_id] = self._fn
+        for up, on in dict.fromkeys(upstream):
+            builder.add_edge(up, task_id, EdgeKind.DATA, on)
         # A reference, which type checkers read as the value (see above).
-        return Output[R](self._task_id)  # type: ignore[return-value]
+        return Output[R](task_id)  # type: ignore[return-value]
 
     @staticmethod
     def _argument(

@@ -24,6 +24,7 @@ from schedr import (
     branch,
     chain,
     dag_ctx,
+    group,
     on,
     task,
 )
@@ -172,3 +173,15 @@ with Dag("typed"):
     wants_int(dag_ctx.run.since)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
     Rows(["x"])  # type: ignore[list-item]  # pyright: ignore[reportArgumentType]
+
+with Dag("grouped"):
+    first = side_effect()
+    with group("loading") as loading:
+        rows_in_group = extract()
+        load(rows_in_group)
+    first >> loading >> side_effect()
+    rows_in_group >> loading
+    loading >> EmptyOperator("after_load")
+    with group("more") as more:
+        side_effect()
+    loading >> more

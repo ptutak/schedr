@@ -152,6 +152,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
+        task_id = builder.qualified(task_id)
         self._task_id = task_id
         upstream: list[_build.Upstream] = []
         where = f"task `{task_id}`"
@@ -235,6 +236,7 @@ class EmptyOperator(Operator):
     def __init__(self, task_id: str, *, run_if: RunIf | None = None) -> None:
         """Records the empty task in the DAG being defined."""
         builder = _build.require_active("EmptyOperator")
+        task_id = builder.qualified(task_id)
         self._task_id = task_id
         builder.add_task(
             task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions(run_if=run_if)

@@ -189,3 +189,14 @@ Today's commits, oldest first:
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+## In progress at the end of 2026-10-29 (uncommitted)
+
+- **M4.2b (groups)** is built (decisions 56A, 64, 65): the model and checks, `schedr.group`,
+  the run graph's clustered boxes (`layout_grouped`). Its commit is the next step.
+- **Docs of M4.2b go to a Grok session** (the user, 2026-10-29), not Claude.
+- **Next after M4.2b: M4.2c, an import/parse errors tab in the UI** (the user's request): no
+  API or UI shows them today (`schedr-db` `parse_files` stores them). Decisions to ask: which
+  parse's errors (each root's current), where the tab lives, whether warnings are uploaded.
+- **One `/code-review` over the session's work is still owed** (the user: later).
+- Until Friday 9:00, code reviews are Claude's own (`/code-review`), not Grok's.

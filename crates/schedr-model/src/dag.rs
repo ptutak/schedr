@@ -86,6 +86,21 @@ pub struct Dag {
     pub tasks: Vec<Task>,
     /// The dependencies between them.
     pub edges: Vec<Edge>,
+    /// The task groups (decision 64), for the UI and the API; the master schedules tasks only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
+}
+
+/// A group of tasks (`with group("load"):`): a name for some of a DAG's tasks, drawn as a box
+/// around them in the UI. It has no state and no rule of its own (decision 56A).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// The group's ID, unique within its DAG (`load`, `load.eu` for a nested one).
+    pub id: String,
+    /// The group it is nested in, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 impl Dag {

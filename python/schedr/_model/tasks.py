@@ -253,6 +253,7 @@ class Task:
         output_type: The type of its output.
         settings: Its resolved settings.
         outcomes: Its outcomes, each a name and, for a command, the exit code meaning it.
+        group: The group it belongs to (the innermost), if any.
     """
 
     id: str
@@ -260,6 +261,7 @@ class Task:
     output_type: TypeDesc
     settings: TaskSettings = field(default_factory=TaskSettings)
     outcomes: tuple[tuple[str, int | None], ...] = DEFAULT_OUTCOMES
+    group: str | None = None
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -282,7 +284,8 @@ class Task:
 
         Returns:
             ``{"id": ..., "kind": ..., ..., "settings": ..., "output_type": ...}``, with
-            ``"outcomes": [...]`` when they aren't just ``SUCCESS`` on exit 0.
+            ``"outcomes": [...]`` when they aren't just ``SUCCESS`` on exit 0 and ``"group"``
+            when it is in one.
         """
         result: dict[str, Any] = {
             "id": self.id,
@@ -295,4 +298,6 @@ class Task:
                 {"name": name} if code is None else {"name": name, "exit_code": code}
                 for name, code in self.outcomes
             ]
+        if self.group is not None:
+            result["group"] = self.group
         return result

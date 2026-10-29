@@ -51,6 +51,7 @@ fn python_task_serializes_flat_with_a_kind_tag() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::Int,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     let expected = json!({
         "id": "load",
@@ -78,6 +79,7 @@ fn command_and_empty_tasks_round_trip() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     let json = serde_json::to_value(&command).unwrap();
     assert_eq!(json["kind"], "command");
@@ -94,6 +96,7 @@ fn command_and_empty_tasks_round_trip() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     let json = serde_json::to_value(&empty).unwrap();
     assert_eq!(json["kind"], "empty");
@@ -149,6 +152,7 @@ fn references_of_a_python_task_come_from_its_arguments() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     assert_eq!(task.references(), vec![&output_ref("x"), &output_ref("y")]);
 }
@@ -173,6 +177,7 @@ fn references_of_a_command_task_come_from_its_command_line_and_env() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     assert_eq!(task.references(), vec![&planned_for, &output_ref("load")]);
 }
@@ -185,6 +190,7 @@ fn empty_tasks_have_no_references() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
+        group: None,
     };
     assert_eq!(task.references(), Vec::<&Reference>::new());
 }

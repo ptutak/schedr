@@ -7,7 +7,7 @@ every upstream output they reference.
 
 import dataclasses
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Protocol, get_args, get_origin, is_typeddict
 
@@ -185,6 +185,32 @@ def to_ms(duration: timedelta, name: str) -> int:
     return micros // 1000
 
 
+@dataclass
+class GroupScope:
+    """A task group being defined, or defined (``with group(...)``; decision 56A).
+
+    Attributes:
+        id: Its ID: its name, prefixed by its parents' (``load.eu``).
+        parent: The group it is nested in.
+        options: The options its tasks get unless they set their own (its parents' under
+            its own).
+        members: The tasks in it, nested groups' included, in definition order.
+        closed: Whether its ``with`` block ended (its roots and leaves are then known).
+        roots: Its tasks with no upstream task inside it.
+        leaves: Its tasks with no downstream task inside it.
+        pending: Dependencies on it written while it was open, made when it closes.
+    """
+
+    id: str
+    parent: str | None
+    options: TaskOptions
+    members: list[str] = field(default_factory=list)
+    closed: bool = False
+    roots: list[str] = field(default_factory=list)
+    leaves: list[str] = field(default_factory=list)
+    pending: list[tuple[object, object, str]] = field(default_factory=list)
+
+
 class DagBuilder:
     """The tasks and edges of the DAG being defined."""
 
@@ -204,6 +230,69 @@ class DagBuilder:
         self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
         # Arguments that take a reference, checked once the DAG is complete (check_nones).
         self.none_checks: list[tuple[str, str, OutputRef | OutcomeRef, TypeDesc]] = []
+        # Task groups, outer before inner, and the ones open now (innermost last).
+        self.groups: dict[str, GroupScope] = {}
+        self.open_groups: list[GroupScope] = []
+
+    def qualified(self, task_id: str) -> str:
+        """A task's ID inside the open groups: their prefix, then ``task_id``.
+
+        Args:
+            task_id: The task's own ID.
+
+        Returns:
+            E.g. ``load.eu.extract`` inside ``with group("load"): with group("eu"):``.
+        """
+        return f"{self.open_groups[-1].id}.{task_id}" if self.open_groups else task_id
+
+    def open_group(self, name: str, options: TaskOptions) -> GroupScope:
+        """Starts a group inside the open ones.
+
+        Args:
+            name: Its own name (one ID segment).
+            options: Its own options (``defaults=`` with ``run_if=`` over them).
+
+        Returns:
+            The group, open.
+
+        Raises:
+            IdError: For an invalid name, one used twice in a parent, or one that is a task's
+                ID.
+        """
+        if not isinstance(name, str) or "." in name:
+            raise IdError(f"group name {name!r} must be one ID part, without `.`")
+        group_id = self.qualified(name)
+        validate_task_id(group_id)
+        if group_id in self.groups:
+            raise IdError(f"group `{group_id}` is defined twice in DAG `{self.dag_id}`")
+        if group_id in self.tasks:
+            raise IdError(f"group `{group_id}` has the ID of a task of DAG `{self.dag_id}`")
+        parent = self.open_groups[-1] if self.open_groups else None
+        inherited = parent.options if parent is not None else TaskOptions()
+        scope = GroupScope(group_id, parent.id if parent else None, options.over(inherited))
+        self.groups[group_id] = scope
+        self.open_groups.append(scope)
+        return scope
+
+    def close_group(self, scope: GroupScope) -> None:
+        """Ends the innermost group, then makes the dependencies written on it meanwhile.
+
+        Its roots and leaves are known from here on.
+
+        Args:
+            scope: The group (the innermost open one).
+        """
+        assert self.open_groups
+        assert self.open_groups[-1] is scope
+        self.open_groups.pop()
+        members = set(scope.members)
+        inside = [e for e in self.edges if e.from_ in members and e.to in members]
+        scope.roots = [t for t in scope.members if not any(e.to == t for e in inside)]
+        scope.leaves = [t for t in scope.members if not any(e.from_ == t for e in inside)]
+        scope.closed = True
+        pending, scope.pending = scope.pending, []
+        for upstream, downstream, what in pending:
+            order(upstream, downstream, what)
 
     def add_task(
         self,
@@ -214,10 +303,10 @@ class DagBuilder:
         outcomes: OutcomeSpec = DEFAULT,
         outcome_types: Mapping[str, TypeDesc] | None = None,
     ) -> None:
-        """Adds a task with its settings resolved against the DAG's defaults.
+        """Adds a task with its settings resolved against its groups' and the DAG's defaults.
 
         Args:
-            task_id: The task's ID.
+            task_id: The task's ID, qualified by its groups (see ``qualified``).
             kind: Its kind.
             output_type: The type of its output.
             options: Its own options.
@@ -234,8 +323,22 @@ class DagBuilder:
                 f"task ID `{task_id}` is defined twice in DAG `{self.dag_id}`; give one a "
                 "different ID (`task_id=` for operators, `.override(task_id=...)` for @task)"
             )
+        if task_id in self.groups:
+            raise IdError(f"task ID `{task_id}` is a group's ID in DAG `{self.dag_id}`")
+        scope = self.open_groups[-1] if self.open_groups else None
+        if scope is not None:
+            options = options.over(scope.options)
+            for group in self.open_groups:
+                group.members.append(task_id)
         settings = options.over(self.defaults).settings()
-        self.tasks[task_id] = Task(task_id, kind, output_type, settings, outcomes.declared())
+        self.tasks[task_id] = Task(
+            task_id,
+            kind,
+            output_type,
+            settings,
+            outcomes.declared(),
+            group=scope.id if scope is not None else None,
+        )
         self.outcomes[task_id] = outcomes
         self.outcome_types[task_id] = dict(outcome_types or {})
 
@@ -633,22 +736,34 @@ def to_template(value: object, where: str, upstream: list[Upstream]) -> Template
     )
 
 
-def task_ids_of(operand: object, what: str) -> list[str]:
+def task_ids_of(operand: object, what: str, *, upstream: bool = True) -> list[str]:
     """The task IDs a ``>>`` operand stands for.
 
     Args:
-        operand: A task, an output (its task), or a list of them.
+        operand: A task, an output (its task), a group, or a list of them.
         what: The operator, for messages.
+        upstream: Which side the operand is on: a group stands for its leaves upstream and
+            its roots downstream (decision 56A).
 
     Returns:
         The task IDs.
 
     Raises:
         TypeError: For anything else.
+        ValueError: For a group without tasks.
     """
     items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
     ids: list[str] = []
     for item in items:
+        scope = getattr(item, "_schedr_group", None)
+        if isinstance(scope, GroupScope):
+            ends = scope.leaves if upstream else scope.roots
+            if not ends:
+                raise ValueError(
+                    f"`{what}`: group `{scope.id}` has no tasks, so nothing can depend on it"
+                )
+            ids.extend(ends)
+            continue
         task_id = getattr(item, "_schedr_task_id", None)
         if not isinstance(task_id, str):
             raise TypeError(f"`{what}` needs tasks or outputs, got {type(item).__name__}")
@@ -656,20 +771,42 @@ def task_ids_of(operand: object, what: str) -> list[str]:
     return ids
 
 
+def _open_group_in(*operands: object) -> GroupScope | None:
+    """The outermost still-open group among ``>>``'s operands, if any."""
+    found: list[GroupScope] = []
+    for operand in operands:
+        items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
+        for item in items:
+            scope = getattr(item, "_schedr_group", None)
+            if isinstance(scope, GroupScope) and not scope.closed:
+                found.append(scope)
+    return min(found, key=lambda g: g.id.count("."), default=None)
+
+
 def order(upstream: object, downstream: object, what: str) -> None:
     """Records order-only dependencies: every downstream task runs after every upstream one.
 
+    A group stands for its leaves upstream and its roots downstream; on a group still being
+    defined, the dependency is made when its ``with`` block ends (decision 56A).
+
     Args:
-        upstream: Tasks, outputs (``f.on(X)`` too: then on those outcomes), or lists of them.
-        downstream: Tasks, outputs, or lists of them.
+        upstream: Tasks, outputs (``f.on(X)`` too: then on those outcomes), groups, or lists
+            of them.
+        downstream: Tasks, outputs, groups, or lists of them.
         what: The operator, for messages.
     """
     builder = require_active(f"`{what}`")
+    still_open = _open_group_in(upstream, downstream)
+    if still_open is not None:
+        still_open.pending.append((upstream, downstream, what))
+        return
     ups: Sequence[object] = upstream if isinstance(upstream, list | tuple) else [upstream]
-    for item, up in zip(ups, task_ids_of(upstream, what), strict=True):
+    downs = task_ids_of(downstream, what, upstream=False)
+    for item in ups:
         on = tuple(getattr(item, "_schedr_on", ()))
-        for down in task_ids_of(downstream, what):
-            builder.add_edge(up, down, EdgeKind.ORDER, on)
+        for up in task_ids_of(item, what):
+            for down in downs:
+                builder.add_edge(up, down, EdgeKind.ORDER, on)
 
 
 _DAG_CTX_TYPES: dict[DagCtxField, TypeDesc] = {

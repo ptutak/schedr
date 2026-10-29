@@ -8,6 +8,7 @@ from importlib.metadata import version
 
 from schedr.context import dag_ctx
 from schedr.dag import Dag, TaskDefaults
+from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator
 from schedr.outcomes import Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
 from schedr.tasks import Chosen, Output, Task, branch, chain, on, task
@@ -29,6 +30,7 @@ __all__ = [
     "Done",
     "EmptyOperator",
     "Every",
+    "Group",
     "KiB",
     "MiB",
     "Once",
@@ -42,6 +44,7 @@ __all__ = [
     "branch",
     "chain",
     "dag_ctx",
+    "group",
     "on",
     "task",
 ]

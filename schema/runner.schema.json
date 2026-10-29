@@ -245,6 +245,13 @@
           },
           "type": "array"
         },
+        "groups": {
+          "description": "The task groups (decision 64), for the UI and the API; the master schedules tasks only.",
+          "items": {
+            "$ref": "#/$defs/Group"
+          },
+          "type": "array"
+        },
         "id": {
           "$ref": "#/$defs/DagId",
           "description": "The DAG's ID."
@@ -478,6 +485,27 @@
         "name",
         "type",
         "required"
+      ],
+      "type": "object"
+    },
+    "Group": {
+      "additionalProperties": false,
+      "description": "A group of tasks (`with group(\"load\"):`): a name for some of a DAG's tasks, drawn as a box\naround them in the UI. It has no state and no rule of its own (decision 56A).",
+      "properties": {
+        "id": {
+          "description": "The group's ID, unique within its DAG (`load`, `load.eu` for a nested one).",
+          "type": "string"
+        },
+        "parent": {
+          "description": "The group it is nested in, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -1162,6 +1190,13 @@
         }
       ],
       "properties": {
+        "group": {
+          "description": "The group it belongs to (the innermost), if any (decision 64).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "$ref": "#/$defs/TaskId",
           "description": "The task's ID, unique within its DAG."

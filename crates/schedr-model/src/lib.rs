@@ -19,7 +19,7 @@ pub mod types;
 pub mod value;
 pub mod version;
 
-pub use dag::{Dag, DagLocation, Edge, EdgeKind};
+pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group};
 pub use ids::{DagId, IdError, TaskId};
 pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
 pub use task::{

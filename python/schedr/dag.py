@@ -16,6 +16,7 @@ from schedr._model import Dag as DagModel
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
+    Group,
     NoTrigger,
     parse_moment,
     registry,
@@ -174,6 +175,7 @@ class Dag:
             max_active_runs=self.max_active_runs,
             description=self.description,
             tags=self.tags,
+            groups=[Group(g.id, g.parent) for g in builder.groups.values()],
         )
         registry.register(self.model, builder.functions, self._filename)
 

@@ -12,6 +12,13 @@
 //!    least-squares fit under those constraints, by pool-adjacent-violators), sweeping down
 //!    and up; then shifted so the leftmost node starts at the margin.
 //!
+//! **Groups** (decision 65): a group's tasks stay together. Every layer is ordered group by
+//! group (a group's place is its members' mean; nested groups inside their parent), a long
+//! edge's points belong to the innermost group both its ends are in, and after the x fit any
+//! other task is pushed clear of a group's box in every layer the box spans. A box is its
+//! members' extent and its nested boxes', with padding and a band for its label on top; the
+//! space between layers grows with the deepest nesting, so labels never meet.
+//!
 //! Deterministic: the same graph always gets the same layout.
 
 #[cfg(test)]
@@ -33,6 +40,36 @@ pub const MARGIN: f64 = 16.0;
 const SWEEPS: usize = 12;
 /// Placement sweeps.
 const PLACEMENTS: usize = 8;
+/// A group box's padding around its contents (sides and bottom).
+pub const GROUP_PAD: f64 = 10.0;
+/// A group box's band for its label, above its contents.
+pub const GROUP_LABEL: f64 = 22.0;
+/// Rounds of pushing other tasks clear of the group boxes, at most.
+const SEPARATIONS: usize = 24;
+
+/// A group of nodes, for [`layout_grouped`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupSpec {
+    /// The group it is nested in (an index into the same list, before this one).
+    pub parent: Option<usize>,
+}
+
+/// A group's box, drawn around its nodes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroupBox {
+    /// The group's index in the groups given.
+    pub group: usize,
+    /// The box's left edge.
+    pub left: f64,
+    /// The box's top edge.
+    pub top: f64,
+    /// The box's width.
+    pub width: f64,
+    /// The box's height.
+    pub height: f64,
+    /// How deeply it is nested (0 for a top-level group).
+    pub depth: usize,
+}
 
 /// A node placed: its box's centre.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,6 +106,8 @@ pub struct Layout {
     /// The edges, in the order given (an edge that doesn't go down, which a DAG never has, is
     /// left out).
     pub routes: Vec<Route>,
+    /// The groups' boxes, outer before inner (a group without nodes has none).
+    pub boxes: Vec<GroupBox>,
     /// The drawing's width.
     pub width: f64,
     /// The drawing's height.
@@ -94,6 +133,8 @@ impl Item {
 /// The layered graph: items per layer and edges between consecutive layers (by item index).
 struct Layered {
     items: Vec<Item>,
+    /// Each item's groups, outermost first (empty outside any group).
+    paths: Vec<Vec<usize>>,
     layer_of: Vec<usize>,
     /// `layers[l]`: the items of layer `l`, in order.
     layers: Vec<Vec<usize>>,
@@ -107,15 +148,57 @@ struct Layered {
 /// Lays out `count` nodes joined by `edges` (`(from, to)` indices; `to` runs after `from`).
 #[must_use]
 pub fn layout(count: usize, edges: &[(usize, usize)]) -> Layout {
+    layout_grouped(count, edges, &[], &vec![None; count])
+}
+
+/// [`layout`], with `groups` and each node's innermost group (`node_group`, by index into
+/// `groups`) kept together and boxed.
+#[must_use]
+pub fn layout_grouped(
+    count: usize,
+    edges: &[(usize, usize)],
+    groups: &[GroupSpec],
+    node_group: &[Option<usize>],
+) -> Layout {
+    let paths: Vec<Vec<usize>> = (0..count)
+        .map(|n| group_path(groups, node_group.get(n).copied().flatten()))
+        .collect();
+    let deepest = paths.iter().map(Vec::len).max().unwrap_or(0);
+    // Room between layers for the deepest boxes' padding and labels.
+    let layer_gap = LAYER_GAP + to_f64(deepest.saturating_sub(1)) * (GROUP_PAD + GROUP_LABEL);
+    let top = MARGIN + to_f64(deepest) * GROUP_LABEL;
     let layer = layers(count, edges);
-    let mut graph = layered(count, edges, &layer);
+    let mut graph = layered(count, edges, &layer, paths);
+    for l in 0..graph.layers.len() {
+        let keys: Vec<f64> = (0..graph.layers[l].len()).map(to_f64).collect();
+        arrange(&mut graph, l, &keys);
+    }
     reduce_crossings(&mut graph);
-    let x = place(&graph);
-    let y = |l: usize| {
-        MARGIN
-            + NODE_HEIGHT / 2.0
-            + f64::from(u32::try_from(l).unwrap_or(u32::MAX)) * (NODE_HEIGHT + LAYER_GAP)
-    };
+    let mut x = place(&graph);
+    separate(&graph, groups, &mut x);
+    let y = |l: usize| top + NODE_HEIGHT / 2.0 + to_f64(l) * (NODE_HEIGHT + layer_gap);
+    let mut boxes = group_boxes(&graph, groups, &x, &y);
+    // Everything shifted so the leftmost box or node starts at the margin.
+    let left = boxes
+        .iter()
+        .map(|b| b.left)
+        .chain(
+            graph
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| x[i] - item.width() / 2.0),
+        )
+        .fold(f64::INFINITY, f64::min);
+    if left.is_finite() {
+        let shift = MARGIN - left;
+        for value in &mut x {
+            *value += shift;
+        }
+        for group_box in &mut boxes {
+            group_box.left += shift;
+        }
+    }
     let nodes = (0..count)
         .map(|n| Placed {
             x: x[n],
@@ -148,18 +231,39 @@ pub fn layout(count: usize, edges: &[(usize, usize)]) -> Layout {
         .iter()
         .enumerate()
         .map(|(i, item)| x[i] + item.width() / 2.0)
+        .chain(boxes.iter().map(|b| b.left + b.width))
+        .fold(0.0_f64, f64::max);
+    let bottom = boxes
+        .iter()
+        .map(|b| b.top + b.height)
         .fold(0.0_f64, f64::max);
     let depth = layer.iter().copied().max().map_or(0, |l| l + 1);
     Layout {
         nodes,
         routes,
+        boxes,
         width: right + MARGIN,
         height: if depth == 0 {
             2.0 * MARGIN
         } else {
-            y(depth - 1) + NODE_HEIGHT / 2.0 + MARGIN
+            (y(depth - 1) + NODE_HEIGHT / 2.0).max(bottom) + MARGIN
         },
     }
+}
+
+/// A group and its ancestors, outermost first.
+fn group_path(groups: &[GroupSpec], innermost: Option<usize>) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut at = innermost.filter(|&g| g < groups.len());
+    while let Some(g) = at {
+        if path.contains(&g) || path.len() > groups.len() {
+            break; // a cycle, which validation refuses: stop rather than loop
+        }
+        path.push(g);
+        at = groups[g].parent.filter(|&p| p < groups.len());
+    }
+    path.reverse();
+    path
 }
 
 /// Each node's layer: one below its lowest upstream node. Nodes on a cycle (never in a valid
@@ -194,7 +298,12 @@ fn layers(count: usize, edges: &[(usize, usize)]) -> Vec<usize> {
     layer
 }
 
-fn layered(count: usize, edges: &[(usize, usize)], layer: &[usize]) -> Layered {
+fn layered(
+    count: usize,
+    edges: &[(usize, usize)],
+    layer: &[usize],
+    mut paths: Vec<Vec<usize>>,
+) -> Layered {
     let mut items: Vec<Item> = (0..count).map(Item::Node).collect();
     let mut layer_of = layer.to_vec();
     let mut chains = Vec::new();
@@ -202,10 +311,18 @@ fn layered(count: usize, edges: &[(usize, usize)], layer: &[usize]) -> Layered {
         if from >= count || to >= count || layer[from] >= layer[to] {
             continue;
         }
+        // A long edge's points are in the groups both its ends are in.
+        let shared: Vec<usize> = paths[from]
+            .iter()
+            .zip(&paths[to])
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| *a)
+            .collect();
         let mut chain = vec![from];
         for l in layer[from] + 1..layer[to] {
             items.push(Item::Dummy);
             layer_of.push(l);
+            paths.push(shared.clone());
             chain.push(items.len() - 1);
         }
         chain.push(to);
@@ -226,6 +343,7 @@ fn layered(count: usize, edges: &[(usize, usize)], layer: &[usize]) -> Layered {
     }
     Layered {
         items,
+        paths,
         layer_of,
         layers,
         up,
@@ -274,10 +392,70 @@ fn reorder(graph: &mut Layered, l: usize, by_up: bool) {
             (key, i)
         })
         .collect();
-    let mut sorted = keys;
-    // Stable: ties keep their order.
-    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
-    graph.layers[l] = sorted.into_iter().map(|(_, i)| i).collect();
+    let mut wanted = vec![0.0; graph.items.len()];
+    for (key, i) in &keys {
+        wanted[*i] = *key;
+    }
+    let keys: Vec<f64> = graph.layers[l].iter().map(|&i| wanted[i]).collect();
+    arrange(graph, l, &keys);
+}
+
+/// Orders layer `l` by `keys` (one per item, in the layer's current order), group by group:
+/// a group's members stay together, placed by their mean key; nested groups likewise inside.
+/// Stable: ties keep their order.
+fn arrange(graph: &mut Layered, l: usize, keys: &[f64]) {
+    let members: Vec<(usize, f64)> = graph.layers[l]
+        .iter()
+        .copied()
+        .zip(keys.iter().copied())
+        .collect();
+    graph.layers[l] = arrange_level(&graph.paths, &members, 0);
+}
+
+/// One thing [`arrange_level`] places: its key, its first place in the layer, the group it
+/// stands for (`None` for a single item) and its items with their keys.
+type Unit = (f64, usize, Option<usize>, Vec<(usize, f64)>);
+
+fn arrange_level(paths: &[Vec<usize>], members: &[(usize, f64)], depth: usize) -> Vec<usize> {
+    // Units: an item not deeper in a group, or a whole group at this depth.
+    let mut units: Vec<Unit> = Vec::new();
+    for (place, &(item, key)) in members.iter().enumerate() {
+        match paths[item].get(depth) {
+            None => units.push((key, place, None, vec![(item, key)])),
+            Some(&group) => match units.iter_mut().find(|u| u.2 == Some(group)) {
+                Some(unit) => unit.3.push((item, key)),
+                None => units.push((key, place, Some(group), vec![(item, key)])),
+            },
+        }
+    }
+    for unit in &mut units {
+        if unit.2.is_some() {
+            unit.0 = unit.3.iter().map(|(_, k)| k).sum::<f64>() / to_f64(unit.3.len());
+        }
+    }
+    // Sibling groups keep one order in every layer (by index), so their boxes never swap
+    // sides: each group's key is raised to at least the one before it; tasks outside groups
+    // then fall between them by their own keys.
+    let mut grouped: Vec<usize> = (0..units.len()).filter(|&u| units[u].2.is_some()).collect();
+    grouped.sort_by_key(|&u| units[u].2);
+    let mut floor = f64::NEG_INFINITY;
+    for &u in &grouped {
+        floor = floor.max(units[u].0);
+        units[u].0 = floor;
+    }
+    units.sort_by(|a, b| {
+        a.0.total_cmp(&b.0).then_with(|| match (a.2, b.2) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            _ => a.1.cmp(&b.1),
+        })
+    });
+    units
+        .into_iter()
+        .flat_map(|(_, _, group, inside)| match group {
+            None => inside.into_iter().map(|(i, _)| i).collect::<Vec<_>>(),
+            Some(_) => arrange_level(paths, &inside, depth + 1),
+        })
+        .collect()
 }
 
 /// Each item's place in its layer.
@@ -329,18 +507,187 @@ fn place(graph: &Layered) -> Vec<f64> {
             fit(graph, l, &graph.down, &mut x);
         }
     }
-    let left = graph
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| x[i] - item.width() / 2.0)
-        .fold(f64::INFINITY, f64::min);
-    if left.is_finite() {
-        for value in &mut x {
-            *value += MARGIN - left;
+    x
+}
+
+/// Pushes every item clear of the boxes of the groups it isn't in, in each layer those
+/// boxes span, keeping each layer's order and gaps. Everything only moves right, so the
+/// rounds settle: an item before a group's members that reaches into its box moves the whole
+/// group right (in every layer, with what follows it); an item after them, or in a layer
+/// without them, that reaches into the box moves right of it (with what follows it).
+fn separate(graph: &Layered, groups: &[GroupSpec], x: &mut [f64]) {
+    let paths: Vec<Vec<usize>> = (0..groups.len())
+        .map(|g| group_path(groups, Some(g)))
+        .collect();
+    for _ in 0..SEPARATIONS * groups.len() {
+        let mut moved = false;
+        for (g, path) in paths.iter().enumerate() {
+            moved |= clear(graph, g, path, x);
+        }
+        if !moved {
+            break;
         }
     }
-    x
+}
+
+/// Whether an item with groups `item` belongs left of a group with path `group`: when it is in
+/// a sibling group ordered before the group's branch, as the layers are ordered.
+fn belongs_left(item: &[usize], group: &[usize]) -> bool {
+    item.iter()
+        .zip(group)
+        .find(|(a, b)| a != b)
+        .is_some_and(|(a, b)| a < b)
+}
+
+/// One pass of [`separate`] for group `g` (its groups `path`); whether anything moved.
+fn clear(graph: &Layered, g: usize, path: &[usize], x: &mut [f64]) -> bool {
+    let inside = |i: usize| graph.paths[i].contains(&g);
+    let mut moved = false;
+    for layer in &graph.layers {
+        // The span as it is now: each move below changes it.
+        let Some((left, right, first, last)) = group_spans_of(graph, g, x) else {
+            return moved;
+        };
+        let Some(&head) = layer.first() else {
+            continue;
+        };
+        if !(first..=last).contains(&graph.layer_of[head]) {
+            continue;
+        }
+        let block = layer.iter().position(|&i| inside(i));
+        if let Some(start) = block
+            && start > 0
+        {
+            let before = layer[start - 1];
+            let reach = x[before] + graph.items[before].width() / 2.0 + gap(graph.items[before]);
+            if reach > left + 1e-9 {
+                shift_group(graph, g, reach - left, x);
+                moved = true;
+                continue;
+            }
+        }
+        // The left side: before the group's members, or (in a layer without them) up to the
+        // last item of a group ordered before this one, as the layers are ordered.
+        let split = block.unwrap_or_else(|| {
+            layer
+                .iter()
+                .rposition(|&i| belongs_left(&graph.paths[i], path))
+                .map_or(0, |k| k + 1)
+        });
+        if block.is_none() && split > 0 {
+            let reach = layer[..split]
+                .iter()
+                .map(|&i| x[i] + graph.items[i].width() / 2.0 + gap(graph.items[i]))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if reach > left + 1e-9 {
+                // The group goes right of the items that belong left of it.
+                shift_group(graph, g, reach - left, x);
+                moved = true;
+                continue;
+            }
+        }
+        let outside = layer.iter().enumerate().skip(split).find(|&(_, &i)| {
+            !inside(i)
+                && x[i] + graph.items[i].width() / 2.0 > left + 1e-9
+                && x[i] - graph.items[i].width() / 2.0 < right - 1e-9
+        });
+        if let Some((k, &i)) = outside {
+            let wanted = right + gap(graph.items[i]).min(GAP);
+            let edge = x[i] - graph.items[i].width() / 2.0;
+            shift_from(layer, k, wanted - edge, x);
+            moved = true;
+        }
+    }
+    moved
+}
+
+/// Moves the items of `layer` from position `k` on right by `by`.
+fn shift_from(layer: &[usize], k: usize, by: f64, x: &mut [f64]) {
+    for &i in &layer[k..] {
+        x[i] += by;
+    }
+}
+
+/// Moves group `g` right by `by`: in each layer, its first member and everything after it.
+fn shift_group(graph: &Layered, g: usize, by: f64, x: &mut [f64]) {
+    for layer in &graph.layers {
+        if let Some(k) = layer.iter().position(|&i| graph.paths[i].contains(&g)) {
+            shift_from(layer, k, by, x);
+        }
+    }
+}
+
+/// [`group_spans`] for one group.
+fn group_spans_of(graph: &Layered, group: usize, x: &[f64]) -> Option<(f64, f64, usize, usize)> {
+    let mut span: Option<(f64, f64, usize, usize)> = None;
+    for (item, path) in graph.paths.iter().enumerate() {
+        let Some(depth) = path.iter().position(|&h| h == group) else {
+            continue;
+        };
+        let half = graph.items[item].width() / 2.0;
+        let pad = to_f64(path.len() - depth) * GROUP_PAD;
+        let left = x[item] - half - pad;
+        let right = x[item] + half + pad;
+        let layer = graph.layer_of[item];
+        span = Some(match span {
+            None => (left, right, layer, layer),
+            Some((lo, hi, first, last)) => (
+                lo.min(left),
+                hi.max(right),
+                first.min(layer),
+                last.max(layer),
+            ),
+        });
+    }
+    span
+}
+
+/// Each group's box across x (with its padding and its nested groups' padding) and the
+/// layers it spans, or `None` for a group without items.
+fn group_spans(
+    graph: &Layered,
+    group_count: usize,
+    x: &[f64],
+) -> Vec<Option<(f64, f64, usize, usize)>> {
+    (0..group_count)
+        .map(|g| group_spans_of(graph, g, x))
+        .collect()
+}
+
+/// The groups' boxes, outer before inner.
+fn group_boxes(
+    graph: &Layered,
+    groups: &[GroupSpec],
+    x: &[f64],
+    y: &impl Fn(usize) -> f64,
+) -> Vec<GroupBox> {
+    let spans = group_spans(graph, groups.len(), x);
+    let mut boxes: Vec<GroupBox> = Vec::new();
+    for (g, span) in spans.iter().enumerate() {
+        let Some((left, right, first, last)) = *span else {
+            continue;
+        };
+        let depth = group_path(groups, Some(g)).len() - 1;
+        // The deepest nesting under this group, per layer edge, sets its vertical padding.
+        let below = graph
+            .paths
+            .iter()
+            .filter_map(|p| p.iter().position(|&h| h == g).map(|at| p.len() - at))
+            .max()
+            .unwrap_or(1);
+        let top = y(first) - NODE_HEIGHT / 2.0 - to_f64(below) * GROUP_LABEL;
+        let bottom = y(last) + NODE_HEIGHT / 2.0 + to_f64(below) * GROUP_PAD;
+        boxes.push(GroupBox {
+            group: g,
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+            depth,
+        });
+    }
+    boxes.sort_by_key(|b| (b.depth, b.group));
+    boxes
 }
 
 const fn gap(item: Item) -> f64 {

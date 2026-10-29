@@ -17,6 +17,7 @@ fn empty_task(name: &str) -> Task {
         settings: TaskSettings::default(),
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
+        group: None,
     }
 }
 
@@ -55,6 +56,7 @@ fn dag() -> Dag {
             edge("a", "c", EdgeKind::Order),
             edge("a", "b", EdgeKind::Order),
         ],
+        groups: Vec::new(),
     }
 }
 
@@ -94,6 +96,7 @@ fn round_trips_through_json() {
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
+        group: None,
     });
     let json = serde_json::to_string(&original).unwrap();
     assert_eq!(serde_json::from_str::<Dag>(&json).unwrap(), original);

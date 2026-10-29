@@ -107,8 +107,8 @@ proptest! {
     #[test]
     fn crossings_are_no_worse_than_the_tasks_own_order((count, edges) in dags(16)) {
         let layer = layers(count, &edges);
-        let naive = crossings(&layered(count, &edges, &layer));
-        let mut graph = layered(count, &edges, &layer);
+        let naive = crossings(&layered(count, &edges, &layer, vec![Vec::new(); count]));
+        let mut graph = layered(count, &edges, &layer, vec![Vec::new(); count]);
         reduce_crossings(&mut graph);
         prop_assert!(crossings(&graph) <= naive);
         // What is drawn is what was counted.
@@ -164,5 +164,114 @@ fn an_empty_graph_and_a_cycle_still_lay_out() {
             .routes
             .iter()
             .all(|r| cycle.nodes[r.from].layer < cycle.nodes[r.to].layer)
+    );
+}
+
+/// A DAG with groups: up to three groups (the third nested in the first), each node in one
+/// of them or in none.
+fn grouped_dags(
+    max: usize,
+) -> impl Strategy<Value = (usize, Vec<(usize, usize)>, Vec<Option<usize>>)> {
+    dags(max).prop_flat_map(|(count, edges)| {
+        (
+            Just(count),
+            Just(edges),
+            proptest::collection::vec(proptest::option::of(0..3_usize), count),
+        )
+    })
+}
+
+const GROUPS: [GroupSpec; 3] = [
+    GroupSpec { parent: None },
+    GroupSpec { parent: None },
+    GroupSpec { parent: Some(0) },
+];
+
+/// Whether node `n`, in `node_group`, is in group `g` (directly or nested).
+fn in_group(node_group: &[Option<usize>], n: usize, g: usize) -> bool {
+    group_path(&GROUPS, node_group[n]).contains(&g)
+}
+
+fn contains(b: &GroupBox, node: &Placed) -> (bool, bool) {
+    let left = node.x - NODE_WIDTH / 2.0;
+    let right = node.x + NODE_WIDTH / 2.0;
+    let top = node.y - NODE_HEIGHT / 2.0;
+    let bottom = node.y + NODE_HEIGHT / 2.0;
+    let inside = left >= b.left - 1e-6
+        && right <= b.left + b.width + 1e-6
+        && top >= b.top - 1e-6
+        && bottom <= b.top + b.height + 1e-6;
+    let touches = left < b.left + b.width - 1e-6
+        && right > b.left + 1e-6
+        && top < b.top + b.height - 1e-6
+        && bottom > b.top + 1e-6;
+    (inside, touches)
+}
+
+proptest! {
+    #[test]
+    fn a_groups_box_holds_its_nodes_and_no_other((count, edges, node_group) in grouped_dags(16)) {
+        let layout = layout_grouped(count, &edges, &GROUPS, &node_group);
+        for b in &layout.boxes {
+            for (n, node) in layout.nodes.iter().enumerate() {
+                let (inside, touches) = contains(b, node);
+                if in_group(&node_group, n, b.group) {
+                    prop_assert!(inside, "node {n} outside its group {}'s box {b:?}", b.group);
+                } else {
+                    prop_assert!(!touches, "node {n} inside group {}'s box {b:?}", b.group);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_nested_box_is_inside_its_parents((count, edges, node_group) in grouped_dags(16)) {
+        let layout = layout_grouped(count, &edges, &GROUPS, &node_group);
+        let find = |g: usize| layout.boxes.iter().find(|b| b.group == g);
+        if let (Some(inner), Some(outer)) = (find(2), find(0)) {
+            prop_assert!(inner.left > outer.left && inner.left + inner.width < outer.left + outer.width);
+            prop_assert!(inner.top > outer.top && inner.top + inner.height < outer.top + outer.height);
+            prop_assert_eq!(inner.depth, 1);
+        }
+    }
+
+    #[test]
+    fn grouped_nodes_never_overlap_and_fit((count, edges, node_group) in grouped_dags(16)) {
+        let layout = layout_grouped(count, &edges, &GROUPS, &node_group);
+        for (i, a) in layout.nodes.iter().enumerate() {
+            for b in &layout.nodes[i + 1..] {
+                prop_assert!((a.x - b.x).abs() >= NODE_WIDTH || (a.y - b.y).abs() >= NODE_HEIGHT);
+            }
+            prop_assert!(a.x - NODE_WIDTH / 2.0 >= MARGIN - 1e-6);
+            prop_assert!(a.x + NODE_WIDTH / 2.0 <= layout.width - MARGIN + 1e-6);
+        }
+        for b in &layout.boxes {
+            prop_assert!(b.left >= MARGIN - 1e-6 && b.top >= 0.0);
+            prop_assert!(b.left + b.width <= layout.width + 1e-6);
+            prop_assert!(b.top + b.height <= layout.height + 1e-6);
+        }
+        prop_assert_eq!(layout_grouped(count, &edges, &GROUPS, &node_group), layout);
+    }
+}
+
+#[test]
+fn a_groups_tasks_sit_together_in_a_box_with_room_for_its_label() {
+    // start -> (load: a -> b, c) -> end, with `other` beside them.
+    let edges = [(0, 1), (1, 2), (0, 3), (2, 4), (3, 4), (0, 5)];
+    let node_group = [None, Some(0), Some(0), Some(0), None, None];
+    let layout = layout_grouped(6, &edges, &[GroupSpec { parent: None }], &node_group);
+    let [load] = layout.boxes.as_slice() else {
+        panic!("one box: {:?}", layout.boxes)
+    };
+    for n in [1, 2, 3] {
+        assert!(contains(load, &layout.nodes[n]).0, "{n} in the box");
+    }
+    for n in [0, 4, 5] {
+        assert!(!contains(load, &layout.nodes[n]).1, "{n} out of the box");
+    }
+    let first = layout.nodes[1].y - NODE_HEIGHT / 2.0;
+    assert!(
+        (first - load.top - GROUP_LABEL).abs() < 1e-9,
+        "{first} {load:?}"
     );
 }

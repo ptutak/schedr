@@ -347,6 +347,25 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// The dependencies.
     pub edges: Vec<EdgeLine>,
+    /// The task groups' boxes, outer before inner (decision 65).
+    pub groups: Vec<GroupFrame>,
+}
+
+/// A task group's box on the graph.
+#[derive(Debug, Clone)]
+pub struct GroupFrame {
+    /// Its left edge.
+    pub left: f64,
+    /// Its top edge.
+    pub top: f64,
+    /// Its width.
+    pub width: f64,
+    /// Its height.
+    pub height: f64,
+    /// Its name (its own part of its ID).
+    pub label: String,
+    /// Its ID, for the tooltip.
+    pub group_id: String,
 }
 
 /// A task's row in the run's table.
@@ -658,7 +677,8 @@ fn graph_of(
     let index = |id: &str| ids.iter().position(|i| i == id);
     let edges = joined_edges(dag, index);
     let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _, _)| (*f, *t)).collect();
-    let layout = graph::layout(ids.len(), &pairs);
+    let (group_ids, specs, node_group) = groups_of(dag, &ids);
+    let layout = graph::layout_grouped(ids.len(), &pairs, &specs, &node_group);
     let nodes = ids
         .iter()
         .zip(&layout.nodes)
@@ -704,6 +724,21 @@ fn graph_of(
             }
         })
         .collect();
+    let groups = layout
+        .boxes
+        .iter()
+        .map(|b| {
+            let id = &group_ids[b.group];
+            GroupFrame {
+                left: b.left,
+                top: b.top,
+                width: b.width,
+                height: b.height,
+                label: fitted(id.rsplit('.').next().unwrap_or(id), 28),
+                group_id: id.clone(),
+            }
+        })
+        .collect();
     Graph {
         width: layout.width,
         height: layout.height,
@@ -711,7 +746,48 @@ fn graph_of(
         node_height: NODE_HEIGHT,
         nodes,
         edges: lines,
+        groups,
     }
+}
+
+/// The DAG's groups (decision 64): their IDs, their nesting, and each task's innermost group
+/// (`ids` is the tasks' order). A group or parent the DAG doesn't declare is left out.
+fn groups_of(
+    dag: &serde_json::Value,
+    ids: &[String],
+) -> (Vec<String>, Vec<graph::GroupSpec>, Vec<Option<usize>>) {
+    let declared: Vec<(String, Option<String>)> = dag["groups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            let id = g["id"].as_str()?.to_owned();
+            Some((id, g["parent"].as_str().map(str::to_owned)))
+        })
+        .collect();
+    let index = |id: &str| declared.iter().position(|(g, _)| g == id);
+    let specs = declared
+        .iter()
+        .map(|(_, parent)| graph::GroupSpec {
+            parent: parent.as_deref().and_then(index),
+        })
+        .collect();
+    let tasks = dag["tasks"].as_array().cloned().unwrap_or_default();
+    let node_group = ids
+        .iter()
+        .map(|id| {
+            tasks
+                .iter()
+                .find(|t| t["id"].as_str() == Some(id))
+                .and_then(|t| t["group"].as_str())
+                .and_then(index)
+        })
+        .collect();
+    (
+        declared.into_iter().map(|(g, _)| g).collect(),
+        specs,
+        node_group,
+    )
 }
 
 /// A line of the graph: the pair's upstream and downstream tasks (by index), `data` or

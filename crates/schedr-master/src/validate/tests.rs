@@ -308,3 +308,36 @@ fn a_task_whose_output_cant_reach_the_master_is_refused() {
         error.message
     );
 }
+
+#[test]
+fn groups_must_be_unique_nest_properly_and_be_declared() {
+    let mut grouped = task("load.x", &json!({}));
+    grouped["group"] = json!("load");
+    let mut stray = task("y", &json!({}));
+    stray["group"] = json!("ghost");
+    let groups = json!([
+        {"id": "load"},
+        {"id": "load.eu", "parent": "load"},
+        {"id": "a", "parent": "b"},
+        {"id": "b", "parent": "a"},
+        {"id": "c", "parent": "missing"},
+        {"id": "load"}
+    ]);
+    assert_eq!(
+        problems(&json!({"tasks": [grouped, stray], "edges": [], "groups": groups})),
+        [
+            "group `load` is defined more than once",
+            "group `a` is nested inside itself",
+            "group `b` is nested inside itself",
+            "group `c`: its parent `missing` isn't a group of the DAG",
+            "task `y`: its group `ghost` isn't a group of the DAG"
+        ]
+    );
+    let mut fine = task("load.eu.x", &json!({}));
+    fine["group"] = json!("load.eu");
+    let groups = json!([{"id": "load"}, {"id": "load.eu", "parent": "load"}]);
+    assert_eq!(
+        problems(&json!({"tasks": [fine], "edges": [], "groups": groups})),
+        Vec::<String>::new()
+    );
+}
