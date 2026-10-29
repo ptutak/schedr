@@ -9,6 +9,26 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B30: large parse uploads exceed the master's default gRPC receive limit
+
+- **Found:** 2026-10-29, reproduced with `make stress STRESS=stress_01_throughput`,
+  quick profile ×4. Its 201 DAGs (9,001 tasks) produce a 4,922,341-byte parse upload.
+  The worker logs `parse result not uploaded`, with `OutOfRange`: the message exceeds
+  tonic's default 4,194,304-byte receive limit. `Hub::service` does not override it.
+- **Effect:** no DAGs are stored, so the first stress scenario appears stuck until its
+  ten-minute parsing deadline. Production roots with similarly large parse results also
+  fail. The limit applies to the whole root's parse upload, not each DAG separately.
+  The quick profile scales with CPU and memory; the ×2 baseline's smaller upload did not
+  expose this limit.
+- **Proof:** paired gRPC tests in this session uploaded the same valid 5,429,488-byte
+  parse: the default rejected it; changing only the server's receive limit to 8 MiB
+  accepted it and stored all 201 DAGs. A second, process-level regression with two DAGs
+  produced a 6,292,428-byte upload and failed against the original binary at the same
+  4 MiB limit. These tests and the attempted fixes were reverted at the user's request.
+- **Plan:** add `[master] grpc_max_message_size` with a 64 MiB default and its environment
+  mirror, represented by a validated size type.
+  **Deferred:** the user requested only this bug report; no fix is retained.
+
 ## B29: a `@branch` edge to a target it didn't choose isn't faint on the run graph (Suspected)
 
 - **Found:** 2026-10-28, by Grok while writing the docs for M4.1a-M4.2a (by reading).
