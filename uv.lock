@@ -1177,6 +1177,11 @@ wheels = [
 name = "schedr"
 source = { editable = "." }
 
+[package.optional-dependencies]
+pydantic = [
+    { name = "pydantic" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
@@ -1201,6 +1206,8 @@ ui-test = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.11,<3" }]
+provides-extras = ["pydantic"]
 
 [package.metadata.requires-dev]
 dev = [

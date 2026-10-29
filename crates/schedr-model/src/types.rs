@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
+/// `Any`, for the parts of a model.
+static ANY: TypeDesc = TypeDesc::Any;
+
 /// The type of a value that can be stored as a task output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -71,6 +74,15 @@ pub enum TypeDesc {
         /// The fields, in declaration order.
         fields: Vec<Field>,
     },
+    /// A Pydantic model (decision 59), described by Pydantic's JSON Schema of it: what
+    /// `model_dump(mode="json")` writes. Only the Python layer compares it; here its parts
+    /// are `Any`.
+    Model {
+        /// The class name, for messages and outcome names.
+        name: String,
+        /// The JSON Schema (with its `$defs`).
+        schema: serde_json::Value,
+    },
     /// The output of a `command` or `script` task.
     ProcessResult,
 }
@@ -93,7 +105,7 @@ impl TypeDesc {
     ///
     /// Returns `None` if this type has no such field: `TypedDict`s, dataclasses and
     /// `ProcessResult` have named fields, `dict[str, T]` has any key (giving `T`), and `Any`
-    /// gives `Any`.
+    /// and a model give `Any`.
     #[must_use]
     pub fn field(&self, name: &str) -> Option<&TypeDesc> {
         static STR: TypeDesc = TypeDesc::Str;
@@ -101,6 +113,8 @@ impl TypeDesc {
         static BOOL: TypeDesc = TypeDesc::Bool;
         match self {
             Self::Any => Some(self),
+            // Checked by the Python layer against the model's schema (decision 59).
+            Self::Model { .. } => Some(&ANY),
             Self::Dict { value } => Some(value),
             Self::ProcessResult => match name {
                 "stdout" | "stderr" => Some(&STR),
@@ -118,11 +132,12 @@ impl TypeDesc {
     /// The type of the element at `index`, for checking an output path such as `out[0]`.
     ///
     /// Returns `None` if this type can't be indexed, or for a tuple index out of range;
-    /// `Any` gives `Any`.
+    /// `Any` and a model give `Any`.
     #[must_use]
     pub fn element(&self, index: u64) -> Option<&TypeDesc> {
         match self {
             Self::Any => Some(self),
+            Self::Model { .. } => Some(&ANY),
             Self::List { item } => Some(item),
             Self::Tuple { items } => usize::try_from(index).ok().and_then(|i| items.get(i)),
             _ => None,

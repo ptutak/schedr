@@ -81,3 +81,37 @@ no dependency on the failure keep running.
 [Defaults and retries](05-defaults.md) is what a failure does to the task that failed.
 Task groups and mapped tasks are
 [Native API](../_generated/05-design/07-python-api-structure.md#native-api).
+
+## Pydantic models
+
+A task can return and take Pydantic models, with `pip install schedr[pydantic]`
+(Pydantic 2.11 or newer, before 3). schedr never imports Pydantic itself; it uses the
+model's own methods. A model is stored as `model_dump(mode="json")` writes it, keyed by
+field names, and read back with `model_validate`, so Pydantic's rules and validators apply
+when the downstream task receives it.
+
+```{literalinclude} ../../examples/docs/pydantic_models.py
+:language: python
+:caption: examples/docs/pydantic_models.py
+```
+
+An outcome model derives from `schedr.pydantic.Model` (a `BaseModel`), as a dataclass
+outcome derives from `schedr.Data` ([Type checkers](09-type-checkers.md)). Ordinary data
+stays a plain `BaseModel`.
+
+A model's type is Pydantic's own JSON Schema of it, and loading the file checks it
+strictly: an output fits a parameter only when every value it can be is **provably**
+accepted.
+
+| Passing | Result |
+|---|---|
+| A model to a parameter of the same model, or one with the same or fewer constraints | Fits |
+| `config.retries` (`int`, minimum 0) to `retries: int` | Fits: tighter than the parameter |
+| A plain `int` to a field with `Field(ge=0)` | Refused: the value might be negative. Give the output the same constraint |
+| A `str` to an `HttpUrl` field | Refused: the parameter needs format `uri` |
+| A field with `pattern` to one with another pattern | Refused: patterns must be identical |
+| A model that may be `None` to one that may not | Refused |
+| A model's `datetime`, `date` or `timedelta` field (`found.fetched_at`) to a parameter of that type, or the other way | Fits: the task receives the value, read by Pydantic's rules. A date the model holds without a time zone arrives without one |
+
+Parts that can't be compared (`allOf`, `not`, `if`, custom schemas) fit only when the two
+sides are identical. The error names the field and both sides' constraints.

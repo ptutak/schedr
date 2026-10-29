@@ -16,6 +16,11 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+# Pydantic models as outputs and inputs (decision 59): schedr itself never imports Pydantic.
+# 2.11 brought `model_validate(..., by_name=True)`; 3.0 may change the v2 API.
+pydantic = ["pydantic>=2.11,<3"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",

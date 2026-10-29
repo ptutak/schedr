@@ -10,12 +10,14 @@ from schedr._model import (
     DictType,
     ListType,
     LiteralType,
+    ModelType,
     ScalarType,
     TupleType,
     TypedDictType,
     TypeDesc,
     UnionType,
 )
+from schedr._serialization import schemas
 
 _PROCESS_RESULT_FIELDS: dict[str, TypeDesc] = {
     "stdout": ScalarType("str"),
@@ -54,7 +56,7 @@ def type_name(desc: TypeDesc) -> str:  # noqa: PLR0911
             return f"Literal[{', '.join(repr(v) for v in values)}]"
         case UnionType(variants=variants):
             return " | ".join(type_name(v) for v in variants)
-        case TypedDictType(name=name) | DataclassType(name=name):
+        case TypedDictType(name=name) | DataclassType(name=name) | ModelType(name=name):
             return name
 
 
@@ -69,10 +71,13 @@ def follow_path(desc: TypeDesc, path: tuple[str | int, ...]) -> TypeDesc | None:
         The part's type, or ``None`` if the path doesn't exist in the type. ``Any`` stays
         ``Any``.
     """
+    found: TypeDesc | None
     for step in path:
         match desc, step:
             case ScalarType(name="any"), _:
                 return desc
+            case ModelType(), _:
+                found = schemas.part(desc, step)
             case ScalarType(name="process_result"), str():
                 found = _PROCESS_RESULT_FIELDS.get(step)
             case DictType(value=value), str():
@@ -105,11 +110,28 @@ def _union_of(types: Sequence[TypeDesc | None]) -> TypeDesc:
     return distinct[0] if len(distinct) == 1 else UnionType(tuple(distinct))
 
 
+def assignment_problem(source: TypeDesc, target: TypeDesc) -> str | None:
+    """Why a value of type ``source`` can't be passed where ``target`` is expected.
+
+    Args:
+        source: The upstream output's type.
+        target: The parameter's type.
+
+    Returns:
+        ``None`` when it fits. A Pydantic model on either side gives the schema comparison's
+        reason (decision 59); otherwise an empty string (the types alone say why).
+    """
+    if schemas.contains_model(source) or schemas.contains_model(target):
+        return schemas.fit_problem(source, target)
+    return None if is_assignable(source, target) else ""
+
+
 def is_assignable(source: TypeDesc, target: TypeDesc) -> bool:  # noqa: PLR0911
     """Whether a value of type ``source`` can be passed where ``target`` is expected.
 
     ``int`` fits ``float``; ``bool`` doesn't fit ``int`` (no coercion, as at run time);
-    containers are checked element by element; classes match by name and fields.
+    containers are checked element by element; classes match by name and fields. A
+    Pydantic model on either side is compared by JSON Schema, strictly (decision 59).
 
     Args:
         source: The upstream output's type.
@@ -120,6 +142,8 @@ def is_assignable(source: TypeDesc, target: TypeDesc) -> bool:  # noqa: PLR0911
     """
     if ScalarType("any") in (source, target):
         return True
+    if schemas.contains_model(source) or schemas.contains_model(target):
+        return schemas.fit_problem(source, target) is None
     if isinstance(source, UnionType):
         return all(is_assignable(v, target) for v in source.variants)
     if isinstance(source, LiteralType):

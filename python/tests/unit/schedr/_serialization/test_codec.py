@@ -197,7 +197,8 @@ def test_decode_any_restores_tagged_types(stored: object, value: object) -> None
         ({"$date": 5}, date, "bad $date value 5"),
         ({"$timedelta": "1s"}, timedelta, "a $timedelta holds whole microseconds"),
         ({"$timedelta": True}, timedelta, "a $timedelta holds whole microseconds"),
-        ("2026-01-01", date, "expected a $date value, got str"),
+        # Text is a model's date (decision 60): read by Pydantic, refused when it isn't one.
+        ("soon", date, "bad date text 'soon'"),
         ([1, 2], tuple[int, int], "expected a $tuple value, got list"),
         ({"$tuple": [1]}, tuple[int, int], "expected a tuple of 2"),
         ({"a": 1}, list[int], "expected a list, got dict"),

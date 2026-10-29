@@ -3,7 +3,7 @@
 Mirrors ``schedr-model`` (``types.rs``).
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -203,6 +203,33 @@ class DataclassType:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ModelType:
+    """A Pydantic model, described by Pydantic's JSON Schema of it (decision 59).
+
+    An output's type holds the serialization schema (what ``model_dump(mode="json")``
+    writes), a parameter's the validation schema (what ``model_validate`` accepts); a part of
+    one (``out.url``) is a model type too, holding that part's schema and the ``$defs`` its
+    references need.
+
+    Attributes:
+        name: The class name (also the outcome name in outcome unions), or the part's path
+            for a part (``Remote.url``).
+        schema: The JSON Schema.
+    """
+
+    name: str
+    schema: Mapping[str, Any]
+
+    def to_json(self) -> dict[str, Any]:
+        """The type as DAG JSON.
+
+        Returns:
+            ``{"type": "model", "name": ..., "schema": ...}``.
+        """
+        return {"type": "model", "name": self.name, "schema": dict(self.schema)}
+
+
 type TypeDesc = (
     ScalarType
     | ListType
@@ -212,5 +239,6 @@ type TypeDesc = (
     | UnionType
     | TypedDictType
     | DataclassType
+    | ModelType
 )
 """Any type descriptor."""

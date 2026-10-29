@@ -991,6 +991,29 @@
         },
         {
           "additionalProperties": false,
+          "description": "A Pydantic model (decision 59), described by Pydantic's JSON Schema of it: what\n`model_dump(mode=\"json\")` writes. Only the Python layer compares it; here its parts\nare `Any`.",
+          "properties": {
+            "name": {
+              "description": "The class name, for messages and outcome names.",
+              "type": "string"
+            },
+            "schema": {
+              "description": "The JSON Schema (with its `$defs`)."
+            },
+            "type": {
+              "const": "model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "schema"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The output of a `command` or `script` task.",
           "properties": {
             "type": {

@@ -10,7 +10,8 @@ them without Python and a task annotated ``Any`` gets the real type back:
 - ``{"$tuple": [...]}``.
 
 Dataclasses are stored as plain objects, without a class name; decoding follows the receiving
-annotation (see PROJECT.md, Output serialization).
+annotation (see PROJECT.md, Output serialization). Pydantic models are stored as Pydantic writes
+them (``model_dump(mode="json")``) and read back with ``model_validate`` (decision 59).
 """
 
 import dataclasses
@@ -19,6 +20,7 @@ import math
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, get_args, get_origin, is_typeddict
 
+from schedr._serialization import models
 from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
     SEQUENCE_ORIGINS,
@@ -109,6 +111,10 @@ def encode(value: object, annotation: object, at: str = "") -> Any:  # noqa: PLR
         return _encode_dict(value, args[1] if args else Any, at)
     if isinstance(annotation, type) and is_typeddict(annotation):
         return _encode_typed_dict(value, annotation, at)
+    if models.is_model(annotation):
+        if not isinstance(value, annotation):  # type: ignore[arg-type]
+            raise CodecError(at, f"expected {label(annotation)}, got {_type_of(value)}")
+        return models.dump(value)
     if isinstance(annotation, type) and dataclasses.is_dataclass(annotation):
         if not isinstance(value, annotation):
             raise CodecError(at, f"expected {annotation.__name__}, got {_type_of(value)}")
@@ -239,6 +245,8 @@ def encode_any(value: object, at: str = "") -> Any:  # noqa: PLR0911
         return {"$tuple": [encode_any(v, f"{at}[{i}]") for i, v in enumerate(value)]}
     if isinstance(value, dict):
         return _encode_dict(value, Any, at)
+    if models.is_model_value(value):
+        return models.dump(value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {
             f.name: encode_any(getattr(value, f.name), f"{at}.{f.name}")
@@ -338,6 +346,13 @@ def decode(data: Any, annotation: object, at: str = "") -> Any:  # noqa: PLR0911
     if isinstance(annotation, type) and is_typeddict(annotation):
         hints = _typed_dict_hints(data, annotation, at)
         return {k: decode(v, hints[k], f"{at}[{k!r}]") for k, v in data.items()}
+    if models.is_model(annotation):
+        assert isinstance(annotation, type)
+        try:
+            # schedr's tagged dates (from a dataclass or plain output) become values first.
+            return models.validate(annotation, decode_any(data))
+        except ValueError as e:  # Pydantic's ValidationError
+            raise CodecError(at, f"{annotation.__name__}: {e}") from e
     if isinstance(annotation, type) and dataclasses.is_dataclass(annotation):
         return _decode_dataclass(data, annotation, at)
     raise TypeModelError(f"`{label(annotation)}` is not supported")
@@ -350,6 +365,12 @@ def _tagged(data: Any, tag: str, at: str) -> Any:
 
 
 def _decode_time(data: Any, annotation: object, at: str) -> Any:
+    if isinstance(data, str):
+        # A model's date, as Pydantic wrote it (decision 60): read by Pydantic's own rules.
+        try:
+            return models.parse_date(data, annotation)
+        except ValueError as e:
+            raise CodecError(at, f"bad {label(annotation)} text {data!r}: {e}") from e
     if annotation is timedelta:
         micros = _tagged(data, "$timedelta", at)
         if not isinstance(micros, int) or isinstance(micros, bool):

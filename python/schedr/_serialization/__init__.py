@@ -15,12 +15,18 @@ from schedr._serialization.codec import (
     encode_any,
     encoded_size,
 )
-from schedr._serialization.compatibility import follow_path, is_assignable, type_name
+from schedr._serialization.compatibility import (
+    assignment_problem,
+    follow_path,
+    is_assignable,
+    type_name,
+)
 from schedr._serialization.describe import describe
 
 __all__ = [
     "CodecError",
     "TypeModelError",
+    "assignment_problem",
     "check_size",
     "decode",
     "decode_any",

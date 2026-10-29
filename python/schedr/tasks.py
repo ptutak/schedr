@@ -31,6 +31,7 @@ from schedr._model import (
 from schedr._serialization import (
     CodecError,
     TypeModelError,
+    assignment_problem,
     describe,
     encode,
     is_assignable,
@@ -427,7 +428,7 @@ class TaskFunction[**P, R]:
         """
         task_id, value = task_value
         try:
-            expected = describe(annotation)
+            expected = describe(annotation, "input")
         except TypeModelError as e:
             raise TypeModelError(f"{where}: parameter type `{label(annotation)}`: {e}") from None
         converted = _build.to_value(value, where, upstream)
@@ -438,10 +439,12 @@ class TaskFunction[**P, R]:
         # Each reference, at any depth, against the type of the place it fills.
         for reference, at in _build.typed_references(converted, expected):
             produced = _build.reference_type(builder, reference, where)
-            if not is_assignable(produced, at):
+            problem = assignment_problem(produced, at)
+            if problem is not None:
+                reason = f": {problem}" if problem else ""
                 raise TypeError(
                     f"{where}: expects `{type_name(at)}`, but "
-                    f"`{_build.reference_label(reference)}` is `{type_name(produced)}`"
+                    f"`{_build.reference_label(reference)}` is `{type_name(produced)}`{reason}"
                 )
             # Whether it may get None is known once the DAG is complete.
             if isinstance(reference, OutputRef | OutcomeRef):

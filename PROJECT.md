@@ -5324,8 +5324,8 @@ sure an output can be serialized, from earliest to last:
      to names defined later in the file.
    - **Not supported** (parse errors naming the part): `tuple[T, ...]` (use `list[T]`), a bare
      `tuple`, recursive types (a dataclass referring to itself), generic `type` aliases with
-     parameters, `set`, `bytes`, `Decimal`, `object` and other classes. Pydantic models come
-     with M4 (they need their own type descriptor).
+     parameters, `set`, `bytes`, `Decimal`, `object` and other classes. Pydantic models have
+     their own descriptor (M4.1e, decision 59; below).
    - **Compatibility of an output with a parameter:** `int` fits `float`; `bool` doesn't fit
      `int` (no coercion, as at run time); containers are checked element by element; a union
      fits if each member fits; a `Literal` fits if each value fits; dataclasses and
@@ -5434,11 +5434,41 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
 **Dataclasses and Pydantic models** are supported as output and input types.
 
 - **Pydantic models: only when Pydantic is installed** (detected from annotations; extra
-  `schedr[pydantic]`). Never a required dependency: the `schedr` package shares the user's
-  environment and stays **dependency-free**, and importing Pydantic would add start-up time to
-  every task. schedr hands validation to Pydantic (`model_dump(mode="json")` /
-  `model_validate`), so **Pydantic's own rules** apply (lax by default, strict if the model
-  says so).
+  `schedr[pydantic]`, `pydantic>=2.11,<3`). Never a required dependency: the `schedr` package
+  shares the user's environment and stays **dependency-free**, and importing Pydantic would
+  add start-up time to every task. schedr hands validation to Pydantic
+  (`model_dump(mode="json", by_alias=False)` / `model_validate(..., by_name=True)`: keyed by
+  field names, so a path `out.url` is by attribute name, as type checkers read it; `by_name`
+  needs 2.11), so **Pydantic's own rules** apply (lax by default, strict if the model says
+  so). Built in M4.1e (2026-10-29).
+  - **The type is Pydantic's JSON Schema** (decision 59, the user's, 2026-10-29: C): DAG
+    JSON's `{"type": "model", "name", "schema"}`. An output holds the serialization schema
+    (every field marked required: `model_dump` writes defaults too), a parameter the
+    validation schema (fields with defaults optional). Rust only stores it (`TypeDesc::Model`;
+    its parts are `Any` there); the Python layer compares. schedr's own descriptors are turned
+    into JSON Schema for the comparison, so a model meets dataclasses and plain types in one
+    check.
+  - **Strict comparison:** an output fits only when every value it can be is provably
+    accepted. A constraint, format, enum or required field the parameter has and the output
+    lacks is refused (59.1: `int` into `Field(ge=0)`, `str` into `HttpUrl`); what can't be
+    compared (`allOf`, `not`, `if`, differing patterns, schedr's tagged tuples against
+    Pydantic's lists) fits only when identical (59.2). `$ref`s are followed; recursive models fit
+    themselves. The error names the field and both sides' constraints.
+  - **A model's dates are dates** (decision 60, the user's, 2026-10-29: B; "the user sees
+    `datetime` and expects it to just work"): Pydantic writes them as text (`date-time`,
+    `date`, `duration`), schedr tags its own (`{"$datetime": ...}`); the comparison lets
+    each fit the other, and the runner converts when the task receives the value: text
+    through Pydantic's own parser (`TypeAdapter`), schedr's tags removed before
+    `model_validate`. A date the model holds without a time zone stays naive: Pydantic
+    stored it, so schedr's own rule against naive datetimes (about what schedr stores)
+    doesn't apply. Plain `str` still doesn't fit a `datetime` (no format proves it a date).
+    Not chosen: A refusing (strict, but the field's type says `datetime`); C storing a
+    model's dates tagged (schedr rewriting Pydantic's JSON, each Pydantic type needing a
+    conversion).
+  - Not chosen: A schedr's own descriptor for a model's fields, with Pydantic's types mapped
+    to what they dump as and the rest `Any` (less code, but `Any` parts go unchecked; with
+    Rust costing the same, the user chose the strictest); B an opaque model matched by name
+    (paths unchecked).
 - **Dataclasses** (standard library):
   - Encoded field by field (an `asdict()`-like walk guided by the annotations); decoded by
     calling the constructor with keyword arguments, recursively, guided by the **downstream

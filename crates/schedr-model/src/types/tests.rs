@@ -174,3 +174,23 @@ fn element_of_lists_tuples_and_any() {
 fn types_without_elements_have_no_element(#[case] ty: TypeDesc) {
     assert_eq!(ty.element(0), None);
 }
+
+#[test]
+fn a_model_keeps_its_schema_and_its_parts_are_any() {
+    let model: TypeDesc = serde_json::from_value(serde_json::json!({
+        "type": "model", "name": "Remote",
+        "schema": {"type": "object", "properties": {"url": {"type": "string", "format": "uri"}}}
+    }))
+    .unwrap();
+    let TypeDesc::Model { name, schema } = &model else {
+        panic!("expected a model, got {model:?}")
+    };
+    assert_eq!(name, "Remote");
+    assert_eq!(schema["properties"]["url"]["format"], "uri");
+    assert_eq!(model.field("url"), Some(&TypeDesc::Any));
+    assert_eq!(model.element(0), Some(&TypeDesc::Any));
+    assert_eq!(
+        serde_json::to_value(&model).unwrap()["schema"]["properties"]["url"]["type"],
+        "string"
+    );
+}

@@ -8,8 +8,7 @@ Every task has an outcome enum (see PROJECT.md, Task results and outcomes):
   ``None``), or ``CommandOperator(..., outcomes=Check)`` (the members' values are exit codes);
 - an implicit one from an outcome union: a return type that is a union of two or more
   dataclasses, Pydantic models and ``None`` (``-> Rows | Unavailable``), one outcome per
-  class, named after it (``"None"`` for ``None``). Pydantic models are recognised here, but
-  outputs of them come later (B36): the type model refuses them for now.
+  class, named after it (``"None"`` for ``None``).
 
 In the backend an outcome is a name; the classes and enums exist only here.
 """

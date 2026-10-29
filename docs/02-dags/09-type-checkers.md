@@ -48,8 +48,8 @@ class Found(Data, frozen=True):    # instead of @dataclass(frozen=True)
 The dataclass options are class keywords: `frozen`, `eq`, `order`, `kw_only`,
 `unsafe_hash`, `repr` (not `slots`). Ordinary data, a class a task returns on its own or
 inside a list, stays a plain `@dataclass`. A Pydantic outcome model derives from
-`schedr.pydantic.Model` instead of `BaseModel` (Pydantic outputs come later; see
-[Routing by outcome](08-outcomes.md)).
+`schedr.pydantic.Model` instead of `BaseModel` (see
+[Data flow](03-data-flow.md#pydantic-models)).
 
 A plain `@dataclass` still works as an outcome class: the DAG runs as written. Type
 checkers then reject `.on(Plain)`, because the class doesn't declare it. Write
