@@ -37,6 +37,7 @@ from schedr._serialization import (
     type_name,
 )
 from schedr._serialization.annotations import label, type_hints
+from schedr.outcomes import Done
 
 _VALUE_IN_DAG_BODY = (
     "an output can't be used as a value in the DAG file (it exists only at run time); "
@@ -340,8 +341,13 @@ class TaskFunction[**P, R]:
         """The ID of the task a call creates."""
         return self._task_id
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Output[R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         """Records the task (inside a DAG) or calls the function (outside).
+
+        Type checkers read the call as the function's value (``R``), so it passes to a task
+        taking ``R`` and its fields are typed; ``@task`` makes ``R`` ``Done`` for a function
+        returning ``None``, which ``>>`` orders. Inside a DAG it is an ``Output`` all the same:
+        a reference.
 
         Returns:
             The task's output, a reference; outside a DAG, the function's return value.
@@ -352,7 +358,7 @@ class TaskFunction[**P, R]:
         """
         builder = _build.active()
         if builder is None:
-            return self._fn(*args, **kwargs)  # type: ignore[return-value]
+            return self._fn(*args, **kwargs)
         where = f"task `{self._task_id}`"
         try:
             bound = self._signature.bind(*args, **kwargs)
@@ -403,7 +409,8 @@ class TaskFunction[**P, R]:
         builder.functions[self._task_id] = self._fn
         for task_id, on in dict.fromkeys(upstream):
             builder.add_edge(task_id, self._task_id, EdgeKind.DATA, on)
-        return Output(self._task_id)
+        # A reference, which type checkers read as the value (see above).
+        return Output[R](self._task_id)  # type: ignore[return-value]
 
     @staticmethod
     def _argument(
@@ -483,12 +490,28 @@ class TaskFunction[**P, R]:
         )
 
 
+class TaskDecorator(Protocol):
+    """What ``@task(...)`` with arguments gives: makes a function a task, as ``@task`` does."""
+
+    @overload
+    def __call__[**P](self, fn: Callable[P, None], /) -> TaskFunction[P, Done]: ...
+    @overload
+    def __call__[**P, R](self, fn: Callable[P, R], /) -> TaskFunction[P, R]: ...
+    def __call__(self, fn: Callable[..., Any], /) -> TaskFunction[..., Any]:
+        """Makes ``fn`` a task (a function returning ``None`` gives ``Done`` when called)."""
+        ...
+
+
+@overload
+def task[**P](fn: Callable[P, None], /) -> TaskFunction[P, Done]: ...
+
+
 @overload
 def task[**P, R](fn: Callable[P, R], /) -> TaskFunction[P, R]: ...
 
 
 @overload
-def task[**P, R](
+def task(
     *,
     task_id: str | None = None,
     retries: int | None = None,
@@ -499,7 +522,7 @@ def task[**P, R](
     preload: bool | None = None,
     fresh_process: bool | None = None,
     run_if: _outcomes.RunIf | None = None,
-) -> Callable[[Callable[P, R]], TaskFunction[P, R]]: ...
+) -> TaskDecorator: ...
 
 
 def task[**P, R](
@@ -519,7 +542,8 @@ def task[**P, R](
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
     The function must annotate its return type and declare each parameter (no ``*args`` /
-    ``**kwargs``). The task ID defaults to the function's name.
+    ``**kwargs``). The task ID defaults to the function's name. Type checkers read a call of
+    it in a DAG body as the function's value; a function returning ``None`` gives ``Done``.
 
     Args:
         fn: The function (when used as ``@task`` without parentheses).
@@ -564,14 +588,60 @@ def chain(*items: object) -> None:
         _build.order(upstream, downstream, "chain()")
 
 
-class Task(Protocol):
-    """A task handle, as a ``@branch`` function returns: an output or an operator."""
+type Task = object
+"""A task handle, as a ``@branch`` function returns: a task call or an operator.
 
-    @property
-    def _schedr_task_id(self) -> str: ...
+Type checkers read a task call as its value (``Done``, ``Rows``, ...), so any object is
+accepted here; a handle that isn't a direct downstream task fails the branch when it runs.
+"""
 
 
-def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, list[str]]:
+class Chosen(Protocol):
+    """What a call of a ``@branch`` task gives, for type checkers: what it chose, to order.
+
+    ``targets(cfg) >> [to_s3, to_gcs]``: ``>>`` orders it, nothing can be passed.
+    """
+
+    def __rshift__(self, other: object, /) -> object:
+        """``self >> other``: ``other`` runs after it (its edges, selection edges)."""
+        ...
+
+    def __rrshift__(self, other: object, /) -> Chosen:
+        """``[a, b] >> self``: it runs after the tasks in the list."""
+        ...
+
+    def __lshift__(self, other: object, /) -> object:
+        """``self << other``: it runs after ``other``."""
+        ...
+
+    def __rlshift__(self, other: object, /) -> Chosen:
+        """``[a, b] << self``: the tasks in the list run after it."""
+        ...
+
+
+def on[U](output: object, kind: type[U], /) -> U:
+    """``output.on(kind)`` for type checkers, when the class doesn't declare ``.on``.
+
+    ``plain_load(on(fetch(), Plain))`` where ``Plain`` is a plain ``@dataclass`` outcome: it
+    runs exactly as ``fetch().on(Plain)``, and type checkers read it as a ``Plain`` (see
+    ``schedr.Data`` to make ``.on`` itself typed).
+
+    Args:
+        output: A task call (an ``Output`` in a DAG body).
+        kind: One class of its outcome union.
+
+    Returns:
+        The narrowed reference.
+
+    Raises:
+        TypeError: If ``output`` isn't a task's output, or ``kind`` isn't one of its outcomes.
+    """
+    if not isinstance(output, Output):
+        raise TypeError(f"on(): expects a task's output in a DAG body, got {output!r}")
+    return output.on(kind)  # type: ignore[return-value]
+
+
+def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, Chosen]:
     """Makes a function a branch: it chooses which of its direct downstream tasks run.
 
     The function returns the chosen tasks' handles (one, or a list; ``[]`` for none, never
@@ -589,4 +659,4 @@ def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, list[str]]:
         TypeError: If the function can't be a task.
     """
     name: str = getattr(fn, "__name__", "")
-    return TaskFunction(fn, name, _build.TaskOptions(), branch=True)
+    return TaskFunction[P, Chosen](fn, name, _build.TaskOptions(), branch=True)

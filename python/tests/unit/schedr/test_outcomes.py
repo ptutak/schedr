@@ -1,3 +1,5 @@
+import dataclasses
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -7,11 +9,14 @@ import pytest
 from schedr import (
     CommandOperator,
     Dag,
+    Data,
     DefaultOutcome,
     EmptyOperator,
     Outcome,
     RunIf,
     TaskDefaults,
+    TypingHint,
+    on,
     task,
 )
 from schedr._model import registry
@@ -22,22 +27,18 @@ from schedr.types import ProcessResult
 type Validate = Callable[[str, Any], None]
 
 
-@dataclass
-class Rows:
+class Rows(Data):
     rows: list[int]
 
 
-@dataclass
-class Unavailable:
+class Unavailable(Data):
     reason: str
 
 
-@dataclass
-class Page[T]:
+class Page[T](Data):
     items: list[T]
 
 
-@dataclass
 class SpecialRows(Rows):
     pass
 
@@ -475,3 +476,98 @@ def test_an_outcome_goes_only_where_a_str_or_outcome_enum_goes() -> None:
     with Dag("d"), pytest.raises(TypeError, match=r"expects `int`, but `check.outcome` is `str`"):
         wants_int(check().outcome)  # type: ignore[arg-type]
     registry.take_defined()
+
+
+def test_a_data_subclass_is_a_dataclass_with_its_options() -> None:
+    class Frozen(Data, frozen=True, kw_only=True):
+        rows: list[int]
+        note: str = ""
+
+    value = Frozen(rows=[1])
+    assert dataclasses.is_dataclass(value)
+    assert value == Frozen(rows=[1], note="")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        value.rows = []  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        Frozen([1])  # type: ignore[misc]  # kw_only
+    # A subclass of one is a dataclass of its own fields too.
+    assert [f.name for f in dataclasses.fields(SpecialRows)] == ["rows"]
+    assert Rows([1]) == Rows([1])
+
+
+def test_data_refuses_options_that_arent_dataclass_options() -> None:
+    with pytest.raises(TypeError, match=r"`Bad\(Data, \.\.\.\)`: unknown option\(s\) slots"):
+
+        class Bad(Data, slots=True):  # type: ignore[call-arg]
+            x: int
+
+
+def test_plain_outcome_classes_run_but_get_a_typing_hint() -> None:
+    @dataclass
+    class PlainRows:
+        rows: list[int]
+
+    @dataclass
+    class PlainGone:
+        reason: str
+
+    with pytest.warns(TypingHint) as hints:
+        spec = from_return_type(PlainRows | PlainGone | None, "task `fetch`")
+    assert spec.names == ("PlainRows", "PlainGone", "None")
+    assert [str(h.message) for h in hints] == [
+        "task `fetch`: outcome class `PlainRows` derives from neither schedr.Data nor "
+        "schedr.pydantic.Model, so type checkers reject `.on(PlainRows)`; derive it from "
+        "schedr.Data, or write `on(output, PlainRows)`",
+        "task `fetch`: outcome class `PlainGone` derives from neither schedr.Data nor "
+        "schedr.pydantic.Model, so type checkers reject `.on(PlainGone)`; derive it from "
+        "schedr.Data, or write `on(output, PlainGone)`",
+    ]
+
+
+def test_data_outcome_classes_and_data_that_isnt_an_outcome_get_no_hint() -> None:
+    @dataclass
+    class Plain:
+        rows: list[int]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", TypingHint)
+        assert from_return_type(Rows | Unavailable | None, "task `a`").names == (
+            "Rows",
+            "Unavailable",
+            "None",
+        )
+        # Ordinary data: no outcomes, so nothing to narrow.
+        assert from_return_type(Plain, "task `b`") is DEFAULT
+        assert from_return_type(list[Plain | None], "task `c`") is DEFAULT
+
+
+def test_the_on_function_narrows_as_the_method_does() -> None:
+    @dataclass
+    class PlainRows:
+        rows: list[int]
+
+    @dataclass
+    class PlainGone:
+        reason: str
+
+    @task
+    def plain_fetch() -> PlainRows | PlainGone:
+        return PlainRows([1])
+
+    @task
+    def plain_load(rows: PlainRows) -> int:
+        return len(rows.rows)
+
+    with Dag("d"), pytest.warns(TypingHint):
+        plain_load(on(plain_fetch(), PlainRows))
+    assert edges(only_dag()) == [("plain_fetch", "plain_load", "data", ("PlainRows",))]
+
+
+def test_the_on_function_refuses_what_isnt_an_output() -> None:
+    class Gone(Data):
+        reason: str
+
+    with pytest.raises(TypeError, match=r"on\(\): expects a task's output in a DAG body, got 3"):
+        on(3, Rows)
+    with Dag("d"), pytest.raises(TypeError, match=r"`Gone` isn't one of its outcomes"):
+        on(fetch(), Gone)

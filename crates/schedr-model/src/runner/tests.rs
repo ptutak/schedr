@@ -27,6 +27,7 @@ fn file_messages_round_trip() {
             path: "helpers.py".into(),
             dags: vec![],
             error: None,
+            warnings: Vec::new(),
         },
         RunnerMessage::FileParsed {
             path: "broken.py".into(),
@@ -36,6 +37,7 @@ fn file_messages_round_trip() {
                 message: "No module named 'pandas'".into(),
                 traceback: "  File \"broken.py\", line 1".into(),
             }),
+            warnings: Vec::new(),
         },
         RunnerMessage::ParseFinished,
     ] {
@@ -310,5 +312,30 @@ fn fork_server_messages_have_their_wire_shapes() {
     assert_eq!(
         serde_json::to_value(RunnerMode::ForkServer).unwrap(),
         json!("fork_server")
+    );
+}
+
+#[test]
+fn a_parsed_files_warnings_are_read_and_left_out_when_there_are_none() {
+    let with = serde_json::json!({
+        "type": "file_parsed", "path": "sync.py", "dags": [], "error": null,
+        "warnings": ["TypingHint: task `fetch`: outcome class `Rows` ..."]
+    });
+    let RunnerMessage::FileParsed { warnings, .. } = serde_json::from_value(with).unwrap() else {
+        panic!("expected file_parsed")
+    };
+    assert_eq!(
+        warnings,
+        ["TypingHint: task `fetch`: outcome class `Rows` ..."]
+    );
+    let without = RunnerMessage::FileParsed {
+        path: "sync.py".into(),
+        dags: vec![],
+        error: None,
+        warnings: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_value(&without).unwrap(),
+        serde_json::json!({"type": "file_parsed", "path": "sync.py", "dags": [], "error": null})
     );
 }

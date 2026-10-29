@@ -13,7 +13,6 @@ from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, Reference
@@ -99,41 +98,44 @@ def running(values: RunValues) -> Iterator[None]:
         _RUNNING.reset(token)
 
 
-def _current(field: DagCtxField, value: Callable[[RunValues], Any]) -> Any:
-    """A field's value inside a running task, its reference in a DAG body, else an error."""
+def _current[V](field: DagCtxField, value: Callable[[RunValues], V]) -> V:
+    """A field's value inside a running task, its reference in a DAG body, else an error.
+
+    Type checkers read it as the value (``V``) in both places, as they read a task call.
+    """
     values = _RUNNING.get()
     if values is not None:
         return value(values)
     if _build.active() is None:
         raise RuntimeError(_OUTSIDE)
-    return DagCtxReference(field)
+    return DagCtxReference(field)  # type: ignore[return-value]
 
 
 class RunContext:
     """``dag_ctx.run``: the run's information.
 
-    Each field is a reference in the DAG body and a value inside a running task; for type
-    checkers it is ``Any`` (as ``dag_ctx.params`` fields are), since the same expression is
-    used in both places. Reading a field anywhere else raises ``RuntimeError``.
+    Each field is a reference in the DAG body and a value inside a running task; type
+    checkers read it as the value in both (as they read a task call), so it passes to a task
+    taking that type. Reading a field anywhere else raises ``RuntimeError``.
     """
 
     @property
-    def id(self) -> Any:
+    def id(self) -> str:
         """The run's ID (a UUIDv7)."""
         return _current(DagCtxField.RUN_ID, lambda v: v.run_id)
 
     @property
-    def kind(self) -> Any:
+    def kind(self) -> str:
         """The run's kind: ``scheduled``, ``manual``, ``backfill``, ``chained`` or ``event``."""
         return _current(DagCtxField.RUN_KIND, lambda v: v.kind)
 
     @property
-    def planned_for(self) -> Any:
+    def planned_for(self) -> datetime:
         """The moment the run is for (a fire time for scheduled runs)."""
         return _current(DagCtxField.PLANNED_FOR, lambda v: v.planned_for)
 
     @property
-    def since(self) -> Any:
+    def since(self) -> datetime:
         """The start of the run's window, which is ``(since, planned_for]``."""
         return _current(DagCtxField.SINCE, lambda v: v.since)
 
@@ -147,7 +149,7 @@ class DagContext:
         return RunContext()
 
     @property
-    def dag_id(self) -> Any:
+    def dag_id(self) -> str:
         """The DAG's ID."""
         return _current(DagCtxField.DAG_ID, lambda v: v.dag_id)
 

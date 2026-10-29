@@ -437,6 +437,8 @@ struct CheckedFile<'a> {
     path: &'a str,
     dags: Vec<&'a str>,
     error: Option<&'a schedr_model::runner::ErrorSummary>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    warnings: &'a [String],
 }
 
 /// `dags check --json`, with `version_check` when `--against` read the worker list.
@@ -531,6 +533,7 @@ fn write_json(
                 path: &file.path,
                 dags: file.dags.iter().map(|dag| dag.id.as_str()).collect(),
                 error: file.error.as_ref(),
+                warnings: &file.warnings,
             })
             .collect(),
         version_check: version.map(|check| VersionJson {
@@ -548,7 +551,8 @@ fn write_json(
     Ok(())
 }
 
-/// One line per file, then the summary, then the passing `--against` line.
+/// One line per file and one per warning it raised, then the summary, then the passing
+/// `--against` line.
 fn write_text(
     files: &[ParsedFile],
     errors: usize,
@@ -576,6 +580,10 @@ fn write_text(
                     writeln!(out, "         {line}")?;
                 }
             }
+        }
+        // Warnings don't fail the check: the DAG runs as written (e.g. a `TypingHint`).
+        for warning in &file.warnings {
+            writeln!(out, "warn   {}: {warning}", file.path)?;
         }
     }
     let dags: usize = files.iter().map(|file| file.dags.len()).sum();

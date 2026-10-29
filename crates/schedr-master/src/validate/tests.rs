@@ -217,6 +217,7 @@ fn file(path: &str, dags: Vec<Dag>) -> ParsedFile {
         path: path.to_owned(),
         dags,
         error: None,
+        warnings: Vec::new(),
     }
 }
 
@@ -249,6 +250,7 @@ fn valid_files_and_import_errors_are_kept() {
         path: "bad.py".to_owned(),
         dags: vec![dag_with(&json!({}))],
         error: Some(error.clone()),
+        warnings: Vec::new(),
     };
     let good = file("sync.py", vec![dag_with(&json!({}))]);
     let files = validate_files("etl", vec![good.clone(), failed], MASTER);

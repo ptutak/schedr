@@ -87,6 +87,7 @@ pub async fn parse_files<R: ParseRunner>(
                     path,
                     dags: Vec::new(),
                     error: Some(error),
+                    warnings: Vec::new(),
                 });
             }
             Err(SessionEnd::Failed(error)) => return Err(error),
@@ -139,11 +140,21 @@ async fn run_session<S: ParseSession>(
             {
                 current = Some(path);
             }
-            RunnerMessage::FileParsed { path, dags, error } if current.as_ref() == Some(&path) => {
+            RunnerMessage::FileParsed {
+                path,
+                dags,
+                error,
+                warnings,
+            } if current.as_ref() == Some(&path) => {
                 current = None;
                 imported += 1;
                 remaining.pop_front();
-                parsed.push(ParsedFile { path, dags, error });
+                parsed.push(ParsedFile {
+                    path,
+                    dags,
+                    error,
+                    warnings,
+                });
             }
             RunnerMessage::ParseFinished if current.is_none() && remaining.is_empty() => {
                 return Ok(());

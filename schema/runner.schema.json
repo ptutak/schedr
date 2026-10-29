@@ -820,6 +820,13 @@
             "type": {
               "const": "file_parsed",
               "type": "string"
+            },
+            "warnings": {
+              "description": "The Python warnings importing it raised (`Category: message`), e.g. a\n`TypingHint`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [

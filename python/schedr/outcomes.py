@@ -8,7 +8,8 @@ Every task has an outcome enum (see PROJECT.md, Task results and outcomes):
   ``None``), or ``CommandOperator(..., outcomes=Check)`` (the members' values are exit codes);
 - an implicit one from an outcome union: a return type that is a union of two or more
   dataclasses, Pydantic models and ``None`` (``-> Rows | Unavailable``), one outcome per
-  class, named after it (``"None"`` for ``None``).
+  class, named after it (``"None"`` for ``None``). Pydantic models are recognised here, but
+  outputs of them come later (B36): the type model refuses them for now.
 
 In the backend an outcome is a name; the classes and enums exist only here.
 """
@@ -16,12 +17,48 @@ In the backend an outcome is a name; the classes and enums exist only here.
 import dataclasses
 import types
 import typing
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from typing import Any, TypeAliasType, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Protocol,
+    Self,
+    TypeAliasType,
+    Union,
+    dataclass_transform,
+    get_args,
+    get_origin,
+    overload,
+)
 
-__all__ = ["DefaultOutcome", "Outcome", "RunIf"]
+__all__ = ["Data", "DefaultOutcome", "Done", "Outcome", "RunIf", "TypingHint"]
+
+
+class Done(Protocol):
+    """What a call of a task without data gives, for type checkers: something to order.
+
+    A task returning ``None``, an edge on an ``Outcome`` member (``check().on(Check.CHANGED)``)
+    and ``.on(None)`` are typed ``Done``: ``>>`` orders them, nothing can be passed.
+    """
+
+    def __rshift__(self, other: object, /) -> object:
+        """``self >> other``: ``other`` runs after it."""
+        ...
+
+    def __rrshift__(self, other: object, /) -> Done:
+        """``[a, b] >> self``: it runs after the tasks in the list."""
+        ...
+
+    def __lshift__(self, other: object, /) -> object:
+        """``self << other``: it runs after ``other``."""
+        ...
+
+    def __rlshift__(self, other: object, /) -> Done:
+        """``[a, b] << self``: the tasks in the list run after it."""
+        ...
 
 
 class Outcome(IntEnum):
@@ -35,7 +72,102 @@ class Outcome(IntEnum):
         class Check(Outcome):
             CHANGED = 0
             UNCHANGED = 3
+
+    In a DAG body, a call of a task returning one is typed as the enum (its output is
+    ``None``): ``check().on(Check.CHANGED) >> notify``, ``react(check().outcome)``.
     """
+
+    if TYPE_CHECKING:
+        # The call is a reference at run time (an ``Output``), which has these.
+
+        def on(self, *members: Self) -> Done:
+            """The edge taken on these outcomes (see ``Output.on``)."""
+            ...
+
+        @property
+        def outcome(self) -> Self:
+            """The outcome itself as data, for a task taking the enum."""
+            ...
+
+        def __rshift__(self, other: object, /) -> object:  # type: ignore[override]
+            """``self >> other``: ``other`` runs after it."""
+            ...
+
+        def __lshift__(self, other: object, /) -> object:  # type: ignore[override]
+            """``self << other``: it runs after ``other``."""
+            ...
+
+
+class TypingHint(UserWarning):
+    """A DAG that runs as written, but that type checkers will read wrongly.
+
+    E.g. an outcome class deriving from neither ``schedr.Data`` nor ``schedr.pydantic.Model``:
+    ``.on(Cls)`` works when the DAG runs, but type checkers reject it (see ``schedr.on``).
+    ``schedr dags check`` prints these; pytest lists them in its warnings summary.
+    """
+
+
+_DATACLASS_OPTIONS = frozenset({"frozen", "eq", "order", "kw_only", "unsafe_hash", "repr"})
+
+
+@dataclass_transform()
+class Data:
+    """The base of outcome classes: a subclass is a dataclass, and type checkers see ``.on``.
+
+    ``class Rows(Data, frozen=True): rows: list[Row]`` is what ``@dataclass(frozen=True)``
+    would make, with nothing else at run time. Type checkers read a call of a task returning
+    ``Rows | Unavailable`` as that union, so ``.on(Rows)`` (typed ``Rows``) and ``>>`` must
+    come from the class: ``Data`` declares them for type checkers only. Dataclass options
+    are class keywords (``frozen``, ``eq``, ``order``, ``kw_only``, ``unsafe_hash``,
+    ``repr``); ``slots`` isn't one (it makes a new class).
+
+    Ordinary data (not an outcome) stays a plain ``@dataclass``.
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Makes the subclass a dataclass with the given options.
+
+        Raises:
+            TypeError: For an option that isn't a dataclass option this base takes.
+        """
+        options = {k: kwargs.pop(k) for k in list(kwargs) if k in _DATACLASS_OPTIONS}
+        unknown = sorted(kwargs)
+        if unknown:
+            raise TypeError(
+                f"`{cls.__name__}(Data, ...)`: unknown option(s) {', '.join(unknown)}; Data "
+                f"takes the dataclass options {', '.join(sorted(_DATACLASS_OPTIONS))}"
+            )
+        super().__init_subclass__()
+        dataclasses.dataclass(cls, **options)
+
+    if TYPE_CHECKING:
+        # The call is a reference at run time (an ``Output``), which has these.
+
+        @overload
+        def on[U](self, kind: type[U], /) -> U: ...
+        @overload
+        def on[U, V](self, kind: type[U], other: type[V], /) -> U | V: ...
+        @overload
+        def on(self, kind: None, /) -> Done: ...
+        def on(self, *kinds: object) -> object:
+            """Narrows to some of the task's outcome classes (see ``Output.on``)."""
+            ...
+
+        def __rshift__(self, other: object, /) -> object:
+            """``self >> other``: ``other`` runs after it."""
+            ...
+
+        def __rrshift__(self, other: object, /) -> Self:
+            """``[a, b] >> self``: it runs after the tasks in the list."""
+            ...
+
+        def __lshift__(self, other: object, /) -> object:
+            """``self << other``: it runs after ``other``."""
+            ...
+
+        def __rlshift__(self, other: object, /) -> Self:
+            """``[a, b] << self``: the tasks in the list run after it."""
+            ...
 
 
 class DefaultOutcome(Outcome):
@@ -169,10 +301,30 @@ def from_return_type(annotation: object, where: str) -> OutcomeSpec:
     if len(members) < 2 or not all(_is_outcome_member(m) for m in members):  # noqa: PLR2004
         return DEFAULT
     _check_distinct(members, where)
+    _hint_plain_classes(members, where)
     return OutcomeSpec(
         names=tuple(_member_name(m) for m in members),
         classes=tuple(typing.cast("type", m) for m in members),
     )
+
+
+def _hint_plain_classes(members: Sequence[object], where: str) -> None:
+    """Warns about outcome classes type checkers won't see ``.on`` on (see ``TypingHint``)."""
+    for member in members:
+        target = get_origin(member) or member
+        if member is types.NoneType or not isinstance(target, type):
+            continue
+        if issubclass(target, Data) or getattr(target, "_schedr_outcome_model", False):
+            continue
+        base = "schedr.Data" if dataclasses.is_dataclass(target) else "schedr.pydantic.Model"
+        warnings.warn(
+            TypingHint(
+                f"{where}: outcome class `{target.__name__}` derives from neither schedr.Data "
+                f"nor schedr.pydantic.Model, so type checkers reject `.on({target.__name__})`; "
+                f"derive it from {base}, or write `on(output, {target.__name__})`"
+            ),
+            stacklevel=2,
+        )
 
 
 def _check_distinct(members: Sequence[object], where: str) -> None:

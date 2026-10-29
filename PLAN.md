@@ -277,8 +277,10 @@ follows. **Reviews (52A, refined by the user 2026-10-28):** steps are split into
 reviews a batch of about five sub-steps at once, then writes the guide for them. Sub-steps
 built before the 2026-10-30 reset go into the whole-repository review. The order puts the result model first (everything graph-like
 builds on it), the agent channel before what talks over it, and the watcher host after async
-functions. Claude implements each step; Grok reviews it and updates the guide (from the
-2026-10-30 reset on).
+functions. Claude implements each step and updates the guide. **Grok reviews** (the user,
+2026-10-29): one during the 2026-10-29 session (on the $5 of credits), then Friday's
+whole-repository review (below); later M4 reviews planned after it. This replaces the batch
+reviews of about five sub-steps.
 
 | Step | Contents | Done when |
 |---|---|---|

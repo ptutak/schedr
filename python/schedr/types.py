@@ -7,7 +7,7 @@ parse-time check (see PROJECT.md, Output serialization).
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self
 
 KiB = 1024
 """One kibibyte, in bytes."""
@@ -60,3 +60,22 @@ class ProcessResult:
     exit_code: int
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+
+    if TYPE_CHECKING:
+        # In a DAG body a command's output is a reference (an ``Output``), which orders.
+
+        def __rshift__(self, other: object, /) -> object:
+            """``self >> other``: ``other`` runs after the command."""
+            ...
+
+        def __rrshift__(self, other: object, /) -> Self:
+            """``[a, b] >> self``: the command runs after the tasks in the list."""
+            ...
+
+        def __lshift__(self, other: object, /) -> object:
+            """``self << other``: the command runs after ``other``."""
+            ...
+
+        def __rlshift__(self, other: object, /) -> Self:
+            """``[a, b] << self``: the tasks in the list run after the command."""
+            ...

@@ -22,8 +22,9 @@ from schedr._model import (
     Template,
 )
 from schedr._templates import is_tstring, to_template
-from schedr.outcomes import Outcome, RunIf, for_command
+from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
 from schedr.tasks import Output
+from schedr.types import ProcessResult
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -55,26 +56,13 @@ class Operator:
     def _schedr_task_id(self) -> str:
         return self._task_id
 
-    @property
-    def output(self) -> Output[Any]:
-        """The task's output, as a reference."""
-        return Output(self._task_id)
+    def _on(self, members: tuple[Outcome, ...]) -> Output[Any]:
+        """The task's output narrowed to ``members`` (see ``Output.on``)."""
+        return Output[Any](self._task_id).on(*members)
 
-    def on(self, *members: Outcome) -> Output[Any]:
-        """The task's output, depended on only for these outcomes (see ``Output.on``).
-
-        Args:
-            *members: Members of its ``outcomes=`` enum (``DefaultOutcome.SUCCESS`` without).
-
-        Returns:
-            The narrowed reference, e.g. ``probe.on(Check.CHANGED) >> notify``.
-        """
-        return self.output.on(*members)
-
-    @property
-    def outcome(self) -> Any:
-        """The task's outcome as data, for a task taking its ``Outcome`` enum."""
-        return self.output.outcome
+    def _outcome(self) -> object:
+        """The task's outcome as data (see ``Output.outcome``)."""
+        return Output[Any](self._task_id).outcome
 
     def __rshift__(self, other: object) -> object:
         """``self >> other``: ``other`` runs after this task.
@@ -117,7 +105,7 @@ class Operator:
         return f"{type(self).__name__}({self._task_id!r})"
 
 
-class CommandOperator(Operator):
+class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     """Runs an inline command.
 
     A string or a t-string is run by a shell; in a t-string every interpolated value is
@@ -138,7 +126,8 @@ class CommandOperator(Operator):
         max_output_size: The output size limit in bytes (per stream).
         outcomes: An ``Outcome`` enum: its members' values are the exit codes meaning them
             (each a success with that outcome, any other code a failure). Default: ``SUCCESS``
-            on 0.
+            on 0. Type checkers then read the operator as ``CommandOperator[Check]``: ``.on``
+            takes that enum's members and ``.outcome`` is one.
         run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
 
     Raises:
@@ -158,7 +147,7 @@ class CommandOperator(Operator):
         timeout: timedelta | None = None,
         queue: str | None = None,
         max_output_size: int | None = None,
-        outcomes: type[Outcome] | None = None,
+        outcomes: type[E] | None = None,
         run_if: RunIf | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
@@ -200,14 +189,35 @@ class CommandOperator(Operator):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
 
     @property
-    def stdout(self) -> Output[str]:
-        """The command's standard output, as a reference."""
-        return Output(self._task_id, ("stdout",))
+    def output(self) -> ProcessResult:
+        """The command's output: a reference, read by type checkers as its value."""
+        return Output[ProcessResult](self._task_id)  # type: ignore[return-value]
+
+    def on(self, *members: E) -> ProcessResult:
+        """The output, depended on only for these outcomes (see ``Output.on``).
+
+        Args:
+            *members: Members of its ``outcomes=`` enum (``DefaultOutcome.SUCCESS`` without).
+
+        Returns:
+            The narrowed reference, e.g. ``probe.on(Check.CHANGED) >> notify``.
+        """
+        return self._on(members)  # type: ignore[return-value]
 
     @property
-    def stderr(self) -> Output[str]:
-        """The command's standard error, as a reference."""
-        return Output(self._task_id, ("stderr",))
+    def outcome(self) -> E:
+        """The command's outcome as data, for a task taking its ``Outcome`` enum."""
+        return self._outcome()  # type: ignore[return-value]
+
+    @property
+    def stdout(self) -> str:
+        """The command's standard output: a reference, read by type checkers as its value."""
+        return Output[str](self._task_id, ("stdout",))  # type: ignore[return-value]
+
+    @property
+    def stderr(self) -> str:
+        """The command's standard error: a reference, read by type checkers as its value."""
+        return Output[str](self._task_id, ("stderr",))  # type: ignore[return-value]
 
 
 class EmptyOperator(Operator):
@@ -229,3 +239,24 @@ class EmptyOperator(Operator):
         builder.add_task(
             task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions(run_if=run_if)
         )
+
+    @property
+    def output(self) -> Done:
+        """Its output (``None``): a reference, to order with ``>>``."""
+        return Output[None](self._task_id)
+
+    def on(self, *members: DefaultOutcome) -> Done:
+        """Depends on it only for these outcomes (it has only ``SUCCESS``; see ``Output.on``).
+
+        Args:
+            *members: ``DefaultOutcome.SUCCESS``.
+
+        Returns:
+            The narrowed reference, to order with ``>>``.
+        """
+        return self._on(members)
+
+    @property
+    def outcome(self) -> DefaultOutcome:
+        """Its outcome as data (always ``SUCCESS``), for a task taking ``DefaultOutcome``."""
+        return self._outcome()  # type: ignore[return-value]

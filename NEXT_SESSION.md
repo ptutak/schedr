@@ -61,10 +61,12 @@ Today's commits, oldest first:
 
 - **Steps are split into small sub-steps** (M4.2b, M4.2c, ...). Each is committed after
   Claude's own review, with mutation-checked tests (every regression test shown failing with
-  its fix undone). **Grok reviews a batch of about five sub-steps** (read-only, throwaway
-  proof tests), then writes the guide for them. Every Grok finding is verified before acting;
-  the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **57**), lettered options, the recommended one first,
+  its fix undone). **Grok reviews** (the user, 2026-10-29): one during the 2026-10-29
+  session (on the $5 of credits), then Friday's whole-repository review; later M4 reviews to
+  be planned then. No batch reviews of about five sub-steps. Read-only with throwaway proof
+  tests. Claude writes the guide for each step. Every Grok finding is verified before
+  acting; the rejected ones are reported with why.
+- **Decisions:** numbered (the next is **59**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
@@ -95,7 +97,7 @@ Today's commits, oldest first:
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B36); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B37); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.

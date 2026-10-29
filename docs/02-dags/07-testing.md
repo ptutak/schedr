@@ -31,8 +31,19 @@ the exception type and the message, then the traceback indented under the path. 
 summary counts that file, and the process exits 1. Exit 0 means every file imported.
 Exit 2 is wrong usage.
 
-`--json` prints `{"files": [{"path", "dags", "error"}]}`. `dags` is the list of DAG IDs.
-`error` is `null` or an object with `exception`, `message` and `traceback`.
+A Python warning raised while a file is imported follows that file's line, as `warn`, three
+spaces, the path, the warning's category and its message. A `TypingHint` always shows;
+others as the interpreter's warning filters let them through. Warnings don't fail the check.
+
+```
+ok     fetch.py: fetch_rows (2 tasks)
+warn   fetch.py: TypingHint: task `fetch`: outcome class `Rows` derives from neither schedr.Data nor schedr.pydantic.Model, so type checkers reject `.on(Rows)`; derive it from schedr.Data, or write `on(output, Rows)`
+1 file(s), 1 DAG(s), 0 error(s)
+```
+
+`--json` prints `{"files": [{"path", "dags", "error", "warnings"}]}`. `dags` is the list of
+DAG IDs. `error` is `null` or an object with `exception`, `message` and `traceback`.
+`warnings`, a list of `Category: message` strings, is there only when the file raised any.
 
 `schedr dags check --against <server URL>` reads that server's workers
 (`GET /api/v1/workers`) after the file report. It fails, exit 1, when this `schedr` is

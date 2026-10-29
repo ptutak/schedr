@@ -189,6 +189,7 @@ fn parsed(path: &str, error: bool) -> ParsedFile {
             message: "boom".to_owned(),
             traceback: "sync.py:1\n".to_owned(),
         }),
+        warnings: Vec::new(),
     }
 }
 
@@ -473,4 +474,33 @@ async fn remember_auth(
         .map(str::to_owned);
     *seen.lock().unwrap() = header;
     next.run(request).await
+}
+
+#[test]
+fn a_files_warnings_are_listed_after_it_and_dont_fail_the_check() {
+    let mut warned = parsed("sync.py", false);
+    warned.warnings = vec!["TypingHint: task `fetch`: outcome class `Rows` ...".to_owned()];
+    let mut out = Vec::new();
+    finish_check(
+        &[warned.clone(), parsed("util.py", false)],
+        None,
+        false,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "ok     sync.py: no DAGs\n\
+         warn   sync.py: TypingHint: task `fetch`: outcome class `Rows` ...\n\
+         ok     util.py: no DAGs\n\
+         2 file(s), 0 DAG(s), 0 error(s)\n"
+    );
+    let mut out = Vec::new();
+    finish_check(&[warned, parsed("util.py", false)], None, true, &mut out).unwrap();
+    let report: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+    assert_eq!(
+        report["files"][0]["warnings"],
+        serde_json::json!(["TypingHint: task `fetch`: outcome class `Rows` ..."])
+    );
+    assert!(report["files"][1].get("warnings").is_none(), "{report}");
 }

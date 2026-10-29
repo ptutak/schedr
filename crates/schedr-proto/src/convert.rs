@@ -57,7 +57,8 @@ pub fn parsed_file_to_proto(file: &ParsedFile) -> pb::ParsedFile {
     }
 }
 
-/// A parsed file from its protocol form.
+/// A parsed file from its protocol form (without its warnings, which the protocol doesn't
+/// carry).
 ///
 /// # Errors
 ///
@@ -84,6 +85,8 @@ pub fn parsed_file_from_proto(file: pb::ParsedFile) -> Result<ParsedFile, Conver
             traceback: e.traceback,
         }),
         path: file.path,
+        // Not in the protocol: only `schedr dags check` shows them.
+        warnings: Vec::new(),
     })
 }
 

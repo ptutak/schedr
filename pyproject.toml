@@ -25,6 +25,10 @@ dev = [
     "pre-commit>=4.0",
     "pyyaml==6.0.3",
     "jsonschema>=4.25",
+    # Type-checks DAG code as an editor does (`make lint`, over examples/; decision 57).
+    "basedpyright==1.40.2",
+    # Tests `schedr.pydantic.Model` and Pydantic outcome unions; never a runtime dependency.
+    "pydantic==2.14.1",
 ]
 # The web UI's browser tests (`make test-ui`, decision 27A); not in `uv sync`'s default.
 ui-test = [
@@ -108,6 +112,20 @@ strict = true
 mypy_path = "python"
 packages = ["schedr"]
 
+# --- basedpyright ---------------------------------------------------------
+# DAG code as an editor reads it (decision 57): the examples and the typing checks, in
+# basedpyright's default (strictest) mode. Off: what DAG code does on purpose.
+[tool.basedpyright]
+include = ["examples", "python/tests/typing"]
+# The DAG files only: the examples' own tests are pytest code.
+exclude = ["examples/**/test_*.py", "examples/**/conftest.py"]
+extraPaths = ["python"]
+pythonVersion = "3.14"
+failOnWarnings = true
+# `a >> b` and `CommandOperator(...)` are statements: they record a dependency or a task.
+reportUnusedExpression = false
+reportUnusedCallResult = false
+
 # --- pytest -------------------------------------------------------------
 [tool.pytest.ini_options]
 # python/tests/ui needs the `ui-test` group and a browser: `make test-ui` runs it.
@@ -117,6 +135,11 @@ pythonpath = ["python"]
 # need no __init__.py (see PROJECT.md, Repository and tooling: Testing).
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = ["integration: tests that spawn processes or touch the filesystem"]
+# Tests and examples write outcome classes as type checkers read them (decision 57); a test
+# about a plain class expects the hint with `pytest.warns`. Matched by its message (a
+# `TypingHint` is a `UserWarning`): naming the class would import schedr before coverage
+# starts. `.` stands for the `:` the filter syntax can't hold.
+filterwarnings = ["error:task [^ ]+. outcome class:UserWarning"]
 
 [tool.coverage.run]
 # Forked processes (the fork server's shims and children, in tests) save their data.

@@ -3675,10 +3675,52 @@ User code can never change scheduling behaviour (skips, branching, retries) from
 - **Data flow defines dependencies.** Calling a task inside a DAG returns an **output
   reference**; passing it to another task (as an argument, or inside a t-string) creates the
   dependency. `>>` remains for **order-only** dependencies (no data passed).
-- **Typing of calls.** A `@task` returning `T` gives an **`Output[T]`** when called. Arguments
-  receiving an `Output[T]` instead of `T` can't be expressed in Python's type system without a
-  plugin, so they are **checked at parse time** (see Output serialization); a mypy plugin may
-  come later.
+- **Typing of calls: type checkers read a call as its value** (decision 57, the user's,
+  2026-10-29; A + bases). At run time a call in a DAG body gives an `Output` (a reference);
+  for type checkers a `@task` returning `T` gives **`T`**, so it passes to a task taking `T`
+  and its fields are typed, in mypy `--strict` and pyright / basedpyright alike, without a
+  plugin. Python's typing can't say "an `Output[T]` is also a `T`" (no intersection types,
+  no mapping over a `ParamSpec`'s parameters), so the DAG methods come from the value's
+  side:
+  - **Outcome classes derive from `schedr.Data`** (a `dataclass_transform` base: the
+    subclass is a dataclass, options as class keywords, `class Rows(Data, frozen=True)`) or
+    **`schedr.pydantic.Model`** (a `BaseModel`, imported only with Pydantic; one base, as
+    basedpyright refuses `BaseModel` and another base with an `__init__` together). Both
+    declare `.on(...)` (typed as the narrowed class), `>>` and `<<` for type checkers only.
+    Ordinary data stays a plain `@dataclass` / `BaseModel`.
+  - **A plain outcome class stays allowed** (57.1 B): it runs as written; type checkers
+    then need `schedr.on(output, Cls)` (typed `Cls`), and loading the file raises a
+    `schedr.TypingHint` warning naming the class, which `schedr dags check` prints (57.4:
+    the runner returns the warnings an import raised with the file's result, as `warnings`
+    on `file_parsed`; not sent to the master) and pytest lists. Not chosen: an error (A:
+    one kind of outcome class, but no way to keep plain classes).
+  - **Calls without data are handles:** a task returning `None` gives `Done` (chosen by
+    `@task`'s overloads, so a wrong argument is still a plain argument error), a `@branch`
+    call `Chosen`, `.on(None)` and an enum outcome's `.on(member)` `Done`; each has `>>`.
+    `Outcome` enums declare `.on`, `.outcome` (typed as the enum) and `>>`;
+    `CommandOperator` is generic in its `outcomes=` enum (`.on` takes its members,
+    `.outcome` is one; `.on(...)`, `.output` a `ProcessResult`, `.stdout` a `str`);
+    `ProcessResult` declares `>>`. `Task` (a branch's return annotation) is `object`.
+  - **`dag_ctx` fields are typed as their values** (`datetime`, `str`).
+  - **What only loading the file checks:** an output used as a value in the DAG body (`if
+    rows:`, `len(rows)`: type checkers read `rows` as the value and accept them), `None`
+    from an edge that may be skipped, outcomes and graph rules. Writing DAGs (Type
+    checkers) says so.
+  - **Gaps:** `>>` between two values of builtin types (`rows >> counts`) needs `chain()`;
+    a branch's returned handles aren't checked (`Task` is `object`; the branch fails when
+    it runs).
+  - **Checked:** `make lint` runs mypy `--strict` and basedpyright (its default, strictest
+    mode, with `reportUnusedExpression` and `reportUnusedCallResult` off: `a >> b` and an
+    operator alone on a line are statements on purpose) over the example DAGs and
+    `python/tests/typing/dag_types.py`, whose expected mistakes carry ignore comments that
+    must stay needed (57.3). basedpyright is pointed at `pyproject.toml` (`--project`): a
+    `pyrightconfig.json` in a parent directory would win otherwise.
+  - Not chosen: B `Output` typed as a subclass of `Any` (accepted everywhere: no argument
+    checked); D′ calls kept as `Output[T]` with `.value` for each data pass and `.on(Cls)`
+    typed `Cls` (every plain pass grows); C a mypy plugin (mypy only: editors on pyright get
+    nothing); a `types-schedr` stubs package (the same typing language, so no more
+    expressive, plus drift); a per-task `@task(typed=False)` typed `Any` (57.2: the user,
+    for the same reason as B).
 - **IDs.** The DAG ID is an **explicit, required string**. A task ID defaults to the **function
   name** for `@task` and is **required** for operators. Duplicate IDs are a parse error.
   **Using a `@task` function more than once** in a DAG (e.g. in a loop): `fn.override(task_id=
@@ -4129,8 +4171,8 @@ task data: "data flow is the only way to pass task data" still holds).
 - **Values at run time:** while the runner calls a task's function, `dag_ctx` gives the
   values (`planned_for` / `since` as aware `datetime`s in UTC), set with a context variable
   for the call only; everywhere else (DAG body, tests outside a run) it gives references.
-  Because the same expression is both, the fields are typed `Any` for type checkers (as
-  `dag_ctx.params` fields will be).
+  Type checkers read them as the values in both places (`datetime`, `str`; decision 57), as
+  they read a task call.
 
 **Declaring parameters.**
 
@@ -5577,8 +5619,8 @@ and no cluster. Four levels, from cheapest to fullest.
     each with pytest tests using plain calls, `task_context` and `run_dag`. They run with
     the integration tests (`make test-integration`, CI's `integration` job: they need the
     binary). Ruff checks them like the package (docstrings on their tasks are left to the
-    author); mypy doesn't: a DAG passes `Output[T]` where a task takes `T`, which needs the
-    mypy plugin that may come later (see Native API: typing of calls).
+    author), and mypy `--strict` and basedpyright check the DAG files (not their tests;
+    decision 57, see Native API: typing of calls).
   - **Step by step:** `with run_dag(..., step=True) as run: for task in run: ...` yields each
     task as it reaches a final state; the master **starts no new task until the test
     continues**, so a test sees each result (and outside state, e.g. "the file is in the
@@ -6261,6 +6303,11 @@ Rust crates chosen for the implementation (versions pinned when added):
 
 Not chosen: `chrono` + `chrono-tz` (weaker DST handling); `diesel` / compile-time `sqlx` macros
 (two backends); `actix-web` (a second async stack). The Python package stays dependency-free.
+
+**Python dev tools added with decision 57** (2026-10-29, dev group only): `basedpyright`
+1.40.2 (2026-10-04; brings `nodejs-wheel-binaries` 24.19.0) checks DAG code as an editor does;
+`pydantic` 2.14.1 (2026-10-11; brings `pydantic-core` 2.50.1, `annotated-types` 0.8.0,
+`typing-inspection` 0.4.4) tests `schedr.pydantic.Model`. Each meets the library-age rule.
 
 **Library ages** (decided 2026-10-26, B15, the user): a new major or minor version (its `x.y.0`)
 must be at least 7 days old; a patch on a minor that already qualifies may move once it is 3

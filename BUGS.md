@@ -9,6 +9,19 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B36: Pydantic models are named as outputs and outcomes, but the type model refuses them
+
+- **Found:** 2026-10-29, while testing `schedr.pydantic.Model` (decision 57). A task returning
+  `Remote | Missing` (Pydantic models) fails at parse time: "`Remote` is not supported".
+  PROJECT.md (Output serialization) says "Pydantic models come with M4 (they need their own
+  type descriptor)", but no M4 step in PLAN.md lists that work, while M4.1's text and
+  `python/schedr/outcomes.py`'s docstring name Pydantic models in outcome unions.
+- **Effect:** Pydantic models can be neither outputs nor outcomes yet; `schedr.pydantic.Model`
+  (and the outcome union's detection of `BaseModel`) wait for them.
+- **Plan:** schedule Pydantic outputs (the type descriptor, `model_dump(mode="json")` /
+  `model_validate`, PROJECT.md's Dataclasses and Pydantic models) as an M4 step; until then
+  the docstring says they come later.
+
 ## B35: a parse upload refused for its size is retried forever, never shown as an import error (Suspected)
 
 - **Found:** 2026-10-29, by the review of B30's fix (by reading). A refused upload

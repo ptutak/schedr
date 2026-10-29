@@ -293,6 +293,7 @@ impl Database {
                         .map(|e| from_json("parse_files.error", &e))
                         .transpose()?,
                     path,
+                    warnings: Vec::new(),
                 })
             })
             .collect()

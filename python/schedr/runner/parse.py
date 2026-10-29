@@ -12,10 +12,12 @@ import os
 import re
 import sys
 import traceback
+import warnings
 from pathlib import Path
 from typing import Any
 
 from schedr._model import Dag, registry
+from schedr.outcomes import TypingHint
 from schedr.runner.protocol import Channel
 
 TRACEBACK_LINES = 20
@@ -122,14 +124,24 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
         path: The file's path relative to the root.
 
     Returns:
-        The message, with the DAG JSON of each DAG, or the import error.
+        The message, with the DAG JSON of each DAG, or the import error, and the warnings
+        importing it raised (``Category: message``; a ``TypingHint`` always, others as the
+        interpreter's warning filters let them through).
     """
-    try:
-        dags = import_dag_file(root, root_dir, path)
-        documents = [d.to_json() for d in dags]
-    except (Exception, SystemExit) as e:
-        return {"type": "file_parsed", "path": path, "dags": [], "error": import_error(e)}
-    return {"type": "file_parsed", "path": path, "dags": documents, "error": None}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", TypingHint)
+        try:
+            dags = import_dag_file(root, root_dir, path)
+            documents = [d.to_json() for d in dags]
+            error = None
+        except (Exception, SystemExit) as e:
+            documents, error = [], import_error(e)
+    message: dict[str, Any] = {"type": "file_parsed", "path": path, "dags": documents}
+    message["error"] = error
+    shown = [f"{w.category.__name__}: {w.message}" for w in caught]
+    if shown:
+        message["warnings"] = list(dict.fromkeys(shown))
+    return message
 
 
 def extend_sys_path(entries: list[str]) -> None:

@@ -28,26 +28,22 @@ DAG = """
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from schedr import Dag, Outcome, dag_ctx, task
+from schedr import Dag, Data, Outcome, dag_ctx, task
 
-@dataclass
-class Rows:
+class Rows(Data):
     rows: list[int]
 
-@dataclass
-class Gone:
+class Gone(Data):
     reason: str
 
 class Check(Outcome):
     CHANGED = 0
     UNCHANGED = 3
 
-@dataclass
-class Primary:
+class Primary(Data):
     n: int
 
-@dataclass
-class Mirror:
+class Mirror(Data):
     n: int
 
 @task

@@ -9,8 +9,8 @@ from importlib.metadata import version
 from schedr.context import dag_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.operators import CommandOperator, EmptyOperator
-from schedr.outcomes import DefaultOutcome, Outcome, RunIf
-from schedr.tasks import Output, Task, branch, chain, task
+from schedr.outcomes import Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
+from schedr.tasks import Chosen, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
 
@@ -20,10 +20,13 @@ __all__ = [
     "MONTHLY",
     "WEEKLY",
     "YEARLY",
+    "Chosen",
     "CommandOperator",
     "Cron",
     "Dag",
+    "Data",
     "DefaultOutcome",
+    "Done",
     "EmptyOperator",
     "Every",
     "KiB",
@@ -35,9 +38,11 @@ __all__ = [
     "Task",
     "TaskDefaults",
     "Trigger",
+    "TypingHint",
     "branch",
     "chain",
     "dag_ctx",
+    "on",
     "task",
 ]
 __version__ = version("schedr")

@@ -1,10 +1,9 @@
 """Routing by outcome: a union of dataclasses, a command's exit codes, and a branch."""
 
-from dataclasses import dataclass
-
 from schedr import (
     CommandOperator,
     Dag,
+    Data,
     EmptyOperator,
     Outcome,
     RunIf,
@@ -14,15 +13,13 @@ from schedr import (
 )
 
 
-@dataclass(frozen=True)
-class Rows:
+class Rows(Data, frozen=True):
     """Rows fetched from one source."""
 
     rows: list[dict[str, str]]
 
 
-@dataclass(frozen=True)
-class Unavailable:
+class Unavailable(Data, frozen=True):
     """The source could not be reached."""
 
     reason: str

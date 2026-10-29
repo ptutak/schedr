@@ -30,7 +30,9 @@ flowchart LR
    server, then the bare one, then a new process. `schedr dags check` starts a new process
    and does not ask the fork servers. The native API only *records* DAGs while a file is
    imported; no task runs. A file that takes longer than `[dags] parse_file_timeout` (60 s)
-   is an import error.
+   is an import error. The runner also returns the Python warnings each import raised (a
+   `TypingHint` for an outcome class type checkers can't narrow, for example). Only
+   `schedr dags check` shows them; the agent doesn't upload them.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file with a unary call.
    The master validates them and stores a new DAG version for each DAG that changed. A new
    DAG is stored **paused**. The whole root goes in one message, which the master accepts up

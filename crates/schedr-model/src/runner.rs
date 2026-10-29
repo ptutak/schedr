@@ -73,6 +73,10 @@ pub struct ParsedFile {
     pub dags: Vec<Dag>,
     /// Why importing it failed, if it did.
     pub error: Option<ErrorSummary>,
+    /// The Python warnings importing it raised (`Category: message`), for `schedr dags
+    /// check`; neither uploaded to the master nor stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A message from the runner to the agent.
@@ -99,6 +103,10 @@ pub enum RunnerMessage {
         dags: Vec<Dag>,
         /// Why importing it failed, if it did; then `dags` is empty.
         error: Option<ErrorSummary>,
+        /// The Python warnings importing it raised (`Category: message`), e.g. a
+        /// `TypingHint`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     /// Every requested file was handled.
     ParseFinished,

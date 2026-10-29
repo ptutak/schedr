@@ -195,6 +195,49 @@ def test_file_result_for_success_and_failure(
     assert exited["error"]["exception"] == "SystemExit"
 
 
+PLAIN_OUTCOMES = """
+import warnings
+from dataclasses import dataclass
+from schedr import Dag, task
+
+@dataclass
+class Rows:
+    rows: list[str]
+
+@dataclass
+class Gone:
+    reason: str
+
+warnings.warn("custom note", UserWarning, stacklevel=1)
+
+with Dag("plain"):
+    @task
+    def fetch() -> Rows | Gone: ...
+    fetch()
+"""
+
+
+def test_the_warnings_importing_a_file_raised_come_with_its_result(
+    root: Path, validate_runner_message: Callable[[Any], None]
+) -> None:
+    (root / "plain.py").write_text(PLAIN_OUTCOMES)
+    result = file_result("etl", root, "plain.py")
+    assert result["error"] is None
+    assert result["dags"][0]["id"] == "plain"
+    assert result["warnings"] == [
+        "UserWarning: custom note",
+        "TypingHint: task `fetch`: outcome class `Rows` derives from neither schedr.Data nor "
+        "schedr.pydantic.Model, so type checkers reject `.on(Rows)`; derive it from "
+        "schedr.Data, or write `on(output, Rows)`",
+        "TypingHint: task `fetch`: outcome class `Gone` derives from neither schedr.Data nor "
+        "schedr.pydantic.Model, so type checkers reject `.on(Gone)`; derive it from "
+        "schedr.Data, or write `on(output, Gone)`",
+    ]
+    validate_runner_message(result)
+    # A file without any leaves the key out.
+    assert "warnings" not in file_result("etl", root, "team_a/sync.py")
+
+
 def test_a_helper_module_reports_no_dags(root: Path) -> None:
     assert file_result("etl", root, "helpers.py")["dags"] == []
 

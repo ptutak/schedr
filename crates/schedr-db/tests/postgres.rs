@@ -92,6 +92,7 @@ fn files() -> Vec<ParsedFile> {
             path: "sync.py".to_owned(),
             dags: vec![dag()],
             error: None,
+            warnings: Vec::new(),
         },
         ParsedFile {
             path: "bad.py".to_owned(),
@@ -101,6 +102,7 @@ fn files() -> Vec<ParsedFile> {
                 message: "no module".to_owned(),
                 traceback: "...".to_owned(),
             }),
+            warnings: Vec::new(),
         },
     ]
 }

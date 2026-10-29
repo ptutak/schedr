@@ -48,6 +48,7 @@ fn upload(hash: &str, files: Vec<(&str, Vec<Dag>)>) -> ParseUpload {
                 path: path.to_owned(),
                 dags,
                 error: None,
+                warnings: Vec::new(),
             })
             .collect(),
     }

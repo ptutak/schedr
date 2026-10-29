@@ -39,6 +39,12 @@ exist only in Python.
 `SUCCESS` is `DefaultOutcome.SUCCESS`. Users never write the pair: they write return
 types, `outcomes=` and `.on(...)`; the runner (Python) or the agent (commands) builds it.
 
+Outcome classes derive from `schedr.Data` (`class Rows(Data, frozen=True)`, a dataclass),
+so type checkers accept `.on(Rows)`; a plain `@dataclass` works too, with a `TypingHint`
+warning and `on(output, Rows)` for type checkers (see [Type checkers](09-type-checkers.md)).
+Pydantic models are recognised as outcome members, but outputs of them come later: a task
+returning one is refused for now.
+
 A union is an outcome union only at the **top level**, and only of dataclasses, Pydantic
 models and `None`. `int | None`, `int | str`, `Rows | int` and `list[Rows | Unavailable]`
 are ordinary data with outcome `SUCCESS`. Members that are subclasses of one another, the

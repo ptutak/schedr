@@ -136,6 +136,7 @@ fn parsed_files_round_trip() {
             message: "no module".to_owned(),
             traceback: "Traceback ...".to_owned(),
         }),
+        warnings: Vec::new(),
     };
     let proto = parsed_file_to_proto(&failed);
     assert_eq!(

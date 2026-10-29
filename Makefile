@@ -49,10 +49,15 @@ fmt-check:       ## Verify formatting without changing files
 	cargo fmt --all -- --check
 	uv run ruff format --check python examples
 
-lint:            ## Run clippy, ruff and mypy
+# DAG code as authors write it (decision 57): the example DAGs and the typing checks.
+DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py
+
+lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG code
 	cargo clippy --workspace --all-targets -- -D warnings
 	uv run ruff check python examples
 	uv run mypy
+	uv run mypy --strict $(DAG_TYPED)
+	uv run basedpyright --project pyproject.toml
 
 schema:          ## Regenerate the committed files under schema/
 	cargo xtask schema
