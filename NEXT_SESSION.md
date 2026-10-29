@@ -186,3 +186,8 @@ Today's commits, oldest first:
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+
+## Dev notes
+- When using UI, when I click on "Trigger" sometimes the UI hangs and I cannot see that anything is happening briefly, then it's unstuck and properly triggers a DAG, the same thing happens when clicking on other links, the page briefly freezes. When I look at "Inspect" I can see the request is in a "Pending" state
+- When a DAG runs I can see a task step in a "Scheduled" state for quite a long time before it ends up in a SUCCESS state. The timings show that in fact it finished the next second before the upstream task but I couldn't see that in the UI.
