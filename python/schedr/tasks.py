@@ -24,7 +24,6 @@ from schedr._model import (
     OutputRef,
     PythonKind,
     Reference,
-    RefValue,
     ScalarType,
     TemplateValue,
     Value,
@@ -425,25 +424,22 @@ class TaskFunction[**P, R]:
         except TypeModelError as e:
             raise TypeModelError(f"{where}: parameter type `{label(annotation)}`: {e}") from None
         converted = _build.to_value(value, where, upstream)
-        for reference in converted.references():
-            _build.reference_type(builder, reference, where)
         for template in _build.templates_in(converted):
             _build.check_template_references(builder, template, where)
         if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
             raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
-        # Whether a reference may get None is known once the DAG is complete.
-        builder.none_checks.extend(
-            (task_id, where, reference, at)
-            for reference, at in _build.typed_references(converted, expected)
-        )
-        if isinstance(converted, RefValue):
-            produced = _build.reference_type(builder, converted.reference, where)
-            if not is_assignable(produced, expected):
+        # Each reference, at any depth, against the type of the place it fills.
+        for reference, at in _build.typed_references(converted, expected):
+            produced = _build.reference_type(builder, reference, where)
+            if not is_assignable(produced, at):
                 raise TypeError(
-                    f"{where}: expects `{type_name(expected)}`, but "
-                    f"`{_build.reference_label(converted.reference)}` is `{type_name(produced)}`"
+                    f"{where}: expects `{type_name(at)}`, but "
+                    f"`{_build.reference_label(reference)}` is `{type_name(produced)}`"
                 )
-        elif isinstance(converted, LiteralValue):
+            # Whether it may get None is known once the DAG is complete.
+            if isinstance(reference, OutputRef | OutcomeRef):
+                builder.none_checks.append((task_id, where, reference, at))
+        if isinstance(converted, LiteralValue):
             try:
                 converted = LiteralValue(encode(value, annotation))
             except CodecError as e:

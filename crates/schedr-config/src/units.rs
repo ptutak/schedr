@@ -124,27 +124,36 @@ pub fn deserialize_duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration,
     d.deserialize_str(DurationVisitor)
 }
 
+/// A serde `deserialize_with` helper for size fields.
+///
+/// # Errors
+///
+/// Fails for a value that isn't a string, or a string [`parse_size`] rejects.
+pub fn deserialize_size<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    struct SizeVisitor;
+
+    impl Visitor<'_> for SizeVisitor {
+        type Value = u64;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a size string such as `4MiB` or `10GiB`")
+        }
+
+        fn visit_str<E: de::Error>(self, s: &str) -> Result<u64, E> {
+            parse_size(s).map_err(E::custom)
+        }
+    }
+
+    d.deserialize_str(SizeVisitor)
+}
+
 /// A serde `deserialize_with` helper for optional size fields (`None` when left out).
 ///
 /// # Errors
 ///
 /// Fails for a value that isn't a string, or a string [`parse_size`] rejects.
 pub fn deserialize_optional_size<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    struct SizeVisitor;
-
-    impl Visitor<'_> for SizeVisitor {
-        type Value = Option<u64>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a size string such as `4MiB` or `10GiB`")
-        }
-
-        fn visit_str<E: de::Error>(self, s: &str) -> Result<Option<u64>, E> {
-            parse_size(s).map(Some).map_err(E::custom)
-        }
-    }
-
-    d.deserialize_str(SizeVisitor)
+    deserialize_size(d).map(Some)
 }
 
 /// Writes a duration as [`parse_duration`] reads it, in the largest units that are exact
@@ -205,6 +214,15 @@ pub fn serialize_optional_size<S: Serializer>(size: &Option<u64>, s: S) -> Resul
         Some(bytes) => s.serialize_some(&format_size(*bytes)),
         None => s.serialize_none(),
     }
+}
+
+/// Writes a size as [`format_size`] does.
+///
+/// # Errors
+///
+/// The serializer's.
+pub fn serialize_size<S: Serializer>(size: &u64, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format_size(*size))
 }
 
 /// The JSON Schema of a duration field: a string with format `duration`.

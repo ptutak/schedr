@@ -51,11 +51,13 @@ pub struct Settings {
     pub listen_retry: Duration,
     /// Which DAGs a round visits (`[master] quiet_dag*`).
     pub quiet: QuietSettings,
+    /// The largest message a worker may send (`[master] grpc_max_message_size`).
+    pub max_message_size: usize,
 }
 
 impl Default for Settings {
     /// Heartbeat every 10 s, lost after 60 s, 30 s cancel grace, 10 min per parse job, 10 min
-    /// for missing code.
+    /// for missing code, messages up to 64 MiB.
     fn default() -> Self {
         Self {
             heartbeat_interval: Duration::from_secs(10),
@@ -67,6 +69,7 @@ impl Default for Settings {
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
             quiet: QuietSettings::default(),
+            max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
         }
     }
 }

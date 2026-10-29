@@ -238,6 +238,7 @@ fn master_webserver_and_worker_defaults() {
         MasterSection {
             bind: std::net::IpAddr::from([0, 0, 0, 0]),
             grpc_port: 8070,
+            grpc_max_message_size: 64 * 1024 * 1024,
             tick_interval: Duration::from_secs(1),
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),

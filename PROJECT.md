@@ -1786,6 +1786,14 @@ SchedrScriptOperator(
     `$XDG_DATA_HOME/schedr`, else `~/.local/share/schedr`.
   - **The worker's identity and capacity:** `[worker] id` (else the host name), `slots` (2),
     `queues` (none: `default`), `pass_env`; `[dags] parse_file_timeout` (60 s) per file.
+- **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
+  default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30). A root's
+  parse upload is one message (every DAG of the root) and a `Finished` carries the output,
+  so gRPC's default 4 MiB refused a root of about 200 DAGs. A larger upload is refused with
+  `OUT_OF_RANGE`, which the worker logs; a larger message on the worker's stream ends the
+  stream (B33). Not chosen: B a fixed 64 MiB (nothing to raise for
+  a very large root); C the upload split per DAG (a protocol change, and `Finished` still
+  needs a limit).
 - **Mutual TLS from the start**: master and workers verify each other's certificates.
   Certificates are files mounted from Kubernetes Secrets (how they are issued is a deployment
   concern).
@@ -3837,8 +3845,34 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   targets(cfg) >> [to_s3, to_gcs, to_local]
   ```
 
-- **Task groups: `with group("name"):`.** Task IDs become `name.task_id`; a dependency on the
-  group applies to every task in it; a group can have its own `TaskDefaults`.
+- **Task groups: `with group("name"):`.** A group organises tasks while the DAG is written;
+  it isn't something that runs. At parse time it is flattened: its tasks become ordinary tasks
+  with prefixed IDs (`name.task_id`; nested groups `outer.inner.task_id`) and ordinary edges,
+  plus group metadata for the UI (members, name, parent). The master never sees a group.
+  - **What it is for:** reusing a piece of DAG (a function building extract → transform →
+    load, called once per source, each call in its own group so the IDs don't collide);
+    shared settings (its own `TaskDefaults`, `run_if`, `uses=`; an inner group's override an
+    outer one's, a task's own arguments win over both); depending on a block of work
+    (`start >> load >> publish` without listing what `load` holds); reading the graph (the UI
+    draws a box around its tasks).
+  - **What it isn't:** it has **no state** (no "group succeeded" stored; the UI may derive
+    one from its tasks), **no trigger rule of its own** (`run_if` on a group is only its
+    tasks' default; the group never waits nor is skipped, its tasks are), not a sub-DAG (no
+    runs, not triggered), and not mappable (mapped groups not supported, in both APIs; see
+    Airflow compatibility: Branching, task groups and mapping).
+  - **A dependency on a group goes through its roots and leaves** (decision 56A, the
+    user's, 2026-10-29): `x >> group` links `x` to the group's **roots** (its tasks with no
+    upstream inside the group), `group >> y` links the group's **leaves** (no downstream
+    inside it) to `y`, as Airflow's `TaskGroup` does. Roots and leaves are computed when the
+    group's `with` block closes, so the order of statements inside it doesn't matter; a
+    dependency on an empty group is a parse error. Example: with `a >> b` and `c` in `load`,
+    `start >> load` gives `start >> a`, `start >> c`, and `load >> publish` gives
+    `b >> publish`, `c >> publish`. Edges count in trigger rules (55B), so this lets skips
+    flow along the group's own chain: a skipped `a` skips `b`, which doesn't also hang on
+    `start`. Not chosen: B every task in the group (the earlier wording: n×m edges, a task
+    whose in-group upstream was skipped still runs on the outer edge, and Airflow's
+    translation would need a rule of its own); C every task for `x >> group` and the leaves
+    for `group >> y` (neither rule's simplicity).
 - **Mapping keeps Airflow's names**, `.partial(...)` / `.expand(...)`, so both APIs share one
   mental model (e.g. `load_file.partial(bucket="raw").expand(path=files)`). Which mapping
   features beyond that: see Airflow compatibility (Dynamic task mapping), decided for both
@@ -5765,7 +5799,8 @@ each case is described below.
 **Task groups:**
 
 - **`TaskGroup` (context manager) and `@task_group`: supported.** `group_id.task_id` names,
-  `prefix_group_id=False`, dependencies on a group, nested groups, per-group `default_args`
+  `prefix_group_id=False`, dependencies on a group (its roots and leaves, as in the native API:
+  decision 56A), nested groups, per-group `default_args`
   (→ group `TaskDefaults`); `tooltip`, `ui_color`, `ui_fgcolor` kept as metadata.
 - **Mapped task groups** (`@task_group(...).expand(...)`): **not supported for now** (an
   error). The native API has none either; if added later, in both APIs together.

@@ -16,6 +16,13 @@ fn task(id: &str, arguments: &Json) -> Json {
     })
 }
 
+fn branch(id: &str) -> Json {
+    let mut branch = task(id, &json!({}));
+    branch["branch"] = json!(true);
+    branch["output_type"] = json!({"type": "list", "item": {"type": "str"}});
+    branch
+}
+
 fn output_of(task: &str) -> Json {
     json!({"ref": {"kind": "output", "task": task}})
 }
@@ -133,6 +140,25 @@ fn edges_join_tasks_of_the_dag() {
 }
 
 #[test]
+fn selection_edges_come_only_from_branches_and_only_selection_edges_from_them() {
+    assert_eq!(
+        problems(
+            &json!({"edges": [edge("extract", "load", "data"), edge("extract", "load", "selection")]})
+        ),
+        ["edge `extract` -> `load`: a selection edge, but `extract` isn't a `@branch` task"]
+    );
+    let tasks = json!([branch("pick"), task("a", &json!({})), task("b", &json!({}))]);
+    assert_eq!(
+        problems(
+            &json!({"tasks": tasks, "edges": [edge("pick", "a", "selection"), edge("pick", "b", "order")]})
+        ),
+        [
+            "edge `pick` -> `b`: of kind `order`, but every edge from the `@branch` task `pick` must be a selection edge"
+        ]
+    );
+}
+
+#[test]
 fn cycles_name_the_tasks_left_over() {
     let tasks = json!([
         task("a", &json!({})),
@@ -159,8 +185,12 @@ fn outputs_are_used_only_along_data_edges() {
         ["task `load` uses the output of `extract` without a data edge from it"]
     );
     // A branch's targets read what it chose along their selection edges.
+    let tasks = json!([
+        branch("extract"),
+        task("load", &json!({"rows": output_of("extract")}))
+    ]);
     assert_eq!(
-        problems(&json!({"edges": [edge("extract", "load", "selection")]})),
+        problems(&json!({"tasks": tasks, "edges": [edge("extract", "load", "selection")]})),
         Vec::<String>::new()
     );
     let tasks = json!([

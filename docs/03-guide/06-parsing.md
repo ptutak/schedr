@@ -33,7 +33,9 @@ flowchart LR
    is an import error.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file with a unary call.
    The master validates them and stores a new DAG version for each DAG that changed. A new
-   DAG is stored **paused**.
+   DAG is stored **paused**. The whole root goes in one message, which the master accepts up
+   to `[master] grpc_max_message_size` (64 MiB by default). A larger upload is refused, and
+   the worker logs `parse result not uploaded` with `OutOfRange`: raise the setting.
 
 A parse job that hasn't finished after 10 minutes, or whose worker is lost, goes to the next
 worker that reported the same hash. Parse jobs live only in the master's memory. After a

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::roots::{PathList, Root};
 use crate::units::{
     DurationText, MemoryReserve, SizeText, deserialize_duration, deserialize_optional_size,
-    serialize_duration, serialize_optional_size,
+    deserialize_size, serialize_duration, serialize_optional_size, serialize_size,
 };
 
 #[cfg(test)]
@@ -345,6 +345,16 @@ pub struct MasterSection {
     pub bind: IpAddr,
     /// The gRPC port workers connect to.
     pub grpc_port: u16,
+    /// The largest message the master accepts from a worker: a root's parse upload (every
+    /// DAG it defines, in one message) or a `Finished` with its output. A larger upload is
+    /// refused and the worker logs it; a larger message on the worker's stream ends the
+    /// stream. From 4 MiB (gRPC's default) to 1 GiB.
+    #[serde(
+        deserialize_with = "deserialize_size",
+        serialize_with = "serialize_size"
+    )]
+    #[schemars(with = "SizeText")]
+    pub grpc_max_message_size: u64,
     /// How often the master's loop runs (scheduler, commands, dispatching).
     #[serde(
         deserialize_with = "deserialize_duration",
@@ -455,7 +465,7 @@ pub struct MasterSection {
 }
 
 impl Default for MasterSection {
-    /// All interfaces, port 8070, a tick every second, heartbeats every 10 s, lost after
+    /// All interfaces, port 8070, messages up to 64 MiB, a tick every second, heartbeats every 10 s, lost after
     /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease; a task set aside for 60 s,
     /// listening tried again every 30 min, a commit read back for 3 s every 500 ms; quiet DAGs
     /// on, quiet 60 s after a run, woken 60 s ahead, every DAG visited within 60 s.
@@ -463,6 +473,7 @@ impl Default for MasterSection {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             grpc_port: 8070,
+            grpc_max_message_size: 64 * 1024 * 1024,
             tick_interval: Duration::from_secs(1),
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),

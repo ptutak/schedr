@@ -596,3 +596,92 @@ async fn an_edge_on_outcomes_is_labelled_and_faint_once_not_taken() {
         ["on Rows (not taken)", "on Unavailable | Rows"]
     );
 }
+
+/// A run whose branch `pick` chose `a` of `a`, `b` and `c`; `c` ran anyway on its order edge
+/// from `other` (decision 55B). `chose` is the branch's stored output, if it can be read.
+fn branch_run(chose: Option<Value>) -> Vec<(&'static str, u16, Value)> {
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| *path != "/api/v1/runs/r2/dag");
+    for (path, _, value) in &mut answers {
+        if *path == "/api/v1/runs/r2" {
+            value["tasks"] = json!([
+                task("pick", "success", None, None),
+                task("other", "success", None, None),
+                task("a", "success", None, None),
+                task("b", "skipped", None, None),
+                task("c", "success", None, None),
+            ]);
+        }
+    }
+    answers.push((
+        "/api/v1/runs/r2/dag",
+        200,
+        json!({
+            "id": "sync",
+            "tasks": [
+                {"id": "pick", "kind": "python", "branch": true},
+                {"id": "other"}, {"id": "a"}, {"id": "b"}, {"id": "c"}
+            ],
+            "edges": [
+                {"from": "pick", "to": "a", "kind": "selection"},
+                {"from": "pick", "to": "b", "kind": "selection"},
+                {"from": "pick", "to": "c", "kind": "selection"},
+                {"from": "other", "to": "c", "kind": "order"}
+            ]
+        }),
+    ));
+    if let Some(chose) = chose {
+        answers.push((
+            "/api/v1/runs/r2/tasks/pick/output",
+            200,
+            json!({"outcome": "SUCCESS", "value": chose}),
+        ));
+    }
+    answers
+}
+
+#[tokio::test]
+async fn a_branchs_edge_to_a_target_it_didnt_choose_is_faint() {
+    let app = ui(vec![deployment(
+        "etl",
+        scripted(&branch_run(Some(json!(["a"])))),
+    )]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge", "class"),
+        [
+            "edge selection",
+            "edge selection not-taken",
+            "edge selection not-taken",
+            "edge order"
+        ]
+    );
+    // An output that isn't a list chose nothing, as the master reads it.
+    let app = ui(vec![deployment(
+        "etl",
+        scripted(&branch_run(Some(json!(null)))),
+    )]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge", "class"),
+        [
+            "edge selection not-taken",
+            "edge selection not-taken",
+            "edge selection not-taken",
+            "edge order"
+        ]
+    );
+    // Without the branch's output, what it chose isn't known: every edge drawn solid.
+    let app = ui(vec![deployment("etl", scripted(&branch_run(None)))]);
+    let (status, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge", "class"),
+        [
+            "edge selection",
+            "edge selection",
+            "edge selection",
+            "edge order"
+        ]
+    );
+}

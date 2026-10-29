@@ -419,10 +419,8 @@ def _hides_tstring(value: object) -> bool:
     return False
 
 
-def typed_references(
-    value: Value, expected: TypeDesc
-) -> list[tuple[OutputRef | OutcomeRef, TypeDesc]]:
-    """The output and outcome references inside a value, each with the type expected there.
+def typed_references(value: Value, expected: TypeDesc) -> list[tuple[Reference, TypeDesc]]:
+    """The references inside a value, each with the type expected there.
 
     Args:
         value: A DAG JSON value.
@@ -433,7 +431,7 @@ def typed_references(
         element's type from its container's; ``Any`` where that can't be told).
     """
     match value:
-        case RefValue(reference=OutputRef() | OutcomeRef() as reference):
+        case RefValue(reference=reference):
             return [(reference, expected)]
         case ListValue(items=items):
             return [

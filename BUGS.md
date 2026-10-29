@@ -9,58 +9,65 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
-## B30: large parse uploads exceed the master's default gRPC receive limit
+## B35: a parse upload refused for its size is retried forever, never shown as an import error (Suspected)
 
-- **Found:** 2026-10-29, reproduced with `make stress STRESS=stress_01_throughput`,
-  quick profile ×4. Its 201 DAGs (9,001 tasks) produce a 4,922,341-byte parse upload.
-  The worker logs `parse result not uploaded`, with `OutOfRange`: the message exceeds
-  tonic's default 4,194,304-byte receive limit. `Hub::service` does not override it.
-- **Effect:** no DAGs are stored, so the first stress scenario appears stuck until its
-  ten-minute parsing deadline. Production roots with similarly large parse results also
-  fail. The limit applies to the whole root's parse upload, not each DAG separately.
-  The quick profile scales with CPU and memory; the ×2 baseline's smaller upload did not
-  expose this limit.
-- **Proof:** paired gRPC tests in this session uploaded the same valid 5,429,488-byte
-  parse: the default rejected it; changing only the server's receive limit to 8 MiB
-  accepted it and stored all 201 DAGs. A second, process-level regression with two DAGs
-  produced a 6,292,428-byte upload and failed against the original binary at the same
-  4 MiB limit. These tests and the attempted fixes were reverted at the user's request.
-- **Plan:** add `[master] grpc_max_message_size` with a 64 MiB default and its environment
-  mirror, represented by a validated size type.
-  **Deferred:** the user requested only this bug report; no fix is retained.
+- **Found:** 2026-10-29, by the review of B30's fix (by reading). A refused upload
+  (`OUT_OF_RANGE`) leaves the parse job assigned with nothing recorded for the root; after
+  the 10-minute `parse_job_timeout` the job goes to the next worker, which fails the same way.
+- **Effect:** a root past `[master] grpc_max_message_size` keeps its stale DAGs, the UI shows
+  no import error, and the only sign is a worker log line (`parse result not uploaded`).
+- **To confirm:** a master test with a hub limited to 4 MiB, an upload past it, then the
+  job's timeout. **A fix:** the worker reports a too-large result as a parse failure the
+  master records for the root, naming the setting.
 
-## B29: a `@branch` edge to a target it didn't choose isn't faint on the run graph (Suspected)
+## B34: a parse upload blocks the agent's session loop while it is sent (Suspected)
 
-- **Found:** 2026-10-28, by Grok while writing the docs for M4.1a-M4.2a (by reading).
-  `joined_edges` (`crates/schedr-ui/src/runs.rs`) marks an edge "not taken" only when it has
-  an `on` list; a selection edge has none, so an unchosen target's line stays solid (its box
-  shows `skipped`). The guide (12-ui) describes it as it is.
-- **To confirm:** a UI test rendering a run whose branch chose one of two targets. **A fix:**
-  mark a selection edge not taken once its branch succeeded without choosing the target
-  (the branch's stored output), and say so in the guide.
+- **Found:** 2026-10-29, by the review of B30's fix (by reading). The agent awaits
+  `upload_parse_result` inside its session loop (`crates/schedr-agent/src/agent.rs`,
+  `on_done`), so no heartbeat is sent and no master message is read meanwhile. B30's fix allows
+  uploads of 64 MiB and more (up to 1 GiB), where it was 4 MiB.
+- **Effect:** an upload slower than the lease (60 s) gets the worker marked lost and its
+  running attempts ended.
+- **To confirm:** an agent test with a slow upload and a short lease. **A fix:** upload from a
+  task of its own, its result reported back to the loop.
 
-## B28: the master doesn't check that selection edges come only from `@branch` tasks (Suspected)
+## B33: a task's output past `[master] grpc_max_message_size` ends its worker's stream (Suspected)
 
-- **Found:** 2026-10-28, while fixing Grok's review of M4.1a-M4.2a. `dag_problems`
-  (`crates/schedr-master/src/validate.rs`) checks edges' ends and data edges for references,
-  but not an edge's kind against its upstream: a hand-written or old DAG JSON can have a
-  selection edge from a plain task, or a plain edge from a branch. The Python API never
-  writes either (`DagBuilder.add_edge`).
-- **Effect:** a selection edge from a plain task is taken only when that task's output
-  happens to read as a list of IDs naming the target (`Execution::chosen_of`); otherwise its
-  target is skipped as not chosen.
-- **To confirm:** a master test settling a run whose plain task has a selection edge.
-  **A fix:** refuse both shapes in `dag_problems`.
+- **Found:** 2026-10-29, by the review of B30's fix (by reading). The limit applies to the
+  worker's `Control` stream too: a `Finished` larger than it makes the master's decoding fail,
+  which ends the whole stream, not just that message. Nothing checks a task's
+  `max_output_size` against the limit (neither the Python API nor `validate.rs`).
+- **Effect:** with `max_output_size` set above the limit, such an output drops the worker's
+  link; the result is journalled and sent again in the next `Register`, which is too large as
+  well, so the worker may never register again.
+- **To confirm:** an agent and master test with a task returning more than a small limit.
+  **A fix:** refuse a `max_output_size` above the limit when the DAG is validated, or fail the
+  attempt with `output_too_large` on the worker before sending.
 
-## B27: a reference inside a list or dict argument isn't checked against the element's type
+## B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected)
 
-- **Found:** 2026-10-28, while fixing Grok's review of M4.1a-M4.2a. `_argument`
-  (`python/schedr/tasks.py`) checks only a top-level reference against the parameter's type;
-  references in a container are checked only for their path. Shown: `total([name()])` with
-  `total(values: list[int])` and `name() -> str` parses; the run then fails with
-  `input_mismatch`, not retried.
-- **A fix:** check each reference against the type `_build.typed_references` already gives
-  it (the None check's walk), as the top-level one is.
+- **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other
+  links, the page hangs for a moment with nothing happening; the browser's Inspect shows the
+  request `Pending`; then it goes through and the DAG is triggered properly.
+- **Suspect:** the browser's limit of six HTTP/1.1 connections per host: the run and log
+  pages hold SSE streams (live changes, the log tail), and other tabs on the same UI hold
+  theirs, so a new request waits for a free connection (B25 and B26 reduced this, not to
+  zero). Not checked.
+- **To confirm:** a browser test with several live pages open on one UI, timing a click
+  until its request is sent. **A fix** depends on the cause (one shared stream per browser,
+  HTTP/2, fewer streams per page).
+
+## B31: a finished task stays `scheduled` on the UI long after it ended (Suspected)
+
+- **Found:** 2026-10-28, by the user (dev notes): during a run a task stays `scheduled` on
+  the run page for quite a long time before it shows `success`, while its times say it
+  finished a second after its upstream task.
+- **Suspect:** the run page isn't told of the change and waits for the webserver's fallback
+  `refresh`, every 15 s (`REFRESH_INTERVAL`, `crates/schedr-api/src/events.rs`), e.g. when
+  the database's changes can't be followed (SQLite, standalone) or a change of that kind isn't
+  announced. Not checked.
+- **To confirm:** a test running a two-task DAG in standalone with a run page's live stream
+  open, timing each task's state change against when the page hears of it.
 
 ## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
 

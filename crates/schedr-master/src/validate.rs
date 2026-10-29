@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::{Dag, EdgeKind, Reference, SchedrVersion, TaskId};
+use schedr_model::{Dag, EdgeKind, Reference, SchedrVersion, TaskId, TaskKind};
 
 use crate::fire_times::FireTimes;
 
@@ -69,6 +69,12 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
 }
 
 fn edge_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String>) {
+    let branches: BTreeSet<&TaskId> = dag
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.kind, TaskKind::Python { branch: true, .. }))
+        .map(|task| &task.id)
+        .collect();
     for edge in &dag.edges {
         for end in [&edge.from, &edge.to] {
             if !tasks.contains(end) {
@@ -81,6 +87,31 @@ fn edge_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String
         if edge.from == edge.to {
             problems.push(format!("task `{}` depends on itself", edge.from));
         }
+        let from_branch = branches.contains(&edge.from);
+        if edge.kind == EdgeKind::Selection && !from_branch {
+            problems.push(format!(
+                "edge `{}` -> `{}`: a selection edge, but `{}` isn't a `@branch` task",
+                edge.from, edge.to, edge.from
+            ));
+        } else if edge.kind != EdgeKind::Selection && from_branch {
+            problems.push(format!(
+                "edge `{}` -> `{}`: of kind `{}`, but every edge from the `@branch` task `{}` must \
+                 be a selection edge",
+                edge.from,
+                edge.to,
+                edge_kind_name(edge.kind),
+                edge.from
+            ));
+        }
+    }
+}
+
+/// An edge kind as DAG JSON writes it.
+const fn edge_kind_name(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Data => "data",
+        EdgeKind::Order => "order",
+        EdgeKind::Selection => "selection",
     }
 }
 

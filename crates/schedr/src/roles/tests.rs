@@ -32,8 +32,10 @@ fn loopback() -> SocketAddr {
 fn the_master_settings_come_from_the_config() {
     let mut config = config();
     config.master.lease_timeout = Duration::from_secs(90);
+    config.master.grpc_max_message_size = 16 << 20;
     let settings = master_settings(&config);
     assert_eq!(settings.lease_timeout, Duration::from_secs(90));
+    assert_eq!(settings.max_message_size, 16 << 20);
     assert_eq!(settings.heartbeat_interval, Duration::from_secs(10));
     assert_eq!(settings.parse_job_timeout, PARSE_JOB_TIMEOUT);
 }

@@ -15,7 +15,13 @@ use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
     FileSource, Override, SourceError, env_provider, file_metadata, override_provider,
 };
-use crate::units::format_duration;
+use crate::units::{format_duration, format_size};
+
+/// The smallest `[master] grpc_max_message_size`: gRPC's default, which workers rely on.
+const MIN_MESSAGE_SIZE: u64 = 4 * 1024 * 1024;
+
+/// The largest `[master] grpc_max_message_size`.
+const MAX_MESSAGE_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests;
@@ -57,6 +63,15 @@ pub enum ConfigError {
         report_period: String,
         /// `termination_grace_period`, as written.
         grace: String,
+    },
+    /// `[master] grpc_max_message_size` is out of its range.
+    #[error(
+        "[master] grpc_max_message_size ({size}) must be from 4MiB (gRPC's default, which \
+         workers rely on) to 1GiB"
+    )]
+    MessageSize {
+        /// The size, as written.
+        size: String,
     },
     /// The DAG interpreter isn't an `[interpreters]` entry.
     #[error("[dags] interpreter `{name}` is not defined in [interpreters] (defined: {defined})")]
@@ -140,6 +155,11 @@ pub fn load(
             terminate_period: format_duration(worker.drain_terminate_period),
             report_period: format_duration(worker.drain_report_period),
             grace: format_duration(worker.termination_grace_period),
+        });
+    }
+    if !(MIN_MESSAGE_SIZE..=MAX_MESSAGE_SIZE).contains(&config.master.grpc_max_message_size) {
+        return Err(ConfigError::MessageSize {
+            size: format_size(config.master.grpc_max_message_size),
         });
     }
     if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {

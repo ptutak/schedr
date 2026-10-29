@@ -64,7 +64,7 @@ Today's commits, oldest first:
   its fix undone). **Grok reviews a batch of about five sub-steps** (read-only, throwaway
   proof tests), then writes the guide for them. Every Grok finding is verified before acting;
   the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **56**), lettered options, the recommended one first,
+- **Decisions:** numbered (the next is **57**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
@@ -95,7 +95,7 @@ Today's commits, oldest first:
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B30); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B36); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -189,5 +189,5 @@ Today's commits, oldest first:
 
 
 ## Dev notes
-- When using UI, when I click on "Trigger" sometimes the UI hangs and I cannot see that anything is happening briefly, then it's unstuck and properly triggers a DAG, the same thing happens when clicking on other links, the page briefly freezes. When I look at "Inspect" I can see the request is in a "Pending" state
-- When a DAG runs I can see a task step in a "Scheduled" state for quite a long time before it ends up in a SUCCESS state. The timings show that in fact it finished the next second before the upstream task but I couldn't see that in the UI.
+- The user's two UI notes (a click hanging with its request pending; a task left `scheduled`
+  long after it ended) are B32 and B31 in BUGS.md, not to be fixed until scheduled.

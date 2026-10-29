@@ -362,3 +362,40 @@ fn the_charts_fork_server_variables_make_an_interpreter_table() {
     assert!(python.fork_server);
     assert_eq!(python.preload, ["requests", "pymongo"]);
 }
+
+#[test]
+fn the_grpc_message_size_is_read_from_the_file_and_env_within_its_range() {
+    let from_file = load(
+        Some(file("[master]\ngrpc_max_message_size = \"16MiB\"\n")),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(from_file.master.grpc_max_message_size, 16 * 1024 * 1024);
+    let from_env = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__MASTER__GRPC_MAX_MESSAGE_SIZE", "1GiB")]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(from_env.master.grpc_max_message_size, 1024 * 1024 * 1024);
+    for (size, shown) in [("4194303B", "4194303B"), ("2GiB", "2GiB")] {
+        let error = load(
+            None,
+            &env(&[("SCHEDR_CONFIG__MASTER__GRPC_MAX_MESSAGE_SIZE", size)]),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::MessageSize {
+                size: shown.to_owned()
+            }
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with("[master] grpc_max_message_size (")
+        );
+    }
+}

@@ -368,6 +368,40 @@ def test_an_output_must_fit_the_parameter() -> None:
         wants_int(extract())
 
 
+def test_references_inside_containers_must_fit_their_element() -> None:
+    @task
+    def name() -> str: ...
+
+    @task
+    def total(values: list[int]) -> None: ...
+
+    @task
+    def by_key(values: dict[str, int]) -> None: ...
+
+    @task
+    def anything(values: list[Any]) -> None: ...
+
+    with (
+        pytest.raises(TypeError, match=r"argument `values`: expects `int`, but `name` is `str`"),
+        Dag("d"),
+    ):
+        total([1, name()])
+    with (
+        pytest.raises(TypeError, match=r"argument `values`: expects `int`, but `name` is `str`"),
+        Dag("e"),
+    ):
+        by_key({"a": name()})
+    with (
+        pytest.raises(
+            TypeError, match=r"expects `int`, but `dag_ctx\.run\.planned_for` is `datetime`"
+        ),
+        Dag("f"),
+    ):
+        total([dag_ctx.run.planned_for])
+    with Dag("g"):
+        anything([name(), dag_ctx.run.planned_for])
+
+
 def test_parts_and_dag_ctx_are_checked_too() -> None:
     @task
     def wants_str(s: str) -> None: ...

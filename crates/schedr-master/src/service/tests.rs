@@ -47,8 +47,20 @@ async fn connected_on(
     db: Database,
     clock: fn() -> Timestamp,
 ) -> (Hub, Database, MasterClient<Channel>) {
+    connected_on_with(db, clock, |hub| hub).await
+}
+
+/// As [`connected_on`], the hub changed by `with` before it is served.
+async fn connected_on_with(
+    db: Database,
+    clock: fn() -> Timestamp,
+    with: impl FnOnce(Hub) -> Hub,
+) -> (Hub, Database, MasterClient<Channel>) {
     db.migrate().await.unwrap();
-    let hub = Hub::with_clock(MasterCore::new(db.clone(), Settings::default()), clock);
+    let hub = with(Hub::with_clock(
+        MasterCore::new(db.clone(), Settings::default()),
+        clock,
+    ));
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     let service = hub.service();
     tokio::spawn(async move {
@@ -217,6 +229,65 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("the worker should be disconnected when its stream ends");
+}
+
+/// A parse upload past gRPC's default 4 MiB receive limit: a file's import error padded to
+/// 5 MiB beside the `sync` DAG.
+fn large_parse_result() -> pb::ParseResult {
+    let mut result = parse_result();
+    let big: ParsedFile = serde_json::from_value(json!({
+        "path": "big.py", "dags": [],
+        "error": {"exception": "ImportError", "message": "x".repeat(5 << 20), "traceback": ""}
+    }))
+    .unwrap();
+    result.files.push(parsed_file_to_proto(&big));
+    result
+}
+
+#[tokio::test]
+async fn a_parse_upload_past_grpcs_default_limit_is_stored() {
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+
+    client
+        .upload_parse_result(large_parse_result())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let dags = db.stored_dags().await.unwrap();
+    assert_eq!(
+        dags.iter().map(|d| d.dag_id.as_str()).collect::<Vec<_>>(),
+        ["sync"]
+    );
+}
+
+#[tokio::test]
+async fn a_parse_upload_past_the_configured_limit_is_refused() {
+    let (_hub, _db, mut client) = connected_on_with(
+        Database::connect("sqlite::memory:").await.unwrap(),
+        fixed_now,
+        |hub| hub.with_max_message_size(4 << 20),
+    )
+    .await;
+    let status = client
+        .upload_parse_result(large_parse_result())
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange, "{status}");
 }
 
 #[tokio::test]

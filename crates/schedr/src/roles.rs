@@ -108,6 +108,9 @@ pub fn master_settings(config: &Config) -> Settings {
             wake_ahead: config.master.quiet_dag_wake_ahead,
             full_pass_interval: config.master.quiet_dag_full_pass_interval,
         },
+        // At most 1 GiB (checked when the configuration is read).
+        max_message_size: usize::try_from(config.master.grpc_max_message_size)
+            .unwrap_or(usize::MAX),
     }
 }
 

@@ -47,6 +47,8 @@ pub struct Hub {
     db: Database,
     /// The longest a gauge refresh may take before it is abandoned.
     refresh_limit: Duration,
+    /// The largest message a worker may send (a parse upload, a `Finished` with its output).
+    max_message_size: usize,
     /// When each worker's latest message arrived (the core's).
     arrivals: Arrivals,
     /// How often to try listening for commands again while the loop has no notifications
@@ -78,6 +80,7 @@ impl Hub {
         Self {
             beat: Beat::default(),
             refresh_limit: DEFAULT_REFRESH_LIMIT,
+            max_message_size: core.settings().max_message_size,
             metrics: core.metrics().clone(),
             db: core.db().clone(),
             arrivals: core.arrivals(),
@@ -153,10 +156,19 @@ impl Hub {
         Arc::clone(&self.core)
     }
 
+    /// The hub accepting messages from workers up to `bytes` instead of its core's
+    /// `max_message_size` (`[master] grpc_max_message_size`); a larger one is refused with
+    /// `OUT_OF_RANGE`.
+    #[must_use]
+    pub const fn with_max_message_size(mut self, bytes: usize) -> Self {
+        self.max_message_size = bytes;
+        self
+    }
+
     /// The gRPC service for a tonic server.
     #[must_use]
     pub fn service(&self) -> MasterServer<Self> {
-        MasterServer::new(self.clone())
+        MasterServer::new(self.clone()).max_decoding_message_size(self.max_message_size)
     }
 
     /// Reads the worker registry back (see [`MasterCore::restore`]) at the hub's clock, the
@@ -623,6 +635,10 @@ pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);
 
 /// The longest a gauge refresh may take unless set otherwise.
 pub const DEFAULT_REFRESH_LIMIT: Duration = Duration::from_secs(30);
+
+/// The largest message from a worker unless set otherwise (`[master] grpc_max_message_size`'s
+/// default; gRPC's own, 4 MiB, is too small for a large root's parse upload).
+pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 << 20;
 
 /// How often the loop beats while it waits between ticks (liveness, see [`Hub::beat`]).
 pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);

@@ -2,6 +2,7 @@
 //! its tasks and its command history, and a task's panel beside the graph (31A): attempts,
 //! output (its last 64 KiB, 33), log, and cleanup (a shell until M4).
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -318,7 +319,7 @@ pub struct Node {
 pub struct EdgeLine {
     /// The SVG path.
     pub path: String,
-    /// `data` or `order` (its CSS class).
+    /// `data`, `order` or `selection` (its CSS class).
     pub kind: String,
     /// The outcomes it is taken on (`Rows | Unavailable`); empty for any.
     pub on: String,
@@ -326,7 +327,8 @@ pub struct EdgeLine {
     pub label_x: f64,
     /// See `label_x`.
     pub label_y: f64,
-    /// Whether its upstream task ended with an outcome it isn't taken on.
+    /// Whether its upstream task ended with an outcome it isn't taken on, was skipped, or is a
+    /// branch that didn't choose its downstream task.
     pub not_taken: bool,
 }
 
@@ -469,7 +471,7 @@ pub async fn run<T: Transport>(
         .iter()
         .map(|t| task_row(&page, &run_href, t))
         .collect();
-    let graph = graph_of(&dag, &detail.tasks, &run_href, query.task.as_deref());
+    let graph = run_graph(deployment, &run_id, &dag, &detail.tasks, &run_href, &query).await;
     let at = format!("{}/d/{}", page.base, path_segment(&deployment.name));
     render(
         &RunPage {
@@ -587,10 +589,60 @@ fn command_row(page: &Page, command: &CommandView) -> CommandRow {
     }
 }
 
-/// The graph of the DAG version the run ran with, its tasks coloured by their state.
+/// The run's graph, with what its branches chose.
+async fn run_graph<T: Transport>(
+    deployment: &Deployment<T>,
+    run_id: &str,
+    dag: &serde_json::Value,
+    tasks: &[TaskView],
+    run_href: &str,
+    query: &RunQuery,
+) -> Graph {
+    let chosen = chosen_by_branches(deployment, run_id, dag, tasks).await;
+    graph_of(dag, tasks, &chosen, run_href, query.task.as_deref())
+}
+
+/// What each `@branch` task that succeeded chose (its stored output, the IDs of its targets;
+/// anything else chose nothing, as the master reads it); a branch whose output can't be read
+/// is left out, its edges drawn as taken.
+async fn chosen_by_branches<T: Transport>(
+    deployment: &Deployment<T>,
+    run_id: &str,
+    dag: &serde_json::Value,
+    tasks: &[TaskView],
+) -> BTreeMap<String, Vec<String>> {
+    let succeeded = |id: &str| {
+        tasks
+            .iter()
+            .any(|t| t.task_id == id && t.state == "success")
+    };
+    let branches: Vec<&str> = dag["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["branch"].as_bool() == Some(true))
+        .filter_map(|t| t["id"].as_str())
+        .filter(|id| succeeded(id))
+        .collect();
+    let mut chosen = BTreeMap::new();
+    for id in branches {
+        let Ok(output) = deployment.client.output(run_id, id).await else {
+            continue;
+        };
+        // As the master reads it: anything but a list of IDs chose nothing.
+        let targets = output.value.as_array().into_iter().flatten();
+        let targets = targets.filter_map(|v| v.as_str().map(str::to_owned));
+        chosen.insert(id.to_owned(), targets.collect());
+    }
+    chosen
+}
+
+/// The graph of the DAG version the run ran with, its tasks coloured by their state; `chosen`
+/// is what its branches chose (see [`chosen_by_branches`]).
 fn graph_of(
     dag: &serde_json::Value,
     tasks: &[TaskView],
+    chosen: &BTreeMap<String, Vec<String>>,
     run_href: &str,
     selected: Option<&str>,
 ) -> Graph {
@@ -634,15 +686,10 @@ fn graph_of(
         .routes
         .iter()
         .map(|route| {
-            let (from, _, kind, on) = &edges[route.edge];
+            let (from, to, kind, on) = &edges[route.edge];
             let upstream = tasks.iter().find(|t| t.task_id == ids[*from]);
-            let not_taken = on.as_ref().is_some_and(|on| {
-                upstream.is_some_and(|t| {
-                    t.state == "skipped"
-                        || (t.state == "success"
-                            && !on.contains(t.outcome.as_ref().unwrap_or(&"SUCCESS".to_owned())))
-                })
-            });
+            let chose = chosen.get(&ids[*from]);
+            let not_taken = not_taken(&edges[route.edge], upstream, chose, &ids[*to]);
             let end = route.points.last().copied().unwrap_or_default();
             EdgeLine {
                 path: path_of(&route.points),
@@ -713,6 +760,29 @@ fn joined_edges(dag: &serde_json::Value, index: impl Fn(&str) -> Option<usize>) 
         }
     }
     edges
+}
+
+/// Whether `edge` wasn't taken: its upstream task ended with an outcome it isn't taken on or
+/// was skipped, or it is a selection edge to a target its branch didn't choose (`chose`, when
+/// known).
+fn not_taken(
+    edge: &Joined,
+    upstream: Option<&TaskView>,
+    chose: Option<&Vec<String>>,
+    to: &str,
+) -> bool {
+    let (_, _, kind, on) = edge;
+    let skipped = upstream.is_some_and(|t| t.state == "skipped");
+    if kind == "selection" {
+        return skipped || chose.is_some_and(|targets| !targets.iter().any(|t| t == to));
+    }
+    on.as_ref().is_some_and(|on| {
+        skipped
+            || upstream.is_some_and(|t| {
+                t.state == "success"
+                    && !on.contains(t.outcome.as_ref().unwrap_or(&"SUCCESS".to_owned()))
+            })
+    })
 }
 
 /// An SVG path through `points`: straight down from each point, then a curve to the next.
