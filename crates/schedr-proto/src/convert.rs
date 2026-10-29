@@ -23,6 +23,9 @@ pub enum ConversionError {
     /// A run kind name that isn't a `RunKind`.
     #[error("RunInfo.kind: unknown run kind `{0}`")]
     UnknownRunKind(String),
+    /// A parse upload's messages out of order (see [`ParseUpload`]).
+    #[error("{0}")]
+    BadUpload(String),
     /// A DAG in a parsed file that isn't valid DAG JSON.
     #[error("ParsedFile `{path}`: DAG {index} isn't valid DAG JSON: {reason}")]
     InvalidDagJson {
@@ -54,6 +57,68 @@ pub fn parsed_file_to_proto(file: &ParsedFile) -> pb::ParsedFile {
             message: e.message.clone(),
             traceback: e.traceback.clone(),
         }),
+    }
+}
+
+/// A parse result as an upload's messages: the header (without files), then each file in
+/// a message of its own (B35).
+#[must_use]
+pub fn parse_upload_parts(mut result: pb::ParseResult) -> Vec<pb::ParseResultPart> {
+    let files = std::mem::take(&mut result.files);
+    let mut parts = Vec::with_capacity(files.len() + 1);
+    parts.push(pb::ParseResultPart {
+        part: Some(pb::parse_result_part::Part::Header(result)),
+    });
+    parts.extend(files.into_iter().map(|file| pb::ParseResultPart {
+        part: Some(pb::parse_result_part::Part::File(file)),
+    }));
+    parts
+}
+
+/// Collects an upload's messages back into one parse result, as they arrive.
+#[derive(Debug, Default)]
+pub struct ParseUpload {
+    result: Option<pb::ParseResult>,
+}
+
+impl ParseUpload {
+    /// Takes the next message.
+    ///
+    /// # Errors
+    ///
+    /// [`ConversionError::BadUpload`] when the first message isn't the header, a later one is,
+    /// or one is empty.
+    pub fn add(&mut self, part: pb::ParseResultPart) -> Result<(), ConversionError> {
+        match (part.part, &mut self.result) {
+            (Some(pb::parse_result_part::Part::Header(header)), None) => {
+                self.result = Some(header);
+                Ok(())
+            }
+            (Some(pb::parse_result_part::Part::File(file)), Some(result)) => {
+                result.files.push(file);
+                Ok(())
+            }
+            (Some(pb::parse_result_part::Part::Header(_)), Some(_)) => Err(
+                ConversionError::BadUpload("a second header in one parse upload".to_owned()),
+            ),
+            (Some(pb::parse_result_part::Part::File(_)), None) => Err(ConversionError::BadUpload(
+                "a parse upload must start with its header".to_owned(),
+            )),
+            (None, _) => Err(ConversionError::BadUpload(
+                "an empty message in a parse upload".to_owned(),
+            )),
+        }
+    }
+
+    /// The whole parse result.
+    ///
+    /// # Errors
+    ///
+    /// [`ConversionError::BadUpload`] when no header arrived.
+    pub fn finish(self) -> Result<pb::ParseResult, ConversionError> {
+        self.result.ok_or_else(|| {
+            ConversionError::BadUpload("a parse upload without its header".to_owned())
+        })
     }
 }
 

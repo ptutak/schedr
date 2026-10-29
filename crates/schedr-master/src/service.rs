@@ -13,6 +13,7 @@ use jiff::Timestamp;
 use schedr_db::commands::CommandNotifications;
 use schedr_db::{Database, DbError};
 use schedr_model::beat::Beat;
+use schedr_proto::convert::ParseUpload;
 use schedr_proto::pb::master_server::{Master, MasterServer};
 use schedr_proto::pb::{self, master_message, worker_message};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -47,7 +48,8 @@ pub struct Hub {
     db: Database,
     /// The longest a gauge refresh may take before it is abandoned.
     refresh_limit: Duration,
-    /// The largest message a worker may send (a parse upload, a `Finished` with its output).
+    /// The largest message a worker may send (a parse upload's file, a `Finished` with its
+    /// output): the core's `Settings::max_message_size`, which `Registered` also announces.
     max_message_size: usize,
     /// When each worker's latest message arrived (the core's).
     arrivals: Arrivals,
@@ -154,15 +156,6 @@ impl Hub {
     #[must_use]
     pub fn core(&self) -> Arc<Mutex<MasterCore>> {
         Arc::clone(&self.core)
-    }
-
-    /// The hub accepting messages from workers up to `bytes` instead of its core's
-    /// `max_message_size` (`[master] grpc_max_message_size`); a larger one is refused with
-    /// `OUT_OF_RANGE`.
-    #[must_use]
-    pub const fn with_max_message_size(mut self, bytes: usize) -> Self {
-        self.max_message_size = bytes;
-        self
     }
 
     /// The gRPC service for a tonic server.
@@ -582,15 +575,21 @@ impl Master for Hub {
 
     async fn upload_parse_result(
         &self,
-        request: Request<pb::ParseResult>,
+        request: Request<Streaming<pb::ParseResultPart>>,
     ) -> Result<Response<pb::ParseResultAck>, Status> {
+        // The header, then a file a message (B35): read whole before the lock is taken.
+        let mut parts = request.into_inner();
+        let mut upload = ParseUpload::default();
+        while let Some(part) = parts.message().await? {
+            upload
+                .add(part)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        }
+        let result = upload
+            .finish()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         self.while_leading().await;
-        let uploaded = self
-            .core
-            .lock()
-            .await
-            .upload(request.into_inner(), (self.clock)())
-            .await;
+        let uploaded = self.core.lock().await.upload(result, (self.clock)()).await;
         match uploaded {
             Ok(()) => Ok(Response::new(pb::ParseResultAck {})),
             Err(error @ CoreError::BadMessage { .. }) => {

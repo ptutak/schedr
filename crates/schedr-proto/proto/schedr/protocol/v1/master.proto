@@ -14,8 +14,10 @@ import "google/protobuf/timestamp.proto";
 service Master {
   // The long-lived control stream, one per worker. The first message is Register.
   rpc Control(stream WorkerMessage) returns (stream MasterMessage);
-  // A parse job's result (bulky, so a unary call rather than the stream).
-  rpc UploadParseResult(ParseResult) returns (ParseResultAck);
+  // A parse job's result (bulky, so a call of its own rather than the control stream): a
+  // ParseResult header (no files), then one ParsedFile per message, so only one file's size
+  // counts against the master's message limit, not the root's (B35).
+  rpc UploadParseResult(stream ParseResultPart) returns (ParseResultAck);
   // An attempt's inputs when they are too big to travel inside AssignTask.
   rpc FetchInputs(FetchInputsRequest) returns (stream InputChunk);
 }
@@ -234,6 +236,9 @@ message JournalDecision {
 message Registered {
   Timing timing = 1;
   repeated JournalDecision decisions = 2;
+  // The largest message the master accepts ([master] grpc_max_message_size): the agent turns
+  // a result or a parsed file past it into a failure instead of sending it (B33, B35).
+  uint64 max_message_size = 3;
 }
 
 message RunInfo {
@@ -314,6 +319,15 @@ message ParseResult {
   RootHash root = 3;
   string schedr_version = 4;
   repeated ParsedFile files = 5;
+}
+
+// One message of a parse upload: the header first, then the files.
+message ParseResultPart {
+  oneof part {
+    // The job, the root and the versions; its `files` are empty.
+    ParseResult header = 1;
+    ParsedFile file = 2;
+  }
 }
 
 message ParseResultAck {}

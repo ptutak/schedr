@@ -53,6 +53,8 @@ pub struct Discovery {
     /// Marks waking the DAGs it defines anew.
     wakes: Wakes,
     master: SchedrVersion,
+    /// The master's message limit: a task whose output can't fit it is refused (B33).
+    max_message_size: usize,
     jobs: ParseJobs,
     /// What each alive worker last reported for each root.
     reports: BTreeMap<String, BTreeMap<String, ParseKey>>,
@@ -92,12 +94,20 @@ impl Discovery {
         self.wakes = wakes;
     }
 
+    /// Discovery refusing tasks whose output can't fit `bytes`, the master's message limit.
+    #[must_use]
+    pub const fn with_max_message_size(mut self, bytes: usize) -> Self {
+        self.max_message_size = bytes;
+        self
+    }
+
     /// Discovery over a database, checking DAG JSON for a master of version `master`.
     #[must_use]
     pub fn new(db: Database, master: SchedrVersion, jobs: ParseJobs) -> Self {
         Self {
             db,
             master,
+            max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             jobs,
             reports: BTreeMap::new(),
             current: BTreeMap::new(),
@@ -293,7 +303,12 @@ impl Discovery {
         upload: ParseUpload,
         now: Timestamp,
     ) -> Result<String, DbError> {
-        let files = validate_files(&upload.key.root, upload.files, self.master);
+        let files = validate_files(
+            &upload.key.root,
+            upload.files,
+            self.master,
+            self.max_message_size,
+        );
         let parse_id = self
             .db
             .insert_parse(&NewParse {

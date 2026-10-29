@@ -9,41 +9,6 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
-## B35: a parse upload refused for its size is retried forever, never shown as an import error (Suspected)
-
-- **Found:** 2026-10-29, by the review of B30's fix (by reading). A refused upload
-  (`OUT_OF_RANGE`) leaves the parse job assigned with nothing recorded for the root; after
-  the 10-minute `parse_job_timeout` the job goes to the next worker, which fails the same way.
-- **Effect:** a root past `[master] grpc_max_message_size` keeps its stale DAGs, the UI shows
-  no import error, and the only sign is a worker log line (`parse result not uploaded`).
-- **To confirm:** a master test with a hub limited to 4 MiB, an upload past it, then the
-  job's timeout. **A fix:** the worker reports a too-large result as a parse failure the
-  master records for the root, naming the setting.
-
-## B34: a parse upload blocks the agent's session loop while it is sent (Suspected)
-
-- **Found:** 2026-10-29, by the review of B30's fix (by reading). The agent awaits
-  `upload_parse_result` inside its session loop (`crates/schedr-agent/src/agent.rs`,
-  `on_done`), so no heartbeat is sent and no master message is read meanwhile. B30's fix allows
-  uploads of 64 MiB and more (up to 1 GiB), where it was 4 MiB.
-- **Effect:** an upload slower than the lease (60 s) gets the worker marked lost and its
-  running attempts ended.
-- **To confirm:** an agent test with a slow upload and a short lease. **A fix:** upload from a
-  task of its own, its result reported back to the loop.
-
-## B33: a task's output past `[master] grpc_max_message_size` ends its worker's stream (Suspected)
-
-- **Found:** 2026-10-29, by the review of B30's fix (by reading). The limit applies to the
-  worker's `Control` stream too: a `Finished` larger than it makes the master's decoding fail,
-  which ends the whole stream, not just that message. Nothing checks a task's
-  `max_output_size` against the limit (neither the Python API nor `validate.rs`).
-- **Effect:** with `max_output_size` set above the limit, such an output drops the worker's
-  link; the result is journalled and sent again in the next `Register`, which is too large as
-  well, so the worker may never register again.
-- **To confirm:** an agent and master test with a task returning more than a small limit.
-  **A fix:** refuse a `max_output_size` above the limit when the DAG is validated, or fail the
-  attempt with `output_too_large` on the worker before sending.
-
 ## B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected)
 
 - **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other

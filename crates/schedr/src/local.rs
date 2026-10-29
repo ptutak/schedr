@@ -213,7 +213,13 @@ pub async fn check_root(
             &output,
         ))
     })?;
-    Ok(validate_files(&root.name, parsed, SchedrVersion::current()))
+    let limit = usize::try_from(config.master.grpc_max_message_size).unwrap_or(usize::MAX);
+    Ok(validate_files(
+        &root.name,
+        parsed,
+        SchedrVersion::current(),
+        limit,
+    ))
 }
 
 /// How many of the runner's last output lines a failed parse shows.

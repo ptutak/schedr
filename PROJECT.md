@@ -1789,11 +1789,28 @@ SchedrScriptOperator(
 - **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
   default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30). A root's
   parse upload is one message (every DAG of the root) and a `Finished` carries the output,
-  so gRPC's default 4 MiB refused a root of about 200 DAGs. A larger upload is refused with
-  `OUT_OF_RANGE`, which the worker logs; a larger message on the worker's stream ends the
-  stream (B33). Not chosen: B a fixed 64 MiB (nothing to raise for
-  a very large root); C the upload split per DAG (a protocol change, and `Finished` still
-  needs a limit).
+- **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
+  default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30), announced
+  to each worker in `Registered` (`max_message_size`). Not chosen for 58: B a fixed 64 MiB
+  (nothing to raise for a very large root); C the upload split per DAG (a protocol change,
+  and `Finished` still needs a limit).
+  - **A parse upload is a stream, a file a message** (decision 62, the user's, 2026-10-29;
+    fixes B35): `UploadParseResult(stream ParseResultPart)`, the header first, then each
+    file, so only one file's size counts, not the root's. A single file past the limit is
+    uploaded as its import error (`ParseResultTooLarge`, naming the setting), so it shows
+    instead of the job being refused and handed out again every 10 minutes. The upload runs
+    in a task of its own, so the worker's heartbeats go on meanwhile (B34). Not chosen:
+    reporting a refused upload as an import error of every file (the root's DAGs all broken
+    until the setting is raised).
+  - **A result that can't reach the master** (decision 61, the user's, 2026-10-29; fixes
+    B33): a message past the limit on the worker's stream ends the whole stream, so two
+    checks keep results under it. When a DAG loads, a task whose `max_output_size` can't fit
+    (a command's two streams counted, 64 KiB left for the rest) is refused, naming the task
+    and the setting. When an attempt ends, the agent turns a result past the limit into a
+    failed attempt, `output_too_large` (not retried), before journalling it, so it is never
+    sent whole, not even again in `Register`. Not chosen: either check alone (the load check
+    misses a limit lowered later; the run check lets DAGs that can never succeed load).
+
 - **Mutual TLS from the start**: master and workers verify each other's certificates.
   Certificates are files mounted from Kubernetes Secrets (how they are issued is a deployment
   concern).
@@ -5462,6 +5479,11 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
     `model_validate`. A date the model holds without a time zone stays naive: Pydantic
     stored it, so schedr's own rule against naive datetimes (about what schedr stores)
     doesn't apply. Plain `str` still doesn't fit a `datetime` (no format proves it a date).
+    Passed on, a naive value stays refused when schedr stores it (decision 63, the user's,
+    2026-10-29: A), the message saying where it usually comes from: declare the field
+    `AwareDatetime`, or add a zone. Not chosen: storing naive datetimes (B: schedr's stored
+    times are moments, shown in UTC and local time; its Rust rendering and the UI read them as
+    timestamps; naive and aware values then meet in tasks); reading them as UTC (C: a guess).
     Not chosen: A refusing (strict, but the field's type says `datetime`); C storing a
     model's dates tagged (schedr rewriting Pydantic's JSON, each Pydantic type needing a
     conversion).

@@ -114,7 +114,7 @@ def encode(value: object, annotation: object, at: str = "") -> Any:  # noqa: PLR
     if models.is_model(annotation):
         if not isinstance(value, annotation):  # type: ignore[arg-type]
             raise CodecError(at, f"expected {label(annotation)}, got {_type_of(value)}")
-        return models.dump(value)
+        return _finite(models.dump(value), at)
     if isinstance(annotation, type) and dataclasses.is_dataclass(annotation):
         if not isinstance(value, annotation):
             raise CodecError(at, f"expected {annotation.__name__}, got {_type_of(value)}")
@@ -143,7 +143,12 @@ def _encode_time(value: object, annotation: object, at: str) -> Any:
         if not isinstance(value, datetime):
             raise CodecError(at, f"expected datetime, got {_type_of(value)}")
         if value.tzinfo is None or value.utcoffset() is None:
-            raise CodecError(at, "naive datetime (no time zone) can't be stored")
+            raise CodecError(
+                at,
+                "naive datetime (no time zone) can't be stored; a Pydantic model's date "
+                "without a zone arrives naive: declare it AwareDatetime, or add a zone "
+                "(e.g. .replace(tzinfo=UTC))",
+            )
         return {"$datetime": value.isoformat()}
     if annotation is date:
         if not isinstance(value, date) or isinstance(value, datetime):
@@ -152,6 +157,19 @@ def _encode_time(value: object, annotation: object, at: str) -> Any:
     if not isinstance(value, timedelta):
         raise CodecError(at, f"expected timedelta, got {_type_of(value)}")
     return {"$timedelta": (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds}
+
+
+def _finite(data: Any, at: str) -> Any:
+    """Refuses NaN and infinity in a model's dumped data, as for every other output."""
+    if isinstance(data, float) and not math.isfinite(data):
+        raise CodecError(at, f"{data} can't be stored (NaN and infinity aren't JSON)")
+    if isinstance(data, list):
+        for i, item in enumerate(data):
+            _finite(item, f"{at}[{i}]")
+    elif isinstance(data, dict):
+        for key, item in data.items():
+            _finite(item, f"{at}.{key}")
+    return data
 
 
 def _encode_union(value: object, members: tuple[Any, ...], at: str) -> Any:
@@ -246,7 +264,7 @@ def encode_any(value: object, at: str = "") -> Any:  # noqa: PLR0911
     if isinstance(value, dict):
         return _encode_dict(value, Any, at)
     if models.is_model_value(value):
-        return models.dump(value)
+        return _finite(models.dump(value), at)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {
             f.name: encode_any(getattr(value, f.name), f"{at}.{f.name}")

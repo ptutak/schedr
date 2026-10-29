@@ -183,14 +183,71 @@ pub fn validate_files(
     root: &str,
     files: Vec<ParsedFile>,
     master: SchedrVersion,
+    max_message_size: usize,
 ) -> Vec<ParsedFile> {
     files
         .into_iter()
-        .map(|file| validate_file(root, file, master))
+        .map(|file| validate_file(root, file, master, max_message_size))
         .collect()
 }
 
-fn validate_file(root: &str, mut file: ParsedFile, master: SchedrVersion) -> ParsedFile {
+/// Room a worker's `Finished` needs besides the output (ids, the summary, framing).
+const RESULT_OVERHEAD: u64 = 64 * 1024;
+
+/// The tasks whose output can't reach the master: a result past its message limit
+/// (`[master] grpc_max_message_size`) would end the worker's stream (B33). A command's
+/// output holds stdout and stderr, each up to its `max_output_size`.
+#[must_use]
+pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
+    let limit = u64::try_from(max_message_size).unwrap_or(u64::MAX);
+    dag.tasks
+        .iter()
+        .filter_map(|task| {
+            let streams = match task.kind {
+                TaskKind::Empty => return None,
+                TaskKind::Command { .. } => 2,
+                TaskKind::Python { .. } => 1,
+            };
+            let size = task.settings.max_output_size;
+            let needed = size.saturating_mul(streams).saturating_add(RESULT_OVERHEAD);
+            (needed > limit).then(|| {
+                let each = if streams == 2 {
+                    " (stdout and stderr each)"
+                } else {
+                    ""
+                };
+                format!(
+                    "task `{}`: max_output_size {}{each} can't reach the master, which accepts \
+                     results up to {} ([master] grpc_max_message_size, less 64 KiB for the \
+                     rest of the result): lower max_output_size, or raise the setting",
+                    task.id,
+                    shown_size(size),
+                    shown_size(limit.saturating_sub(RESULT_OVERHEAD) / streams),
+                )
+            })
+        })
+        .collect()
+}
+
+/// A size as people read it: whole MiB or KiB when exact, else bytes.
+fn shown_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else if bytes >= KIB && bytes.is_multiple_of(KIB) {
+        format!("{} KiB", bytes / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn validate_file(
+    root: &str,
+    mut file: ParsedFile,
+    master: SchedrVersion,
+    max_message_size: usize,
+) -> ParsedFile {
     if !inside_root(&file.path) {
         file.dags.clear();
         file.error = Some(ErrorSummary {
@@ -208,7 +265,9 @@ fn validate_file(root: &str, mut file: ParsedFile, master: SchedrVersion) -> Par
         .dags
         .iter()
         .flat_map(|dag| {
-            dag_problems(dag, root, &file.path, master)
+            let mut problems = dag_problems(dag, root, &file.path, master);
+            problems.extend(output_problems(dag, max_message_size));
+            problems
                 .into_iter()
                 .map(move |p| format!("DAG `{}`: {p}", dag.id))
         })

@@ -9,7 +9,7 @@ import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, get_args, get_origin, is_typeddict
 
 from schedr._model import (
     DagCtxField,
@@ -21,6 +21,7 @@ from schedr._model import (
     ListValue,
     LiteralValue,
     MapValue,
+    ModelType,
     OutcomeRef,
     OutputRef,
     PythonKind,
@@ -40,11 +41,22 @@ from schedr._model import (
 )
 from schedr._serialization import (
     CodecError,
+    decode,
     encode_any,
     follow_path,
     is_assignable,
+    schemas,
     type_name,
 )
+from schedr._serialization.annotations import (
+    MAPPING_ORIGINS,
+    SEQUENCE_ORIGINS,
+    is_union,
+    tuple_items,
+    type_hints,
+    unwrap,
+)
+from schedr._serialization.models import is_model
 from schedr._templates import is_tstring
 from schedr._templates import to_template as tstring_to_template
 from schedr.outcomes import DEFAULT, OutcomeSpec, RunIf
@@ -437,24 +449,88 @@ def typed_references(value: Value, expected: TypeDesc) -> list[tuple[Reference, 
             return [
                 found
                 for index, item in enumerate(items)
-                for found in typed_references(item, _element_type(expected, index))
+                for found in typed_references(item, _element_type(expected, index, "a list"))
             ]
         case MapValue(entries=entries):
             return [
                 found
                 for key in sorted(entries)
-                for found in typed_references(entries[key], _element_type(expected, key))
+                for found in typed_references(entries[key], _element_type(expected, key, "a dict"))
             ]
     return []
 
 
-def _element_type(container: TypeDesc, step: str | int) -> TypeDesc:
-    """The type of one element of a container type (of each form a union allows)."""
+def _element_type(container: TypeDesc, step: str | int, written: str) -> TypeDesc:
+    """The type of one element of a container type (of each form a union allows).
+
+    Raises:
+        TypeError: When the type has no such element: the container written (``written``)
+            can't be a value of it, e.g. a list where a model is expected.
+    """
     variants = container.variants if isinstance(container, UnionType) else (container,)
     found = [t for v in variants if (t := follow_path(v, (step,))) is not None]
     if not found:
-        return ScalarType("any")
+        raise TypeError(f"expects `{type_name(container)}`, but gets {written}")
     return found[0] if len(found) == 1 else UnionType(tuple(found))
+
+
+def check_literals(value: Value, annotation: object, where: str) -> None:
+    """Checks the literals inside a list or dict that also holds references (B27).
+
+    A container of literals only is encoded against the parameter's type when it is
+    converted; one mixing in references keeps its literals as they are, so each is checked
+    here against its element's annotation, as stored data is when a task decodes it.
+
+    Args:
+        value: The converted argument.
+        annotation: The parameter's annotation.
+        where: The argument, for messages.
+
+    Raises:
+        TypeError: For a literal that isn't a value of its element's type.
+    """
+    match value:
+        case ListValue(items=items):
+            children: list[tuple[str | int, Value]] = list(enumerate(items))
+        case MapValue(entries=entries):
+            children = sorted(entries.items())
+        case _:
+            return
+    for step, child in children:
+        element = _element_annotation(annotation, step)
+        if isinstance(child, LiteralValue):
+            if element is not Any:
+                try:
+                    decode(child.value, element)
+                except CodecError as e:
+                    raise TypeError(f"{where}[{step!r}]: {e.reason}") from None
+        else:
+            check_literals(child, element, f"{where}[{step!r}]")
+
+
+def _element_annotation(annotation: object, step: str | int) -> object:  # noqa: PLR0911
+    """The annotation of one element of a container annotation (``Any`` when unclear)."""
+    annotation = unwrap(annotation)
+    if annotation is Any or is_union(annotation):
+        return Any
+    origin, args = get_origin(annotation), get_args(annotation)
+    if isinstance(step, int):
+        if origin in SEQUENCE_ORIGINS:
+            return args[0] if args else Any
+        if origin is tuple:
+            items = tuple_items(args)
+            return items[step] if step < len(items) else Any
+        return Any
+    if origin in MAPPING_ORIGINS:
+        return args[1] if len(args) == 2 else Any  # noqa: PLR2004
+    if is_model(annotation):
+        field = getattr(annotation, "model_fields", {}).get(step)
+        return field.annotation if field is not None else Any
+    if isinstance(annotation, type) and (
+        dataclasses.is_dataclass(annotation) or is_typeddict(annotation)
+    ):
+        return type_hints(annotation, f"`{annotation.__name__}`").get(step, Any)
+    return Any
 
 
 def templates_in(value: Value) -> list[Template]:
@@ -623,6 +699,8 @@ def may_have_field(desc: TypeDesc, name: str) -> bool:
         return True
     if isinstance(desc, UnionType):
         return any(may_have_field(v, name) for v in desc.variants)
+    if isinstance(desc, ModelType):
+        return schemas.part(desc, name) is not None
     fields = getattr(desc, "fields", None)
     return fields is not None and any(f.name == name for f in fields)
 
@@ -702,10 +780,15 @@ def is_renderable(desc: TypeDesc) -> bool:
 
     Returns:
         True for strings, numbers, booleans, dates, times, durations and ``Any`` (and unions
-        of them); ``None``, lists, dicts and classes can't be rendered.
+        of them), and a model's field holding text, a number or a boolean (a model's date is
+        its text: a format spec such as ``%Y`` doesn't apply to it); ``None``, lists, dicts
+        and classes can't be rendered.
     """
     if isinstance(desc, UnionType):
         return all(is_renderable(v) for v in desc.variants)
+    if isinstance(desc, ModelType):
+        # A model's field as Pydantic writes it: text, a number or a boolean.
+        return schemas.is_scalar(desc)
     return isinstance(desc, ScalarType) and desc.name in _RENDERABLE
 
 

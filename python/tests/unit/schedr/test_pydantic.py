@@ -6,7 +6,7 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel, Field, HttpUrl
 
-from schedr import Dag, TypingHint, task
+from schedr import CommandOperator, Dag, TypingHint, task
 from schedr._model import ModelType, registry
 from schedr._serialization import (
     CodecError,
@@ -191,6 +191,9 @@ def test_a_naive_model_date_stays_naive() -> None:
     received = decode(encode(naive, Stamped)["at"], datetime)
     assert received == datetime(2026, 10, 29, 3)
     assert received.tzinfo is None
+    # Stored again by schedr, it is refused, saying where it came from (decision 63).
+    with pytest.raises(CodecError, match="declare it AwareDatetime, or add a zone"):
+        encode(received, datetime)
 
 
 def test_fields_a_model_needs_must_be_written_by_the_output() -> None:
@@ -237,3 +240,66 @@ def test_model_outputs_route_and_pass_in_a_dag() -> None:
         ),
     ):
         bad(configure().retries)
+
+
+# --- Grok's review of 2026-10-29 -------------------------------------------------------
+
+
+def test_a_models_nan_or_infinity_isnt_stored() -> None:
+    class Num(BaseModel):
+        x: float
+
+    with pytest.raises(CodecError, match=r"at `\.x`: nan can't be stored"):
+        encode(Num(x=float("nan")), Num)
+    with pytest.raises(CodecError, match=r"at `\.x`: inf can't be stored"):
+        encode_any(Num(x=float("inf")))
+
+
+def test_outcome_on_a_model_with_an_outcome_field_is_refused() -> None:
+    class Result(BaseModel):
+        outcome: str
+
+    @task
+    def compute() -> Result:
+        return Result(outcome="ok")
+
+    @task
+    def take(s: str) -> None: ...
+
+    with (
+        Dag("d"),
+        pytest.raises(TypeError, match=r'write `compute\["outcome"\]` for the field'),
+    ):
+        take(compute().outcome)
+
+
+def test_a_models_text_and_number_fields_render_in_commands() -> None:
+    class Endpoint(BaseModel):
+        url: str
+        port: int
+        tags: list[str]
+
+    @task
+    def endpoint() -> Endpoint:
+        return Endpoint(url="x", port=1, tags=[])
+
+    with Dag("d"):
+        found = endpoint()
+        CommandOperator("curl", ["curl", found.url, t"{found.port}"])
+    with Dag("e"), pytest.raises(TypeError, match=r"`Endpoint\.tags` can't be rendered"):
+        CommandOperator("bad", ["echo", endpoint().tags])
+
+
+def test_a_container_that_cant_be_the_parameters_shape_is_refused() -> None:
+    @task
+    def name() -> str:
+        return "a"
+
+    @task
+    def use(settings: Settings) -> None: ...
+
+    with (
+        Dag("d"),
+        pytest.raises(TypeError, match=r"argument `settings`: expects `Settings`, but gets a list"),
+    ):
+        use([name()])  # type: ignore[arg-type]

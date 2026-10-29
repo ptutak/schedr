@@ -34,7 +34,7 @@ use schedr_model::beat::Beat;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::attempt_status_from_proto;
-use schedr_proto::convert::parsed_file_to_proto;
+use schedr_proto::convert::{parse_upload_parts, parsed_file_to_proto};
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_proto::pb::{self, master_message, worker_message};
 use tokio::sync::{mpsc, watch};
@@ -374,6 +374,8 @@ pub struct Agent<E> {
     heartbeat: Duration,
     /// Whether the master registered this agent in the current session.
     registered: bool,
+    /// The largest message the master accepts (from `Registered`; gRPC's default before).
+    master_limit: usize,
     /// Shutdown requests so far (none in a session run without [`Agent::run`]).
     shutdown: Option<watch::Receiver<u32>>,
     /// The drain, once shutdown was asked for.
@@ -410,6 +412,7 @@ impl<E: Executor> Agent<E> {
             done_rx,
             heartbeat: Duration::from_secs(10),
             registered: false,
+            master_limit: GRPC_DEFAULT_LIMIT,
             shutdown: None,
             drain: None,
             beat: Beat::default(),
@@ -785,6 +788,10 @@ impl<E: Executor> Agent<E> {
         match message {
             master_message::Message::Registered(registered) => {
                 self.registered = true;
+                if registered.max_message_size > 0 {
+                    self.master_limit =
+                        usize::try_from(registered.max_message_size).unwrap_or(usize::MAX);
+                }
                 if let Some(timing) = registered.timing.filter(|t| t.heartbeat_interval_ms > 0) {
                     self.heartbeat = Duration::from_millis(timing.heartbeat_interval_ms);
                     *heartbeat = tokio::time::interval(self.heartbeat);
@@ -1082,6 +1089,7 @@ impl<E: Executor> Agent<E> {
                 }
             }
             Done::Attempt(mut finished) => {
+                fit_result(&mut finished, self.master_limit);
                 let status = attempt_status_from_proto(finished.status)
                     .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
                 self.metrics.attempt_ended(&status);
@@ -1119,16 +1127,27 @@ impl<E: Executor> Agent<E> {
                     "parse result dropped: no master connection (the job is given out again)"
                 ),
                 (Ok(files), Some((_, client))) => {
+                    let limit = self.master_limit;
                     let result = pb::ParseResult {
                         parse_job_id: job_id,
                         worker_id: self.settings.worker_id.clone(),
                         root: Some(root),
                         schedr_version: AGENT_VERSION.to_owned(),
-                        files: files.iter().map(parsed_file_to_proto).collect(),
+                        files: files
+                            .iter()
+                            .map(|file| fitted_file(parsed_file_to_proto(file), limit))
+                            .collect(),
                     };
-                    if let Err(status) = client.upload_parse_result(result).await {
-                        tracing::error!(%status, "parse result not uploaded");
-                    }
+                    // In a task of its own: a large root's upload takes a while, and the
+                    // session's loop must keep sending heartbeats meanwhile (B34). A file a
+                    // message, so only one file's size counts against the limit (B35).
+                    let parts = tokio_stream::iter(parse_upload_parts(result));
+                    let mut client = client.clone();
+                    tokio::spawn(async move {
+                        if let Err(status) = client.upload_parse_result(parts).await {
+                            tracing::error!(%status, "parse result not uploaded");
+                        }
+                    });
                 }
                 (Err(error), _) => {
                     tracing::error!(root = root.root.as_str(), error, "parse job failed");
@@ -1198,6 +1217,55 @@ fn root_hash(name: &str, hash: &str) -> pb::RootHash {
         kind: pb::RootKind::Dag.into(),
         root: name.to_owned(),
         content_hash: hash.to_owned(),
+    }
+}
+
+/// gRPC's own message limit, assumed until the master says its own in `Registered`.
+const GRPC_DEFAULT_LIMIT: usize = 4 << 20;
+
+/// Room a message needs around its largest field (ids, versions, framing).
+const MESSAGE_OVERHEAD: usize = 64 << 10;
+
+/// A result that can't reach the master (bigger than its message `limit`) becomes a failed
+/// attempt, `output_too_large` (not retried), before it is journalled: sent as it was, it
+/// would end the worker's stream, and again on every `Register` (B33).
+fn fit_result(finished: &mut pb::Finished, limit: usize) {
+    let size = prost::Message::encoded_len(finished);
+    if size.saturating_add(MESSAGE_OVERHEAD) <= limit {
+        return;
+    }
+    let message = format!(
+        "the result is {size} bytes, more than the master accepts ({limit} bytes, [master] \
+         grpc_max_message_size): lower the task's max_output_size, or raise the setting"
+    );
+    tracing::error!(attempt_id = finished.attempt_id.as_str(), %message, "result too large");
+    finished.status = pb::AttemptStatus::Failed.into();
+    finished.output_json = Vec::new();
+    finished.outcome = String::new();
+    "output_too_large".clone_into(&mut finished.error_kind);
+    finished.error_summary_json = ErrorSummary::json("ResultTooLarge", &message).into_bytes();
+}
+
+/// A parsed file as uploaded: itself, or, when it is too big for the master's message
+/// `limit`, an import error saying so and naming the setting (B35).
+fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
+    let size = prost::Message::encoded_len(&file);
+    if size.saturating_add(MESSAGE_OVERHEAD) <= limit {
+        return file;
+    }
+    let message = format!(
+        "the file's parse result is {size} bytes, more than the master accepts ({limit} \
+         bytes, [master] grpc_max_message_size): raise the setting, or split the file"
+    );
+    tracing::error!(path = file.path.as_str(), %message, "parsed file not uploaded");
+    pb::ParsedFile {
+        path: file.path,
+        dag_json: Vec::new(),
+        import_error: Some(pb::ImportError {
+            exception: "ParseResultTooLarge".to_owned(),
+            message,
+            traceback: String::new(),
+        }),
     }
 }
 

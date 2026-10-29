@@ -66,7 +66,7 @@ Today's commits, oldest first:
   be planned then. No batch reviews of about five sub-steps. Read-only with throwaway proof
   tests. Claude writes the guide for each step. Every Grok finding is verified before
   acting; the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **61**), lettered options, the recommended one first,
+- **Decisions:** numbered (the next is **64**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
@@ -111,7 +111,8 @@ Today's commits, oldest first:
   `curl https://crates.io/api/v1/crates/<name>/versions` (or PyPI), and add them to the
   "Libraries" table in PROJECT.md.
 - `0001_initial.sql` (both `postgres/` and `sqlite/`) and the protocol (`PROTOCOL_VERSION`
-  0.1) are edited in place until the first release.
+  0.1) are edited in place until the first release: **1.0.0, after M4.5** (the user,
+  2026-10-29; PLAN.md, Release 1.0.0). From then on, migrations and additive protocol changes.
 - Match the surrounding code: comment density, naming, and the error message style (backticks
   around names, lower case, what to do next).
 - Regenerate `schema/` with `make schema` after API or DAG JSON changes (`make check` runs
@@ -188,8 +189,3 @@ Today's commits, oldest first:
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
-
-
-## Dev notes
-- The user's two UI notes (a click hanging with its request pending; a task left `scheduled`
-  long after it ended) are B32 and B31 in BUGS.md, not to be fixed until scheduled.

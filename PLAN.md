@@ -340,6 +340,14 @@ message's attempt answers for all.
 | M4.5.2 | **Savepoints in `schedr-db`:** `Database::savepoint` inside an open scope (Postgres and SQLite), `ROLLBACK TO` clearing the scope's `broken` mark, `RELEASE`; a failed statement behind a savepoint no longer voids the transaction | unit tests on both databases, including a failed statement undone alone |
 | M4.5.3 | **Turns in one transaction:** the turn loop (`service.rs`) wrapped in one transaction, a savepoint and memory snapshot per message, the batch ended at `CodeVersionChanged`, `Draining` and `Deregister`, heartbeats and warnings after the commit; metrics, wakes and `arrivals` deferred to after the commit; the fallback when the commit fails; the read-back once per turn | a failed message undone alone while the others are stored; a commit failure redone one by one; no metric counted twice; the baseline's measurements lower |
 
+## Release 1.0.0: after M4.5
+
+Decided by the user (2026-10-29): **schedr 1.0.0 is released once M4.5 is done.** Until then,
+`0001_initial.sql` (Postgres and SQLite) and the protocol (`PROTOCOL_VERSION` 0.1) are edited
+in place. From 1.0.0 on, a schema change is a new migration, and the protocol changes only
+additively within a major version (a new major for anything else); DAG JSON, the REST API
+and the configuration keep what they accept.
+
 ## M6: sign-in against LDAP
 
 Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode

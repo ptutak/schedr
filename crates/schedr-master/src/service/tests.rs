@@ -5,7 +5,7 @@ use schedr_db::Database;
 use schedr_model::DagId;
 use schedr_model::runner::ParsedFile;
 use schedr_proto::PROTOCOL_VERSION;
-use schedr_proto::convert::parsed_file_to_proto;
+use schedr_proto::convert::{parse_upload_parts, parsed_file_to_proto};
 use schedr_proto::pb::master_client::MasterClient;
 use serde_json::json;
 use tonic::transport::{Channel, Endpoint, Server};
@@ -47,20 +47,17 @@ async fn connected_on(
     db: Database,
     clock: fn() -> Timestamp,
 ) -> (Hub, Database, MasterClient<Channel>) {
-    connected_on_with(db, clock, |hub| hub).await
+    connected_on_with(db, clock, Settings::default()).await
 }
 
-/// As [`connected_on`], the hub changed by `with` before it is served.
+/// As [`connected_on`], the master with `settings`.
 async fn connected_on_with(
     db: Database,
     clock: fn() -> Timestamp,
-    with: impl FnOnce(Hub) -> Hub,
+    settings: Settings,
 ) -> (Hub, Database, MasterClient<Channel>) {
     db.migrate().await.unwrap();
-    let hub = with(Hub::with_clock(
-        MasterCore::new(db.clone(), Settings::default()),
-        clock,
-    ));
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), settings), clock);
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     let service = hub.service();
     tokio::spawn(async move {
@@ -122,6 +119,16 @@ async fn next(stream: &mut Streaming<pb::MasterMessage>) -> master_message::Mess
         .unwrap()
 }
 
+/// Uploads `result` as the agent does: its header, then a file a message.
+async fn upload(
+    client: &mut MasterClient<Channel>,
+    result: pb::ParseResult,
+) -> Result<tonic::Response<pb::ParseResultAck>, tonic::Status> {
+    client
+        .upload_parse_result(tokio_stream::iter(parse_upload_parts(result)))
+        .await
+}
+
 fn parse_result() -> pb::ParseResult {
     let file: ParsedFile = serde_json::from_value(json!({
         "path": "sync.py",
@@ -170,7 +177,7 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
         master_message::Message::AssignParse(_)
     ));
 
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -263,10 +270,7 @@ async fn a_parse_upload_past_grpcs_default_limit_is_stored() {
         master_message::Message::AssignParse(_)
     ));
 
-    client
-        .upload_parse_result(large_parse_result())
-        .await
-        .unwrap();
+    upload(&mut client, large_parse_result()).await.unwrap();
     hub.tick().await.unwrap();
     let dags = db.stored_dags().await.unwrap();
     assert_eq!(
@@ -280,13 +284,13 @@ async fn a_parse_upload_past_the_configured_limit_is_refused() {
     let (_hub, _db, mut client) = connected_on_with(
         Database::connect("sqlite::memory:").await.unwrap(),
         fixed_now,
-        |hub| hub.with_max_message_size(4 << 20),
+        Settings {
+            max_message_size: 4 << 20,
+            ..Settings::default()
+        },
     )
     .await;
-    let status = client
-        .upload_parse_result(large_parse_result())
-        .await
-        .unwrap_err();
+    let status = upload(&mut client, large_parse_result()).await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::OutOfRange, "{status}");
 }
 
@@ -315,13 +319,15 @@ async fn a_stream_must_start_with_a_compatible_register() {
 #[tokio::test]
 async fn a_bad_upload_is_an_invalid_argument() {
     let (_hub, _db, mut client) = connected().await;
-    let status = client
-        .upload_parse_result(pb::ParseResult {
+    let status = upload(
+        &mut client,
+        pb::ParseResult {
             root: None,
             ..parse_result()
-        })
-        .await
-        .unwrap_err();
+        },
+    )
+    .await
+    .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }
 
@@ -482,7 +488,7 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
         master_message::Message::AssignParse(_)
     ));
     // The worker runs an attempt…
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -580,7 +586,7 @@ async fn parsed_worker(
         next(&mut stream).await,
         master_message::Message::AssignParse(_)
     ));
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(client, parse_result()).await.unwrap();
     (to_master, stream)
 }
 
@@ -886,7 +892,7 @@ async fn a_tasks_inputs_are_served_while_the_master_is_busy() {
         next(&mut stream).await,
         master_message::Message::AssignParse(_)
     ));
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -936,7 +942,7 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
         next(&mut stream).await,
         master_message::Message::AssignParse(_)
     ));
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -989,7 +995,7 @@ async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
         next(&mut stream).await,
         master_message::Message::AssignParse(_)
     ));
-    client.upload_parse_result(parse_result()).await.unwrap();
+    upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -1071,7 +1077,7 @@ async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
     }))
     .unwrap();
     result.files = vec![parsed_file_to_proto(&file)];
-    client.upload_parse_result(result).await.unwrap();
+    upload(&mut client, result).await.unwrap();
     db.insert_command(&trigger_sync(), "anna", fixed_now())
         .await
         .unwrap();
@@ -1174,5 +1180,51 @@ async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
     assert!(
         rounds <= most,
         "{rounds} rounds in {elapsed:?}, at most {most}"
+    );
+}
+
+/// B35: a root bigger than the limit, its files each under it, is uploaded a file a message
+/// and stored, instead of being refused and handed out again every ten minutes.
+#[tokio::test]
+async fn a_root_past_the_limit_is_stored_when_each_file_fits() {
+    let (hub, db, mut client) = connected_on_with(
+        Database::connect("sqlite::memory:").await.unwrap(),
+        fixed_now,
+        Settings {
+            max_message_size: 4 << 20,
+            ..Settings::default()
+        },
+    )
+    .await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let master_message::Message::Registered(registered) = next(&mut stream).await else {
+        panic!("expected Registered")
+    };
+    assert_eq!(registered.max_message_size, 4 << 20);
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    let mut result = parse_result();
+    for name in ["a.py", "b.py"] {
+        let big: ParsedFile = serde_json::from_value(json!({
+            "path": name, "dags": [],
+            "error": {"exception": "ImportError", "message": "x".repeat(3 << 20), "traceback": ""}
+        }))
+        .unwrap();
+        result.files.push(parsed_file_to_proto(&big));
+    }
+    upload(&mut client, result).await.unwrap();
+    hub.tick().await.unwrap();
+    let dags = db.stored_dags().await.unwrap();
+    assert_eq!(
+        dags.iter().map(|d| d.dag_id.as_str()).collect::<Vec<_>>(),
+        ["sync"]
     );
 }

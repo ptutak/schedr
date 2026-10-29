@@ -147,6 +147,33 @@ def from_desc(desc: TypeDesc, *, output: bool) -> dict[str, Any]:  # noqa: PLR09
             }
 
 
+_SCALAR_TYPES = frozenset({"string", "integer", "number", "boolean"})
+
+
+def is_scalar(desc: ModelType) -> bool:
+    """Whether every value of a model's part is text, a number or a boolean (renderable).
+
+    Args:
+        desc: A model, or a part of one.
+
+    Returns:
+        True for those types, enums of them, and unions of such parts.
+    """
+    return _scalar(desc.schema, desc.schema)
+
+
+def _scalar(schema: Schema, root: Schema) -> bool:
+    schema = _resolve(schema, root)
+    members = schema.get("anyOf") or schema.get("oneOf")
+    if members is not None:
+        return all(_scalar(m, root) for m in members)
+    if "enum" in schema or "const" in schema:
+        values = schema["enum"] if "enum" in schema else [schema["const"]]
+        return all(isinstance(v, str | int | float) for v in values)
+    types = _types(schema)
+    return types is not None and types <= _SCALAR_TYPES
+
+
 def part(desc: ModelType, step: str | int) -> ModelType | None:
     """The type of one step into a model's value (``out.url``, ``out.items[0]``).
 

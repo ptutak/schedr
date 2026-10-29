@@ -33,11 +33,13 @@ flowchart LR
    is an import error. The runner also returns the Python warnings each import raised (a
    `TypingHint` for an outcome class type checkers can't narrow, for example). Only
    `schedr dags check` shows them; the agent doesn't upload them.
-5. **Upload.** The agent sends the DAG JSON and the import errors per file with a unary call.
+5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
-   DAG is stored **paused**. The whole root goes in one message, which the master accepts up
-   to `[master] grpc_max_message_size` (64 MiB by default). A larger upload is refused, and
-   the worker logs `parse result not uploaded` with `OutOfRange`: raise the setting.
+   DAG is stored **paused**. The upload is a stream: a header, then one message per file, so
+   only a single file's size counts against `[master] grpc_max_message_size` (64 MiB by
+   default), which the master sends the worker in `Registered`. A file whose parse result is
+   bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. The
+   upload runs beside the worker's session, so heartbeats go on while it is sent.
 
 A parse job that hasn't finished after 10 minutes, or whose worker is lost, goes to the next
 worker that reported the same hash. Parse jobs live only in the master's memory. After a

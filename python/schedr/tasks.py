@@ -436,8 +436,14 @@ class TaskFunction[**P, R]:
             _build.check_template_references(builder, template, where)
         if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
             raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
-        # Each reference, at any depth, against the type of the place it fills.
-        for reference, at in _build.typed_references(converted, expected):
+        # Each reference, at any depth, against the type of the place it fills; the literals
+        # beside them against theirs.
+        try:
+            typed = _build.typed_references(converted, expected)
+        except TypeError as e:
+            raise TypeError(f"{where}: {e}") from None
+        _build.check_literals(converted, annotation, where)
+        for reference, at in typed:
             produced = _build.reference_type(builder, reference, where)
             problem = assignment_problem(produced, at)
             if problem is not None:

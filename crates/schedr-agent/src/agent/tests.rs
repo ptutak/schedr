@@ -311,10 +311,18 @@ async fn a_new_file_gives_a_new_hash_and_a_new_parse() {
 }
 
 /// A master that answers `Register` with prepared messages and records what the agent sends.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Scripted {
     script: Vec<pb::MasterMessage>,
     received: Arc<Mutex<Vec<pb::WorkerMessage>>>,
+    /// Also assign a parse of each root `Register` reports, at the hash it reports.
+    parse_registered: bool,
+    /// How long an upload takes to answer.
+    upload_delay: Duration,
+    /// The heartbeats that arrived while each upload waited.
+    during_uploads: Arc<Mutex<Vec<usize>>>,
+    /// Each parse result uploaded, put back together.
+    uploads: Arc<Mutex<Vec<pb::ParseResult>>>,
 }
 
 #[tonic::async_trait]
@@ -331,6 +339,19 @@ impl pb::master_server::Master for Scripted {
         for message in self.script.clone() {
             sender.send(Ok(message)).await.unwrap();
         }
+        if self.parse_registered {
+            let first = inbound.message().await?.expect("a register first");
+            if let Some(worker_message::Message::Register(register)) = &first.message {
+                for root in &register.roots {
+                    let job = master_message::Message::AssignParse(pb::AssignParse {
+                        parse_job_id: format!("job-{}", root.root),
+                        root: Some(root.clone()),
+                    });
+                    sender.send(Ok(to_worker(job))).await.unwrap();
+                }
+            }
+            self.received.lock().unwrap().push(first);
+        }
         let received = Arc::clone(&self.received);
         tokio::spawn(async move {
             let _keep_open = sender;
@@ -343,8 +364,20 @@ impl pb::master_server::Master for Scripted {
 
     async fn upload_parse_result(
         &self,
-        _request: tonic::Request<pb::ParseResult>,
+        request: tonic::Request<tonic::Streaming<pb::ParseResultPart>>,
     ) -> Result<tonic::Response<pb::ParseResultAck>, tonic::Status> {
+        let mut parts = request.into_inner();
+        let mut upload = schedr_proto::convert::ParseUpload::default();
+        while let Some(part) = parts.message().await? {
+            upload.add(part).unwrap();
+        }
+        self.uploads.lock().unwrap().push(upload.finish().unwrap());
+        if !self.upload_delay.is_zero() {
+            let before = heartbeats(&self.received.lock().unwrap());
+            tokio::time::sleep(self.upload_delay).await;
+            let after = heartbeats(&self.received.lock().unwrap());
+            self.during_uploads.lock().unwrap().push(after - before);
+        }
         Ok(tonic::Response::new(pb::ParseResultAck {}))
     }
 
@@ -439,6 +472,21 @@ async fn against_script_with(
     done: impl Fn(&[pb::WorkerMessage]) -> bool,
     tweak: impl FnOnce(&mut Agent<Fake>),
 ) -> (Vec<pb::WorkerMessage>, Vec<String>) {
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    against_master(slots, start, master, done, tweak).await
+}
+
+/// [`against_script_with`], against a prepared master.
+async fn against_master(
+    slots: u32,
+    start: Start,
+    master: Scripted,
+    done: impl Fn(&[pb::WorkerMessage]) -> bool,
+    tweak: impl FnOnce(&mut Agent<Fake>),
+) -> (Vec<pb::WorkerMessage>, Vec<String>) {
     let dir = TempDir::new().unwrap();
     let journal = Journal::new(dir.path().join("journal"));
     match start {
@@ -452,11 +500,7 @@ async fn against_script_with(
     let root = dir.path().join("etl");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("sync.py"), "").unwrap();
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let master = Scripted {
-        script,
-        received: Arc::clone(&received),
-    };
+    let received = Arc::clone(&master.received);
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     tokio::spawn(async move {
         Server::builder()
@@ -584,6 +628,7 @@ async fn without_a_free_slot_an_assignment_is_rejected() {
 #[tokio::test]
 async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
             lease_timeout_ms: 60_000,
@@ -701,6 +746,7 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
         ("old-4", JournalRecord::Running(None)),
     ]);
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
             lease_timeout_ms: 60_000,
@@ -801,6 +847,7 @@ async fn the_workers_warnings_go_after_register_and_on_every_change() {
 #[tokio::test]
 async fn a_forked_attempt_sends_started_again_with_its_method() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
             lease_timeout_ms: 60_000,
@@ -837,6 +884,7 @@ async fn a_forked_attempt_sends_started_again_with_its_method() {
 #[tokio::test]
 async fn an_attempt_assigned_again_is_ignored() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
             lease_timeout_ms: 60_000,
@@ -1208,5 +1256,104 @@ fn a_missing_proc_is_warned_once_and_other_identity_errors_every_time() {
     assert_eq!(
         NO_PROC_WARNING,
         "no /proc: orphaned tasks aren't stopped after a crash"
+    );
+}
+
+#[tokio::test]
+async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
+    let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![],
+    }));
+    let master = Scripted {
+        script: vec![timing],
+        parse_registered: true,
+        upload_delay: Duration::from_millis(500),
+        ..Scripted::default()
+    };
+    let during = Arc::clone(&master.during_uploads);
+    let uploaded = Arc::clone(&master.during_uploads);
+    against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        move |_| !uploaded.lock().unwrap().is_empty(),
+        |_| {},
+    )
+    .await;
+    // A 500 ms upload at a 20 ms heartbeat: about 25 expected, at least a few under load.
+    let counts = during.lock().unwrap().clone();
+    assert!(counts[0] >= 5, "heartbeats while uploading: {counts:?}");
+}
+
+#[tokio::test]
+async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() {
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 1,
+        timing: None,
+        decisions: vec![],
+    }));
+    let master = Scripted {
+        script: vec![registered],
+        parse_registered: true,
+        ..Scripted::default()
+    };
+    let uploads = Arc::clone(&master.uploads);
+    let seen = Arc::clone(&master.uploads);
+    against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        move |_| !seen.lock().unwrap().is_empty(),
+        |_| {},
+    )
+    .await;
+    let uploaded = uploads.lock().unwrap().clone();
+    let file = &uploaded[0].files[0];
+    assert_eq!(file.path, "sync.py");
+    assert_eq!(file.dag_json, Vec::<Vec<u8>>::new());
+    let error = file.import_error.as_ref().expect("an import error");
+    assert_eq!(error.exception, "ParseResultTooLarge");
+    assert!(
+        error.message.ends_with(
+            "more than the master accepts (1 bytes, [master] grpc_max_message_size): raise the \
+             setting, or split the file"
+        ),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn a_result_past_the_masters_limit_is_sent_as_output_too_large() {
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 1,
+        timing: None,
+        decisions: vec![],
+    }));
+    let python = task_json(&json!({"kind": "python"}));
+    let script = vec![registered, assign("a1", &python, "sync.py", false)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).iter().any(|k| k.starts_with("finished"));
+    let (seen, _) = against_script(1, Start::With(vec![]), script, done).await;
+    let finished = seen
+        .iter()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Finished(f)) => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!(finished.error_kind, "output_too_large");
+    assert_eq!(finished.output_json, Vec::<u8>::new());
+    let summary = String::from_utf8(finished.error_summary_json.clone()).unwrap();
+    assert!(summary.contains("ResultTooLarge"), "{summary}");
+    assert!(
+        summary.contains("[master] grpc_max_message_size"),
+        "{summary}"
     );
 }

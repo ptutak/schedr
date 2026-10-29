@@ -39,7 +39,7 @@ The master decides retries. What uses a retry, and what doesn't:
 | `failed`, `timed_out`, `oom_killed`, `lost` | yes, while the task's `retries` last |
 | `interrupted` (drain), `assignment_expired`, rejected | no: the task runs again |
 | `cancelled` | never retried |
-| failed with an error certain to repeat (e.g. inputs too large, a template that can't render) | never retried |
+| failed with an error certain to repeat (e.g. inputs too large, a template that can't render, a result bigger than the master accepts: `output_too_large`) | never retried |
 
 ## Delivery
 

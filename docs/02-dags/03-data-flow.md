@@ -45,6 +45,7 @@ The part is checked against the upstream return type at import.
 | The upstream type | A valid next step |
 |---|---|
 | A dataclass or a `TypedDict` | A field that exists. `batch.rows` is `int` because `Batch.rows` is. |
+| A Pydantic model | A field of its schema, by attribute name: `config.retries` has the field's schema (`int`, minimum 0). See [Pydantic models](#pydantic-models). |
 | `dict[str, T]` | Any string key, of type `T`. |
 | `list[T]` | Any index, of type `T`. |
 | `tuple[A, B]` | An index that exists. |
@@ -115,3 +116,10 @@ accepted.
 
 Parts that can't be compared (`allOf`, `not`, `if`, custom schemas) fit only when the two
 sides are identical. The error names the field and both sides' constraints.
+
+A model's text, number and boolean fields render into commands and t-strings like any
+value (`t"curl {found.url}"`). A model's date renders as the text Pydantic wrote: a format
+spec such as `:%Y` doesn't apply to it. A date a model holds without a time zone reaches a
+`datetime` parameter without one, and schedr refuses to store such a value again: declare
+the field `AwareDatetime`, or add a zone in the task. `NaN` and infinity in a model are
+refused, as in any output.

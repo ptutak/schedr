@@ -203,7 +203,8 @@ impl MasterCore {
             db.clone(),
             SchedrVersion::current(),
             ParseJobs::new(settings.parse_job_timeout),
-        );
+        )
+        .with_max_message_size(settings.max_message_size);
         discovery.set_wakes(wakes.clone());
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
             .with_code_wait(settings.code_wait)
@@ -424,6 +425,7 @@ impl MasterCore {
                 cancel_grace_ms: millis(self.settings.cancel_grace),
             }),
             decisions,
+            max_message_size: u64::try_from(self.settings.max_message_size).unwrap_or(u64::MAX),
         };
         Ok((registered, outgoing))
     }

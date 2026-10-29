@@ -381,6 +381,9 @@ def test_references_inside_containers_must_fit_their_element() -> None:
     @task
     def anything(values: list[Any]) -> None: ...
 
+    @task
+    def count() -> int: ...
+
     with (
         pytest.raises(TypeError, match=r"argument `values`: expects `int`, but `name` is `str`"),
         Dag("d"),
@@ -400,6 +403,12 @@ def test_references_inside_containers_must_fit_their_element() -> None:
         total([dag_ctx.run.planned_for])
     with Dag("g"):
         anything([name(), dag_ctx.run.planned_for])
+    # The literals beside a reference are checked too (Grok's review, 2026-10-29).
+    with (
+        pytest.raises(TypeError, match=r"argument `values`\[0\]: expected int, got bool"),
+        Dag("h"),
+    ):
+        total([True, count()])
 
 
 def test_parts_and_dag_ctx_are_checked_too() -> None:

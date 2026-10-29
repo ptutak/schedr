@@ -5,6 +5,9 @@ use super::*;
 
 const MASTER: SchedrVersion = SchedrVersion::new(0, 1);
 
+/// The master's message limit in these tests: the default, 64 MiB.
+const LIMIT: usize = 64 << 20;
+
 fn task(id: &str, arguments: &Json) -> Json {
     json!({
         "id": id, "kind": "python", "arguments": arguments,
@@ -228,6 +231,7 @@ fn files_with_invalid_dags_become_import_errors() {
         "etl",
         vec![file("sync.py", vec![dag_with(&json!({})), bad])],
         MASTER,
+        LIMIT,
     );
     assert_eq!(files[0].dags, []);
     let error = files[0].error.as_ref().unwrap();
@@ -253,7 +257,7 @@ fn valid_files_and_import_errors_are_kept() {
         warnings: Vec::new(),
     };
     let good = file("sync.py", vec![dag_with(&json!({}))]);
-    let files = validate_files("etl", vec![good.clone(), failed], MASTER);
+    let files = validate_files("etl", vec![good.clone(), failed], MASTER, LIMIT);
     assert_eq!(files[0], good);
     assert_eq!(files[1].dags, []);
     assert_eq!(files[1].error, Some(error));
@@ -262,7 +266,7 @@ fn valid_files_and_import_errors_are_kept() {
 #[test]
 fn paths_must_stay_inside_the_root() {
     for path in ["", "/etc/x.py", "../x.py", "a/../x.py", "./x.py", "a\\x.py"] {
-        let files = validate_files("etl", vec![file(path, vec![])], MASTER);
+        let files = validate_files("etl", vec![file(path, vec![])], MASTER, LIMIT);
         let error = files[0].error.as_ref().unwrap();
         assert_eq!(error.exception, INVALID_PATH_EXCEPTION, "{path}");
         assert_eq!(
@@ -270,6 +274,37 @@ fn paths_must_stay_inside_the_root() {
             format!("`{path}` isn't a relative path inside the root")
         );
     }
-    let files = validate_files("etl", vec![file("team/a.py", vec![])], MASTER);
+    let files = validate_files("etl", vec![file("team/a.py", vec![])], MASTER, LIMIT);
     assert_eq!(files[0].error, None);
+}
+
+#[test]
+fn a_task_whose_output_cant_reach_the_master_is_refused() {
+    let mut command = task("dump", &json!({}));
+    command["kind"] = json!("command");
+    command["command"] = json!({"shell": [{"text": "cat big"}]});
+    command["settings"]["max_output_size"] = json!(40u64 << 20);
+    let mut python = task("load", &json!({}));
+    python["settings"]["max_output_size"] = json!(40u64 << 20);
+    let dag = dag_with(&json!({"tasks": [command, python], "edges": []}));
+    // 40 MiB fits 64 MiB for a Python task; a command's two streams don't.
+    assert_eq!(
+        output_problems(&dag, LIMIT),
+        [
+            "task `dump`: max_output_size 40 MiB (stdout and stderr each) can't reach the master, \
+          which accepts results up to 32736 KiB ([master] grpc_max_message_size, less 64 KiB \
+          for the rest of the result): lower max_output_size, or raise the setting"
+        ]
+    );
+    assert_eq!(output_problems(&dag, 128 << 20), Vec::<String>::new());
+    // Through the file check: the DAG is refused as an import error.
+    let files = validate_files("etl", vec![file("sync.py", vec![dag])], MASTER, LIMIT);
+    let error = files[0].error.as_ref().unwrap();
+    assert!(
+        error
+            .message
+            .contains("task `dump`: max_output_size 40 MiB"),
+        "{}",
+        error.message
+    );
 }
