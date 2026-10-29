@@ -862,7 +862,7 @@
           "description": "The task's function returned; its output is encoded and within the size limit.",
           "properties": {
             "outcome": {
-              "description": "The outcome's name (`SUCCESS` until outcome types arrive, milestone M4).",
+              "description": "The outcome's name: `SUCCESS`, an outcome union member's class name, or an `Outcome` member's name.",
               "type": "string"
             },
             "output": {
