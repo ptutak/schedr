@@ -17,7 +17,9 @@ from schedr._model import (
     DictType,
     Edge,
     EdgeKind,
+    Expand,
     IdError,
+    ListType,
     ListValue,
     LiteralValue,
     MapValue,
@@ -230,6 +232,8 @@ class DagBuilder:
         self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
         # Arguments that take a reference, checked once the DAG is complete (check_nones).
         self.none_checks: list[tuple[str, str, OutputRef | OutcomeRef, TypeDesc]] = []
+        # Mapped tasks (`.expand()`): their output is the list of their instances' outputs.
+        self.mapped: set[str] = set()
         # Task groups, outer before inner, and the ones open now (innermost last).
         self.groups: dict[str, GroupScope] = {}
         self.open_groups: list[GroupScope] = []
@@ -302,6 +306,7 @@ class DagBuilder:
         options: TaskOptions,
         outcomes: OutcomeSpec = DEFAULT,
         outcome_types: Mapping[str, TypeDesc] | None = None,
+        expand: Expand | None = None,
     ) -> None:
         """Adds a task with its settings resolved against its groups' and the DAG's defaults.
 
@@ -313,6 +318,7 @@ class DagBuilder:
             outcomes: Its outcomes.
             outcome_types: For an outcome union, each outcome's type (what ``.on()`` narrows
                 to).
+            expand: What a mapped task's instances vary over (``.expand()``).
 
         Raises:
             IdError: If a task with this ID already exists, or the ID is invalid.
@@ -338,7 +344,10 @@ class DagBuilder:
             settings,
             outcomes.declared(),
             group=scope.id if scope is not None else None,
+            expand=expand,
         )
+        if expand is not None:
+            self.mapped.add(task_id)
         self.outcomes[task_id] = outcomes
         self.outcome_types[task_id] = dict(outcome_types or {})
 
@@ -408,9 +417,12 @@ class DagBuilder:
             TypeError: For a parameter that may get ``None`` and doesn't allow it.
         """
         skippable = self.may_skip()
+        partial = self.instances_may_skip()
         for task_id, where, reference, expected in self.none_checks:
             if task_id not in self.tasks:
                 continue  # Its definition failed (the error was caught in the DAG block).
+            if isinstance(reference, OutputRef) and reference.task in partial:
+                _check_mapped_none(reference, expected, where)
             if self.tasks[task_id].settings.run_if != RunIf.NONE_FAILED:
                 continue
             on = tuple(reference.on) if isinstance(reference, OutputRef) else ()
@@ -426,6 +438,32 @@ class DagBuilder:
                     f"(`{type_name(expected)} | None`), or give the task "
                     "run_if=RunIf.ALL_SUCCEEDED (skipped instead)"
                 )
+
+    def instances_may_skip(self) -> set[str]:
+        """The mapped tasks some of whose instances may be skipped while others run.
+
+        An instance is skipped when its element's edge isn't taken: it maps element by element
+        over a narrowed mapped output (``.expand(r=results.on(Rows))``), or over a mapped task
+        whose instances may be skipped.
+
+        Returns:
+            Their IDs.
+        """
+        found: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for task_id in self.mapped - found:
+                expand = self.tasks[task_id].expand
+                assert expand is not None
+                for reference in expand.references():
+                    if not isinstance(reference, OutputRef) or reference.task not in self.mapped:
+                        continue
+                    if reference.on or reference.task in found:
+                        found.add(task_id)
+                        changed = True
+                        break
+        return found
 
     def find_cycle(self) -> list[str] | None:
         """A dependency cycle, if there is one.
@@ -894,7 +932,9 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
     if reference.on and by_outcome:
         narrowed = [by_outcome[name] for name in reference.on]
         produced = narrowed[0] if len(narrowed) == 1 else UnionType(tuple(narrowed))
-    elif by_outcome and reference.path:
+    if reference.task in builder.mapped:
+        return _mapped_type(reference, produced, where)
+    if by_outcome and reference.path and not reference.on:
         raise TypeError(
             f"{where}: `{reference_label(reference)}`: the output of `{reference.task}` is one of "
             f"its outcomes ({', '.join(by_outcome)}); narrow it first, e.g. "
@@ -905,6 +945,44 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
         raise TypeError(
             f"{where}: `{reference_label(reference)}` doesn't exist: the output of "
             f"`{reference.task}` is `{type_name(produced)}`"
+        )
+    return found
+
+
+def _check_mapped_none(reference: OutputRef, expected: TypeDesc, where: str) -> None:
+    """Refuses a parameter that can't take ``None`` for a skipped instance's element.
+
+    Raises:
+        TypeError: When the element type (or the indexed element) doesn't allow ``None``.
+    """
+    element = follow_path(expected, (0,)) if not reference.path else expected
+    if element is None or is_assignable(ScalarType("none"), element):
+        return
+    raise TypeError(
+        f"{where}: some instances of the mapped task `{reference.task}` may be skipped, and "
+        f"`{reference_label(reference)}` has None for them; allow None "
+        f"(`{type_name(element)} | None`{' in the list' if not reference.path else ''})"
+    )
+
+
+def _mapped_type(reference: OutputRef, element: TypeDesc, where: str) -> TypeDesc:
+    """The type a reference to a mapped task's output stands for.
+
+    The list of its instances' outputs (each ``element``), or a part of one by index
+    (``results[0].rows``); a field of every element (``results.rows``) is refused.
+    """
+    path = tuple(reference.path)
+    if path and isinstance(path[0], str):
+        raise TypeError(
+            f"{where}: `{reference_label(reference)}`: `{reference.task}` is mapped, so its "
+            "output is a list (one element per instance); index it (`"
+            f"{reference.task}[0].{path[0]}`), or gather the field in a task"
+        )
+    found = follow_path(ListType(element), path)
+    if found is None:
+        raise TypeError(
+            f"{where}: `{reference_label(reference)}` doesn't exist: the output of "
+            f"`{reference.task}` is `list[{type_name(element)}]`"
         )
     return found
 

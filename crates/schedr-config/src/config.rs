@@ -46,6 +46,8 @@ pub struct Config {
     pub database: DatabaseSection,
     /// `[master]`: the master's port and timing.
     pub master: MasterSection,
+    /// `[mapping]`: mapped tasks (`.expand()`).
+    pub mapping: MappingSection,
     /// `[webserver]`: the REST API (and later the UI).
     pub webserver: WebserverSection,
     /// `[ui]`: the web UI (`schedr ui`, and the one `schedr standalone` serves).
@@ -332,6 +334,24 @@ impl Default for OpsSection {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8090,
             loop_stall_timeout: Duration::from_secs(120),
+        }
+    }
+}
+
+/// `[mapping]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct MappingSection {
+    /// The most instances a mapped task may have in a run; more fail the task, saying so
+    /// (like Airflow's `max_map_length`). At least 1.
+    pub max_instances: u32,
+}
+
+impl Default for MappingSection {
+    /// 1024 instances.
+    fn default() -> Self {
+        Self {
+            max_instances: 1024,
         }
     }
 }

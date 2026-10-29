@@ -51,8 +51,10 @@ pub async fn list_dags(State(state): State<ApiState>) -> ApiResult<DagList> {
     }))
 }
 
-/// The files of each DAG root's current code that failed to import: their DAGs aren't in
-/// the DAG list (decision 66). Fixing a file and syncing the root makes its entry go.
+/// The files of each DAG root's current code that failed to import (decision 66). A DAG
+/// defined in such a file keeps its last good version (still listed and scheduled), but its
+/// tasks run the current code and fail until the file is fixed; fixing it and syncing the root
+/// makes the entry go.
 #[utoipa::path(get, path = "/api/v1/import-errors", tag = "dags",
     responses((status = 200, body = ImportErrorList)))]
 pub async fn list_import_errors(State(state): State<ApiState>) -> ApiResult<ImportErrorList> {

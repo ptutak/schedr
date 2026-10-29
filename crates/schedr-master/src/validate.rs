@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::{Dag, EdgeKind, Reference, SchedrVersion, TaskId, TaskKind};
+use schedr_model::{Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind};
 
 use crate::fire_times::FireTimes;
 
@@ -57,6 +57,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         }
     }
     group_problems(dag, &mut problems);
+    expand_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
@@ -67,6 +68,39 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         ));
     }
     problems
+}
+
+/// Mapped tasks (decision 69): a Python task only, with something to vary over, never an
+/// argument both fixed and mapped. Mapped tasks don't run before M4.3b.
+fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        let Some(expand) = &task.expand else {
+            continue;
+        };
+        let TaskKind::Python { arguments, .. } = &task.kind else {
+            problems.push(format!(
+                "task `{}`: only a @task function can be mapped (`.expand()`)",
+                task.id
+            ));
+            continue;
+        };
+        if let Expand::Product(over) = expand {
+            if over.is_empty() {
+                problems.push(format!("task `{}`: `.expand()` names no argument", task.id));
+            }
+            for name in over.keys().filter(|name| arguments.contains_key(*name)) {
+                problems.push(format!(
+                    "task `{}`: argument `{name}` is both fixed (`.partial()`) and mapped \
+                     (`.expand()`)",
+                    task.id
+                ));
+            }
+        }
+        problems.push(format!(
+            "task `{}` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)",
+            task.id
+        ));
+    }
 }
 
 /// Groups (decision 64): unique, each parent a group of the DAG, no group inside itself, and

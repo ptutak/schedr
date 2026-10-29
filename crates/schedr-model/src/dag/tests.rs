@@ -18,6 +18,7 @@ fn empty_task(name: &str) -> Task {
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     }
 }
 
@@ -97,6 +98,7 @@ fn round_trips_through_json() {
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     });
     let json = serde_json::to_string(&original).unwrap();
     assert_eq!(serde_json::from_str::<Dag>(&json).unwrap(), original);

@@ -185,3 +185,18 @@ with Dag("grouped"):
     with group("more") as more:
         side_effect()
     loading >> more
+
+
+@task(retries=1)
+def side_with_options() -> None: ...
+
+
+@task(retries=1)
+def counted() -> int:
+    return 1
+
+
+with Dag("decorated"):
+    marked: Done = side_with_options()
+    wants_int(counted())
+    wants_str(counted())  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]

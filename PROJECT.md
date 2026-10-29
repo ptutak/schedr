@@ -1447,7 +1447,9 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
 
 Asked by the user (2026-10-29): a place in the UI for the DAG files that failed to import.
 - **What is shown** (decision 66, the user's: A): the files of each root's **current** parse
-  that failed (their DAGs aren't in the DAG list), with the root, the hash, when and by which
+  that failed (their DAGs keep their last good version, listed and scheduled, but their tasks
+  run the current code and fail until the file is fixed; see DAG code delivery), with the
+  root, the hash, when and by which
   worker it was parsed, the exception, message and traceback. The master writes each root's
   current parse to `current_parses` when it decides it (from what alive workers report), so
   the API (`GET /api/v1/import-errors`) shows exactly what is in effect without deciding
@@ -3741,7 +3743,9 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     checkers) says so.
   - **Gaps:** `>>` between two values of builtin types (`rows >> counts`) needs `chain()`;
     a branch's returned handles aren't checked (`Task` is `object`; the branch fails when
-    it runs).
+    it runs); `.partial()`, `.expand()` and `.expand_kwargs()` take `object` (Python typing
+    can't say "a list of this parameter's type" for each argument), so a wrong mapped list is
+    caught when the file loads, not in the editor.
   - **Checked:** `make lint` runs mypy `--strict` and basedpyright (its default, strictest
     mode, with `reportUnusedExpression` and `reportUnusedCallResult` off: `a >> b` and an
     operator alone on a line are statements on purpose) over the example DAGs and
@@ -3975,6 +3979,32 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   mental model (e.g. `load_file.partial(bucket="raw").expand(path=files)`). Which mapping
   features beyond that: see Airflow compatibility (Dynamic task mapping), decided for both
   APIs.
+  - **Built in M4.3** (2026-10-29), in three sub-steps: M4.3a the API, DAG JSON and checks;
+    M4.3b the master (expansion, instances, fan-in); M4.3c the runner, API, CLI, UI and
+    `run_dag` per instance. `@task` functions only for now (operators' `.partial()` /
+    `.expand()`, which M5's `BashOperator` needs, later). For type checkers `.expand(...)`
+    returns `list[R]`.
+  - **DAG JSON** (decision 69, the user's, 2026-10-29: A): the fixed arguments stay in
+    `arguments` (`.partial`), and an `expand` field says what varies: `{"product": {name:
+    value}}` (`.expand`; each value a literal list or a reference to a list) or `{"kwargs":
+    value}` (`.expand_kwargs`, a list of dicts). Not chosen: B marking mapped arguments inside
+    `arguments` (every reader of `arguments` would have to know the wrapper).
+  - **Checked when the file loads:** each mapped list against `list[<the parameter's type>]`
+    (literal elements encoded, references typed); names (known, not both fixed and mapped,
+    the rest of the required parameters fixed); a `@branch` can't be mapped. A reference to a
+    mapped task's output is a `list` of its output type: indexing is allowed (`results[0]`), a
+    field of every element (`results.rows`) refused; `.on(...)` and `.outcome` on the whole
+    output refused outside `.expand()` (element by element inside it). A list from a mapped
+    task some of whose instances may be skipped (it maps over a narrowed mapped output, or
+    over such a task) has `None` for them: the receiving type must allow it.
+  - **Mapping over a mapped output** (decision 70, the user's, 2026-10-29: A): the downstream
+    task's instances are created once every upstream instance has finished, then `check[i]`
+    gets `process[i]`'s output. Not chosen: B starting `check[i]` as soon as `process[i]`
+    ends (a pipeline: faster, but instance pairs to track and the count known only at the end).
+  - **In the REST API** (decision 71, the user's, 2026-10-29: A): one row per instance in a
+    run's tasks (`map_index`, -1 for an unmapped task), per-instance URLs with
+    `?map_index=N`. Not chosen: B nesting instances under their task (a new URL family).
+  - `[mapping] max_instances` (1024, at least 1) in the server's configuration.
 - **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
   imported (so an import error). The native API never "accepts and warns"; that applies only to
   the Airflow layer (see Airflow compatibility: Thin translating classes).
@@ -6267,6 +6297,19 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   schedr's crates).
 
 ### Python
+
+- **No `Any`** (the user, 2026-10-29: "avoid Any at all cost"): public signatures carry
+  precise types (overloads, protocols, generics, unions, `object` for an unknown value the
+  caller narrows, the `Json` alias for JSON); `Any` never silences a type checker. Where a
+  precise type can't be written, a comment or an explicit, local `cast` says why. Left alone:
+  signatures a framework dictates (`__init_subclass__(cls, **kwargs: Any)`) and internal code
+  over arbitrary values (annotations, decoded JSON). Applied 2026-10-29: `run_dag`'s
+  `TaskResult.output` is `object` (decision 73, the user's: a test narrows it before using a
+  field; comparing needs nothing), `output_json` is `Json`, `replace=` takes
+  `Mapping[str, object]`, each trigger's `override` names its options with their types (an
+  unknown one is a type error and a `TypeError`), `branch` takes a function returning
+  `list[Task] | Task`, `Output`'s parts are `Output[object]`, and the `@task` decorator's
+  implementation returns the union of its overloads' results (`TaskDecorator` a class).
 
 - Supported versions: **Python 3.14+** (required by t-strings, see Airflow compatibility, Scope:
   Templating). CI tests 3.14.

@@ -341,3 +341,31 @@ fn groups_must_be_unique_nest_properly_and_be_declared() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn a_mapped_task_is_checked_and_refused_until_m4_3b() {
+    let mut mapped = task("load", &json!({"bucket": {"literal": "raw"}}));
+    mapped["expand"] = json!({"product": {"bucket": {"literal": ["a"]}, "path": {"literal": [1]}}});
+    let mut empty = task("none", &json!({}));
+    empty["expand"] = json!({"product": {}});
+    assert_eq!(
+        problems(&json!({"tasks": [mapped, empty], "edges": []})),
+        [
+            "task `load`: argument `bucket` is both fixed (`.partial()`) and mapped (`.expand()`)",
+            "task `load` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)",
+            "task `none`: `.expand()` names no argument",
+            "task `none` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)"
+        ]
+    );
+    // A reference in what it maps over is a reference like any: it needs its data edge.
+    let mut over_output = task("load", &json!({}));
+    over_output["expand"] = json!({"kwargs": output_of("extract")});
+    let found =
+        problems(&json!({"tasks": [task("extract", &json!({})), over_output], "edges": []}));
+    assert!(
+        found.contains(
+            &"task `load` uses the output of `extract` without a data edge from it".to_owned()
+        ),
+        "{found:?}"
+    );
+}

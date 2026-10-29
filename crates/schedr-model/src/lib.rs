@@ -23,7 +23,7 @@ pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group};
 pub use ids::{DagId, IdError, TaskId};
 pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
 pub use task::{
-    CommandLine, DEFAULT_OUTCOME, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,
+    CommandLine, DEFAULT_OUTCOME, Expand, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,
     default_outcomes,
 };
 pub use trigger::Trigger;

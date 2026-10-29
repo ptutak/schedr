@@ -26,7 +26,7 @@ from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
 from schedr.context import RunValues, running
 from schedr.runner.parse import extend_sys_path, import_dag_entries
-from schedr.types import ProcessResult
+from schedr.types import Json, ProcessResult
 
 RUN_KINDS = frozenset({"scheduled", "manual", "backfill", "chained", "event"})
 """The run kinds ``task_context(kind=...)`` accepts."""
@@ -178,13 +178,13 @@ class TaskResult:
     state: str
     outcome: str | None
     try_number: int
-    output_json: Any
+    output_json: Json
     attempts: tuple[Attempt, ...]
     log: str
-    _decode: Callable[[str, Any], Any] = field(repr=False, compare=False)
+    _decode: Callable[[str, Json], object] = field(repr=False, compare=False)
 
     @property
-    def output(self) -> Any:
+    def output(self) -> object:
         """The output decoded by the task's return type, as a downstream task would get it.
 
         A command's output is a ``ProcessResult``; an empty task's is ``None``.
@@ -227,7 +227,7 @@ class _OutputTypes:
         self._location = location
         self._entry: registry.DefinedDag | None = None
 
-    def decode(self, task_id: str, data: Any) -> Any:
+    def decode(self, task_id: str, data: Json) -> object:
         if self._location is None:
             return decode_any(data)
         entry = self._load(self._location)
@@ -298,7 +298,7 @@ def run_dag(
     params: object = None,
     secrets: Mapping[str, str] | None = None,
     step: bool = False,
-    replace: Mapping[str, Any] | None = None,
+    replace: Mapping[str, object] | None = None,
 ) -> RunResult:
     """Runs one real run of a DAG with ``schedr dags test`` and returns its result.
 

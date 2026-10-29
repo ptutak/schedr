@@ -73,6 +73,9 @@ pub enum ConfigError {
         /// The size, as written.
         size: String,
     },
+    /// `[mapping] max_instances` is zero.
+    #[error("[mapping] max_instances must be at least 1")]
+    NoInstances,
     /// The DAG interpreter isn't an `[interpreters]` entry.
     #[error("[dags] interpreter `{name}` is not defined in [interpreters] (defined: {defined})")]
     UnknownInterpreter {
@@ -161,6 +164,9 @@ pub fn load(
         return Err(ConfigError::MessageSize {
             size: format_size(config.master.grpc_max_message_size),
         });
+    }
+    if config.mapping.max_instances == 0 {
+        return Err(ConfigError::NoInstances);
     }
     if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {
         config.interpreters.insert(

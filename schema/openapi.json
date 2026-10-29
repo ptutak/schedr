@@ -1185,7 +1185,7 @@
             }
           }
         },
-        "summary": "The files of each DAG root's current code that failed to import: their DAGs aren't in\nthe DAG list (decision 66). Fixing a file and syncing the root makes its entry go.",
+        "summary": "The files of each DAG root's current code that failed to import (decision 66). A DAG\ndefined in such a file keeps its last good version (still listed and scheduled), but its\ntasks run the current code and fail until the file is fixed; fixing it and syncing the root\nmakes the entry go.",
         "tags": [
           "dags"
         ]

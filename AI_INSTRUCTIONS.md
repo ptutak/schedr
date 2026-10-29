@@ -154,6 +154,13 @@ tooling, says). I still talk only to you.
 - Errors say what is wrong and what to do next, and name what was used (e.g. which
   interpreter, from where).
 - Times are stored in UTC; shown to people in UTC and local time.
+- **Avoid `Any` at all cost** in typed code (Python `typing.Any`, and its equivalents
+  elsewhere): find the precise type (overloads, protocols, generics, a union, `object` for a
+  value of unknown type that callers must narrow, a project alias such as `Json`). Never use
+  `Any` to silence a type checker. Where nothing precise can be said, say so in a comment or
+  use an explicit, local `cast` with the reason. Left alone: what a framework's own signature
+  dictates (e.g. `__init_subclass__(cls, **kwargs: Any)`) and internal code whose values are
+  arbitrary by nature (annotations, decoded JSON); public signatures never.
 
 ## Environment
 

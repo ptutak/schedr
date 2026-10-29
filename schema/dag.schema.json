@@ -140,6 +140,40 @@
         }
       ]
     },
+    "Expand": {
+      "description": "What a mapped task's instances vary over (decision 69): one instance per element.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`.expand(name=values, ...)`: each argument a list (a literal or a reference to a list);\nthe instances are their cartesian product, the first argument varying slowest.",
+          "properties": {
+            "product": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "product"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`.expand_kwargs(values)`: a list of dicts, each one instance's arguments.",
+          "properties": {
+            "kwargs": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "kwargs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Field": {
       "additionalProperties": false,
       "description": "A named field of a `TypedDict` or dataclass.",
@@ -383,6 +417,17 @@
         }
       ],
       "properties": {
+        "expand": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What its instances vary over, for a mapped task (`.expand(...)`); its `arguments` are\nthen the fixed ones (`.partial(...)`)."
+        },
         "group": {
           "description": "The group it belongs to (the innermost), if any (decision 64).",
           "type": [

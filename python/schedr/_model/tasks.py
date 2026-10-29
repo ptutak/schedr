@@ -244,6 +244,64 @@ type TaskKind = PythonKind | CommandKind | EmptyKind
 
 
 @dataclass(frozen=True, slots=True)
+class ExpandProduct:
+    """``.expand(name=values, ...)``: one instance per element of their cartesian product.
+
+    Attributes:
+        over: Each mapped argument's list (a literal, or a reference to a list).
+    """
+
+    over: Mapping[str, Value]
+
+    def references(self) -> list[Reference]:
+        """The references in what it maps over.
+
+        Returns:
+            They, in argument order.
+        """
+        return [r for name in sorted(self.over) for r in self.over[name].references()]
+
+    def to_json(self) -> dict[str, Any]:
+        """As DAG JSON.
+
+        Returns:
+            ``{"product": {name: value}}``.
+        """
+        return {"product": {name: self.over[name].to_json() for name in sorted(self.over)}}
+
+
+@dataclass(frozen=True, slots=True)
+class ExpandKwargs:
+    """``.expand_kwargs(values)``: one instance per dict of the list, its arguments.
+
+    Attributes:
+        over: The list of dicts (a literal, or a reference to one).
+    """
+
+    over: Value
+
+    def references(self) -> list[Reference]:
+        """The references in what it maps over.
+
+        Returns:
+            They, in order.
+        """
+        return self.over.references()
+
+    def to_json(self) -> dict[str, Any]:
+        """As DAG JSON.
+
+        Returns:
+            ``{"kwargs": value}``.
+        """
+        return {"kwargs": self.over.to_json()}
+
+
+type Expand = ExpandProduct | ExpandKwargs
+"""What a mapped task's instances vary over (decision 69)."""
+
+
+@dataclass(frozen=True, slots=True)
 class Task:
     """A task of a DAG.
 
@@ -254,6 +312,7 @@ class Task:
         settings: Its resolved settings.
         outcomes: Its outcomes, each a name and, for a command, the exit code meaning it.
         group: The group it belongs to (the innermost), if any.
+        expand: What its instances vary over, for a mapped task.
     """
 
     id: str
@@ -262,6 +321,7 @@ class Task:
     settings: TaskSettings = field(default_factory=TaskSettings)
     outcomes: tuple[tuple[str, int | None], ...] = DEFAULT_OUTCOMES
     group: str | None = None
+    expand: Expand | None = None
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -275,9 +335,10 @@ class Task:
         """Every reference the task uses.
 
         Returns:
-            The kind's references.
+            The kind's references, then those of what it is mapped over.
         """
-        return self.kind.references()
+        mapped = self.expand.references() if self.expand is not None else []
+        return [*self.kind.references(), *mapped]
 
     def to_json(self) -> dict[str, Any]:
         """The task as DAG JSON (the kind's fields are flattened into it).
@@ -300,4 +361,6 @@ class Task:
             ]
         if self.group is not None:
             result["group"] = self.group
+        if self.expand is not None:
+            result["expand"] = self.expand.to_json()
         return result

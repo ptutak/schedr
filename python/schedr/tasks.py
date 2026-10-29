@@ -11,19 +11,25 @@ import annotationlib
 import functools
 import inspect
 import itertools
+import typing
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, Protocol, overload
+from typing import Any, NoReturn, Protocol, overload
 
 from schedr import _build
 from schedr import outcomes as _outcomes
 from schedr._model import (
+    DagCtxRef,
     EdgeKind,
+    Expand,
+    ExpandKwargs,
+    ExpandProduct,
     LiteralValue,
     OutcomeRef,
     OutputRef,
     PythonKind,
     Reference,
+    RefValue,
     ScalarType,
     TemplateValue,
     Value,
@@ -92,7 +98,7 @@ class Output[T]:
     @overload
     def on(self, *members: _outcomes.Outcome) -> Output[T]: ...
 
-    def on(self, *kinds: Any) -> Output[Any]:
+    def on(self, *kinds: object) -> Output[object]:
         """Depends on the task only when it ends with one of these outcomes.
 
         The output is narrowed to them: ``load(fetch().on(Rows))``,
@@ -150,7 +156,7 @@ class Output[T]:
             )
         return _OutcomeOutput(self._task)
 
-    def __getattr__(self, name: str) -> Output[Any]:
+    def __getattr__(self, name: str) -> Output[object]:
         """References a field of the output.
 
         Args:
@@ -166,7 +172,7 @@ class Output[T]:
             raise AttributeError(name)
         return Output(self._task, (*self._path, name), self._on)
 
-    def __getitem__(self, key: str | int) -> Output[Any]:
+    def __getitem__(self, key: str | int) -> Output[object]:
         """References a key or an index of the output.
 
         Args:
@@ -229,7 +235,7 @@ class Output[T]:
         """
         raise TypeError(_VALUE_IN_DAG_BODY)
 
-    def __iter__(self) -> Any:
+    def __iter__(self) -> NoReturn:
         """Refuses to be iterated (map over outputs with ``.expand()``, milestone M4).
 
         Raises:
@@ -360,13 +366,78 @@ class TaskFunction[**P, R]:
         builder = _build.active()
         if builder is None:
             return self._fn(*args, **kwargs)
-        # Inside groups, the ID carries their prefix (decision 56A).
         task_id = builder.qualified(self._task_id)
-        where = f"task `{task_id}`"
         try:
             bound = self._signature.bind(*args, **kwargs)
         except TypeError as e:
-            raise TypeError(f"{where}: {e}") from None
+            raise TypeError(f"task `{task_id}`: {e}") from None
+        return self._record(builder, dict(bound.arguments), None)  # type: ignore[return-value]
+
+    def partial(self, **fixed: object) -> PartialTask[P, R]:
+        """Fixes some arguments of a mapped task: ``load.partial(bucket="raw").expand(...)``.
+
+        Args:
+            **fixed: Arguments every instance gets.
+
+        Returns:
+            The task with them fixed, to ``.expand(...)``.
+
+        Raises:
+            TypeError: For a name that isn't a parameter.
+        """
+        unknown = sorted(set(fixed) - set(self._signature.parameters))
+        if unknown:
+            raise TypeError(f"task `{self._task_id}`: `.partial()`: no parameter `{unknown[0]}`")
+        return PartialTask(self, fixed)
+
+    def expand(self, **mapped: object) -> list[R]:
+        """A mapped task: one instance per element of the lists given (their cartesian product).
+
+        ``load.expand(path=files)`` runs ``load`` once per element of ``files`` (a literal list
+        or an upstream output that is a list, a mapped task's included, element by element).
+        Type checkers read it as the list of the instances' outputs, in the order of the
+        elements.
+
+        Args:
+            **mapped: Each mapped parameter's list.
+
+        Returns:
+            The list of the instances' outputs (a reference in a DAG body).
+        """
+        return PartialTask(self, {}).expand(**mapped)
+
+    def expand_kwargs(self, values: object) -> list[R]:
+        """A mapped task: one instance per dict of ``values``, its arguments.
+
+        Args:
+            values: A list of dicts (a literal, or an upstream output that is one).
+
+        Returns:
+            The list of the instances' outputs (a reference in a DAG body).
+        """
+        return PartialTask(self, {}).expand_kwargs(values)
+
+    def _record(
+        self,
+        builder: _build.DagBuilder,
+        fixed: dict[str, object],
+        expand: tuple[str, object] | None,
+    ) -> Output[Any]:
+        """Records the task: its fixed arguments and, for a mapped task, what it maps over.
+
+        Args:
+            builder: The DAG being defined.
+            fixed: The arguments every instance gets, by parameter name.
+            expand: ``("product", {name: list})`` or ``("kwargs", list_of_dicts)``.
+
+        Returns:
+            The reference to its output (the list of its instances' outputs when mapped).
+        """
+        # Inside groups, the ID carries their prefix (decision 56A).
+        task_id = builder.qualified(self._task_id)
+        where = f"task `{task_id}`"
+        if expand is not None and self._branch:
+            raise TypeError(f"{where}: a @branch task can't be mapped (`.expand()`)")
         hints = type_hints(self._fn, where)
         # A branch's output is the IDs of the tasks it chose; its outcome SUCCESS.
         spec = (
@@ -399,8 +470,10 @@ class TaskFunction[**P, R]:
                 f"{where}, argument `{name}`",
                 upstream,
             )
-            for name, value in bound.arguments.items()
+            for name, value in fixed.items()
         }
+        _refuse_whole_mapped(builder, arguments, where)
+        mapped = None if expand is None else self._mapped(builder, task_id, hints, expand, upstream)
         builder.add_task(
             task_id,
             PythonKind(arguments, branch=self._branch),
@@ -408,12 +481,48 @@ class TaskFunction[**P, R]:
             self._options,
             spec,
             outcome_types,
+            mapped,
         )
         builder.functions[task_id] = self._fn
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
         # A reference, which type checkers read as the value (see above).
-        return Output[R](task_id)  # type: ignore[return-value]
+        return Output[R](task_id)
+
+    def _mapped(
+        self,
+        builder: _build.DagBuilder,
+        task_id: str,
+        hints: dict[str, Any],
+        expand: tuple[str, object],
+        upstream: list[_build.Upstream],
+    ) -> Expand:
+        """What a mapped task varies over, each list checked against its parameter's type."""
+        where = f"task `{task_id}`"
+        kind, value = expand
+        if kind == "kwargs":
+            converted = self._argument(
+                builder,
+                (task_id, value),
+                list[dict[str, Any]],
+                f"{where}, `.expand_kwargs()`",
+                upstream,
+                elementwise=True,
+            )
+            return ExpandKwargs(converted)
+        assert isinstance(value, dict)
+        over = {
+            name: self._argument(
+                builder,
+                (task_id, values),
+                list[hints.get(name, Any)],  # type: ignore[misc]
+                f"{where}, mapped argument `{name}`",
+                upstream,
+                elementwise=True,
+            )
+            for name, values in value.items()
+        }
+        return ExpandProduct(over)
 
     @staticmethod
     def _argument(
@@ -422,11 +531,15 @@ class TaskFunction[**P, R]:
         annotation: object,
         where: str,
         upstream: list[_build.Upstream],
+        *,
+        elementwise: bool = False,
     ) -> Value:
         """Converts one argument of a task, checking it against its parameter's type.
 
         A reference is also queued for the ``None`` check, made once the DAG is complete
-        (see ``DagBuilder.check_nones``).
+        (see ``DagBuilder.check_nones``), unless it is what a mapped task maps over as a whole
+        (``elementwise``): narrowed there, a mapped output skips the instances whose element
+        didn't match instead.
         """
         task_id, value = task_value
         try:
@@ -455,7 +568,8 @@ class TaskFunction[**P, R]:
                     f"`{_build.reference_label(reference)}` is `{type_name(produced)}`{reason}"
                 )
             # Whether it may get None is known once the DAG is complete.
-            if isinstance(reference, OutputRef | OutcomeRef):
+            whole = elementwise and isinstance(converted, RefValue)
+            if isinstance(reference, OutputRef | OutcomeRef) and not whole:
                 builder.none_checks.append((task_id, where, reference, at))
         if isinstance(converted, LiteralValue):
             try:
@@ -501,16 +615,120 @@ class TaskFunction[**P, R]:
         )
 
 
-class TaskDecorator(Protocol):
+class PartialTask[**P, R]:
+    """A ``@task`` function with some arguments fixed: ``load.partial(bucket="raw")``."""
+
+    def __init__(self, function: TaskFunction[P, R], fixed: dict[str, object]) -> None:
+        """Remembers the function and the fixed arguments.
+
+        Args:
+            function: The task function.
+            fixed: The arguments every instance gets.
+        """
+        self._function = function
+        self._fixed = fixed
+
+    def expand(self, **mapped: object) -> list[R]:
+        """See :meth:`TaskFunction.expand`.
+
+        Args:
+            **mapped: Each mapped parameter's list.
+
+        Returns:
+            The list of the instances' outputs (a reference in a DAG body).
+
+        Raises:
+            RuntimeError: Outside ``with Dag(...)``.
+            TypeError: For no mapped argument, an unknown or fixed one, or a required
+                parameter left without a value.
+        """
+        name = self._function.task_id
+        if not mapped:
+            raise TypeError(f"task `{name}`: `.expand()` needs at least one mapped argument")
+        parameters = self._function._signature.parameters
+        for key in mapped:
+            if key not in parameters:
+                raise TypeError(f"task `{name}`: `.expand()`: no parameter `{key}`")
+            if key in self._fixed:
+                raise TypeError(
+                    f"task `{name}`: `{key}` is both fixed (`.partial()`) and mapped (`.expand()`)"
+                )
+        try:
+            self._function._signature.bind(**self._fixed, **dict.fromkeys(mapped))
+        except TypeError as e:
+            raise TypeError(f"task `{name}`: {e}") from None
+        builder = _build.require_active(f"`{name}.expand()`")
+        recorded = self._function._record(builder, dict(self._fixed), ("product", mapped))
+        return recorded  # type: ignore[return-value]
+
+    def expand_kwargs(self, values: object) -> list[R]:
+        """See :meth:`TaskFunction.expand_kwargs`.
+
+        Args:
+            values: A list of dicts (a literal, or an upstream output that is one).
+
+        Returns:
+            The list of the instances' outputs (a reference in a DAG body).
+
+        Raises:
+            RuntimeError: Outside ``with Dag(...)``.
+        """
+        name = self._function.task_id
+        builder = _build.require_active(f"`{name}.expand_kwargs()`")
+        recorded = self._function._record(builder, dict(self._fixed), ("kwargs", values))
+        return recorded  # type: ignore[return-value]
+
+
+def _refuse_whole_mapped(
+    builder: _build.DagBuilder, arguments: dict[str, Value], where: str
+) -> None:
+    """Refuses ``.on(...)`` and ``.outcome`` on a mapped task's whole output as an argument.
+
+    Each instance has its own outcome: narrowing the list has no single meaning (filter it and
+    lose the alignment with map indexes, or replace the others with ``None``?), so it is only
+    allowed element by element, inside ``.expand()``.
+    """
+    for name, value in arguments.items():
+        for reference in value.references():
+            if isinstance(reference, DagCtxRef) or reference.task not in builder.mapped:
+                continue
+            if isinstance(reference, OutcomeRef) or reference.on:
+                what = "`.outcome`" if isinstance(reference, OutcomeRef) else "`.on(...)`"
+                raise TypeError(
+                    f"{where}, argument `{name}`: {what} on the mapped task `{reference.task}`'s "
+                    "whole output: each instance has its own outcome; narrow element by element "
+                    "inside `.expand()`, or take the whole list and filter it in a task"
+                )
+
+
+class TaskDecorator:
     """What ``@task(...)`` with arguments gives: makes a function a task, as ``@task`` does."""
 
+    def __init__(self, task_id: str | None, options: _build.TaskOptions) -> None:
+        """Remembers the task's own ID and options.
+
+        Args:
+            task_id: The task's ID; the function's name when ``None``.
+            options: The task's own options.
+        """
+        self._task_id = task_id
+        self._options = options
+
     @overload
-    def __call__[**P](self, fn: Callable[P, None], /) -> TaskFunction[P, Done]: ...
+    def __call__[**Q](self, fn: Callable[Q, None], /) -> TaskFunction[Q, Done]: ...
     @overload
-    def __call__[**P, R](self, fn: Callable[P, R], /) -> TaskFunction[P, R]: ...
-    def __call__(self, fn: Callable[..., Any], /) -> TaskFunction[..., Any]:
-        """Makes ``fn`` a task (a function returning ``None`` gives ``Done`` when called)."""
-        ...
+    def __call__[**Q, S](self, fn: Callable[Q, S], /) -> TaskFunction[Q, S]: ...
+    def __call__[**Q, S](self, fn: Callable[Q, S], /) -> TaskFunction[Q, S] | TaskFunction[Q, Done]:
+        """Makes ``fn`` a task (a function returning ``None`` gives ``Done`` when called).
+
+        Args:
+            fn: The function.
+
+        Returns:
+            The task function.
+        """
+        name: str = getattr(fn, "__name__", "")
+        return TaskFunction(fn, self._task_id or name, self._options)
 
 
 @overload
@@ -549,7 +767,7 @@ def task[**P, R](
     preload: bool | None = None,
     fresh_process: bool | None = None,
     run_if: _outcomes.RunIf | None = None,
-) -> TaskFunction[P, R] | Callable[[Callable[P, R]], TaskFunction[P, R]]:
+) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
     The function must annotate its return type and declare each parameter (no ``*args`` /
@@ -582,11 +800,8 @@ def task[**P, R](
         retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
     )
 
-    def decorate(function: Callable[P, R]) -> TaskFunction[P, R]:
-        name: str = getattr(function, "__name__", "")
-        return TaskFunction(function, task_id or name, options)
-
-    return decorate if fn is None else decorate(fn)
+    decorator = TaskDecorator(task_id, options)
+    return decorator if fn is None else decorator(fn)
 
 
 def chain(*items: object) -> None:
@@ -652,7 +867,7 @@ def on[U](output: object, kind: type[U], /) -> U:
     return output.on(kind)  # type: ignore[return-value]
 
 
-def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, Chosen]:
+def branch[**P](fn: Callable[P, list[Task] | Task], /) -> TaskFunction[P, Chosen]:
     """Makes a function a branch: it chooses which of its direct downstream tasks run.
 
     The function returns the chosen tasks' handles (one, or a list; ``[]`` for none, never
@@ -670,4 +885,6 @@ def branch[**P](fn: Callable[P, Any], /) -> TaskFunction[P, Chosen]:
         TypeError: If the function can't be a task.
     """
     name: str = getattr(fn, "__name__", "")
-    return TaskFunction[P, Chosen](fn, name, _build.TaskOptions(), branch=True)
+    function = TaskFunction(fn, name, _build.TaskOptions(), branch=True)
+    # Its call in a DAG body is what it chose, ordered with `>>` (type checkers' view).
+    return typing.cast("TaskFunction[P, Chosen]", function)

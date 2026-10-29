@@ -399,3 +399,25 @@ fn the_grpc_message_size_is_read_from_the_file_and_env_within_its_range() {
         );
     }
 }
+
+#[test]
+fn mapping_max_instances_is_read_and_must_be_positive() {
+    assert_eq!(
+        load(None, &env(&[]), &[]).unwrap().mapping.max_instances,
+        1024
+    );
+    let set = load(
+        Some(file("[mapping]\nmax_instances = 50\n")),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(set.mapping.max_instances, 50);
+    let zero = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__MAPPING__MAX_INSTANCES", "0")]),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(zero, ConfigError::NoInstances);
+}

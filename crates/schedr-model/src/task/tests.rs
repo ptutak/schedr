@@ -52,6 +52,7 @@ fn python_task_serializes_flat_with_a_kind_tag() {
         output_type: TypeDesc::Int,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     let expected = json!({
         "id": "load",
@@ -80,6 +81,7 @@ fn command_and_empty_tasks_round_trip() {
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     let json = serde_json::to_value(&command).unwrap();
     assert_eq!(json["kind"], "command");
@@ -97,6 +99,7 @@ fn command_and_empty_tasks_round_trip() {
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     let json = serde_json::to_value(&empty).unwrap();
     assert_eq!(json["kind"], "empty");
@@ -153,6 +156,7 @@ fn references_of_a_python_task_come_from_its_arguments() {
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     assert_eq!(task.references(), vec![&output_ref("x"), &output_ref("y")]);
 }
@@ -178,6 +182,7 @@ fn references_of_a_command_task_come_from_its_command_line_and_env() {
         output_type: TypeDesc::ProcessResult,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     assert_eq!(task.references(), vec![&planned_for, &output_ref("load")]);
 }
@@ -191,6 +196,7 @@ fn empty_tasks_have_no_references() {
         output_type: TypeDesc::None,
         outcomes: crate::default_outcomes(),
         group: None,
+        expand: None,
     };
     assert_eq!(task.references(), Vec::<&Reference>::new());
 }
@@ -203,4 +209,37 @@ fn settings_without_how_a_task_starts_read_as_forked_from_the_preloaded_server()
     }))
     .unwrap();
     assert_eq!((settings.preload, settings.fresh_process), (true, false));
+}
+
+#[test]
+fn a_mapped_tasks_expand_round_trips_and_its_references_count() {
+    let json = serde_json::json!({
+        "id": "load", "kind": "python",
+        "arguments": {"bucket": {"literal": "raw"}},
+        "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                     "queue": "default", "max_output_size": 1_048_576},
+        "output_type": {"type": "int"},
+        "expand": {"product": {"path": {"ref": {"kind": "output", "task": "list_files"}}}}
+    });
+    let task: Task = serde_json::from_value(json.clone()).unwrap();
+    let Some(Expand::Product(over)) = &task.expand else {
+        panic!("expected a product: {:?}", task.expand)
+    };
+    assert_eq!(over.keys().collect::<Vec<_>>(), ["path"]);
+    assert_eq!(task.references().len(), 1);
+    let written = serde_json::to_value(&task).unwrap();
+    assert_eq!(written["expand"], json["expand"]);
+    assert_eq!(serde_json::from_value::<Task>(written).unwrap(), task);
+    let kwargs: Expand =
+        serde_json::from_value(serde_json::json!({"kwargs": {"literal": [{"a": 1}]}})).unwrap();
+    assert!(matches!(kwargs, Expand::Kwargs(_)));
+    // An unmapped task writes no `expand`.
+    let mut plain = task.clone();
+    plain.expand = None;
+    assert!(
+        serde_json::to_value(&plain)
+            .unwrap()
+            .get("expand")
+            .is_none()
+    );
 }

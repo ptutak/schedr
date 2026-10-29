@@ -9,6 +9,7 @@ moment. A DAG without a trigger (``trigger=None``) has manual runs only. Event t
 import dataclasses
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from enum import Enum
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,6 +21,16 @@ PRESETS = frozenset(
     {"@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly"}
 )
 """The cron presets accepted instead of an expression."""
+
+
+class _Unset(Enum):
+    """The marker of an option not given to ``override`` (``None`` is a value there)."""
+
+    UNSET = "unset"
+
+
+UNSET = _Unset.UNSET
+"""An option ``override`` leaves as it is."""
 
 
 class Trigger:
@@ -48,29 +59,14 @@ class Trigger:
         """
         raise NotImplementedError
 
-    def override(self, **changes: Any) -> Self:
-        """The same trigger with some options changed, e.g. ``DAILY.override(start=...)``.
-
-        Args:
-            **changes: The options to change, by name (as the class takes them).
-
-        Returns:
-            A new trigger.
+    def _changed(self, changes: dict[str, object]) -> Self:
+        """The same trigger with the options in ``changes`` given (``UNSET`` ones left).
 
         Raises:
-            TypeError: For an option the trigger doesn't have.
             ValueError: For a value its class rejects.
         """
-        if not dataclasses.is_dataclass(self):
-            raise TypeError(f"`{type(self).__name__}` has no options to override")
-        names = {f.name for f in dataclasses.fields(self)}
-        unknown = sorted(set(changes) - names)
-        if unknown:
-            raise TypeError(
-                f"`{type(self).__name__}` has no option `{unknown[0]}` "
-                f"(options: {', '.join(sorted(names))})"
-            )
-        return dataclasses.replace(self, **changes)
+        given = {name: value for name, value in changes.items() if value is not UNSET}
+        return dataclasses.replace(self, **given)  # type: ignore[type-var]
 
 
 Moment = datetime | date | str | None
@@ -98,6 +94,27 @@ class Cron(Trigger):
     catchup: bool = False
     start: Moment = None
     end: Moment = None
+
+    def override(
+        self,
+        *,
+        expression: str | _Unset = UNSET,
+        tz: str | _Unset = UNSET,
+        catchup: bool | _Unset = UNSET,
+        start: Moment | _Unset = UNSET,
+        end: Moment | _Unset = UNSET,
+    ) -> Self:
+        """The same trigger with some options changed, e.g. ``DAILY.override(start=...)``.
+
+        Returns:
+            A new trigger.
+
+        Raises:
+            ValueError: For a value the class rejects.
+        """
+        return self._changed(
+            {"expression": expression, "tz": tz, "catchup": catchup, "start": start, "end": end}
+        )
 
     def __post_init__(self) -> None:
         """Checks the expression's shape and the time zone.
@@ -149,6 +166,24 @@ class Every(Trigger):
     start: Moment = None
     end: Moment = None
 
+    def override(
+        self,
+        *,
+        interval: timedelta | _Unset = UNSET,
+        catchup: bool | _Unset = UNSET,
+        start: Moment | _Unset = UNSET,
+        end: Moment | _Unset = UNSET,
+    ) -> Self:
+        """The same trigger with some options changed, e.g. ``.override(end=...)``.
+
+        Returns:
+            A new trigger.
+
+        Raises:
+            ValueError: For a value the class rejects.
+        """
+        return self._changed({"interval": interval, "catchup": catchup, "start": start, "end": end})
+
     def __post_init__(self) -> None:
         """Checks the interval.
 
@@ -186,6 +221,19 @@ class Once(Trigger):
 
     at: datetime | date | str
     tz: str = "UTC"
+
+    def override(
+        self, *, at: datetime | date | str | _Unset = UNSET, tz: str | _Unset = UNSET
+    ) -> Self:
+        """The same trigger with some options changed.
+
+        Returns:
+            A new trigger.
+
+        Raises:
+            ValueError: For a value the class rejects.
+        """
+        return self._changed({"at": at, "tz": tz})
 
     def __post_init__(self) -> None:
         """Checks the time zone and reads the fire time.

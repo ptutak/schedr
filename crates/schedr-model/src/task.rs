@@ -169,6 +169,17 @@ pub enum TaskKind {
     Empty,
 }
 
+/// What a mapped task's instances vary over (decision 69): one instance per element.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Expand {
+    /// `.expand(name=values, ...)`: each argument a list (a literal or a reference to a list);
+    /// the instances are their cartesian product, the first argument varying slowest.
+    Product(BTreeMap<String, Value>),
+    /// `.expand_kwargs(values)`: a list of dicts, each one instance's arguments.
+    Kwargs(Value),
+}
+
 /// A task of a DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
@@ -190,6 +201,10 @@ pub struct Task {
     /// The group it belongs to (the innermost), if any (decision 64).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// What its instances vary over, for a mapped task (`.expand(...)`); its `arguments` are
+    /// then the fixed ones (`.partial(...)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expand: Option<Expand>,
 }
 
 impl Task {
@@ -204,10 +219,11 @@ impl Task {
 }
 
 impl Task {
-    /// Every reference the task uses (arguments, command line, environment), in order.
+    /// Every reference the task uses (arguments, command line, environment, what it is
+    /// mapped over), in order.
     #[must_use]
     pub fn references(&self) -> Vec<&Reference> {
-        match &self.kind {
+        let mut found: Vec<&Reference> = match &self.kind {
             TaskKind::Python { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
@@ -218,6 +234,12 @@ impl Task {
                 .flat_map(Template::references)
                 .collect(),
             TaskKind::Empty => Vec::new(),
+        };
+        match &self.expand {
+            Some(Expand::Product(over)) => found.extend(over.values().flat_map(Value::references)),
+            Some(Expand::Kwargs(over)) => found.extend(over.references()),
+            None => {}
         }
+        found
     }
 }

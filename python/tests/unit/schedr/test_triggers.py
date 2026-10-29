@@ -155,9 +155,17 @@ def test_override_changes_options_of_a_preset() -> None:
 
 
 def test_override_rejects_unknown_options_and_bad_values() -> None:
-    with pytest.raises(TypeError, match="`Cron` has no option `queue` \\(options: catchup, end"):
-        DAILY.override(queue="io")
+    # Each trigger's options are typed keywords: type checkers report an unknown one too.
+    with pytest.raises(TypeError, match="unexpected keyword argument 'queue'"):
+        DAILY.override(queue="io")  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="unknown time zone"):
         DAILY.override(tz="Mars/Base")
-    with pytest.raises(TypeError, match="`Trigger` has no options to override"):
-        Trigger().override(start="2026-01-01")
+    assert not hasattr(Trigger(), "override")
+
+
+def test_override_leaves_what_isnt_given_and_takes_none() -> None:
+    every = Every(timedelta(hours=1), start="2026-01-01", end="2026-12-31")
+    assert every.override(end=None) == Every(timedelta(hours=1), start="2026-01-01")
+    once = Once("2026-12-24T23:00", tz="Europe/Warsaw")
+    assert once.override(tz="UTC") == Once("2026-12-24T23:00")
+    assert DAILY.override() == DAILY
