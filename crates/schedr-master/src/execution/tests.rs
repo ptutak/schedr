@@ -111,10 +111,13 @@ fn expected(list: &[(&str, TaskInstanceState)]) -> Vec<(String, TaskInstanceStat
 async fn start(db: &Database, run_id: &str, task: &str) {
     let running = InstanceUpdate {
         task_id: id(task),
+        map_index: -1,
         state: S::Running,
         ready_at: None,
         outcome: None,
         used_retry: false,
+        reason: None,
+        map_sizes: None,
     };
     db.update_instances(run_id, &[running], ts(NOW))
         .await
@@ -185,14 +188,15 @@ async fn successes_move_the_run_forward_and_finish_it() {
         ..ended(AttemptStatus::Success)
     };
     let recorded = execution
-        .attempt_finished(&run_id, &id("extract"), &result, ts(NOW))
+        .attempt_finished(&run_id, &id("extract"), -1, &result, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
         recorded,
         Recorded {
             state: Some(S::Success),
-            run_result: None
+            run_result: None,
+            stops: vec![],
         }
     );
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -215,6 +219,7 @@ async fn successes_move_the_run_forward_and_finish_it() {
         .attempt_finished(
             &run_id,
             &id("load"),
+            -1,
             &ended(AttemptStatus::Success),
             ts(NOW),
         )
@@ -233,6 +238,7 @@ async fn a_failure_with_retries_left_waits_then_queues_again() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::Failed),
             ts(NOW),
         )
@@ -263,6 +269,7 @@ async fn a_failure_with_retries_left_waits_then_queues_again() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::TimedOut),
             ts(NOW),
         )
@@ -291,6 +298,7 @@ async fn an_interrupted_attempt_runs_again_without_a_retry() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::Interrupted),
             ts(NOW),
         )
@@ -308,18 +316,19 @@ async fn a_repeated_result_is_ignored() {
     start(&db, &run_id, "extract").await;
     let success = ended(AttemptStatus::Success);
     execution
-        .attempt_finished(&run_id, &id("extract"), &success, ts(NOW))
+        .attempt_finished(&run_id, &id("extract"), -1, &success, ts(NOW))
         .await
         .unwrap();
     let again = execution
-        .attempt_finished(&run_id, &id("extract"), &success, ts(NOW))
+        .attempt_finished(&run_id, &id("extract"), -1, &success, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
         again,
         Recorded {
             state: None,
-            run_result: None
+            run_result: None,
+            stops: vec![],
         }
     );
 }
@@ -332,6 +341,7 @@ async fn unknown_runs_and_tasks_are_errors() {
         .attempt_finished(
             &run_id,
             &id("ghost"),
+            -1,
             &ended(AttemptStatus::Success),
             ts(NOW),
         )
@@ -377,7 +387,7 @@ async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_res
     assert_eq!(
         cancelled,
         Cancelled {
-            running: vec![id("extract")],
+            running: vec![(id("extract"), -1)],
             run_result: None
         }
     );
@@ -394,6 +404,7 @@ async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_res
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::Failed),
             ts(NOW),
         )
@@ -403,7 +414,8 @@ async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_res
         recorded,
         Recorded {
             state: Some(S::Failed),
-            run_result: Some(RunState::Failed)
+            run_result: Some(RunState::Failed),
+            stops: vec![],
         }
     );
 }
@@ -418,6 +430,7 @@ async fn a_cancelled_attempt_ends_the_run_cancelled() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::Cancelled),
             ts(NOW),
         )
@@ -496,6 +509,7 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::AssignmentExpired),
             ts(NOW),
         )
@@ -526,6 +540,7 @@ async fn a_failure_of_a_task_being_cancelled_isnt_retried() {
         .attempt_finished(
             &run_id,
             &id("extract"),
+            -1,
             &ended(AttemptStatus::Failed),
             ts(NOW),
         )
@@ -599,7 +614,7 @@ async fn a_round_queues_at_most_so_many_retries_the_rest_in_the_next() {
     let waiting: Vec<InstanceUpdate> = (0..count)
         .map(|i| InstanceUpdate {
             ready_at: Some(ts(NOW)),
-            ..update(&id(&format!("t{i:04}")), TaskInstanceState::UpForRetry)
+            ..update(&id(&format!("t{i:04}")), -1, TaskInstanceState::UpForRetry)
         })
         .collect();
     db.update_instances(&run_id, &waiting, ts(NOW))
@@ -636,7 +651,7 @@ async fn a_reported_outcome_is_stored_and_routes_the_run() {
         ..ended(AttemptStatus::Success)
     };
     execution
-        .attempt_finished(&run_id, &id("fetch"), &result, ts(NOW))
+        .attempt_finished(&run_id, &id("fetch"), -1, &result, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -687,11 +702,224 @@ async fn a_branchs_stored_choice_routes_the_run() {
         ..ended(AttemptStatus::Success)
     };
     execution
-        .attempt_finished(&run_id, &id("pick"), &result, ts(NOW))
+        .attempt_finished(&run_id, &id("pick"), -1, &result, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
         states(&db, &run_id).await,
         expected(&[("a", S::Skipped), ("b", S::Queued), ("pick", S::Success)])
     );
+}
+
+/// `files` (its output a list) → `load` mapped over it with a fixed `bucket` → `check` mapped
+/// over `load` element by element → `total` gathering `check`.
+fn mapped() -> Dag {
+    let python = |name: &str| {
+        let mut t = task(name, "python", 0);
+        t["module"] = json!("m");
+        t["function"] = json!(name);
+        t["arguments"] = json!({});
+        t
+    };
+    let output_of = |task: &str| json!({"ref": {"kind": "output", "task": task}});
+    let mut load = python("load");
+    load["arguments"] = json!({"bucket": {"literal": "raw"}});
+    load["expand"] = json!({"product": [{"name": "path", "value": output_of("files")}]});
+    let mut check = python("check");
+    check["expand"] = json!({"product": [{"name": "n", "value": output_of("load")}]});
+    let mut total = python("total");
+    total["arguments"] = json!({"all": output_of("check")});
+    dag(
+        &json!([python("files"), load, check, total]),
+        &json!([
+            {"from": "files", "to": "load", "kind": "data"},
+            {"from": "load", "to": "check", "kind": "data"},
+            {"from": "check", "to": "total", "kind": "data"}
+        ]),
+    )
+}
+
+/// What assignment does to one instance: its attempt starts.
+async fn start_instance(db: &Database, run_id: &str, task: &str, map_index: i32) {
+    let running = InstanceUpdate {
+        map_index,
+        ..update(&id(task), map_index, S::Running)
+    };
+    db.update_instances(run_id, &[running], ts(NOW))
+        .await
+        .unwrap();
+}
+
+fn with_output(output: Json) -> AttemptResult {
+    AttemptResult {
+        output: Some(output),
+        ..ended(AttemptStatus::Success)
+    }
+}
+
+async fn rows(db: &Database, run_id: &str) -> Vec<(String, i32, TaskInstanceState)> {
+    db.run_tasks(run_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .instances
+        .iter()
+        .map(|i| (i.task_id.to_string(), i.map_index, i.state))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_mapped_task_expands_over_an_output_and_its_instances_get_their_elements() {
+    let dag = mapped();
+    let (execution, db, run_id) = with_run(dag.clone(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("files"),
+            -1,
+            &with_output(json!(["a.csv", "b.csv"])),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    // `load` expanded over the list, `check` over `load`'s instances at once (a lane).
+    let s = |t: &str, i: i32, state| (t.to_owned(), i, state);
+    assert_eq!(
+        rows(&db, &run_id).await,
+        [
+            s("check", -1, S::Running),
+            s("check", 0, S::Scheduled),
+            s("check", 1, S::Scheduled),
+            s("files", -1, S::Success),
+            s("load", -1, S::Running),
+            s("load", 0, S::Queued),
+            s("load", 1, S::Queued),
+            s("total", -1, S::Scheduled),
+        ]
+    );
+    assert_eq!(
+        db.map_sizes(&run_id, &id("load")).await.unwrap(),
+        Some(vec![2])
+    );
+    let load = dag.task(&id("load")).unwrap();
+    let mut resolved = mapping::Resolved::new();
+    let inputs = mapping::inputs(&db, &dag, &run_id, (load, 1), &mut resolved)
+        .await
+        .unwrap();
+    assert_eq!(inputs["$expand"], json!({"path": "b.csv"}));
+
+    // `load[1]` succeeds: `check[1]` is queued with that output as its element.
+    start_instance(&db, &run_id, "load", 1).await;
+    execution
+        .attempt_finished(&run_id, &id("load"), 1, &with_output(json!(7)), ts(NOW))
+        .await
+        .unwrap();
+    let check = dag.task(&id("check")).unwrap();
+    let inputs = mapping::inputs(&db, &dag, &run_id, (check, 1), &mut resolved)
+        .await
+        .unwrap();
+    assert_eq!(inputs["$expand"], json!({"n": 7}));
+    assert_eq!(inputs["$expand_outcomes"], json!({"n": "SUCCESS"}));
+    // The lane's upstream isn't an input as a whole.
+    assert!(inputs.get("load").is_none(), "{inputs}");
+
+    // `load[0]` fails: the step fails, `check[1]` (queued) is cancelled, `total` doesn't run.
+    start_instance(&db, &run_id, "load", 0).await;
+    let failed = execution
+        .attempt_finished(
+            &run_id,
+            &id("load"),
+            0,
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.run_result, Some(RunState::Failed));
+    assert_eq!(
+        rows(&db, &run_id).await,
+        [
+            s("check", -1, S::UpstreamFailed),
+            s("check", 0, S::UpstreamFailed),
+            s("check", 1, S::Cancelled),
+            s("files", -1, S::Success),
+            s("load", -1, S::Failed),
+            s("load", 0, S::Failed),
+            s("load", 1, S::Success),
+            s("total", -1, S::UpstreamFailed),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_mapped_task_that_cant_expand_fails_with_its_reason() {
+    for (output, max, reason) in [
+        (
+            json!(null),
+            1024,
+            "mapped argument `path`: expected a list, got null",
+        ),
+        (
+            json!(["a", "b"]),
+            1,
+            "`load` would have 2 instances, more than [mapping] max_instances (1)",
+        ),
+    ] {
+        let (mut execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+        execution.set_max_instances(max);
+        execution.prepare_runs(ts(NOW)).await.unwrap();
+        start_instance(&db, &run_id, "files", -1).await;
+        execution
+            .attempt_finished(&run_id, &id("files"), -1, &with_output(output), ts(NOW))
+            .await
+            .unwrap();
+        let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+        let load = run
+            .instances
+            .iter()
+            .find(|i| i.task_id == id("load"))
+            .unwrap();
+        assert_eq!(
+            (load.state, load.reason.as_deref()),
+            (S::Failed, Some(reason))
+        );
+        assert_eq!(run.state, RunState::Failed);
+    }
+}
+
+#[tokio::test]
+async fn cancelling_a_run_cancels_its_instances_and_stops_the_running_ones() {
+    let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("files"),
+            -1,
+            &with_output(json!(["a", "b"])),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    start_instance(&db, &run_id, "load", 0).await;
+    let cancelled = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    assert_eq!(cancelled.running, [(id("load"), 0)]);
+    assert_eq!(cancelled.run_result, None);
+    // The stopped instance reports: `load` and the run end cancelled.
+    let ended = execution
+        .attempt_finished(
+            &run_id,
+            &id("load"),
+            0,
+            &ended(AttemptStatus::Cancelled),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ended.run_result, Some(RunState::Cancelled));
+    let states: Vec<(String, i32, TaskInstanceState)> = rows(&db, &run_id).await;
+    assert!(states.iter().all(|(_, _, s)| s.is_final()), "{states:?}");
 }

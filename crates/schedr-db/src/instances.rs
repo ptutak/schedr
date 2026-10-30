@@ -31,6 +31,9 @@ pub struct StoredInstance {
     pub id: String,
     /// The task.
     pub task_id: TaskId,
+    /// Its place among a mapped task's instances; -1 for an unmapped task, and for a mapped
+    /// task as a whole (decision 74).
+    pub map_index: i32,
     /// Its state.
     pub state: TaskInstanceState,
     /// Attempts made so far.
@@ -43,6 +46,10 @@ pub struct StoredInstance {
     pub cancel_requested: bool,
     /// Its outcome, once it succeeded.
     pub outcome: Option<String>,
+    /// Why it ended without an attempt, when it did (decision 78).
+    pub reason: Option<String>,
+    /// A mapped task as a whole, once expanded: the size of each dimension of its instances.
+    pub map_sizes: Option<Vec<usize>>,
 }
 
 /// A run with its task instances.
@@ -56,7 +63,7 @@ pub struct RunTasks {
     pub dag: Arc<Dag>,
     /// The schedr version of the parse that DAG version came from.
     pub parse_version: String,
-    /// Its task instances, in task ID order.
+    /// Its task instances, in task ID order, then `map_index` order.
     pub instances: Vec<StoredInstance>,
 }
 
@@ -65,6 +72,8 @@ pub struct RunTasks {
 pub struct InstanceUpdate {
     /// The task.
     pub task_id: TaskId,
+    /// Which of its instances (-1: an unmapped task, or a mapped one as a whole).
+    pub map_index: i32,
     /// Its new state.
     pub state: TaskInstanceState,
     /// When it is ready to run (`queued`, `up_for_retry`); cleared otherwise.
@@ -73,6 +82,10 @@ pub struct InstanceUpdate {
     pub outcome: Option<String>,
     /// Whether the attempt that led here used a retry.
     pub used_retry: bool,
+    /// Why it ends without an attempt (decision 78); kept when `None`.
+    pub reason: Option<String>,
+    /// A mapped task that expanded: its dimensions' sizes; kept when `None`.
+    pub map_sizes: Option<Vec<usize>>,
 }
 
 type InstanceRow = (
@@ -84,33 +97,37 @@ type InstanceRow = (
     Option<String>,
     bool,
     Option<String>,
+    i32,
+    Option<String>,
+    Option<String>,
 );
 /// A run's state, whether it is being cancelled, its DAG version and its parse's version.
 type RunRow = (String, bool, String, String);
 
-/// `updates` with one entry per task, in the order each task first appears: a task given
+/// `updates` with one entry per instance, in the order each first appears: one given
 /// twice ends as its last update says, its used retries added up, as one statement each in
 /// turn did (one statement for many rows would apply one of them, any).
 fn merged(updates: &[InstanceUpdate]) -> Vec<(&InstanceUpdate, i32)> {
     let mut merged: Vec<(&InstanceUpdate, i32)> = Vec::with_capacity(updates.len());
-    let mut at: std::collections::HashMap<&TaskId, usize> = std::collections::HashMap::new();
+    let mut at: std::collections::HashMap<(&TaskId, i32), usize> = std::collections::HashMap::new();
     for update in updates {
         let retries = i32::from(update.used_retry);
-        if let Some(&i) = at.get(&update.task_id) {
+        let key = (&update.task_id, update.map_index);
+        if let Some(&i) = at.get(&key) {
             let used = merged[i].1 + retries;
             merged[i] = (update, used);
         } else {
-            at.insert(&update.task_id, merged.len());
+            at.insert(key, merged.len());
             merged.push((update, retries));
         }
     }
     merged
 }
 
-/// The most task instances one `UPDATE` changes (five parameters each).
+/// The most task instances one `UPDATE` changes (eight parameters each).
 const UPDATES_PER_STATEMENT: usize = 500;
 
-/// The most task instances one `INSERT` creates (six parameters each: well under SQLite's
+/// The most task instances one `INSERT` creates (seven parameters each: well under SQLite's
 /// 32,766 and Postgres's 65,535).
 const INSTANCES_PER_STATEMENT: usize = 500;
 
@@ -136,7 +153,8 @@ impl Database {
         Ok(runs)
     }
 
-    /// Creates a run's task instances in their first states.
+    /// Creates task instances of a run in their first states: (task, `map_index`, state); a
+    /// run's own when it starts, a mapped task's when it expands.
     ///
     /// # Errors
     ///
@@ -144,7 +162,7 @@ impl Database {
     pub async fn create_instances(
         &self,
         run_id: &str,
-        states: &[(TaskId, TaskInstanceState)],
+        states: &[(TaskId, i32, TaskInstanceState)],
         now: Timestamp,
     ) -> Result<(), DbError> {
         let now_text = db_time(now);
@@ -154,31 +172,33 @@ impl Database {
             for chunk in states.chunks(INSTANCES_PER_STATEMENT) {
                 let rows: Vec<String> = (0..chunk.len())
                     .map(|i| {
-                        let n = i * 6;
+                        let n = i * 7;
                         format!(
-                            "(${}{{uuid}}, ${}{{uuid}}, ${}, ${}, ${}{{ts}}, ${}{{ts}})",
+                            "(${}{{uuid}}, ${}{{uuid}}, ${}, ${}, ${}, ${}{{ts}}, ${}{{ts}})",
                             n + 1,
                             n + 2,
                             n + 3,
                             n + 4,
                             n + 5,
-                            n + 6
+                            n + 6,
+                            n + 7
                         )
                     })
                     .collect();
                 let text = format!(
                     "INSERT INTO task_instances \
-                     (id, run_id, task_id, state, ready_at, updated_at) VALUES {}",
+                     (id, run_id, task_id, map_index, state, ready_at, updated_at) VALUES {}",
                     rows.join(", ")
                 );
                 let text = sql_text(backend, &text);
                 let mut insert = sqlx::query(text);
-                for (task_id, state) in chunk {
+                for (task_id, map_index, state) in chunk {
                     let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
                     insert = insert
                         .bind(Uuid::now_v7().to_string())
                         .bind(run_id)
                         .bind(task_id.as_str())
+                        .bind(*map_index)
                         .bind(state.to_string())
                         .bind(ready)
                         .bind(&now_text);
@@ -199,8 +219,8 @@ impl Database {
             p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
-            {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome FROM task_instances \
-            WHERE run_id = $1{uuid} ORDER BY task_id";
+            {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome, map_index, reason, \
+            map_sizes{text} FROM task_instances WHERE run_id = $1{uuid} ORDER BY task_id, map_index";
         let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
             let run = sqlx::query_as(sql(backend, RUN))
                 .bind(run_id)
@@ -244,22 +264,28 @@ impl Database {
             for chunk in updates.chunks(UPDATES_PER_STATEMENT) {
                 let rows: Vec<String> = (0..chunk.len())
                     .map(|i| {
-                        let n = 2 + i * 5;
+                        let n = 2 + i * 8;
                         format!(
-                            "(${}, ${}, ${}{{ts}}, ${}, ${})",
+                            "(${}, ${}, ${}, ${}{{ts}}, ${}, ${}, ${}, ${}{{json}})",
                             n + 1,
                             n + 2,
                             n + 3,
                             n + 4,
-                            n + 5
+                            n + 5,
+                            n + 6,
+                            n + 7,
+                            n + 8
                         )
                     })
                     .collect();
                 let text = format!(
-                    "UPDATE task_instances AS t SET state = v.column2, ready_at = v.column3, \
-                     outcome = v.column4, retries_used = t.retries_used + v.column5, \
-                     updated_at = $1{{ts}} FROM (VALUES {}) AS v \
-                     WHERE t.run_id = $2{{uuid}} AND t.task_id = v.column1",
+                    "UPDATE task_instances AS t SET state = v.column3, ready_at = v.column4, \
+                     outcome = v.column5, retries_used = t.retries_used + v.column6, \
+                     reason = COALESCE(v.column7, t.reason), \
+                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = $1{{ts}} \
+                     FROM (VALUES {}) AS v \
+                     WHERE t.run_id = $2{{uuid}} AND t.task_id = v.column1 \
+                     AND t.map_index = v.column2",
                     rows.join(", ")
                 );
                 let mut update = sqlx::query(sql_text(backend, &text))
@@ -268,10 +294,13 @@ impl Database {
                 for (one, retries) in chunk {
                     update = update
                         .bind(one.task_id.as_str())
+                        .bind(one.map_index)
                         .bind(one.state.to_string())
                         .bind(one.ready_at.map(db_time))
                         .bind(one.outcome.as_deref())
-                        .bind(*retries);
+                        .bind(*retries)
+                        .bind(one.reason.as_deref())
+                        .bind(one.map_sizes.as_ref().map(to_json));
                 }
                 update.execute(&mut *tx).await?;
             }
@@ -386,6 +415,58 @@ impl Database {
         Ok(())
     }
 
+    /// A mapped task's dimensions' sizes in a run, once it expanded.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored sizes don't read.
+    pub async fn map_sizes(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+    ) -> Result<Option<Vec<usize>>, DbError> {
+        const SIZES: &str = "SELECT map_sizes{text} FROM task_instances \
+            WHERE run_id = $1{uuid} AND task_id = $2 AND map_index = -1";
+        let row: Option<(Option<String>,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, SIZES))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .fetch_optional(pool)
+                .await?
+        });
+        row.and_then(|(sizes,)| sizes)
+            .map(|s| from_json("task_instances.map_sizes", &s))
+            .transpose()
+    }
+
+    /// Marks one running task instance as being cancelled (a mapped task's step that failed,
+    /// decision 75a), the first request counting.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn request_instance_cancel(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        map_index: i32,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const CANCEL: &str = "UPDATE task_instances SET cancel_requested_at = $1{ts} \
+            WHERE run_id = $2{uuid} AND task_id = $3 AND map_index = $4 \
+            AND cancel_requested_at IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, CANCEL))
+                .bind(db_time(now))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .bind(map_index)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// Queues an `unschedulable` task again (`schedr tasks retry`); whether it was one.
     ///
     /// # Errors
@@ -412,22 +493,23 @@ impl Database {
         Ok(updated > 0)
     }
 
-    /// The task instances whose retry delay has passed: (run ID, task ID), oldest first.
+    /// The task instances whose retry delay has passed: (run ID, task ID, `map_index`), oldest
+    /// first.
     ///
     /// # Errors
     ///
     /// [`DbError`] if the query fails or a stored ID doesn't read.
-    pub async fn due_retries(&self, now: Timestamp) -> Result<Vec<(String, TaskId)>, DbError> {
-        const DUE: &str = "SELECT run_id{text}, task_id FROM task_instances \
+    pub async fn due_retries(&self, now: Timestamp) -> Result<Vec<(String, TaskId, i32)>, DbError> {
+        const DUE: &str = "SELECT run_id{text}, task_id, map_index FROM task_instances \
             WHERE state = 'up_for_retry' AND ready_at <= $1{ts} ORDER BY ready_at, id";
-        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+        let rows: Vec<(String, String, i32)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, DUE))
                 .bind(db_time(now))
                 .fetch_all(pool)
                 .await?
         });
         rows.into_iter()
-            .map(|(run_id, task_id)| Ok((run_id, task_id_of(task_id)?)))
+            .map(|(run_id, task_id, map_index)| Ok((run_id, task_id_of(task_id)?, map_index)))
             .collect()
     }
 
@@ -489,10 +571,23 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
 }
 
 fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
-    let (id, task_id, state, try_number, retries_used, ready_at, cancel_requested, outcome) = row;
+    let (
+        id,
+        task_id,
+        state,
+        try_number,
+        retries_used,
+        ready_at,
+        cancel_requested,
+        outcome,
+        map_index,
+        reason,
+        map_sizes,
+    ) = row;
     Ok(StoredInstance {
         id,
         task_id: task_id_of(task_id)?,
+        map_index,
         state: from_name("task_instances.state", state)?,
         try_number: u32::try_from(try_number).unwrap_or(0),
         retries_used: u32::try_from(retries_used).unwrap_or(0),
@@ -501,5 +596,9 @@ fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
             .transpose()?,
         cancel_requested,
         outcome,
+        reason,
+        map_sizes: map_sizes
+            .map(|s| from_json("task_instances.map_sizes", &s))
+            .transpose()?,
     })
 }

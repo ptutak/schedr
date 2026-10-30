@@ -469,13 +469,13 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "`.expand(name=values, ...)`: each argument a list (a literal or a reference to a list);\nthe instances are their cartesian product, the first argument varying slowest.",
+          "description": "`.expand(name=values, ...)`: each argument a list (a literal or a reference to a list),\nin the order written; the instances are their cartesian product, the first argument\nvarying slowest (decision 79).",
           "properties": {
             "product": {
-              "additionalProperties": {
-                "$ref": "#/$defs/Value"
+              "items": {
+                "$ref": "#/$defs/Mapped"
               },
-              "type": "object"
+              "type": "array"
             }
           },
           "required": [
@@ -540,6 +540,25 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "Mapped": {
+      "additionalProperties": false,
+      "description": "One mapped argument of `.expand(...)`: its name and the list it maps over.",
+      "properties": {
+        "name": {
+          "description": "The parameter's name.",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Value",
+          "description": "Its list: a literal, or a reference to a list."
+        }
+      },
+      "required": [
+        "name",
+        "value"
       ],
       "type": "object"
     },

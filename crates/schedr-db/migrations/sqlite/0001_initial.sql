@@ -128,6 +128,12 @@ CREATE TABLE task_instances (
     ready_at      TEXT,
     -- When a user asked to cancel this task (`schedr tasks cancel`) while it ran.
     cancel_requested_at TEXT,
+    -- Why it ended without an attempt (a mapped task: too many instances, a mapped list that
+    -- isn't a list); see PROJECT.md, decision 78.
+    reason        TEXT,
+    -- A mapped task as a whole (map_index -1) once expanded: the size of each dimension of
+    -- its instances (a JSON array), for an instance's place in each.
+    map_sizes     TEXT,
     updated_at    TEXT NOT NULL,
     UNIQUE (run_id, task_id, map_index)
 );

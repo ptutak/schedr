@@ -111,6 +111,7 @@ pub fn master_settings(config: &Config) -> Settings {
         // At most 1 GiB (checked when the configuration is read).
         max_message_size: usize::try_from(config.master.grpc_max_message_size)
             .unwrap_or(usize::MAX),
+        max_instances: usize::try_from(config.mapping.max_instances).unwrap_or(usize::MAX),
     }
 }
 

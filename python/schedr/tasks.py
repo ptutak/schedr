@@ -14,7 +14,7 @@ import itertools
 import typing
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, NoReturn, Protocol, overload
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
 
 from schedr import _build
 from schedr import outcomes as _outcomes
@@ -50,6 +50,34 @@ _VALUE_IN_DAG_BODY = (
     "an output can't be used as a value in the DAG file (it exists only at run time); "
     "pass it to a task, or decide in a task"
 )
+
+
+class Mapped[T](list[T]):
+    """A mapped task's output, as type checkers read it: the list of its instances' outputs.
+
+    At run time it is a reference (an ``Output``), as any task's output in the DAG body.
+    Index it (``results[0]``), pass it whole to a task taking a list (a gather), or map over
+    it element by element (``check.expand(n=results)``), narrowing each element with
+    ``.on(...)``: ``count.expand(rows=results.on(Rows))``.
+    """
+
+    if TYPE_CHECKING:
+
+        @overload
+        def on[U](self, kind: type[U], /) -> list[U]: ...
+        @overload
+        def on[U, V](self, kind: type[U], other: type[V], /) -> list[U | V]: ...
+        def on(self, *kinds: object) -> object:
+            """Narrows each element to some of the task's outcome classes (in ``.expand()``)."""
+            ...
+
+        def __rshift__(self, other: object, /) -> object:
+            """``self >> other``: ``other`` runs after every instance."""
+            ...
+
+        def __rrshift__(self, other: object, /) -> Self:
+            """``[a, b] >> self``: every instance runs after the tasks in the list."""
+            ...
 
 
 class Output[T]:
@@ -390,7 +418,7 @@ class TaskFunction[**P, R]:
             raise TypeError(f"task `{self._task_id}`: `.partial()`: no parameter `{unknown[0]}`")
         return PartialTask(self, fixed)
 
-    def expand(self, **mapped: object) -> list[R]:
+    def expand(self, **mapped: object) -> Mapped[R]:
         """A mapped task: one instance per element of the lists given (their cartesian product).
 
         ``load.expand(path=files)`` runs ``load`` once per element of ``files`` (a literal list
@@ -406,7 +434,7 @@ class TaskFunction[**P, R]:
         """
         return PartialTask(self, {}).expand(**mapped)
 
-    def expand_kwargs(self, values: object) -> list[R]:
+    def expand_kwargs(self, values: object) -> Mapped[R]:
         """A mapped task: one instance per dict of ``values``, its arguments.
 
         Args:
@@ -628,7 +656,7 @@ class PartialTask[**P, R]:
         self._function = function
         self._fixed = fixed
 
-    def expand(self, **mapped: object) -> list[R]:
+    def expand(self, **mapped: object) -> Mapped[R]:
         """See :meth:`TaskFunction.expand`.
 
         Args:
@@ -661,7 +689,7 @@ class PartialTask[**P, R]:
         recorded = self._function._record(builder, dict(self._fixed), ("product", mapped))
         return recorded  # type: ignore[return-value]
 
-    def expand_kwargs(self, values: object) -> list[R]:
+    def expand_kwargs(self, values: object) -> Mapped[R]:
         """See :meth:`TaskFunction.expand_kwargs`.
 
         Args:

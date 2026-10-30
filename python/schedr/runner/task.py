@@ -196,14 +196,52 @@ def _narrowed(
     says which one it is (only a whole output: a path reaches into one member already).
     """
     outcome = (outcomes or {}).get(reference.get("task", ""))
-    if reference.get("kind") != "output" or reference.get("path") or not isinstance(outcome, str):
+    if reference.get("kind") != "output" or reference.get("path"):
         return annotation
-    if get_origin(unwrap(annotation)) not in {Union, types.UnionType}:
+    return _member_named(annotation, outcome)
+
+
+def _member_named(annotation: object, outcome: object) -> object:
+    """The member of a union annotation named `outcome`, else the annotation."""
+    if not isinstance(outcome, str) or get_origin(unwrap(annotation)) not in {
+        Union,
+        types.UnionType,
+    }:
         return annotation
     for member in get_args(unwrap(annotation)):
         if getattr(get_origin(member) or member, "__name__", None) == outcome:
             return member
     return annotation
+
+
+def mapped_arguments(inputs: Mapping[str, Any], hints: Mapping[str, Any]) -> dict[str, Any]:
+    """A mapped task instance's own arguments: the elements the master resolved for it.
+
+    They come with the inputs under ``$expand`` (decision 76); one taken element by element
+    from a mapped upstream task has that instance's outcome under ``$expand_outcomes``, which
+    picks the member of a union to decode it as.
+
+    Args:
+        inputs: The instance's inputs.
+        hints: The task function's type hints.
+
+    Returns:
+        The arguments by parameter name (none for a task that isn't mapped).
+
+    Raises:
+        TaskInputError: If an element doesn't fit its parameter.
+    """
+    outcomes = inputs.get("$expand_outcomes", {})
+    arguments = {}
+    for name, value in inputs.get("$expand", {}).items():
+        annotation = _member_named(hints.get(name, Any), outcomes.get(name))
+        try:
+            arguments[name] = decode(value, annotation)
+        except CodecError as e:
+            raise TaskInputError(
+                f"mapped argument `{name}`: the element doesn't fit the parameter's type, {e}"
+            ) from e
+    return arguments
 
 
 def run_values(run: Mapping[str, Any]) -> RunValues:
@@ -332,6 +370,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
             name: build(value, hints.get(name, Any), inputs, run, outcomes)
             for name, value in task.get("arguments", {}).items()
         }
+        arguments.update(mapped_arguments(inputs, hints))
     except TaskSetupError as e:
         return failure(e, "task_not_found")
     except (TaskInputError, TypeModelError) as e:

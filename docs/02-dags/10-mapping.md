@@ -1,0 +1,90 @@
+# Mapping
+
+A mapped task runs **once per element** of a list: one instance per file, per region, per
+customer. The list can be written in the DAG file or come from an upstream task's output, so
+the number of instances is known only when the run gets there.
+
+```{literalinclude} ../../examples/docs/mapping.py
+:language: python
+:caption: examples/docs/mapping.py
+```
+
+## Mapping a task
+
+`.partial(...)` fixes the arguments every instance shares; `.expand(...)` names the ones
+that vary, each a list. `fetch.partial(bucket="raw").expand(path=list_files())` runs one
+`fetch` per file, each with `bucket="raw"`.
+
+- **Several mapped lists** give every combination: `.expand(region=["eu", "us"],
+  day=[1, 2])` makes four instances, the first argument written varying slowest (`eu`/1,
+  `eu`/2, `us`/1, `us`/2).
+- **`.expand_kwargs(...)`** maps over a list of dicts, each one instance's arguments.
+- **What is mapped over is checked when the file loads:** each list against the parameter's
+  type (`path: str` needs a `list[str]`), names that exist, nothing both fixed and mapped.
+- **The instances** are numbered from 0 in that order (their `map_index`). They run in
+  parallel as worker slots allow, and each retries on its own.
+- **An empty list** runs no instance: the task succeeds, and its output is `[]`.
+- **At most `[mapping] max_instances`** instances (1024 by default, a server setting); past
+  it, the task fails without running any and says why.
+
+A mapped task's output is the **list of its instances' outputs**, in their order. For type
+checkers `.expand(...)` returns `schedr.Mapped[R]`, a `list[R]` that also has `.on(...)` for
+mapping over it element by element: index it (`results[0]`) or pass it whole to a task
+taking a list.
+
+## Lanes: mapping over a mapped output
+
+Mapping over another mapped task's whole output pairs the instances element by element:
+`count.expand(rows=results.on(Rows))` gives `count[i]` the output of `fetch[i]`. Each pair is a
+**lane**, and lanes move on their own: `count[0]` starts as soon as `fetch[0]` is done,
+without waiting for the slowest file.
+
+- **`.on(...)` works per element** inside `.expand()`: an instance whose upstream instance
+  ended with another outcome is **skipped**, and its place in the list is `None`.
+- **To wait for all of them first,** add an order edge from the whole task:
+  `results >> counts` (the two mapped outputs) next to the expansion. Then nothing of `count`
+  starts before every `fetch` has finished, and nothing of it runs if one failed.
+- Using the upstream task anywhere else in the same task (`.partial(all=results)`,
+  `results[0]`) also makes it wait for the whole task.
+
+## Gathering
+
+A task that takes the whole list (`total(counts)`) is a **gather**: it waits for every
+instance, then receives their outputs in order.
+
+| The instances | The mapped task | The gather |
+|---|---|---|
+| all succeeded | success | runs, with every output |
+| some skipped | success | runs, with `None` in their places: its parameter must allow it (`Sequence[int \| None]`, checked when the file loads) |
+| all skipped | skipped | skipped, as after any skipped task |
+| none (an empty list) | success | runs, with `[]` |
+| one **failed** after its retries | failed at once: the other instances are cancelled, running ones stopped | `upstream_failed`: doesn't run |
+
+A gather that may receive `None` takes a `Sequence[int | None]` rather than a
+`list[int | None]`: type checkers read the mapped output as a `list[int]` (they can't know
+which instances will be skipped), and a `list` parameter accepts only its exact element
+type, a `Sequence` any narrower one.
+
+**All or nothing:** with `run_if=RunIf.ALL_SUCCEEDED` on the mapped task, one skipped instance
+skips the whole task, and so its gather: the gather gets every result or doesn't run. A
+mapped task applies its `run_if` to its instances the way any task applies it to its
+upstream edges.
+
+## Gathering everything
+
+A gather sees every instance only if none of them is skipped, and none of them fails:
+
+- **Don't narrow, decide in the task.** `.on(Rows)` skips the instances that ended
+  otherwise. Mapping over the whole union (`count_any.expand(result=results)`, taking
+  `Rows | Missing`) runs every instance, and the task decides what each one means.
+  `report(results)` takes the whole union of every instance the same way.
+- **Return expected problems as outcomes, don't raise them.** `fetch` returns `Missing` for
+  a file that isn't there: the instance succeeds, and the gather receives the `Missing`. An
+  uncaught exception is a real failure: it fails the step, cancels the other instances, and
+  the gather doesn't run. That is on purpose: a failure means the step failed.
+
+## Not yet
+
+The API, the CLI and the UI list a mapped task's instances as rows of the run without
+showing their index yet, and `run_dag`'s results don't name them; both come next (M4.3c).
+`.partial()` and `.expand()` work on `@task` functions; operators can't be mapped yet.

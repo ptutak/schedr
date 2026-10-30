@@ -219,13 +219,15 @@ fn a_mapped_tasks_expand_round_trips_and_its_references_count() {
         "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
                      "queue": "default", "max_output_size": 1_048_576},
         "output_type": {"type": "int"},
-        "expand": {"product": {"path": {"ref": {"kind": "output", "task": "list_files"}}}}
+        "expand": {"product": [
+            {"name": "path", "value": {"ref": {"kind": "output", "task": "list_files"}}}
+        ]}
     });
     let task: Task = serde_json::from_value(json.clone()).unwrap();
     let Some(Expand::Product(over)) = &task.expand else {
         panic!("expected a product: {:?}", task.expand)
     };
-    assert_eq!(over.keys().collect::<Vec<_>>(), ["path"]);
+    assert_eq!(over.iter().map(|m| &m.name).collect::<Vec<_>>(), ["path"]);
     assert_eq!(task.references().len(), 1);
     let written = serde_json::to_value(&task).unwrap();
     assert_eq!(written["expand"], json["expand"]);

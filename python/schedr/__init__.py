@@ -11,7 +11,7 @@ from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator
 from schedr.outcomes import Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
-from schedr.tasks import Chosen, Output, Task, branch, chain, on, task
+from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
 
@@ -32,6 +32,7 @@ __all__ = [
     "Every",
     "Group",
     "KiB",
+    "Mapped",
     "MiB",
     "Once",
     "Outcome",

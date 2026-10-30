@@ -71,7 +71,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
 }
 
 /// Mapped tasks (decision 69): a Python task only, with something to vary over, never an
-/// argument both fixed and mapped. Mapped tasks don't run before M4.3b.
+/// argument both fixed and mapped, or mapped twice.
 fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
     for task in &dag.tasks {
         let Some(expand) = &task.expand else {
@@ -88,18 +88,23 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
             if over.is_empty() {
                 problems.push(format!("task `{}`: `.expand()` names no argument", task.id));
             }
-            for name in over.keys().filter(|name| arguments.contains_key(*name)) {
-                problems.push(format!(
-                    "task `{}`: argument `{name}` is both fixed (`.partial()`) and mapped \
-                     (`.expand()`)",
-                    task.id
-                ));
+            let mut seen = std::collections::BTreeSet::new();
+            for name in over.iter().map(|m| m.name.as_str()) {
+                if arguments.contains_key(name) {
+                    problems.push(format!(
+                        "task `{}`: argument `{name}` is both fixed (`.partial()`) and mapped \
+                         (`.expand()`)",
+                        task.id
+                    ));
+                }
+                if !seen.insert(name) {
+                    problems.push(format!(
+                        "task `{}`: argument `{name}` is mapped twice (`.expand()`)",
+                        task.id
+                    ));
+                }
             }
         }
-        problems.push(format!(
-            "task `{}` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)",
-            task.id
-        ));
     }
 }
 

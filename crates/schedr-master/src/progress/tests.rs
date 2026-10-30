@@ -350,7 +350,7 @@ fn cancelling_cancels_what_hasnt_started_and_reports_what_runs() {
         cancelled,
         changes(&[("audit", S::Cancelled), ("report", S::Cancelled)])
     );
-    assert_eq!(running, [id("load")]);
+    assert_eq!(running, [(id("load"), -1)]);
     assert_eq!(run.result(), None);
     run.set(&id("load"), S::Success);
     assert_eq!(run.result(), Some(RunState::Cancelled));
@@ -424,4 +424,210 @@ fn a_branch_runs_the_targets_it_chose(
         ],
         [a, b, c]
     );
+}
+
+/// A python task for the mapping tests: `expand` over `over` (a task's whole output, or a
+/// literal list), with `run_if`.
+fn mapped_task(name: &str, over: Option<&Json>, run_if: &str) -> Json {
+    let mut task = task(name, "python");
+    task["module"] = json!("m");
+    task["function"] = json!("f");
+    task["arguments"] = json!({});
+    task["settings"]["run_if"] = json!(run_if);
+    if let Some(over) = over {
+        task["expand"] = json!({"product": [{"name": "n", "value": over}]});
+    }
+    task
+}
+
+fn output_of(task: &str) -> Json {
+    json!({"ref": {"kind": "output", "task": task}})
+}
+
+/// `size` mapped over a literal, `check` over `size` element by element (a lane), `total`
+/// gathering `check`; `edges` added to those.
+fn mapped_dag(check_run_if: &str, extra_edges: &Json) -> Dag {
+    let mut edges = vec![
+        json!({"from": "size", "to": "check", "kind": "data"}),
+        json!({"from": "check", "to": "total", "kind": "data"}),
+    ];
+    edges.extend(extra_edges.as_array().unwrap().iter().cloned());
+    let mut total = mapped_task("total", None, "none_failed");
+    total["arguments"] = json!({"all": output_of("check")});
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "m", "location": {"root": "etl", "path": "m.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": [
+            mapped_task("size", Some(&json!({"literal": [1, 2, 3]})), "none_failed"),
+            mapped_task("check", Some(&output_of("size")), check_run_if),
+            total
+        ],
+        "edges": edges
+    }))
+    .unwrap()
+}
+
+/// Settles, expanding as asked with `sizes` per task, until nothing changes.
+fn settle_expanding(run: &mut RunProgress<'_>, sizes: &BTreeMap<&str, Vec<usize>>) {
+    loop {
+        run.settle();
+        let ready = run.take_expansions();
+        if ready.is_empty() {
+            return;
+        }
+        for task in ready {
+            let expansion = Expansion::Sizes(sizes[task.as_str()].clone());
+            run.expand(&task, expansion);
+        }
+    }
+}
+
+fn instance_states(run: &RunProgress<'_>, task: &str) -> Vec<TaskInstanceState> {
+    run.instances(&id(task))
+        .map(|i| i.states.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn lanes_move_on_their_own_until_the_gather() {
+    let dag = mapped_dag("none_failed", &json!([]));
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![3]), ("check", vec![3])]);
+    settle_expanding(&mut run, &sizes);
+    // Both expanded at once: `check`'s count is `size`'s, known when `size` expanded.
+    assert_eq!(instance_states(&run, "size"), [S::Queued; 3]);
+    assert_eq!(instance_states(&run, "check"), [S::Scheduled; 3]);
+    assert_eq!(run.states()[&id("check")], S::Running);
+    // `check[1]` starts when `size[1]` is done, whatever the others do.
+    run.set_instance(&id("size"), 1, S::Success);
+    run.set_instance_outcome(&id("size"), 1, "SUCCESS");
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(
+        instance_states(&run, "check"),
+        [S::Scheduled, S::Queued, S::Scheduled]
+    );
+    // The gather waits for every instance.
+    for i in [0, 2] {
+        run.set_instance(&id("size"), i, S::Success);
+    }
+    settle_expanding(&mut run, &sizes);
+    for i in 0..3 {
+        run.set_instance(&id("check"), i, S::Success);
+    }
+    assert_eq!(run.states()[&id("total")], S::Scheduled);
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(run.states()[&id("size")], S::Success);
+    assert_eq!(run.states()[&id("check")], S::Success);
+    assert_eq!(run.states()[&id("total")], S::Queued);
+}
+
+#[test]
+fn an_order_edge_beside_the_lane_is_a_barrier() {
+    let dag = mapped_dag(
+        "none_failed",
+        &json!([{"from": "size", "to": "check", "kind": "order"}]),
+    );
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![2]), ("check", vec![2])]);
+    settle_expanding(&mut run, &sizes);
+    run.set_instance(&id("size"), 0, S::Success);
+    settle_expanding(&mut run, &sizes);
+    // `size` as a whole hasn't finished: `check` doesn't even expand.
+    assert_eq!(run.states()[&id("check")], S::Scheduled);
+    run.set_instance(&id("size"), 1, S::Success);
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(instance_states(&run, "check"), [S::Queued; 2]);
+}
+
+#[test]
+fn a_failed_instance_fails_the_step_at_once_and_cancels_the_rest() {
+    let dag = mapped_dag("none_failed", &json!([]));
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![3]), ("check", vec![3])]);
+    settle_expanding(&mut run, &sizes);
+    run.set_instance(&id("size"), 0, S::Running);
+    run.set_instance(&id("size"), 1, S::Success);
+    settle_expanding(&mut run, &sizes);
+    run.set_instance(&id("check"), 1, S::Running);
+    run.set_instance(&id("size"), 2, S::Failed);
+    settle_expanding(&mut run, &sizes);
+    // `size` failed: its queued instance is cancelled, its running one stopped.
+    assert_eq!(run.states()[&id("size")], S::Failed);
+    assert_eq!(
+        instance_states(&run, "size"),
+        [S::Running, S::Success, S::Failed]
+    );
+    // `check[2]`'s lane failed, so `check` fails as a step too: `check[0]` (waiting for its
+    // lane) is cancelled, the running `check[1]` stopped.
+    assert_eq!(run.states()[&id("check")], S::UpstreamFailed);
+    assert_eq!(
+        instance_states(&run, "check"),
+        [S::Cancelled, S::Running, S::UpstreamFailed]
+    );
+    assert_eq!(run.take_stops(), [(id("size"), 0), (id("check"), 1)]);
+    assert_eq!(run.states()[&id("total")], S::UpstreamFailed);
+    // The run ends once the stopped instances have.
+    assert_eq!(run.result(), None);
+    run.set_instance(&id("size"), 0, S::Cancelled);
+    run.set_instance(&id("check"), 1, S::Cancelled);
+    assert_eq!(run.result(), Some(RunState::Failed));
+}
+
+#[rstest]
+#[case::none_failed_some_skipped("none_failed", &["Rows", "Missing"], S::Success)]
+#[case::none_failed_all_skipped("none_failed", &["Missing", "Missing"], S::Skipped)]
+#[case::all_succeeded_one_skipped("all_succeeded", &["Rows", "Missing"], S::Skipped)]
+#[case::all_succeeded_none_skipped("all_succeeded", &["Rows", "Rows"], S::Success)]
+fn a_mapped_task_applies_its_run_if_to_its_instances(
+    #[case] run_if: &str,
+    #[case] outcomes: &[&str],
+    #[case] expected: TaskInstanceState,
+) {
+    // `check` maps over `size.on(Rows)`: an instance whose `size` ended `Missing` is skipped.
+    let dag = mapped_dag(run_if, &json!([]));
+    let mut dag = dag;
+    dag.edges[0] = serde_json::from_value(
+        json!({"from": "size", "to": "check", "kind": "data", "on": ["Rows"]}),
+    )
+    .unwrap();
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![2]), ("check", vec![2])]);
+    settle_expanding(&mut run, &sizes);
+    for (i, outcome) in outcomes.iter().enumerate() {
+        run.set_instance(&id("size"), i, S::Success);
+        run.set_instance_outcome(&id("size"), i, outcome);
+    }
+    settle_expanding(&mut run, &sizes);
+    for (i, outcome) in outcomes.iter().enumerate() {
+        if *outcome == "Rows" {
+            assert_eq!(instance_states(&run, "check")[i], S::Queued);
+            run.set_instance(&id("check"), i, S::Success);
+        } else {
+            assert_eq!(instance_states(&run, "check")[i], S::Skipped);
+        }
+    }
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(run.states()[&id("check")], expected);
+}
+
+#[test]
+fn an_empty_expansion_succeeds_and_a_failed_one_has_its_reason() {
+    let dag = mapped_dag("none_failed", &json!([]));
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    settle_expanding(
+        &mut run,
+        &BTreeMap::from([("size", vec![0]), ("check", vec![0])]),
+    );
+    assert_eq!(run.states()[&id("size")], S::Success);
+    assert_eq!(run.states()[&id("check")], S::Success);
+    assert_eq!(run.states()[&id("total")], S::Queued);
+
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    run.settle();
+    assert_eq!(run.take_expansions(), [id("size")]);
+    run.expand(&id("size"), Expansion::Fail("too many".to_owned()));
+    run.settle();
+    assert_eq!(run.states()[&id("size")], S::Failed);
+    assert_eq!(run.reason(&id("size")), Some("too many"));
+    assert_eq!(run.states()[&id("check")], S::UpstreamFailed);
 }

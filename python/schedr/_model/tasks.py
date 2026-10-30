@@ -248,7 +248,8 @@ class ExpandProduct:
     """``.expand(name=values, ...)``: one instance per element of their cartesian product.
 
     Attributes:
-        over: Each mapped argument's list (a literal, or a reference to a list).
+        over: Each mapped argument's list (a literal, or a reference to a list), in the order
+            written: the first varies slowest (decision 79).
     """
 
     over: Mapping[str, Value]
@@ -259,15 +260,19 @@ class ExpandProduct:
         Returns:
             They, in argument order.
         """
-        return [r for name in sorted(self.over) for r in self.over[name].references()]
+        return [r for value in self.over.values() for r in value.references()]
 
     def to_json(self) -> dict[str, Any]:
         """As DAG JSON.
 
         Returns:
-            ``{"product": {name: value}}``.
+            ``{"product": [{"name": name, "value": value}, ...]}``, in the order written.
         """
-        return {"product": {name: self.over[name].to_json() for name in sorted(self.over)}}
+        return {
+            "product": [
+                {"name": name, "value": value.to_json()} for name, value in self.over.items()
+            ]
+        }
 
 
 @dataclass(frozen=True, slots=True)

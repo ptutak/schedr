@@ -343,18 +343,21 @@ fn groups_must_be_unique_nest_properly_and_be_declared() {
 }
 
 #[test]
-fn a_mapped_task_is_checked_and_refused_until_m4_3b() {
+fn a_mapped_tasks_names_are_checked() {
     let mut mapped = task("load", &json!({"bucket": {"literal": "raw"}}));
-    mapped["expand"] = json!({"product": {"bucket": {"literal": ["a"]}, "path": {"literal": [1]}}});
+    mapped["expand"] = json!({"product": [
+        {"name": "bucket", "value": {"literal": ["a"]}},
+        {"name": "path", "value": {"literal": [1]}},
+        {"name": "path", "value": {"literal": [2]}}
+    ]});
     let mut empty = task("none", &json!({}));
-    empty["expand"] = json!({"product": {}});
+    empty["expand"] = json!({"product": []});
     assert_eq!(
         problems(&json!({"tasks": [mapped, empty], "edges": []})),
         [
             "task `load`: argument `bucket` is both fixed (`.partial()`) and mapped (`.expand()`)",
-            "task `load` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)",
-            "task `none`: `.expand()` names no argument",
-            "task `none` is mapped (`.expand()`), which this master doesn't run yet (M4.3b)"
+            "task `load`: argument `path` is mapped twice (`.expand()`)",
+            "task `none`: `.expand()` names no argument"
         ]
     );
     // A reference in what it maps over is a reference like any: it needs its data edge.

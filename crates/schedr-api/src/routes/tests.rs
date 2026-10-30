@@ -79,7 +79,11 @@ async fn api() -> (axum::Router, Database, String) {
         .unwrap();
     db.create_instances(
         &run_id,
-        &[(TaskId::new("extract").unwrap(), TaskInstanceState::Queued)],
+        &[(
+            TaskId::new("extract").unwrap(),
+            -1,
+            TaskInstanceState::Queued,
+        )],
         ts(NOW),
     )
     .await

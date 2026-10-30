@@ -53,6 +53,8 @@ pub struct Settings {
     pub quiet: QuietSettings,
     /// The largest message a worker may send (`[master] grpc_max_message_size`).
     pub max_message_size: usize,
+    /// The most instances a mapped task may have (`[mapping] max_instances`).
+    pub max_instances: usize,
 }
 
 impl Default for Settings {
@@ -70,6 +72,7 @@ impl Default for Settings {
             listen_retry: Duration::from_mins(30),
             quiet: QuietSettings::default(),
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
+            max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
         }
     }
 }
@@ -211,6 +214,7 @@ impl MasterCore {
             .with_set_aside(settings.set_aside, settings.read_back)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
+        dispatcher.set_max_instances(settings.max_instances);
         Self {
             discovery,
             dispatcher,

@@ -37,6 +37,7 @@ use schedr_proto::pb;
 
 use crate::core::Arrivals;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
+use crate::mapping;
 use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
@@ -201,6 +202,11 @@ pub struct Dispatcher {
     set_aside_for: SignedDuration,
     /// How a commit cut off is read back.
     read_back: ReadBack,
+    /// `CancelAttempt`s for running instances whose mapped task's step failed (75a), sent
+    /// with the next step.
+    stops: Vec<Outgoing>,
+    /// Mapped lists resolved during a step, shared by a task's instances.
+    resolved: mapping::Resolved,
 }
 
 /// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
@@ -249,6 +255,8 @@ impl Dispatcher {
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
             read_back: ReadBack::default(),
+            stops: Vec::new(),
+            resolved: mapping::Resolved::new(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -300,6 +308,11 @@ impl Dispatcher {
         self.set_aside_for = SignedDuration::try_from(set_aside).unwrap_or(SignedDuration::MAX);
         self.read_back = read_back;
         self
+    }
+
+    /// The most instances a mapped task may have (`[mapping] max_instances`).
+    pub const fn set_max_instances(&mut self, max_instances: usize) {
+        self.execution.set_max_instances(max_instances);
     }
 
     /// The dispatcher with another code wait (see [`DEFAULT_CODE_WAIT`]).
@@ -421,6 +434,8 @@ impl Dispatcher {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
+        outgoing.append(&mut self.stops);
+        self.resolved.clear();
         self.execution.prepare_runs(now).await?;
         self.execution.queue_due_retries(now).await?;
         self.expire(now).await?;
@@ -637,14 +652,22 @@ impl Dispatcher {
         else {
             return Ok(());
         };
-        let inputs = upstream_inputs(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+        let inputs = mapping::inputs(
+            &self.db,
+            &ready.dag,
+            &ready.run_id,
+            (task, ready.map_index),
+            &mut self.resolved,
+        )
+        .await?;
+        let inputs = serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec());
         let outcomes =
             upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
         if inputs.len() > MAX_INPUTS {
             self.end(
                 &attempt_id,
                 &ready.run_id,
-                &ready.task_id,
+                (&ready.task_id, ready.map_index),
                 inputs_too_large(),
                 now,
             )
@@ -976,13 +999,14 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
         let cancelled = self.execution.cancel_run(run_id, now).await?;
-        let running: BTreeSet<&TaskId> = cancelled.running.iter().collect();
+        let running: BTreeSet<(&TaskId, i32)> =
+            cancelled.running.iter().map(|(t, i)| (t, *i)).collect();
         Ok(self
             .db
             .open_attempts(None)
             .await?
             .into_iter()
-            .filter(|a| a.run_id == run_id && running.contains(&a.task_id))
+            .filter(|a| a.run_id == run_id && running.contains(&(&a.task_id, a.map_index)))
             .map(|a| cancel(&a.worker_id, &a.id))
             .collect())
     }
@@ -997,10 +1021,34 @@ impl Dispatcher {
         self.workers.release(&attempt.id);
         if self.db.end_attempt(&attempt.id, end, now).await? {
             self.metrics.attempt_ended(&end.status);
-            self.execution
-                .attempt_finished(&attempt.run_id, &attempt.task_id, result, now)
+            let recorded = self
+                .execution
+                .attempt_finished(
+                    &attempt.run_id,
+                    &attempt.task_id,
+                    attempt.map_index,
+                    result,
+                    now,
+                )
                 .await?;
+            self.stop(&attempt.run_id, &recorded.stops).await?;
         }
+        Ok(())
+    }
+
+    /// Queues `CancelAttempt`s for running instances whose mapped task's step failed (75a).
+    async fn stop(&mut self, run_id: &str, stops: &[(TaskId, i32)]) -> Result<(), DispatchError> {
+        if stops.is_empty() {
+            return Ok(());
+        }
+        let stopping: BTreeSet<(&TaskId, i32)> = stops.iter().map(|(t, i)| (t, *i)).collect();
+        let attempts = self.db.open_attempts(None).await?;
+        self.stops.extend(
+            attempts
+                .iter()
+                .filter(|a| a.run_id == run_id && stopping.contains(&(&a.task_id, a.map_index)))
+                .map(|a| cancel(&a.worker_id, &a.id)),
+        );
         Ok(())
     }
 
@@ -1008,7 +1056,7 @@ impl Dispatcher {
         &mut self,
         attempt_id: &str,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, i32),
         end: AttemptEnd,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
@@ -1020,9 +1068,11 @@ impl Dispatcher {
         };
         if self.db.end_attempt(attempt_id, &end, now).await? {
             self.metrics.attempt_ended(&end.status);
-            self.execution
-                .attempt_finished(run_id, task_id, &result, now)
+            let recorded = self
+                .execution
+                .attempt_finished(run_id, task_id, map_index, &result, now)
                 .await?;
+            self.stop(run_id, &recorded.stops).await?;
         }
         Ok(())
     }
@@ -1228,7 +1278,7 @@ impl Dispatcher {
         pb::AssignTask {
             attempt_id: attempt_id.to_owned(),
             task_id: ready.task_id.to_string(),
-            map_index: -1,
+            map_index: ready.map_index,
             try_number,
             run: Some(pb::RunInfo {
                 run_id: ready.run_id.clone(),
@@ -1368,8 +1418,20 @@ pub async fn attempt_inputs(
     let Some(run) = db.run_tasks(&attempt.run_id).await? else {
         return Ok(None);
     };
+    let Some(task) = run.dag.task(&attempt.task_id) else {
+        return Ok(Some(b"{}".to_vec()));
+    };
+    let mut resolved = mapping::Resolved::new();
+    let inputs = mapping::inputs(
+        db,
+        &run.dag,
+        &attempt.run_id,
+        (task, attempt.map_index),
+        &mut resolved,
+    )
+    .await?;
     Ok(Some(
-        upstream_inputs(db, &run.dag, &attempt.run_id, &attempt.task_id).await?,
+        serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()),
     ))
 }
 
@@ -1399,31 +1461,6 @@ async fn upstream_outcomes(
         .into_iter()
         .map(|(task, outcome)| (task.to_string(), outcome.unwrap_or_default()))
         .collect())
-}
-
-/// The upstream outputs the task uses, as JSON (`{task_id: output}`).
-async fn upstream_inputs(
-    db: &Database,
-    dag: &schedr_model::Dag,
-    run_id: &str,
-    task_id: &TaskId,
-) -> Result<Vec<u8>, DispatchError> {
-    let Some(task) = dag.task(task_id) else {
-        return Ok(b"{}".to_vec());
-    };
-    let used: BTreeSet<&TaskId> = task
-        .references()
-        .into_iter()
-        .filter_map(Reference::upstream_task)
-        .collect();
-    if used.is_empty() {
-        return Ok(b"{}".to_vec());
-    }
-    // Only the outputs it uses: not the whole run's, which grows with a DAG's width (B18).
-    let wanted: Vec<&TaskId> = used.into_iter().collect();
-    let outputs = db.outputs_of(run_id, &wanted).await?;
-    let inputs: BTreeMap<&TaskId, &serde_json::Value> = outputs.iter().collect();
-    Ok(serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()))
 }
 
 /// Whether `error` is one task's own (data that won't read, a statement the database

@@ -48,6 +48,21 @@ pub struct ReadyInstance {
     /// The schedr version of the parse its DAG version came from: workers older than this
     /// don't get it.
     pub parse_version: String,
+    /// Its place among a mapped task's instances; -1 for an unmapped task.
+    pub map_index: i32,
+}
+
+/// One instance of a mapped task, as its downstream tasks see it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceResult {
+    /// Its place, from 0.
+    pub map_index: i32,
+    /// Its state.
+    pub state: TaskInstanceState,
+    /// Its outcome, once it succeeded.
+    pub outcome: Option<String>,
+    /// Its output (stored JSON), once it succeeded.
+    pub output: Option<serde_json::Value>,
 }
 
 /// A stored attempt.
@@ -69,6 +84,8 @@ pub struct StoredAttempt {
     pub status: Option<AttemptStatus>,
     /// Whether the worker reported `Started`.
     pub started: bool,
+    /// Its task instance's place among a mapped task's instances; -1 for an unmapped task.
+    pub map_index: i32,
 }
 
 /// How an attempt ended.
@@ -128,6 +145,7 @@ type ReadyRow = (
     String,
     Option<String>,
     String,
+    i32,
 );
 type AttemptRow = (
     String,
@@ -138,21 +156,22 @@ type AttemptRow = (
     Option<String>,
     Option<String>,
     bool,
+    i32,
 );
 
 /// The attempt queries (sqlx needs `'static` text, so the shared columns are written out).
 const ATTEMPT_BY_ID: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
-    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL \
-    FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
+    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.id = $1{uuid}";
 const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
-    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL \
-    FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
+    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
-    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL \
-    FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
+    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.started_at IS NULL AND a.assigned_at < $1{ts} \
     ORDER BY a.assigned_at, a.id";
 
@@ -166,7 +185,8 @@ impl Database {
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version FROM task_instances t JOIN runs r ON r.id = t.run_id \
+            t.queued_reason, p.schedr_version, t.map_index FROM task_instances t \
+            JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
             WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' \
@@ -406,7 +426,8 @@ impl Database {
         run_id: &str,
     ) -> Result<BTreeMap<TaskId, serde_json::Value>, DbError> {
         const OUTPUTS: &str = "SELECT t.task_id, o.value{text} FROM outputs o \
-            JOIN task_instances t ON t.id = o.task_instance_id WHERE t.run_id = $1{uuid}";
+            JOIN task_instances t ON t.id = o.task_instance_id \
+            WHERE t.run_id = $1{uuid} AND t.map_index = -1";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, OUTPUTS))
                 .bind(run_id)
@@ -436,7 +457,7 @@ impl Database {
             let text = format!(
                 "SELECT task_id, state, outcome FROM task_instances \
                  WHERE run_id = $1{{uuid}} AND state IN ('success', 'skipped') \
-                 AND task_id IN ({})",
+                 AND map_index = -1 AND task_id IN ({})",
                 wanted.join(", ")
             );
             let rows: Vec<(String, String, Option<String>)> = on_pool!(self, |pool, backend| {
@@ -472,7 +493,7 @@ impl Database {
             let text = format!(
                 "SELECT t.task_id, o.value{{text}} FROM outputs o \
                  JOIN task_instances t ON t.id = o.task_instance_id \
-                 WHERE t.run_id = $1{{uuid}} AND t.task_id IN ({})",
+                 WHERE t.run_id = $1{{uuid}} AND t.map_index = -1 AND t.task_id IN ({})",
                 wanted.join(", ")
             );
             let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
@@ -487,6 +508,77 @@ impl Database {
             }
         }
         Ok(outputs)
+    }
+
+    /// A mapped task's instances in a run, in `map_index` order: each one's state, and its
+    /// outcome and output once it succeeded (what a mapped task's whole output and its lanes
+    /// are made of, decisions 70 and 77).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn instance_results(
+        &self,
+        run_id: &str,
+        task: &TaskId,
+    ) -> Result<Vec<InstanceResult>, DbError> {
+        const RESULTS: &str = "SELECT t.map_index, t.state, t.outcome, o.value{text} \
+            FROM task_instances t LEFT JOIN outputs o ON o.task_instance_id = t.id \
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index >= 0 \
+            ORDER BY t.map_index";
+        let rows: Vec<(i32, String, Option<String>, Option<String>)> =
+            on_pool!(self, |pool, backend| {
+                sqlx::query_as(sql(backend, RESULTS))
+                    .bind(run_id)
+                    .bind(task.as_str())
+                    .fetch_all(pool)
+                    .await?
+            });
+        rows.into_iter()
+            .map(|(map_index, state, outcome, value)| {
+                Ok(InstanceResult {
+                    map_index,
+                    state: from_name("task_instances.state", state)?,
+                    outcome,
+                    output: value.map(|v| from_json("outputs.value", &v)).transpose()?,
+                })
+            })
+            .collect()
+    }
+
+    /// One instance of a mapped task in a run: its state, and its outcome and output once it
+    /// succeeded (what a lane gives its downstream instance).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn instance_result(
+        &self,
+        run_id: &str,
+        task: &TaskId,
+        map_index: i32,
+    ) -> Result<Option<InstanceResult>, DbError> {
+        const RESULT: &str = "SELECT t.state, t.outcome, o.value{text} \
+            FROM task_instances t LEFT JOIN outputs o ON o.task_instance_id = t.id \
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3";
+        let row: Option<(String, Option<String>, Option<String>)> =
+            on_pool!(self, |pool, backend| {
+                sqlx::query_as(sql(backend, RESULT))
+                    .bind(run_id)
+                    .bind(task.as_str())
+                    .bind(map_index)
+                    .fetch_optional(pool)
+                    .await?
+            });
+        row.map(|(state, outcome, value)| {
+            Ok(InstanceResult {
+                map_index,
+                state: from_name("task_instances.state", state)?,
+                outcome,
+                output: value.map(|v| from_json("outputs.value", &v)).transpose()?,
+            })
+        })
+        .transpose()
     }
 
     /// Queues every `unschedulable` task instance again (the set of workers changed).
@@ -529,6 +621,7 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         content_hash,
         queued_reason,
         parse_version,
+        map_index,
     ) = row;
     Ok(ReadyInstance {
         instance_id,
@@ -542,11 +635,12 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         content_hash,
         queued_reason,
         parse_version,
+        map_index,
     })
 }
 
 fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
-    let (id, instance_id, run_id, task_id, try_number, worker_id, status, started) = row;
+    let (id, instance_id, run_id, task_id, try_number, worker_id, status, started, map_index) = row;
     Ok(StoredAttempt {
         id,
         instance_id,
@@ -558,5 +652,6 @@ fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
             .map(|s| from_name("attempts.status", s))
             .transpose()?,
         started,
+        map_index,
     })
 }

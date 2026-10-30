@@ -4033,9 +4033,9 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     `.expand()`, which M5's `BashOperator` needs, later). For type checkers `.expand(...)`
     returns `list[R]`.
   - **DAG JSON** (decision 69, the user's, 2026-10-29: A): the fixed arguments stay in
-    `arguments` (`.partial`), and an `expand` field says what varies: `{"product": {name:
-    value}}` (`.expand`; each value a literal list or a reference to a list) or `{"kwargs":
-    value}` (`.expand_kwargs`, a list of dicts). Not chosen: B marking mapped arguments inside
+    `arguments` (`.partial`), and an `expand` field says what varies: `{"product": [{"name":
+    name, "value": value}, ...]}` (`.expand`; each value a literal list or a reference to a
+    list, in the order written) or `{"kwargs": value}` (`.expand_kwargs`, a list of dicts). Not chosen: B marking mapped arguments inside
     `arguments` (every reader of `arguments` would have to know the wrapper).
   - **Checked when the file loads:** each mapped list against `list[<the parameter's type>]`
     (literal elements encoded, references typed); names (known, not both fixed and mapped,
@@ -4053,6 +4053,57 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     run's tasks (`map_index`, -1 for an unmapped task), per-instance URLs with
     `?map_index=N`. Not chosen: B nesting instances under their task (a new URL family).
   - `[mapping] max_instances` (1024, at least 1) in the server's configuration.
+  - **The order of the instances** (decision 79, the user's, 2026-10-30: A): over several
+    lists, the first argument **written** varies slowest (`.expand(region=[...],
+    day=[...])`: all of the first region's days, then the next region's), as in Airflow; it
+    is the gather's order. So `product` is an ordered list in DAG JSON. Not chosen: B the
+    parameters' names in alphabetical order (no format change, but renaming a parameter
+    would reorder `map_index`).
+  - **Lanes: mapping over a mapped output** (decision 70 revised, the user's, 2026-10-30: B):
+    `check.expand(n=sizes)` over the mapped `size` creates `check`'s instances as soon as
+    `size` has expanded (its count is known then), and `check[i]` waits only for `size[i]`:
+    each lane moves on its own, and the barrier is the first task taking the whole list (a
+    gather) or any task that isn't mapped element by element. **Only that element-wise data
+    edge is a lane** (70.1): every other edge into a mapped task, an order edge from the same
+    task included, counts the upstream as a whole, so `size >> check` next to the expansion
+    restores the barrier (A's behaviour: nothing of `check` starts before all of `size` has
+    finished, nothing of it runs if `size` failed); M5's Airflow layer adds that edge itself.
+    A reference to `size` anywhere else in `check` (`.partial(all=sizes)`, `sizes[0]`) also
+    makes the edge whole. Not chosen: A the barrier always (slower: each step waits for its
+    slowest instance); C a per-task setting (the edge does it).
+  - **How a mapped task is stored** (decision 74, the user's: A): every task keeps its
+    `map_index = -1` row. For an unmapped task it is the one runnable instance; for a mapped
+    task it is the task **as a whole** (what edges, trigger rules and the run's result look
+    at), never sent to a worker, with no attempts or output: `scheduled` until its upstream
+    is ready, `running` once expanded, then its state from its instances. Expansion adds the
+    instances `0..N-1`, which run, retry and are cancelled each on its own. Not chosen: B no
+    row for the whole task (every rule would aggregate instances).
+  - **Its state from its instances** (decision 75, the user's): **a failure fails the step at
+    once** (75a: B): when an instance fails after its last retry (or its lane's upstream
+    did), the task's other instances are cancelled, running ones stopped (their results
+    ignored); the task is `failed` (`upstream_failed` when only lanes failed), its
+    downstream `upstream_failed`. Otherwise, once every instance has finished, the task
+    applies **its own `run_if` to its instances as if they were its edges** (75b: D):
+    `NONE_FAILED` (default) skipped when every instance was skipped, else success with
+    `None` for the skipped ones; `ALL_SUCCEEDED` skipped when any was ("all or nothing");
+    no instances (`N = 0`): success with `[]`. A gather that must see everything maps
+    without narrowing (`.on(...)` skips instances; the task deciding on the whole `Rows |
+    Missing` doesn't), and expected failures are outcomes, not exceptions (see the mapping
+    guide's example). Not chosen: 75a A letting the other instances finish (Airflow's);
+    75b C always success with `[None, ...]`.
+  - **An instance's element** (decision 76, the user's: A): the master resolves each
+    instance's mapped values and sends them with its inputs under `$expand` (with the
+    element's outcome under `$expand_outcomes` for one from a mapped upstream, so a union
+    decodes to the right member); the runner passes them as the mapped parameters. The task
+    JSON is the same for every instance. Not chosen: B a task JSON per instance (inline in
+    `AssignTask`, so a large element could exceed the message limit).
+  - **A mapped task's whole output** (decision 77, the user's: A): stored per instance only;
+    a downstream task's list is built when read, in `map_index` order, `None` for a skipped
+    instance. Not chosen: B storing the list on the `-1` row too (twice the storage, and the
+    list could exceed limits its instances met).
+  - **Why a task failed with no attempt** (decision 78, the user's: A): a nullable `reason`
+    on `task_instances` (more instances than `max_instances`; a mapped list that is `null`
+    or not a list when it expands). Not chosen: B reusing `queued_reason`.
 - **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
   imported (so an import error). The native API never "accepts and warns"; that applies only to
   the Airflow layer (see Airflow compatibility: Thin translating classes).

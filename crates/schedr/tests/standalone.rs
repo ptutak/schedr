@@ -434,6 +434,70 @@ with Dag("routed"):
 }
 
 #[test]
+fn a_mapped_task_runs_its_instances_and_lanes_and_the_gathers_get_their_lists() {
+    let dag = r#"
+from schedr import Dag, Data, task
+
+class Rows(Data):
+    count: int
+
+class Missing(Data):
+    reason: str
+
+@task
+def list_files() -> list[str]:
+    return ["a.csv", "missing.csv", "bb.csv"]
+
+@task
+def fetch(bucket: str, path: str) -> Rows | Missing:
+    if path.startswith("missing"):
+        return Missing(reason=f"{bucket}/{path} not found")
+    return Rows(count=len(path))
+
+@task
+def count(rows: Rows) -> int:
+    return rows.count * 10
+
+@task
+def total(counts: list[int | None]) -> list[int | None]:
+    return counts
+
+@task
+def summary(results: list[Rows | Missing]) -> list[str]:
+    return [type(r).__name__ for r in results]
+
+with Dag("mapped"):
+    results = fetch.partial(bucket="raw").expand(path=list_files())
+    total(count.expand(rows=results.on(Rows)))
+    summary(results)
+"#;
+    let standalone = Standalone::start(&[("mapped.py", dag)], None);
+    standalone.wait("DAG `mapped`", || standalone.dag_ids() == ["mapped"]);
+    let run_id = standalone.trigger("mapped");
+    standalone.wait_for_state(&run_id, "success");
+    let output = |task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap()
+    };
+    // `count` ran for the two `Rows` lanes (its instance for `Missing` was skipped: `None`
+    // in the gathered list), in the order of the files.
+    assert_eq!(
+        output("total")["value"],
+        serde_json::json!([50, null, 60]),
+        "{}",
+        output("total")
+    );
+    // A gather of the whole union sees every instance, each decoded as its own member.
+    assert_eq!(
+        output("summary")["value"],
+        serde_json::json!(["Rows", "Missing", "Rows"]),
+        "{}",
+        output("summary")
+    );
+}
+
+#[test]
 fn a_branch_runs_only_the_targets_it_chose() {
     let dag = r#"
 from schedr import CommandOperator, Dag, Task, branch

@@ -173,11 +173,22 @@ pub enum TaskKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Expand {
-    /// `.expand(name=values, ...)`: each argument a list (a literal or a reference to a list);
-    /// the instances are their cartesian product, the first argument varying slowest.
-    Product(BTreeMap<String, Value>),
+    /// `.expand(name=values, ...)`: each argument a list (a literal or a reference to a list),
+    /// in the order written; the instances are their cartesian product, the first argument
+    /// varying slowest (decision 79).
+    Product(Vec<Mapped>),
     /// `.expand_kwargs(values)`: a list of dicts, each one instance's arguments.
     Kwargs(Value),
+}
+
+/// One mapped argument of `.expand(...)`: its name and the list it maps over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Mapped {
+    /// The parameter's name.
+    pub name: String,
+    /// Its list: a literal, or a reference to a list.
+    pub value: Value,
 }
 
 /// A task of a DAG.
@@ -236,7 +247,9 @@ impl Task {
             TaskKind::Empty => Vec::new(),
         };
         match &self.expand {
-            Some(Expand::Product(over)) => found.extend(over.values().flat_map(Value::references)),
+            Some(Expand::Product(over)) => {
+                found.extend(over.iter().flat_map(|m| m.value.references()));
+            }
             Some(Expand::Kwargs(over)) => found.extend(over.references()),
             None => {}
         }

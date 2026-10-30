@@ -260,7 +260,7 @@ async fn a_runs_dag_and_a_tasks_output_are_read() {
     assert_eq!(db.run_dag_json(unknown).await.unwrap(), None);
 
     let now = ts("2026-10-15T03:00:01Z");
-    db.create_instances(&run_id, &[(extract(), TaskInstanceState::Queued)], now)
+    db.create_instances(&run_id, &[(extract(), -1, TaskInstanceState::Queued)], now)
         .await
         .unwrap();
     assert_eq!(db.run_task_output(&run_id, &extract()).await.unwrap(), None);
@@ -284,7 +284,7 @@ async fn a_runs_instances_and_attempts_are_shown() {
     let (db, version) = with_dag().await;
     let run_id = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
     let now = ts("2026-10-15T03:00:01Z");
-    db.create_instances(&run_id, &[(extract(), TaskInstanceState::Queued)], now)
+    db.create_instances(&run_id, &[(extract(), -1, TaskInstanceState::Queued)], now)
         .await
         .unwrap();
     let ready = db.ready_instances(now).await.unwrap();
@@ -344,7 +344,7 @@ async fn stored_values_that_dont_read_are_errors() {
     let run_id = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
     db.create_instances(
         &run_id,
-        &[(extract(), TaskInstanceState::Queued)],
+        &[(extract(), -1, TaskInstanceState::Queued)],
         ts("2026-10-15T03:00:01Z"),
     )
     .await
@@ -396,11 +396,11 @@ async fn states_are_counted_for_the_masters_gauges() {
     add_run(&db, &version, "2026-10-14T03:00:00Z", RunState::Success).await;
     let done = add_run(&db, &version, "2026-10-13T03:00:00Z", RunState::Success).await;
     let now = ts("2026-10-15T03:00:01Z");
-    db.create_instances(&running, &[(extract(), TaskInstanceState::Queued)], now)
+    db.create_instances(&running, &[(extract(), -1, TaskInstanceState::Queued)], now)
         .await
         .unwrap();
     // A finished run's tasks don't count.
-    db.create_instances(&done, &[(extract(), TaskInstanceState::Success)], now)
+    db.create_instances(&done, &[(extract(), -1, TaskInstanceState::Success)], now)
         .await
         .unwrap();
     db.register_worker(

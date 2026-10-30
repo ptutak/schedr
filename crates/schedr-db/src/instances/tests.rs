@@ -90,8 +90,8 @@ async fn running_runs_without_instances_are_newly_running() {
     db.create_instances(
         &run_id,
         &[
-            (id("extract"), TaskInstanceState::Queued),
-            (id("load"), TaskInstanceState::Scheduled),
+            (id("extract"), -1, TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
         ],
         now,
     )
@@ -109,8 +109,8 @@ async fn instances_are_read_back_with_the_run() {
     db.create_instances(
         &run_id,
         &[
-            (id("load"), TaskInstanceState::Scheduled),
-            (id("extract"), TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
+            (id("extract"), -1, TaskInstanceState::Queued),
         ],
         now,
     )
@@ -149,16 +149,23 @@ async fn instances_are_read_back_with_the_run() {
 async fn updates_change_states_and_count_retries() {
     let (db, run_id) = with_run(RunState::Running).await;
     let now = ts("2026-10-21T08:00:01Z");
-    db.create_instances(&run_id, &[(id("extract"), TaskInstanceState::Running)], now)
-        .await
-        .unwrap();
+    db.create_instances(
+        &run_id,
+        &[(id("extract"), -1, TaskInstanceState::Running)],
+        now,
+    )
+    .await
+    .unwrap();
     let retry_at = ts("2026-10-21T08:05:00Z");
     let retry = InstanceUpdate {
         task_id: id("extract"),
+        map_index: -1,
         state: TaskInstanceState::UpForRetry,
         ready_at: Some(retry_at),
         outcome: None,
         used_retry: true,
+        reason: None,
+        map_sizes: None,
     };
     db.update_instances(&run_id, &[retry], now).await.unwrap();
     let instance = &db.run_tasks(&run_id).await.unwrap().unwrap().instances[0];
@@ -172,7 +179,7 @@ async fn updates_change_states_and_count_retries() {
     );
     assert_eq!(
         db.due_retries(retry_at).await.unwrap(),
-        [(run_id.clone(), id("extract"))]
+        [(run_id.clone(), id("extract"), -1)]
     );
 }
 
@@ -181,7 +188,7 @@ async fn outputs_are_stored_once_per_instance() {
     let (db, run_id) = with_run(RunState::Running).await;
     db.create_instances(
         &run_id,
-        &[(id("extract"), TaskInstanceState::Running)],
+        &[(id("extract"), -1, TaskInstanceState::Running)],
         ts("2026-10-21T08:00:01Z"),
     )
     .await
@@ -232,7 +239,7 @@ async fn stored_values_that_dont_read_are_errors() {
     let (db, run_id) = with_run(RunState::Running).await;
     db.create_instances(
         &run_id,
-        &[(id("extract"), TaskInstanceState::UpForRetry)],
+        &[(id("extract"), -1, TaskInstanceState::UpForRetry)],
         ts("2026-10-21T08:00:01Z"),
     )
     .await
@@ -276,8 +283,8 @@ async fn a_task_cancel_is_recorded_and_an_unschedulable_task_retried() {
     db.create_instances(
         &run_id,
         &[
-            (id("extract"), TaskInstanceState::Running),
-            (id("load"), TaskInstanceState::Unschedulable),
+            (id("extract"), -1, TaskInstanceState::Running),
+            (id("load"), -1, TaskInstanceState::Unschedulable),
         ],
         now,
     )
@@ -322,14 +329,14 @@ async fn a_wide_runs_instances_are_created_in_a_few_statements_all_of_them() {
     // few statements of up to INSTANCES_PER_STATEMENT rows, which must store every one.
     let (db, run_id) = with_run(RunState::Running).await;
     let count = INSTANCES_PER_STATEMENT * 2 + 201;
-    let states: Vec<(TaskId, TaskInstanceState)> = (0..count)
+    let states: Vec<(TaskId, i32, TaskInstanceState)> = (0..count)
         .map(|i| {
             let state = if i % 2 == 0 {
                 TaskInstanceState::Queued
             } else {
                 TaskInstanceState::Scheduled
             };
-            (id(&format!("t{i:04}")), state)
+            (id(&format!("t{i:04}")), -1, state)
         })
         .collect();
     db.create_instances(&run_id, &states, ts("2026-10-21T08:00:00Z"))
@@ -337,7 +344,7 @@ async fn a_wide_runs_instances_are_created_in_a_few_statements_all_of_them() {
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     assert_eq!(run.instances.len(), count);
-    for (instance, (task_id, state)) in run.instances.iter().zip(&states) {
+    for (instance, (task_id, _, state)) in run.instances.iter().zip(&states) {
         assert_eq!((&instance.task_id, instance.state), (task_id, *state));
         assert_eq!(
             instance.ready_at.is_some(),
@@ -353,8 +360,8 @@ async fn many_updates_in_a_few_statements_change_each_task_as_one_by_one() {
     let (db, run_id) = with_run(RunState::Running).await;
     let count = UPDATES_PER_STATEMENT * 2 + 201;
     let at = ts("2026-10-21T08:00:00Z");
-    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..count)
-        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Scheduled))
+    let tasks: Vec<(TaskId, i32, TaskInstanceState)> = (0..count)
+        .map(|i| (id(&format!("t{i:04}")), -1, TaskInstanceState::Scheduled))
         .collect();
     db.create_instances(&run_id, &tasks, at).await.unwrap();
     let updates: Vec<InstanceUpdate> = (0..count)
@@ -362,6 +369,7 @@ async fn many_updates_in_a_few_statements_change_each_task_as_one_by_one() {
             let queued = i % 3 == 0;
             InstanceUpdate {
                 task_id: id(&format!("t{i:04}")),
+                map_index: -1,
                 state: if queued {
                     TaskInstanceState::Queued
                 } else {
@@ -370,6 +378,8 @@ async fn many_updates_in_a_few_statements_change_each_task_as_one_by_one() {
                 ready_at: queued.then_some(at),
                 outcome: (!queued).then(|| "SUCCESS".to_owned()),
                 used_retry: i % 2 == 0,
+                reason: None,
+                map_sizes: None,
             }
         })
         .collect();
@@ -390,14 +400,14 @@ async fn many_updates_in_a_few_statements_change_each_task_as_one_by_one() {
 async fn waiting_reasons_are_set_together_on_queued_tasks_only() {
     let (db, run_id) = with_run(RunState::Running).await;
     let at = ts("2026-10-21T08:00:00Z");
-    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..5)
+    let tasks: Vec<(TaskId, i32, TaskInstanceState)> = (0..5)
         .map(|i| {
             let state = if i == 4 {
                 TaskInstanceState::Scheduled
             } else {
                 TaskInstanceState::Queued
             };
-            (id(&format!("t{i}")), state)
+            (id(&format!("t{i}")), -1, state)
         })
         .collect();
     db.create_instances(&run_id, &tasks, at).await.unwrap();
@@ -442,15 +452,18 @@ async fn a_task_updated_twice_at_once_ends_as_its_last_update_with_both_retries(
     // a statement each applied both in turn.
     let (db, run_id) = with_run(RunState::Running).await;
     let at = ts("2026-10-21T08:00:00Z");
-    db.create_instances(&run_id, &[(id("t0"), TaskInstanceState::Scheduled)], at)
+    db.create_instances(&run_id, &[(id("t0"), -1, TaskInstanceState::Scheduled)], at)
         .await
         .unwrap();
     let queued = InstanceUpdate {
         task_id: id("t0"),
+        map_index: -1,
         state: TaskInstanceState::Queued,
         ready_at: Some(at),
         outcome: None,
         used_retry: true,
+        reason: None,
+        map_sizes: None,
     };
     let done = InstanceUpdate {
         state: TaskInstanceState::Success,

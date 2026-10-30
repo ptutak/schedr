@@ -78,8 +78,8 @@ async fn with_run() -> (Database, String) {
     db.create_instances(
         &run_id,
         &[
-            (id("extract"), TaskInstanceState::Queued),
-            (id("load"), TaskInstanceState::Scheduled),
+            (id("extract"), -1, TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
         ],
         ts(NOW),
     )
@@ -107,10 +107,13 @@ async fn ready_tasks_share_their_dags_one_definition() {
         &run_id,
         &[crate::instances::InstanceUpdate {
             task_id: id("load"),
+            map_index: -1,
             state: TaskInstanceState::Queued,
             ready_at: Some(ts(NOW)),
             outcome: None,
             used_retry: false,
+            reason: None,
+            map_sizes: None,
         }],
         ts(NOW),
     )
@@ -211,6 +214,7 @@ async fn an_instance_is_assigned_once_with_the_next_try_number() {
             worker_id: "w1".to_owned(),
             status: None,
             started: false,
+            map_index: -1,
         }
     );
     assert_eq!(
@@ -372,10 +376,13 @@ async fn run_outputs_are_the_stored_outputs_by_task() {
         .unwrap();
     let done = InstanceUpdate {
         task_id: id("extract"),
+        map_index: -1,
         state: TaskInstanceState::Success,
         ready_at: None,
         outcome: Some("SUCCESS".to_owned()),
         used_retry: false,
+        reason: None,
+        map_sizes: None,
     };
     db.update_instances(&run_id, &[done], ts(NOW))
         .await

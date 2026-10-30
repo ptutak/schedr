@@ -4,15 +4,18 @@
 //! Every change is stored as it is decided. Assigning tasks to workers and the messages of the
 //! protocol use these operations (see PROJECT.md, Task assignment).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use schedr_db::instances::{InstanceUpdate, RunTasks};
 use schedr_db::{Database, DbError};
-use schedr_model::{AttemptStatus, DagId, RunState, TaskId, TaskInstanceState, TaskKind};
+use schedr_model::{
+    AttemptStatus, Dag, DagId, Reference, RunState, TaskId, TaskInstanceState, TaskKind,
+};
 
+use crate::mapping::{self, Dim};
 use crate::metrics::MasterMetrics;
-use crate::progress::{AfterAttempt, RunProgress, after_attempt};
+use crate::progress::{AfterAttempt, Expansion, Instances, RunProgress, Snapshot, after_attempt};
 use crate::quiet::{WakeReason, Wakes};
 
 /// The most task instances a round creates for runs that just started (whole runs only, at
@@ -21,6 +24,9 @@ pub const INSTANCES_PER_ROUND: usize = 2000;
 
 /// The most failed tasks a round queues again once their retry delay passed (B18).
 pub const RETRIES_PER_ROUND: usize = 100;
+
+/// `[mapping] max_instances` by default.
+pub const DEFAULT_MAX_INSTANCES: usize = 1024;
 #[cfg(test)]
 mod tests;
 
@@ -66,13 +72,15 @@ pub struct Recorded {
     pub state: Option<TaskInstanceState>,
     /// The run's result, if it finished now.
     pub run_result: Option<RunState>,
+    /// Running instances to stop, by `map_index`: their mapped task's step failed (75a).
+    pub stops: Vec<(TaskId, i32)>,
 }
 
 /// What cancelling a run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cancelled {
-    /// Tasks still running: their attempts are to be cancelled.
-    pub running: Vec<TaskId>,
+    /// Tasks and instances still running, by `map_index`: their attempts are to be cancelled.
+    pub running: Vec<(TaskId, i32)>,
     /// The run's result, if it finished now.
     pub run_result: Option<RunState>,
 }
@@ -112,6 +120,8 @@ pub struct Execution {
     db: Database,
     metrics: MasterMetrics,
     wakes: Wakes,
+    /// `[mapping] max_instances`.
+    max_instances: usize,
 }
 
 impl Execution {
@@ -122,6 +132,7 @@ impl Execution {
             db,
             metrics: MasterMetrics::default(),
             wakes: Wakes::default(),
+            max_instances: DEFAULT_MAX_INSTANCES,
         }
     }
 
@@ -133,6 +144,11 @@ impl Execution {
     /// Counts finished runs in `metrics`.
     pub fn set_metrics(&mut self, metrics: MasterMetrics) {
         self.metrics = metrics;
+    }
+
+    /// The most instances a mapped task may have (`[mapping] max_instances`).
+    pub const fn set_max_instances(&mut self, max_instances: usize) {
+        self.max_instances = max_instances;
     }
 
     /// Finishes run `run_id` of `dag` with `result`, and counts it.
@@ -150,7 +166,8 @@ impl Execution {
     }
 
     /// Creates the task instances of runs that started: empty tasks are completed, tasks with
-    /// no upstream tasks are queued. Returns the runs prepared.
+    /// no upstream tasks are queued, mapped tasks with nothing to wait for expanded. Returns
+    /// the runs prepared.
     ///
     /// # Errors
     ///
@@ -166,21 +183,18 @@ impl Execution {
                 break;
             }
             created += tasks;
+            let first: Vec<(TaskId, i32, TaskInstanceState)> = run
+                .dag
+                .tasks
+                .iter()
+                .map(|t| (t.id.clone(), -1, TaskInstanceState::Scheduled))
+                .collect();
+            self.db.create_instances(&run.run_id, &first, now).await?;
             let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
-            progress.settle();
-            let states: Vec<(TaskId, TaskInstanceState)> = progress
-                .states()
-                .iter()
-                .map(|(id, state)| (id.clone(), *state))
-                .collect();
-            self.db.create_instances(&run.run_id, &states, now).await?;
-            let outcomes: Vec<InstanceUpdate> = states
-                .iter()
-                .filter(|(_, s)| *s == TaskInstanceState::Success)
-                .map(|(id, s)| update(id, *s))
-                .collect();
-            self.db
-                .update_instances(&run.run_id, &outcomes, now)
+            let before = progress.snapshot();
+            self.settle_all(&run.run_id, &run.dag, &mut progress)
+                .await?;
+            self.store(&run.run_id, &mut progress, &before, Vec::new(), now)
                 .await?;
             if let Some(result) = progress.result() {
                 self.finish(&run.run_id, &run.dag.id, result, now).await?;
@@ -190,9 +204,9 @@ impl Execution {
         Ok(prepared)
     }
 
-    /// Records how an attempt of a running task ended, moves the run forward and finishes it
-    /// when every task has. A result for a task that isn't running is ignored (delivery is at
-    /// least once).
+    /// Records how an attempt of a running task instance ended, moves the run forward and
+    /// finishes it when every task has. A result for an instance that isn't running is
+    /// ignored (delivery is at least once).
     ///
     /// # Errors
     ///
@@ -201,31 +215,28 @@ impl Execution {
         &self,
         run_id: &str,
         task_id: &TaskId,
+        map_index: i32,
         result: &AttemptResult,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
         let run = self.run(run_id).await?;
+        let unknown = || ExecutionError::UnknownTask {
+            run_id: run_id.to_owned(),
+            task_id: task_id.clone(),
+        };
         let instance = run
             .instances
             .iter()
-            .find(|i| &i.task_id == task_id)
-            .ok_or_else(|| ExecutionError::UnknownTask {
-                run_id: run_id.to_owned(),
-                task_id: task_id.clone(),
-            })?;
+            .find(|i| &i.task_id == task_id && i.map_index == map_index)
+            .ok_or_else(unknown)?;
         if instance.state != TaskInstanceState::Running {
             return Ok(Recorded {
                 state: None,
                 run_result: None,
+                stops: Vec::new(),
             });
         }
-        let task = run
-            .dag
-            .task(task_id)
-            .ok_or_else(|| ExecutionError::UnknownTask {
-                run_id: run_id.to_owned(),
-                task_id: task_id.clone(),
-            })?;
+        let task = run.dag.task(task_id).ok_or_else(unknown)?;
         let next = after_attempt(
             result.status,
             result.error_kind.as_deref(),
@@ -251,20 +262,20 @@ impl Execution {
             self.db.store_output(&instance.id, outcome, &value).await?;
         }
         let first = InstanceUpdate {
-            task_id: task_id.clone(),
-            state,
             ready_at,
             outcome: (state == TaskInstanceState::Success).then(|| outcome.to_owned()),
             used_retry: next.uses_retry(),
+            ..update(task_id, map_index, state)
         };
-        let run_result = self.advance(run_id, &run, vec![first], now).await?;
+        let (run_result, stops) = self.advance(run_id, &run, vec![first], now).await?;
         Ok(Recorded {
             state: Some(state),
             run_result,
+            stops,
         })
     }
 
-    /// Queues the tasks whose retry delay has passed. Returns how many.
+    /// Queues the task instances whose retry delay has passed. Returns how many.
     ///
     /// # Errors
     ///
@@ -273,19 +284,19 @@ impl Execution {
         let mut due = self.db.due_retries(now).await?;
         // At most so many a round, the earliest due first; the rest in the next ones (B18).
         due.truncate(RETRIES_PER_ROUND);
-        for (run_id, task_id) in &due {
+        for (run_id, task_id, map_index) in &due {
             let queued = InstanceUpdate {
                 ready_at: Some(now),
-                ..update(task_id, TaskInstanceState::Queued)
+                ..update(task_id, *map_index, TaskInstanceState::Queued)
             };
             self.db.update_instances(run_id, &[queued], now).await?;
         }
         Ok(due.len())
     }
 
-    /// Cancels a run: a queued run ends `cancelled` at once; in a running one every task that
-    /// hasn't started is cancelled, and the running ones are returned to be stopped (their
-    /// results still count, and a failure among them isn't retried).
+    /// Cancels a run: a queued run ends `cancelled` at once; in a running one every task and
+    /// instance that hasn't started is cancelled, and the running ones are returned to be
+    /// stopped (their results still count, and a failure among them isn't retried).
     ///
     /// # Errors
     ///
@@ -311,11 +322,13 @@ impl Execution {
                 run_result: Some(RunState::Cancelled),
             });
         }
-        let mut progress =
-            RunProgress::new(&run.dag, states_of(&run)).with_outcomes(outcomes_of(&run));
-        let (changes, running) = progress.cancel();
-        let updates: Vec<InstanceUpdate> = changes.iter().map(|(id, s)| update(id, *s)).collect();
-        self.db.update_instances(run_id, &updates, now).await?;
+        let mut progress = progress_of(&run);
+        let before = progress.snapshot();
+        let (_, running) = progress.cancel();
+        // A mapped task whose instances are all cancelled now ends as a whole.
+        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        self.store(run_id, &mut progress, &before, Vec::new(), now)
+            .await?;
         let run_result = progress.result();
         if let Some(result) = run_result {
             self.finish(run_id, &run.dag.id, result, now).await?;
@@ -329,7 +342,8 @@ impl Execution {
     /// Cancels one task of a run: one that hasn't started becomes `cancelled` at once, one
     /// that runs is marked so that whatever its attempt reports (or a rejection, an expired
     /// assignment, a lost worker) ends it `cancelled` without a retry, a failure staying a
-    /// failure. The tasks downstream of it are cancelled when it is.
+    /// failure. The tasks downstream of it are cancelled when it is. For a mapped task, every
+    /// instance of it.
     ///
     /// # Errors
     ///
@@ -355,20 +369,57 @@ impl Execution {
         let Some(state) = run
             .instances
             .iter()
-            .find(|i| &i.task_id == task_id)
+            .find(|i| &i.task_id == task_id && i.map_index == -1)
             .map(|i| i.state)
         else {
             return Ok(TaskCancel::RunQueued);
         };
+        let instances: Vec<(usize, S)> = run
+            .instances
+            .iter()
+            .filter(|i| &i.task_id == task_id && i.map_index >= 0)
+            .filter_map(|i| Some((usize::try_from(i.map_index).ok()?, i.state)))
+            .collect();
+        if state == S::Running && !instances.is_empty() {
+            // An expanded mapped task: its instances that haven't started are cancelled, the
+            // running ones stopped; it ends as a whole once they have.
+            let mut progress = progress_of(&run);
+            let before = progress.snapshot();
+            let mut running = false;
+            for (index, instance) in instances {
+                match instance {
+                    S::Scheduled | S::Queued | S::UpForRetry | S::Unschedulable => {
+                        progress.set_instance(task_id, index, S::Cancelled);
+                    }
+                    S::Running | S::CleaningUp => running = true,
+                    _ => {}
+                }
+            }
+            if running {
+                self.db.request_task_cancel(run_id, task_id, now).await?;
+            }
+            self.settle_all(run_id, &run.dag, &mut progress).await?;
+            self.store(run_id, &mut progress, &before, Vec::new(), now)
+                .await?;
+            let result = progress.result();
+            if let Some(result) = result {
+                self.finish(run_id, &run.dag.id, result, now).await?;
+            }
+            return Ok(if running {
+                TaskCancel::Stopping
+            } else {
+                TaskCancel::Cancelled(result)
+            });
+        }
         match state {
             S::Running | S::CleaningUp => {
                 self.db.request_task_cancel(run_id, task_id, now).await?;
                 Ok(TaskCancel::Stopping)
             }
             S::Scheduled | S::Queued | S::UpForRetry | S::Unschedulable => {
-                let first = vec![update(task_id, S::Cancelled)];
+                let first = vec![update(task_id, -1, S::Cancelled)];
                 Ok(TaskCancel::Cancelled(
-                    self.advance(run_id, &run, first, now).await?,
+                    self.advance(run_id, &run, first, now).await?.0,
                 ))
             }
             S::Success | S::Failed | S::Cancelled | S::Skipped | S::UpstreamFailed => {
@@ -377,7 +428,8 @@ impl Execution {
         }
     }
 
-    /// Queues an `unschedulable` task of an unfinished run again (`schedr tasks retry`).
+    /// Queues an `unschedulable` task again (`schedr tasks retry`); for a mapped task, its
+    /// `unschedulable` instances.
     ///
     /// # Errors
     ///
@@ -398,7 +450,12 @@ impl Execution {
                 task_id: task_id.clone(),
             });
         }
-        let Some(instance) = run.instances.iter().find(|i| &i.task_id == task_id) else {
+        let mut of_task = run.instances.iter().filter(|i| &i.task_id == task_id);
+        let Some(instance) = of_task
+            .clone()
+            .find(|i| i.state == TaskInstanceState::Unschedulable)
+            .or_else(|| of_task.next())
+        else {
             return Ok(TaskRetry::RunQueued);
         };
         if instance.state == TaskInstanceState::Unschedulable
@@ -425,7 +482,7 @@ impl Execution {
         if run.state.is_final() {
             return Ok(None);
         }
-        self.advance(run_id, &run, Vec::new(), now).await
+        Ok(self.advance(run_id, &run, Vec::new(), now).await?.0)
     }
 
     async fn run(&self, run_id: &str) -> Result<RunTasks, ExecutionError> {
@@ -436,37 +493,165 @@ impl Execution {
     }
 
     /// Applies `first`, settles the run's other tasks, stores everything and finishes the run
-    /// if it is done.
+    /// if it is done. Returns the run's result, if it finished, and the instances to stop.
     async fn advance(
         &self,
         run_id: &str,
         run: &RunTasks,
         first: Vec<InstanceUpdate>,
         now: Timestamp,
-    ) -> Result<Option<RunState>, ExecutionError> {
-        let mut progress = RunProgress::new(&run.dag, states_of(run))
-            .with_outcomes(outcomes_of(run))
-            .with_chosen(self.chosen_of(run_id, run, &first).await?);
+    ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
+        let mut progress = progress_of(run).with_chosen(self.chosen_of(run_id, run, &first).await?);
+        let before = progress.snapshot();
         for change in &first {
+            if let Ok(index) = usize::try_from(change.map_index) {
+                progress.set_instance(&change.task_id, index, change.state);
+                if let Some(outcome) = &change.outcome {
+                    progress.set_instance_outcome(&change.task_id, index, outcome);
+                }
+                continue;
+            }
             progress.set(&change.task_id, change.state);
             if let Some(outcome) = &change.outcome {
                 progress.set_outcome(&change.task_id, outcome);
             }
         }
-        let mut updates = first;
-        for (task_id, state) in progress.settle() {
-            let mut next = update(&task_id, state);
-            if state == TaskInstanceState::Queued {
-                next.ready_at = Some(now);
-            }
-            updates.push(next);
-        }
-        self.db.update_instances(run_id, &updates, now).await?;
+        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        let stops = self
+            .store(run_id, &mut progress, &before, first, now)
+            .await?;
         let result = progress.result();
         if let Some(result) = result {
             self.finish(run_id, &run.dag.id, result, now).await?;
         }
-        Ok(result)
+        Ok((result, stops))
+    }
+
+    /// Settles a run, expanding each mapped task as it becomes ready, until nothing changes.
+    async fn settle_all(
+        &self,
+        run_id: &str,
+        dag: &Dag,
+        progress: &mut RunProgress<'_>,
+    ) -> Result<(), ExecutionError> {
+        loop {
+            progress.settle();
+            let ready = progress.take_expansions();
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for task_id in ready {
+                let expansion = self.expansion(run_id, dag, &task_id, progress).await?;
+                progress.expand(&task_id, expansion);
+            }
+        }
+    }
+
+    /// How a mapped task expands: its dimensions' sizes from what it is mapped over (a lane:
+    /// its upstream's instances), or why it can't (not a list, too many instances).
+    async fn expansion(
+        &self,
+        run_id: &str,
+        dag: &Dag,
+        task_id: &TaskId,
+        progress: &RunProgress<'_>,
+    ) -> Result<Expansion, ExecutionError> {
+        let Some(task) = dag.task(task_id) else {
+            return Ok(Expansion::Fail(format!("no task `{task_id}`")));
+        };
+        let dims = mapping::dims(dag, task);
+        let used: BTreeSet<&TaskId> = dims
+            .iter()
+            .filter_map(|(_, dim)| match dim {
+                Dim::Values(value) => Some(value.references()),
+                Dim::Lane(_) => None,
+            })
+            .flatten()
+            .filter_map(Reference::upstream_task)
+            .collect();
+        let sources = mapping::sources(&self.db, dag, run_id, &used).await?;
+        let mut sizes = Vec::with_capacity(dims.len());
+        for (name, dim) in &dims {
+            let what = name.map_or_else(
+                || "`.expand_kwargs()`".to_owned(),
+                |name| format!("mapped argument `{name}`"),
+            );
+            let size = match dim {
+                Dim::Lane(upstream) => progress.instances(upstream).map_or(0, |i| i.states.len()),
+                Dim::Values(value) => match mapping::resolve(value, &sources) {
+                    Ok(serde_json::Value::Array(items)) => {
+                        if name.is_none() && items.iter().any(|item| !item.is_object()) {
+                            return Ok(Expansion::Fail(format!(
+                                "{what}: every element must be a dict of arguments"
+                            )));
+                        }
+                        items.len()
+                    }
+                    Ok(other) => {
+                        return Ok(Expansion::Fail(format!(
+                            "{what}: expected a list, got {}",
+                            mapping::kind_of(&other)
+                        )));
+                    }
+                    Err(error) => return Ok(Expansion::Fail(format!("{what}: {error}"))),
+                },
+            };
+            sizes.push(size);
+        }
+        Ok(match mapping::count(&sizes) {
+            Some(n) if n <= self.max_instances => Expansion::Sizes(sizes),
+            n => Expansion::Fail(format!(
+                "`{task_id}` would have {} instances, more than [mapping] max_instances ({})",
+                n.map_or_else(|| "too many".to_owned(), |n| n.to_string()),
+                self.max_instances
+            )),
+        })
+    }
+
+    /// Stores what changed since `before` (`first` as given: the attempt's own change) and
+    /// marks the instances to stop. Returns those.
+    async fn store(
+        &self,
+        run_id: &str,
+        progress: &mut RunProgress<'_>,
+        before: &Snapshot,
+        first: Vec<InstanceUpdate>,
+        now: Timestamp,
+    ) -> Result<Vec<(TaskId, i32)>, ExecutionError> {
+        let changes = progress.changes_since(before);
+        if !changes.created.is_empty() {
+            self.db
+                .create_instances(run_id, &changes.created, now)
+                .await?;
+        }
+        let mut updates = first;
+        for (task_id, map_index, state) in changes.updated {
+            let given = updates
+                .iter()
+                .any(|u| u.task_id == task_id && u.map_index == map_index && u.state == state);
+            if given {
+                continue;
+            }
+            let mut next = update(&task_id, map_index, state);
+            if state == TaskInstanceState::Queued {
+                next.ready_at = Some(now);
+            }
+            if map_index == -1 {
+                next.reason = progress.reason(&task_id).map(str::to_owned);
+                next.map_sizes = progress.instances(&task_id).map(|i| i.sizes.clone());
+            }
+            updates.push(next);
+        }
+        self.db.update_instances(run_id, &updates, now).await?;
+        let mut stops = Vec::new();
+        for (task_id, index) in progress.take_stops() {
+            let map_index = i32::try_from(index).unwrap_or(i32::MAX);
+            self.db
+                .request_instance_cancel(run_id, &task_id, map_index, now)
+                .await?;
+            stops.push((task_id, map_index));
+        }
+        Ok(stops)
     }
 }
 
@@ -515,9 +700,38 @@ impl Execution {
     }
 }
 
+/// A run's progress as stored: its tasks (the `-1` rows) and the instances of the mapped
+/// tasks that expanded.
+fn progress_of(run: &RunTasks) -> RunProgress<'_> {
+    let mut instances: BTreeMap<TaskId, Instances> = BTreeMap::new();
+    for row in run.instances.iter().filter(|i| i.map_index >= 0) {
+        let entry = instances
+            .entry(row.task_id.clone())
+            .or_insert_with(|| Instances {
+                sizes: Vec::new(),
+                states: Vec::new(),
+                outcomes: Vec::new(),
+            });
+        entry.states.push(row.state);
+        entry.outcomes.push(row.outcome.clone());
+    }
+    for row in run.instances.iter().filter(|i| i.map_index == -1) {
+        if let Some(entry) = instances.get_mut(&row.task_id) {
+            entry.sizes = row
+                .map_sizes
+                .clone()
+                .unwrap_or_else(|| vec![entry.states.len()]);
+        }
+    }
+    RunProgress::new(&run.dag, states_of(run))
+        .with_outcomes(outcomes_of(run))
+        .with_instances(instances)
+}
+
 fn outcomes_of(run: &RunTasks) -> BTreeMap<TaskId, String> {
     run.instances
         .iter()
+        .filter(|i| i.map_index == -1)
         .filter_map(|i| Some((i.task_id.clone(), i.outcome.clone()?)))
         .collect()
 }
@@ -525,17 +739,22 @@ fn outcomes_of(run: &RunTasks) -> BTreeMap<TaskId, String> {
 fn states_of(run: &RunTasks) -> BTreeMap<TaskId, TaskInstanceState> {
     run.instances
         .iter()
+        .filter(|i| i.map_index == -1)
         .map(|i| (i.task_id.clone(), i.state))
         .collect()
 }
 
-/// A plain state change; empty tasks that succeed get the success outcome.
-fn update(task_id: &TaskId, state: TaskInstanceState) -> InstanceUpdate {
+/// A plain state change; empty tasks (and mapped tasks as a whole) that succeed get the
+/// success outcome.
+fn update(task_id: &TaskId, map_index: i32, state: TaskInstanceState) -> InstanceUpdate {
     InstanceUpdate {
         task_id: task_id.clone(),
+        map_index,
         state,
         ready_at: None,
         outcome: (state == TaskInstanceState::Success).then(|| SUCCESS.to_owned()),
         used_retry: false,
+        reason: None,
+        map_sizes: None,
     }
 }

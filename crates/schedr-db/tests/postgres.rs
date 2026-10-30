@@ -344,8 +344,8 @@ async fn with_instances() -> (Database, String) {
     db.create_instances(
         &run_id,
         &[
-            (id("extract"), TaskInstanceState::Queued),
-            (id("load"), TaskInstanceState::Scheduled),
+            (id("extract"), -1, TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
         ],
         ts(NOW),
     )
@@ -603,11 +603,9 @@ async fn attempts_and_outputs_move_a_task_forward() {
     db.update_instances(
         &run_id,
         &[InstanceUpdate {
-            task_id: id("extract"),
-            state: TaskInstanceState::Success,
-            ready_at: None,
             outcome: Some("SUCCESS".to_owned()),
             used_retry: true,
+            ..plain_update("extract", TaskInstanceState::Success)
         }],
         ts(NOW),
     )
@@ -671,10 +669,13 @@ async fn failures_retries_requeues_and_cancels_are_stored() {
         &run_id,
         &[InstanceUpdate {
             task_id: id("load"),
+            map_index: -1,
             state: TaskInstanceState::UpForRetry,
             ready_at: Some(ts(NOW)),
             outcome: None,
             used_retry: true,
+            reason: None,
+            map_sizes: None,
         }],
         ts(NOW),
     )
@@ -682,16 +683,19 @@ async fn failures_retries_requeues_and_cancels_are_stored() {
     .unwrap();
     assert_eq!(
         db.due_retries(ts(NOW)).await.unwrap(),
-        [(run_id.clone(), id("load"))]
+        [(run_id.clone(), id("load"), -1)]
     );
     db.update_instances(
         &run_id,
         &[InstanceUpdate {
             task_id: id("load"),
+            map_index: -1,
             state: TaskInstanceState::Unschedulable,
             ready_at: None,
             outcome: None,
             used_retry: false,
+            reason: None,
+            map_sizes: None,
         }],
         ts(NOW),
     )
@@ -793,8 +797,8 @@ async fn writes_announce_what_changed_once_per_run_dag_and_the_workers() {
     db.create_instances(
         &run_id,
         &[
-            (id("extract"), TaskInstanceState::Queued),
-            (id("load"), TaskInstanceState::Scheduled),
+            (id("extract"), -1, TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
         ],
         ts(NOW),
     )
@@ -1180,8 +1184,8 @@ async fn a_wide_runs_instances_are_all_created_on_postgres() {
         .await
         .unwrap()
         .unwrap();
-    let states: Vec<(TaskId, TaskInstanceState)> = (0..1201)
-        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Queued))
+    let states: Vec<(TaskId, i32, TaskInstanceState)> = (0..1201)
+        .map(|i| (id(&format!("t{i:04}")), -1, TaskInstanceState::Queued))
         .collect();
     db.create_instances(&run_id, &states, ts(NOW))
         .await
@@ -1204,13 +1208,14 @@ async fn many_updates_change_each_task_on_postgres() {
         .await
         .unwrap()
         .unwrap();
-    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..1201)
-        .map(|i| (id(&format!("t{i:04}")), TaskInstanceState::Scheduled))
+    let tasks: Vec<(TaskId, i32, TaskInstanceState)> = (0..1201)
+        .map(|i| (id(&format!("t{i:04}")), -1, TaskInstanceState::Scheduled))
         .collect();
     db.create_instances(&run_id, &tasks, ts(NOW)).await.unwrap();
     let updates: Vec<InstanceUpdate> = (0..1201)
         .map(|i| InstanceUpdate {
             task_id: id(&format!("t{i:04}")),
+            map_index: -1,
             state: if i % 3 == 0 {
                 TaskInstanceState::Queued
             } else {
@@ -1219,6 +1224,8 @@ async fn many_updates_change_each_task_on_postgres() {
             ready_at: (i % 3 == 0).then(|| ts(NOW)),
             outcome: (i % 3 != 0).then(|| "SUCCESS".to_owned()),
             used_retry: i % 2 == 0,
+            reason: None,
+            map_sizes: None,
         })
         .collect();
     db.update_instances(&run_id, &updates, ts(NOW))
@@ -1247,8 +1254,8 @@ async fn waiting_reasons_are_set_together_on_postgres() {
         .await
         .unwrap()
         .unwrap();
-    let tasks: Vec<(TaskId, TaskInstanceState)> = (0..3)
-        .map(|i| (id(&format!("t{i}")), TaskInstanceState::Queued))
+    let tasks: Vec<(TaskId, i32, TaskInstanceState)> = (0..3)
+        .map(|i| (id(&format!("t{i}")), -1, TaskInstanceState::Queued))
         .collect();
     db.create_instances(&run_id, &tasks, ts(NOW)).await.unwrap();
     let instances = db.run_tasks(&run_id).await.unwrap().unwrap().instances;
@@ -1278,4 +1285,18 @@ async fn insert_worker(db: &Database) {
     .execute(admin_pool(db))
     .await
     .unwrap();
+}
+
+/// An update of an unmapped task's state alone.
+fn plain_update(task: &str, state: TaskInstanceState) -> InstanceUpdate {
+    InstanceUpdate {
+        task_id: id(task),
+        map_index: -1,
+        state,
+        ready_at: None,
+        outcome: None,
+        used_retry: false,
+        reason: None,
+        map_sizes: None,
+    }
 }

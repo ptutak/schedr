@@ -78,7 +78,7 @@ def test_a_partial_and_expand_are_recorded_as_arguments_and_expand() -> None:
     loaded = task_json(model, "load")
     assert loaded["arguments"] == {"bucket": {"literal": "raw"}}
     assert loaded["expand"] == {
-        "product": {"path": {"ref": {"kind": "output", "task": "list_files"}}}
+        "product": [{"name": "path", "value": {"ref": {"kind": "output", "task": "list_files"}}}]
     }
     assert [(e.from_, e.to, e.kind.value) for e in model.edges] == [("list_files", "load", "data")]
 
@@ -86,7 +86,9 @@ def test_a_partial_and_expand_are_recorded_as_arguments_and_expand() -> None:
 def test_mapped_literals_are_checked_element_by_element() -> None:
     with Dag("d"):
         size.expand(n=[1, 2, 3])
-    assert task_json(only_dag(), "size")["expand"] == {"product": {"n": {"literal": [1, 2, 3]}}}
+    assert task_json(only_dag(), "size")["expand"] == {
+        "product": [{"name": "n", "value": {"literal": [1, 2, 3]}}]
+    }
     with (
         Dag("e"),
         pytest.raises(TypeError, match=r"mapped argument `n`: expected int, got str"),
@@ -118,7 +120,7 @@ def test_a_mapped_tasks_output_is_the_list_of_its_instances_outputs() -> None:
         size.override(task_id="again").expand(n=sizes)  # element by element
     model = only_dag()
     assert task_json(model, "again")["expand"] == {
-        "product": {"n": {"ref": {"kind": "output", "task": "size"}}}
+        "product": [{"name": "n", "value": {"ref": {"kind": "output", "task": "size"}}}]
     }
     with (
         Dag("e"),
@@ -185,6 +187,15 @@ def test_expand_names_are_checked() -> None:
         load.partial(bucket="x").expand()
 
 
+def test_the_product_keeps_the_written_order() -> None:
+    with Dag("d"):
+        load.expand(path=["a"], bucket=["raw", "clean"])
+    assert [m["name"] for m in task_json(only_dag(), "load")["expand"]["product"]] == [
+        "path",
+        "bucket",
+    ]
+
+
 def test_expand_kwargs_maps_over_a_list_of_dicts() -> None:
     with Dag("d"):
         load.expand_kwargs([{"bucket": "raw", "path": "a"}])
@@ -207,3 +218,12 @@ def test_a_branch_cant_be_mapped() -> None:
 def test_outside_a_dag_expand_is_refused() -> None:
     with pytest.raises(RuntimeError, match=r"`size\.expand\(\)` must be created inside"):
         size.expand(n=[1])
+
+
+def test_an_order_edge_between_mapped_outputs_is_the_barrier() -> None:
+    with Dag("d"):
+        sizes = size.expand(n=[1, 2])
+        again = size.override(task_id="again").expand(n=sizes)
+        sizes >> again
+    kinds = sorted((e.from_, e.to, e.kind.value) for e in only_dag().edges)
+    assert kinds == [("size", "again", "data"), ("size", "again", "order")]
