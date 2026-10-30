@@ -4,9 +4,10 @@ from typing import Any
 
 import pytest
 
-from schedr import Dag
+from schedr import Dag, task_ctx
 from schedr._model import DagCtxField, DagCtxRef, registry
 from schedr.context import DagCtxReference, RunValues, dag_ctx, running
+from schedr.testing import task_context
 
 FIELDS: list[tuple[Callable[[], Any], DagCtxField]] = [
     (lambda: dag_ctx.run.id, DagCtxField.RUN_ID),
@@ -76,3 +77,15 @@ def test_running_resets_after_an_exception() -> None:
         raise ValueError("inside")
     with pytest.raises(RuntimeError, match="must be run inside a schedr task"):
         _ = dag_ctx.dag_id
+
+
+def test_task_ctx_gives_the_running_tasks_own_values_and_nothing_elsewhere() -> None:
+    with task_context(task_id="size", try_number=2, map_index=3):
+        assert (task_ctx.task_id, task_ctx.try_number, task_ctx.map_index) == ("size", 2, 3)
+    with task_context():
+        assert task_ctx.map_index is None
+    with pytest.raises(RuntimeError, match="the running task's own context"):
+        _ = task_ctx.map_index
+    with Dag("d"), pytest.raises(RuntimeError, match="no references for the DAG body"):
+        _ = task_ctx.try_number
+    registry.take_defined()

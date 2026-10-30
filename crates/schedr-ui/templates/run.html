@@ -48,7 +48,7 @@
         <title>{{ node.task_id }} · {{ node.state }}</title>
         <rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>
         <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
-        <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{{ node.state }}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
+        <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{% if node.counts.is_empty() %}{{ node.state }}{% else %}{{ node.counts }}{% endif %}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
       </a>
       {% endfor %}
     </svg>
@@ -78,7 +78,7 @@ document.addEventListener("htmx:afterSettle", function () {
   <tbody>
   {% for task in tasks %}
     <tr>
-      <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ task.href }}">{{ task.task_id }}</a></td>
+      <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ task.href }}">{{ task.label }}</a></td>
       <td><span class="state {{ task.state }}">{{ task.status }}</span></td>
       <td>{{ task.tries }}</td>
       <td class="dim">{{ task.reason }}</td>

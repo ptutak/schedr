@@ -50,6 +50,16 @@ pub enum ExecutionError {
         /// The task.
         task_id: TaskId,
     },
+    /// No such instance of the task in the run (not mapped, not expanded, out of range).
+    #[error("task `{task_id}` of run `{run_id}` has no instance {map_index}")]
+    UnknownInstance {
+        /// The run.
+        run_id: String,
+        /// The task.
+        task_id: TaskId,
+        /// The instance asked for.
+        map_index: i32,
+    },
 }
 
 /// How an attempt ended, as the master needs it.
@@ -351,7 +361,7 @@ impl Execution {
     pub async fn cancel_task(
         &self,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<TaskCancel, ExecutionError> {
         use TaskInstanceState as S;
@@ -364,6 +374,11 @@ impl Execution {
                 run_id: run_id.to_owned(),
                 task_id: task_id.clone(),
             });
+        }
+        if let Some(index) = map_index.filter(|i| *i >= 0) {
+            return self
+                .cancel_instance(run_id, &run, (task_id, index), now)
+                .await;
         }
         // A run that just started may not have its instances yet either.
         let Some(state) = run
@@ -428,6 +443,43 @@ impl Execution {
         }
     }
 
+    /// Cancels one instance of a mapped task (decision 82): one that hasn't started is
+    /// cancelled at once (the task as a whole ends cancelled once its others have), a running
+    /// one is stopped.
+    async fn cancel_instance(
+        &self,
+        run_id: &str,
+        run: &RunTasks,
+        (task_id, map_index): (&TaskId, i32),
+        now: Timestamp,
+    ) -> Result<TaskCancel, ExecutionError> {
+        use TaskInstanceState as S;
+        let instance = run
+            .instances
+            .iter()
+            .find(|i| &i.task_id == task_id && i.map_index == map_index)
+            .ok_or_else(|| ExecutionError::UnknownInstance {
+                run_id: run_id.to_owned(),
+                task_id: task_id.clone(),
+                map_index,
+            })?;
+        match instance.state {
+            S::Running | S::CleaningUp => {
+                self.db
+                    .request_instance_cancel(run_id, task_id, map_index, now)
+                    .await?;
+                Ok(TaskCancel::Stopping)
+            }
+            S::Scheduled | S::Queued | S::UpForRetry | S::Unschedulable => {
+                let first = vec![update(task_id, map_index, S::Cancelled)];
+                Ok(TaskCancel::Cancelled(
+                    self.advance(run_id, run, first, now).await?.0,
+                ))
+            }
+            state => Ok(TaskCancel::AlreadyFinished(state)),
+        }
+    }
+
     /// Queues an `unschedulable` task again (`schedr tasks retry`); for a mapped task, its
     /// `unschedulable` instances.
     ///
@@ -437,7 +489,7 @@ impl Execution {
     pub async fn retry_task(
         &self,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<TaskRetry, ExecutionError> {
         let run = self.run(run_id).await?;
@@ -450,16 +502,30 @@ impl Execution {
                 task_id: task_id.clone(),
             });
         }
-        let mut of_task = run.instances.iter().filter(|i| &i.task_id == task_id);
+        let mut of_task = run
+            .instances
+            .iter()
+            .filter(|i| &i.task_id == task_id)
+            .filter(|i| map_index.is_none_or(|m| i.map_index == m));
         let Some(instance) = of_task
             .clone()
             .find(|i| i.state == TaskInstanceState::Unschedulable)
             .or_else(|| of_task.next())
         else {
+            if let Some(map_index) = map_index.filter(|_| !run.instances.is_empty()) {
+                return Err(ExecutionError::UnknownInstance {
+                    run_id: run_id.to_owned(),
+                    task_id: task_id.clone(),
+                    map_index,
+                });
+            }
             return Ok(TaskRetry::RunQueued);
         };
         if instance.state == TaskInstanceState::Unschedulable
-            && self.db.retry_unschedulable(run_id, task_id, now).await?
+            && self
+                .db
+                .retry_unschedulable(run_id, (task_id, map_index), now)
+                .await?
         {
             return Ok(TaskRetry::Queued(instance.id.clone()));
         }

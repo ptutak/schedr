@@ -205,6 +205,7 @@ svg.dag text.sub { fill: var(--dim); font: 11px system-ui, sans-serif; }
 .panel-head { display: flex; align-items: center; gap: 10px; }
 .panel-head h2 { margin: 0; flex: 1; overflow-wrap: anywhere; }
 .panel-head .close { font-size: 20px; color: var(--dim); }
+.panel-head .back { font-size: 13px; color: var(--dim); }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 10px 0; }
 .tabs .tab { padding: 6px 10px; border-radius: 8px 8px 0 0; color: var(--dim); }
 .tabs .tab.open { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-bottom-color: var(--surface); margin-bottom: -1px; }

@@ -56,6 +56,11 @@ pub struct RunRecord {
 pub struct InstanceRecord {
     /// The task.
     pub task_id: TaskId,
+    /// Its place among a mapped task's instances; -1 for an unmapped task, and for a mapped
+    /// task as a whole.
+    pub map_index: i32,
+    /// Why it ended without an attempt (a mapped task that couldn't expand).
+    pub reason: Option<String>,
     /// Its state.
     pub state: TaskInstanceState,
     /// Its outcome, on success.
@@ -116,7 +121,16 @@ type RunRow = (
     Option<String>,
 );
 
-type InstanceRow = (String, String, Option<String>, i32, Option<String>, String);
+type InstanceRow = (
+    String,
+    String,
+    Option<String>,
+    i32,
+    Option<String>,
+    String,
+    i32,
+    Option<String>,
+);
 
 type AttemptRow = (
     String,
@@ -217,13 +231,29 @@ impl Database {
         run_id: &str,
         task_id: &TaskId,
     ) -> Result<Option<(String, serde_json::Value)>, DbError> {
+        self.instance_output(run_id, task_id, -1).await
+    }
+
+    /// One task instance's stored output in a run, with its outcome; `None` when it has none
+    /// (yet).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored value doesn't read.
+    pub async fn instance_output(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        map_index: i32,
+    ) -> Result<Option<(String, serde_json::Value)>, DbError> {
         const OUTPUT: &str = "SELECT o.outcome, o.value{text} FROM outputs o \
             JOIN task_instances t ON t.id = o.task_instance_id \
-            WHERE t.run_id = $1{uuid} AND t.task_id = $2";
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, OUTPUT))
                 .bind(run_id)
                 .bind(task_id.as_str())
+                .bind(map_index)
                 .fetch_optional(pool)
                 .await?
         });
@@ -269,14 +299,16 @@ impl Database {
         row.map(run_record).transpose()
     }
 
-    /// A run's task instances, in task ID order.
+    /// A run's task instances, in task ID order, then `map_index` order (a mapped task as a
+    /// whole first).
     ///
     /// # Errors
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn run_instances(&self, run_id: &str) -> Result<Vec<InstanceRecord>, DbError> {
         const INSTANCES: &str = "SELECT task_id, state, outcome, try_number, queued_reason, \
-            {ts<}updated_at{>ts} FROM task_instances WHERE run_id = $1{uuid} ORDER BY task_id";
+            {ts<}updated_at{>ts}, map_index, reason FROM task_instances \
+            WHERE run_id = $1{uuid} ORDER BY task_id, map_index";
         let rows: Vec<InstanceRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, INSTANCES))
                 .bind(run_id)
@@ -285,9 +317,20 @@ impl Database {
         });
         rows.into_iter()
             .map(
-                |(task_id, state, outcome, try_number, queued_reason, updated_at)| {
+                |(
+                    task_id,
+                    state,
+                    outcome,
+                    try_number,
+                    queued_reason,
+                    updated_at,
+                    map_index,
+                    reason,
+                )| {
                     Ok(InstanceRecord {
                         task_id: task_id_of(task_id)?,
+                        map_index,
+                        reason,
                         state: from_name("task_instances.state", state)?,
                         outcome,
                         try_number: u32::try_from(try_number).unwrap_or(0),
@@ -362,16 +405,32 @@ impl Database {
         run_id: &str,
         task_id: &TaskId,
     ) -> Result<Vec<AttemptRecord>, DbError> {
+        self.instance_attempts(run_id, task_id, -1).await
+    }
+
+    /// The attempts of one task instance of a run, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn instance_attempts(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        map_index: i32,
+    ) -> Result<Vec<AttemptRecord>, DbError> {
         const ATTEMPTS: &str = "SELECT a.id{text}, a.try_number, a.worker_id, a.status, \
             a.exit_code, a.error_kind, a.error_summary{text}, {ts<}a.assigned_at{>ts}, \
             {ts<}a.started_at{>ts}, {ts<}a.ended_at{>ts}, a.duration_ms, a.peak_memory_bytes, \
             a.start_method, a.usage{text}, a.core_dumped FROM attempts a \
             JOIN task_instances t ON t.id = a.task_instance_id \
-            WHERE t.run_id = $1{uuid} AND t.task_id = $2 ORDER BY a.try_number";
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3 \
+            ORDER BY a.try_number";
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, ATTEMPTS))
                 .bind(run_id)
                 .bind(task_id.as_str())
+                .bind(map_index)
                 .fetch_all(pool)
                 .await?
         });

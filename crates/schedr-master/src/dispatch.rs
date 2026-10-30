@@ -950,10 +950,13 @@ impl Dispatcher {
     pub async fn cancel_task(
         &mut self,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<(TaskCancel, Vec<Outgoing>), DispatchError> {
-        let cancelled = self.execution.cancel_task(run_id, task_id, now).await?;
+        let cancelled = self
+            .execution
+            .cancel_task(run_id, (task_id, map_index), now)
+            .await?;
         if cancelled != TaskCancel::Stopping {
             return Ok((cancelled, Vec::new()));
         }
@@ -963,6 +966,7 @@ impl Dispatcher {
             .await?
             .into_iter()
             .filter(|a| a.run_id == run_id && &a.task_id == task_id)
+            .filter(|a| map_index.is_none_or(|i| a.map_index == i))
             .map(|a| cancel(&a.worker_id, &a.id))
             .collect();
         Ok((cancelled, stopping))
@@ -977,10 +981,13 @@ impl Dispatcher {
     pub async fn retry_task(
         &mut self,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<TaskRetry, DispatchError> {
-        let retried = self.execution.retry_task(run_id, task_id, now).await?;
+        let retried = self
+            .execution
+            .retry_task(run_id, (task_id, map_index), now)
+            .await?;
         if let TaskRetry::Queued(instance_id) = &retried {
             self.rejections.remove(instance_id);
             self.code_missing.remove(instance_id);

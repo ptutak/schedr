@@ -747,9 +747,10 @@ async fn drive(
         if !json {
             for task in &detail.tasks {
                 let worth_showing = !["scheduled", "queued"].contains(&task.state.as_str());
-                if worth_showing && shown.get(&task.task_id) != Some(&task.state) {
-                    writeln!(out, "{:<10} {}", task.state, task.task_id)?;
-                    shown.insert(task.task_id.clone(), task.state.clone());
+                let name = shown_name(task);
+                if worth_showing && shown.get(&name) != Some(&task.state) {
+                    writeln!(out, "{:<10} {name}", task.state)?;
+                    shown.insert(name, task.state.clone());
                 }
             }
         }
@@ -822,20 +823,44 @@ async fn report(
     (data, logs): (&Path, &Path),
 ) -> Result<Value, AppError> {
     let db = Database::connect(&format!("sqlite://{}", data.join("schedr.db").display())).await?;
-    let outputs = db.run_outputs(&detail.run.run_id).await?;
+    let run_id = &detail.run.run_id;
     let mut tasks = Vec::new();
     for task in &detail.tasks {
-        let attempts: AttemptList = client.attempts(&detail.run.run_id, &task.task_id).await?;
+        let instance = u32::try_from(task.map_index).ok();
+        // A mapped task as a whole has no attempts; its output is the gathered list.
+        let attempts: AttemptList = if task.instances.is_some() {
+            AttemptList {
+                attempts: Vec::new(),
+            }
+        } else {
+            client
+                .instance_attempts(run_id, &task.task_id, instance)
+                .await?
+        };
         let mut log = String::new();
         for attempt in &attempts.attempts {
             let file = logs.join(format!("{}.log", attempt.attempt_id));
             log.push_str(&std::fs::read_to_string(file).unwrap_or_default());
         }
-        let output = schedr_model::TaskId::new(task.task_id.clone())
-            .ok()
-            .and_then(|id| outputs.get(&id).cloned());
+        let output = if task.instances.is_some() {
+            client
+                .instance_output(run_id, &task.task_id, None)
+                .await
+                .ok()
+                .map(|o| o.value)
+        } else {
+            match schedr_model::TaskId::new(task.task_id.clone()) {
+                Ok(id) => db
+                    .instance_output(run_id, &id, task.map_index)
+                    .await?
+                    .map(|(_, value)| value),
+                Err(_) => None,
+            }
+        };
         tasks.push(json!({
             "task_id": task.task_id,
+            "map_index": task.map_index,
+            "instances": task.instances,
             "state": task.state,
             "outcome": task.outcome,
             "try_number": task.try_number,
@@ -847,11 +872,30 @@ async fn report(
     Ok(json!({"run": detail.run, "location": location, "tasks": tasks}))
 }
 
+/// A task as the report shows it: `fetch`, or `fetch[2]` for an instance (decision 86).
+fn shown_name(task: &schedr_api::views::TaskView) -> String {
+    if task.map_index >= 0 {
+        format!("{}[{}]", task.task_id, task.map_index)
+    } else {
+        task.task_id.clone()
+    }
+}
+
+/// [`shown_name`] of a task in the report's JSON.
+fn reported_name(task: &Value) -> String {
+    let id = task["task_id"].as_str().unwrap_or_default();
+    match task["map_index"].as_i64() {
+        Some(index) if index >= 0 => format!("{id}[{index}]"),
+        _ => id.to_owned(),
+    }
+}
+
 fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {
     let empty = Vec::new();
     let tasks = report["tasks"].as_array().unwrap_or(&empty);
     for task in tasks {
-        let id = task["task_id"].as_str().unwrap_or_default();
+        let name = reported_name(task);
+        let id = name.as_str();
         for line in task["log"].as_str().unwrap_or_default().lines() {
             writeln!(out, "{id} | {line}")?;
         }
@@ -885,7 +929,7 @@ fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {
         .iter()
         .map(|task| {
             vec![
-                task["task_id"].as_str().unwrap_or_default().to_owned(),
+                reported_name(task),
                 task["state"].as_str().unwrap_or_default().to_owned(),
                 task["outcome"].as_str().unwrap_or("-").to_owned(),
                 task["try_number"].to_string(),

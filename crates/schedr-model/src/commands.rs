@@ -47,6 +47,9 @@ pub enum Command {
         run_id: String,
         /// The task.
         task_id: TaskId,
+        /// One instance of a mapped task; none: the whole task (decision 82).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map_index: Option<i32>,
     },
     /// Queue an `unschedulable` task of an unfinished run again (`schedr tasks retry`).
     RetryTask {
@@ -54,6 +57,9 @@ pub enum Command {
         run_id: String,
         /// The task.
         task_id: TaskId,
+        /// The instance of a mapped task (decision 82).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map_index: Option<i32>,
     },
     /// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones
     /// finish; kept across restarts until resumed.

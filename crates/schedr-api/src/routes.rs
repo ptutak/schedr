@@ -25,8 +25,8 @@ use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody,
-    ImportErrorList, ImportErrorView, LogChunk, LogQuery, OutputView, PauseRequest, RunDetail,
-    RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
+    ImportErrorList, ImportErrorView, InstanceQuery, LogChunk, LogQuery, OutputView, PauseRequest,
+    RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
 };
 
 #[cfg(test)]
@@ -263,21 +263,120 @@ pub async fn get_run_dag(
 #[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/output", tag = "runs",
     params(
         ("run_id" = String, Path, description = "The run's ID"),
-        ("task_id" = String, Path, description = "The task's ID")
+        ("task_id" = String, Path, description = "The task's ID"),
+        InstanceQuery
     ),
-    responses((status = 200, body = OutputView), (status = 404, body = ErrorBody)))]
+    responses(
+        (status = 200, body = OutputView),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)
+    ))]
 pub async fn get_output(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
+    query: Result<Query<InstanceQuery>, QueryRejection>,
 ) -> ApiResult<OutputView> {
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let run_id = known_run(&state, &run_id).await?.id;
+    let none = || ApiError::NotFound(format!("no output of `{task_id}` in run `{run_id}`"));
+    let mapped = mapped_count(&state, &run_id, &task_id).await?;
+    if let (Some(_), None) = (mapped, query.map_index) {
+        // The mapped task's whole output: the list a downstream task gets (decision 81).
+        let whole = state
+            .db
+            .run_instances(&run_id)
+            .await?
+            .into_iter()
+            .find(|i| i.task_id == task_id && i.map_index == -1)
+            .filter(|i| i.state == schedr_model::TaskInstanceState::Success)
+            .ok_or_else(none)?;
+        let list = state
+            .db
+            .instance_results(&run_id, &task_id)
+            .await?
+            .into_iter()
+            .map(|r| {
+                if r.state == schedr_model::TaskInstanceState::Success {
+                    r.output.unwrap_or(serde_json::Value::Null)
+                } else {
+                    serde_json::Value::Null
+                }
+            })
+            .collect();
+        return Ok(Json(OutputView {
+            outcome: whole.outcome.unwrap_or_else(|| "SUCCESS".to_owned()),
+            value: serde_json::Value::Array(list),
+        }));
+    }
+    let map_index = instance_of(mapped, &task_id, query.map_index, false)?;
     let (outcome, value) = state
         .db
-        .run_task_output(&run_id, &task_id)
+        .instance_output(&run_id, &task_id, map_index)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("no output of `{task_id}` in run `{run_id}`")))?;
+        .ok_or_else(none)?;
     Ok(Json(OutputView { outcome, value }))
+}
+
+/// How many instances `task_id` has in the run when it is mapped (decision 80); `None` for
+/// an unmapped task.
+async fn mapped_count(
+    state: &ApiState,
+    run_id: &str,
+    task_id: &TaskId,
+) -> Result<Option<usize>, ApiError> {
+    let mapped = mapped_tasks(state, run_id).await?;
+    if !mapped.contains(task_id) {
+        return Ok(None);
+    }
+    let rows = state.db.run_instances(run_id).await?;
+    Ok(Some(
+        rows.iter()
+            .filter(|i| &i.task_id == task_id && i.map_index >= 0)
+            .count(),
+    ))
+}
+
+/// The run's mapped tasks, from the DAG version it runs.
+async fn mapped_tasks(
+    state: &ApiState,
+    run_id: &str,
+) -> Result<std::collections::BTreeSet<TaskId>, ApiError> {
+    let dag: Option<schedr_model::Dag> = state
+        .db
+        .run_dag_json(run_id)
+        .await?
+        .and_then(|json| serde_json::from_value(json).ok());
+    Ok(dag
+        .map(|dag| {
+            dag.tasks
+                .into_iter()
+                .filter(|t| t.expand.is_some())
+                .map(|t| t.id)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// The `map_index` a request about `task_id` means: the instance asked for of a mapped task
+/// (`required`: a mapped task needs one, decision 82), -1 for an unmapped one.
+fn instance_of(
+    mapped: Option<usize>,
+    task_id: &TaskId,
+    asked: Option<i32>,
+    required: bool,
+) -> Result<i32, ApiError> {
+    match (mapped, asked) {
+        (Some(count), None) if required => Err(ApiError::BadRequest(format!(
+            "task `{task_id}` is mapped ({count} instances): give ?map_index=N, from 0 to {}",
+            count.saturating_sub(1)
+        ))),
+        (Some(_) | None, None | Some(-1)) => Ok(-1),
+        (Some(_), Some(index)) => Ok(index),
+        (None, Some(index)) => Err(ApiError::BadRequest(format!(
+            "task `{task_id}` isn't mapped: it has no instance {index}"
+        ))),
+    }
 }
 
 /// The commands about a run, oldest first: the trigger that made it, and cancelling it or
@@ -307,9 +406,22 @@ pub async fn get_run(
     let run = known_run(&state, &run_id).await?;
     let run_id = &run.id;
     let tasks = state.db.run_instances(run_id).await?;
+    let mapped = mapped_tasks(&state, run_id).await?;
+    let count = |task: &TaskId| {
+        tasks
+            .iter()
+            .filter(|i| &i.task_id == task && i.map_index >= 0)
+            .count()
+    };
     Ok(Json(RunDetail {
         run: RunView::from(&run),
-        tasks: tasks.iter().map(TaskView::from).collect(),
+        tasks: tasks
+            .iter()
+            .map(|i| {
+                let whole = i.map_index == -1 && mapped.contains(&i.task_id);
+                TaskView::of(i, whole.then(|| count(&i.task_id)))
+            })
+            .collect(),
         code_hashes: state.db.run_code_hashes(run_id).await?,
     }))
 }
@@ -334,17 +446,25 @@ pub async fn cancel_run(
 #[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/cancel", tag = "runs",
     params(
         ("run_id" = String, Path, description = "The run's ID"),
-        ("task_id" = String, Path, description = "The task's ID")
+        ("task_id" = String, Path, description = "The task's ID"),
+        InstanceQuery
     ),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn cancel_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
+    query: Result<Query<InstanceQuery>, QueryRejection>,
     Extension(user): Extension<User>,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    submit(&state, &user, Command::CancelTask { run_id, task_id }).await
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let command = Command::CancelTask {
+        run_id,
+        task_id,
+        map_index: query.map_index,
+    };
+    submit(&state, &user, command).await
 }
 
 /// Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the
@@ -352,33 +472,58 @@ pub async fn cancel_task(
 #[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/retry", tag = "runs",
     params(
         ("run_id" = String, Path, description = "The run's ID"),
-        ("task_id" = String, Path, description = "The task's ID")
+        ("task_id" = String, Path, description = "The task's ID"),
+        InstanceQuery
     ),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn retry_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
+    query: Result<Query<InstanceQuery>, QueryRejection>,
     Extension(user): Extension<User>,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    submit(&state, &user, Command::RetryTask { run_id, task_id }).await
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    // A mapped task's instance must be named (decision 82); checked when the run is known.
+    if let Some(found) = state.db.run_record(&run_id).await? {
+        let mapped = mapped_count(&state, &found.id, &task_id).await?;
+        instance_of(mapped, &task_id, query.map_index, true)?;
+    }
+    let command = Command::RetryTask {
+        run_id,
+        task_id,
+        map_index: query.map_index,
+    };
+    submit(&state, &user, command).await
 }
 
 /// The attempts of a run's task, oldest first.
 #[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/attempts", tag = "runs",
     params(
         ("run_id" = String, Path, description = "The run's ID"),
-        ("task_id" = String, Path, description = "The task's ID")
+        ("task_id" = String, Path, description = "The task's ID"),
+        InstanceQuery
     ),
-    responses((status = 200, body = AttemptList), (status = 404, body = ErrorBody)))]
+    responses(
+        (status = 200, body = AttemptList),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)
+    ))]
 pub async fn list_attempts(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
+    query: Result<Query<InstanceQuery>, QueryRejection>,
 ) -> ApiResult<AttemptList> {
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let run_id = known_run(&state, &run_id).await?.id;
-    let attempts = state.db.task_attempts(&run_id, &task_id).await?;
+    let mapped = mapped_count(&state, &run_id, &task_id).await?;
+    let map_index = instance_of(mapped, &task_id, query.map_index, true)?;
+    let attempts = state
+        .db
+        .instance_attempts(&run_id, &task_id, map_index)
+        .await?;
     Ok(Json(AttemptList {
         attempts: attempts.iter().map(Into::into).collect(),
     }))
@@ -408,9 +553,11 @@ pub async fn get_log(
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let run_id = known_run(&state, &run_id).await?.id;
+    let mapped = mapped_count(&state, &run_id, &task_id).await?;
+    let map_index = instance_of(mapped, &task_id, query.map_index, true)?;
     let attempt = state
         .db
-        .task_attempts(&run_id, &task_id)
+        .instance_attempts(&run_id, &task_id, map_index)
         .await?
         .into_iter()
         .find(|a| a.try_number == try_number)

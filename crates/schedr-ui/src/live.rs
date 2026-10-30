@@ -315,6 +315,9 @@ pub struct TailQuery {
     pub try_number: u32,
     /// The first byte not shown yet.
     pub from: u64,
+    /// The instance of a mapped task.
+    #[serde(default)]
+    pub map_index: Option<u32>,
 }
 
 /// `GET /d/<deployment>/runs/<run>/tasks/<task>/tail?try=&from=`: the log from `from` as it
@@ -341,7 +344,13 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
         let mut failing: Option<tokio::time::Instant> = None;
         loop {
             let part = client
-                .log_part(&run_id, &task_id, query.try_number, from, TAIL_PART)
+                .instance_log_part(
+                    &run_id,
+                    (&task_id, query.map_index),
+                    query.try_number,
+                    from,
+                    TAIL_PART,
+                )
                 .await;
             let mut more_now = false;
             let (html, done) = match part {

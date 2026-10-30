@@ -265,6 +265,11 @@ policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.
 `webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
 Claude, no docs round).
 
+**How it is run** (the user, 2026-10-30): split into 14 sections by concern (the plan is in
+the Grok skill's `reviews/schedr-full-2026-10-30.md`); **about 20% of each week's Grok
+allowance goes to it, the rest to reviewing current work**, so it takes about five weeks,
+riskiest sections first.
+
 ## M4: Native API complete
 
 Done when (PROJECT.md, Roadmap): the native API's whole design is built, so a DAG written
@@ -291,8 +296,8 @@ reviews of about five sub-steps.
 | M4.2c | **Import errors in the UI** (decisions 66-68; the user's request): each root's current parse recorded by the master, `GET /api/v1/import-errors`, a page with a nav count and a DAG-list notice | done (2026-10-29) |
 | M4.3a | **Mapping, the API** (decisions 69-71): `.partial` / `.expand` / `.expand_kwargs`, `expand` in DAG JSON, the parse-time checks, `[mapping] max_instances`; the master refuses mapped DAGs until M4.3b | done (2026-10-29, `82f9b47`) |
 | M4.3b | **Mapping, the master:** instances created once inputs exist, per-instance inputs, the mapped task's state, fan-in lists (`None` for skipped instances), element-wise mapping and `.on`, empty expansion, the instance limit; lanes (70 B), a failed step cancels the rest (75a B), `run_if` over instances (75b D), the written order (79) | done (2026-10-30) |
-| M4.3c | **Mapping, around it:** `map_index` in the runner and task context, the API and CLI per instance, the UI's summary node and instance list, `run_dag`'s `tasks["x"][3]` | |
-| M4.3 | **Mapping:** `.partial(...)` / `.expand(...)`, instances `map_index` 0..N-1 created once the input exists, element-wise `.on` and expansion over a mapped output, the whole output as `Output[list[T]]` (input order; `[]` for an empty expansion; `upstream_failed` on a failed instance), `[mapping] max_instances`; instances in the API and UI | a mapped task over a literal and over an upstream output, empty included, with per-instance results |
+| M4.3c | **Mapping, around it:** `map_index` in the runner and task context, the API and CLI per instance, the UI's summary node and instance list, `run_dag`'s `tasks["x"][3]`; decisions 80-86 (`task_ctx`) | done (2026-10-30) |
+| M4.3 | **Mapping:** `.partial(...)` / `.expand(...)`, instances `map_index` 0..N-1 created once the input exists, element-wise `.on` and expansion over a mapped output, the whole output as `Output[list[T]]` (input order; `[]` for an empty expansion; `upstream_failed` on a failed instance), `[mapping] max_instances`; instances in the API and UI | a mapped task over a literal and over an upstream output, empty included, with per-instance results: done (2026-10-30, M4.3a-c) |
 | M4.4 | **Concurrency limits:** `Dag(max_active_tasks=)`, `@task(max_active=, max_active_per_run=)` (also operators, `TaskDefaults`), applied in the assignment's transaction, the waiting reason and its metric | limits hold under a stress scenario (no more running than allowed), reasons shown |
 | M4.5 | **The agent channel, params and `dag_ctx`:** per-call connections to the agent (`SCM_RIGHTS`), `schedr task-ctx` / `schedr dag-ctx`, `schedr.script`; `Dag(params=...)` (dataclass or model, JSON Schema in the DAG JSON), values validated by the master before a run exists (`runs trigger -p`, `--params`, the UI's form), stored with the run; `dag_ctx` references in the DAG body, values at run time, `dag_ctx.params(...)` | a Python task, a command and a plain script read the same params and run information |
 | M4.6 | **Secrets:** the secret storage abstraction, Vault (KV v2, Kubernetes auth, token renewal, cache), the `db` storage for standalone (encrypted, `SCHEDR_SECRET_KEY`) and `schedr secrets set/list/get/delete/export`; placeholders rendered by the agent, `secrets=` and `SecretPrefix` on demand, masking (`min_mask_length`, `unmasked_prefixes`), the error kinds; storage names checked at DAG validation; the chart's key and Vault role | a task reads secrets from Vault (a dev-mode container in the integration tests) and from `db`, masked in its log |
@@ -373,6 +378,16 @@ users of schedr's own). Decisions laid out on 2026-10-28, to take when M6 starts
   that passed remembered 5 minutes as `basic`'s; `behind_tls_proxy` beyond loopback; the bind
   password from a mounted Secret, never the configuration; a wrong password, an unknown user
   and a non-member answered alike, in comparable time. Tested against an OpenLDAP container.
+
+### M6 proposals
+
+Ideas logged for M6, not decided:
+
+- **Skip (or set a task's state) from the UI and the CLI** (the user, 2026-10-30): a person
+  marks a task that hasn't run as skipped. To settle then: what its downstream gets (a data
+  edge of a skipped task passes `None`, so the parse-time check of `None` would have to
+  cover it; "mark success" would need an output schedr can't invent), whether a running task
+  can be skipped, a mapped task's instances, and the command log recording who and why.
 
 ## Testing approach
 

@@ -66,7 +66,7 @@ Today's commits, oldest first:
   be planned then. No batch reviews of about five sub-steps. Read-only with throwaway proof
   tests. Claude writes the guide for each step. Every Grok finding is verified before
   acting; the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **80**), lettered options, the recommended one first,
+- **Decisions:** numbered (the next is **87**), lettered options, the recommended one first,
   with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
   must run). Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)

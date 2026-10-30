@@ -475,17 +475,19 @@ impl Database {
     pub async fn retry_unschedulable(
         &self,
         run_id: &str,
-        task_id: &TaskId,
+        (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<bool, DbError> {
         const RETRY: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
             queued_reason = NULL, updated_at = $1{ts} \
-            WHERE run_id = $2{uuid} AND task_id = $3 AND state = 'unschedulable'";
+            WHERE run_id = $2{uuid} AND task_id = $3 AND state = 'unschedulable' \
+            AND ($4 IS NULL OR map_index = $4)";
         let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, RETRY))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
+                .bind(map_index)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()

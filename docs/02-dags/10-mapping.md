@@ -83,8 +83,22 @@ A gather sees every instance only if none of them is skipped, and none of them f
   uncaught exception is a real failure: it fails the step, cancels the other instances, and
   the gather doesn't run. That is on purpose: a failure means the step failed.
 
-## Not yet
+## Following the instances
 
-The API, the CLI and the UI list a mapped task's instances as rows of the run without
-showing their index yet, and `run_dag`'s results don't name them; both come next (M4.3c).
+- **Inside a task,** `task_ctx.map_index` is the instance's index (`None` for a task that
+  isn't mapped), and `task_ctx.try_number` its attempt
+  ([The DAG context](06-context.md#the-running-tasks-own-context-task_ctx)). A command gets
+  `SCHEDR_MAP_INDEX`.
+- **In the UI,** a mapped task is one node, labelled with its instance count (`fetch ×3`)
+  and how many are done; its panel lists the instances, and each one's panel has its
+  attempts, logs and output. The whole task's output is the gathered list.
+- **In the API,** a run's tasks list each mapped task as a whole (`map_index: -1`,
+  `instances: 3`) and then its instances. A task's `output` without `?map_index` is the
+  gathered list, with `?map_index=1` that instance's; `attempts`, `log` and `retry` need
+  `?map_index` for a mapped task; `cancel` without it cancels the whole task.
+- **In the CLI,** `schedr tasks logs / cancel / retry` take `--map-index N`; `schedr dags
+  test` lists the instances as `fetch[0]`, `fetch[1]`, ... after the task.
+- **In tests,** `run_dag(...).tasks["fetch"]` is the whole task (its `output` the list) and
+  `tasks["fetch"][1]` an instance ([Testing a DAG](07-testing.md#run_dag)).
+
 `.partial()` and `.expand()` work on `@task` functions; operators can't be mapped yet.

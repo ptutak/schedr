@@ -172,29 +172,61 @@ pub struct RunList {
 pub struct TaskView {
     /// The task's ID.
     pub task_id: String,
+    /// Which instance of a mapped task, from 0; -1 for an unmapped task, and for a mapped
+    /// task as a whole (decision 80).
+    #[serde(default = "unmapped")]
+    pub map_index: i32,
+    /// A mapped task as a whole: how many instances it has (0 before it expands, or for an
+    /// empty list); `null` for an unmapped task and for an instance.
+    #[serde(default)]
+    pub instances: Option<usize>,
     /// Its state (`scheduled`, `queued`, `running`, `success`, ...).
     pub state: String,
     /// Its outcome, on success.
     pub outcome: Option<String>,
     /// Attempts made.
     pub try_number: u32,
-    /// Why it waits or can't be scheduled.
+    /// Why it waits or can't be scheduled, or why a mapped task failed without an attempt
+    /// (too many instances, a mapped value that isn't a list).
     pub reason: Option<String>,
     /// When it last changed.
     pub updated_at: Timestamp,
 }
 
-impl From<&InstanceRecord> for TaskView {
-    fn from(instance: &InstanceRecord) -> Self {
+/// The `map_index` of a task that isn't mapped (read from an answer that leaves it out).
+const fn unmapped() -> i32 {
+    -1
+}
+
+impl TaskView {
+    /// The view of `instance`; `instances` for a mapped task as a whole.
+    #[must_use]
+    pub fn of(instance: &InstanceRecord, instances: Option<usize>) -> Self {
         Self {
             task_id: instance.task_id.to_string(),
+            map_index: instance.map_index,
+            instances,
             state: instance.state.to_string(),
             outcome: instance.outcome.clone(),
             try_number: instance.try_number,
-            reason: instance.queued_reason.clone(),
+            reason: instance
+                .reason
+                .clone()
+                .or_else(|| instance.queued_reason.clone()),
             updated_at: instance.updated_at,
         }
     }
+}
+
+/// Which instance of a mapped task (decisions 81, 82).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct InstanceQuery {
+    /// The instance, from 0 (a mapped task only). For an output, none gives the mapped task's
+    /// whole list; for a cancel, the whole task; attempts, logs and a retry need it.
+    #[serde(default)]
+    pub map_index: Option<i32>,
 }
 
 /// A run with its tasks.
@@ -436,6 +468,9 @@ pub struct LogQuery {
     /// At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).
     #[serde(default)]
     pub limit: Option<u64>,
+    /// The instance of a mapped task, from 0 (required for one).
+    #[serde(default)]
+    pub map_index: Option<i32>,
 }
 
 /// A part of an attempt's log, read from the worker that ran it.

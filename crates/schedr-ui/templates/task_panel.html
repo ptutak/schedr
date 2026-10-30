@@ -2,16 +2,17 @@
 <div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
 <div class="panel-head" data-task="{{ task_id }}">
   <h2 class="mono">{{ task_id }}</h2>
+  {% if !back.is_empty() %}<a class="back" href="{{ back_href }}" hx-get="{{ back }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ back_href }}">all instances</a>{% endif %}
   <span class="state {{ state }}">{{ status }}</span>
   <a class="close" href="{{ close }}" aria-label="Close the task's panel">×</a>
 </div>
 {% if cancellable || retryable %}
 <div class="actions">
   {% if cancellable %}
-  {% call confirm::action("Cancel task", "Cancel task " ~ task_id ~ "?", "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of it are cancelled.", actions ~ "/cancel", "", base) %}{% endcall %}
+  {% call confirm::action("Cancel task", "Cancel task " ~ task_id ~ "?", "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of it are cancelled.", actions ~ "/cancel" ~ action_query, "", base) %}{% endcall %}
   {% endif %}
   {% if retryable %}
-  {% call confirm::action("Retry", "Retry task " ~ task_id ~ "?", "Every worker that could run it rejected it; it is queued again, for every worker.", actions ~ "/retry", "", base) %}{% endcall %}
+  {% call confirm::action("Retry", "Retry task " ~ task_id ~ "?", "Every worker that could run it rejected it; it is queued again, for every worker.", actions ~ "/retry" ~ action_query, "", base) %}{% endcall %}
   {% endif %}
 </div>
 {% endif %}
@@ -58,6 +59,23 @@
   <pre class="log"{% if let Some(tail) = tail %} sse-connect="{{ tail }}" sse-swap="log" hx-swap="beforeend" sse-close="end"{% endif %}>{{ html|safe }}</pre>
 {% when TabBody::NoLog(why) %}
   <p class="empty">No log to show: {{ why }}</p>
+{% when TabBody::Instances(rows) %}
+  {% if rows.is_empty() %}
+  <p class="empty">No instances: it hasn't expanded yet, or its list was empty.</p>
+  {% else %}
+  <table class="list instances">
+    <thead><tr><th>Instance</th><th>State</th><th>Tries</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td class="mono"><a href="{{ row.href }}" hx-get="{{ row.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ row.href }}">[{{ row.map_index }}]</a></td>
+        <td><span class="state {{ row.state }}">{{ row.status }}</span></td>
+        <td>{{ row.tries }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 {% when TabBody::Cleanup %}
   <p class="empty">This task has no cleanup.</p>
 {% endmatch %}

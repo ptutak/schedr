@@ -1,4 +1,6 @@
-"""The DAG context, ``dag_ctx``: the current run's information.
+"""The run's context, ``dag_ctx``, and the running task's own, ``task_ctx``.
+
+``dag_ctx`` is the current run's information.
 
 In the DAG body, ``dag_ctx.run.planned_for`` is a **reference**, filled in at run time; it
 can be passed to tasks and commands, but not used as a value in the DAG file. Inside a
@@ -78,23 +80,44 @@ class RunValues:
     since: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class TaskValues:
+    """The running task's own context (decision 84).
+
+    Attributes:
+        task_id: The task's ID.
+        try_number: The attempt's try number, from 1.
+        map_index: Which instance of a mapped task, from 0; ``None`` for an unmapped task.
+    """
+
+    task_id: str
+    try_number: int
+    map_index: int | None
+
+
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
+_TASK: ContextVar[TaskValues | None] = ContextVar("schedr_running_task_own", default=None)
 
 
 @contextlib.contextmanager
-def running(values: RunValues) -> Iterator[None]:
-    """Makes ``dag_ctx`` give values instead of references inside the block (the runner).
+def running(values: RunValues, task: TaskValues | None = None) -> Iterator[None]:
+    """Makes ``dag_ctx`` give values inside the block, and ``task_ctx`` the task's own.
+
+    The runner calls a task's function inside it; references stand for values there.
 
     Args:
         values: The run's context.
+        task: The task's own context.
 
     Yields:
         Nothing.
     """
     token = _RUNNING.set(values)
+    task_token = _TASK.set(task)
     try:
         yield
     finally:
+        _TASK.reset(task_token)
         _RUNNING.reset(token)
 
 
@@ -165,3 +188,42 @@ class DagContext:
 
 dag_ctx = DagContext()
 """The current run's context: ``dag_ctx.run.planned_for``, ``dag_ctx.run.since``, ..."""
+
+_TASK_OUTSIDE = (
+    "`task_ctx` is the running task's own context: read it inside a task's function while it "
+    "runs (it has no references for the DAG body); in tests, set it with "
+    "`schedr.testing.task_context(...)`"
+)
+
+
+def _task() -> TaskValues:
+    values = _TASK.get()
+    if values is None:
+        raise RuntimeError(_TASK_OUTSIDE)
+    return values
+
+
+class TaskContext:
+    """``task_ctx``: the running task's own context (decision 84), values only.
+
+    Reading it outside a running task (in the DAG body too) raises ``RuntimeError``.
+    """
+
+    @property
+    def task_id(self) -> str:
+        """The task's ID."""
+        return _task().task_id
+
+    @property
+    def try_number(self) -> int:
+        """The attempt's try number, from 1 (retries and requeues count)."""
+        return _task().try_number
+
+    @property
+    def map_index(self) -> int | None:
+        """Which instance of a mapped task this is, from 0; ``None`` for an unmapped task."""
+        return _task().map_index
+
+
+task_ctx = TaskContext()
+"""The running task's own context: ``task_ctx.map_index``, ``task_ctx.try_number``, ..."""

@@ -691,6 +691,7 @@ async fn a_cancel_reaches_the_worker_when_a_later_step_of_its_round_fails() {
     let cancel = schedr_model::commands::Command::CancelTask {
         run_id,
         task_id: schedr_model::TaskId::new("extract").unwrap(),
+        map_index: None,
     };
     db.insert_command(&cancel, "anna", fixed_now())
         .await

@@ -4101,6 +4101,29 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     a downstream task's list is built when read, in `map_index` order, `None` for a skipped
     instance. Not chosen: B storing the list on the `-1` row too (twice the storage, and the
     list could exceed limits its instances met).
+  - **Around it, per instance (M4.3c)** (decisions 80-86, the user's, 2026-10-30: all A):
+    - **80, the run's tasks in the API:** the `-1` row is listed too, as the task as a whole
+      (`map_index: -1`, `instances: N`, `null` for an unmapped task, and `reason` when it
+      failed without an attempt), then its instances `0..N-1`. Not chosen: B instances only.
+    - **81, a mapped task's output:** without `?map_index`, the gathered list as a downstream
+      task receives it (`None` for a skipped instance); with `?map_index=N`, that instance's
+      output and outcome. Not chosen: B an error without `?map_index`.
+    - **82, attempts, logs, retry, cancel:** attempts, logs and retry need `?map_index=N` on
+      a mapped task (a 400 gives the range without it); cancel without it cancels the whole
+      task, with it that instance. Not chosen: B merging every instance's attempts and logs.
+    - **83, the run graph:** one node per mapped task, its instance count in the label and a
+      count of its instances by state; the task panel lists the instances, each with its
+      attempts, log and output. Not chosen: B a node per instance (a wide fan-out swamps it).
+    - **84, `schedr.task_ctx`:** `task_ctx.task_id`, `task_ctx.try_number` and
+      `task_ctx.map_index` (`None` for an unmapped task) while a task runs: the object secrets
+      and connections join later. Not chosen: B `dag_ctx.run.map_index` (not the run's); C
+      the `SCHEDR_MAP_INDEX` variable only.
+    - **85, `run_dag`:** `result.tasks["fetch"]` is the task as a whole (its `.output` the
+      gathered list); `result.tasks["fetch"][1]` (and `.instances`) each instance's result.
+      Not chosen: B `"fetch[1]"` keys.
+    - **86, the CLI:** `--map-index N` on `tasks logs / attempts / output / cancel / retry`;
+      `runs show` and `dags test` list instances as `fetch[0]`, `fetch[1]`, ... after the
+      task's own row. Not chosen: B `fetch[1]` as the task argument.
   - **Why a task failed with no attempt** (decision 78, the user's: A): a nullable `reason`
     on `task_instances` (more instances than `max_instances`; a mapped list that is `null`
     or not a list when it expands). Not chosen: B reusing `queued_reason`.

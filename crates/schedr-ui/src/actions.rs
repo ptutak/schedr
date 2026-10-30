@@ -160,10 +160,19 @@ pub async fn cancel_run<T: Transport>(
     .await
 }
 
-/// `POST /d/<deployment>/runs/<run>/tasks/<task>/cancel` or `.../retry`.
+/// Which instance of a mapped task an action is about (decision 82).
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct Instance {
+    /// The instance, from 0; none: the whole task.
+    map_index: Option<u32>,
+}
+
+/// `POST /d/<deployment>/runs/<run>/tasks/<task>/cancel` or `.../retry`, with
+/// `?map_index=N` for one instance of a mapped task.
 pub async fn task<T: Transport>(
     State(ui): State<Arc<Ui<T>>>,
     Path((deployment, run_id, task_id, action)): Path<(String, String, String, String)>,
+    Query(instance): Query<Instance>,
     headers: HeaderMap,
 ) -> Response {
     let (action, verb) = match action.as_str() {
@@ -175,8 +184,15 @@ pub async fn task<T: Transport>(
         &ui,
         &headers,
         &deployment,
-        format!("{verb} task {task_id}"),
-        async |d| d.client.task_action(&run_id, &task_id, action).await,
+        match instance.map_index {
+            Some(i) => format!("{verb} task {task_id}[{i}]"),
+            None => format!("{verb} task {task_id}"),
+        },
+        async |d| {
+            d.client
+                .task_action(&run_id, (&task_id, instance.map_index), action)
+                .await
+        },
     )
     .await
 }

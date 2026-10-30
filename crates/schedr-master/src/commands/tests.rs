@@ -377,10 +377,12 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
     let cancel = |task_id: &TaskId| Command::CancelTask {
         run_id: run_id.clone(),
         task_id: task_id.clone(),
+        map_index: None,
     };
     let retry = |task_id: &TaskId| Command::RetryTask {
         run_id: run_id.clone(),
         task_id: task_id.clone(),
+        map_index: None,
     };
     world.ask(&cancel(&extract)).await;
     world.ask(&cancel(&ghost)).await;
@@ -389,6 +391,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
         .ask(&Command::RetryTask {
             run_id: unknown_run.clone(),
             task_id: extract.clone(),
+            map_index: None,
         })
         .await;
     let applied = world.apply().await;
@@ -485,6 +488,7 @@ async fn a_database_failure_leaves_a_task_command_pending() {
         .ask(&Command::CancelTask {
             run_id,
             task_id: TaskId::new("extract").unwrap(),
+            map_index: None,
         })
         .await;
     let applied = world
@@ -606,6 +610,7 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
         .ask(&Command::CancelTask {
             run_id: id.clone(),
             task_id: TaskId::new("no_such_task").unwrap(),
+            map_index: None,
         })
         .await;
     world.db.mark_applying(&missing, ts(NOW)).await.unwrap();

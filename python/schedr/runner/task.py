@@ -22,7 +22,7 @@ from schedr._serialization.annotations import (
     unwrap,
 )
 from schedr._templates import as_text
-from schedr.context import RunValues, running
+from schedr.context import RunValues, TaskValues, running
 from schedr.outcomes import from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
 from schedr.runner.protocol import Channel
@@ -379,7 +379,8 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
         return failure(e, "import_failed")
     imported()
     try:
-        with running(run_values(run)):
+        own = TaskValues(task_id, int(run.get("try_number", 1)), run.get("map_index"))
+        with running(run_values(run), own):
             result = function(**arguments)
     except (Exception, SystemExit) as e:
         return failure(e, None)

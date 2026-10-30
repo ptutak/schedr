@@ -218,11 +218,13 @@ async fn actions_become_pending_commands_by_the_user() {
             },
             Command::CancelTask {
                 run_id: run_id.clone(),
-                task_id: TaskId::new("load").unwrap()
+                task_id: TaskId::new("load").unwrap(),
+                map_index: None,
             },
             Command::RetryTask {
                 run_id,
-                task_id: TaskId::new("load").unwrap()
+                task_id: TaskId::new("load").unwrap(),
+                map_index: None,
             },
         ]
     );

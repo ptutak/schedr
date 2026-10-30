@@ -653,12 +653,28 @@ impl<T: Transport> Client<T> {
     ///
     /// [`ClientError`] if the request fails or the answer doesn't read.
     pub async fn output(&self, run_id: &str, task_id: &str) -> Result<OutputView, ClientError> {
+        self.instance_output(run_id, task_id, None).await
+    }
+
+    /// As [`Self::output`], of one instance of a mapped task (`None`: a mapped task's whole
+    /// list, decision 81).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::output`].
+    pub async fn instance_output(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        map_index: Option<u32>,
+    ) -> Result<OutputView, ClientError> {
         self.call(
             Method::Get,
             format!(
-                "/api/v1/runs/{}/tasks/{}/output",
+                "/api/v1/runs/{}/tasks/{}/output{}",
                 path(run_id),
-                path(task_id)
+                path(task_id),
+                instance(map_index, '?')
             ),
             None,
         )
@@ -706,12 +722,27 @@ impl<T: Transport> Client<T> {
     ///
     /// [`ClientError`] if the request fails or the answer doesn't read.
     pub async fn attempts(&self, run_id: &str, task_id: &str) -> Result<AttemptList, ClientError> {
+        self.instance_attempts(run_id, task_id, None).await
+    }
+
+    /// As [`Self::attempts`], of one instance of a mapped task (decision 82).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::attempts`].
+    pub async fn instance_attempts(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        map_index: Option<u32>,
+    ) -> Result<AttemptList, ClientError> {
         self.call(
             Method::Get,
             format!(
-                "/api/v1/runs/{}/tasks/{}/attempts",
+                "/api/v1/runs/{}/tasks/{}/attempts{}",
                 path(run_id),
-                path(task_id)
+                path(task_id),
+                instance(map_index, '?')
             ),
             None,
         )
@@ -756,12 +787,30 @@ impl<T: Transport> Client<T> {
         from: u64,
         limit: u64,
     ) -> Result<LogChunk, ClientError> {
+        self.instance_log_part(run_id, (task_id, None), try_number, from, limit)
+            .await
+    }
+
+    /// As [`Self::log_part`], of one instance of a mapped task (decision 82).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::log`].
+    pub async fn instance_log_part(
+        &self,
+        run_id: &str,
+        (task_id, map_index): (&str, Option<u32>),
+        try_number: u32,
+        from: u64,
+        limit: u64,
+    ) -> Result<LogChunk, ClientError> {
         self.call(
             Method::Get,
             format!(
-                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log?from={from}&limit={limit}",
+                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log?from={from}&limit={limit}{}",
                 path(run_id),
-                path(task_id)
+                path(task_id),
+                instance(map_index, '&')
             ),
             None,
         )
@@ -834,7 +883,7 @@ impl<T: Transport> Client<T> {
     pub async fn task_action(
         &self,
         run_id: &str,
-        task_id: &str,
+        (task_id, map_index): (&str, Option<u32>),
         action: TaskAction,
     ) -> Result<CommandView, ClientError> {
         let action = match action {
@@ -844,9 +893,10 @@ impl<T: Transport> Client<T> {
         self.call(
             Method::Post,
             format!(
-                "/api/v1/runs/{}/tasks/{}/{action}",
+                "/api/v1/runs/{}/tasks/{}/{action}{}",
                 path(run_id),
-                path(task_id)
+                path(task_id),
+                instance(map_index, '?')
             ),
             None,
         )
@@ -971,4 +1021,10 @@ pub enum TaskAction {
     Cancel,
     /// Retry it (an `unschedulable` one).
     Retry,
+}
+
+/// The query parameter naming a mapped task's instance (`?map_index=N`, or with `&` after
+/// other parameters); empty for none.
+fn instance(map_index: Option<u32>, separator: char) -> String {
+    map_index.map_or_else(String::new, |i| format!("{separator}map_index={i}"))
 }

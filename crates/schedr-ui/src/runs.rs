@@ -41,6 +41,9 @@ const TABS: [(&str, &str); 4] = [
     ("cleanup", "Cleanup"),
 ];
 
+/// A mapped task's panel's tabs (decision 83): its instances, and its whole output.
+const MAPPED_TABS: [(&str, &str); 2] = [("instances", "Instances"), ("output", "Output")];
+
 /// The runs list's query: filters and the page's cursor.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListQuery {
@@ -289,6 +292,9 @@ pub struct RunQuery {
     /// The try whose log is shown (the last by default).
     #[serde(default, rename = "try")]
     pub try_number: Option<u32>,
+    /// The instance of a mapped task whose panel is open (none: the task as a whole).
+    #[serde(default)]
+    pub map_index: Option<u32>,
 }
 
 /// A task node of the graph.
@@ -306,6 +312,8 @@ pub struct Node {
     pub state: String,
     /// Its outcome when it says something (not `SUCCESS`).
     pub outcome: String,
+    /// A mapped task: how far its instances are (`2/3 done · 1 failed`).
+    pub counts: String,
     /// Its panel: the run page with it open.
     pub href: String,
     /// Its panel alone (htmx).
@@ -371,8 +379,8 @@ pub struct GroupFrame {
 /// A task's row in the run's table.
 #[derive(Debug, Clone)]
 pub struct TaskRow {
-    /// Its ID.
-    pub task_id: String,
+    /// Its ID as shown: with its instance count for a mapped task (`fetch ×3`).
+    pub label: String,
     /// Its panel (the run page with it open).
     pub href: String,
     /// Its panel alone (htmx).
@@ -485,11 +493,7 @@ pub async fn run<T: Transport>(
         },
         None => String::new(),
     };
-    let tasks: Vec<TaskRow> = detail
-        .tasks
-        .iter()
-        .map(|t| task_row(&page, &run_href, t))
-        .collect();
+    let (whole, tasks) = task_rows(&page, &run_href, &detail.tasks);
     let graph = run_graph(deployment, &run_id, &dag, &detail.tasks, &run_href, &query).await;
     let at = format!("{}/d/{}", page.base, path_segment(&deployment.name));
     render(
@@ -515,7 +519,7 @@ pub async fn run<T: Transport>(
                 .ended_at
                 .map(|t| page.time(&t))
                 .unwrap_or_default(),
-            summary: summary(&detail.run.state, &detail.tasks),
+            summary: summary(&detail.run.state, &whole),
             run_href: run_href.clone(),
             code_hashes: detail.code_hashes,
             commands: commands
@@ -584,10 +588,25 @@ fn status(task: &TaskView) -> String {
     }
 }
 
+/// The run's tasks as a whole, and their rows; a mapped task's instances are in its panel
+/// (decision 83).
+fn task_rows(page: &Page, run_href: &str, tasks: &[TaskView]) -> (Vec<TaskView>, Vec<TaskRow>) {
+    let whole: Vec<TaskView> = tasks
+        .iter()
+        .filter(|t| t.map_index == -1)
+        .cloned()
+        .collect();
+    let rows = whole.iter().map(|t| task_row(page, run_href, t)).collect();
+    (whole, rows)
+}
+
 fn task_row(page: &Page, run_href: &str, task: &TaskView) -> TaskRow {
     let id = path_segment(&task.task_id);
     TaskRow {
-        task_id: task.task_id.clone(),
+        label: task.instances.map_or_else(
+            || task.task_id.clone(),
+            |n| format!("{} ×{n}", task.task_id),
+        ),
         href: format!("{run_href}?task={id}"),
         panel: format!("{run_href}/tasks/{id}"),
         state: task.state.clone(),
@@ -683,13 +702,20 @@ fn graph_of(
         .iter()
         .zip(&layout.nodes)
         .map(|(id, placed)| {
-            let task = tasks.iter().find(|t| &t.task_id == id);
+            let task = tasks.iter().find(|t| &t.task_id == id && t.map_index == -1);
             let segment = path_segment(id);
+            let label = task
+                .and_then(|t| t.instances)
+                .map_or_else(|| fitted(id, 22), |n| format!("{} ×{n}", fitted(id, 17)));
             Node {
                 left: placed.x - NODE_WIDTH / 2.0,
                 top: placed.y - NODE_HEIGHT / 2.0,
                 task_id: id.clone(),
-                label: fitted(id, 22),
+                label,
+                counts: task
+                    .and_then(|t| t.instances)
+                    .map(|n| counts(id, n, tasks))
+                    .unwrap_or_default(),
                 state: task.map_or_else(|| "none".to_owned(), |t| t.state.clone()),
                 outcome: task
                     .and_then(|t| t.outcome.clone())
@@ -748,6 +774,47 @@ fn graph_of(
         edges: lines,
         groups,
     }
+}
+
+/// How far a mapped task's `n` instances are: `2/3 done`, with how many failed.
+fn counts(task_id: &str, n: usize, tasks: &[TaskView]) -> String {
+    let instances = || {
+        tasks
+            .iter()
+            .filter(move |t| t.task_id == task_id && t.map_index >= 0)
+    };
+    let finished = |s: &str| {
+        matches!(
+            s,
+            "success" | "failed" | "cancelled" | "skipped" | "upstream_failed"
+        )
+    };
+    let done = instances().filter(|t| finished(&t.state)).count();
+    let failed = instances()
+        .filter(|t| matches!(t.state.as_str(), "failed" | "upstream_failed"))
+        .count();
+    let mut line = format!("{done}/{n} done");
+    if failed > 0 {
+        let _ = write!(line, " · {failed} failed");
+    }
+    line
+}
+
+/// An instance's row in a mapped task's panel.
+#[derive(Debug, Clone)]
+pub struct InstanceRow {
+    /// Its `map_index`.
+    pub map_index: i32,
+    /// Its state (also its CSS class).
+    pub state: String,
+    /// `state · outcome`.
+    pub status: String,
+    /// Attempts made.
+    pub tries: u32,
+    /// Its panel (htmx).
+    pub panel: String,
+    /// The run page with its panel open.
+    pub href: String,
 }
 
 /// The DAG's groups (decision 64): their IDs, their nesting, and each task's innermost group
@@ -976,6 +1043,8 @@ pub enum TabBody {
     },
     /// Why there is no log to show.
     NoLog(String),
+    /// A mapped task's instances, in order (decision 83).
+    Instances(Vec<InstanceRow>),
     /// The cleanup: nothing until M4's per-task cleanups (a shell, 25B).
     Cleanup,
 }
@@ -994,6 +1063,12 @@ struct PanelFragment {
     base: String,
     /// Where the task's actions are posted (`.../cancel`, `.../retry`).
     actions: String,
+    /// The query after an action's URL: `?map_index=N` for an instance, empty otherwise.
+    action_query: String,
+    /// For an instance: the mapped task's panel, its instances listed (htmx); empty otherwise.
+    back: String,
+    /// See `back`: the run page with it open.
+    back_href: String,
     /// Whether it can be cancelled: it hasn't ended.
     cancellable: bool,
     /// Whether it can be retried: every eligible worker rejected it.
@@ -1039,6 +1114,9 @@ pub async fn panel<T: Transport>(
         let mut to = format!("{run_href}?task={}", path_segment(&task_id));
         if let Some(tab) = &query.tab {
             let _ = write!(to, "&tab={}", path_segment(tab));
+        }
+        if let Some(index) = query.map_index {
+            let _ = write!(to, "&map_index={index}");
         }
         return axum::response::Redirect::to(&to).into_response();
     }
@@ -1117,25 +1195,34 @@ async fn task_panel<T: Transport>(
         } => missing(),
         error => Failure::unavailable(&deployment.name, &error),
     })?;
-    let task = detail
-        .tasks
-        .iter()
-        .find(|t| t.task_id == task_id)
-        .ok_or_else(missing)?;
+    let (task, mapped, map_index) = panel_task(&detail.tasks, run_id, task_id, query)?;
+    let tabs_shown: &[(&str, &str)] = if mapped && map_index.is_none() {
+        &MAPPED_TABS
+    } else {
+        &TABS
+    };
     let tab = query
         .tab
         .as_deref()
-        .filter(|t| TABS.iter().any(|(key, _)| key == t))
-        .unwrap_or("attempts");
+        .filter(|t| tabs_shown.iter().any(|(key, _)| key == t))
+        .unwrap_or(tabs_shown[0].0);
     let segment = path_segment(task_id);
     let panel_href = format!("{run_href}/tasks/{segment}");
+    let instance = map_index.map_or_else(String::new, |i| format!("&map_index={i}"));
+    let at = Instance {
+        task_id,
+        map_index,
+        panel_href: &panel_href,
+        run_href,
+    };
     let body = match tab {
-        "output" => output_tab(deployment, run_id, task_id, &panel_href).await?,
-        "logs" => log_tab(deployment, run_id, task_id, &panel_href, run_href, query).await?,
+        "instances" => TabBody::Instances(instance_rows(&detail.tasks, &at)),
+        "output" => output_tab(deployment, run_id, &at).await?,
+        "logs" => log_tab(deployment, run_id, &at, query).await?,
         "cleanup" => TabBody::Cleanup,
         _ => {
             let attempts = client
-                .attempts(run_id, task_id)
+                .instance_attempts(run_id, task_id, map_index)
                 .await
                 .map_err(|error| Failure::unavailable(&deployment.name, &error))?;
             TabBody::Attempts(
@@ -1147,27 +1234,32 @@ async fn task_panel<T: Transport>(
             )
         }
     };
-    let tabs = TABS
+    let tabs = tabs_shown
         .iter()
         .map(|(key, label)| Tab {
             key,
             label,
-            panel: format!("{panel_href}?tab={key}"),
-            href: format!("{run_href}?task={segment}&tab={key}"),
+            panel: format!("{panel_href}?tab={key}{instance}"),
+            href: format!("{run_href}?task={segment}&tab={key}{instance}"),
             open: *key == tab,
         })
         .collect();
     let refresh = match (tab, query.try_number) {
         ("logs", _) => String::new(),
-        (tab, _) => format!("{panel_href}?tab={tab}"),
+        (tab, _) => format!("{panel_href}?tab={tab}{instance}"),
     };
     let fragment = PanelFragment {
         refresh,
-        task_id: task_id.to_owned(),
+        task_id: map_index.map_or_else(|| task_id.to_owned(), |i| format!("{task_id}[{i}]")),
         status: status(task),
         state: task.state.clone(),
         close: run_href.to_owned(),
         base: page.base.clone(),
+        action_query: map_index.map_or_else(String::new, |i| format!("?map_index={i}")),
+        back: map_index.map_or_else(String::new, |_| format!("{panel_href}?tab=instances")),
+        back_href: map_index.map_or_else(String::new, |_| {
+            format!("{run_href}?task={segment}&tab=instances")
+        }),
         actions: panel_href.clone(),
         cancellable: !matches!(
             task.state.as_str(),
@@ -1184,13 +1276,80 @@ async fn task_panel<T: Transport>(
     })
 }
 
+/// The task (or the instance of a mapped one asked for) whose panel is shown: it, whether
+/// the task is mapped, and the instance's `map_index`.
+fn panel_task<'a>(
+    tasks: &'a [TaskView],
+    run_id: &str,
+    task_id: &str,
+    query: &RunQuery,
+) -> Result<(&'a TaskView, bool, Option<u32>), Failure> {
+    let whole = tasks
+        .iter()
+        .find(|t| t.task_id == task_id && t.map_index == -1)
+        .ok_or_else(|| {
+            Failure::missing(format!("There is no task `{task_id}` in run `{run_id}`."))
+        })?;
+    let mapped = whole.instances.is_some();
+    let map_index = query.map_index.filter(|_| mapped);
+    let task = match map_index {
+        Some(index) => tasks
+            .iter()
+            .find(|t| t.task_id == task_id && i64::from(t.map_index) == i64::from(index))
+            .ok_or_else(|| {
+                Failure::missing(format!(
+                    "Task `{task_id}` of run `{run_id}` has no instance {index}."
+                ))
+            })?,
+        None => whole,
+    };
+    Ok((task, mapped, map_index))
+}
+
+/// A mapped task's instances, as its panel lists them (decision 83).
+fn instance_rows(tasks: &[TaskView], at: &Instance<'_>) -> Vec<InstanceRow> {
+    let segment = path_segment(at.task_id);
+    tasks
+        .iter()
+        .filter(|t| t.task_id == at.task_id && t.map_index >= 0)
+        .map(|t| InstanceRow {
+            map_index: t.map_index,
+            state: t.state.clone(),
+            status: status(t),
+            tries: t.try_number,
+            panel: format!("{}?map_index={}", at.panel_href, t.map_index),
+            href: format!("{}?task={segment}&map_index={}", at.run_href, t.map_index),
+        })
+        .collect()
+}
+
+/// Which task (or instance of one) a panel tab is about, and where its links go.
+struct Instance<'a> {
+    task_id: &'a str,
+    map_index: Option<u32>,
+    panel_href: &'a str,
+    run_href: &'a str,
+}
+
+impl Instance<'_> {
+    /// The query naming the instance, after others (`&map_index=N`); empty for none.
+    fn query(&self) -> String {
+        self.map_index
+            .map_or_else(String::new, |i| format!("&map_index={i}"))
+    }
+}
+
 async fn output_tab<T: Transport>(
     deployment: &Deployment<T>,
     run_id: &str,
-    task_id: &str,
-    panel_href: &str,
+    at: &Instance<'_>,
 ) -> Result<TabBody, Failure> {
-    match deployment.client.output(run_id, task_id).await {
+    let (task_id, panel_href) = (at.task_id, at.panel_href);
+    let output = deployment
+        .client
+        .instance_output(run_id, task_id, at.map_index)
+        .await;
+    match output {
         Ok(output) => {
             let pretty = serde_json::to_string_pretty(&output.value).unwrap_or_default();
             let (text, cut) = tail(&pretty, OUTPUT_TAIL);
@@ -1199,7 +1358,11 @@ async fn output_tab<T: Transport>(
                 text: text.to_owned(),
                 cut,
                 size: bytes(pretty.len() as u64),
-                download: format!("{panel_href}/output.json"),
+                download: format!(
+                    "{panel_href}/output.json{}",
+                    at.map_index
+                        .map_or_else(String::new, |i| format!("?map_index={i}"))
+                ),
             })
         }
         Err(ClientError::Server { status: 404, .. }) => Ok(TabBody::NoOutput),
@@ -1210,14 +1373,14 @@ async fn output_tab<T: Transport>(
 async fn log_tab<T: Transport>(
     deployment: &Deployment<T>,
     run_id: &str,
-    task_id: &str,
-    panel_href: &str,
-    run_href: &str,
+    at: &Instance<'_>,
     query: &RunQuery,
 ) -> Result<TabBody, Failure> {
+    let (task_id, panel_href, run_href) = (at.task_id, at.panel_href, at.run_href);
+    let instance = at.query();
     let client = &deployment.client;
     let attempts = client
-        .attempts(run_id, task_id)
+        .instance_attempts(run_id, task_id, at.map_index)
         .await
         .map_err(|error| Failure::unavailable(&deployment.name, &error))?
         .attempts;
@@ -1233,20 +1396,26 @@ async fn log_tab<T: Transport>(
         .iter()
         .map(|a| TryLink {
             number: a.try_number,
-            panel: format!("{panel_href}?tab=logs&try={}", a.try_number),
-            href: format!("{run_href}?task={segment}&tab=logs&try={}", a.try_number),
+            panel: format!("{panel_href}?tab=logs&try={}{instance}", a.try_number),
+            href: format!(
+                "{run_href}?task={segment}&tab=logs&try={}{instance}",
+                a.try_number
+            ),
             open: a.try_number == shown,
         })
         .collect();
     // The size first (the API's smallest part, 4 bytes), then the end.
-    let head = match client.log_part(run_id, task_id, shown, 0, 4).await {
+    let head = match client
+        .instance_log_part(run_id, (task_id, at.map_index), shown, 0, 4)
+        .await
+    {
         Ok(head) => head,
         Err(ClientError::Server { message, .. }) => return Ok(TabBody::NoLog(message)),
         Err(error) => return Err(Failure::unavailable(&deployment.name, &error)),
     };
     let from = head.size.saturating_sub(LOG_TAIL);
     let part = match client
-        .log_part(run_id, task_id, shown, from, LOG_TAIL)
+        .instance_log_part(run_id, (task_id, at.map_index), shown, from, LOG_TAIL)
         .await
     {
         Ok(part) => part,
@@ -1271,7 +1440,7 @@ async fn log_tab<T: Transport>(
         tries,
         tail: part
             .running
-            .then(|| format!("{panel_href}/tail?try={shown}&from={}", part.next)),
+            .then(|| format!("{panel_href}/tail?try={shown}&from={}{instance}", part.next)),
     })
 }
 
@@ -1279,13 +1448,19 @@ async fn log_tab<T: Transport>(
 pub async fn output_download<T: Transport>(
     State(ui): State<Arc<Ui<T>>>,
     Path((deployment, run_id, task_id)): Path<(String, String, String)>,
+    query: Result<Query<RunQuery>, QueryRejection>,
     headers: HeaderMap,
 ) -> Response {
     let page = Page::new(&headers, ui.docs_dir.is_some());
+    let map_index = query.ok().and_then(|Query(q)| q.map_index);
     let Some(deployment) = ui.deployments.iter().find(|d| d.name == deployment) else {
         return no_deployment(&page, &deployment);
     };
-    match deployment.client.output(&run_id, &task_id).await {
+    let output = deployment
+        .client
+        .instance_output(&run_id, &task_id, map_index)
+        .await;
+    match output {
         Ok(output) => {
             let body = serde_json::to_string_pretty(&output.value).unwrap_or_default();
             let name: String = task_id

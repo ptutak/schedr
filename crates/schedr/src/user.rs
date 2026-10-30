@@ -243,8 +243,7 @@ pub async fn run_runs<T: Transport>(
 ///
 /// # Errors
 ///
-/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason);
-/// [`AppError::NotImplemented`] for `--map-index`.
+/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason).
 pub async fn run_tasks<T: Transport>(
     command: &TasksCommand,
     client: &Client<T>,
@@ -256,13 +255,12 @@ pub async fn run_tasks<T: Transport>(
         TasksCommand::Retry(target) => (target, TaskAction::Retry),
         TasksCommand::Logs(args) => return print_log(args, client, output, out).await,
     };
-    if target.map_index.is_some() {
-        return Err(not_yet("tasks --map-index", "M4"));
-    }
     let (run_id, task_id) = (&target.run_id, &target.task_id);
+    let instance = (task_id.as_str(), target.map_index);
     let command = client
-        .wait(client.task_action(run_id, task_id, action).await?)
+        .wait(client.task_action(run_id, instance, action).await?)
         .await?;
+    let task_id = shown_task(task_id, target.map_index);
     let state = command
         .result
         .as_ref()
@@ -288,12 +286,13 @@ async fn print_log<T: Transport>(
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let target = &args.target;
-    if target.map_index.is_some() {
-        return Err(not_yet("tasks --map-index", "M4"));
-    }
     let (run_id, task_id) = (target.run_id.as_str(), target.task_id.as_str());
+    let map_index = target.map_index;
     let try_number = loop {
-        let attempts = client.attempts(run_id, task_id).await?.attempts;
+        let attempts = client
+            .instance_attempts(run_id, task_id, map_index)
+            .await?
+            .attempts;
         let attempt = match args.try_number {
             Some(n) => attempts.into_iter().find(|a| a.try_number == n),
             None => attempts.into_iter().max_by_key(|a| a.try_number),
@@ -315,7 +314,15 @@ async fn print_log<T: Transport>(
     };
     let mut from = 0;
     loop {
-        let chunk = client.log(run_id, task_id, try_number, from).await?;
+        let chunk = client
+            .instance_log_part(
+                run_id,
+                (task_id, map_index),
+                try_number,
+                from,
+                schedr_model::logs::MAX_CHUNK,
+            )
+            .await?;
         if output.json {
             let line =
                 serde_json::to_string(&chunk).map_err(|e| AppError::BadArgument(e.to_string()))?;
@@ -334,6 +341,11 @@ async fn print_log<T: Transport>(
         }
         tokio::time::sleep(client.poll()).await;
     }
+}
+
+/// A task as shown: `fetch`, or `fetch[2]` for an instance of a mapped task (decision 86).
+fn shown_task(task_id: &str, map_index: Option<u32>) -> String {
+    map_index.map_or_else(|| task_id.to_owned(), |i| format!("{task_id}[{i}]"))
 }
 
 fn for_time(text: Option<&str>, err: &mut impl Write) -> Result<Option<jiff::Timestamp>, AppError> {

@@ -624,6 +624,19 @@
       "TaskView": {
         "description": "A task of a run.",
         "properties": {
+          "instances": {
+            "description": "A mapped task as a whole: how many instances it has (0 before it expands, or for an\nempty list); `null` for an unmapped task and for an instance.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "map_index": {
+            "description": "Which instance of a mapped task, from 0; -1 for an unmapped task, and for a mapped\ntask as a whole (decision 80).",
+            "format": "int32",
+            "type": "integer"
+          },
           "outcome": {
             "description": "Its outcome, on success.",
             "type": [
@@ -632,7 +645,7 @@
             ]
           },
           "reason": {
-            "description": "Why it waits or can't be scheduled.",
+            "description": "Why it waits or can't be scheduled, or why a mapped task failed without an attempt\n(too many instances, a mapped value that isn't a list).",
             "type": [
               "string",
               "null"
@@ -1490,6 +1503,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The instance, from 0 (a mapped task only). For an output, none gives the mapped task's\nwhole list; for a cancel, the whole task; attempts, logs and a retry need it.",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1498,6 +1521,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AttemptList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1572,6 +1604,16 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "The instance of a mapped task, from 0 (required for one).",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1630,6 +1672,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The instance, from 0 (a mapped task only). For an output, none gives the mapped task's\nwhole list; for a cancel, the whole task; attempts, logs and a retry need it.",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1679,6 +1731,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The instance, from 0 (a mapped task only). For an output, none gives the mapped task's\nwhole list; for a cancel, the whole task; attempts, logs and a retry need it.",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1687,6 +1749,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OutputView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1727,6 +1798,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "The instance, from 0 (a mapped task only). For an output, none gives the mapped task's\nwhole list; for a cancel, the whole task; attempts, logs and a retry need it.",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
             }
           }
         ],

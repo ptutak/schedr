@@ -98,14 +98,19 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         json!("2026-10-21T08:00:00Z")
     );
 
-    let task = TaskView::from(&InstanceRecord {
-        task_id: TaskId::new("extract").unwrap(),
-        state: TaskInstanceState::UpstreamFailed,
-        outcome: None,
-        try_number: 0,
-        queued_reason: Some("waiting".to_owned()),
-        updated_at: ts("2026-10-21T08:00:00Z"),
-    });
+    let task = TaskView::of(
+        &InstanceRecord {
+            task_id: TaskId::new("extract").unwrap(),
+            map_index: -1,
+            reason: None,
+            state: TaskInstanceState::UpstreamFailed,
+            outcome: None,
+            try_number: 0,
+            queued_reason: Some("waiting".to_owned()),
+            updated_at: ts("2026-10-21T08:00:00Z"),
+        },
+        None,
+    );
     assert_eq!(
         (task.state.as_str(), task.reason.as_deref()),
         ("upstream_failed", Some("waiting"))

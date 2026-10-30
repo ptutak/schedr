@@ -453,7 +453,7 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
     assert_eq!(
         execution
-            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskCancel::RunQueued,
@@ -462,7 +462,7 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
     execution.prepare_runs(ts(NOW)).await.unwrap();
     assert_eq!(
         execution
-            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskCancel::Cancelled(Some(RunState::Cancelled))
@@ -477,7 +477,7 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
     );
     assert_eq!(
         execution
-            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskCancel::RunFinished(RunState::Cancelled)
@@ -490,7 +490,7 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
     execution.prepare_runs(ts(NOW)).await.unwrap();
     assert_eq!(
         execution
-            .cancel_task(&run_id, &id("start"), ts(NOW))
+            .cancel_task(&run_id, (&id("start"), None), ts(NOW))
             .await
             .unwrap(),
         TaskCancel::AlreadyFinished(S::Success)
@@ -498,7 +498,7 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
     start(&db, &run_id, "extract").await;
     assert_eq!(
         execution
-            .cancel_task(&run_id, &id("extract"), ts(NOW))
+            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskCancel::Stopping
@@ -533,7 +533,7 @@ async fn a_failure_of_a_task_being_cancelled_isnt_retried() {
     execution.prepare_runs(ts(NOW)).await.unwrap();
     start(&db, &run_id, "extract").await;
     execution
-        .cancel_task(&run_id, &id("extract"), ts(NOW))
+        .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
         .await
         .unwrap();
     let recorded = execution
@@ -553,7 +553,9 @@ async fn a_failure_of_a_task_being_cancelled_isnt_retried() {
 async fn cancelling_an_unknown_task_is_an_error_and_settling_a_finished_run_does_nothing() {
     let (execution, _db, run_id) = with_run(chain(), RunState::Running).await;
     assert!(matches!(
-        execution.cancel_task(&run_id, &id("ghost"), ts(NOW)).await,
+        execution
+            .cancel_task(&run_id, (&id("ghost"), None), ts(NOW))
+            .await,
         Err(ExecutionError::UnknownTask { .. })
     ));
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
@@ -922,4 +924,52 @@ async fn cancelling_a_run_cancels_its_instances_and_stops_the_running_ones() {
     assert_eq!(ended.run_result, Some(RunState::Cancelled));
     let states: Vec<(String, i32, TaskInstanceState)> = rows(&db, &run_id).await;
     assert!(states.iter().all(|(_, _, s)| s.is_final()), "{states:?}");
+}
+
+#[tokio::test]
+async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_others() {
+    let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    let files = with_output(json!(["a", "b"]));
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .await
+        .unwrap();
+    start_instance(&db, &run_id, "load", 0).await;
+    // A running instance is stopped; one that hasn't started is cancelled at once.
+    let running = (&id("load"), Some(0));
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, running, ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::Stopping
+    );
+    let queued = (&id("load"), Some(1));
+    assert_eq!(
+        execution
+            .cancel_task(&run_id, queued, ts(NOW))
+            .await
+            .unwrap(),
+        TaskCancel::Cancelled(None)
+    );
+    let unknown = execution
+        .cancel_task(&run_id, (&id("load"), Some(7)), ts(NOW))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            unknown,
+            ExecutionError::UnknownInstance { map_index: 7, .. }
+        ),
+        "{unknown}"
+    );
+    // `load` waits for its stopped instance, then ends cancelled, as the run does.
+    let stopped = ended(AttemptStatus::Cancelled);
+    let finished = execution
+        .attempt_finished(&run_id, &id("load"), 0, &stopped, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(finished.run_result, Some(RunState::Cancelled));
 }

@@ -824,7 +824,7 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
     );
     assert!(matches!(
         dispatcher
-            .retry_task(&run_id, &id("extract"), later(at))
+            .retry_task(&run_id, (&id("extract"), None), later(at))
             .await
             .unwrap(),
         TaskRetry::Queued(_)
@@ -835,14 +835,14 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
     );
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, &id("extract"), later(at))
+            .retry_task(&run_id, (&id("extract"), None), later(at))
             .await
             .unwrap(),
         TaskRetry::NotUnschedulable(TaskInstanceState::Queued)
     );
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, &id("load"), later(at))
+            .retry_task(&run_id, (&id("load"), None), later(at))
             .await
             .unwrap(),
         TaskRetry::NotUnschedulable(TaskInstanceState::Scheduled)
@@ -854,21 +854,23 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, &id("extract"), ts(NOW))
+            .retry_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskRetry::RunQueued,
         "no instances yet"
     );
     assert!(matches!(
-        dispatcher.retry_task(&run_id, &id("ghost"), ts(NOW)).await,
+        dispatcher
+            .retry_task(&run_id, (&id("ghost"), None), ts(NOW))
+            .await,
         Err(DispatchError::Execution(ExecutionError::UnknownTask { .. }))
     ));
     assert!(matches!(
         dispatcher
             .retry_task(
                 "0190a3e5-0000-7000-8000-000000000000",
-                &id("extract"),
+                (&id("extract"), None),
                 ts(NOW)
             )
             .await,
@@ -879,7 +881,7 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
         .unwrap();
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, &id("extract"), ts(NOW))
+            .retry_task(&run_id, (&id("extract"), None), ts(NOW))
             .await
             .unwrap(),
         TaskRetry::RunFinished(RunState::Failed)
@@ -892,7 +894,7 @@ async fn a_running_task_is_cancelled_through_its_worker() {
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let (cancelled, out) = dispatcher
-        .cancel_task(&run_id, &id("extract"), ts(NOW))
+        .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
         .await
         .unwrap();
     assert_eq!(cancelled, TaskCancel::Stopping);
@@ -904,7 +906,7 @@ async fn a_running_task_is_cancelled_through_its_worker() {
         RunState::Cancelled
     );
     let (cancelled, out) = dispatcher
-        .cancel_task(&run_id, &id("load"), ts(NOW))
+        .cancel_task(&run_id, (&id("load"), None), ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -923,7 +925,7 @@ async fn a_rejected_assignment_of_a_task_being_cancelled_cancels_it() {
             dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
         } else {
             dispatcher
-                .cancel_task(&run_id, &id("extract"), ts(NOW))
+                .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
                 .await
                 .unwrap();
         }

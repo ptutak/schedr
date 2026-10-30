@@ -573,10 +573,8 @@ async fn a_task_is_cancelled_and_only_an_unschedulable_one_retried() {
         .await
         .unwrap_err()
         .to_string();
-    assert_eq!(
-        error,
-        "`schedr tasks --map-index` isn't implemented yet (milestone M4)"
-    );
+    // An unmapped task has no instances (decision 82): the API says so.
+    assert_eq!(error, "task `extract` isn't mapped: it has no instance 2");
 }
 
 /// A worker whose log grows: each request gets the next answer.
@@ -767,10 +765,7 @@ async fn a_log_in_json_is_one_part_per_line() {
     .await
     .unwrap_err()
     .to_string();
-    assert_eq!(
-        error,
-        "`schedr tasks --map-index` isn't implemented yet (milestone M4)"
-    );
+    assert_eq!(error, "task `extract` isn't mapped: it has no instance 1");
     let error = tasks(&client, logs_of(&run_id, Some(7), false))
         .await
         .unwrap_err()

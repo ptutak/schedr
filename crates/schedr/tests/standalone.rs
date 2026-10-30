@@ -495,6 +495,84 @@ with Dag("mapped"):
         "{}",
         output("summary")
     );
+
+    mapped_run_per_instance(&standalone, &run_id);
+}
+
+/// The mapped run of the test above, per instance (decisions 80-86): the API, the CLI and the
+/// UI.
+fn mapped_run_per_instance(standalone: &Standalone, run_id: &str) {
+    let output = |task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap()
+    };
+    // The run's tasks list the whole task, then its instances.
+    let run = standalone.get(&format!("/api/v1/runs/{run_id}")).unwrap();
+    let rows: Vec<(String, i64, Value)> = run["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["task_id"] == "fetch")
+        .map(|t| {
+            (
+                t["state"].as_str().unwrap().to_owned(),
+                t["map_index"].as_i64().unwrap(),
+                t["instances"].clone(),
+            )
+        })
+        .collect();
+    let row = |state: &str, index, instances| (state.to_owned(), index, instances);
+    assert_eq!(
+        rows,
+        [
+            row("success", -1, serde_json::json!(3)),
+            row("success", 0, Value::Null),
+            row("success", 1, Value::Null),
+            row("success", 2, Value::Null),
+        ]
+    );
+    // The whole task's output is the gathered list; one instance's, its own.
+    assert_eq!(output("count")["value"], serde_json::json!([50, null, 60]));
+    let second = standalone
+        .get(&format!(
+            "/api/v1/runs/{run_id}/tasks/fetch/output?map_index=1"
+        ))
+        .unwrap();
+    assert_eq!(
+        (&second["outcome"], &second["value"]["reason"]),
+        (
+            &serde_json::json!("Missing"),
+            &serde_json::json!("raw/missing.csv not found")
+        )
+    );
+    // Attempts need an instance (a 400 without one); the CLI takes `--map-index`.
+    let attempts = |query: &str| {
+        standalone.get(&format!(
+            "/api/v1/runs/{run_id}/tasks/fetch/attempts{query}"
+        ))
+    };
+    assert_eq!(attempts(""), None);
+    assert_eq!(
+        attempts("?map_index=2").unwrap()["attempts"][0]["status"],
+        "success"
+    );
+    let (code, _, err) = standalone.cli(&["tasks", "logs", run_id, "fetch", "--map-index", "0"]);
+    assert_eq!(code, 0, "{err}");
+    // The UI: the mapped task's panel lists its instances.
+    let panel = standalone
+        .page(&format!("/d/default/runs/{run_id}?task=fetch"))
+        .expect("the run page with the mapped task's panel");
+    assert!(
+        panel.contains("fetch ×3") && panel.contains("Instances") && panel.contains("[2]"),
+        "{panel}"
+    );
+    let one = standalone
+        .page(&format!(
+            "/d/default/runs/{run_id}?task=fetch&map_index=1&tab=output"
+        ))
+        .expect("an instance's panel");
+    assert!(one.contains("fetch[1]") && one.contains("Missing"), "{one}");
 }
 
 #[test]

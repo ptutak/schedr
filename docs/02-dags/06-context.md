@@ -54,3 +54,18 @@ is read. Reading it with `schedr dag-ctx` is
 
 A test gives `dag_ctx` its values with `task_context`
 ([Testing a DAG](07-testing.md#one-task-and-its-context)).
+
+## The running task's own context: `task_ctx`
+
+`task_ctx` is the running task's own context, read inside its function while it runs:
+
+| | |
+|---|---|
+| `task_ctx.task_id` | The task's ID. |
+| `task_ctx.try_number` | The attempt's try number, from 1 (retries count). |
+| `task_ctx.map_index` | Which instance of a [mapped task](10-mapping.md) this is, from 0; `None` for a task that isn't mapped. |
+
+Unlike `dag_ctx`, it has no references: reading it in the DAG body, or anywhere outside a
+running task, raises `RuntimeError`. A test sets it with `task_context(task_id=...,
+try_number=..., map_index=...)` ([Testing a DAG](07-testing.md#one-task-and-its-context)).
+Secrets and connections join it later.

@@ -302,12 +302,12 @@ async fn a_task_cancel_is_recorded_and_an_unschedulable_task_retried() {
     assert_eq!(cancelling, [("extract", true), ("load", false)]);
 
     assert!(
-        !db.retry_unschedulable(&run_id, &id("extract"), now)
+        !db.retry_unschedulable(&run_id, (&id("extract"), None), now)
             .await
             .unwrap()
     );
     assert!(
-        db.retry_unschedulable(&run_id, &id("load"), now)
+        db.retry_unschedulable(&run_id, (&id("load"), None), now)
             .await
             .unwrap()
     );
@@ -317,7 +317,7 @@ async fn a_task_cancel_is_recorded_and_an_unschedulable_task_retried() {
         (TaskInstanceState::Queued, Some(now))
     );
     assert!(
-        !db.retry_unschedulable(&run_id, &id("load"), now)
+        !db.retry_unschedulable(&run_id, (&id("load"), None), now)
             .await
             .unwrap()
     );

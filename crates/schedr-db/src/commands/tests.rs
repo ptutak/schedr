@@ -191,6 +191,7 @@ async fn a_runs_commands_are_those_naming_it_and_its_trigger() {
             &Command::RetryTask {
                 run_id: run.to_owned(),
                 task_id: schedr_model::TaskId::new("extract").unwrap(),
+                map_index: None,
             },
             "piotr",
             ts("2026-10-21T08:00:03Z"),

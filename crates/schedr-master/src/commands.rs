@@ -239,12 +239,19 @@ impl Commander {
                 }
                 Ok(Outcome::Applied(json!({})))
             }
-            Command::CancelTask { run_id, task_id } => {
-                cancel_task(dispatcher, pending, run_id, task_id, outgoing, now).await
+            Command::CancelTask {
+                run_id,
+                task_id,
+                map_index,
+            } => {
+                let instance = (task_id, *map_index);
+                cancel_task(dispatcher, pending, run_id, instance, outgoing, now).await
             }
-            Command::RetryTask { run_id, task_id } => {
-                retry_task(dispatcher, pending, run_id, task_id, now).await
-            }
+            Command::RetryTask {
+                run_id,
+                task_id,
+                map_index,
+            } => retry_task(dispatcher, pending, run_id, (task_id, *map_index), now).await,
             Command::DrainWorker { worker_id } => {
                 if !self.db.set_worker_drained(worker_id, true).await? {
                     return Ok(no_worker(worker_id));
@@ -328,14 +335,19 @@ async fn cancel_task(
     dispatcher: &mut Dispatcher,
     pending: &PendingCommand,
     run_id: &str,
-    task_id: &TaskId,
+    (task_id, map_index): (&TaskId, Option<i32>),
     outgoing: &mut Vec<Outgoing>,
     now: Timestamp,
 ) -> Result<Outcome, CommandError> {
-    let (cancelled, messages) = match dispatcher.cancel_task(run_id, task_id, now).await {
+    let cancelled = dispatcher
+        .cancel_task(run_id, (task_id, map_index), now)
+        .await;
+    let (cancelled, messages) = match cancelled {
         Ok(done) => done,
         Err(DispatchError::Execution(
-            unknown @ (ExecutionError::UnknownRun(_) | ExecutionError::UnknownTask { .. }),
+            unknown @ (ExecutionError::UnknownRun(_)
+            | ExecutionError::UnknownTask { .. }
+            | ExecutionError::UnknownInstance { .. }),
         )) => return Ok(Outcome::Rejected(unknown.to_string())),
         Err(error) => return Err(error.into()),
     };
@@ -372,13 +384,18 @@ async fn retry_task(
     dispatcher: &mut Dispatcher,
     pending: &PendingCommand,
     run_id: &str,
-    task_id: &TaskId,
+    (task_id, map_index): (&TaskId, Option<i32>),
     now: Timestamp,
 ) -> Result<Outcome, CommandError> {
-    let retried = match dispatcher.retry_task(run_id, task_id, now).await {
+    let retried = match dispatcher
+        .retry_task(run_id, (task_id, map_index), now)
+        .await
+    {
         Ok(retried) => retried,
         Err(DispatchError::Execution(
-            unknown @ (ExecutionError::UnknownRun(_) | ExecutionError::UnknownTask { .. }),
+            unknown @ (ExecutionError::UnknownRun(_)
+            | ExecutionError::UnknownTask { .. }
+            | ExecutionError::UnknownInstance { .. }),
         )) => return Ok(Outcome::Rejected(unknown.to_string())),
         Err(error) => return Err(error.into()),
     };

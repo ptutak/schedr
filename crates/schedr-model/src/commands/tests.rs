@@ -35,14 +35,19 @@ fn sync() -> DagId {
     "unpause_dag"
 )]
 #[case(
-    Command::CancelTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap() },
+    Command::CancelTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap(), map_index: None },
     json!({"kind": "cancel_task", "run_id": "r1", "task_id": "load"}),
     "cancel_task"
 )]
 #[case(
-    Command::RetryTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap() },
+    Command::RetryTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap(), map_index: None },
     json!({"kind": "retry_task", "run_id": "r1", "task_id": "load"}),
     "retry_task"
+)]
+#[case(
+    Command::CancelTask { run_id: "r1".to_owned(), task_id: TaskId::new("load").unwrap(), map_index: Some(2) },
+    json!({"kind": "cancel_task", "run_id": "r1", "task_id": "load", "map_index": 2}),
+    "cancel_task"
 )]
 #[case(
     Command::DrainWorker { worker_id: "w1".to_owned() },

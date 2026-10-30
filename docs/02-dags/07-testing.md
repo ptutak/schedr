@@ -141,7 +141,8 @@ implemented yet (milestone M4). Run parameters, secrets and running one task are
 Outside `with Dag(...)`, a `@task` function is the function. `extract()` in
 `examples/test_sync.py` returns the list, not an `Output`.
 
-`with task_context(...):` makes `dag_ctx` return values for the block, with no process.
+`with task_context(...):` makes `dag_ctx` and `task_ctx` return values for the block, with
+no process.
 
 | Argument | Default |
 |---|---|
@@ -150,6 +151,9 @@ Outside `with Dag(...)`, a `@task` function is the function. `extract()` in
 | `dag_id` | `"test"` |
 | `run_id` | a new UUIDv7 |
 | `kind` | `"manual"` (`scheduled`, `manual`, `backfill`, `chained`, `event`) |
+| `task_id` | `"test"` (`task_ctx.task_id`) |
+| `try_number` | `1` (`task_ctx.try_number`) |
+| `map_index` | `None`, an unmapped task (`task_ctx.map_index`) |
 
 Both times must be aware datetimes, and `since` must not be after `planned_for`.
 `params` and `secrets` raise `NotImplementedError` (milestone M4).
@@ -164,17 +168,18 @@ Both times must be aware datetimes, and `since` must not be after `planned_for`.
 | `run_id`, `dag_id`, `kind` | The run. `kind` is `manual`. |
 | `state` | `success`, `failed` or `cancelled`. |
 | `planned_for`, `since` | The window. |
-| `tasks` | A `TaskResult` per task ID. |
+| `tasks` | A `TaskResult` per task ID. A mapped task's is the task as a whole; `tasks["fetch"][1]` (or `.instances`) is one instance's. |
 
 | `TaskResult` | |
 |---|---|
 | `state` | Where the task ended, such as `success`, `failed`, `skipped`, `upstream_failed`. |
 | `outcome` | The outcome name when it succeeded (`SUCCESS` when the task has no outcomes of its own). |
 | `try_number` | The last try. `0` if it never ran. |
-| `output` | The output decoded with the task's return type. A command's is a `ProcessResult`. An empty task's is `None`. |
+| `output` | The output decoded with the task's return type. A command's is a `ProcessResult`. An empty task's is `None`. A mapped task's is the list of its instances' outputs (`None` for one skipped). |
 | `output_json` | The output as stored. |
 | `log` | Every attempt's log. |
-| `attempts` | `attempt_id`, `try_number`, `status`, `exit_code`, `error_kind`, `error`, `started_at`, `ended_at`, `duration`. |
+| `attempts` | `attempt_id`, `try_number`, `status`, `exit_code`, `error_kind`, `error`, `started_at`, `ended_at`, `duration`. None for a mapped task as a whole (its instances have them). |
+| `map_index`, `instances` | An instance's index (`None` otherwise); a mapped task's instances (`None` for a task that isn't mapped). |
 
 `duration` is what the worker measured. It is `None` for an attempt the master ended.
 `error` is the failure summary (`exception`, `message`, `traceback`).

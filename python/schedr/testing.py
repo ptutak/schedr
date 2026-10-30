@@ -24,7 +24,7 @@ from typing import Any
 from schedr._model import CommandKind, PythonKind, registry
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
-from schedr.context import RunValues, running
+from schedr.context import RunValues, TaskValues, running
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.types import Json, ProcessResult
 
@@ -61,6 +61,9 @@ def task_context(
     kind: str = "manual",
     params: object = None,
     secrets: Mapping[str, str] | None = None,
+    task_id: str = "test",
+    try_number: int = 1,
+    map_index: int | None = None,
 ) -> Iterator[RunValues]:
     """Gives ``dag_ctx`` values inside the block, as while the runner calls a task.
 
@@ -75,6 +78,9 @@ def task_context(
         kind: ``dag_ctx.run.kind``: ``manual`` by default.
         params: Run parameters (milestone M4).
         secrets: Declared secrets (milestone M4).
+        task_id: ``task_ctx.task_id``.
+        try_number: ``task_ctx.try_number``.
+        map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
 
     Yields:
         The values ``dag_ctx`` gives.
@@ -95,7 +101,7 @@ def task_context(
     if start > planned:
         raise ValueError(f"since ({start}) must not be after planned_for ({planned})")
     values = RunValues(dag_id, run_id or str(uuid.uuid7()), kind, planned, start)
-    with running(values):
+    with running(values, TaskValues(task_id, try_number, map_index)):
         yield values
 
 
@@ -169,9 +175,15 @@ class TaskResult:
         state: Where it ended (``success``, ``failed``, ``upstream_failed``, ...).
         outcome: Its outcome on success (``SUCCESS``).
         try_number: Its last try number (0 if it never ran).
-        output_json: Its output as stored (tagged JSON), or ``None``.
-        attempts: Its attempts, in order.
+        output_json: Its output as stored (tagged JSON), or ``None``; a mapped task's is the
+            list of its instances' outputs (``None`` for one that didn't succeed).
+        attempts: Its attempts, in order (none for a mapped task as a whole: its instances
+            have them).
         log: The log of all its attempts.
+        map_index: Which instance of a mapped task it is, from 0; ``None`` for an unmapped
+            task and a mapped one as a whole.
+        instances: A mapped task's instances, in order (``result.tasks["fetch"][1]`` is one);
+            ``None`` for an unmapped task.
     """
 
     task_id: str
@@ -182,6 +194,25 @@ class TaskResult:
     attempts: tuple[Attempt, ...]
     log: str
     _decode: Callable[[str, Json], object] = field(repr=False, compare=False)
+    map_index: int | None = None
+    instances: tuple[TaskResult, ...] | None = None
+
+    def __getitem__(self, index: int) -> TaskResult:
+        """One instance of a mapped task (decision 85).
+
+        Args:
+            index: Its ``map_index``.
+
+        Returns:
+            Its result.
+
+        Raises:
+            TypeError: For a task that isn't mapped.
+            IndexError: For an instance it doesn't have.
+        """
+        if self.instances is None:
+            raise TypeError(f"task `{self.task_id}` isn't mapped: it has no instances")
+        return self.instances[index]
 
     @property
     def output(self) -> object:
@@ -192,7 +223,13 @@ class TaskResult:
         Raises:
             RunDagError: If the DAG file can't be imported to find the type.
         """
-        return None if self.output_json is None else self._decode(self.task_id, self.output_json)
+        if self.output_json is None:
+            return None
+        if self.instances is not None and isinstance(self.output_json, list):
+            # The list of the instances' outputs, each decoded by the task's return type.
+            items: list[Json] = self.output_json
+            return [None if item is None else self._decode(self.task_id, item) for item in items]
+        return self._decode(self.task_id, self.output_json)
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,8 +391,10 @@ def run_dag(
 def _result(report: Mapping[str, Any], root_dir: Path) -> RunResult:
     run = report["run"]
     types = _OutputTypes(run["dag_id"], root_dir, report.get("location"))
-    tasks = {
-        task["task_id"]: TaskResult(
+
+    def result(task: Mapping[str, Any], instances: tuple[TaskResult, ...] | None) -> TaskResult:
+        index = task.get("map_index", -1)
+        return TaskResult(
             task_id=task["task_id"],
             state=task["state"],
             outcome=task.get("outcome"),
@@ -364,8 +403,22 @@ def _result(report: Mapping[str, Any], root_dir: Path) -> RunResult:
             attempts=tuple(Attempt.from_json(a) for a in task["attempts"]),
             log=task["log"],
             _decode=types.decode,
+            map_index=index if index >= 0 else None,
+            instances=instances,
+        )
+
+    # A mapped task's instances follow its own row (decision 85).
+    of: dict[str, list[TaskResult]] = {}
+    for task in report["tasks"]:
+        if task.get("map_index", -1) >= 0:
+            of.setdefault(task["task_id"], []).append(result(task, None))
+    tasks = {
+        task["task_id"]: result(
+            task,
+            tuple(of.get(task["task_id"], ())) if task.get("instances") is not None else None,
         )
         for task in report["tasks"]
+        if task.get("map_index", -1) < 0
     }
     return RunResult(
         run_id=run["run_id"],
