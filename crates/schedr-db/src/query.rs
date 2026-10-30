@@ -112,6 +112,9 @@ macro_rules! in_tx {
                 let mut guard = scope.connection.lock().await;
                 let scoped = &mut *guard;
                 let was_broken = std::mem::replace(&mut scoped.broken, true);
+                // A write a test made fail leaves the transaction broken, as a real one would.
+                #[cfg(any(test, feature = "testing"))]
+                db.faults().before_write()?;
                 let done = async {
                     Ok::<_, $crate::database::DbError>(match &mut scoped.connection {
                         $crate::scope::Connection::Sqlite(connection) => {
@@ -132,6 +135,8 @@ macro_rules! in_tx {
                 }
                 return done;
             }
+            #[cfg(any(test, feature = "testing"))]
+            db.faults().before_write()?;
             Ok::<_, $crate::database::DbError>(match db.pool() {
                 $crate::database::Pool::Sqlite(pool) => {
                     let $backend = $crate::backend::Backend::Sqlite;

@@ -9,6 +9,42 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B83: mapping repeats the entire source list in every instance’s inputs
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:293`. Before consulting the resolved-list cache, every `inputs()` call reloads sources and clones their complete outputs: **Scenario:** a plain task returns N strings, used only by `.expand(x=source)`. Each instance receives its selected string under `$expand` **plus all N strings under `source`**. Fetching, cloning and serializing inputs therefore grows quadratically. The runner uses `$expand` for these mapped arguments. Batch measurement `f3_mapped_inputs_repeat_the_whole_list`, with 256-byte strings and one shared cache: **Confidence: high.** I searched the other call sites and matching implementations for these problems. I did not run the full suite, stress tests, distributed process tests, PostgreSQL fault injection, or release-build benchmarks. The reproductions used SQLite; restart checks recreated the master core against the same database. All throwaway files were removed. `git status --short` was empty before and after; `git diff --exit-code` passed. No tracked files changed. DONE: --- session 01a18d2e-d496-74a2-be56-b991ff6fee40 | 34 commands | tokens in 3111663 (cached 2947456), out 17085 | weekly 21.0%, 5 h 63.0% | /home/ptutak/.claude/skills/codex/logs/01a18d2e-d496-74a2-be56-b991ff6fee40.1.jsonl [exited with code 0]
+- **A fix:** to decide when it is scheduled.
+
+## B82: settling can perform cubic work on a chain
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/progress.rs:454`. Each pass visits all tasks and calls `edges_into()` for scheduled tasks. That helper scans the entire edge vector (`crates/schedr-model/src/dag.rs:116`): The outer loop repeats until nothing changes. A chain listed in reverse dependency order advances one task per pass, yielding Θ(T²E) work—Θ(T³) for a chain. **Scenario:** preparing an 800-task empty chain occupies the master’s core lock for seconds; the service holds that lock while ticking. Batch measurement `f3_settle_scaling`, unoptimized test build: Both task orders produced the same successful result. The same edge-scanning helper is used in mapped settling at `progress.rs:554` and `:600`. **Confidence: high for the complexity; measured timings are debug-build figures.**
+- **A fix:** to decide when it is scheduled.
+
+## B81: valid elements inside mapped lists are rejected as though they must themselves be lists
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:152` and `:158`. Recursive resolution contains unconditional errors: **Scenario:** both of these pass Python DAG construction, but fail the run during preparation: The outer value is already a list; its elements should resolve to strings.
+- **A fix:** to decide when it is scheduled.
+
+## B80: using a mapped output elsewhere breaks per-element narrowing
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:84`. Lane detection requires exactly one reference: With another reference, narrowing falls through to whole-output resolution. At `mapping.rs:170`, `.on(Rows)` is then compared against the whole mapped task’s synthetic `SUCCESS` outcome, producing `null`. **Scenario:** the Python API accepts: After both fetches succeed, finishing `gate` should allow the matching element to proceed. Instead, expansion fails. This also contradicts the mapping guide’s statements that `.on(...)` works per element and an additional use makes the task wait for the whole upstream.
+- **A fix:** to decide when it is scheduled.
+
+## B79: interrupted preparation permanently strands runs
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  high severity, confirmed by Codex's failing test; read and judged sound by Claude; at `crates/schedr-master/src/execution.rs:202`. Preparation commits three stages separately: initial `Scheduled` rows, settled task states, and the run result: Recovery selects only runs with **no** instance rows (`crates/schedr-db/src/instances.rs:143`): **Scenario A:** initial rows commit, then the settling write fails. Subsequent rounds and a restarted master leave a runnable root `Scheduled`. **Scenario B:** an empty task’s success commits, then finishing the run fails. The run remains `Running` with every task finished. Both throwaway tests injected a SQLite trigger failure, removed the trigger, constructed a fresh `MasterCore`, called `restore()`, then completed a tick: **Confidence: high.**
+- **A fix:** to decide when it is scheduled.
+
+## B78: expansion reads instance states before the current result is stored
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  high severity, confirmed by Codex's failing test; read and judged sound by Claude; at `crates/schedr-master/src/execution.rs:597`. `advance()` applies the result to memory, then calls: Only afterwards does it call `store()`. Meanwhile, `expansion()` reads `mapping::sources()` from the database. At `mapping.rs:241`, that reader substitutes `null` for any instance whose stored state is not yet `Success`. **Scenario:** `producer.expand(x=[0,1])` returns `[10,20]` from both instances; `consumer.expand(x=produced[1])` waits for the whole producer. When producer instance 1 finishes last, expansion sees its old `Running` state and resolves `produced[1]` as `null`. The consumer and run fail despite successful producers.
+- **A fix:** to decide when it is scheduled.
+
 ## B77: valid large timedeltas cannot render in agent templates
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
@@ -178,26 +214,12 @@ bug, the entry is removed, saying why in the commit.
   `pending_commands` (`crates/schedr-db/src/commands.rs:299`) has no `LIMIT` (`fetch_all`); the master keeps `COMMANDS_PER_ROUND` (50) after reading and decoding every pending row (`schedr-master/src/commands.rs:129`): draining N commands reads N, N-50, ... rows (Codex: 2,000 commands, 32 MB of audit strings loaded for 50 applied). Expired attempts the same (`unstarted_attempts`, then `truncate`, `dispatch.rs:864`).
 - **A fix:** `LIMIT` in the queries (the round's cap).
 
-## B51: a rolled-back message can still cancel a healthy sibling instance
-
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
-  attempts), with a failing proof each; checked against the code by Claude.
-  Fail-fast's cancellations go to `self.stops` (`crates/schedr-master/src/dispatch.rs:1074`), which the rollback snapshot (`Memory`: workers, rejections, code_missing, `dispatch.rs:218`) doesn't hold: a `Finished` whose commit fails is undone in the database and memory, but its queued `CancelAttempt` for a sibling is sent at the next step (Codex's Postgres proof, a deferred constraint failing the commit: the sibling cancelled while both stay `running`). An assignment's rollback restores workers and outgoing messages but not `stops` either.
-- **A fix:** `stops` in the snapshot (restored with it), or queued only after the commit.
-
 ## B50: a running task can be expired and assigned again after a reconnect
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
   attempts), with a failing proof each; checked against the code by Claude.
   When `Started` is lost with the stream and the worker reconnects within the start timeout (10 s) with the attempt `Running` in its journal, the master adopts it (`crates/schedr-master/src/dispatch.rs:381`: only the slot reserved) and answers `Continue`, but records no start; the expiry (`started_at IS NULL`) then ends it as `AssignmentExpired` and assigns the task again while the first process runs (Codex's proof: one new assignment). The agent resends `Finished` on `Continue` but no `Started`.
 - **A fix:** record the start on adoption (the journal says it runs), or have the agent resend `Started`.
-
-## B49: an expired assignment can leave its task running for good
-
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
-  attempts), with a failing proof each; checked against the code by Claude.
-  `record` (`crates/schedr-master/src/dispatch.rs:1050`) ends the attempt, then moves the task, in separate writes; the expiry path calls it outside any transaction (`expire`, `:889`), so a failed second write leaves the attempt ended and the task `running`, never revisited (expiry looks at open attempts only; Codex's proof: four healthy rounds later, still `running`, no open attempt). The same split in `incarnation_replaced` and `worker_lost` (B42's path).
-- **A fix:** `record`'s writes in one transaction (`Database::atomically`) on every path.
 
 ## B48: every attempt message copies the master's whole worker registry under its lock
 
@@ -247,6 +269,10 @@ bug, the entry is removed, saying why in the commit.
   loop and the worker link), with a failing proof each; checked against the code by Claude.
   `forget` (`crates/schedr-master/src/core.rs:857`) removes the connection, then writes the worker's state and ends its attempts; if a write fails, later lease checks (which walk `connections`) never retry it: the worker stays `lost` with its attempt open (Codex's proofs, a failure injected at each write: the healthy next tick never retries). `Dispatcher::worker_lost` removes the worker before its fallible writes too; deregistration takes the same path.
 - **A fix:** remove from memory only after the writes succeed (or keep a retry list), as B7 did for parse jobs.
+- **Half fixed (2026-10-30, with B49):** `Dispatcher::worker_lost` now runs whole, its memory
+  put back if a write fails (the fault-injection harness's `Lost` scenario). Left: `Core::forget`
+  removes the connection before its writes, and `set_worker_state` and the dispatcher's
+  writes are two transactions.
 
 ## B41: a result the master failed to store isn't sent again while the link stays up
 

@@ -9,6 +9,8 @@ pub mod changes;
 pub mod commands;
 pub mod dags;
 pub mod database;
+#[cfg(any(test, feature = "testing"))]
+mod faults;
 pub mod instances;
 pub mod lease;
 mod query;

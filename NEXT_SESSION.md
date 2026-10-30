@@ -4,81 +4,62 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-10-28, end of session)
+## State (2026-10-30)
 
-- On `main`, clean and pushed. **M1, M2, M2.5 and M3 are done. M4 is in progress:** M4.1
-  (results and outcomes, sub-steps a-d) and M4.2a (`@branch`) are done; next is **M4.2b
-  (groups)**, then M4.3 (mapping) and on in PLAN.md's order (51A).
-- CI: `gh run list`. The latest run passed; the only failures this week were the
-  `wheel-macos-arm64` job being cancelled (not a test failure).
-- The last `make check`: 1488 Rust unit, 124 integration, 782 Python and 27 browser tests,
-  all passing.
-
-Today's commits, oldest first:
-
-| Commit | What |
-|---|---|
-| `669ae0f` | M3.5 + M3.6 |
-| `335fb90` | B25 (hidden tabs close their streams), B26 (open requests cut 3 s after a stop), times as "UTC (local)", `make standalone` with the fork server, chart NOTES warning |
-| `04d083f` | a dialog race (live reads skipped while a dialog is open) |
-| `c172efd` | the round woken on `Finished` (42B/43A), Keycloak claim header, task panel times, a test port |
-| `1e75e64` | LDAP moved to M6 (decisions 45-47 laid out) |
-| `131afa8` | the M4 plan (M4.1-M4.15, decisions 49-53) |
-| `81d40b0` | stress results in the guide, scenario 15c |
-| `c4b78cc` | M4.1a: outcomes in the model and the master's rules |
-| `4e9ee76` | M4.1b: the Python API (`Outcome`, `.on()`, `.outcome`, `run_if`, `CommandOperator(outcomes=)`) |
-| `d9aecbf` | M4.1c: the (output, outcome) pair end to end |
-| `f021fa6` | a CI race in the federation test (`data-command`) |
-| `8c2f979` | M4.1d: the run graph labels edges with outcomes |
-| `820e6c2` | `.outcome` refused where the output may have a field `outcome` |
-| `2855681` | M4.2a: `@branch` and selection edges (55B: counted like any edge) |
-| `f247cf5` | Grok's batch review of M4.1a-M4.2a: 5 fixes (None check at any depth and for outcome references, `may_skip` per rule, paths into `.on(A, B)`, a branch's output along selection edges, the AllSucceeded doc); 1 rejected; B27, B28 logged |
-| `835ad4d` | **M4.5 planned:** batched worker messages, a savepoint per message (decision 54) |
+- **M1–M3 done; M4 in progress.** M4.1 (outcomes), M4.2 (`@branch`, groups, import errors) and
+  M4.3 (mapping, a–c) are done, reviewed and fixed. **Now: a pause for bugs, M4.3e** (the
+  user: "finish bugfixing before we move on with M4.4"; M4.4 not today). Then M4.3d (the CLI's
+  `runs show`, `tasks attempts`, `tasks output`: B37), then M4.4 (concurrency limits:
+  decisions 87–92, 95–96 taken), in PLAN.md's order.
+- **Commits of 2026-10-30:** `5b451e1` the M4.3 review fix-up (decisions 93, 94, 97; the docs
+  round; B37–B77 logged; Codex and the sandbox in AI_SETUP / AI_INSTRUCTIONS); `a8bf777` B39
+  partly fixed (a group drawn as a rigid column; the rest in M6). CI: `gh run list`.
+- **Uncommitted, under Grok's review (`5e2b8d14`, worktree `schedr-grok-harness`):** M4.3e
+  part 1: the fault-injection harness (decision 98) and B49's fix. On acceptance: commit.
+- **Next in M4.3e:** B42's core half (`Core::forget` removes the connection before its
+  writes, which are two transactions), then B79 (a run's preparation in three writes), each
+  as a harness scenario first; then the high-severity bugs section by section: F1's
+  B41, B43, B44; F2's B50 (B51, B52 medium); F6's B53 (**decision 99**: refuse a placeholder
+  inside quotes, or quote by context), B54, B55; F7's B58, B59; F8's B64; F3's B78.
+  Medium and low wait in BUGS.md.
 
 ## Open when this session ended
 
-- **Grok's docs round for M4.1a-M4.2a is done and checked** (session `bdf356db`): a new page
-  `docs/02-dags/08-outcomes.md` with `examples/docs/outcomes.py`, and the guide's life of a
-  run, master, UI and glossary. One wrong claim corrected (run creation doesn't decide
-  waiting tasks). If it isn't committed yet, it waits for the user's acceptance.
-- **Grok's budget:** 98% of the week used (plus $5 of credits). The reset is **Friday
-  2026-10-30 9:00**. Ask the user for the weekly % after each round and log it in
-  `~/.claude/skills/grok/USAGE.md` (commit and push that repository).
-- **Friday after the reset: Grok's whole-repository review** (PLAN.md, "After M3: Grok over
-  the whole repository"), the unreviewed delta first. M4.1a-M4.2a are already reviewed;
-  whatever is built after `835ad4d` isn't.
-- **Pending user decisions:** the assign-to-started improvements (Grok's investigation: rounds
-  holding the master lock; split the lock, send `AssignTask` once committed, shorter rounds,
-  stamp `started_at` at arrival, grouped journal fsyncs). Not scheduled; M4.5.1 measures
-  first. Small offers still open: a clearer message for a stale dev database at migration 1,
-  and a preload list in `make standalone`.
-- **Bugs:** B22 (a draining worker missed its grace under load) seen twice; B27 (references
-  inside containers not type-checked, reproduced) and B28 (selection edges from plain tasks
-  not refused, suspected) and B29 (an unchosen branch edge isn't faint on the graph,
-  suspected) are new.
+- **Codex's whole-repository review** (the Codex skill's `reviews/schedr-full-2026-10-30.md`;
+  ~50% of Codex's week): done F1, F2, F3, F6, F7, F8 (B41–B83, all logged). Next F4 (the
+  database layer), F5 (scheduling and discovery), then F9–F14. One section at a time; its
+  worktree is `schedr-codex-f1` (detached at `a8bf777`; move it to `main` before a section,
+  copy the current BUGS.md in). Its 5-hour window reached 63%: wait for it before more.
+- **Usage:** Grok 31% of its week (resets Fridays 9:00; ask the user for the %); Codex 21%
+  weekly (read from its turns; resets Thursdays 01:57).
+- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B83
+  (B49 fixed in the uncommitted work). The next number is **B84**.
 
-## How we work now (2026-10-28)
+## How we work now (2026-10-30)
 
-- **Steps are split into small sub-steps** (M4.2b, M4.2c, ...). Each is committed after
-  Claude's own review, with mutation-checked tests (every regression test shown failing with
-  its fix undone). **Grok reviews** (the user, 2026-10-29): one during the 2026-10-29
-  session (on the $5 of credits), then Friday's whole-repository review; later M4 reviews to
-  be planned then. No batch reviews of about five sub-steps. Read-only with throwaway proof
-  tests. Claude writes the guide for each step. Every Grok finding is verified before
-  acting; the rejected ones are reported with why.
-- **Decisions:** numbered (the next is **87**), lettered options, the recommended one first,
-  with a "Who (does the work)" column (Claude / Grok (mode); "you" only for commands the user
-  must run). Ask all coming decisions at once before unattended work.
-- **Commit and push only after the user accepts** each one (2026-10-28). Unattended (night)
-  work commits and pushes only when the user accepted that in advance and no relevant
-  decision is waiting for them; otherwise stop before the commit. Check CI with
-  `gh run list`.
-- **Stress tests:** never run `make stress` (or a scenario) without the user asking.
-- **Processes:** kill only your own (no broad `pkill`).
+- **Claude implements; two colleagues, each through a skill:** **Grok** (`/grok`, grok-4.7,
+  high) reviews each step, hunts and fixes bugs, writes docs; **Codex** (`/codex`,
+  gpt-6.1-sol, high) gives second opinions on architecture, reviews beside Grok, finds bugs,
+  writes docs, runs the whole-repository review; **never codes**. AI_INSTRUCTIONS "Working
+  with second agents" and AI_SETUP "Agent tooling" have the details.
+- **Both run in `sandbox.sh`** (bubblewrap): only the worktree, the toolchains (read-only) and
+  their own state; no other project, no `~/.ssh`, no `/mnt/c`; nothing the user runs later is
+  writable; an empty environment but an allowlist. Prompts also say to read only inside the
+  worktree. Prepare a worktree (its pyenv, `uv sync`, a build) before a colleague's turn.
+- **Every finding is verified before acting;** rejected ones reported with why. Code Grok
+  wrote is reviewed by Codex (or a fresh Grok session).
+- **Decisions:** numbered (the next is **99**), lettered options, the recommended first, a
+  "Who (does the work)" column. Ask all coming decisions at once before unattended work.
+- **Commit and push only after the user accepts** each one. Check CI with `gh run list`.
+- **Stress tests:** never without the user asking. **Processes:** kill only your own.
 - **Checks:** `SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python
-  SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:45243/postgres make check`,
-  with the podman container `schedr-pg-check` running Postgres on 127.0.0.1:45243; then
-  `make docs`.
+  SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:45243/postgres make check`
+  (the podman container `schedr-pg-check` on 127.0.0.1:45243), then `make docs`. Running
+  `cargo nextest` by hand needs the same two variables (forgetting the URL fails the Postgres
+  tests).
+- **The fault-injection harness** (decision 98): any master operation that writes gets a
+  `Scenario` (crates/schedr-master/src/faults.rs, dispatch/tests.rs `mod faults`) run by
+  `fail_each_write`; a multi-write bug is proven and fixed against it.
 - Commit messages read like `M4.x: <what>, <what>; <what>` and end with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
@@ -97,7 +78,7 @@ Today's commits, oldest first:
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B37); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B84); fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -119,6 +100,10 @@ Today's commits, oldest first:
   `schema-check`).
 
 ## Environment notes
+
+- **ufw is on** (2026-10-30). This WSL runs in mirrored networking mode, where `127.0.0.1`
+  goes over `loopback0`: ufw allows in and out on it (without that rule every local
+  connection fails: the tests, `make standalone`, the test Postgres).
 
 - Logs and scratch files go in the session scratchpad, not `/tmp`.
 - **The kubectl current context is a real OpenShift cluster (`…bradford-lab`). Never apply
@@ -189,12 +174,3 @@ Today's commits, oldest first:
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
-
-## In progress at the end of 2026-10-29 (uncommitted)
-
-- **M4.2b (groups)** committed (`8f7a6d7`); **M4.2c (import errors page)** built (decisions
-  66-68). Next: M4.3 (mapping).
-- **Docs of M4.2b and M4.2c go to a Grok session** (the user, 2026-10-29), not Claude:
-  Writing DAGs' groups page, the guide's UI page (group boxes, the import errors page).
-- **One `/code-review` over the session's work is still owed** (the user: later).
-- Until Friday 9:00, code reviews are Claude's own (`/code-review`), not Grok's.

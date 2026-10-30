@@ -219,6 +219,8 @@ pub struct Memory {
     workers: Workers,
     rejections: BTreeMap<String, BTreeMap<String, String>>,
     code_missing: BTreeMap<String, CodeMissing>,
+    /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
+    stops: Vec<Outgoing>,
 }
 
 /// What a step's assignments count as they go.
@@ -278,14 +280,16 @@ impl Dispatcher {
     }
 
     /// A copy of what a worker's message changes in memory (worker slots, rejections, code
-    /// missing), to [`Self::restore`] if the message's transaction rolls back: memory then
-    /// shows only what is stored (code review of 2.10b; metrics already counted stay).
+    /// missing, the cancels queued for the next step), to [`Self::restore`] if the message's
+    /// transaction rolls back: memory then shows only what is stored (code review of 2.10b;
+    /// metrics already counted stay).
     #[must_use]
     pub fn memory(&self) -> Memory {
         Memory {
             workers: self.workers.clone(),
             rejections: self.rejections.clone(),
             code_missing: self.code_missing.clone(),
+            stops: self.stops.clone(),
         }
     }
 
@@ -294,6 +298,22 @@ impl Dispatcher {
         self.workers = memory.workers;
         self.rejections = memory.rejections;
         self.code_missing = memory.code_missing;
+        self.stops = memory.stops;
+    }
+
+    /// The attempts a `CancelAttempt` is queued for, sent at the next step (for the
+    /// fault-injection harness's check).
+    #[cfg(test)]
+    pub(crate) fn queued_cancels(&self) -> Vec<(String, String)> {
+        self.stops
+            .iter()
+            .filter_map(|o| match &o.message.message {
+                Some(pb::master_message::Message::CancelAttempt(c)) => {
+                    Some((o.worker_id.clone(), c.attempt_id.clone()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// The dispatcher reading which attempts' `Started` arrived from `arrivals` (the core's, which
@@ -886,13 +906,11 @@ impl Dispatcher {
         expired.truncate(EXPIRIES_PER_ROUND);
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
-            self.record(
-                attempt,
-                &end,
-                &by_master(AttemptStatus::AssignmentExpired),
-                now,
-            )
-            .await?;
+            let result = by_master(AttemptStatus::AssignmentExpired);
+            // Whole or not at all, memory with it (B49): ending the attempt and moving its
+            // task are separate writes, and the slot is freed in memory before them.
+            self.whole(async |dispatcher| dispatcher.record(attempt, &end, &result, now).await)
+                .await?;
         }
         Ok(expired.len())
     }
@@ -907,6 +925,17 @@ impl Dispatcher {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn incarnation_replaced(
+        &mut self,
+        worker_id: &str,
+        reported: &BTreeSet<&str>,
+        now: Timestamp,
+    ) -> Result<usize, DispatchError> {
+        // Whole or not at all, memory with it (B49).
+        self.whole(async |dispatcher| dispatcher.end_unreported(worker_id, reported, now).await)
+            .await
+    }
+
+    async fn end_unreported(
         &mut self,
         worker_id: &str,
         reported: &BTreeSet<&str>,
@@ -939,6 +968,16 @@ impl Dispatcher {
         worker_id: &str,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
+        // Whole or not at all, memory with it (B49): the worker is forgotten in memory first.
+        self.whole(async |dispatcher| dispatcher.forget_worker(worker_id, now).await)
+            .await
+    }
+
+    async fn forget_worker(
+        &mut self,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
         self.workers.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
             // One it never started (sent as it began draining, say) never ran there: taken
@@ -958,6 +997,21 @@ impl Dispatcher {
             self.record(&attempt, &end, &by_master(status), now).await?;
         }
         Ok(())
+    }
+
+    /// Runs `work` in one transaction; if it fails, the memory it changed is put back as it
+    /// was, so memory and database stay in step (B49). Call it with no transaction open:
+    /// joined into an outer one, memory isn't put back if the outer one rolls back.
+    async fn whole<T>(
+        &mut self,
+        work: impl AsyncFnOnce(&mut Self) -> Result<T, DispatchError>,
+    ) -> Result<T, DispatchError> {
+        let (db, memory) = (self.db.clone(), self.memory());
+        let done = Box::pin(db.atomically(work(self))).await;
+        if done.is_err() {
+            self.restore(memory);
+        }
+        done
     }
 
     /// Cancels one task of a run (see [`Execution::cancel_task`]); a `CancelAttempt` for its

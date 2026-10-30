@@ -1430,3 +1430,231 @@ async fn a_read_back_checks_through_its_window_and_stops_when_it_sees_the_work()
     assert_eq!(checks.get(), 7);
     assert_eq!(started.elapsed(), Duration::from_secs(3));
 }
+
+/// The fault-injection harness's scenarios (decision 98): each master operation that writes,
+/// run with each of its writes failing, must leave nothing half-done.
+mod faults {
+    use super::*;
+    use crate::faults::{Scenario, fail_each_write};
+
+    /// A run whose `extract` is assigned to `w1` and running.
+    struct Running {
+        dispatcher: Dispatcher,
+        db: Database,
+        run_id: String,
+        attempt: String,
+    }
+
+    impl Running {
+        async fn new(start: bool) -> Self {
+            let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+            let out = dispatcher.step(ts(NOW)).await.unwrap();
+            let attempt = assignment(&out[0]).attempt_id.clone();
+            if start {
+                dispatcher
+                    .started("w1", &started(&attempt), ts(NOW))
+                    .await
+                    .unwrap();
+            }
+            Self {
+                dispatcher,
+                db,
+                run_id,
+                attempt,
+            }
+        }
+    }
+
+    /// An assignment never started, expired by the round (`step_into` calls `expire` with no
+    /// transaction around it, as the master does).
+    struct Expiry(Running);
+
+    impl Scenario for Expiry {
+        async fn setup() -> Self {
+            Self(Running::new(false).await)
+        }
+        async fn run(&mut self) {
+            let late = later(START_TIMEOUT.as_secs() + 1);
+            let _ = self.0.dispatcher.expire(late).await;
+        }
+        fn db(&self) -> &Database {
+            &self.0.db
+        }
+        fn run_id(&self) -> &str {
+            &self.0.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.0.dispatcher
+        }
+    }
+
+    /// A worker's `Finished`, as the master handles each message: a snapshot of its memory,
+    /// one transaction, the snapshot put back if the transaction fails (`Core::handle`).
+    struct Finishing(Running);
+
+    impl Scenario for Finishing {
+        async fn setup() -> Self {
+            Self(Running::new(true).await)
+        }
+        async fn run(&mut self) {
+            let done = finished(&self.0.attempt, pb::AttemptStatus::Success, &json!([1]));
+            let (db, memory) = (self.0.db.clone(), self.0.dispatcher.memory());
+            let handled =
+                Box::pin(db.atomically(self.0.dispatcher.finished("w1", &done, ts(NOW)))).await;
+            if handled.is_err() {
+                self.0.dispatcher.restore(memory);
+            }
+        }
+        fn db(&self) -> &Database {
+            &self.0.db
+        }
+        fn run_id(&self) -> &str {
+            &self.0.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.0.dispatcher
+        }
+    }
+
+    /// A worker lost with a started attempt (the core calls this with no transaction around).
+    struct Lost(Running);
+
+    impl Scenario for Lost {
+        async fn setup() -> Self {
+            Self(Running::new(true).await)
+        }
+        async fn run(&mut self) {
+            let _ = self.0.dispatcher.worker_lost("w1", ts(NOW)).await;
+        }
+        fn db(&self) -> &Database {
+            &self.0.db
+        }
+        fn run_id(&self) -> &str {
+            &self.0.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.0.dispatcher
+        }
+    }
+
+    /// A worker's agent restarted without its started attempt in the journal (registration:
+    /// no transaction around).
+    struct Restarted(Running);
+
+    impl Scenario for Restarted {
+        async fn setup() -> Self {
+            Self(Running::new(true).await)
+        }
+        async fn run(&mut self) {
+            let reported = BTreeSet::new();
+            let _ = self
+                .0
+                .dispatcher
+                .incarnation_replaced("w1", &reported, ts(NOW))
+                .await;
+        }
+        fn db(&self) -> &Database {
+            &self.0.db
+        }
+        fn run_id(&self) -> &str {
+            &self.0.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.0.dispatcher
+        }
+    }
+
+    /// Grok's review's shape: `fetch` mapped over three elements (no retries), on two workers;
+    /// the worker holding two instances is lost, so its first fails the step and queues a
+    /// cancel for the other worker's instance before the second one's writes.
+    struct LostMapped {
+        dispatcher: Dispatcher,
+        db: Database,
+        run_id: String,
+        lost: String,
+    }
+
+    impl Scenario for LostMapped {
+        async fn setup() -> Self {
+            let mut fetch = task("fetch", &json!({}), 0);
+            fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2, 3]}}]});
+            let mapped: Dag = serde_json::from_value(json!({
+                "produced_by": "0.1", "id": "sync",
+                "location": {"root": "etl", "path": "team/sync.py"},
+                "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+                "tasks": [fetch], "edges": []
+            }))
+            .unwrap();
+            let (mut dispatcher, db, run_id) = with_run(mapped).await;
+            dispatcher
+                .register("w2", "i2", &[], 1, ts(NOW))
+                .await
+                .unwrap();
+            let out = dispatcher.step(ts(NOW)).await.unwrap();
+            let mut by_worker: BTreeMap<String, usize> = BTreeMap::new();
+            for o in &out {
+                let attempt = &assignment(o).attempt_id;
+                dispatcher
+                    .started(&o.worker_id, &started(attempt), ts(NOW))
+                    .await
+                    .unwrap();
+                *by_worker.entry(o.worker_id.clone()).or_default() += 1;
+            }
+            pretty_assertions::assert_eq!(out.len(), 3, "three attempts, on two workers");
+            let lost = by_worker
+                .into_iter()
+                .find(|(_, n)| *n >= 2)
+                .map(|(w, _)| w)
+                .expect("one worker holds two attempts");
+            Self {
+                dispatcher,
+                db,
+                run_id,
+                lost,
+            }
+        }
+        async fn run(&mut self) {
+            let lost = self.lost.clone();
+            let _ = self.dispatcher.worker_lost(&lost, ts(NOW)).await;
+        }
+        fn db(&self) -> &Database {
+            &self.db
+        }
+        fn run_id(&self) -> &str {
+            &self.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.dispatcher
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_worker_failing_a_mapped_step_queues_no_cancel_it_rolled_back() {
+        let (writes, found) = Box::pin(fail_each_write::<LostMapped>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn a_lost_worker_leaves_nothing_half_done_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<Lost>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn a_restarted_worker_leaves_nothing_half_done_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<Restarted>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn an_expired_assignment_leaves_nothing_half_done_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<Expiry>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn a_finished_attempt_leaves_nothing_half_done_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<Finishing>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+}

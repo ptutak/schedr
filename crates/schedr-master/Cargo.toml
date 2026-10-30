@@ -24,6 +24,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Writes made to fail on purpose (the fault-injection harness, decision 98).
+schedr-db = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 hyper-util.workspace = true
 pretty_assertions.workspace = true

@@ -67,6 +67,9 @@ pub struct Database {
     identity: Arc<()>,
     /// How the master learns of new commands (see [`Database::with_notifications`]).
     notifications: Arc<Notifications>,
+    /// Writes made to fail, for tests (shared by clones; decision 98).
+    #[cfg(any(test, feature = "testing"))]
+    faults: Arc<crate::faults::Faults>,
 }
 
 /// `[database] notifications` and `notifications_url`.
@@ -223,11 +226,19 @@ impl From<Pool> for Database {
             dags: Arc::default(),
             identity: Arc::default(),
             notifications: Arc::default(),
+            #[cfg(any(test, feature = "testing"))]
+            faults: Arc::default(),
         }
     }
 }
 
 impl Database {
+    /// The writes made to fail (tests only).
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn faults(&self) -> &crate::faults::Faults {
+        &self.faults
+    }
+
     /// Connects to the database a URL names. SQLite files are created if missing, and
     /// foreign keys are enforced. An in-memory SQLite database (`sqlite::memory:`) uses a
     /// single connection, since each connection would otherwise see its own empty database.
@@ -308,6 +319,8 @@ impl Database {
             dags: self.dags.clone(),
             identity: self.identity.clone(),
             notifications: self.notifications.clone(),
+            #[cfg(any(test, feature = "testing"))]
+            faults: self.faults.clone(),
             fence: Some(Arc::new(Fence {
                 holder: holder.to_owned(),
                 epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
