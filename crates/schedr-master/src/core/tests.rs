@@ -837,3 +837,95 @@ async fn a_partial_tick_returns_its_messages_with_the_result() {
         "{out:?}"
     );
 }
+
+/// The fault-injection harness's scenarios at the core's level (decision 98).
+mod faults {
+    use super::*;
+    use crate::dispatch::Dispatcher;
+    use crate::faults::{Scenario, fail_each_write};
+
+    /// `w1` runs `extract`, then goes silent: the tick after its lease runs out forgets it
+    /// (`Core::forget`: its state stored, its attempts ended, its connection dropped).
+    struct LeaseRunsOut {
+        core: MasterCore,
+        run_id: String,
+    }
+
+    impl Scenario for LeaseRunsOut {
+        async fn setup() -> Self {
+            let mut core = with_dag().await;
+            trigger(&mut core).await;
+            let out = core.tick(ts(NOW)).await.unwrap();
+            let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+                panic!("expected AssignTask, got {out:?}")
+            };
+            let started = worker_message::Message::Started(pb::Started {
+                attempt_id: assign.attempt_id.clone(),
+                start_method: pb::StartMethod::Spawn.into(),
+            });
+            core.handle("w1", started, ts(NOW)).await.unwrap();
+            let run_id = assign.run.as_ref().unwrap().run_id.clone();
+            Self { core, run_id }
+        }
+        async fn run(&mut self) {
+            let lease = SignedDuration::try_from(self.core.settings.lease_timeout).unwrap();
+            let after = ts(NOW)
+                .checked_add(lease)
+                .unwrap()
+                .checked_add(SignedDuration::from_secs(1))
+                .unwrap();
+            let _ = self.core.tick(after).await;
+        }
+        /// The next tick after the lease again: a worker its failure left behind is forgotten.
+        async fn recover(&mut self) {
+            let lease = SignedDuration::try_from(self.core.settings.lease_timeout).unwrap();
+            let later = ts(NOW)
+                .checked_add(lease * 2)
+                .unwrap()
+                .checked_add(SignedDuration::from_secs(2))
+                .unwrap();
+            let _ = self.core.tick(later).await;
+        }
+        fn db(&self) -> &Database {
+            &self.core.db
+        }
+        fn run_id(&self) -> &str {
+            &self.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.core.dispatcher
+        }
+        /// After the next round, `w1` is forgotten for good: stored lost, its connection gone
+        /// (B42: a failure must be retried, not left; a worker stored active keeps its
+        /// connection until then, or nothing would retry it).
+        async fn extra(&self) -> Vec<String> {
+            let workers = self.core.db.workers().await.unwrap();
+            let mut found: Vec<String> = workers
+                .iter()
+                .filter(|w| !matches!(w.state, WorkerState::Lost | WorkerState::Offline))
+                .filter(|w| !self.core.connections.contains_key(&w.id))
+                .map(|w| {
+                    format!(
+                        "worker `{}` stored {:?} with no connection left",
+                        w.id, w.state
+                    )
+                })
+                .collect();
+            let w1 = workers.iter().find(|w| w.id == "w1").unwrap();
+            let connected = self.core.connections.contains_key("w1");
+            if w1.state != WorkerState::Lost || connected {
+                found.push(format!(
+                    "`w1` not forgotten after the next round: {:?}, connected {connected}",
+                    w1.state
+                ));
+            }
+            found
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lease_running_out_leaves_nothing_half_done_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<LeaseRunsOut>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+}

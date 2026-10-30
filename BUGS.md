@@ -9,6 +9,30 @@ A bug found by reasoning but **not reproduced yet** is logged too, marked **Susp
 how it would be confirmed; once a test shows it, the mark goes. If it turns out not to be a
 bug, the entry is removed, saying why in the commit.
 
+## B87: per-tick queries lack indexes excluding completed history
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at both `migrations/{sqlite,postgres}/0001_initial.sql:145` and `:170`. The task-state index covers only queued tasks: It cannot serve `due_retries()`’s `state = 'up_for_retry'` predicate. Attempts have primary/unique indexes, but none covering `unstarted_attempts()`’s `status IS NULL` predicate. Both queries run in the dispatch step (`dispatch.rs:464`). **Scenario:** completed task and attempt history accumulates, with no retries or assignments awaiting expiry → every tick still scans that history. This occurs with an **empty backlog**, separately from known B52’s reads of pending work. **
+- **A fix:** to decide when it is scheduled.
+
+## B86: accepted strings containing NUL cannot be stored in production
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/migrations/postgres/0001_initial.sql:176`. Outputs use: `store_output()` binds the serializer’s JSON through `$3{json}`, expanded to `::jsonb`. The Python codec accepts NUL-containing strings, but PostgreSQL rejects their escaped representation. **Scenario:** a task successfully returns `"before\0after"` → SQLite stores it → PostgreSQL rejects the output write. In worker-message handling, that error rolls back the transaction containing the attempt’s completion (`core.rs:526`, `dispatch.rs:1096`, `execution.rs:284`). **
+- **A fix:** to decide when it is scheduled.
+
+## B85: disconnects during notification draining can silently lose changes
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/changes.rs:220`. Only the first receive handles `None` as `Change::Missed`. The subsequent drain accepts only notifications: This discards a disconnect result or cancels reconnection after the listener has consumed its disconnect state. **Scenario:** one notification is queued → the listening connection dies → another change occurs while disconnected → draining consumes the disconnect → following resumes without reporting `Missed`. The API feed sends a refresh for `Missed` (`schedr-api/src/events.rs:122`), so clients can retain stale data. **
+- **A fix:** to decide when it is scheduled.
+
+## B84: cancelling transaction startup returns an open transaction to the pool
+
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/query.rs:156`. The connection is closed only when `begin_with(...).await` returns an error: Cancelling that future bypasses this branch. In the pinned sqlx implementation, transaction depth advances only after startup completes, so its cancellation rollback does nothing at this point. **Scenario:** a fenced write waits for a lock during startup → its future is cancelled → the lock becomes available → PostgreSQL finishes the cancelled startup → another borrower receives that connection inside the unfinished transaction, including its transaction-local settings and lease-row lock. **
+- **A fix:** to decide when it is scheduled.
+
 ## B83: mapping repeats the entire source list in every instance’s inputs
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
@@ -31,12 +55,6 @@ bug, the entry is removed, saying why in the commit.
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
   medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:84`. Lane detection requires exactly one reference: With another reference, narrowing falls through to whole-output resolution. At `mapping.rs:170`, `.on(Rows)` is then compared against the whole mapped task’s synthetic `SUCCESS` outcome, producing `null`. **Scenario:** the Python API accepts: After both fetches succeed, finishing `gate` should allow the matching element to proceed. Instead, expansion fails. This also contradicts the mapping guide’s statements that `.on(...)` works per element and an additional use makes the task wait for the whole upstream.
-- **A fix:** to decide when it is scheduled.
-
-## B79: interrupted preparation permanently strands runs
-
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
-  high severity, confirmed by Codex's failing test; read and judged sound by Claude; at `crates/schedr-master/src/execution.rs:202`. Preparation commits three stages separately: initial `Scheduled` rows, settled task states, and the run result: Recovery selects only runs with **no** instance rows (`crates/schedr-db/src/instances.rs:143`): **Scenario A:** initial rows commit, then the settling write fails. Subsequent rounds and a restarted master leave a runnable root `Scheduled`. **Scenario B:** an empty task’s success commits, then finishing the run fails. The run remains `Running` with every task finished. Both throwaway tests injected a SQLite trigger failure, removed the trigger, constructed a fresh `MasterCore`, called `restore()`, then completed a tick: **Confidence: high.**
 - **A fix:** to decide when it is scheduled.
 
 ## B78: expansion reads instance states before the current result is stored
@@ -186,13 +204,6 @@ bug, the entry is removed, saying why in the commit.
   `run_python` starts the runner and waits for its hello (up to 30 s) and sends the request before `supervise` starts (`crates/schedr-agent/src/launch.rs:274`); a cancel queued meanwhile, or the execution timeout, does nothing until then, and a failed start afterwards is reported `start_failed`, the cancel lost (Codex's proof: a runner stalled before its hello, still running 2 s after a cancel and a 100 ms timeout). Spawned and forked paths alike.
 - **A fix:** the stop channel and the deadline raced against the handshake too; a cancel during it reported as a cancel.
 
-## B55: a cancelled task can hang forever collecting its output
-
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
-  execution), with a failing proof each; checked against the code by Claude.
-  When the leader exits on SIGTERM, `supervise` returns at once (`crates/schedr-agent/src/supervise.rs:158`) and never sends SIGKILL; `run_command` then awaits `process.output()` without a bound (`launch.rs:332`, the same for Python tasks at `:295`): a child in the group that ignores SIGTERM and holds stdout open keeps the attempt there, and later cancels or a drain find no supervisor (Codex's proof: 2 s after a 100 ms grace, still collecting; the child alive). Startup and parse paths already bound it (`OUTPUT_DRAIN_TIMEOUT`).
-- **A fix:** after the leader exits, kill the group at the grace's end anyway, and bound the output wait as elsewhere.
-
 ## B54: an unreaped child switches off a forked task's memory budget
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
@@ -263,17 +274,6 @@ bug, the entry is removed, saying why in the commit.
   The journal reconciliation resends a cancel only when the run is cancelled (`crates/schedr-master/src/core.rs:830`: `run.cancel_requested`); a `CancelTask` sets the instance's flag, so after a reconnect the attempt gets `Continue` and runs on (Codex's proof: 0 cancels where 1 was due). Rejections and completions check both flags; the reconnect test covers `CancelRun` only.
 - **A fix:** check the instance's `cancel_requested` too, with a test of `CancelTask` across a reconnect.
 
-## B42: a database error while a worker is lost stops its cleanup for good
-
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  `forget` (`crates/schedr-master/src/core.rs:857`) removes the connection, then writes the worker's state and ends its attempts; if a write fails, later lease checks (which walk `connections`) never retry it: the worker stays `lost` with its attempt open (Codex's proofs, a failure injected at each write: the healthy next tick never retries). `Dispatcher::worker_lost` removes the worker before its fallible writes too; deregistration takes the same path.
-- **A fix:** remove from memory only after the writes succeed (or keep a retry list), as B7 did for parse jobs.
-- **Half fixed (2026-10-30, with B49):** `Dispatcher::worker_lost` now runs whole, its memory
-  put back if a write fails (the fault-injection harness's `Lost` scenario). Left: `Core::forget`
-  removes the connection before its writes, and `set_worker_state` and the dispatcher's
-  writes are two transactions.
-
 ## B41: a result the master failed to store isn't sent again while the link stays up
 
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
@@ -293,7 +293,7 @@ bug, the entry is removed, saying why in the commit.
 - **A fix:** the test's own query limit (or a retry of what the master retries itself), and
   the same check over the other tests using the default limit.
 
-## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest in M6)
+## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 
 - **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout (decision 65). A group was
   moved only on the layers holding its tasks while its box covers every layer between, so

@@ -36,6 +36,11 @@ pub trait Process {
     ///
     /// Returns the operating system's error for anything but a group that is gone.
     fn signal(&mut self, signal: Signal) -> io::Result<()>;
+    /// Whether anything of its group is still there, after its leader ended; nothing by
+    /// default.
+    fn group_alive(&self) -> bool {
+        false
+    }
     /// What it used and whether it dumped core, once [`Process::wait`] returned; nothing
     /// known by default.
     fn ended(&self) -> crate::usage::Ended {
@@ -156,13 +161,46 @@ pub async fn supervise<P: Process>(
                 StopReason::TimedOut | StopReason::Cancelled => {}
             },
             termination = process.wait() => {
-                return Ok(ended(termination?, Some(reason), false));
+                let termination = termination?;
+                left_after_leader(process, &mut stops, limits, kill_at).await?;
+                return Ok(ended(termination, Some(reason), false));
             }
             () = tokio::time::sleep_until(kill_at) => break,
         }
     }
     process.signal(Signal::Kill)?;
     Ok(ended(process.wait().await?, Some(reason), true))
+}
+
+/// The leader ended while its task is being stopped: what is left of its group (a child still
+/// shutting down, or one ignoring SIGTERM and holding the output open, B55) keeps the rest of
+/// the grace, then is killed (decision 100); with nothing left, this returns at once. A later
+/// reason still hurries it, as for the leader.
+async fn left_after_leader<P: Process>(
+    process: &mut P,
+    stops: &mut Stops,
+    limits: Limits,
+    mut kill_at: tokio::time::Instant,
+) -> io::Result<()> {
+    const POLL: Duration = Duration::from_millis(100);
+    while process.group_alive() {
+        let now = tokio::time::Instant::now();
+        if now >= kill_at {
+            return process.signal(Signal::Kill);
+        }
+        tokio::select! {
+            biased;
+            later = stops.next_reason() => match later {
+                StopReason::Interrupted => {
+                    kill_at = kill_at.min(now + limits.interrupt_grace);
+                }
+                StopReason::OomKilled => return process.signal(Signal::Kill),
+                StopReason::TimedOut | StopReason::Cancelled => {}
+            },
+            () = tokio::time::sleep_until((now + POLL).min(kill_at)) => {}
+        }
+    }
+    Ok(())
 }
 
 fn ended(termination: Termination, stopped: Option<StopReason>, killed: bool) -> Supervised {

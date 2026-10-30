@@ -1,13 +1,14 @@
 //! Moving runs forward: task instances for new runs, results of attempts, retries whose delay
 //! passed, cancelling, and the run result (the rules are in [`crate::progress`]).
 //!
-//! Every change is stored as it is decided. Assigning tasks to workers and the messages of the
+//! Every change is stored as it is decided, a new run's preparation in one transaction (B79).
+//! Assigning tasks to workers and the messages of the
 //! protocol use these operations (see PROJECT.md, Task assignment).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
-use schedr_db::instances::{InstanceUpdate, RunTasks};
+use schedr_db::instances::{InstanceUpdate, NewlyRunning, RunTasks};
 use schedr_db::{Database, DbError};
 use schedr_model::{
     AttemptStatus, Dag, DagId, Reference, RunState, TaskId, TaskInstanceState, TaskKind,
@@ -193,25 +194,32 @@ impl Execution {
                 break;
             }
             created += tasks;
-            let first: Vec<(TaskId, i32, TaskInstanceState)> = run
-                .dag
-                .tasks
-                .iter()
-                .map(|t| (t.id.clone(), -1, TaskInstanceState::Scheduled))
-                .collect();
-            self.db.create_instances(&run.run_id, &first, now).await?;
-            let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
-            let before = progress.snapshot();
-            self.settle_all(&run.run_id, &run.dag, &mut progress)
-                .await?;
-            self.store(&run.run_id, &mut progress, &before, Vec::new(), now)
-                .await?;
-            if let Some(result) = progress.result() {
-                self.finish(&run.run_id, &run.dag.id, result, now).await?;
-            }
+            // Whole or not at all (B79): a run is found again only while it has no task rows.
+            Box::pin(self.db.atomically(self.prepare(&run, now))).await?;
             prepared.push(run.run_id);
         }
         Ok(prepared)
+    }
+
+    /// A newly running run's task rows, settled (and the run finished if that ends it).
+    async fn prepare(&self, run: &NewlyRunning, now: Timestamp) -> Result<(), ExecutionError> {
+        let first: Vec<(TaskId, i32, TaskInstanceState)> = run
+            .dag
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), -1, TaskInstanceState::Scheduled))
+            .collect();
+        self.db.create_instances(&run.run_id, &first, now).await?;
+        let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
+        let before = progress.snapshot();
+        self.settle_all(&run.run_id, &run.dag, &mut progress)
+            .await?;
+        self.store(&run.run_id, &mut progress, &before, Vec::new(), now)
+            .await?;
+        if let Some(result) = progress.result() {
+            self.finish(&run.run_id, &run.dag.id, result, now).await?;
+        }
+        Ok(())
     }
 
     /// Records how an attempt of a running task instance ended, moves the run forward and

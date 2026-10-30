@@ -896,6 +896,10 @@ impl Process for ForkedProcess {
         }
     }
 
+    fn group_alive(&self) -> bool {
+        rustix::process::test_kill_process_group(self.group).is_ok()
+    }
+
     fn ended(&self) -> Ended {
         self.usage
     }

@@ -901,3 +901,30 @@ async fn a_restarted_master_still_avoids_the_worker_whose_parse_failed() {
     let [retry] = restarted.jobs_mut().expire(later(90)).try_into().unwrap();
     assert_eq!(retry.worker_id, "w2");
 }
+
+#[tokio::test]
+async fn a_gone_worker_whose_decision_failed_is_decided_again_on_the_retry() {
+    // w1 on h1, w2 on the newer h2 (current); w2 goes while the catalog can't be written.
+    let mut discovery = discovery().await;
+    for (worker, hash, runs) in [("w1", "h1", 1), ("w2", "h2", 2)] {
+        discovery
+            .root_reported(worker, key(hash), now())
+            .await
+            .unwrap();
+        let mut parsed = upload(hash, vec![("a.py", vec![dag("a", "a.py", runs)])]);
+        parsed.worker_id = worker.to_owned();
+        discovery.parse_uploaded(parsed, now()).await.unwrap();
+    }
+    assert_eq!(max_active_runs(&discovery).await, Some(2));
+    sqlite(
+        &discovery,
+        "CREATE TRIGGER refuse_dags BEFORE UPDATE ON dags \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .await;
+    discovery.worker_gone("w2", later(1)).await.unwrap_err();
+    sqlite(&discovery, "DROP TRIGGER refuse_dags").await;
+    // The retry (the core's next lease check calls it again) decides again: h1's DAG.
+    discovery.worker_gone("w2", later(2)).await.unwrap();
+    assert_eq!(max_active_runs(&discovery).await, Some(1));
+}

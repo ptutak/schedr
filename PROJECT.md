@@ -1906,6 +1906,11 @@ SchedrScriptOperator(
   a configurable timeout. The attempt ends as **cancelled** (not failed) and is **not retried**.
   A whole run (`schedr runs cancel`) or one task (`schedr tasks cancel`, see Task
   assignment).
+  **When the main process exits first** (decision 100, the user's, 2026-10-30: A; B55): what
+  is left of its group keeps the rest of the grace period, then is killed; with nothing left
+  the stop ends at once. Before, the stop ended with the main process, so a child ignoring
+  SIGTERM and holding the output open hung the attempt for ever. Not chosen: B killing what is
+  left at once (a wrapper script's child still shutting down cleanly would lose its grace).
 - **mTLS details:** mTLS replaces any shared token; certificates are **reloaded when the files
   change** (rotation without restart); the same mTLS setup is used for **every internal link**
   (master ↔ worker, webserver → worker logs). There is no webserver → master link (see Web
@@ -6371,7 +6376,21 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   `dag_ctx.run.planned_for` formatted `%Y-%m-%d`); one without a native equivalent is an error in
   the Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
-- **Safe substitution into shell commands.** A t-string in a `command` inserts values into text
+- **No values in shell source** (decision 99, the user's, 2026-10-30: A, on Codex's second
+  opinion; B53). A shell-string `command` (a `str` or a t-string, run by `/bin/sh`) takes **no
+  placeholders**: a t-string with one is refused when the DAG file loads (also by the master's
+  validation and by the agent before launch), with the two ways to write it instead in the
+  message: an argument list, `command=["./notify.sh", out.report_url]` (no shell reads the
+  values: a t-string element keeps its placeholders and format specs, `:%Y-%m-%d` included), or
+  the value in `env=` read by the shell program, `command='./notify.sh "$URL" | tee log',
+  env={"URL": out.report_url}`. `:raw` goes. Why: quoting each value and joining it into shell
+  text is unsafe whatever the rule: an author's quotes around a placeholder broke it (B53), and
+  Codex reproduced code execution from placeholders in comments, heredoc bodies and after a
+  backslash, where no quoting rule applies. Not chosen: B refusing placeholders inside quotes
+  only (comments, heredocs, backslashes stay open); C quoting by context (a shell parser in two
+  languages, constructs still missed). The section below described the earlier design, quoted
+  by default; it stays as the record of what was replaced.
+- **Safe substitution into shell commands (replaced by decision 99).** A t-string in a `command` inserts values into text
   run by a shell; unquoted, a value with spaces, `;` or `$(…)` would break the command or allow
   shell injection.
   - **Quoted by default.** In a string `command`, every interpolated value is **shell-quoted**

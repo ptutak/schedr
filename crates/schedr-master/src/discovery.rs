@@ -305,12 +305,15 @@ impl Discovery {
             return Ok(());
         };
         for root in roots.keys() {
-            self.decide(root, now).await?;
+            if let Err(error) = self.decide(root, now).await {
+                // Its reports back, so a retry (the next lease check) decides again (B42).
+                self.reports.insert(worker_id.to_owned(), roots);
+                return Err(error);
+            }
         }
         Ok(())
     }
 
-    /// The workers that report `key` and take parse jobs.
     /// Plans the retry of a stored parse with files that failed transiently, unknown to this
     /// master (it restarted): it avoids the worker that parsed such a file, as stored with it
     /// (decision 93), while another can take it.
@@ -334,6 +337,7 @@ impl Discovery {
         Ok(())
     }
 
+    /// The workers that report `key` and take parse jobs.
     fn candidates(&self, key: &ParseKey) -> BTreeSet<String> {
         self.reports
             .iter()

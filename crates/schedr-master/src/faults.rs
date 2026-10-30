@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use schedr_db::Database;
 use schedr_db::attempts::StoredAttempt;
 use schedr_db::instances::RunTasks;
-use schedr_model::{TaskId, TaskInstanceState};
+use schedr_model::{TaskId, TaskInstanceState, WorkerState};
 
 use crate::dispatch::Dispatcher;
 
@@ -26,6 +26,13 @@ pub(crate) trait Scenario: Sized {
     fn run_id(&self) -> &str;
     /// The master's memory to compare with the database.
     fn dispatcher(&self) -> &Dispatcher;
+    /// Checks of its own beyond [`half_done`] (the core's connections, say).
+    async fn extra(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// What the master does next, healthy, after a failed run (its next round): for a state
+    /// that is consistent but never looked at again, [`Self::extra`] then checks that it moved.
+    async fn recover(&mut self) {}
 }
 
 /// Runs the scenario once to count its writes (it must leave nothing half-done), then once per
@@ -41,8 +48,10 @@ pub(crate) async fn fail_each_write<S: Scenario>() -> (u64, Vec<String>) {
     clean.db().count_writes();
     clean.run().await;
     let writes = clean.db().writes();
+    clean.recover().await;
     assert!(writes > 0, "the scenario makes no write: it proves nothing");
-    let baseline = half_done(clean.db(), clean.run_id(), clean.dispatcher()).await;
+    let mut baseline = half_done(clean.db(), clean.run_id(), clean.dispatcher()).await;
+    baseline.extend(clean.extra().await);
     assert!(
         baseline.is_empty(),
         "half-done without any failure: {baseline:?}"
@@ -53,7 +62,10 @@ pub(crate) async fn fail_each_write<S: Scenario>() -> (u64, Vec<String>) {
         scenario.db().fail_write(nth);
         scenario.run().await;
         scenario.db().count_writes();
-        for problem in half_done(scenario.db(), scenario.run_id(), scenario.dispatcher()).await {
+        scenario.recover().await;
+        let mut problems = half_done(scenario.db(), scenario.run_id(), scenario.dispatcher()).await;
+        problems.extend(scenario.extra().await);
+        for problem in problems {
             found.push(format!("write {nth} of {writes} failing: {problem}"));
         }
     }
@@ -161,7 +173,7 @@ fn cancel_problems(
 }
 
 /// The master's memory holds a slot for every open attempt of the run, and none for one that
-/// ended.
+/// ended; a worker stored as gone (lost, offline) has no open attempt.
 async fn slot_problems(
     db: &Database,
     run_id: &str,
@@ -182,7 +194,16 @@ async fn slot_problems(
         }
     }
     let open_ids: BTreeSet<&str> = open.iter().map(|a| a.id.as_str()).collect();
+    // A gone worker's open attempts of any run, not only this one.
+    let all_open = db.open_attempts(None).await.expect("the attempts read");
     for worker in db.workers().await.expect("the workers read") {
+        let gone = matches!(worker.state, WorkerState::Lost | WorkerState::Offline);
+        if gone && all_open.iter().any(|a| a.worker_id == worker.id) {
+            found.push(format!(
+                "worker `{}` stored {:?} with an attempt still open",
+                worker.id, worker.state
+            ));
+        }
         let Some(memory) = dispatcher.workers().get(&worker.id) else {
             continue;
         };

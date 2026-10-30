@@ -544,12 +544,7 @@ impl MasterCore {
                 let moved = self.discovery.stop_parsing(worker_id, now);
                 moved.into_iter().map(assign_parse).collect()
             }
-            worker_message::Message::Deregister(_) => {
-                let mut outgoing = Vec::new();
-                self.forget(worker_id, WorkerState::Offline, now, &mut outgoing)
-                    .await?;
-                outgoing
-            }
+            worker_message::Message::Deregister(_) => self.deregistered(worker_id, now).await,
         })
     }
 
@@ -854,16 +849,44 @@ impl MasterCore {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), CoreError> {
-        self.connections.remove(worker_id);
-        self.arrivals.forget(worker_id);
-        self.db.set_worker_state(worker_id, state, now).await?;
-        self.dispatcher.worker_lost(worker_id, now).await?;
+        // Its state and the end of its attempts in one transaction, memory put back if it
+        // fails, and the connection dropped only once everything below is stored: a failure
+        // anywhere is retried whole by the next tick's lease check, which looks only at
+        // connections (B42); each step can be done again. (`worker_lost` joins this
+        // transaction; the snapshot here covers its memory too.)
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        let stored = Box::pin(db.atomically(async {
+            self.db.set_worker_state(worker_id, state, now).await?;
+            self.dispatcher.worker_lost(worker_id, now).await?;
+            Ok::<(), CoreError>(())
+        }))
+        .await;
+        if let Err(error) = stored {
+            self.dispatcher.restore(memory);
+            return Err(error);
+        }
         // Moved in memory: sent whatever fails after (B7).
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);
         outgoing.extend(moved.into_iter().map(assign_parse));
         self.discovery.worker_gone(worker_id, now).await?;
         self.sync_code();
+        self.connections.remove(worker_id);
+        self.arrivals.forget(worker_id);
         Ok(())
+    }
+
+    /// A worker deregistered: forgotten as `Offline`. A failure is retried by the lease check
+    /// (the connection stays); the parse jobs already moved go out either way, or they'd wait
+    /// for their timeout.
+    async fn deregistered(&mut self, worker_id: &str, now: Timestamp) -> Vec<Outgoing> {
+        let mut outgoing = Vec::new();
+        if let Err(error) = self
+            .forget(worker_id, WorkerState::Offline, now, &mut outgoing)
+            .await
+        {
+            tracing::error!(worker_id, %error, "a deregistered worker not forgotten yet");
+        }
+        outgoing
     }
 
     /// Tells the dispatcher each root's current code, as discovery decided it.

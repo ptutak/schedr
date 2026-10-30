@@ -128,6 +128,76 @@ async fn the_whole_process_group_is_stopped() {
 }
 
 #[tokio::test]
+async fn a_stop_ends_even_when_a_child_outlives_the_leader_with_its_output_open() {
+    // B55: the leader exits on SIGTERM; its child ignores SIGTERM and keeps stdout open.
+    let dir = TempDir::new().unwrap();
+    let pid_file = dir.path().join("child.pid");
+    let script = format!(
+        "(trap '' TERM; while true; do sleep 1; done) & echo $! > {}; \
+         trap 'exit 0' TERM; while true; do sleep 1; done",
+        pid_file.display()
+    );
+    let mut process = spawn(&shell(dir.path(), &script, 1024)).await.unwrap();
+    while !pid_file.exists()
+        || std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .is_empty()
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let child = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .to_owned();
+    let (sender, stop) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
+    let supervised = supervise(&mut process, NO_LIMITS, stop).await.unwrap();
+    assert_eq!(supervised.stopped, Some(StopReason::Cancelled));
+    // The output is collected once the group is gone: within the grace, not never.
+    let collected = tokio::time::timeout(Duration::from_secs(10), process.output()).await;
+    assert!(
+        collected.is_ok(),
+        "still collecting the output: the child {child} keeps it open"
+    );
+    for _ in 0..100 {
+        let status = std::fs::read_to_string(format!("/proc/{child}/status"));
+        if status.is_err() || status.is_ok_and(|s| s.contains("State:\tZ")) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the child process {child} survived its leader being stopped");
+}
+
+#[tokio::test]
+async fn a_child_still_shutting_down_keeps_the_rest_of_the_grace() {
+    // Decision 100: the leader exits on SIGTERM at once; its child takes a second to shut
+    // down cleanly, within the grace, and must not be killed for it.
+    let dir = TempDir::new().unwrap();
+    let ready = dir.path().join("ready");
+    let done = dir.path().join("done");
+    let script = format!(
+        "(trap 'sleep 1; touch {done}; exit 0' TERM; touch {ready}; while true; do sleep 0.1; done) & \
+         trap 'exit 0' TERM; while true; do sleep 1; done",
+        done = done.display(),
+        ready = ready.display()
+    );
+    let mut process = spawn(&shell(dir.path(), &script, 1024)).await.unwrap();
+    while !ready.exists() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let (sender, stop) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
+    let supervised = supervise(&mut process, NO_LIMITS, stop).await.unwrap();
+    assert_eq!(supervised.stopped, Some(StopReason::Cancelled));
+    assert!(
+        done.exists(),
+        "the child was killed before it finished shutting down"
+    );
+}
+
+#[tokio::test]
 async fn an_output_flood_keeps_only_the_tail_but_the_log_has_everything() {
     let dir = TempDir::new().unwrap();
     let script = "yes 0123456789 | head -c 2000000";

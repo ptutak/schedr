@@ -1516,7 +1516,8 @@ mod faults {
         }
     }
 
-    /// A worker lost with a started attempt (the core calls this with no transaction around).
+    /// A worker lost with a started attempt, `worker_lost` alone (the core wraps it in its own
+    /// transaction since B42; this checks the dispatcher's part on its own).
     struct Lost(Running);
 
     impl Scenario for Lost {
@@ -1626,6 +1627,118 @@ mod faults {
         fn dispatcher(&self) -> &Dispatcher {
             &self.dispatcher
         }
+    }
+
+    /// A new run prepared by the round (its tasks' rows created and settled; a DAG of empty
+    /// tasks finished at once), then the next round, healthy: the run must have moved on.
+    struct Preparing {
+        dispatcher: Dispatcher,
+        db: Database,
+        run_id: String,
+    }
+
+    impl Scenario for Preparing {
+        async fn setup() -> Self {
+            let (dispatcher, db, run_id) = with_run(dag(0)).await;
+            Self {
+                dispatcher,
+                db,
+                run_id,
+            }
+        }
+        async fn run(&mut self) {
+            let _ = self.dispatcher.step(ts(NOW)).await;
+        }
+        async fn recover(&mut self) {
+            let _ = self.dispatcher.step(later(1)).await;
+        }
+        /// `extract`, the DAG's first task, is no longer waiting: preparing went through.
+        async fn extra(&self) -> Vec<String> {
+            let run = self.db.run_tasks(&self.run_id).await.unwrap().unwrap();
+            run.instances
+                .iter()
+                .filter(|i| i.task_id == id("extract") && i.state == TaskInstanceState::Scheduled)
+                .map(|_| "`extract` still scheduled after the next round".to_owned())
+                .chain(
+                    run.instances
+                        .is_empty()
+                        .then(|| "no task rows after the next round".to_owned()),
+                )
+                .collect()
+        }
+        fn db(&self) -> &Database {
+            &self.db
+        }
+        fn run_id(&self) -> &str {
+            &self.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.dispatcher
+        }
+    }
+
+    /// A run of one empty task, finished as it is prepared (Codex's F3 case B: the task
+    /// stored done, the run's result not).
+    struct PreparingEmpty(Preparing);
+
+    impl Scenario for PreparingEmpty {
+        async fn setup() -> Self {
+            let mut empty = task("empty", &json!({}), 0);
+            empty["kind"] = json!("empty");
+            empty.as_object_mut().unwrap().remove("arguments");
+            let only: Dag = serde_json::from_value(json!({
+                "produced_by": "0.1", "id": "sync",
+                "location": {"root": "etl", "path": "team/sync.py"},
+                "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+                "tasks": [empty], "edges": []
+            }))
+            .unwrap();
+            let (dispatcher, db, run_id) = with_run(only).await;
+            Self(Preparing {
+                dispatcher,
+                db,
+                run_id,
+            })
+        }
+        async fn run(&mut self) {
+            self.0.run().await;
+        }
+        async fn recover(&mut self) {
+            self.0.recover().await;
+        }
+        /// The run ended `success`, its task's row stored.
+        async fn extra(&self) -> Vec<String> {
+            let run = self.0.db.run_tasks(&self.0.run_id).await.unwrap().unwrap();
+            let mut found = Vec::new();
+            if run.state != RunState::Success {
+                found.push(format!("the run is {:?} after the next round", run.state));
+            }
+            if run.instances.is_empty() {
+                found.push("no task rows after the next round".to_owned());
+            }
+            found
+        }
+        fn db(&self) -> &Database {
+            &self.0.db
+        }
+        fn run_id(&self) -> &str {
+            &self.0.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.0.dispatcher
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_of_empty_tasks_ends_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<PreparingEmpty>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn a_prepared_run_moves_on_whichever_write_fails() {
+        let (writes, found) = Box::pin(fail_each_write::<Preparing>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
     }
 
     #[tokio::test]

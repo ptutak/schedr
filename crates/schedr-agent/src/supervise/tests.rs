@@ -108,6 +108,7 @@ async fn a_timeout_sends_sigterm_and_a_graceful_exit_counts() {
             killed: false
         }
     );
+    // Nothing left of its group: no SIGKILL (decision 100).
     assert_eq!(*fake.signals.lock().unwrap(), vec![Signal::Term]);
 }
 
