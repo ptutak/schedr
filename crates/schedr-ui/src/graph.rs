@@ -510,16 +510,22 @@ fn place(graph: &Layered) -> Vec<f64> {
     x
 }
 
-/// Pushes every item clear of the boxes of the groups it isn't in, in each layer those
-/// boxes span, keeping each layer's order and gaps. Everything only moves right, so the
-/// rounds settle: an item before a group's members that reaches into its box moves the whole
-/// group right (in every layer, with what follows it); an item after them, or in a layer
-/// without them, that reaches into the box moves right of it (with what follows it).
+/// Pushes every item clear of the boxes of the groups it isn't in, keeping each layer's
+/// order. Everything only moves right, so the rounds settle.
+///
+/// A group is rigid: the left edges of the layers whose first member is in that group itself
+/// share the rightmost one, lined up outermost group first, and a layer only moves right. A
+/// layer that holds a nested group stays with that group, so a parent does not chase a child
+/// that has indented. An item pushed out of a box takes with it the outermost group it
+/// belongs to that does not contain that box, by the same delta on every layer that group
+/// occupies, each item at most once, including what follows it. A layer a box spans without
+/// one of its members is not shoved.
 fn separate(graph: &Layered, groups: &[GroupSpec], x: &mut [f64]) {
     let paths: Vec<Vec<usize>> = (0..groups.len())
         .map(|g| group_path(groups, Some(g)))
         .collect();
     for _ in 0..SEPARATIONS * groups.len() {
+        align_groups(graph, groups, x);
         let mut moved = false;
         for (g, path) in paths.iter().enumerate() {
             moved |= clear(graph, g, path, x);
@@ -527,6 +533,51 @@ fn separate(graph: &Layered, groups: &[GroupSpec], x: &mut [f64]) {
         if !moved {
             break;
         }
+    }
+}
+
+/// Lines groups up, outermost first (a group's path, so a parent's nested groups are finished
+/// before the next sibling). A second pass moves nothing.
+fn align_groups(graph: &Layered, groups: &[GroupSpec], x: &mut [f64]) {
+    let mut order: Vec<(Vec<usize>, usize)> = (0..groups.len())
+        .map(|g| (group_path(groups, Some(g)), g))
+        .collect();
+    order.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, g) in order {
+        align_group(graph, g, x);
+    }
+}
+
+/// Moves `g`'s lagging layers right so each shares the rightmost left edge of its first
+/// member. A layer that holds a group nested in `g` is left where that group put it, because
+/// sliding the layer would drag the nested group with it.
+fn align_group(graph: &Layered, g: usize, x: &mut [f64]) {
+    // (layer index, index of the first member, its left edge)
+    let mut bands: Vec<(usize, usize, f64)> = Vec::new();
+    for (layer_index, layer) in graph.layers.iter().enumerate() {
+        let Some(at) = layer.iter().position(|&i| graph.paths[i].contains(&g)) else {
+            continue;
+        };
+        let holds_nested = layer[at..].iter().any(|&other| {
+            let path = &graph.paths[other];
+            path.contains(&g) && path.last() != Some(&g)
+        });
+        if holds_nested {
+            continue;
+        }
+        let item = layer[at];
+        let left = x[item] - graph.items[item].width() / 2.0;
+        bands.push((layer_index, at, left));
+    }
+    let Some(target) = bands.iter().map(|&(_, _, left)| left).reduce(f64::max) else {
+        return;
+    };
+    for (layer_index, at, left) in bands {
+        let by = target - left;
+        if by <= 1e-9 {
+            continue;
+        }
+        shift_from(&graph.layers[layer_index], at, by, x);
     }
 }
 
@@ -594,8 +645,11 @@ fn clear(graph: &Layered, g: usize, path: &[usize], x: &mut [f64]) -> bool {
         if let Some((k, &i)) = outside {
             let wanted = right + gap(graph.items[i]).min(GAP);
             let edge = x[i] - graph.items[i].width() / 2.0;
-            shift_from(layer, k, wanted - edge, x);
-            moved = true;
+            let by = wanted - edge;
+            if by > 1e-9 {
+                shift_out(graph, layer, k, path, by, x);
+                moved = true;
+            }
         }
     }
     moved
@@ -609,11 +663,146 @@ fn shift_from(layer: &[usize], k: usize, by: f64, x: &mut [f64]) {
 }
 
 /// Moves group `g` right by `by`: in each layer, its first member and everything after it.
+/// A group that follows, and does not contain `g`, moves on every layer it occupies too.
 fn shift_group(graph: &Layered, g: usize, by: f64, x: &mut [f64]) {
-    for layer in &graph.layers {
-        if let Some(k) = layer.iter().position(|&i| graph.paths[i].contains(&g)) {
-            shift_from(layer, k, by, x);
+    let ancestors = graph
+        .paths
+        .iter()
+        .find_map(|path| {
+            path.iter()
+                .position(|&at| at == g)
+                .map(|at| path[..at].to_vec())
+        })
+        .unwrap_or_default();
+    shift_closure(graph, &[g], &[], &ancestors, by, x);
+}
+
+/// Moves the items of `layer` from `k` on right by `by`, and with them the outermost group
+/// each belongs to that does not contain the group of `cleared` (that group's path).
+fn shift_out(
+    graph: &Layered,
+    layer: &[usize],
+    k: usize,
+    cleared: &[usize],
+    by: f64,
+    x: &mut [f64],
+) {
+    let mut start = Vec::new();
+    let mut bare = Vec::new();
+    for &item in &layer[k..] {
+        match graph.paths[item].iter().find(|&&h| !cleared.contains(&h)) {
+            Some(&group) => {
+                if !start.contains(&group) {
+                    start.push(group);
+                }
+            }
+            None => bare.push(item),
         }
+    }
+    shift_closure(graph, &start, &bare, cleared, by, x);
+}
+
+/// Adds `by` once to every item in the closure of `start` and `bare`. A group in `blocked`
+/// is not pulled in by what follows: moving it would move the box being cleared.
+fn shift_closure(
+    graph: &Layered,
+    start: &[usize],
+    bare: &[usize],
+    blocked: &[usize],
+    by: f64,
+    x: &mut [f64],
+) {
+    if by <= 1e-9 {
+        return;
+    }
+    let group_count = graph
+        .paths
+        .iter()
+        .flat_map(|path| path.iter().copied())
+        .max()
+        .map_or(0, |group| group + 1);
+    let mut taken = vec![false; group_count];
+    let mut queued = vec![false; group_count];
+    let mut moved = vec![false; graph.items.len()];
+    let mut queue = Vec::new();
+    for &group in start {
+        if group < group_count && !queued[group] {
+            queued[group] = true;
+            queue.push(group);
+        }
+    }
+    for &item in bare {
+        moved[item] = true;
+    }
+    while let Some(group) = queue.pop() {
+        if taken[group] {
+            continue;
+        }
+        taken[group] = true;
+        for layer in &graph.layers {
+            let Some(at) = layer
+                .iter()
+                .position(|&item| graph.paths[item].contains(&group))
+            else {
+                continue;
+            };
+            for &item in &layer[at..] {
+                if moved[item] {
+                    continue;
+                }
+                moved[item] = true;
+                take_group(
+                    graph,
+                    layer,
+                    item,
+                    blocked,
+                    &taken,
+                    &moved,
+                    &mut queued,
+                    &mut queue,
+                );
+            }
+        }
+    }
+    for (item, moves) in moved.iter().enumerate() {
+        if *moves {
+            x[item] += by;
+        }
+    }
+}
+
+/// Queues the innermost group of `item` whose first member on `layer` is already moving,
+/// skipping groups in `blocked`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the closure's flags, each borrowed differently"
+)]
+fn take_group(
+    graph: &Layered,
+    layer: &[usize],
+    item: usize,
+    blocked: &[usize],
+    taken: &[bool],
+    moved: &[bool],
+    queued: &mut [bool],
+    queue: &mut Vec<usize>,
+) {
+    for &group in graph.paths[item].iter().rev() {
+        if group >= taken.len() || taken[group] || blocked.contains(&group) {
+            break;
+        }
+        let starts = layer
+            .iter()
+            .find(|&&other| graph.paths[other].contains(&group))
+            .is_some_and(|&other| moved[other]);
+        if !starts {
+            continue;
+        }
+        if !queued[group] {
+            queued[group] = true;
+            queue.push(group);
+        }
+        break;
     }
 }
 
