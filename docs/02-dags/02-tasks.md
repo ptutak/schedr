@@ -93,9 +93,8 @@ base64 in a `str`). Outcome unions, `Outcome` enums and `.on(...)` are
 ## IDs
 
 A task ID is up to 250 bytes: ASCII letters, digits and `_ . -`. A `.` is allowed
-(`extract.load`); an empty part (`extract.` or `.load`) is an `IdError`. Task groups, which
-give a task that prefix, are
-[Native API](../_generated/05-design/07-python-api-structure.md#native-api).
+(`extract.load`); an empty part (`extract.` or `.load`) is an `IdError`. A task written
+inside a [group](11-groups.md) gets the group's name as that prefix (`load.extract`).
 
 ## No custom operators
 

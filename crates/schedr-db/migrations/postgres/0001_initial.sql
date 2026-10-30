@@ -53,6 +53,10 @@ CREATE TABLE parse_files (
     path            TEXT NOT NULL,
     dags            JSONB NOT NULL,
     error           JSONB,
+    -- Who parsed this file and when: the parse's worker, or the one that parsed it again
+    -- after it failed transiently (decisions 72.2, 93).
+    worker_id       TEXT NOT NULL,
+    parsed_at       TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (parse_result_id, path)
 );
 

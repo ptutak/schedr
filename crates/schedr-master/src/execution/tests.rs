@@ -973,3 +973,125 @@ async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_
         .unwrap();
     assert_eq!(finished.run_result, Some(RunState::Cancelled));
 }
+
+/// Runs `sql` on the tests' SQLite database (a trigger that makes a write fail).
+async fn sqlite(db: &Database, sql: &str) {
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_owned()))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_expansion_is_stored_whole_or_not_at_all() {
+    let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    let before = rows(&db, &run_id).await;
+    // The instances are created, then the whole task's row is marked: that second write fails.
+    sqlite(
+        &db,
+        "CREATE TRIGGER refuse_mark BEFORE UPDATE ON task_instances \
+         WHEN NEW.task_id = 'load' AND NEW.map_index = -1 \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .await;
+    let files = with_output(json!(["a.csv", "b.csv"]));
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .await
+        .unwrap_err();
+    assert_eq!(rows(&db, &run_id).await, before);
+    // Once the write works, the result arrives again and expands `load` as usual.
+    sqlite(&db, "DROP TRIGGER refuse_mark").await;
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .await
+        .unwrap();
+    let load: Vec<_> = rows(&db, &run_id)
+        .await
+        .into_iter()
+        .filter(|(task, _, _)| task == "load")
+        .collect();
+    let s = |i: i32, state| ("load".to_owned(), i, state);
+    assert_eq!(load, [s(-1, S::Running), s(0, S::Queued), s(1, S::Queued)]);
+}
+
+#[tokio::test]
+async fn instances_that_exist_are_never_expanded_again() {
+    let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    let files = with_output(json!(["a.csv", "b.csv"]));
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .await
+        .unwrap();
+    start_instance(&db, &run_id, "load", 0).await;
+    // A database left with the instances but the whole task's row unmarked (as before
+    // expansions were stored in one transaction): its instances keep their states.
+    let unmarked = InstanceUpdate {
+        map_index: -1,
+        ..update(&id("load"), -1, S::Scheduled)
+    };
+    db.update_instances(&run_id, &[unmarked], ts(NOW))
+        .await
+        .unwrap();
+    execution.settle(&run_id, ts(NOW)).await.unwrap();
+    let load: Vec<_> = rows(&db, &run_id)
+        .await
+        .into_iter()
+        .filter(|(task, _, _)| task == "load")
+        .collect();
+    let s = |i: i32, state| ("load".to_owned(), i, state);
+    assert_eq!(load, [s(-1, S::Running), s(0, S::Running), s(1, S::Queued)]);
+}
+
+#[tokio::test]
+async fn a_result_after_its_mapped_task_failed_is_ignored() {
+    let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    let files = with_output(json!(["a.csv", "b.csv"]));
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .await
+        .unwrap();
+    start_instance(&db, &run_id, "load", 0).await;
+    start_instance(&db, &run_id, "load", 1).await;
+    // Instance 0 fails: the step fails at once and instance 1 is stopped (decision 75a).
+    let failed = execution
+        .attempt_finished(
+            &run_id,
+            &id("load"),
+            0,
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.stops, [(id("load"), 1)]);
+    // Its success arrives before the stop does: ignored, the instance ends cancelled.
+    let late = execution
+        .attempt_finished(&run_id, &id("load"), 1, &with_output(json!(7)), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(late.state, Some(S::Cancelled));
+    assert_eq!(
+        db.instance_output(&run_id, &id("load"), 1).await.unwrap(),
+        None
+    );
+    let load: Vec<_> = rows(&db, &run_id)
+        .await
+        .into_iter()
+        .filter(|(task, _, _)| task == "load")
+        .collect();
+    let s = |i: i32, state| ("load".to_owned(), i, state);
+    assert_eq!(
+        load,
+        [s(-1, S::Failed), s(0, S::Failed), s(1, S::Cancelled)]
+    );
+}

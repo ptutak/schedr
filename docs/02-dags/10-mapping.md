@@ -19,8 +19,19 @@ that vary, each a list. `fetch.partial(bucket="raw").expand(path=list_files())` 
   day=[1, 2])` makes four instances, the first argument written varying slowest (`eu`/1,
   `eu`/2, `us`/1, `us`/2).
 - **`.expand_kwargs(...)`** maps over a list of dicts, each one instance's arguments.
-- **What is mapped over is checked when the file loads:** each list against the parameter's
-  type (`path: str` needs a `list[str]`), names that exist, nothing both fixed and mapped.
+  A list written in the file is checked when the file loads: every element is a dict
+  (a reference element is left to its type), each key is a parameter, a key also passed to
+  `.partial()` is refused, the fixed arguments and the dict together supply every required
+  parameter, and each value matches that parameter's type. The list itself must be a
+  `list[dict[str, Any]]`, written out or taken from an upstream task. A reference is not
+  checked element by element at load. When the task waits for that output as a whole, an
+  element that is not a dict fails the whole task when it expands, before any instance
+  runs. When the list is another mapped task's instances one by one (a
+  [lane](#lanes-mapping-over-a-mapped-output)), it fails that one instance when the
+  instance is assigned, as `input_mismatch`, and that failure is not retried.
+- **What `.expand()` maps over is checked when the file loads:** each list against the
+  parameter's type (`path: str` needs a `list[str]`), names that exist, nothing both fixed
+  and mapped.
 - **The instances** are numbered from 0 in that order (their `map_index`). They run in
   parallel as worker slots allow, and each retries on its own.
 - **An empty list** runs no instance: the task succeeds, and its output is `[]`.
@@ -90,12 +101,16 @@ A gather sees every instance only if none of them is skipped, and none of them f
   ([The DAG context](06-context.md#the-running-tasks-own-context-task_ctx)). A command gets
   `SCHEDR_MAP_INDEX`.
 - **In the UI,** a mapped task is one node, labelled with its instance count (`fetch ×3`)
-  and how many are done; its panel lists the instances, and each one's panel has its
-  attempts, logs and output. The whole task's output is the gathered list.
+  and how many are done and how many failed. Its panel opens on the Instances tab; each
+  instance's own panel has that instance's attempts, log and output. The whole task's
+  output is the gathered list.
+  [The web UI](../03-guide/12-ui.md#a-mapped-task) is those panels.
 - **In the API,** a run's tasks list each mapped task as a whole (`map_index: -1`,
-  `instances: 3`) and then its instances. A task's `output` without `?map_index` is the
-  gathered list, with `?map_index=1` that instance's; `attempts`, `log` and `retry` need
-  `?map_index` for a mapped task; `cancel` without it cancels the whole task.
+  `instances: 3`) and then its instances. `?map_index=-1` means the same as leaving the
+  index off: the task as a whole. A task's `output` without `?map_index` (or with `-1`) is
+  the gathered list, with `?map_index=1` that instance's; `attempts`, `log` and `retry` need
+  `?map_index` for a mapped task; `cancel` without it, or with `-1`, cancels the whole task.
+  An index outside `0` to `N-1` is a 400, on every one of those endpoints, cancel included.
 - **In the CLI,** `schedr tasks logs / cancel / retry` take `--map-index N`; `schedr dags
   test` lists the instances as `fetch[0]`, `fetch[1]`, ... after the task.
 - **In tests,** `run_dag(...).tasks["fetch"]` is the whole task (its `output` the list) and

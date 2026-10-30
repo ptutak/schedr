@@ -916,6 +916,93 @@ async fn a_running_task_is_cancelled_through_its_worker() {
 }
 
 #[tokio::test]
+async fn a_mapped_task_cancelled_as_a_whole_stops_its_running_instances() {
+    let mut fetch = task("fetch", &json!({}), 0);
+    fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
+    let mapped: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": [fetch], "edges": []
+    }))
+    .unwrap();
+    // -1, the whole task as the API lists it, is the same as no instance (both stopped).
+    for whole in [None, Some(-1)] {
+        let (mut dispatcher, _, run_id) = with_run(mapped.clone()).await;
+        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let mut attempts: Vec<String> = out
+            .iter()
+            .map(|o| assignment(o).attempt_id.clone())
+            .collect();
+        assert_eq!(attempts.len(), 2);
+        let (cancelled, out) = dispatcher
+            .cancel_task(&run_id, (&id("fetch"), whole), ts(NOW))
+            .await
+            .unwrap();
+        assert_eq!(cancelled, TaskCancel::Stopping, "{whole:?}");
+        let mut stopped: Vec<String> = out
+            .iter()
+            .map(|o| cancelled_attempt(o).to_owned())
+            .collect();
+        attempts.sort();
+        stopped.sort();
+        assert_eq!(stopped, attempts, "{whole:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_expand_kwargs_element_that_isnt_a_dict_fails_its_instance_unretried() {
+    let mut nums = task("nums", &json!({}), 0);
+    nums["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
+    // `load.expand_kwargs(nums)`: a lane over `nums`'s instances, retries left.
+    let mut load = task("load", &json!({}), 3);
+    load["expand"] = json!({"kwargs": {"ref": {"kind": "output", "task": "nums"}}});
+    let lanes: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": [nums, load],
+        "edges": [{"from": "nums", "to": "load", "kind": "data"}]
+    }))
+    .unwrap();
+    let (mut dispatcher, db, run_id) = with_run(lanes).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    // `nums[0]` returns a number, `nums[1]` a dict of arguments; `load[0]` is assigned first.
+    for (assigned, value) in out.iter().zip([json!(1), json!({"n": 2})]) {
+        let attempt = assignment(assigned);
+        assert_eq!(attempt.task_id, "nums");
+        dispatcher
+            .started("w1", &started(&attempt.attempt_id), ts(NOW))
+            .await
+            .unwrap();
+        let done = finished(&attempt.attempt_id, pb::AttemptStatus::Success, &value);
+        dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    }
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    // `load[0]` is never sent; its failure fails `load` at once, so `load[1]` isn't either.
+    assert!(out.is_empty(), "{out:?}");
+    // `load[0]` failed without a try on a worker and isn't retried: it would fail again.
+    let attempts = db.instance_attempts(&run_id, &id("load"), 0).await.unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].error_kind.as_deref(), Some("input_mismatch"));
+    let summary = attempts[0].error_summary.as_deref().unwrap_or_default();
+    assert!(
+        summary.contains("element 0 of `nums` isn't a dict of arguments"),
+        "{summary}"
+    );
+    let load: Vec<_> = db
+        .run_tasks(&run_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .instances
+        .iter()
+        .filter(|i| i.task_id == id("load"))
+        .map(|i| (i.map_index, i.state))
+        .collect();
+    let s = TaskInstanceState::Failed;
+    assert_eq!(load, [(-1, s), (0, s), (1, TaskInstanceState::Cancelled)]);
+}
+
+#[tokio::test]
 async fn a_rejected_assignment_of_a_task_being_cancelled_cancels_it() {
     for whole_run in [false, true] {
         let (mut dispatcher, db, run_id) = with_run(dag(0)).await;

@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 
 from schedr import Dag, Data, Task, branch, task
-from schedr._model import registry
+from schedr._model import IdError, registry
 
 
 class Rows(Data):
@@ -227,3 +227,57 @@ def test_an_order_edge_between_mapped_outputs_is_the_barrier() -> None:
         sizes >> again
     kinds = sorted((e.from_, e.to, e.kind.value) for e in only_dag().edges)
     assert kinds == [("size", "again", "data"), ("size", "again", "order")]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ([{"bucket": "raw", "nope": 1}], r"no parameter `nope`"),
+        ([{"bucket": 123, "path": "a"}], r"element 0, argument `bucket`: expected str, got int"),
+        ([{"path": "a"}], r"missing a required argument: 'bucket'"),
+        (["a"], r"every element must be a dict"),
+    ],
+)
+def test_expand_kwargs_checks_each_dict_written_in_the_dag(
+    kwargs: list[object], message: str
+) -> None:
+    with Dag("d"), pytest.raises(TypeError, match=message):
+        load.expand_kwargs(kwargs)
+
+
+def test_expand_kwargs_refuses_an_argument_also_fixed() -> None:
+    with Dag("d"), pytest.raises(TypeError, match=r"`bucket` is both fixed"):
+        load.partial(bucket="raw").expand_kwargs([{"bucket": "other", "path": "a"}])
+    # The fixed ones and the mapped ones together are every argument.
+    with Dag("e"):
+        load.partial(bucket="raw").expand_kwargs([{"path": "a"}, {"path": "b"}])
+
+
+def test_a_lane_narrowed_to_every_outcome_skips_no_instance() -> None:
+    # `.on(Rows, Missing)` names every outcome of `fetch`: no instance is ever skipped, so a
+    # gather needs no `None`.
+    with Dag("d"):
+        results = fetch.expand(path=list_files())
+        gathered = summarize.expand(result=results.on(Rows, Missing))
+        names(gathered)
+
+
+@task
+def summarize(result: Rows | Missing) -> str:
+    return type(result).__name__
+
+
+@task
+def names(all: list[str]) -> int:
+    return len(all)
+
+
+def test_a_mapped_task_defined_twice_leaves_no_check_on_the_first() -> None:
+    # The second `size` is refused (its ID is taken) after its arguments were checked: the
+    # `None` check of `counts[0]` (an instance that may be skipped) is its own, not the
+    # first `size`'s, which maps over literals.
+    with Dag("d"):
+        counts = count.expand(rows=fetch.expand(path=list_files()).on(Rows))
+        size.expand(n=[1, 2])
+        with pytest.raises(IdError):
+            size.expand(n=[counts[0]])

@@ -152,9 +152,15 @@ impl Discovery {
                 .db
                 .find_parse(&key.root, &key.content_hash, &key.schedr_version)
                 .await?;
-            // No parse yet, or a retry planned (decision 72.2).
-            if found.is_none() || self.jobs.has(&key) {
-                jobs.extend(self.jobs.request(key, worker_id, now));
+            match found {
+                // No parse yet, or a retry planned (decision 72.2).
+                None => jobs.extend(self.jobs.request(key, worker_id, now)),
+                Some(_) if self.jobs.has(&key) => {
+                    jobs.extend(self.jobs.request(key, worker_id, now));
+                }
+                // A parse that failed transiently, its retry unknown to a master restarted
+                // while the worker was drained.
+                Some(parse_id) => self.plan_stored_retry(key, &parse_id, now).await?,
             }
         }
         Ok(jobs)
@@ -259,6 +265,10 @@ impl Discovery {
         });
         self.record_switch(&key.root, &key.content_hash, switched, now)
             .await?;
+        // Its earlier code's job (a retry) can't be parsed by it any more.
+        if let Some(previous) = previous.filter(|p| **p != key) {
+            self.jobs.moved_away(previous, worker_id, now);
+        }
         self.reports
             .entry(worker_id.to_owned())
             .or_default()
@@ -274,10 +284,7 @@ impl Discovery {
             Some(parse_id) => {
                 // After a master restart, a parse that failed transiently isn't planned again
                 // yet.
-                if any_transient(&self.db.parse_files(&parse_id).await?) {
-                    let candidates = self.candidates(&key);
-                    self.jobs.retry(key, candidates, None, now);
-                }
+                self.plan_stored_retry(key, &parse_id, now).await?;
                 None
             }
             None if self.no_parse.contains(worker_id) => {
@@ -304,6 +311,29 @@ impl Discovery {
     }
 
     /// The workers that report `key` and take parse jobs.
+    /// Plans the retry of a stored parse with files that failed transiently, unknown to this
+    /// master (it restarted): it avoids the worker that parsed such a file, as stored with it
+    /// (decision 93), while another can take it.
+    async fn plan_stored_retry(
+        &mut self,
+        key: ParseKey,
+        parse_id: &str,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        let files = self.db.parse_files(parse_id).await?;
+        let Some(failed) = files
+            .iter()
+            .find(|f| f.error.as_ref().is_some_and(ErrorSummary::is_transient))
+        else {
+            return Ok(());
+        };
+        let workers = self.db.parse_file_workers(parse_id).await?;
+        let candidates = self.candidates(&key);
+        let failed_on = workers.get(&failed.path).map(String::as_str);
+        self.jobs.retry(key, candidates, failed_on, now);
+        Ok(())
+    }
+
     fn candidates(&self, key: &ParseKey) -> BTreeSet<String> {
         self.reports
             .iter()
@@ -344,7 +374,9 @@ impl Discovery {
         let (parse_id, files, retried) = if let Some(parse_id) = stored {
             let before = self.db.parse_files(&parse_id).await?;
             let replaced = retried_files(&before, files);
-            self.db.replace_parse_files(&parse_id, &replaced).await?;
+            self.db
+                .replace_parse_files(&parse_id, &replaced, &upload.worker_id, now)
+                .await?;
             let files = self.db.parse_files(&parse_id).await?;
             (parse_id, files, !replaced.is_empty())
         } else {
@@ -393,7 +425,7 @@ impl Discovery {
                 .get(&key.root)
                 .is_some_and(|c| c.parse_id == parse_id)
         {
-            self.refresh(now).await?;
+            self.refresh_or_forget(&key.root, now).await?;
         }
         Ok(parse_id)
     }
@@ -539,17 +571,20 @@ impl Discovery {
                 .set_current_parse(root, &current.parse_id, now)
                 .await?;
             self.current.insert(root.to_owned(), current);
-            self.refresh(now).await?;
+            self.refresh_or_forget(root, now).await?;
         }
         Ok(())
     }
-}
 
-/// Whether any of `files` failed transiently (decision 72.2).
-fn any_transient(files: &[ParsedFile]) -> bool {
-    files
-        .iter()
-        .any(|f| f.error.as_ref().is_some_and(ErrorSummary::is_transient))
+    /// Refreshes the catalog; if that fails, forgets `root`'s current parse, so the next
+    /// report of its code decides (and refreshes) again instead of finding nothing new.
+    async fn refresh_or_forget(&mut self, root: &str, now: Timestamp) -> Result<(), DbError> {
+        let refreshed = self.refresh(now).await;
+        if refreshed.is_err() {
+            self.current.remove(root);
+        }
+        refreshed.map(drop)
+    }
 }
 
 /// Of a retry's `files`, those that replace the stored ones (`before`): where the stored file

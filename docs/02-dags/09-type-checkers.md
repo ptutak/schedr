@@ -76,10 +76,12 @@ and finds what they can't:
   fails: `if` and `for` with "an output can't be used as a value in the DAG file", the
   others with Python's own `TypeError`. In a DAG body, pass outputs, take their fields
   (`rows[0].name`), and order tasks; decide in a task.
-- **`None` from a skipped edge.** A task whose upstream may be skipped (it hangs on an
-  `.on(...)`) gets `None` for that argument when it runs through another edge. Its
-  parameter must allow `None`, or the task takes `run_if=RunIf.ALL_SUCCEEDED` (as `report`
-  above). Type checkers don't know which edges may be skipped.
+- **`None` from a skipped edge.** Under `NONE_FAILED`, an argument is `None` when its edge
+  isn't taken and the task runs through another edge. That is an `.on(...)` that leaves an
+  outcome out, or an upstream task that may be skipped. An `.on(...)` that names every
+  outcome of the task is an edge always taken, so it gives no `None`. The parameter must
+  allow `None`, or the task takes `run_if=RunIf.ALL_SUCCEEDED` (as `report` above). Type
+  checkers don't know which edges may be skipped.
 - **Outcomes and graphs:** `.on(...)` with a class that isn't one of the task's outcomes,
   a branch returning a task that isn't right after it, cycles, duplicate task IDs.
 

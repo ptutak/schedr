@@ -703,3 +703,201 @@ async fn a_known_dag_keeps_its_version_through_a_timeout_and_a_restart_plans_the
         Some(2)
     );
 }
+
+/// Runs `sql` on the tests' SQLite database (a trigger that makes a write fail).
+async fn sqlite(discovery: &Discovery, sql: &str) {
+    let schedr_db::Pool::Sqlite(pool) = discovery.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_owned()))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn max_active_runs(discovery: &Discovery) -> Option<u32> {
+    dags(discovery).await[0]
+        .current
+        .as_ref()
+        .and_then(|c| c.dag.max_active_runs)
+}
+
+#[tokio::test]
+async fn a_catalog_that_failed_to_refresh_is_refreshed_at_the_next_report() {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery.parse_uploaded(first, now()).await.unwrap();
+    // The new code's DAG can't be stored this time.
+    sqlite(
+        &discovery,
+        "CREATE TRIGGER refuse_dags BEFORE UPDATE ON dags \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .await;
+    discovery
+        .root_reported("w1", key("h2"), now())
+        .await
+        .unwrap();
+    let second = upload("h2", vec![("a.py", vec![dag("a", "a.py", 2)])]);
+    discovery.parse_uploaded(second, now()).await.unwrap_err();
+    assert_eq!(max_active_runs(&discovery).await, Some(1));
+    // Once it can, the next report of the same code stores it.
+    sqlite(&discovery, "DROP TRIGGER refuse_dags").await;
+    discovery
+        .root_reported("w1", key("h2"), now())
+        .await
+        .unwrap();
+    assert_eq!(max_active_runs(&discovery).await, Some(2));
+}
+
+#[tokio::test]
+async fn a_catalog_that_failed_to_refresh_after_a_retry_is_refreshed_at_the_next_report() {
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    // The retry's `b.py` defines `b`, which can't be stored this time.
+    sqlite(
+        &discovery,
+        "CREATE TRIGGER refuse_b BEFORE INSERT ON dags WHEN NEW.dag_id = 'b' \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .await;
+    let mut again = upload("h1", vec![("b.py", vec![dag("b", "b.py", 1)])]);
+    again.worker_id = "w2".to_owned();
+    discovery
+        .parse_uploaded(again, later(31))
+        .await
+        .unwrap_err();
+    sqlite(&discovery, "DROP TRIGGER refuse_b").await;
+    discovery
+        .root_reported("w1", key("h1"), later(32))
+        .await
+        .unwrap();
+    let ids: Vec<String> = dags(&discovery)
+        .await
+        .iter()
+        .map(|d| d.dag_id.to_string())
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
+}
+
+/// `w1` on `h1` (parsed), then `h2`, whose `a.py` timed out: a retry of `h2` is planned.
+async fn timed_out_on_h2() -> Discovery {
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery.parse_uploaded(first, now()).await.unwrap();
+    discovery
+        .root_reported("w1", key("h2"), now())
+        .await
+        .unwrap();
+    let timed_out = failing(upload("h2", vec![]), "a.py", "ParseTimeout");
+    discovery.parse_uploaded(timed_out, now()).await.unwrap();
+    assert!(discovery.jobs().has(&key("h2")));
+    discovery
+}
+
+#[tokio::test]
+async fn a_retry_survives_its_only_worker_draining_and_goes_to_it_once_resumed() {
+    let mut discovery = timed_out_on_h2().await;
+    assert_eq!(discovery.stop_parsing("w1", later(1)), []);
+    discovery.allow_parsing("w1", later(2)).await.unwrap();
+    let [retry] = discovery.jobs_mut().expire(later(30)).try_into().unwrap();
+    assert_eq!((retry.worker_id.as_str(), retry.key), ("w1", key("h2")));
+}
+
+#[tokio::test]
+async fn a_master_restarted_while_the_worker_drains_plans_the_retry_when_it_resumes() {
+    let discovery = timed_out_on_h2().await;
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    // It registers drained (as `core` does it: parsing stopped first).
+    restarted.stop_parsing("w1", later(60));
+    restarted
+        .registered("w1", vec![key("h2")], later(60))
+        .await
+        .unwrap();
+    assert!(!restarted.jobs().has(&key("h2")));
+    restarted.allow_parsing("w1", later(61)).await.unwrap();
+    assert!(restarted.jobs().has(&key("h2")), "planned once it resumes");
+    let [retry] = restarted.jobs_mut().expire(later(91)).try_into().unwrap();
+    assert_eq!(retry.worker_id, "w1");
+}
+
+#[tokio::test]
+async fn a_worker_moving_to_new_code_is_no_candidate_for_the_old_retry() {
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    // w2 (the one a retry would prefer: w1's parse failed) moves on to `h2`.
+    discovery
+        .root_reported("w2", key("h2"), later(5))
+        .await
+        .unwrap();
+    let due: Vec<(String, ParseKey)> = discovery
+        .jobs_mut()
+        .expire(later(30))
+        .into_iter()
+        .map(|a| (a.worker_id, a.key))
+        .collect();
+    assert!(due.contains(&("w1".to_owned(), key("h1"))), "{due:?}");
+    assert!(!due.contains(&("w2".to_owned(), key("h1"))), "{due:?}");
+}
+
+#[tokio::test]
+async fn a_restarted_master_still_avoids_the_worker_whose_parse_failed() {
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    // `w1` (whose parse timed out, as stored with the file) comes first in order.
+    for worker in ["w2", "w1"] {
+        restarted
+            .registered(worker, vec![key("h1")], later(60))
+            .await
+            .unwrap();
+    }
+    let [retry] = restarted.jobs_mut().expire(later(90)).try_into().unwrap();
+    assert_eq!(retry.worker_id, "w2");
+}

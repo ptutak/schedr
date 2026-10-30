@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::{Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind};
+use schedr_model::{Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind, Value};
 
 use crate::fire_times::FireTimes;
 
@@ -70,20 +70,62 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     problems
 }
 
-/// Mapped tasks (decision 69): a Python task only, with something to vary over, never an
-/// argument both fixed and mapped, or mapped twice.
+/// Mapped tasks (decision 69): a Python task only, not a `@branch`, with something to vary
+/// over, never an argument both fixed and mapped, or mapped twice.
 fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
     for task in &dag.tasks {
         let Some(expand) = &task.expand else {
             continue;
         };
-        let TaskKind::Python { arguments, .. } = &task.kind else {
+        let TaskKind::Python {
+            arguments, branch, ..
+        } = &task.kind
+        else {
             problems.push(format!(
                 "task `{}`: only a @task function can be mapped (`.expand()`)",
                 task.id
             ));
             continue;
         };
+        if *branch {
+            problems.push(format!(
+                "task `{}`: a @branch task can't be mapped (`.expand()`)",
+                task.id
+            ));
+        }
+        if let Expand::Kwargs(over) = expand {
+            // The names a list written in the DAG gives (an upstream output's are unknown).
+            let elements: Vec<Vec<&str>> = match over {
+                Value::Literal(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(serde_json::Value::as_object)
+                    .map(|item| item.keys().map(String::as_str).collect())
+                    .collect(),
+                Value::List(items) => items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Value::Map(entries) => Some(entries.keys().map(String::as_str).collect()),
+                        Value::Literal(serde_json::Value::Object(entries)) => {
+                            Some(entries.keys().map(String::as_str).collect())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let fixed: std::collections::BTreeSet<&str> = elements
+                .into_iter()
+                .flatten()
+                .filter(|name| arguments.contains_key(*name))
+                .collect();
+            for name in fixed {
+                problems.push(format!(
+                    "task `{}`: argument `{name}` is both fixed (`.partial()`) and mapped \
+                     (`.expand_kwargs()`)",
+                    task.id
+                ));
+            }
+        }
         if let Expand::Product(over) = expand {
             if over.is_empty() {
                 problems.push(format!("task `{}`: `.expand()` names no argument", task.id));
@@ -161,6 +203,14 @@ fn edge_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String
         .filter(|task| matches!(task.kind, TaskKind::Python { branch: true, .. }))
         .map(|task| &task.id)
         .collect();
+    let group_of = |id: &TaskId| dag.task(id).and_then(|t| t.group.as_deref());
+    // An order edge out of the group a branch is in: made by a dependency on a group that
+    // ends with the branch, taken once it ran, whatever it chose (decision 94).
+    let out_of_its_group = |from: &TaskId, to: &TaskId| {
+        group_of(from).is_some_and(|group| {
+            group_of(to).is_none_or(|g| g != group && !g.starts_with(&format!("{group}.")))
+        })
+    };
     for edge in &dag.edges {
         for end in [&edge.from, &edge.to] {
             if !tasks.contains(end) {
@@ -179,10 +229,13 @@ fn edge_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String
                 "edge `{}` -> `{}`: a selection edge, but `{}` isn't a `@branch` task",
                 edge.from, edge.to, edge.from
             ));
-        } else if edge.kind != EdgeKind::Selection && from_branch {
+        } else if edge.kind != EdgeKind::Selection
+            && from_branch
+            && !(edge.kind == EdgeKind::Order && out_of_its_group(&edge.from, &edge.to))
+        {
             problems.push(format!(
                 "edge `{}` -> `{}`: of kind `{}`, but every edge from the `@branch` task `{}` must \
-                 be a selection edge",
+                 be a selection edge (or an order edge out of its group, decision 94)",
                 edge.from,
                 edge.to,
                 edge_kind_name(edge.kind),

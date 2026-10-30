@@ -12,7 +12,7 @@ import functools
 import inspect
 import itertools
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
 
@@ -44,7 +44,7 @@ from schedr._serialization import (
     type_name,
 )
 from schedr._serialization.annotations import label, type_hints
-from schedr.outcomes import Done
+from schedr.outcomes import Done, Outcome
 
 _VALUE_IN_DAG_BODY = (
     "an output can't be used as a value in the DAG file (it exists only at run time); "
@@ -67,8 +67,15 @@ class Mapped[T](list[T]):
         def on[U](self, kind: type[U], /) -> list[U]: ...
         @overload
         def on[U, V](self, kind: type[U], other: type[V], /) -> list[U | V]: ...
+        @overload
+        def on(self, kind: None, /) -> list[Done]: ...
+        @overload
+        def on[E: Outcome](self: Mapped[E], member: E, /, *members: E) -> list[Done]: ...
         def on(self, *kinds: object) -> object:
-            """Narrows each element to some of the task's outcome classes (in ``.expand()``)."""
+            """Narrows each element to some of the task's outcomes (in ``.expand()``).
+
+            Classes of an outcome union, ``None``, or members of an ``Outcome`` enum.
+            """
             ...
 
         def __rshift__(self, other: object, /) -> object:
@@ -490,27 +497,36 @@ class TaskFunction[**P, R]:
         except TypeModelError as e:
             raise TypeModelError(f"{where}: return type `{label(hints['return'])}`: {e}") from None
         upstream: list[_build.Upstream] = []
-        arguments = {
-            name: self._argument(
-                builder,
-                (task_id, value),
-                hints.get(name, Any),
-                f"{where}, argument `{name}`",
-                upstream,
+        # The None checks its arguments queue are its own: dropped if it isn't added (an ID
+        # already taken would otherwise give them to the task that has it).
+        checks = len(builder.none_checks)
+        try:
+            arguments = {
+                name: self._argument(
+                    builder,
+                    (task_id, value),
+                    hints.get(name, Any),
+                    f"{where}, argument `{name}`",
+                    upstream,
+                )
+                for name, value in fixed.items()
+            }
+            _refuse_whole_mapped(builder, arguments, where)
+            mapped = (
+                None if expand is None else self._mapped(builder, task_id, hints, expand, upstream)
             )
-            for name, value in fixed.items()
-        }
-        _refuse_whole_mapped(builder, arguments, where)
-        mapped = None if expand is None else self._mapped(builder, task_id, hints, expand, upstream)
-        builder.add_task(
-            task_id,
-            PythonKind(arguments, branch=self._branch),
-            output_type,
-            self._options,
-            spec,
-            outcome_types,
-            mapped,
-        )
+            builder.add_task(
+                task_id,
+                PythonKind(arguments, branch=self._branch),
+                output_type,
+                self._options,
+                spec,
+                outcome_types,
+                mapped,
+            )
+        except BaseException:
+            del builder.none_checks[checks:]
+            raise
         builder.functions[task_id] = self._fn
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
@@ -529,6 +545,18 @@ class TaskFunction[**P, R]:
         where = f"task `{task_id}`"
         kind, value = expand
         if kind == "kwargs":
+            # A dict written in the DAG: each argument against its parameter's type.
+            for index, element in enumerate(value if isinstance(value, list | tuple) else ()):
+                if not isinstance(element, Mapping):
+                    continue
+                for name, item in element.items():
+                    self._argument(
+                        builder,
+                        (task_id, item),
+                        hints.get(name, Any),
+                        f"{where}, `.expand_kwargs()` element {index}, argument `{name}`",
+                        upstream,
+                    )
             converted = self._argument(
                 builder,
                 (task_id, value),
@@ -700,11 +728,42 @@ class PartialTask[**P, R]:
 
         Raises:
             RuntimeError: Outside ``with Dag(...)``.
+            TypeError: For a list written in the DAG with an element that isn't a dict, or a
+                dict naming an unknown or fixed parameter or leaving a required one without a
+                value.
         """
         name = self._function.task_id
+        if isinstance(values, list | tuple):
+            # Each dict written here is one instance's arguments: checked as `.expand()` checks
+            # its names (an upstream output's dicts are checked by its type).
+            for index, element in enumerate(values):
+                if _build.is_reference(element):
+                    continue
+                where = f"task `{name}`: `.expand_kwargs()` element {index}"
+                if not isinstance(element, Mapping):
+                    raise TypeError(
+                        f"{where}: every element must be a dict of arguments, "
+                        f"not `{type(element).__name__}`"
+                    )
+                self._check_kwargs(where, element)
         builder = _build.require_active(f"`{name}.expand_kwargs()`")
         recorded = self._function._record(builder, dict(self._fixed), ("kwargs", values))
         return recorded  # type: ignore[return-value]
+
+    def _check_kwargs(self, where: str, element: Mapping[object, object]) -> None:
+        """Checks one instance's dict of arguments against the function and the fixed ones."""
+        parameters = self._function._signature.parameters
+        for key in element:
+            if key not in parameters:
+                raise TypeError(f"{where}: no parameter `{key}`")
+            if key in self._fixed:
+                raise TypeError(
+                    f"{where}: `{key}` is both fixed (`.partial()`) and mapped (`.expand_kwargs()`)"
+                )
+        try:
+            self._function._signature.bind(**self._fixed, **dict.fromkeys(map(str, element)))
+        except TypeError as e:
+            raise TypeError(f"{where}: {e}") from None
 
 
 def _refuse_whole_mapped(

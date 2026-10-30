@@ -22,8 +22,9 @@ flowchart LR
 
 `trigger` is the schedule. `defaults` apply to every task in the block; `load` replaces the
 timeout for itself. The other pages cover [tasks](02-tasks.md), [data flow](03-data-flow.md),
-[schedules](04-schedules.md), [defaults](05-defaults.md), the
-[DAG context](06-context.md) and [routing by outcome](08-outcomes.md).
+[groups](11-groups.md), [schedules](04-schedules.md), [defaults](05-defaults.md), the
+[DAG context](06-context.md), [routing by outcome](08-outcomes.md) and
+[mapping](10-mapping.md).
 
 Check the file, then run it locally. Neither command needs a server:
 

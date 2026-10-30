@@ -156,7 +156,25 @@ fn selection_edges_come_only_from_branches_and_only_selection_edges_from_them() 
             &json!({"tasks": tasks, "edges": [edge("pick", "a", "selection"), edge("pick", "b", "order")]})
         ),
         [
-            "edge `pick` -> `b`: of kind `order`, but every edge from the `@branch` task `pick` must be a selection edge"
+            "edge `pick` -> `b`: of kind `order`, but every edge from the `@branch` task `pick` must be a selection edge (or an order edge out of its group, decision 94)"
+        ]
+    );
+    // A dependency on a group that ends with the branch (decision 94): an order edge out of
+    // the group, not one inside it, and never a data edge.
+    let mut pick = branch("route.pick");
+    pick["group"] = json!("route");
+    let mut inside = task("route.audit", &json!({}));
+    inside["group"] = json!("route");
+    let tasks = json!([pick, inside, task("then", &json!({}))]);
+    let groups = json!([{"id": "route", "parent": null}]);
+    let edges = json!([
+        edge("route.pick", "then", "order"),
+        edge("route.pick", "route.audit", "order"),
+    ]);
+    assert_eq!(
+        problems(&json!({"tasks": tasks, "edges": edges, "groups": groups})),
+        [
+            "edge `route.pick` -> `route.audit`: of kind `order`, but every edge from the `@branch` task `route.pick` must be a selection edge (or an order edge out of its group, decision 94)"
         ]
     );
 }
@@ -339,6 +357,30 @@ fn groups_must_be_unique_nest_properly_and_be_declared() {
     assert_eq!(
         problems(&json!({"tasks": [fine], "edges": [], "groups": groups})),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_mapped_branch_and_a_kwargs_argument_also_fixed_are_refused() {
+    let mut chooser = branch("choose");
+    chooser["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1]}}]});
+    // `.partial(bucket=...).expand_kwargs([...])` naming `bucket` again, as a literal list
+    // and as a list holding references.
+    let mut literal = task("load", &json!({"bucket": {"literal": "raw"}}));
+    literal["expand"] = json!({"kwargs": {"literal": [{"path": "a"}, {"bucket": "b"}]}});
+    let mut listed = task("copy", &json!({"bucket": {"literal": "raw"}}));
+    listed["expand"] = json!({"kwargs": {"list": [{"map": {"bucket": output_of("extract")}}]}});
+    let tasks = [chooser, literal, listed, task("extract", &json!({}))];
+    let edges = [edge("extract", "copy", "data")];
+    assert_eq!(
+        problems(&json!({"tasks": tasks, "edges": edges})),
+        [
+            "task `choose`: a @branch task can't be mapped (`.expand()`)",
+            "task `load`: argument `bucket` is both fixed (`.partial()`) and mapped \
+             (`.expand_kwargs()`)",
+            "task `copy`: argument `bucket` is both fixed (`.partial()`) and mapped \
+             (`.expand_kwargs()`)",
+        ]
     );
 }
 

@@ -27,6 +27,42 @@ fn fixed_now() -> Timestamp {
 
 /// A database with DAG `sync` and one running run of it, and the API over it.
 async fn api() -> (axum::Router, Database, String) {
+    let extract = json!({
+        "id": "extract", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "none"}
+    });
+    api_with(extract, &[("extract", -1, TaskInstanceState::Queued)]).await
+}
+
+/// [`api`] with a task mapped over `[1, 2]`, `fetch`, expanded: its whole row running, its
+/// instances 0 and 1 queued.
+async fn mapped_api() -> (axum::Router, Database, String) {
+    let fetch = json!({
+        "id": "fetch", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "int"},
+        "expand": {"product": [{"name": "n", "value": {"literal": [1, 2]}}]}
+    });
+    let instances = [
+        ("fetch", -1, TaskInstanceState::Running),
+        ("fetch", 0, TaskInstanceState::Queued),
+        ("fetch", 1, TaskInstanceState::Queued),
+    ];
+    api_with(fetch, &instances).await
+}
+
+/// The API over DAG `sync` with the one `task` and a running run of it with `instances`.
+async fn api_with(
+    task: Json,
+    instances: &[(&str, i32, TaskInstanceState)],
+) -> (axum::Router, Database, String) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -44,14 +80,7 @@ async fn api() -> (axum::Router, Database, String) {
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
-        "tasks": [{
-            "id": "extract", "kind": "python",
-            "settings": {
-                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
-                "queue": "default", "max_output_size": 1_048_576
-            },
-            "output_type": {"type": "none"}
-        }],
+        "tasks": [task],
         "edges": []
     }))
     .unwrap();
@@ -77,17 +106,13 @@ async fn api() -> (axum::Router, Database, String) {
         .await
         .unwrap()
         .unwrap();
-    db.create_instances(
-        &run_id,
-        &[(
-            TaskId::new("extract").unwrap(),
-            -1,
-            TaskInstanceState::Queued,
-        )],
-        ts(NOW),
-    )
-    .await
-    .unwrap();
+    let instances: Vec<_> = instances
+        .iter()
+        .map(|(task, index, state)| (TaskId::new(*task).unwrap(), *index, *state))
+        .collect();
+    db.create_instances(&run_id, &instances, ts(NOW))
+        .await
+        .unwrap();
     let mut state = ApiState::new(db.clone(), Some("x-forwarded-user".to_owned()));
     state.clock = fixed_now;
     (router(state), db, run_id)
@@ -807,4 +832,127 @@ async fn the_current_codes_import_errors_are_listed() {
             "traceback": "  File \"broken.py\", line 1"
         }]})
     );
+}
+
+#[tokio::test]
+async fn a_mapped_tasks_instance_must_be_one_it_has() {
+    let (app, db, run_id) = mapped_api().await;
+    let task = format!("/api/v1/runs/{run_id}/tasks/fetch");
+    for read in ["attempts", "attempts/1/log"] {
+        let join = if read.contains('?') { '&' } else { '?' };
+        for index in [2, 99, -2] {
+            let (status, body) = get(&app, &format!("{task}/{read}{join}map_index={index}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{read} {index}: {body}");
+            assert_eq!(
+                body["error"],
+                format!("task `fetch` has 2 instances, from 0 to 1: no instance {index}")
+            );
+        }
+        // -1 is the whole task: an instance must be named, as when none is given.
+        let (status, body) = get(&app, &format!("{task}/{read}{join}map_index=-1")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{read} -1: {body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("give ?map_index=N")
+        );
+    }
+    for action in ["cancel", "retry"] {
+        let (status, body) = send(
+            &app,
+            Method::POST,
+            &format!("{task}/{action}?map_index=2"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{action}: {body}");
+    }
+    let (status, _) = send(
+        &app,
+        Method::POST,
+        &format!("{task}/retry?map_index=-1"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A cancel of the whole task is a cancel without an instance, whichever way it is said.
+    let (status, _) = send(
+        &app,
+        Method::POST,
+        &format!("{task}/cancel?map_index=-1"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, _) = send(
+        &app,
+        Method::POST,
+        &format!("{task}/cancel?map_index=1"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let commands: Vec<_> = db
+        .pending_commands()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.command.unwrap())
+        .collect();
+    let fetch = TaskId::new("fetch").unwrap();
+    assert_eq!(
+        commands,
+        [
+            Command::CancelTask {
+                run_id: run_id.clone(),
+                task_id: fetch.clone(),
+                map_index: None,
+            },
+            Command::CancelTask {
+                run_id: run_id.clone(),
+                task_id: fetch,
+                map_index: Some(1),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_unmapped_task_has_no_instance_to_cancel() {
+    let (app, _, run_id) = api().await;
+    let path = format!("/api/v1/runs/{run_id}/tasks/extract/cancel?map_index=0");
+    let (status, body) = send(&app, Method::POST, &path, "").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        "task `extract` isn't mapped: it has no instance 0"
+    );
+}
+
+#[tokio::test]
+async fn map_index_minus_one_on_output_is_the_mapped_tasks_whole_output() {
+    let (app, db, run_id) = mapped_api().await;
+    let path = format!("/api/v1/runs/{run_id}/tasks/fetch/output");
+    // Not finished: no whole output yet, the same answer with or without -1.
+    let without = get(&app, &path).await;
+    assert_eq!(without.0, StatusCode::NOT_FOUND);
+    assert_eq!(get(&app, &format!("{path}?map_index=-1")).await, without);
+    let done = schedr_db::instances::InstanceUpdate {
+        task_id: TaskId::new("fetch").unwrap(),
+        map_index: -1,
+        state: TaskInstanceState::Success,
+        ready_at: None,
+        outcome: None,
+        used_retry: false,
+        reason: None,
+        map_sizes: Some(vec![2]),
+    };
+    db.update_instances(&run_id, &[done], ts(NOW))
+        .await
+        .unwrap();
+    let whole = get(&app, &path).await;
+    assert_eq!(whole.0, StatusCode::OK);
+    assert_eq!(whole.1["value"], json!([null, null]));
+    assert_eq!(get(&app, &format!("{path}?map_index=-1")).await, whole);
 }

@@ -2,10 +2,13 @@
 
 A group organises tasks while the DAG is written; it isn't something that runs. Its tasks'
 IDs get its name as a prefix (``load.extract``), they take its ``defaults`` and ``run_if``
-unless they set their own, and a dependency on the group goes through its roots and leaves
-(decision 56A): ``start >> load`` makes ``start`` run before every task of ``load`` with no
-upstream task inside it, ``load >> publish`` makes ``publish`` run after every task of
-``load`` with no downstream task inside it. The master sees ordinary tasks only.
+unless they set their own, and a dependency on the group goes through its first and last
+tasks, as the whole DAG's edges make them, made when the ``with Dag`` block ends (a mistake
+is reported then): ``start >> load`` makes ``start`` run before every task of ``load`` with
+no upstream task inside it, ``load >> publish`` makes ``publish`` run after every task of
+``load`` with no downstream task inside it. A dependency on a group that ends with a
+``@branch`` is a plain order edge from that branch, taken whatever the branch chose. The
+master schedules ordinary tasks and edges and only checks groups.
 """
 
 from types import TracebackType
@@ -74,9 +77,13 @@ class Group:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Closes the group: its roots and leaves are known, and dependencies on it are made."""
+        """Closes the group: tasks created after the block aren't in it.
+
+        That holds even when the block raised and the DAG file caught the error. Dependencies
+        on it are made once the DAG is complete.
+        """
         builder = _build.active()
-        if builder is None or exc_type is not None or self._scope is None:
+        if builder is None or self._scope is None:
             return
         builder.close_group(self._scope)
 

@@ -255,6 +255,18 @@ impl Execution {
             run.cancel_requested || instance.cancel_requested,
             now,
         );
+        // An instance whose mapped task already failed was being stopped: its result is
+        // ignored, whatever it is (decision 75a).
+        let step_ended = map_index >= 0
+            && run
+                .instances
+                .iter()
+                .any(|i| &i.task_id == task_id && i.map_index == -1 && i.state.is_final());
+        let next = if step_ended {
+            AfterAttempt::Cancelled
+        } else {
+            next
+        };
         let (state, ready_at) = match next {
             AfterAttempt::Succeeded => (TaskInstanceState::Success, None),
             AfterAttempt::RetryAt(at) => (TaskInstanceState::UpForRetry, Some(at)),
@@ -675,8 +687,21 @@ impl Execution {
     }
 
     /// Stores what changed since `before` (`first` as given: the attempt's own change) and
-    /// marks the instances to stop. Returns those.
+    /// marks the instances to stop, in one transaction (an expansion's instances and its
+    /// whole task's row together). Returns those.
     async fn store(
+        &self,
+        run_id: &str,
+        progress: &mut RunProgress<'_>,
+        before: &Snapshot,
+        first: Vec<InstanceUpdate>,
+        now: Timestamp,
+    ) -> Result<Vec<(TaskId, i32)>, ExecutionError> {
+        let writes = self.write_changes(run_id, progress, before, first, now);
+        Box::pin(self.db.atomically(writes)).await
+    }
+
+    async fn write_changes(
         &self,
         run_id: &str,
         progress: &mut RunProgress<'_>,

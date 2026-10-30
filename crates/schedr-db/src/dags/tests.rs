@@ -395,8 +395,44 @@ async fn the_current_parses_import_errors_are_listed_and_replaced_by_the_next_cu
             error: files()[1].error.clone().unwrap(),
         }]
     );
+    // A retry of the file (decision 72.2), on another worker: its error is that worker's,
+    // when it parsed it (decision 93).
+    let retried_at: Timestamp = "2026-10-21T08:05:00Z".parse().unwrap();
+    db.replace_parse_files(&broken, &files()[1..], "w2", retried_at)
+        .await
+        .unwrap();
+    let errors = db.current_import_errors().await.unwrap();
+    assert_eq!(
+        errors
+            .iter()
+            .map(|e| (e.path.as_str(), e.worker_id.as_str(), e.parsed_at))
+            .collect::<Vec<_>>(),
+        [("bad.py", "w2", retried_at)]
+    );
     // The fixed code's parse becomes current: its root has no errors any more.
     let fixed = store_parse(&db, "h2", &files()[..1]).await;
     db.set_current_parse("etl", &fixed, now()).await.unwrap();
     assert_eq!(db.current_import_errors().await.unwrap(), vec![]);
+}
+
+#[tokio::test]
+async fn a_bad_stored_time_names_the_column_it_is_in() {
+    let db = migrated().await;
+    let parse = store_parse(&db, "h1", &files()).await;
+    db.set_current_parse("etl", &parse, now()).await.unwrap();
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query("UPDATE parse_files SET parsed_at = 'not-a-time'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let error = db.current_import_errors().await.unwrap_err().to_string();
+    assert!(error.contains("parse_files.parsed_at"), "{error}");
+    sqlx::query("UPDATE parse_results SET parsed_at = 'not-a-time'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let error = db.parses_of("etl", "h1").await.unwrap_err().to_string();
+    assert!(error.contains("parse_results.parsed_at"), "{error}");
 }

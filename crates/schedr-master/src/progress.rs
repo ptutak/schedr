@@ -316,14 +316,17 @@ impl<'a> RunProgress<'a> {
                     return;
                 }
                 self.states.insert(task.clone(), S::Running);
-                self.instances.insert(
-                    task.clone(),
-                    Instances {
-                        sizes,
+                // Instances already there (stored before their whole task's row was) keep
+                // their states: they may be running or done.
+                let instances = self
+                    .instances
+                    .entry(task.clone())
+                    .or_insert_with(|| Instances {
+                        sizes: Vec::new(),
                         states: vec![S::Scheduled; n],
                         outcomes: vec![None; n],
-                    },
-                );
+                    });
+                instances.sizes = sizes;
             }
         }
     }

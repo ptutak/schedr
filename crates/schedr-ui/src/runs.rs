@@ -1055,7 +1055,10 @@ struct PanelFragment {
     /// Where the panel is read again from when its task changes; empty on the log tab (the log
     /// streams instead).
     refresh: String,
+    /// The task, or its instance (`fetch[1]`).
     task_id: String,
+    /// The graph's node for it: the task (its instances share their task's node).
+    node: String,
     status: String,
     state: String,
     close: String,
@@ -1251,6 +1254,7 @@ async fn task_panel<T: Transport>(
     let fragment = PanelFragment {
         refresh,
         task_id: map_index.map_or_else(|| task_id.to_owned(), |i| format!("{task_id}[{i}]")),
+        node: task_id.to_owned(),
         status: status(task),
         state: task.state.clone(),
         close: run_href.to_owned(),
@@ -1452,7 +1456,10 @@ pub async fn output_download<T: Transport>(
     headers: HeaderMap,
 ) -> Response {
     let page = Page::new(&headers, ui.docs_dir.is_some());
-    let map_index = query.ok().and_then(|Query(q)| q.map_index);
+    let map_index = match query {
+        Ok(Query(query)) => query.map_index,
+        Err(rejection) => return bad_request_page(&page, &rejection.body_text()),
+    };
     let Some(deployment) = ui.deployments.iter().find(|d| d.name == deployment) else {
         return no_deployment(&page, &deployment);
     };

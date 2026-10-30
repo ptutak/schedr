@@ -37,7 +37,7 @@ use schedr_proto::pb;
 
 use crate::core::Arrivals;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
-use crate::mapping;
+use crate::mapping::{self, InputsError};
 use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
@@ -144,6 +144,10 @@ pub const MAX_INPUTS: usize = 64 * 1024 * 1024;
 
 /// The error kind of a task whose inputs are over [`MAX_INPUTS`].
 pub const INPUTS_TOO_LARGE: &str = "inputs_too_large";
+
+/// The error kind of a task whose inputs don't fit its parameters (the runner's too); not
+/// retried.
+pub const INPUT_MISMATCH: &str = "input_mismatch";
 
 /// The grace time between SIGTERM and SIGKILL when an attempt is cancelled (master
 /// configuration; this is the default).
@@ -659,7 +663,22 @@ impl Dispatcher {
             (task, ready.map_index),
             &mut self.resolved,
         )
-        .await?;
+        .await;
+        let inputs = match inputs {
+            Ok(inputs) => inputs,
+            Err(InputsError::Db(error)) => return Err(error.into()),
+            Err(InputsError::NotArguments(why)) => {
+                let end = AttemptEnd {
+                    error_kind: Some(INPUT_MISMATCH.to_owned()),
+                    error_summary: Some(ErrorSummary::json("InputMismatch", &why)),
+                    ..AttemptEnd::by_master(AttemptStatus::Failed)
+                };
+                let instance = (&ready.task_id, ready.map_index);
+                self.end(&attempt_id, &ready.run_id, instance, end, now)
+                    .await?;
+                return Ok(());
+            }
+        };
         let inputs = serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec());
         let outcomes =
             upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
@@ -953,6 +972,8 @@ impl Dispatcher {
         (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<(TaskCancel, Vec<Outgoing>), DispatchError> {
+        // -1 is the whole task, as the API lists it: every instance (execution agrees).
+        let map_index = map_index.filter(|i| *i >= 0);
         let cancelled = self
             .execution
             .cancel_task(run_id, (task_id, map_index), now)
@@ -1436,7 +1457,13 @@ pub async fn attempt_inputs(
         (task, attempt.map_index),
         &mut resolved,
     )
-    .await?;
+    .await;
+    let inputs = match inputs {
+        Ok(inputs) => inputs,
+        Err(InputsError::Db(error)) => return Err(error.into()),
+        // Ended when it was assigned: never sent.
+        Err(InputsError::NotArguments(_)) => return Ok(None),
+    };
     Ok(Some(
         serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()),
     ))

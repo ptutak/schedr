@@ -120,6 +120,16 @@ def wants_time(t: datetime) -> None: ...
 def side_effect() -> None: ...
 
 
+@task
+def check_n(n: int) -> Check:
+    return Check.CHANGED
+
+
+@task
+def fetch_n(n: int) -> Rows | Unavailable:
+    return Rows([])
+
+
 with Dag("typed"):
     rows = extract()
     count = load(rows)
@@ -151,6 +161,15 @@ with Dag("typed"):
     plain = CommandOperator("plain", "true")
     default: DefaultOutcome = plain.outcome
     react(plain.outcome)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+    # A mapped task's output: each element narrowed like a task's output.
+    fetched_each = fetch_n.expand(n=[1, 2])
+    each_rows: list[Rows] = fetched_each.on(Rows)
+    each_either: list[Rows | Unavailable] = fetched_each.on(Rows, Unavailable)
+    each_gate: list[Done] = fetched_each.on(None)
+    checked_each = check_n.expand(n=[1, 2])
+    each_changed: list[Done] = checked_each.on(Check.CHANGED)
+    checked_each.on(Other.X)  # type: ignore[call-overload]  # pyright: ignore[reportArgumentType,reportCallIssue]
 
     done: Done = side_effect()
     done >> side_effect()

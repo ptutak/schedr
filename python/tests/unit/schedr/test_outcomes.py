@@ -571,3 +571,16 @@ def test_the_on_function_refuses_what_isnt_an_output() -> None:
         on(3, Rows)
     with Dag("d"), pytest.raises(TypeError, match=r"`Gone` isn't one of its outcomes"):
         on(fetch(), Gone)
+
+
+def test_an_edge_on_every_outcome_is_always_taken() -> None:
+    @task
+    def both(value: Rows | Unavailable) -> None:
+        pass
+
+    # `.on(Rows, Unavailable)` names every outcome of `fetch`: its edge is taken whatever
+    # `fetch` ends with, so `value` is never None and needn't allow it.
+    with Dag("d"):
+        whole = both(fetch().on(Rows, Unavailable))
+        count() >> whole
+    registry.take_defined()

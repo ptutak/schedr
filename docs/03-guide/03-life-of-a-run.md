@@ -53,15 +53,23 @@ for the next round.
 The round's first step applies every pending command, oldest first. For `trigger_run` the
 scheduler checks that the DAG can run, then inserts a run. The run is `running` if the DAG is
 under `max_active_runs`, otherwise `queued`. The command is then marked `applied`, with the run
-ID as its result. A command that can't apply (an unknown DAG, a time in the future) is marked
-`rejected` with the reason, and the CLI prints it and exits 1.
+ID as its result. A command that can't apply (an unknown DAG, a time in the future, or a DAG
+whose file fails to import) is marked `rejected` with the reason, and the CLI prints it and
+exits 1.
+
+A DAG whose file fails to import, other than a timeout or a runner that died, is held. The
+scheduler creates no run of it, a fire time during the hold is missed as while it is paused,
+and a queued run is not started. A run that has already started is not cancelled. A timeout
+or a runner that died holds nothing: the file is parsed again.
+[Parsing](06-parsing.md#a-held-dag) is the whole of it.
 
 ## 4. The same round dispatches
 
 Later in the same round the dispatcher:
 
-1. creates the run's task instances: `extract` has no upstream task, so it is `queued`; `load`
-   is `scheduled`;
+1. creates one row per task, at `map_index` -1: `extract` has no upstream task, so it is
+   `queued`; `load` is `scheduled`. A mapped task's instances are created when it expands
+   ([A mapped task](#a-mapped-task));
 2. picks a worker for `extract`: among `active` workers that serve its queue, run a recent
    enough schedr and have a free slot, the one with the most free slots. Workers that
    reported the root's current code come first; one that said it lacks the code is picked
@@ -136,3 +144,50 @@ Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, wh
 it from the worker that ran the attempt (see [Workers](05-workers.md)). The
 [run page](12-ui.md#a-run) shows that run: its state, its graph, its tasks, a task's
 attempts, output and log, and the commands about it.
+
+## A mapped task
+
+The walkthrough's tasks are not mapped. Every task, mapped or not, gets one row at the
+start of the run, `map_index` -1, `scheduled`. An unmapped task's row is the one the master
+assigns, and it is that task's only row. A mapped task's `-1` row is never sent to a
+worker. It stays `scheduled` until the task expands. With instances it becomes
+`running`, and then takes the state those instances settle to. When it cannot expand it
+becomes `failed`. The instances are further rows, `0` to `N-1`, created when it expands.
+The API lists the `-1` row first and then
+those instances. `?map_index=-1` means the same as leaving the index off
+([Mapping](../02-dags/10-mapping.md#following-the-instances)).
+
+When the task's edges are ready, the master expands it and stores the instances in the same
+transaction as the `-1` row's new state. One instance per element, numbered from 0. An empty
+list ends the task `success`, with output `[]` and no instances. The task fails, with a
+reason and with nothing run, when what it maps over is not a list, when an
+`.expand_kwargs()` list it waits for as a whole has an element that is not a dict, or when
+it would have more than `[mapping] max_instances` instances (1024). On a lane, an
+`.expand_kwargs()` element that is not a dict fails that instance when it is assigned, as
+`input_mismatch`, which is not retried.
+
+A lane is an element-wise data edge: the task is mapped over the whole output of a mapped
+task, and it uses that task nowhere else. A lane counts as ready once that upstream task
+has expanded, so the downstream task can expand before those instances finish, and instance
+`i` then waits only for upstream instance `i`. Any other edge waits for the upstream task
+as a whole: an order edge, `.partial(all=…)`, or `results[0]`. If that upstream task
+failed, nothing of the downstream
+task runs.
+
+One failed instance, or a lane whose upstream instance failed, fails the mapped task at
+once. The task is `failed` when one of its own instances failed, and `upstream_failed` when
+the only failures are lanes. Instances that have not started are cancelled. Ones that are
+running are stopped. A result that arrives after the `-1` row is already final does not
+change that row. The attempt is recorded as the worker reported it, the instance ends
+`cancelled` whatever that report was, and its output is not stored. Instances that had
+already succeeded keep their results. The tasks after a failed mapped task are
+`upstream_failed`.
+
+When every instance has finished and none failed, the task's `run_if` applies to the
+instances. `NONE_FAILED` (the default) succeeds unless every instance was skipped.
+`ALL_SUCCEEDED` skips the task if any instance was skipped. Any `cancelled` instance makes
+the whole task `cancelled`. A failure is decided first, so it wins over a cancellation.
+The list a downstream task reads is built then, in `map_index` order, from the instances.
+It is not stored on the `-1` row. An instance that did not succeed is JSON null in that
+list, which the next task reads as `None`.
+[Mapping](../02-dags/10-mapping.md) is how a DAG writes this.

@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Iterator
 from typing import Any
 
@@ -5,10 +6,13 @@ import pytest
 
 from schedr import (
     Dag,
+    Data,
     EmptyOperator,
     Group,
     RunIf,
+    Task,
     TaskDefaults,
+    branch,
     chain,
     group,
     task,
@@ -116,7 +120,7 @@ def test_a_dependency_written_inside_the_group_is_made_when_it_closes() -> None:
         start = EmptyOperator("start")
         with group("load") as load:
             start >> load
-            transform(extract())  # extract becomes a root after the line above
+            transform(extract())  # extract is a first task, the line above notwithstanding
     assert edges(only_dag()) == [
         ("load.extract", "load.transform", "data"),
         ("start", "load.extract", "order"),
@@ -141,12 +145,112 @@ def test_groups_lists_chain_and_left_shift() -> None:
 
 
 def test_a_dependency_on_an_empty_group_is_refused() -> None:
-    with Dag("d"):
-        with group("empty") as empty:
-            pass
-        first = EmptyOperator("x")
-        with pytest.raises(ValueError, match=r"`>>`: group `empty` has no tasks"):
+    def define() -> None:
+        with Dag("d"):
+            with group("empty") as empty:
+                pass
+            first = EmptyOperator("x")
             first >> empty
+
+    # Reported when the DAG ends: a group's ends are known once every edge is.
+    with pytest.raises(ValueError, match=r"`>>`: group `empty` has no tasks"):
+        define()
+
+
+class Rows(Data):
+    n: int
+
+
+class Missing(Data):
+    why: str
+
+
+@task
+def fetch() -> Rows | Missing:
+    return Rows(1)
+
+
+def test_a_groups_ends_count_edges_written_after_its_block() -> None:
+    # `store` runs only on `Rows`, an edge inside the group written after its block: it is
+    # no first task of the group, so `start` doesn't run it on its own (decision 56A).
+    with Dag("d"):
+        start = EmptyOperator("start")
+        with group("load") as load:
+            fetched = fetch()
+            store = EmptyOperator("store")
+        fetched.on(Rows) >> store
+        start >> load
+    assert sorted((e.from_, e.to, e.on) for e in only_dag().edges) == [
+        ("load.fetch", "load.store", ("Rows",)),
+        ("start", "load.fetch", ()),
+    ]
+
+
+def test_a_dependency_inside_a_group_counts_for_the_groups_ends() -> None:
+    # `a >> b` between two groups inside `outer`, written last: `outer`'s first task is `a`'s.
+    with Dag("d"):
+        start = EmptyOperator("start")
+        with group("outer") as outer:
+            with group("a") as a:
+                extract()
+            with group("b") as b:
+                audit()
+        start >> outer
+        a >> b
+    assert edges(only_dag()) == [
+        ("outer.a.extract", "outer.b.audit", "order"),
+        ("start", "outer.a.extract", "order"),
+    ]
+
+
+@branch
+def pick() -> list[Task]:
+    return []
+
+
+def test_a_dependency_on_a_group_ending_with_a_branch_is_a_plain_edge() -> None:
+    # Decision 94: the branch's own choices stay choices; the edge the group's dependency
+    # makes is taken once the branch has run, whatever it chose.
+    with Dag("d"):
+        with group("route") as route:
+            chosen = pick()
+        yes, no = EmptyOperator("yes"), EmptyOperator("no")
+        chosen >> [yes, no]
+        route >> EmptyOperator("then")
+    assert edges(only_dag()) == [
+        ("route.pick", "no", "selection"),
+        ("route.pick", "then", "order"),
+        ("route.pick", "yes", "selection"),
+    ]
+
+
+def test_a_group_whose_block_raised_is_closed() -> None:
+    with Dag("d"):
+        try:
+            with group("load") as load:
+                extract()
+                raise RuntimeError("caught in the DAG file")
+        except RuntimeError:
+            pass
+        load >> EmptyOperator("after")
+    model = only_dag()
+    assert [(t.id, t.group) for t in model.tasks] == [
+        ("load.extract", "load"),
+        ("after", None),
+    ]
+    assert edges(model) == [("load.extract", "after", "order")]
+
+
+def test_a_cycle_through_a_whole_group_is_named() -> None:
+    def define() -> None:
+        with Dag("d"):
+            with group("g") as g:
+                a, b = EmptyOperator("a"), EmptyOperator("b")
+            a >> b >> a
+            g >> EmptyOperator("after")
+
+    with pytest.raises(ValueError, match=r"group `g`'s tasks form a cycle: g\.a -> g\.b -> g\.a"):
+        define()
 
 
 def test_a_group_name_is_one_id_part() -> None:
@@ -187,3 +291,77 @@ def test_a_group_needs_a_dag_and_its_block() -> None:
         assert named.group_id == "named"
         assert repr(named) == "Group('named')"
         extract()
+
+
+def _statement_order_edges(start_first: bool) -> list[tuple[str, str, str]]:
+    """Failure A of the fix-up review: `extracted >> [store, notify]` adds an edge inside
+    `load` and one out of it; `start >> load` reads `load`'s first tasks."""
+    with Dag("d"):
+        start, notify = EmptyOperator("start"), EmptyOperator("notify")
+        with group("load") as load:
+            with group("extract") as extracted:
+                e = EmptyOperator("e", run_if=RunIf.ALL_SUCCEEDED)
+            store = EmptyOperator("store")
+        fetch().on(Rows) >> e
+        if start_first:
+            start >> load
+            extracted >> [store, notify]
+        else:
+            extracted >> [store, notify]
+            start >> load
+    return edges(only_dag())
+
+
+def test_a_groups_ends_dont_depend_on_the_order_of_statements() -> None:
+    first = _statement_order_edges(start_first=True)
+    assert first == _statement_order_edges(start_first=False)
+    # `store` comes after `e` inside `load`: no first task of it.
+    assert ("start", "load.store", "order") not in first
+
+
+def test_a_dependency_reaching_out_of_a_group_still_counts_for_its_ends() -> None:
+    # Failure B: `a >> [tb, outside]` adds `ta -> tb` inside `left` (and one out of `outer`):
+    # `ta` is then no last task of `left`, whatever the statements' order.
+    with Dag("d"):
+        outside = EmptyOperator("outside")
+        with group("outer"):
+            with group("left") as left:
+                with group("a") as a:
+                    EmptyOperator("ta")
+                tb = EmptyOperator("tb", run_if=RunIf.ALL_SUCCEEDED)
+            c = EmptyOperator("c")
+        fetch().on(Rows) >> tb
+        left >> c
+        a >> [tb, outside]
+    assert ("outer.left.a.ta", "outer.c", "order") not in edges(only_dag())
+
+
+def test_a_cycle_through_a_group_is_its_own_not_another_one() -> None:
+    def define() -> None:
+        with Dag("d"):
+            x, y = EmptyOperator("x"), EmptyOperator("y")
+            x >> y >> x
+            with group("g") as g:
+                a, b = EmptyOperator("a"), EmptyOperator("b")
+            a >> b >> a
+            g >> EmptyOperator("after")
+
+    with pytest.raises(ValueError, match=r"group `g`'s tasks form a cycle: g\.a -> g\.b -> g\.a"):
+        define()
+
+
+def test_a_group_dependency_error_names_the_line_it_was_written_on() -> None:
+    lines: list[int] = []
+
+    def define() -> None:
+        with Dag("d"):
+            with group("empty") as empty:
+                pass
+            first = EmptyOperator("x")
+            lines.append(inspect.currentframe().f_lineno + 1)  # type: ignore[union-attr]
+            first >> empty
+
+    # Reported when the DAG ends, so the message says where the dependency was written.
+    with pytest.raises(ValueError, match=r"`>>`: group `empty` has no tasks") as raised:
+        define()
+    assert str(raised.value).startswith(f"test_groups.py:{lines[0]}: "), raised.value

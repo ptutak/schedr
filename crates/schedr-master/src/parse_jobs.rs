@@ -107,6 +107,11 @@ impl ParseJobs {
         if job.worker.is_some() || job.not_before.is_some_and(|at| at > now) {
             return None;
         }
+        // A retry goes to another candidate than the worker that failed, if there is one: the
+        // round's expiry hands it out.
+        if job.failed_on.as_deref() == Some(worker_id) && job.candidates.len() > 1 {
+            return None;
+        }
         job.worker = Some((worker_id.to_owned(), now));
         Some(ParseAssignment {
             job_id: job.id.clone(),
@@ -162,6 +167,25 @@ impl ParseJobs {
         self.jobs.insert(key, job);
     }
 
+    /// A worker reports other code than `key` now: it can't parse `key` any more.
+    /// If the job was its, it is handed out again at the next round ([`Self::expire`]); the
+    /// agent drops a job for code it no longer has, without an answer.
+    pub fn moved_away(&mut self, key: &ParseKey, worker_id: &str, now: Timestamp) {
+        let Some(job) = self.jobs.get_mut(key) else {
+            return;
+        };
+        job.candidates.remove(worker_id);
+        // A first parse nobody reports any more isn't needed; a retry waits for a reporter.
+        if job.candidates.is_empty() && job.not_before.is_none() {
+            self.jobs.remove(key);
+            return;
+        }
+        if job.worker.as_ref().is_some_and(|(w, _)| w == worker_id) {
+            job.worker = None;
+            job.not_before = Some(job.not_before.map_or(now, |at| at.min(now)));
+        }
+    }
+
     /// Whether `key` has a job (a retry included).
     #[must_use]
     pub fn has(&self, key: &ParseKey) -> bool {
@@ -176,12 +200,14 @@ impl ParseJobs {
             job.candidates.remove(worker_id);
             if job.worker.as_ref().is_some_and(|(w, _)| w == worker_id) {
                 job.worker = None;
-                if let Some(next) = job.candidates.iter().next().cloned() {
+                if let Some(next) = next_candidate(job) {
                     assignments.push(assign(key, job, next, now));
                 }
             }
         }
-        self.jobs.retain(|_, job| !job.candidates.is_empty());
+        // A retry waits for a worker reporting its hash (one resumed, or registered again).
+        self.jobs
+            .retain(|_, job| !job.candidates.is_empty() || job.not_before.is_some());
         assignments
     }
 
@@ -192,32 +218,31 @@ impl ParseJobs {
         let mut assignments = Vec::new();
         for (key, job) in &mut self.jobs {
             let Some((worker, since)) = &job.worker else {
-                if job.not_before.is_some_and(|at| at <= now) {
-                    let next = job
-                        .candidates
-                        .iter()
-                        .find(|c| job.failed_on.as_ref() != Some(*c))
-                        .or_else(|| job.candidates.iter().next())
-                        .cloned();
-                    if let Some(next) = next {
-                        assignments.push(assign(key, job, next, now));
-                    }
+                if job.not_before.is_some_and(|at| at <= now)
+                    && let Some(next) = next_candidate(job)
+                {
+                    assignments.push(assign(key, job, next, now));
                 }
                 continue;
             };
             if now.duration_since(*since).unsigned_abs() < self.timeout {
                 continue;
             }
-            let next = job
+            // The candidates after its worker in turn; a retry passes over the worker whose
+            // parse failed while another can take it.
+            let in_turn: Vec<&String> = job
                 .candidates
                 .range::<String, _>((
                     std::ops::Bound::Excluded(worker),
                     std::ops::Bound::Unbounded,
                 ))
                 .chain(job.candidates.iter())
-                .next()
-                .cloned()
-                .unwrap_or_else(|| worker.clone());
+                .collect();
+            let next = in_turn
+                .iter()
+                .find(|c| job.failed_on.as_ref() != Some(**c))
+                .or_else(|| in_turn.first())
+                .map_or_else(|| worker.clone(), |c| (*c).clone());
             assignments.push(assign(key, job, next, now));
         }
         assignments
@@ -243,6 +268,15 @@ fn assign(key: &ParseKey, job: &mut Job, worker: String, now: Timestamp) -> Pars
         worker_id: worker,
         key: key.clone(),
     }
+}
+
+/// The candidate a job goes to: one other than the worker whose parse failed, if there is one.
+fn next_candidate(job: &Job) -> Option<String> {
+    job.candidates
+        .iter()
+        .find(|c| job.failed_on.as_ref() != Some(*c))
+        .or_else(|| job.candidates.iter().next())
+        .cloned()
 }
 
 /// A new job, counted in `metrics`.

@@ -157,3 +157,63 @@ fn a_due_retry_goes_to_the_first_worker_reporting_the_hash() {
     let job = jobs.request(key("h1"), "w3", at(100)).unwrap();
     assert_eq!(job.worker_id, "w3");
 }
+
+fn workers(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|w| (*w).to_owned()).collect()
+}
+
+#[test]
+fn a_retry_outlives_its_last_candidate_and_goes_to_the_next_one() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.retry(key("h1"), workers(&["w1"]), Some("w1"), at(0));
+    // Its only worker drains: the retry waits for a worker to report the hash again.
+    assert_eq!(jobs.worker_lost("w1", at(1)), []);
+    assert!(jobs.has(&key("h1")));
+    let resumed = jobs.request(key("h1"), "w1", at(30)).unwrap();
+    assert_eq!(resumed.worker_id, "w1");
+}
+
+#[test]
+fn a_retry_goes_to_the_worker_that_failed_only_when_no_other_can_take_it() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.retry(key("h1"), workers(&["w1", "w2", "w3"]), Some("w1"), at(0));
+    let [first] = jobs.expire(at(30)).try_into().unwrap();
+    assert_eq!(first.worker_id, "w2");
+    // Its worker is lost: the next one that didn't fail, not w1.
+    let [next] = jobs.worker_lost("w2", at(31)).try_into().unwrap();
+    assert_eq!(next.worker_id, "w3");
+
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.retry(key("h1"), workers(&["w1", "w2"]), Some("w1"), at(0));
+    // The worker that failed asks first: it waits for the round to give it to w2.
+    assert_eq!(jobs.request(key("h1"), "w1", at(30)), None);
+    let [due] = jobs.expire(at(30)).try_into().unwrap();
+    assert_eq!(due.worker_id, "w2");
+}
+
+#[test]
+fn a_worker_reporting_other_code_is_no_candidate_for_the_old() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.retry(key("h1"), workers(&["w1", "w2"]), Some("w1"), at(0));
+    // w2 moved to other code before the retry was due: only w1 still has `h1`.
+    jobs.moved_away(&key("h1"), "w2", at(10));
+    let [due] = jobs.expire(at(30)).try_into().unwrap();
+    assert_eq!(due.worker_id, "w1");
+    // The worker it went to moves away too: it is handed out again at the next round.
+    jobs.request(key("h1"), "w3", at(31));
+    jobs.moved_away(&key("h1"), "w1", at(32));
+    let [again] = jobs.expire(at(32)).try_into().unwrap();
+    assert_eq!(again.worker_id, "w3");
+}
+
+#[test]
+fn a_timed_out_retry_skips_the_worker_that_failed_too() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.retry(key("h1"), workers(&["a", "b", "c"]), Some("b"), at(0));
+    let [first] = jobs.expire(at(30)).try_into().unwrap();
+    assert_eq!(first.worker_id, "a");
+    // `a` never answers: the next in turn is `c`, not `b`, whose parse failed.
+    let timeout = i64::try_from(PARSE_JOB_TIMEOUT.as_secs()).unwrap();
+    let [next] = jobs.expire(at(30 + timeout)).try_into().unwrap();
+    assert_eq!(next.worker_id, "c");
+}

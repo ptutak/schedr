@@ -254,6 +254,18 @@ pub async fn sources(
 /// them, so assigning N of them resolves each list once, not N times. Kept for one step.
 pub type Resolved = BTreeMap<(String, TaskId, usize), Json>;
 
+/// Why a task instance's inputs can't be made.
+#[derive(Debug, thiserror::Error)]
+pub enum InputsError {
+    /// The database failed.
+    #[error(transparent)]
+    Db(#[from] DbError),
+    /// An element `.expand_kwargs()` maps over isn't a dict of arguments: the instance can't
+    /// run (it would every time).
+    #[error("{0}")]
+    NotArguments(String),
+}
+
 /// A task instance's inputs, as JSON: the whole outputs of the upstream tasks it uses (not
 /// its lanes), and for an instance of a mapped task its own arguments under `$expand`, with
 /// the outcome of each taken from a lane under `$expand_outcomes` (decision 76). A lane reads
@@ -261,14 +273,16 @@ pub type Resolved = BTreeMap<(String, TaskId, usize), Json>;
 ///
 /// # Errors
 ///
-/// [`DbError`] if the database fails.
+/// [`InputsError::Db`] if the database fails; [`InputsError::NotArguments`] for an element
+/// of `.expand_kwargs()` over a mapped task that isn't a dict (a mapped list's elements are
+/// checked when the task expands).
 pub async fn inputs(
     db: &Database,
     dag: &Dag,
     run_id: &str,
     (task, map_index): (&Task, i32),
     resolved: &mut Resolved,
-) -> Result<Json, DbError> {
+) -> Result<Json, InputsError> {
     let lanes = lane_sources(dag, task);
     let used: BTreeSet<&TaskId> = task
         .references()
@@ -290,6 +304,10 @@ pub async fn inputs(
     let mut expand = serde_json::Map::new();
     let mut outcomes = serde_json::Map::new();
     for (d, ((name, dim), at)) in dims(dag, task).into_iter().zip(place).enumerate() {
+        let lane = match dim {
+            Dim::Lane(upstream) => Some(upstream),
+            Dim::Values(_) => None,
+        };
         let (element, outcome) = match dim {
             Dim::Values(value) => {
                 let list = resolved
@@ -319,11 +337,17 @@ pub async fn inputs(
                 expand.insert(name.to_owned(), element);
             }
             // `.expand_kwargs()`: the element is a dict of arguments.
-            None => {
-                if let Json::Object(arguments) = element {
-                    expand.extend(arguments);
+            None => match (element, lane) {
+                (Json::Object(arguments), _) => expand.extend(arguments),
+                (element, Some(upstream)) => {
+                    return Err(InputsError::NotArguments(format!(
+                        "element {at} of `{upstream}` isn't a dict of arguments for \
+                         `.expand_kwargs()`: {element}"
+                    )));
                 }
-            }
+                // A mapped list was checked when the task expanded.
+                (_, None) => {}
+            },
         }
     }
     inputs.insert("$expand".to_owned(), Json::Object(expand));

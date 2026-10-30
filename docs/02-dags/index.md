@@ -1,8 +1,9 @@
 # Writing DAGs
 
 How to define a DAG in Python with the `schedr` package: the tasks, the data between them,
-how they route by outcome, how a task runs once per element, when runs start, how to test
-the file, and how type checkers read it. These pages describe the API as it runs.
+how tasks are grouped, how they route by outcome, how a task runs once per element, when
+runs start, how to test the file, and how type checkers read it. These pages describe the
+API as it runs.
 [How schedr works](../03-guide/index.md) is what the system does with a DAG once it is stored.
 [Python API structure](../_generated/05-design/07-python-api-structure.md) is why the API is
 shaped this way, including features that are not built yet. Signatures are on the
@@ -25,4 +26,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 08-outcomes
 09-type-checkers
 10-mapping
+11-groups
 ```

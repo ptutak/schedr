@@ -1,6 +1,6 @@
 {% import "confirm.html" as confirm %}
 <div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
-<div class="panel-head" data-task="{{ task_id }}">
+<div class="panel-head" data-task="{{ node }}">
   <h2 class="mono">{{ task_id }}</h2>
   {% if !back.is_empty() %}<a class="back" href="{{ back_href }}" hx-get="{{ back }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ back_href }}">all instances</a>{% endif %}
   <span class="state {{ state }}">{{ status }}</span>

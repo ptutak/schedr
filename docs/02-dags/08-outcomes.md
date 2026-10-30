@@ -131,9 +131,15 @@ source. `all_ok` sets `RunIf.ALL_SUCCEEDED` and is skipped because `to_gcs` was.
 
 Under `NONE_FAILED`, a task whose **every** edge isn't taken is skipped, not run with
 `None`. A parameter must allow `None` only when its reference may stand for `None`
-(narrowed with `.on(...)`, or to a task that may be skipped) **and** the task has
-another edge that can run it anyway: `load(primary.on(Rows), mirror.on(Rows))` takes
-`Rows | None` twice; `report_outage(mirror.on(Unavailable))` takes plain `Unavailable`.
+**and** the task has another edge that can run it anyway.
+
+A reference may stand for `None` when `.on(...)` leaves an outcome of the upstream task
+out, or when that task may itself be skipped. An `.on(...)` that names every outcome of
+the task is an edge always taken, the same as naming none: it gives no `None`.
+`both(fetch().on(Rows, Unavailable))` takes `Rows | Unavailable` when those are all of
+`fetch`'s outcomes. `load(primary.on(Rows), mirror.on(Rows))` takes `Rows | None` twice,
+because each `.on(Rows)` leaves `Unavailable` out and the other edge can still run `load`.
+`report_outage(mirror.on(Unavailable))` takes plain `Unavailable`.
 
 The check runs when the `with Dag` block ends, so an order edge added after the call
 counts. It reaches references at any depth (a list or dict that holds one) and outcome

@@ -154,10 +154,15 @@ class Dag:
         Nothing is recorded when the block raised.
 
         Raises:
-            ValueError: If the dependencies form a cycle.
+            ValueError: If the dependencies form a cycle, or one on a group can't be made.
         """
-        _build.pop()
         builder = self._builder
+        try:
+            # While the DAG is still the active one: a group's ends are read through it.
+            if exc_type is None and builder is not None:
+                builder.make_group_dependencies()
+        finally:
+            _build.pop()
         if exc_type is not None or builder is None:
             return
         cycle = builder.find_cycle()

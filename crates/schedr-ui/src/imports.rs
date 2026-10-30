@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use schedr_api::views::{ImportErrorList, ImportErrorView};
 use schedr_client::{ClientError, Transport};
+use schedr_model::runner::{PARSE_TIMEOUT_EXCEPTION, RUNNER_DIED_EXCEPTION};
 
 use crate::page::Page;
 use crate::pages::render;
@@ -91,12 +92,26 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
 
 /// How many files failed in the deployments that answered.
 async fn count<T: Transport + Send + Sync + 'static>(ui: &Arc<Ui<T>>) -> usize {
-    ask_all(ui)
+    let (held, transient) = counts(ui).await;
+    held + transient
+}
+
+/// The files that failed in every deployment: those whose DAGs are held, and those that
+/// failed transiently (a timeout or a runner that died: parsed again, nothing held).
+async fn counts<T: Transport + Send + Sync + 'static>(ui: &Arc<Ui<T>>) -> (usize, usize) {
+    let errors: Vec<ImportErrorView> = ask_all(ui)
         .await
         .into_iter()
         .filter_map(|(_, answer)| answer.ok())
-        .map(|list| list.errors.len())
-        .sum()
+        .flat_map(|list| list.errors)
+        .collect();
+    let transient = errors
+        .iter()
+        .filter(|e| {
+            [PARSE_TIMEOUT_EXCEPTION, RUNNER_DIED_EXCEPTION].contains(&e.exception.as_str())
+        })
+        .count();
+    (errors.len() - transient, transient)
 }
 
 /// `GET /import-errors/count`: the navigation's count, ` (2)`, or nothing.
@@ -115,21 +130,42 @@ pub async fn notice<T: Transport + Send + Sync + 'static>(
     headers: HeaderMap,
 ) -> Response {
     let page = Page::new(&headers, ui.docs_dir.is_some());
-    match count(&ui).await {
-        0 => Html(String::new()).into_response(),
-        n => {
-            let files = if n == 1 {
-                "1 file"
-            } else {
-                &format!("{n} files")
-            };
-            Html(format!(
-                r#"<div class="banner warning">{files} failed to import: their DAGs are held (no runs) until the file is fixed (a timeout is parsed again) (<a href="{}/import-errors">see import errors</a>)</div>"#,
-                page.base
-            ))
-            .into_response()
+    let files = |n: usize| {
+        if n == 1 {
+            "1 file".to_owned()
+        } else {
+            format!("{n} files")
         }
+    };
+    let (held, transient) = counts(&ui).await;
+    let mut said = Vec::new();
+    match held {
+        0 => {}
+        1 => said.push(
+            "1 file failed to import: its DAGs are held (no runs) until it is fixed".to_owned(),
+        ),
+        n => said.push(format!(
+            "{} failed to import: their DAGs are held (no runs) until they are fixed",
+            files(n)
+        )),
     }
+    if transient > 0 {
+        let whose = if transient == 1 { "its" } else { "their" };
+        said.push(format!(
+            "{} failed to import for now (a timeout or a runner that died): parsed again, \
+             {whose} DAGs keep their last good version",
+            files(transient)
+        ));
+    }
+    if said.is_empty() {
+        return Html(String::new()).into_response();
+    }
+    Html(format!(
+        r#"<div class="banner warning">{}. (<a href="{}/import-errors">see import errors</a>)</div>"#,
+        said.join("; "),
+        page.base
+    ))
+    .into_response()
 }
 
 fn row<T>(page: &Page, deployment: &Deployment<T>, error: &ImportErrorView) -> ImportErrorRow {

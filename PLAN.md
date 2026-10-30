@@ -244,7 +244,7 @@ and updates the guide.
 | M3.5 | **Auth modes:** `none` / `proxy_header` / `basic` with their safety rules, for the webserver and the UI; the UI's actions checked by `Origin` (24A) | each mode tested, CSRF refused |
 | M3.6 | **Federation, in production:** several deployments in one UI, any mix of standalones on SQLite, standalones on Postgres and distributed ones (the user, 2026-10-28: the way from a federation of standalones on SQLite to Postgres to distributed, a deployment at a time, every stage possible); merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them (the token for standalones); standalone without its own UI (`schedr standalone --no-ui`); the chart deploys `schedr ui` with distributed (37A) and **alone**, over a list of deployments in other releases or namespaces; the chart's values for M3.5's sign-in (the auth sections, the users file and tokens from Secrets, the webserver's UI port and the UI's certificate) | one UI over a standalone on SQLite, a standalone on Postgres and a distributed deployment, one of them down; the chart renders each shape |
 
-## After M3: Grok over the whole repository
+## After M3: the whole repository reviewed (Codex, from 2026-10-30)
 
 Asked by the user (2026-10-27): once M3 is done, Grok reviews the **whole repository**, not
 one step's diff (it has only reviewed diffs so far), with a proof test or script per finding,
@@ -265,10 +265,11 @@ policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.
 `webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
 Claude, no docs round).
 
-**How it is run** (the user, 2026-10-30): split into 14 sections by concern (the plan is in
-the Grok skill's `reviews/schedr-full-2026-10-30.md`); **about 20% of each week's Grok
-allowance goes to it, the rest to reviewing current work**, so it takes about five weeks,
-riskiest sections first.
+**How it is run** (the user, 2026-10-30): split into 14 sections by concern, riskiest first,
+one fresh read-only session each. **Moved to Codex** the same day, before any section ran
+(the plan is in the Codex skill's `reviews/schedr-full-2026-10-30.md`); Grok's allowance goes
+wholly to current work (reviews, bug fixing, docs). The share of Codex's week it takes is set
+with the user; its pace follows from the first sections' cost.
 
 ## M4: Native API complete
 
@@ -296,9 +297,11 @@ reviews of about five sub-steps.
 | M4.2c | **Import errors in the UI** (decisions 66-68; the user's request): each root's current parse recorded by the master, `GET /api/v1/import-errors`, a page with a nav count and a DAG-list notice | done (2026-10-29) |
 | M4.3a | **Mapping, the API** (decisions 69-71): `.partial` / `.expand` / `.expand_kwargs`, `expand` in DAG JSON, the parse-time checks, `[mapping] max_instances`; the master refuses mapped DAGs until M4.3b | done (2026-10-29, `82f9b47`) |
 | M4.3b | **Mapping, the master:** instances created once inputs exist, per-instance inputs, the mapped task's state, fan-in lists (`None` for skipped instances), element-wise mapping and `.on`, empty expansion, the instance limit; lanes (70 B), a failed step cancels the rest (75a B), `run_if` over instances (75b D), the written order (79) | done (2026-10-30) |
-| M4.3c | **Mapping, around it:** `map_index` in the runner and task context, the API and CLI per instance, the UI's summary node and instance list, `run_dag`'s `tasks["x"][3]`; decisions 80-86 (`task_ctx`) | done (2026-10-30) |
+| M4.3c | **Mapping, around it:** `map_index` in the runner and task context, the API and CLI per instance, the UI's summary node and instance list, `run_dag`'s `tasks["x"][3]`; decisions 80-86 (`task_ctx`) | done (2026-10-30), except decision 86's missing CLI commands (M4.3d) |
+| M4.3d | **The CLI's run and task reads** (B37, the user's 2026-10-30): `schedr runs show`, `schedr tasks attempts` and `schedr tasks output` over the client's existing methods, `--map-index N` on them, a mapped task's instances listed as `fetch[0]`, `fetch[1]`, ... after its own row (decision 86), human output and `--json`; the CLI reference regenerated | each command against a standalone with a mapped run, an instance and the gathered list |
 | M4.3 | **Mapping:** `.partial(...)` / `.expand(...)`, instances `map_index` 0..N-1 created once the input exists, element-wise `.on` and expansion over a mapped output, the whole output as `Output[list[T]]` (input order; `[]` for an empty expansion; `upstream_failed` on a failed instance), `[mapping] max_instances`; instances in the API and UI | a mapped task over a literal and over an upstream output, empty included, with per-instance results: done (2026-10-30, M4.3a-c) |
-| M4.4 | **Concurrency limits:** `Dag(max_active_tasks=)`, `@task(max_active=, max_active_per_run=)` (also operators, `TaskDefaults`), applied in the assignment's transaction, the waiting reason and its metric | limits hold under a stress scenario (no more running than allowed), reasons shown |
+| M4.3e | **Bug fixing before M4.4** (the user, 2026-10-30: "finish bugfixing before we move on with M4.4"; "let's make a pause for bugs"). **First, the fault-injection harness** (decision 98, the user's, 2026-10-30): a test-only write hook in `schedr-db` (the Nth write fails), a consistency check (no half-done state: an attempt ended with its task running, a lost worker with open attempts, a run's state against its tasks, the master's reserved slots against open attempts, queued cancels for rolled-back work), and `fail_each_write` running an operation once per write with that write failing; one test per master operation (assign, start, finish, reject, expiry, worker lost, reconnect, each command). Then the fixes, each checked by it where it applies: the worker link's bugs from Codex's whole-repo review F1, B41-B48 (a result not resent while the link lives, a lost worker's cleanup skipped after a failed write, a task's cancel lost on reconnect, an old stream disconnecting its replacement, a registration deadlocking on a full channel, a `Finished` from another worker accepted, a replayed result over the master's limit, the per-message snapshot's cost), and B40 (a lease test's 2 s limit under load); each with a reproducing test first (Codex's proofs reused), reviewed by Grok and Codex. The older suspected bugs (B4, B22, B24, B31, B32) investigated by Grok or Codex alongside; B38 with B39's graph work. **Run in parallel with the scan** (the user, 2026-10-30: option A): Codex keeps reviewing sections of the committed code while Claude fixes the high-severity bugs section by section (F1's B41-B48, F2's B49-B52, F6's B53-B57, then each new section's), each fix round reviewed by Grok; medium and low ones wait in BUGS.md. Decision 98 (B53's fix) taken when it comes up | the high-severity bugs of every section scanned so far fixed, their tests failing first, `make check` passing; then M4.4 |
+| M4.4 | **Concurrency limits:** `Dag(max_active_tasks=)`, `@task(max_active=, max_active_per_run=)` (also operators, `TaskDefaults`), counted in the master's memory and checked as each task is assigned (88A), each mapped instance counting (89), the limits across runs from the current version (87A), a parse-time warning for `max_active_per_run` on an unmapped task (90A), the waiting reason and its metric (91), each limit with its current count on the DAG page (96) | limits hold in an integration test with many tasks and tight limits (92B; kept to a few seconds like the other standalone tests, or the user decides whether it leaves the default suite: the user, 2026-10-30), and a stress scenario written for it, run when the user next runs the stress suite, the counts match the database after a restart, reasons shown |
 | M4.5 | **The agent channel, params and `dag_ctx`:** per-call connections to the agent (`SCM_RIGHTS`), `schedr task-ctx` / `schedr dag-ctx`, `schedr.script`; `Dag(params=...)` (dataclass or model, JSON Schema in the DAG JSON), values validated by the master before a run exists (`runs trigger -p`, `--params`, the UI's form), stored with the run; `dag_ctx` references in the DAG body, values at run time, `dag_ctx.params(...)` | a Python task, a command and a plain script read the same params and run information |
 | M4.6 | **Secrets:** the secret storage abstraction, Vault (KV v2, Kubernetes auth, token renewal, cache), the `db` storage for standalone (encrypted, `SCHEDR_SECRET_KEY`) and `schedr secrets set/list/get/delete/export`; placeholders rendered by the agent, `secrets=` and `SecretPrefix` on demand, masking (`min_mask_length`, `unmasked_prefixes`), the error kinds; storage names checked at DAG validation; the chart's key and Vault role | a task reads secrets from Vault (a dev-mode container in the integration tests) and from `db`, masked in its log |
 | M4.7 | **Connections:** `@connection` generator functions, the built-in typed connections (`HTTP` and `Mongo` sync and async through httpx and pymongo, `SSH` and `SQL` sync, `Generic`) with `check()`, `CommandOperator(connections=)` variables and files, `schedr task-ctx connection`, `schedr connections check` / `test`, optional `@task(connections=[...])`, test doubles (decision 53) | the same DAG reads a connection's values from two environments' storages |
@@ -311,6 +314,39 @@ reviews of about five sub-steps.
 | M4.13 | **Notifications:** channels in the server's configuration (email and webhook), `Dag(notify=...)`, the events (`RUN_FAILED` by default), fixed messages, metrics | a failed run sends one email and one webhook, a pure cancel none |
 | M4.14 | **Retention:** `[retention]` (runs, outputs, events, commands), the master's batched job, never the latest run nor an unfinished one, "output deleted by retention" | old runs and outputs go, the protected ones stay, on SQLite and Postgres |
 | M4.15 | **Per-task memory and upgrade rules:** a task's own memory budget in the API, `setrlimit` opt-in through `schedr task-exec` (50A); the upgrade rules checked against what M2 built (version gating, warnings within a major) and completed | a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers |
+
+### M4.4: decisions (taken by the user 2026-10-30: all as recommended, 87A 88A 89 90A 91 92B, 95 not now, 96 yes; recorded in PROJECT.md, Native API: Concurrency limits)
+
+What PROJECT.md already settles (Native API: Concurrency limits; Task assignment):
+`max_active_tasks` on the `Dag` (default `None`), `max_active` and `max_active_per_run` on a
+task (also operators and `TaskDefaults`), checked when a task is assigned, counting
+`running`, `cleaning_up` and assigned-not-started; a task held back stays `queued` with its
+reason ("waiting: `max_active_per_run` (10) reached"); the order stays oldest-ready first
+among the tasks the limits allow (no head-of-line blocking). Open:
+
+- **87. Which DAG version's limits apply,** when runs of one DAG are on different versions:
+  A each run's own version for `max_active_per_run`, the DAG's **current** version for the
+  limits across runs (`max_active_tasks`, `max_active`); B each run's own version for all;
+  C the current version for all. Recommended: A (a limit across runs is today's intent).
+- **88. How the master counts:** A in memory (running, cleaning-up and assigned instances per
+  DAG and per task, rebuilt from the database when the master starts; the lease guarantees
+  one master, and its writes are fenced), checked as each task is assigned; B a count query
+  in each assignment's transaction (PROJECT.md's wording; simplest to trust, a query per
+  assignment, which B18 showed costs at thousands a round). Recommended: A, with a test that
+  the counts match the database after a restart.
+- **89. A mapped task:** its instances count one by one toward `max_active_tasks`,
+  `max_active` and `max_active_per_run` (the `-1` row never counts). Recommended as stated
+  (PROJECT.md's own example: 1,000 instances, 10 at a time).
+- **90. `max_active_per_run` on an unmapped task** (always one instance a run, so it limits
+  nothing): A a parse-time warning (a `TypingHint`-like hint shown by `dags check`); B
+  accepted silently; C an error. Recommended: A.
+- **91. The waiting reasons and the metric:** the reason as above, naming the limit and its
+  value; `master_tasks_waiting{reason="max_active_tasks"|"max_active"|"max_active_per_run"}`
+  beside the existing reasons. Recommended as stated.
+- **92. "Done when: limits hold under a stress scenario":** `make stress` is never run
+  without the user's go-ahead. A add a stress scenario and run it once, with the user's
+  go-ahead; B an integration test with many tasks and tight limits instead (no `make stress`).
+  Recommended: B now, A when the user next runs the stress suite.
 
 ## M4.5: Batched worker messages
 
@@ -383,6 +419,9 @@ users of schedr's own). Decisions laid out on 2026-10-28, to take when M6 starts
 
 Ideas logged for M6, not decided:
 
+- **Changing a concurrency limit without a code change** (decision 95, 2026-10-30: not in
+  M4.4): an override through the API or CLI during an incident, like Airflow's editable
+  pools; with limits shared across DAGs.
 - **Skip (or set a task's state) from the UI and the CLI** (the user, 2026-10-30): a person
   marks a task that hasn't run as skipped. To settle then: what its downstream gets (a data
   edge of a skipped task passes `None`, so the parse-time check of `None` would have to

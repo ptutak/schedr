@@ -25,7 +25,7 @@ PROJECT.md              # decision log (see Project documents)
 PLAN.md                 # milestones and steps
 BUGS.md                 # open bugs
 NEXT_SESSION.md         # hand-off for the next working session
-AI_SETUP.md, AI_INSTRUCTIONS.md   # the Grok worker's skill lives in ~/.claude/skills/grok, not here
+AI_SETUP.md, AI_INSTRUCTIONS.md   # the Grok and Codex skills live in ~/.claude/skills, not here
 Makefile                # every task has a target; `make help` lists them
 .pre-commit-config.yaml
 .github/workflows/ci.yml
@@ -250,27 +250,58 @@ Separate jobs. The ones that run on this machine each have a make target:
 
 ## Agent tooling
 
-- **Claude Code is the main agent;** Grok Build (xAI's terminal agent, on a SuperGrok or X
-  Premium+ subscription, so no per-token billing) reviews, explores, hunts bugs and keeps the
-  docs up. How the two work together is in `AI_INSTRUCTIONS.md`, Working with a second agent.
-- **Set up once per machine,** not per repository: the `/grok` skill lives in
-  `~/.claude/skills/grok/`. It has `SKILL.md`, `grok-turn.sh` (one headless turn, resumed by
-  session ID, logs in `logs/`) and `install.sh`. Copy the folder to a new machine and run
-  `~/.claude/skills/grok/install.sh`. It installs the Grok CLI (`npm install -g
-  @xai-official/grok`), runs `grok login`, and allows the turn script in
-  `~/.claude/settings.json`. Running it again is safe.
-- **Per repository, nothing to add:** the skill finds the working rules (this file and
+- **Claude Code is the main agent** and writes the code. Two colleagues work beside it, each
+  through a skill, on its own subscription (no per-token billing):
+  - **Grok** (Grok Build, xAI's terminal agent, on SuperGrok or X Premium+): step reviews,
+    bug hunting and fixing, docs, exploration.
+  - **Codex** (OpenAI's Codex CLI, on a ChatGPT plan): a second opinion on architecture,
+    reviews together with Grok, bug finding, docs, and the long whole-repository review;
+    not coding.
+
+  How they work together is in `AI_INSTRUCTIONS.md`, Working with a second agent, and in
+  each skill's `SKILL.md`.
+- **Set up once per machine,** not per repository. Each skill is a folder with its own private
+  git repository:
+
+  | | Grok | Codex |
+  |---|---|---|
+  | Folder | `~/.claude/skills/grok/` | `~/.claude/skills/codex/` |
+  | Repository | `git@github.com:ptutak/grok-skill.git` | `git@github.com:ptutak/codex-skill.git` |
+  | Invoked as | `/grok <task>` | `/codex <task>` |
+  | One turn | `grok-turn.sh new\|resume <session-id> <worktree> <prompt-file>` (the ID chosen by the caller) | `codex-turn.sh new <worktree> <prompt-file>` (prints the ID Codex assigns), then `resume <session-id> <worktree> <prompt-file>` |
+  | Model, effort | `GROK_MODEL` (grok-4.7), `GROK_EFFORT` (high) | `CODEX_MODEL` (gpt-6.1-sol), `CODEX_EFFORT` (high) |
+  | Watch live (no tokens) | `grok-watch [-a] [<id>]`, `-l` the sessions, `-c [DAYS] [--prune]` old ones, `-h` | `codex-watch` the same; `-l` also shows the weekly and 5-hour limits |
+  | Usage | the weekly % asked of the user, logged in `USAGE.md` | read from each turn (weekly and 5-hour %), logged in `USAGE.md` |
+  | Runs | with `--always-approve`, inside `sandbox.sh` | in its `workspace-write` sandbox (writes only in the worktree, network open), approvals off, inside `sandbox.sh` |
+
+  **`sandbox.sh`** (bubblewrap, `sudo apt install bubblewrap`) gives each turn a private view of
+  the filesystem: the system and the toolchains read-only, the worktree and the repository's
+  git data, the agent's own state; nothing else of the user's (no other project, no `~/.ssh`,
+  no Windows drive). Added after Codex listed the user's other projects with `find ..`.
+  Nothing the user runs later outside the sandbox is writable in it: `~/.cargo` is read-only
+  but its download cache, and the CLIs' own programs, configs, plugins, skills and memories
+  are read-only within their state folders (an agent gone wrong can't change them for later).
+  The environment is emptied but for an allowlist (the paths, the proxy, the toolchains' roots,
+  `SCHEDR_*`, `CARGO_*`, `RUSTUP_*`, `UV_*`): no token of the user's reaches an agent, which
+  sends what it reads to its provider.
+
+  On a new machine: clone each repository into its folder and run its `install.sh`. It
+  installs the CLI (`npm install -g @xai-official/grok` or `@openai/codex`), logs in (`grok
+  login`, `codex login`), links the watcher into `~/.local/bin`, and allows the turn script in
+  `~/.claude/settings.json`. Running it again is safe. Each skill keeps its review plans in
+  `reviews/` and its per-turn logs in `logs/` (ignored by git).
+- **Per repository, nothing to add:** the skills find the working rules (this file and
   `AI_INSTRUCTIONS.md`, else `AGENTS.md` / `CLAUDE.md`) and the checks (`make check`,
-  `make docs`). Grok's worktree is a sibling folder (`../<repo>-grok-<step>`), outside the
-  repository, so nothing needs ignoring.
-- **The worktree has its own Python environment** (a pyenv virtualenv
-  `<repo>-grok-<step>`, named in the worktree's untracked `.python-version`, deleted with
-  it): one environment shared by checkouts has an editable install pointing at whichever
-  synced last, so tests import another branch's code. Never `make setup` there: git hooks
-  are shared by all checkouts.
-- **The worktree has its own build directory,** so Grok's first build is a full one. Kind
-  clusters, ports and containers are shared with the main checkout: don't run the same
-  cluster script in both at once.
+  `make docs`). A colleague's worktree is a sibling folder (`../<repo>-grok-<step>`,
+  `../<repo>-codex-<step>`), outside the repository, so nothing needs ignoring.
+- **The worktree has its own Python environment** (a pyenv virtualenv named like the
+  worktree, in its untracked `.python-version`, deleted with it): one environment shared by
+  checkouts has an editable install pointing at whichever synced last, so tests import another
+  branch's code. Never `make setup` there: git hooks are shared by all checkouts.
+- **The worktree has its own build directory,** so a colleague's first build is a full one;
+  Claude runs it (and installs the environment) before the first turn, which matters for
+  Codex, whose sandbox can't write outside the worktree. Kind clusters, ports and containers
+  are shared with the main checkout: don't run the same cluster script in both at once.
 
 ## Project documents
 

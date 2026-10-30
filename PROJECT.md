@@ -1448,9 +1448,12 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
 Asked by the user (2026-10-29): a place in the UI for the DAG files that failed to import.
 - **What is shown** (decision 66, the user's: A): the files of each root's **current** parse
   that failed (their DAGs keep their last good version, listed but **held**: no runs until the
-  file is fixed, decision 72; see DAG code delivery), with the
-  root, the hash, when and by which
-  worker it was parsed, the exception, message and traceback. The master writes each root's
+  file is fixed, decision 72; a timeout or a runner that died holds nothing and is parsed
+  again, 72.2; see DAG code delivery), with the root, the hash, when and by which worker
+  **that file** was parsed (decision 93, the user's, 2026-10-30: A: `worker_id` and
+  `parsed_at` on each `parse_files` row, a retry writing its own; not chosen: B a retry
+  overwriting the parse's, which would misdate the files it didn't parse; C both, two sets
+  to explain), the exception, message and traceback. The master writes each root's
   current parse to `current_parses` when it decides it (from what alive workers report), so
   the API (`GET /api/v1/import-errors`) shows exactly what is in effect without deciding
   again. Not chosen: B the history of earlier parses too (more API and UI).
@@ -1582,7 +1585,9 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   - **no run is created:** nothing is stored, and its fire times count as missed (as when
     paused); once the file imports again, its trigger's `catchup` decides about them;
   - **a manual trigger is refused:** the command is `rejected` with the reason ("DAG `sync`
-    is held: `sync.py` fails to import (ModuleNotFoundError: …); fix the file first");
+    is held, no runs are created and it can't be triggered: its file `sync.py` fails to
+    import (ModuleNotFoundError: …), so its tasks couldn't run. Every DAG of the file is held
+    until it imports");
   - **its queued runs wait** until the hold lifts (72.1, the user's: A); runs already
     running go on.
   - Shown as `held` in the API (`DagView.held`: the file, exception and message), a badge,
@@ -2166,8 +2171,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
 - **Concurrency limits** (see Native API: `max_active_runs`, `max_active_tasks`, `max_active`,
   `max_active_per_run`): a ready task whose limit is reached stays **`queued`**, with the reason
   shown in the UI (e.g. "waiting: `max_active_per_run` (10) reached"). Limits are checked
-  **when a task is assigned, in the same transaction** that records the assignment (two tasks
-  can't both take the last place); they count tasks in `running` and `cleaning_up` (a cleanup
+  **when a task is assigned**, against counts the master keeps in memory (decision 88A:
+  rebuilt from the database when it starts; one master holds the lease, so two tasks can't
+  both take the last place); they count tasks in `running` and `cleaning_up` (a cleanup
   still holds the slot) and assigned tasks not yet `Started`. When a place frees up, the order
   stays oldest-ready first among tasks whose limits allow them.
 - `EmptyOperator` tasks and tasks skipped by branching are completed **by the master**, without
@@ -3719,7 +3725,7 @@ the runner turns the record into DAG JSON in the shared model:
 | Dependencies (`>>`, `chain()`)  | Edges between task IDs                               | Master: dependency resolution |
 | Trigger rules                   | A per-task field                                     | Master: when a task is ready, skipped or `upstream_failed` |
 | Branching                       | A `python` task flagged as a branch                  | Master: skips the branches not chosen and propagates the skip |
-| Task groups                     | Flattened to `group_id.task_id` names and edges, plus group metadata for the UI | Master sees ordinary tasks |
+| Task groups                     | Flattened to `group_id.task_id` names and edges, plus group metadata for the UI | Master schedules ordinary tasks (checks the groups) |
 | Dynamic task mapping            | The task, its fixed arguments, and what it maps over (a literal or an output reference) | Master: once the upstream output exists, creates N task instances (`map_index` 0…N−1) |
 | t-strings                       | Literal text plus typed references                   | Agent / runner: filled in at run time |
 | `EmptyOperator`                 | An `empty` task                                      | Master completes it, no worker |
@@ -3935,6 +3941,41 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     dedicated worker group with a fixed number of slots) cover it. Possibly later: named
     limits in the server configuration, referenced by tasks.
   - How the master applies them: see Task assignment.
+  - **Decided for M4.4** (decisions 87-92 and 95-96, the user's, 2026-10-30: all as recommended):
+    - **87, which version's limits** (A): `max_active_per_run` from each run's own DAG
+      version; the limits across runs (`max_active_tasks`, `max_active`) from the DAG's
+      **current** version, since a limit across runs has one value at a time. Not chosen: B
+      each run's own version for all (no single limit would hold); C the current version for
+      all (a run's own limit changing while it runs).
+    - **88, counting** (A): in the master's memory, the running, cleaning-up and
+      assigned-not-started instances per DAG and per task, rebuilt from the database when the
+      master starts (the lease keeps one master, its writes fenced) and checked as each task
+      is assigned; tested to match the database after a restart. Not chosen: B a count query
+      in each assignment's transaction (a query per assignment, B18's cost at thousands a
+      round). This replaces "in the same transaction" in Task assignment.
+    - **89, mapped tasks:** each instance counts toward all three limits; the `-1` row never
+      does.
+    - **90, `max_active_per_run` on an unmapped task** (A): a parse-time warning shown by
+      `dags check` (it limits nothing: one instance a run), not for a value from
+      `TaskDefaults`. Not chosen: B silent; C an error (breaks defaults shared with mapped
+      tasks).
+    - **91, the reason and the metric:** "waiting: `max_active_per_run` (10) reached" (the
+      limit and its value); `master_tasks_waiting{reason="max_active_tasks" | "max_active" |
+      "max_active_per_run"}` beside the existing reasons.
+    - **92, proof** (B): an integration test with many tasks and tight limits sampling the
+      active counts, and a stress scenario written in M4.4 too, run when the user next runs
+      the stress suite (never without their go). Not chosen: A running the scenario as part
+      of M4.4.
+    - **95, changing a limit without a code change** (the user, 2026-10-30: not now): no
+      override through the API or CLI (like Airflow's editable pools); with limits shared
+      across DAGs, a proposal for M6 (PLAN.md).
+    - **96, limits on the DAG page** (the user, 2026-10-30: yes): each limit set with its
+      current count ("`max_active_per_run` 10, 7 running"), from the master's counts (88A),
+      beside 91's waiting reasons.
+    - **Settled by precedent:** a limit below 1 is a parse-time error (`None`: no limit);
+      lowering a limit lets the running finish and holds new ones until under it; tasks
+      waiting to retry and tasks the master completes never count; the counts follow the
+      master's rollback rules (a rolled-back message restores them).
 - **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
   `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
 - **Routing: outcomes first, `@branch` for subsets** (see Task results and outcomes). To
@@ -3975,7 +4016,9 @@ User code can never change scheduling behaviour (skips, branching, retries) from
 - **Task groups: `with group("name"):`.** A group organises tasks while the DAG is written;
   it isn't something that runs. At parse time it is flattened: its tasks become ordinary tasks
   with prefixed IDs (`name.task_id`; nested groups `outer.inner.task_id`) and ordinary edges,
-  plus group metadata for the UI (members, name, parent). The master never sees a group.
+  plus group metadata for the UI (members, name, parent). The master schedules ordinary tasks
+  and edges; it reads groups only to check them (decision 64) and to accept decision 94's
+  edges.
   - **What it is for:** reusing a piece of DAG (a function building extract → transform →
     load, called once per source, each call in its own group so the IDs don't collide);
     shared settings (its own `TaskDefaults`, `run_if`, `uses=`; an inner group's override an
@@ -3990,9 +4033,14 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   - **A dependency on a group goes through its roots and leaves** (decision 56A, the
     user's, 2026-10-29): `x >> group` links `x` to the group's **roots** (its tasks with no
     upstream inside the group), `group >> y` links the group's **leaves** (no downstream
-    inside it) to `y`, as Airflow's `TaskGroup` does. Roots and leaves are computed when the
-    group's `with` block closes, so the order of statements inside it doesn't matter; a
-    dependency on an empty group is a parse error. Example: with `a >> b` and `c` in `load`,
+    inside it) to `y`, as Airflow's `TaskGroup` does. Roots and leaves are computed once the
+    whole DAG is written, from all its edges (Grok's review, 2026-10-30: computing them when
+    the group's block closed missed edges written after it), so where a statement is written
+    doesn't matter; a dependency inside a group counts for that group's ends. A dependency on
+    an empty group, or on one whose tasks form a cycle, is a parse error, reported when the
+    `with Dag(...)` block ends and naming where the dependency was written (decision 97, the
+    user's, 2026-10-30: A, `sync.py:42: ...`; not chosen: B the message alone, whose
+    traceback points at the block's end). Example: with `a >> b` and `c` in `load`,
     `start >> load` gives `start >> a`, `start >> c`, and `load >> publish` gives
     `b >> publish`, `c >> publish`. Edges count in trigger rules (55B), so this lets skips
     flow along the group's own chain: a skipped `a` skips `b`, which doesn't also hang on
@@ -4002,9 +4050,20 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     for `group >> y` (neither rule's simplicity).
   - **Built in M4.2b** (2026-10-29): `with group("load", defaults=TaskDefaults(...),
     run_if=...) as load:` (`schedr.group`, a `Group` handle); a group's name is one ID part;
-    it may not repeat in its parent nor be a task's ID; a dependency written while the group
-    is open is made when it closes; the same `@task` function in two groups needs no
-    `.override()`.
+    it may not repeat in its parent nor be a task's ID; the same `@task` function in two
+    groups needs no `.override()`; a group whose block raised (the error caught in the DAG
+    file) is closed all the same.
+  - **A dependency on a group that ends with a `@branch`** (decision 94, the user's,
+    2026-10-30: B): `route >> then` joins the **set** of the group's last tasks to the tasks
+    after it with plain order edges, a `@branch` among them included: it counts as having
+    run, whatever it chose, and each task after it applies its own `run_if` over that set
+    (`NONE_FAILED`: runs unless one failed or all were skipped; `ALL_SUCCEEDED`: only when
+    all succeeded). The branch's own edges stay choices. The master accepts an order edge
+    from a `@branch` to a task outside the branch's group (every other edge from a branch is
+    a choice). Before, the edge became a choice the branch never made, so `then` was always
+    skipped although the group succeeded (ten cases laid out for the user, 2026-10-30). Not
+    chosen: A refusing such a dependency at parse time; D a branch in a group choosing only
+    tasks inside it (refuses DAGs that work, and Airflow translations).
   - **In DAG JSON** (decision 64, the user's, 2026-10-29: A): a top-level `groups` list
     (`{id, parent}`, outer before inner) and an optional `group` on each task (its innermost
     group), both left out when empty; the master checks them (unique, parents declared, no
@@ -4127,6 +4186,17 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   - **Why a task failed with no attempt** (decision 78, the user's: A): a nullable `reason`
     on `task_instances` (more instances than `max_instances`; a mapped list that is `null`
     or not a list when it expands). Not chosen: B reusing `queued_reason`.
+  - **Settled by Grok's M4.3 review (2026-10-30), within decisions 75a, 76 and 82:**
+    `?map_index=-1` (the whole task, as listed) means the same as no index, and an index
+    outside `0..N-1` is a 400, on every endpoint (cancel included); a result that arrives
+    after the step already failed is ignored (the instance ends `cancelled`, its output not
+    stored); an element of `.expand_kwargs()` over a mapped task that isn't a dict fails its
+    instance at assignment, unretried (`input_mismatch`), as a mapped list's does at
+    expansion; dicts written in the DAG for `.expand_kwargs()` are checked like `.expand()`'s
+    names and types when the file loads (an argument also in `.partial()` refused, by the
+    master too, which also refuses a mapped `@branch`); an expansion is stored in one
+    transaction; `.on(...)` naming every outcome of a task is an unconditioned edge (no
+    `None` to allow).
 - **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
   imported (so an import error). The native API never "accepts and warns"; that applies only to
   the Airflow layer (see Airflow compatibility: Thin translating classes).
@@ -6597,6 +6667,15 @@ typed-path 0.12.4, utoipa-swagger-ui 10.0.2, webpki-root-certs 1.0.11, yoke 0.8.
 0.4.5 (0.4.6 is 1 day old, under the 3 days for a patch).
 
 ### Testing
+
+**Failure at every write** (decision 98, the user's, 2026-10-30, after Codex's whole-repository
+review found the class again and again: B42, B49, B51): a fault-injection harness in the
+tests. A test-only hook in `schedr-db`'s query layer makes the Nth write fail;
+`fail_each_write` runs a master operation once per write it makes, that write failing, from
+a fresh state each time; a shared consistency check then finds any half-done state (the
+database against itself and against the master's memory). Every master operation that writes
+gets such a test, so a path that can leave half a state fails the day it is written. Not
+chosen: a trigger per bug, by hand (what each proof did until then).
 
 **Unit tests and integration tests.** Every step brings its unit tests, and integration tests
 where it needs real processes, files, a real database or the whole system (see PLAN.md). Unit

@@ -30,21 +30,82 @@ flowchart LR
    server, then the bare one, then a new process. `schedr dags check` starts a new process
    and does not ask the fork servers. The native API only *records* DAGs while a file is
    imported; no task runs. A file that takes longer than `[dags] parse_file_timeout` (60 s)
-   is an import error. The runner also returns the Python warnings each import raised (a
-   `TypingHint` for an outcome class type checkers can't narrow, for example). Only
-   `schedr dags check` shows them; the agent doesn't upload them.
+   is an import error, and so is a runner that died while importing it. Neither holds the
+   file's DAGs: the file is parsed again ([Parsed again](#parsed-again)). The runner also
+   returns the Python warnings each import raised (a `TypingHint` for an outcome class type
+   checkers can't narrow, for example). Only `schedr dags check` shows them; the agent
+   doesn't upload them.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
    DAG is stored **paused**. The upload is a stream: a header, then one message per file, so
    only a single file's size counts against `[master] grpc_max_message_size` (64 MiB by
    default), which the master sends the worker in `Registered`. A file whose parse result is
-   bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. The
+   bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. That,
+   a file the master refuses after it imported (`InvalidDag`), and a path that isn't inside
+   the root (`InvalidPath`), each hold every DAG of the file. A file that raised while it
+   was imported does too
+   ([When a file fails to import](#when-a-file-fails-to-import)). The
    upload runs beside the worker's session, so heartbeats go on while it is sent.
 
 A parse job that hasn't finished after 10 minutes, or whose worker is lost, goes to the next
 worker that reported the same hash. Parse jobs live only in the master's memory. After a
-master restart, workers report their hashes again and the jobs are created again. A parse
-that was already stored is not repeated.
+master restart, workers report their hashes again and the jobs are created again. A
+stored parse is parsed again only when a file of it failed transiently
+([Parsed again](#parsed-again)).
+
+## When a file fails to import
+
+Each file of a parse is stored on its own, with the worker that parsed it and the time.
+The [Import errors](12-ui.md#import-errors) page lists the files of each root's current
+code that failed. A warning or a `TypingHint` is not among them.
+
+| What happened | Recorded as | What follows |
+|---|---|---|
+| The file raised while it was imported | that exception, its message and its traceback | every DAG of the file is [held](#a-held-dag) |
+| The import took longer than `parse_file_timeout`, or the runner died | `ParseTimeout` or `RunnerDied` | nothing is held; the file is [parsed again](#parsed-again) |
+| The file imported, but a DAG in it fails the master's checks, its path isn't inside the root, or the whole file's parse result is bigger than `grpc_max_message_size` | `InvalidDag`, `InvalidPath` or `ParseResultTooLarge` | every DAG of the file is held, and the file is not parsed again |
+
+A file that failed, for any of these, keeps the DAGs of its last version that imported.
+A file that has never imported defines none yet.
+
+### A held DAG
+
+The hold is the file's, so every DAG defined in that file is held while the error is in
+the root's current parse. The scheduler creates no run of it. A fire time during the hold
+is missed, as while the DAG is paused. A manual trigger is rejected. The reason names the
+DAG, the file and the error, and says what to change: for a result that is too large, for
+a DAG the checks refuse, for a path outside the root, or, for anything else, that the file
+has to import. A queued run is not started. A run that has already started is not
+cancelled. The API reports `held`: the reason, the file, the exception and the message, or
+nothing when the DAG is not held. `schedr dags list` has a `HELD` column (`yes:` and the
+exception, or `no`) and prints each reason under the table. The
+[DAG page](12-ui.md#a-dag) shows a held badge, the reason and a Trigger that does not
+send. The master logs a warning when the hold starts ("DAG held (its file failed); no run
+is created or started until the file is fixed") and a note when the file imports again
+("DAG no longer held: its file imports again; missed fire times follow its catchup
+setting"). The gauge is `schedr_master_dags{state="held"}`
+([Observability](09-observability.md)).
+
+### Parsed again
+
+Only `ParseTimeout` and `RunnerDied` are parsed again, with no limit on the number of
+tries. The first retry waits 30 seconds. Each wait after that is twice the last, up to 10
+minutes. That wait is separate from a parse job that hasn't finished after 10 minutes,
+which is handed to another worker at once. The retry goes to a worker other than the one
+whose parse failed, when another worker has reported the same code. The worker that failed
+gets it only when it is the only one.
+
+The worker imports the root again. The master replaces only a file that failed transiently
+and whose new result differs, and a file the stored parse doesn't have. A file that loaded
+keeps its result, and so does a file that fails again in the same way: the worker and the
+time stored for it stay. A file the retry does replace records the worker that parsed it
+this time, and when.
+
+Parse jobs live only in the master's memory. After a restart, workers report their hashes
+again, and a stored parse that still has such a file is planned when a worker reports the
+code. The worker avoided is the one stored on the failed file that comes first by path,
+when another worker has the code. A file that keeps failing this way never takes effect.
+The master logs a warning naming those files, and the import error stays listed.
 
 ## Which code runs: only the newest
 

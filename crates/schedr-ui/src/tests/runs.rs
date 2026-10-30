@@ -761,8 +761,48 @@ async fn import_errors_are_listed_counted_in_the_nav_and_noticed_on_the_dag_list
     let (_, count) = get(&app, "/import-errors/count", &[]).await;
     assert_eq!(count, r#"<span class="count failed">2</span>"#);
     let (_, notice) = get(&app, "/import-errors/notice", &[]).await;
-    assert!(notice.contains("2 files failed to import"), "{notice}");
+    assert!(
+        notice.contains(
+            "2 files failed to import: their DAGs are held (no runs) until they are fixed"
+        ),
+        "{notice}"
+    );
     assert!(notice.contains(r#"href="/import-errors""#), "{notice}");
+}
+
+#[tokio::test]
+async fn the_notice_says_held_only_of_files_that_hold_their_dags() {
+    let mut timed_out = import_error("slow.py");
+    timed_out["exception"] = json!("ParseTimeout");
+    let mut died = import_error("crashed.py");
+    died["exception"] = json!("RunnerDied");
+    let answer = |errors: Vec<Value>| {
+        let etl = scripted(&[("/api/v1/import-errors", 200, json!({"errors": errors}))]);
+        ui(vec![deployment("etl", etl)])
+    };
+    let notice = |app| async move { get(&app, "/import-errors/notice", &[]).await.1 };
+    // Only transient failures: nothing is held, the files are parsed again.
+    let only = notice(answer(vec![timed_out.clone(), died.clone()])).await;
+    assert!(!only.contains("held"), "{only}");
+    assert!(
+        only.contains(
+            "2 files failed to import for now (a timeout or a runner that died): parsed again"
+        ),
+        "{only}"
+    );
+    // Both kinds: each said of its own files.
+    let both = notice(answer(vec![import_error("broken.py"), timed_out])).await;
+    assert!(
+        both.contains("1 file failed to import: its DAGs are held (no runs) until it is fixed"),
+        "{both}"
+    );
+    assert!(
+        both.contains(
+            "1 file failed to import for now (a timeout or a runner that died): parsed again, \
+             its DAGs keep their last good version"
+        ),
+        "{both}"
+    );
 }
 
 #[tokio::test]

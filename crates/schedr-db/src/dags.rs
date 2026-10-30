@@ -256,8 +256,9 @@ impl Database {
             (id, root, content_hash, schedr_version, worker_id, parsed_at) \
             VALUES ($1{uuid}, $2, $3, $4, $5, $6{ts}) \
             ON CONFLICT (root, content_hash, schedr_version) DO NOTHING";
-        const FILE: &str = "INSERT INTO parse_files (parse_result_id, path, dags, error) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json})";
+        const FILE: &str = "INSERT INTO parse_files \
+            (parse_result_id, path, dags, error, worker_id, parsed_at) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6{ts})";
         let id = Uuid::now_v7().to_string();
         let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             let done = sqlx::query(sql(backend, INSERT))
@@ -277,6 +278,8 @@ impl Database {
                         .bind(&file.path)
                         .bind(to_json(&file.dags))
                         .bind(file.error.as_ref().map(to_json))
+                        .bind(parse.worker_id)
+                        .bind(db_time(parse.parsed_at))
                         .execute(&mut *tx)
                         .await?;
                 }
@@ -293,7 +296,8 @@ impl Database {
     }
 
     /// Replaces files of a stored parse (a re-parse of files that failed transiently,
-    /// decision 72.2): each of `files` takes the place of the stored file at its path.
+    /// decision 72.2): each of `files` takes the place of the stored file at its path, parsed
+    /// by `worker_id` at `parsed_at` (decision 93).
     ///
     /// # Errors
     ///
@@ -302,11 +306,14 @@ impl Database {
         &self,
         parse_id: &str,
         files: &[ParsedFile],
+        worker_id: &str,
+        parsed_at: Timestamp,
     ) -> Result<(), DbError> {
         const DELETE: &str =
             "DELETE FROM parse_files WHERE parse_result_id = $1{uuid} AND path = $2";
-        const FILE: &str = "INSERT INTO parse_files (parse_result_id, path, dags, error) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json})";
+        const FILE: &str = "INSERT INTO parse_files \
+            (parse_result_id, path, dags, error, worker_id, parsed_at) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6{ts})";
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for file in files {
                 sqlx::query(sql(backend, DELETE))
@@ -319,11 +326,34 @@ impl Database {
                     .bind(&file.path)
                     .bind(to_json(&file.dags))
                     .bind(file.error.as_ref().map(to_json))
+                    .bind(worker_id)
+                    .bind(db_time(parsed_at))
                     .execute(&mut *tx)
                     .await?;
             }
         });
         Ok(())
+    }
+
+    /// The worker that parsed each file of a parse, by path (decision 93): the parse's own,
+    /// or the one that parsed the file again.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn parse_file_workers(
+        &self,
+        parse_id: &str,
+    ) -> Result<BTreeMap<String, String>, DbError> {
+        const WORKERS: &str = "SELECT path, worker_id FROM parse_files \
+            WHERE parse_result_id = $1{uuid}";
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, WORKERS))
+                .bind(parse_id)
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(rows.into_iter().collect())
     }
 
     /// The files of a stored parse, in path order.
@@ -388,8 +418,8 @@ impl Database {
     /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if a stored error or time
     /// doesn't read back.
     pub async fn current_import_errors(&self) -> Result<Vec<ImportErrorRecord>, DbError> {
-        const ERRORS: &str = "SELECT c.root, r.content_hash, r.schedr_version, r.worker_id, \
-            {ts<}r.parsed_at{>ts}, f.path, f.error{text} \
+        const ERRORS: &str = "SELECT c.root, r.content_hash, r.schedr_version, f.worker_id, \
+            {ts<}f.parsed_at{>ts}, f.path, f.error{text} \
             FROM current_parses c \
             JOIN parse_results r ON r.id = c.parse_result_id \
             JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
@@ -405,7 +435,7 @@ impl Database {
                         content_hash,
                         schedr_version,
                         worker_id,
-                        parsed_at: parse_time("parse_results.parsed_at", &parsed_at)?,
+                        parsed_at: parse_time("parse_files.parsed_at", &parsed_at)?,
                         path,
                         error: from_json("parse_files.error", &error)?,
                     })

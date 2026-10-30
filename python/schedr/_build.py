@@ -6,9 +6,12 @@ every upstream output they reference.
 """
 
 import dataclasses
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
+from pathlib import Path
+from types import FrameType
 from typing import Any, Protocol, get_args, get_origin, is_typeddict
 
 from schedr._model import (
@@ -197,20 +200,12 @@ class GroupScope:
         options: The options its tasks get unless they set their own (its parents' under
             its own).
         members: The tasks in it, nested groups' included, in definition order.
-        closed: Whether its ``with`` block ended (its roots and leaves are then known).
-        roots: Its tasks with no upstream task inside it.
-        leaves: Its tasks with no downstream task inside it.
-        pending: Dependencies on it written while it was open, made when it closes.
     """
 
     id: str
     parent: str | None
     options: TaskOptions
     members: list[str] = field(default_factory=list)
-    closed: bool = False
-    roots: list[str] = field(default_factory=list)
-    leaves: list[str] = field(default_factory=list)
-    pending: list[tuple[object, object, str]] = field(default_factory=list)
 
 
 class DagBuilder:
@@ -237,6 +232,9 @@ class DagBuilder:
         # Task groups, outer before inner, and the ones open now (innermost last).
         self.groups: dict[str, GroupScope] = {}
         self.open_groups: list[GroupScope] = []
+        # Dependencies on groups, made once the DAG is complete (`make_group_dependencies`),
+        # each with where it was written (`file:line`, for its errors).
+        self.group_dependencies: list[tuple[object, object, str, str]] = []
 
     def qualified(self, task_id: str) -> str:
         """A task's ID inside the open groups: their prefix, then ``task_id``.
@@ -279,24 +277,107 @@ class DagBuilder:
         return scope
 
     def close_group(self, scope: GroupScope) -> None:
-        """Ends the innermost group, then makes the dependencies written on it meanwhile.
+        """Ends a group's block, and those of the groups opened in it and left open.
 
-        Its roots and leaves are known from here on.
+        A block whose error was caught in the DAG file ends too: tasks created from here on
+        aren't theirs.
 
         Args:
-            scope: The group (the innermost open one).
+            scope: The group.
         """
-        assert self.open_groups
-        assert self.open_groups[-1] is scope
-        self.open_groups.pop()
+        while scope in self.open_groups:
+            self.open_groups.pop()
+
+    def ends(self, scope: GroupScope, *, upstream: bool) -> list[str]:
+        """A group's last tasks (``upstream``) or first tasks, from the DAG's edges now.
+
+        Args:
+            scope: The group.
+            upstream: Its last tasks (none of its tasks after them) or its first ones.
+
+        Returns:
+            Their IDs, in definition order.
+
+        Raises:
+            ValueError: For a group whose tasks form a cycle (so none is first or last).
+        """
         members = set(scope.members)
         inside = [e for e in self.edges if e.from_ in members and e.to in members]
-        scope.roots = [t for t in scope.members if not any(e.to == t for e in inside)]
-        scope.leaves = [t for t in scope.members if not any(e.from_ == t for e in inside)]
-        scope.closed = True
-        pending, scope.pending = scope.pending, []
-        for upstream, downstream, what in pending:
-            order(upstream, downstream, what)
+        if upstream:
+            found = [t for t in scope.members if not any(e.from_ == t for e in inside)]
+        else:
+            found = [t for t in scope.members if not any(e.to == t for e in inside)]
+        if not found and members:
+            cycle = self.find_cycle(within=members) or []
+            raise ValueError(
+                f"group `{scope.id}`'s tasks form a cycle: {' -> '.join(cycle)}, so none is "
+                f"its {'last' if upstream else 'first'}"
+            )
+        return found
+
+    def make_group_dependencies(self) -> None:
+        """Makes the dependencies on groups (decision 56A), once every edge is known.
+
+        A group stands for its last tasks upstream and its first tasks downstream, as the
+        whole DAG's edges make them, wherever those edges were written. So a dependency that
+        may add an edge inside a group is made before any that reads that group's ends,
+        whatever the order they were written in (written order otherwise). The edges from a
+        group's last tasks are plain order edges, a ``@branch``'s too (decision 94).
+
+        Raises:
+            ValueError: For a dependency on a group without tasks, one making a task depend on
+                itself, or dependencies that each need the other's edges first.
+        """
+        written = list(self.group_dependencies)
+        self.group_dependencies = []
+        reads = [_groups_in(up) | _groups_in(down) for up, down, _, _ in written]
+        # The groups a dependency may add an edge inside: one holding a task it may start
+        # from and one it may go to (a group operand may stand for any of its tasks).
+        writes = []
+        for up, down, _, _ in written:
+            starts, finishes = set(task_ids_in(up)), set(task_ids_in(down))
+            writes.append(
+                {
+                    g.id
+                    for g in self.groups.values()
+                    if starts & set(g.members) and finishes & set(g.members)
+                }
+            )
+        before = {
+            n: {m for m in range(len(written)) if m != n and writes[m] & reads[n]}
+            for n in range(len(written))
+        }
+        done: list[int] = []
+        while len(done) < len(written):
+            ready = [n for n in range(len(written)) if n not in done and before[n] <= set(done)]
+            if not ready:
+                stuck = [
+                    f"`{written[n][2]}` at {written[n][3]}"
+                    for n in range(len(written))
+                    if n not in done
+                ]
+                raise ValueError(
+                    "dependencies on groups each need the other's edges first "
+                    f"({', '.join(stuck)}): write the tasks' own dependencies instead"
+                )
+            done.append(ready[0])
+        for n in done:
+            upstream, downstream, what, where = written[n]
+            try:
+                self._make_group_dependency(upstream, downstream, what)
+            except ValueError as e:
+                # Made after the line that wrote it: the message says where that was.
+                raise ValueError(f"{where}: {e}") from None
+
+    def _make_group_dependency(self, upstream: object, downstream: object, what: str) -> None:
+        ups: Sequence[object] = upstream if isinstance(upstream, list | tuple) else [upstream]
+        downs = task_ids_of(downstream, what, upstream=False)
+        for item in ups:
+            on = tuple(getattr(item, "_schedr_on", ()))
+            group_end = isinstance(getattr(item, "_schedr_group", None), GroupScope)
+            for up in task_ids_of(item, what):
+                for down in downs:
+                    self.add_edge(up, down, EdgeKind.ORDER, on, plain=group_end)
 
     def add_task(
         self,
@@ -351,7 +432,9 @@ class DagBuilder:
         self.outcomes[task_id] = outcomes
         self.outcome_types[task_id] = dict(outcome_types or {})
 
-    def add_edge(self, from_: str, to: str, kind: EdgeKind, on: tuple[str, ...] = ()) -> None:
+    def add_edge(
+        self, from_: str, to: str, kind: EdgeKind, on: tuple[str, ...] = (), *, plain: bool = False
+    ) -> None:
         """Adds a dependency, once for each outcome condition.
 
         Args:
@@ -359,6 +442,8 @@ class DagBuilder:
             to: The downstream task's ID.
             kind: Why the dependency exists.
             on: The upstream outcomes it is taken on; empty for any.
+            plain: Kept as ``kind`` even from a ``@branch`` (made by a dependency on a group
+                that ends with it, decision 94).
 
         Raises:
             ValueError: For a task depending on itself or on a task of another DAG.
@@ -369,12 +454,30 @@ class DagBuilder:
         if from_ == to:
             raise ValueError(f"task `{to}` can't depend on itself")
         task = self.tasks[from_]
-        if isinstance(task.kind, PythonKind) and task.kind.branch:
+        if isinstance(task.kind, PythonKind) and task.kind.branch and not plain:
             # Every edge out of a branch is taken only when it chose its target.
             kind = EdgeKind.SELECTION
         edge = Edge(from_, to, kind, on)
         if edge not in self.edges:
             self.edges.append(edge)
+
+    def narrows(self, task_id: str, on: Sequence[str]) -> bool:
+        """Whether ``.on(...)`` with the outcomes ``on`` leaves out some outcome of a task.
+
+        Naming every outcome (``.on(Rows, Missing)`` for ``Rows | Missing``) is taken whatever
+        the task ends with, like no condition at all.
+
+        Args:
+            task_id: The upstream task.
+            on: The outcomes named; empty for no condition.
+
+        Returns:
+            True when an outcome it may end with isn't named.
+        """
+        if not on:
+            return False
+        spec = self.outcomes.get(task_id)
+        return spec is None or not set(spec.names) <= set(on)
 
     def may_skip(self) -> set[str]:
         """The tasks that may be skipped, by their own rule over edges that may not be taken.
@@ -395,7 +498,9 @@ class DagBuilder:
                 if task_id in skippable or not incoming:
                     continue
                 not_taken = [
-                    bool(e.on) or e.kind == EdgeKind.SELECTION or e.from_ in skippable
+                    self.narrows(e.from_, e.on)
+                    or e.kind == EdgeKind.SELECTION
+                    or e.from_ in skippable
                     for e in incoming
                 ]
                 every = task.settings.run_if == RunIf.NONE_FAILED
@@ -426,7 +531,7 @@ class DagBuilder:
             if self.tasks[task_id].settings.run_if != RunIf.NONE_FAILED:
                 continue
             on = tuple(reference.on) if isinstance(reference, OutputRef) else ()
-            if not (on or reference.task in skippable):
+            if not (self.narrows(reference.task, on) or reference.task in skippable):
                 continue
             own = (reference.task, on)
             if not any(e.to == task_id and (e.from_, e.on) != own for e in self.edges):
@@ -459,21 +564,26 @@ class DagBuilder:
                 for reference in expand.references():
                     if not isinstance(reference, OutputRef) or reference.task not in self.mapped:
                         continue
-                    if reference.on or reference.task in found:
+                    if self.narrows(reference.task, reference.on) or reference.task in found:
                         found.add(task_id)
                         changed = True
                         break
         return found
 
-    def find_cycle(self) -> list[str] | None:
+    def find_cycle(self, within: set[str] | None = None) -> list[str] | None:
         """A dependency cycle, if there is one.
+
+        Args:
+            within: Only among these tasks (a group's), not the whole DAG.
 
         Returns:
             The task IDs around a cycle (first repeated at the end), or ``None``.
         """
-        downstream: dict[str, list[str]] = {t: [] for t in self.tasks}
+        tasks = [t for t in self.tasks if within is None or t in within]
+        downstream: dict[str, list[str]] = {t: [] for t in tasks}
         for edge in self.edges:
-            downstream[edge.from_].append(edge.to)
+            if edge.from_ in downstream and edge.to in downstream:
+                downstream[edge.from_].append(edge.to)
         state: dict[str, int] = {}
         path: list[str] = []
 
@@ -489,7 +599,7 @@ class DagBuilder:
             state[task] = 2
             return None
 
-        for task in self.tasks:
+        for task in tasks:
             if task not in state and (cycle := visit(task)) is not None:
                 return cycle
         return None
@@ -795,7 +905,7 @@ def task_ids_of(operand: object, what: str, *, upstream: bool = True) -> list[st
     for item in items:
         scope = getattr(item, "_schedr_group", None)
         if isinstance(scope, GroupScope):
-            ends = scope.leaves if upstream else scope.roots
+            ends = require_active(f"`{what}`").ends(scope, upstream=upstream)
             if not ends:
                 raise ValueError(
                     f"`{what}`: group `{scope.id}` has no tasks, so nothing can depend on it"
@@ -809,23 +919,70 @@ def task_ids_of(operand: object, what: str, *, upstream: bool = True) -> list[st
     return ids
 
 
-def _open_group_in(*operands: object) -> GroupScope | None:
-    """The outermost still-open group among ``>>``'s operands, if any."""
-    found: list[GroupScope] = []
+_PACKAGE = Path(__file__).resolve().parent
+
+
+def _written_at() -> str:
+    """Where the DAG file's statement being run is.
+
+    Returns:
+        `file:line` of the first caller outside schedr, or `?`.
+    """
+    frame: FrameType | None = sys._getframe(1)  # the cheap way to the caller's line
+    while frame is not None and Path(frame.f_code.co_filename).resolve().is_relative_to(_PACKAGE):
+        frame = frame.f_back
+    if frame is None:
+        return "?"
+    return f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno}"
+
+
+def _check_operand(operand: object, what: str) -> None:
+    """Refuses a ``>>`` operand that is no task, output or group, where it is written."""
+    items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
+    for item in items:
+        if isinstance(getattr(item, "_schedr_group", None), GroupScope):
+            continue
+        if not isinstance(getattr(item, "_schedr_task_id", None), str):
+            raise TypeError(f"`{what}` needs tasks or outputs, got {type(item).__name__}")
+
+
+def _groups_in(operand: object) -> set[str]:
+    """The IDs of the groups among a ``>>`` operand."""
+    items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
+    return {
+        scope.id
+        for item in items
+        if isinstance(scope := getattr(item, "_schedr_group", None), GroupScope)
+    }
+
+
+def task_ids_in(operand: object) -> list[str]:
+    """Every task a ``>>`` operand involves: a group's members, a task's ID."""
+    items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
+    ids: list[str] = []
+    for item in items:
+        scope = getattr(item, "_schedr_group", None)
+        if isinstance(scope, GroupScope):
+            ids.extend(scope.members)
+        elif isinstance(task_id := getattr(item, "_schedr_task_id", None), str):
+            ids.append(task_id)
+    return ids
+
+
+def _has_group(*operands: object) -> bool:
+    """Whether a group is among ``>>``'s operands."""
     for operand in operands:
         items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
-        for item in items:
-            scope = getattr(item, "_schedr_group", None)
-            if isinstance(scope, GroupScope) and not scope.closed:
-                found.append(scope)
-    return min(found, key=lambda g: g.id.count("."), default=None)
+        if any(isinstance(getattr(i, "_schedr_group", None), GroupScope) for i in items):
+            return True
+    return False
 
 
 def order(upstream: object, downstream: object, what: str) -> None:
     """Records order-only dependencies: every downstream task runs after every upstream one.
 
-    A group stands for its leaves upstream and its roots downstream; on a group still being
-    defined, the dependency is made when its ``with`` block ends (decision 56A).
+    A group stands for its last tasks upstream and its first tasks downstream: a dependency
+    on one is made when the DAG is complete, from all its edges (decision 56A).
 
     Args:
         upstream: Tasks, outputs (``f.on(X)`` too: then on those outcomes), groups, or lists
@@ -834,9 +991,10 @@ def order(upstream: object, downstream: object, what: str) -> None:
         what: The operator, for messages.
     """
     builder = require_active(f"`{what}`")
-    still_open = _open_group_in(upstream, downstream)
-    if still_open is not None:
-        still_open.pending.append((upstream, downstream, what))
+    if _has_group(upstream, downstream):
+        for operand in (upstream, downstream):
+            _check_operand(operand, what)
+        builder.group_dependencies.append((upstream, downstream, what, _written_at()))
         return
     ups: Sequence[object] = upstream if isinstance(upstream, list | tuple) else [upstream]
     downs = task_ids_of(downstream, what, upstream=False)

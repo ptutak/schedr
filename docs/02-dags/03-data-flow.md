@@ -23,8 +23,8 @@ downstream task's inputs. A key is a `str` or an `int`; a negative index is a
 | `a >> [b, c]`, `[a, b] >> c` | An edge from every task on the left to every task on the right. |
 | `chain(a, [b, c], d)` | `a >> [b, c] >> d`. |
 
-`chain` and `>>` take tasks and outputs. A bare function is a `TypeError`. Both kinds of
-edge may exist between the same pair. A task depending on itself, or on a task that is not
+`chain` and `>>` take tasks, outputs and [groups](11-groups.md). A bare function is a
+`TypeError`. Both kinds of edge may exist between the same pair. A task depending on itself, or on a task that is not
 in this DAG, is a `ValueError`. When the block ends, a cycle is a `ValueError`:
 `` DAG `data_flow` has a dependency cycle: a -> b -> a ``.
 
@@ -80,8 +80,8 @@ A task runs when its incoming edges and `run_if` allow it
 didn't happen, or a `@branch` that didn't choose this task) counts as skipped. Tasks with
 no dependency on the failure keep running.
 [Defaults and retries](05-defaults.md) is what a failure does to the task that failed.
-Task groups and mapped tasks are
-[Native API](../_generated/05-design/07-python-api-structure.md#native-api).
+[Task groups](11-groups.md) organise tasks while the DAG is written.
+[Mapping](10-mapping.md) runs a task once per element.
 
 ## Pydantic models
 

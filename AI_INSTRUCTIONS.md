@@ -16,7 +16,7 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 2. **Ask when there is a real choice** (see Decisions); otherwise pick the sensible default,
    say which, and go on.
 3. **Do the whole step:** code, unit tests, integration tests, docs and docstrings, generated
-   files (the docs can be Grok's, see Working with a second agent). **Update the guide**
+   files (the docs can be Grok's or Codex's, see Working with second agents). **Update the guide**
    (the hand-written pages on how the system works, see `AI_SETUP.md`, Documentation) wherever the step changes what they describe: a page that
    says something the code no longer does is a bug. Reference pages generated from the code
    need no edits, but a new setting, command, endpoint or metric needs its doc comment.
@@ -25,8 +25,9 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    **Run the stress suite** (`make stress`, if the project has one) at the end of each
    milestone and after a step that changes the core's scheduling, database or worker code, and
    report its numbers.
-5. **Run a code review once over the whole step** (Grok's independent review, see Working
-   with a second agent; the code-review skill, `/code-review`, when Grok is unavailable) on
+5. **Run a code review once over the whole step** (Grok's and Codex's independent reviews of
+   the same diff, see Working with second agents; the code-review skill, `/code-review`, when
+   neither is available) on
    everything the step changed, after the checks pass. It also checks that the guide matches
    the change. Fix what it confirms, re-run the checks, and list in the summary what it found
    and what was fixed or left (with why). A finding outside the step's scope goes to
@@ -40,57 +41,69 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    myself, often without saying so, so don't claim CI hasn't run. To know CI's state, ask me
    (I may not have `gh` installed).
 
-## Working with a second agent (Grok)
+## Working with second agents (Grok and Codex)
 
-A second agent, Grok Build, works through the `/grok` skill (set up as `AI_SETUP.md`, Agent
-tooling, says). I still talk only to you.
+Two colleagues work beside you: **Grok** (Grok Build) through the `/grok` skill and **Codex**
+(OpenAI's Codex CLI) through the `/codex` skill, set up as `AI_SETUP.md`, Agent tooling, says.
+I still talk only to you. Below, "a colleague" is either; where they differ, it says so.
 
 - **Who does what:**
 
   | Work | Who |
   |---|---|
   | Designing and implementing important changes (the step's core) | **you** |
-  | **Independent code review** of the step's diff: bugs, races, async and distributed edge cases, performance, security | **Grok**, read-only; it replaces the code-review skill (that one only when Grok is unavailable) |
-  | **Bug hunting and fixing:** root-cause analysis, reproductions, fixes (a reproducing test first, as Bugs says) | **Grok** |
-  | **Documentation:** the guide and Writing DAGs kept up with the code, after the step's code is reviewed | **Grok** |
+  | **Independent code review** of the step's diff: bugs, races, async and distributed edge cases, performance, security | **Grok and Codex**, each on the same diff, independently, read-only; compared after. They replace the code-review skill (that one only when neither is available) |
+  | **Bug hunting:** root-cause analysis, reproductions | **Grok or Codex** |
+  | **Bug fixing** (a reproducing test first, as Bugs says) | **Grok** (Codex doesn't code) |
+  | **Documentation:** the guide and Writing DAGs kept up with the code, after the step's code is reviewed | **Grok or Codex** |
+  | **The whole-repository review**, section by section | **Codex**, read-only, about half its week |
   | Exploring the code: call sites, dependencies, affected files, before a change | **Grok**, read-only |
   | Tests: missing cases, generating tests for code that exists | **Grok** |
   | External research: documentation, APIs, other tools' behaviour | **Grok** |
   | Small well-scoped implementation, mechanical refactors and migrations | **Grok** |
-  | A second opinion on architecture | **Grok**, read-only, before I decide |
+  | A second opinion on architecture | **Codex** (or Grok), read-only, before I decide |
 
-- **Ask for independent analysis, never confirmation:** give Grok the diff, the code or the
+  **Codex doesn't code:** no implementation, refactors or code fixes (my experience with it:
+  strong on design opinions, reviews and finding bugs). Its tasks are read-only, but for
+  docs rounds.
+
+- **Ask for independent analysis, never confirmation:** give a colleague the diff, the code or the
   question, not your hypothesis or your conclusions. "Review this diff" or "find why X
   happens", not "check that the bug is Y".
-- **Grok's findings are claims:** verify each one yourself (read the code, reproduce it)
+- **A colleague's findings are claims:** verify each one yourself (read the code, reproduce it)
   before applying it, and decide what to apply. Report what it found, what you confirmed,
   what you rejected and why. A confirmed finding outside the step goes to `BUGS.md`.
-- **Grok works in its own git worktree** (`<repo>-grok-<step>`, branch `grok/<step>`; one
-  per task, so two can run side by side), approving its own commands there. For a review,
+- **A colleague works in its own git worktree** (`<repo>-grok-<step>` / `<repo>-codex-<step>`,
+  branch `grok/<step>` / `codex/<step>`; one per task, so several can run side by side): Grok
+  approving its own commands there, Codex in its sandbox (it writes only in its worktree, so
+  you prepare the environment and the build before its first turn). Never two writing in one
+  worktree at once. For a review,
   the worktree holds a snapshot of your uncommitted work, so Grok can run tests to back a
-  finding; a read-only task changes no files. It never commits, pushes, or touches the main
-  checkout. It follows this file, except the summary and committing, which are yours.
-- **Who decides** (when Grok writes code or docs):
+  finding; a read-only task changes no files. A colleague never commits, pushes, or touches
+  the main checkout. It follows this file, except the summary and committing, which are yours.
+- **Who decides** (when a colleague writes code or docs):
 
   | Decision | Decided by |
   |---|---|
-  | **Important:** anything I see or depend on (API, CLI, config, schema, data format, defaults, behaviour), scope, a new dependency, anything hard to undo; when unsure, important | **me,** from Grok's options table, shown as Grok wrote it, with your view added if you disagree |
-  | **Small:** internal names, helper structure, test layout, wording, what the project's documents already settle | **Grok** in normal mode (listed in its summary under "Small decisions"); **you** in paranoid mode, each said in one status line so I can overrule it |
+  | **Important:** anything I see or depend on (API, CLI, config, schema, data format, defaults, behaviour), scope, a new dependency, anything hard to undo; when unsure, important | **me,** from the colleague's options table, shown as it wrote it, with your view added if you disagree |
+  | **Small:** internal names, helper structure, test layout, wording, what the project's documents already settle | **the colleague** in normal mode (listed in its summary under "Small decisions"); **you** in paranoid mode, each said in one status line so I can overrule it |
 
-- **Answer Grok as I answer you:** it numbers its decisions and letters the options, and the
+- **Answer a colleague as I answer you:** it numbers its decisions and letters the options, and the
   answer is one line each: `1. A`, `2. B`, `3. explain`, `4. A+B`, `5. other: <suggestion>`;
   yours are marked `(mine)`.
-- **Modes:** *normal* (the default) and *paranoid*, where Grok stops at every decision. Use
+- **Modes:** *normal* (the default) and *paranoid*, where the colleague stops at every decision. Use
   paranoid for brittle work (migrations, concurrency, security, data formats) or when I ask;
   propose it when a task looks brittle. **Split a task by risk** rather than running all of
   it paranoid: the brittle part (e.g. handling secrets) in paranoid mode, the rest in
   normal mode, as two tasks or two phases.
-- **Grok's "done" is a claim, not a result:** read its diff, run `make check` and
+- **A colleague's "done" is a claim, not a result:** read its diff, run `make check` and
   `make docs` yourself, and check its "Small decisions" list. Code Grok wrote gets an
-  independent review too: a fresh Grok session, not the one that wrote it.
+  independent review too: Codex, or a fresh Grok session, never the one that wrote it.
+- **Usage:** each has a weekly allowance; log every round in its skill's `USAGE.md`. Grok's
+  weekly % comes from me (ask after each round); Codex's is printed by each of its turns.
 - **When I say commit,** commit in the worktree, fast-forward the main branch to it, and
   remove the worktree.
-- Grok's blockers and requests outside its worktree (system packages, `sudo`, other
+- A colleague's blockers and requests outside its worktree (system packages, `sudo`, other
   clusters or accounts) come to me; don't grant them yourself.
 
 ## Decisions
@@ -98,7 +111,8 @@ tooling, says). I still talk only to you.
 - **Recommend, don't just list:** the recommended option first, marked as such, with why.
 - **Show options side by side:** a small table with a concrete example of each (code, output,
   file layout), plus what each costs, and a **Who (does the work)** column: `Claude`,
-  `Grok (normal)` or `Grok (paranoid)`; `you` only for something I must run myself (a
+  `Grok (normal)`, `Grok (paranoid)`, `Codex (normal)` or `Codex (paranoid)`; `you` only for
+  something I must run myself (a
   login, my settings). Deciding is always mine; the column never says so. I often pick
   from the table.
 - **Precise definitions when I ask to elaborate:** what exactly happens, edge cases, a table

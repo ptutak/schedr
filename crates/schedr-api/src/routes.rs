@@ -281,7 +281,7 @@ pub async fn get_output(
     let run_id = known_run(&state, &run_id).await?.id;
     let none = || ApiError::NotFound(format!("no output of `{task_id}` in run `{run_id}`"));
     let mapped = mapped_count(&state, &run_id, &task_id).await?;
-    if let (Some(_), None) = (mapped, query.map_index) {
+    if let (Some(_), None | Some(-1)) = (mapped, query.map_index) {
         // The mapped task's whole output: the list a downstream task gets (decision 81).
         let whole = state
             .db
@@ -366,13 +366,21 @@ fn instance_of(
     asked: Option<i32>,
     required: bool,
 ) -> Result<i32, ApiError> {
-    match (mapped, asked) {
+    // -1 is the whole task, as listed: the same as naming no instance.
+    match (mapped, asked.filter(|index| *index != -1)) {
         (Some(count), None) if required => Err(ApiError::BadRequest(format!(
             "task `{task_id}` is mapped ({count} instances): give ?map_index=N, from 0 to {}",
             count.saturating_sub(1)
         ))),
-        (Some(_) | None, None | Some(-1)) => Ok(-1),
-        (Some(_), Some(index)) => Ok(index),
+        (Some(_) | None, None) => Ok(-1),
+        (Some(count), Some(index)) if usize::try_from(index).is_ok_and(|i| i < count) => Ok(index),
+        (Some(0), Some(index)) => Err(ApiError::BadRequest(format!(
+            "task `{task_id}` has no instances (yet): no instance {index}"
+        ))),
+        (Some(count), Some(index)) => Err(ApiError::BadRequest(format!(
+            "task `{task_id}` has {count} instances, from 0 to {}: no instance {index}",
+            count - 1
+        ))),
         (None, Some(index)) => Err(ApiError::BadRequest(format!(
             "task `{task_id}` isn't mapped: it has no instance {index}"
         ))),
@@ -459,10 +467,17 @@ pub async fn cancel_task(
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    // An instance must be one the task has; checked when the run is known.
+    let mut map_index = query.map_index.filter(|index| *index != -1);
+    if let Some(found) = state.db.run_record(&run_id).await? {
+        let mapped = mapped_count(&state, &found.id, &task_id).await?;
+        map_index = Some(instance_of(mapped, &task_id, query.map_index, false)?)
+            .filter(|index| *index >= 0);
+    }
     let command = Command::CancelTask {
         run_id,
         task_id,
-        map_index: query.map_index,
+        map_index,
     };
     submit(&state, &user, command).await
 }
@@ -486,14 +501,16 @@ pub async fn retry_task(
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     // A mapped task's instance must be named (decision 82); checked when the run is known.
+    let mut map_index = query.map_index.filter(|index| *index != -1);
     if let Some(found) = state.db.run_record(&run_id).await? {
         let mapped = mapped_count(&state, &found.id, &task_id).await?;
-        instance_of(mapped, &task_id, query.map_index, true)?;
+        map_index =
+            Some(instance_of(mapped, &task_id, query.map_index, true)?).filter(|index| *index >= 0);
     }
     let command = Command::RetryTask {
         run_id,
         task_id,
-        map_index: query.map_index,
+        map_index,
     };
     submit(&state, &user, command).await
 }

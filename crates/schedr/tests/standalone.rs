@@ -573,6 +573,19 @@ fn mapped_run_per_instance(standalone: &Standalone, run_id: &str) {
         ))
         .expect("an instance's panel");
     assert!(one.contains("fetch[1]") && one.contains("Missing"), "{one}");
+    // The instance's panel names the graph's node, so the node stays selected on a swap.
+    assert!(
+        one.contains(r#"<div class="panel-head" data-task="fetch">"#),
+        "{one}"
+    );
+    // A download names an instance it can read, never the gathered list instead.
+    let download = format!("/d/default/runs/{run_id}/tasks/fetch/output.json");
+    assert!(
+        standalone
+            .page(&format!("{download}?map_index=1"))
+            .is_some()
+    );
+    assert_eq!(standalone.page(&format!("{download}?map_index=nope")), None);
 }
 
 #[test]
