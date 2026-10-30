@@ -278,6 +278,10 @@ Separate jobs. The ones that run on this machine each have a make target:
   the filesystem: the system and the toolchains read-only, the worktree and the repository's
   git data, the agent's own state; nothing else of the user's (no other project, no `~/.ssh`,
   no Windows drive). Added after Codex listed the user's other projects with `find ..`.
+  Its own PID namespace (`--unshare-pid`): an agent sees and signals only its own processes,
+  added after a throwaway test's `kill -KILL -<pgid>` (which procps 4.0.4 reads as `kill -1`)
+  killed every process of the user; the prompts also forbid that form (`kill -s KILL --
+  -<pgid>`, or the code's own helpers).
   Nothing the user runs later outside the sandbox is writable in it: `~/.cargo` is read-only
   but its download cache, and the CLIs' own programs, configs, plugins, skills and memories
   are read-only within their state folders (an agent gone wrong can't change them for later).
@@ -310,9 +314,13 @@ Separate jobs. The ones that run on this machine each have a make target:
   decided.
 - **`PLAN.md`:** milestones, each with a "done when"; steps in dependency order, each with
   its own "done when"; a status line when a milestone is done.
-- **`BUGS.md`:** open bugs with stable IDs (B1, B2, …, never reused): found, symptom, repro,
-  cause or suspect, plan. A fix removes its entry in the same commit, with a test that would
-  have caught it.
+- **`BUGS.md`:** open bugs with stable IDs (B1, B2, …, never reused): a rating (severity
+  critical/high/medium/low × probability likely/possible/rare, and a kind: security, data,
+  correctness, reliability, performance, usability, tests), found, symptom, repro, cause or
+  suspect, plan. At the top, the scales ("Ratings") and the ranking table (security first,
+  then by score), regenerated with every change. A fix removes its entry in the same commit,
+  with a test that would have caught it. The rule for when bugs are fixed is in
+  `AI_INSTRUCTIONS.md`, Bugs.
 - **`NEXT_SESSION.md`:** where things stand, next steps in order, working rules, environment
   notes, a short code map; rewritten at the end of a milestone or session.
 

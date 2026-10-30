@@ -30,5 +30,5 @@ with Dag("daily_report", trigger=Cron("0 6 * * *", tz="Europe/Warsaw")):
 
     CommandOperator(
         "announce",
-        command=t"echo {rows} rows in the report for {dag_ctx.run.planned_for:%Y-%m-%d}",
+        command=["echo", t"{rows} rows in the report for {dag_ctx.run.planned_for:%Y-%m-%d}"],
     )

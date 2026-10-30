@@ -190,19 +190,18 @@ fn a_python_task_runs_the_runner_with_the_request() {
 #[test]
 fn a_command_is_rendered_with_its_inputs_and_environment() {
     let (_dir, setup) = setup();
-    let command = json!({"shell": [
-        {"text": "load --rows "},
-        {"ref": {"kind": "output", "task": "extract", "path": ["rows"]}},
-        {"text": " --name "},
-        {"ref": {"kind": "output", "task": "extract", "path": ["name"]}}
+    let command = json!({"argv": [
+        [{"text": "load"}],
+        [{"text": "--rows="}, {"ref": {"kind": "output", "task": "extract", "path": ["rows"]}}],
+        [{"ref": {"kind": "output", "task": "extract", "path": ["name"]}}]
     ]});
     let env = json!({"TARGET": [{"text": "db-"}, {"ref": {"kind": "dag_ctx", "field": "dag_id"}}]});
     let spec = AttemptSpec::from_assign(&assign(&command_task(&command, &env)), None).unwrap();
     let Plan::Command(process) = plan(&spec, &setup).unwrap() else {
         panic!("expected a command plan")
     };
-    assert_eq!(process.program, PathBuf::from("/bin/sh"));
-    assert_eq!(process.args, ["-c", "load --rows 3 --name 'a b'"]);
+    assert_eq!(process.program, PathBuf::from("load"));
+    assert_eq!(process.args, ["--rows=3", "a b"]);
     assert_eq!(process.env["TARGET"], "db-sync");
     assert_eq!(process.env["SCHEDR_DAG_ID"], "sync");
     assert_eq!(process.working_dir, setup.roots["etl"].join("team"));
@@ -232,12 +231,21 @@ fn missing_code_is_a_rejection_and_bad_templates_a_failure() {
         }
     ));
 
-    let ghost = json!({"shell": [{"ref": {"kind": "output", "task": "ghost"}}]});
+    let ghost = json!({"argv": [[{"ref": {"kind": "output", "task": "ghost"}}]]});
     let spec = AttemptSpec::from_assign(&assign(&command_task(&ghost, &json!({}))), None).unwrap();
     let NotRun::Failed { kind, .. } = plan(&spec, &setup).unwrap_err() else {
         panic!("expected a failure")
     };
     assert_eq!(kind, RENDER_FAILED);
+    // Decision 99: a reference in a shell command never runs, whatever the master sent.
+    let shell =
+        json!({"shell": [{"text": "echo "}, {"ref": {"kind": "output", "task": "extract"}}]});
+    let spec = AttemptSpec::from_assign(&assign(&command_task(&shell, &json!({}))), None).unwrap();
+    let NotRun::Failed { kind, message } = plan(&spec, &setup).unwrap_err() else {
+        panic!("expected a failure")
+    };
+    assert_eq!(kind, RENDER_FAILED);
+    assert!(message.contains("in a shell command"), "{message}");
     let reserved = json!({"SCHEDR_X": [{"text": "1"}]});
     let spec = AttemptSpec::from_assign(
         &assign(&command_task(

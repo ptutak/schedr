@@ -39,6 +39,6 @@ with Dag("data_flow", trigger=None):
 
     batch = fetch()
     note = load(batch.rows, batch.source)
-    CommandOperator("show", command=t"echo {note}")
+    CommandOperator("show", command=["echo", note])
     finished = finish(note)
     chain(batch, [left(), right()], finished)

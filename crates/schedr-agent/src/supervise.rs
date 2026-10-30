@@ -36,11 +36,9 @@ pub trait Process {
     ///
     /// Returns the operating system's error for anything but a group that is gone.
     fn signal(&mut self, signal: Signal) -> io::Result<()>;
-    /// Whether anything of its group is still there, after its leader ended; nothing by
-    /// default.
-    fn group_alive(&self) -> bool {
-        false
-    }
+    /// Whether anything of its group still runs, after its leader ended (no default: a
+    /// wrapper that forgot to forward it would leave a stopped task's children behind).
+    fn group_alive(&self) -> bool;
     /// What it used and whether it dumped core, once [`Process::wait`] returned; nothing
     /// known by default.
     fn ended(&self) -> crate::usage::Ended {
@@ -192,7 +190,9 @@ async fn left_after_leader<P: Process>(
             biased;
             later = stops.next_reason() => match later {
                 StopReason::Interrupted => {
-                    kill_at = kill_at.min(now + limits.interrupt_grace);
+                    // From its arrival, not from the poll before it.
+                    let arrived = tokio::time::Instant::now();
+                    kill_at = kill_at.min(arrived + limits.interrupt_grace);
                 }
                 StopReason::OomKilled => return process.signal(Signal::Kill),
                 StopReason::TimedOut | StopReason::Cancelled => {}

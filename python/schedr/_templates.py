@@ -1,20 +1,16 @@
 """t-strings (PEP 750) as DAG JSON templates: literal text plus references.
 
 References (outputs, ``dag_ctx``) are filled in at run time by the agent or the runner;
-plain Python values known in the DAG body are formatted at parse time. In a shell command
-every interpolated value is shell-quoted unless its format spec is ``raw`` (see PROJECT.md,
-Airflow compatibility, Scope: Templating, safe substitution into shell commands).
+plain Python values known in the DAG body are formatted at parse time. A shell command takes
+no placeholders: values are passed as arguments or in the environment, never as shell source
+(see PROJECT.md, Airflow compatibility, Scope: Templating, decision 99).
 """
 
-import shlex
 from datetime import date, datetime, timedelta
 from string.templatelib import Interpolation
 from string.templatelib import Template as TString
 
 from schedr._model import Reference, Template, TemplatePart, TemplateRef
-
-RAW = "raw"
-"""The format spec that inserts a value into a shell command unquoted."""
 
 _LITERAL_TYPES = (str, int, float, bool, datetime, date, timedelta)
 
@@ -31,32 +27,55 @@ def is_tstring(value: object) -> bool:
     return isinstance(value, TString)
 
 
-def check_spec(spec: str, *, shell: bool, where: str) -> None:
+def check_spec(spec: str, *, where: str) -> None:
     """Checks a reference's format spec.
 
-    Allowed: none; ``raw`` in a shell command; a ``strftime`` pattern (containing ``%``),
-    whose fit with the reference's type is checked once the type is known.
+    Allowed: none, or a ``strftime`` pattern (containing ``%``), whose fit with the
+    reference's type is checked once the type is known.
 
     Args:
         spec: The format spec, possibly empty.
-        shell: Whether the template is a shell command.
         where: Where it is used, for messages.
 
     Raises:
-        ValueError: For ``raw`` outside a shell command, or an unknown spec.
+        ValueError: For an unknown spec.
     """
     if not spec or "%" in spec:
         return
-    if spec == RAW:
-        if not shell:
-            raise ValueError(
-                f"{where}: `:raw` only applies to shell commands (elsewhere nothing is quoted)"
-            )
-        return
     raise ValueError(
-        f"{where}: unknown format spec `:{spec}` for a reference (use `:raw` in shell commands, "
-        "or a strftime pattern such as `:%Y-%m-%d` for dates)"
+        f"{where}: unknown format spec `:{spec}` for a reference (a strftime pattern such as "
+        "`:%Y-%m-%d` formats dates)"
     )
+
+
+def shell_text(tstring: TString, where: str) -> str:
+    """The text of a t-string used as a shell command, which takes no placeholders.
+
+    A value placed in shell source can run as code whatever the quoting (inside the author's
+    quotes, in a comment, a heredoc, after a backslash), so a shell command takes values only
+    as arguments or environment variables (decision 99).
+
+    Args:
+        tstring: The t-string.
+        where: Where it is used, for messages.
+
+    Returns:
+        Its text.
+
+    Raises:
+        TypeError: For a placeholder, with the two ways to pass the value instead.
+    """
+    for item in tstring:
+        if isinstance(item, Interpolation):
+            conversion = f"!{item.conversion}" if item.conversion else ""
+            spec = f":{item.format_spec}" if item.format_spec else ""
+            raise TypeError(
+                f"{where}: `{{{item.expression}{conversion}{spec}}}` in a shell command: the "
+                "shell would read the value as code. Pass values as arguments, "
+                'command=["./notify.sh", out.report_url] (no shell runs), or in the '
+                """environment, command='./notify.sh "$URL"', env={"URL": out.report_url}"""
+            )
+    return "".join(tstring.strings)
 
 
 def as_text(value: object) -> str:
@@ -81,7 +100,7 @@ def as_text(value: object) -> str:
     return str(value)
 
 
-def _format_literal(item: Interpolation[object], *, shell: bool, where: str) -> str:
+def _format_literal(item: Interpolation[object], where: str) -> str:
     value = item.value
     if value is None or not isinstance(value, _LITERAL_TYPES):
         raise TypeError(
@@ -95,22 +114,15 @@ def _format_literal(item: Interpolation[object], *, shell: bool, where: str) -> 
     elif item.conversion == "a":
         value = ascii(value)
     spec = item.format_spec
-    if spec == RAW:
-        if not shell:
-            raise ValueError(f"{where}: `:raw` only applies to shell commands")
-        return as_text(value)
-    text = as_text(value) if not spec else format(value, spec)
-    return shlex.quote(text) if shell else text
+    return as_text(value) if not spec else format(value, spec)
 
 
-def to_template(tstring: TString, where: str, *, shell: bool) -> Template:
+def to_template(tstring: TString, where: str) -> Template:
     """Converts a t-string to a DAG JSON template.
 
     Args:
         tstring: The t-string.
         where: Where it is used, for messages.
-        shell: Whether it is a shell command (literal values are then shell-quoted, and
-            ``:raw`` is allowed).
 
     Returns:
         The template, adjacent text merged into one part.
@@ -141,7 +153,7 @@ def to_template(tstring: TString, where: str, *, shell: bool) -> Template:
                     f"{where}: `{{{item.expression}!{item.conversion}}}`: conversions don't apply "
                     "to references (they are rendered at run time, without Python)"
                 )
-            check_spec(item.format_spec, shell=shell, where=where)
+            check_spec(item.format_spec, where=where)
             reference: Reference = value._schedr_reference()
             parts.append(TemplateRef(reference, item.format_spec or None))
         elif is_tstring(value):
@@ -149,5 +161,5 @@ def to_template(tstring: TString, where: str, *, shell: bool) -> Template:
                 f"{where}: `{{{item.expression}}}` is a t-string; nesting isn't supported"
             )
         else:
-            add_text(_format_literal(item, shell=shell, where=where))
+            add_text(_format_literal(item, where))
     return Template(parts)

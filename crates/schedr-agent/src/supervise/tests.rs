@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -12,6 +13,8 @@ struct Fake {
     signals: Arc<Mutex<Vec<Signal>>>,
     end: watch::Sender<Option<Termination>>,
     fail_signal: bool,
+    /// Something of its group left after it ended, until SIGKILL.
+    group: Arc<AtomicBool>,
 }
 
 impl Fake {
@@ -23,6 +26,7 @@ impl Fake {
             signals: Arc::default(),
             end,
             fail_signal: false,
+            group: Arc::default(),
         }
     }
 }
@@ -47,9 +51,14 @@ impl Process for Fake {
             }
             Signal::Kill => {
                 self.end.send_replace(Some(Termination::Signaled(9)));
+                self.group.store(false, Ordering::SeqCst);
             }
         }
         Ok(())
+    }
+
+    fn group_alive(&self) -> bool {
+        self.group.load(Ordering::SeqCst)
     }
 }
 
@@ -273,4 +282,40 @@ async fn stops_come_in_order_from_every_sender() {
     drop(sender);
     let more = tokio::time::timeout(Duration::from_millis(20), stops.next_reason()).await;
     assert!(more.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn what_is_left_of_the_group_keeps_the_grace_then_is_killed() {
+    let mut fake = Fake::new(Some(Termination::Exited(0)));
+    fake.group.store(true, Ordering::SeqCst);
+    let (sender, stops) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
+    let started = tokio::time::Instant::now();
+    let result = supervise(&mut fake, LIMITS, stops).await.unwrap();
+    assert_eq!(started.elapsed(), LIMITS.grace);
+    assert_eq!(result.termination, Termination::Exited(0));
+    assert_eq!(
+        *fake.signals.lock().unwrap(),
+        vec![Signal::Term, Signal::Kill]
+    );
+}
+
+/// An interrupt arriving while the rest of the group shuts down gets its whole grace from
+/// when it arrives, not from the poll before it.
+#[tokio::test(start_paused = true)]
+async fn an_interrupt_after_the_leader_ended_gets_its_grace_from_its_arrival() {
+    let mut fake = Fake::new(Some(Termination::Exited(0)));
+    fake.group.store(true, Ordering::SeqCst);
+    let (sender, stops) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = sender.send(StopReason::Interrupted);
+    });
+    let started = tokio::time::Instant::now();
+    supervise(&mut fake, LIMITS, stops).await.unwrap();
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_millis(50) + LIMITS.interrupt_grace
+    );
 }

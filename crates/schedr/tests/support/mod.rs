@@ -29,7 +29,7 @@ def load(rows: int) -> str:
 
 with Dag("chain"):
     done = load(extract()["rows"])
-    CommandOperator("report", t"echo report {done}")
+    CommandOperator("report", ["echo", t"report {done}"])
 "#;
 
 pub fn python() -> String {

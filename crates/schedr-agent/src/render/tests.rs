@@ -1,5 +1,4 @@
 use pretty_assertions::assert_eq;
-use proptest::prelude::*;
 use rstest::rstest;
 use schedr_model::{TaskId, TemplateRef};
 
@@ -157,7 +156,6 @@ fn floats_are_written_like_python(#[case] value: f64, #[case] expected: &str) {
 #[case(json!({"$timedelta": 3_600_000_000_i64}), None, "3600")]
 #[case(json!({"$timedelta": 1_500_000}), None, "1.5")]
 #[case(json!({"$timedelta": -86_400_000_000_i64}), None, "-86400")]
-#[case(json!("x"), Some("raw"), "x")]
 #[case(json!("x"), Some(""), "x")]
 fn values_as_text(#[case] value: Value, #[case] spec: Option<&str>, #[case] expected: &str) {
     assert_eq!(to_text(&value, spec, "r").unwrap(), expected);
@@ -173,6 +171,7 @@ fn unrenderable_values(#[case] value: Value, #[case] message: &str) {
 
 #[rstest]
 #[case(json!(5), "%Y", "only dates and times take a format spec")]
+#[case(json!("x"), "raw", "only dates and times take a format spec")]
 #[case(json!({"$timedelta": 1}), "%S", "durations are written as seconds")]
 #[case(json!({"$datetime": "not a date"}), "%Y", "the stored date is invalid")]
 #[case(json!({"$datetime": "2026-10-19T03:00:00+00:00"}), "%Y %", "")]
@@ -182,66 +181,8 @@ fn bad_format_specs(#[case] value: Value, #[case] spec: &str, #[case] reason: &s
     assert!(err.to_string().contains(reason), "{err}");
 }
 
-#[derive(serde::Deserialize)]
-struct Fixture {
-    cases: Vec<Case>,
-}
-
-#[derive(serde::Deserialize)]
-struct Case {
-    input: String,
-    quoted: String,
-}
-
 #[test]
-fn shell_quote_matches_python_shlex_quote_on_the_shared_fixture() {
-    let text = include_str!("../../../../testdata/shell_quote.json");
-    let fixture: Fixture = serde_json::from_str(text).unwrap();
-    assert!(fixture.cases.len() > 20);
-    for case in fixture.cases {
-        assert_eq!(
-            shell_quote(&case.input),
-            case.quoted,
-            "input {:?}",
-            case.input
-        );
-    }
-}
-
-/// Undoes POSIX single quoting as `sh` would: a test oracle for `shell_quote`.
-fn sh_unquote(quoted: &str) -> String {
-    let mut out = String::new();
-    let mut chars = quoted.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => out.extend(chars.by_ref().take_while(|&c| c != '\'')),
-            '"' => out.extend(chars.by_ref().take_while(|&c| c != '"')),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-proptest! {
-    #[test]
-    fn quoting_round_trips_through_the_shell(s in ".*") {
-        prop_assert_eq!(sh_unquote(&shell_quote(&s)), s);
-    }
-
-    #[test]
-    fn safe_strings_stay_as_they_are(s in "[A-Za-z0-9_@%+=:,./-]+") {
-        prop_assert_eq!(shell_quote(&s), s);
-    }
-
-    #[test]
-    fn unsafe_strings_are_wrapped_in_single_quotes(s in ".*[^A-Za-z0-9_@%+=:,./-].*") {
-        let quoted = shell_quote(&s);
-        prop_assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
-    }
-}
-
-#[test]
-fn render_quotes_references_in_shell_commands_unless_raw() {
+fn render_writes_references_as_they_are() {
     let template = Template(vec![
         text("./notify.sh "),
         part(
@@ -252,17 +193,12 @@ fn render_quotes_references_in_shell_commands_unless_raw() {
             None,
         ),
         text(" "),
-        part(output("count", vec![]), Some("raw")),
+        part(output("count", vec![]), None),
         text(" "),
         part(PLANNED_FOR, Some("%Y-%m-%d")),
     ]);
-    let ctx = ctx();
     assert_eq!(
-        render(&template, &ctx, true).unwrap(),
-        "./notify.sh 'a b' 120 2026-10-15"
-    );
-    assert_eq!(
-        render(&template, &ctx, false).unwrap(),
+        render(&template, &ctx()).unwrap(),
         "./notify.sh a b 120 2026-10-15"
     );
 }
@@ -271,29 +207,33 @@ fn render_quotes_references_in_shell_commands_unless_raw() {
 fn render_reports_resolution_errors() {
     let template = Template(vec![part(output("missing", vec![]), None)]);
     assert_eq!(
-        render(&template, &ctx(), false).unwrap_err().to_string(),
+        render(&template, &ctx()).unwrap_err().to_string(),
         "the output of `missing` isn't among the task's inputs"
     );
 }
 
 #[test]
 fn shell_command_lines_run_through_sh() {
-    let line = CommandLine::Shell(Template(vec![
-        text("echo "),
-        part(
-            output(
-                "extract",
-                vec![field("rows"), PathElem::Index(0), field("id")],
-            ),
-            None,
-        ),
-    ]));
+    let line = CommandLine::Shell(Template::text("echo \"$URL\""));
     assert_eq!(
         command_line(&line, &ctx()).unwrap(),
         (
             "/bin/sh".to_owned(),
-            vec!["-c".to_owned(), "echo 'a b'".to_owned()]
+            vec!["-c".to_owned(), "echo \"$URL\"".to_owned()]
         )
+    );
+}
+
+/// Decision 99: a value never becomes shell source, whatever DAG JSON the agent is sent.
+#[test]
+fn a_shell_command_with_a_reference_is_refused_before_launch() {
+    let line = CommandLine::Shell(Template(vec![
+        text("echo "),
+        part(output("count", vec![]), None),
+    ]));
+    assert_eq!(
+        command_line(&line, &ctx()).unwrap_err(),
+        RenderError::ShellPlaceholder("count".to_owned())
     );
 }
 

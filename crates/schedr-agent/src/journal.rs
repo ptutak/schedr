@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use prost::Message;
-use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
+use rustix::process::{Pid, Signal, kill_process_group};
 use schedr_proto::pb;
 use serde::{Deserialize, Serialize};
 
@@ -322,6 +322,15 @@ pub fn process_identity(pid: i32) -> io::Result<ProcessIdentity> {
     })
 }
 
+/// The group a journal's `pgid` names; never group 1 (B88): signalling it is `kill(-1)`,
+/// every process the agent may signal, and no task's group is init's.
+fn orphan_group(pgid: i32) -> Option<Pid> {
+    if pgid <= 1 {
+        return None;
+    }
+    Pid::from_raw(pgid)
+}
+
 /// How stopping an orphaned process group went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orphan {
@@ -343,7 +352,7 @@ pub async fn stop_orphan(identity: ProcessIdentity, grace: Duration) -> io::Resu
     if process_identity(identity.pgid).ok() != Some(identity) {
         return Ok(Orphan::Gone);
     }
-    let Some(group) = Pid::from_raw(identity.pgid) else {
+    let Some(group) = orphan_group(identity.pgid) else {
         return Ok(Orphan::Gone);
     };
     let signal = |signal| match kill_process_group(group, signal) {
@@ -368,7 +377,7 @@ pub async fn stop_orphan(identity: ProcessIdentity, grace: Duration) -> io::Resu
 async fn gone_within(group: Pid, wait: Duration) -> bool {
     let deadline = Instant::now() + wait;
     loop {
-        if test_kill_process_group(group).is_err() {
+        if !crate::process::group_running(group) {
             return true;
         }
         if Instant::now() >= deadline {

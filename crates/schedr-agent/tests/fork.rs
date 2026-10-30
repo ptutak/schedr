@@ -378,7 +378,11 @@ async fn a_forked_task_over_its_timeout_is_stopped() {
     let ran = run_python(
         &task,
         request(dir.path(), &dag, "slow"),
-        limits(Some(Duration::from_secs(1))),
+        // A long grace: the runner ends on SIGTERM, so none of it is waited for.
+        Limits {
+            grace: Duration::from_secs(20),
+            ..limits(Some(Duration::from_secs(1)))
+        },
         Stops::new().1,
         Some(&forks),
         &mut None,
@@ -396,6 +400,9 @@ async fn a_forked_task_over_its_timeout_is_stopped() {
         ran.supervised.termination,
         Termination::Signaled(_)
     ));
+    // The runner ended on SIGTERM: the shim holds its leader as a zombie (the group's ID
+    // stays reserved), which isn't running, so nothing is left to wait for (decision 100).
+    assert!(!ran.supervised.killed, "{:?}", ran.supervised);
 }
 
 #[tokio::test]

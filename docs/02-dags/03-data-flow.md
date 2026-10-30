@@ -67,7 +67,6 @@ value is formatted while the file is imported: a string as itself, a number or a
 |---|---|
 | none | The text above. |
 | a spec containing `%`, such as `:%Y-%m-%d` | A `datetime`, a `date`, or `Any`. |
-| `:raw` | A shell command, where it turns quoting off. Elsewhere it is a `ValueError`. |
 
 `!r`, `!s` and `!a` apply to a plain value. On a reference they are a `TypeError`. A
 t-string nested in another, or used as a dict key, is a `TypeError`.

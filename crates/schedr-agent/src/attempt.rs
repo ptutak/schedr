@@ -275,7 +275,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
             let task_env = env
                 .iter()
-                .map(|(name, template)| Ok((name.clone(), render(template, &ctx, false)?)))
+                .map(|(name, template)| Ok((name.clone(), render(template, &ctx)?)))
                 .collect::<Result<BTreeMap<_, _>, crate::render::RenderError>>()
                 .map_err(|e| failed(RENDER_FAILED, &e))?;
             let env = task_environment(&setup.agent_env, &setup.pass_env, &task_env, &vars)

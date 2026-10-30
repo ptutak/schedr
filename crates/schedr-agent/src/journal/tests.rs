@@ -264,3 +264,13 @@ async fn a_gone_or_recycled_process_is_left_alone() {
         Orphan::Gone
     );
 }
+
+#[test]
+fn the_group_of_init_or_of_everything_is_never_an_orphan() {
+    // B88: signalling group 1 is `kill(-1)`, every process of the user; a journal naming it
+    // (corrupted, or init's own identity) must not reach a signal.
+    assert_eq!(orphan_group(1), None);
+    assert_eq!(orphan_group(0), None);
+    assert_eq!(orphan_group(-7), None);
+    assert_eq!(orphan_group(4242), Pid::from_raw(4242));
+}

@@ -4234,7 +4234,7 @@ with Dag(
 
     CommandOperator(  # depends on load: its command uses `count`
         "notify",
-        command=t"echo synced {count} customers for {dag_ctx.run.planned_for}",
+        command=["echo", t"synced {count} customers for {dag_ctx.run.planned_for}"],
     )
 ```
 
@@ -6639,7 +6639,6 @@ Rust crates chosen for the implementation (versions pinned when added):
 | configuration | `figment` | file < env (`SCHEDR_CONFIG__`, `__` nesting) < flags out of the box |
 | logging | `tracing` + `tracing-subscriber` | see Observability |
 | processes and signals | `tokio::process` (`process_group`), `rustix` | safe APIs only (`unsafe_code = "forbid"`) |
-| shell quoting | own implementation | must match `shlex.quote` exactly |
 | ignore files | `ignore` | gitignore semantics for `.schedrignore`, directory walking with symbolic links |
 | content hashes | `sha2` | SHA-256 of DAG roots |
 | metrics | `prometheus-client` | Prometheus's own client: a registry per process, typed label sets; see Observability (M2.9) |
@@ -6822,7 +6821,7 @@ a real server or talks to Postgres is an integration test.
   | Language | Tools |
   |---|---|
   | Python | `pytest`, `pytest-cov` |
-  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: shell quoting vs `shlex.quote`, fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`tempfile`** (temporary directories: DAG roots for scanning); **`tower`** + **`http-body-util`** (REST API requests through the router, in process); **`cargo-llvm-cov`** |
+  | Rust | built-in `#[test]` run by **`cargo-nextest`**; **`rstest`** (fixtures, parametrized cases); **`proptest`** (property tests: fire times across DST, JSON round trips); **`insta`** (snapshots: DAG JSON, error messages, CLI output); **`pretty_assertions`**; **`tempfile`** (temporary directories: DAG roots for scanning); **`tower`** + **`http-body-util`** (REST API requests through the router, in process); **`cargo-llvm-cov`** |
 
 ### Documentation
 

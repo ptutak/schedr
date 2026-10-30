@@ -822,7 +822,7 @@ def to_value(value: object, where: str, upstream: list[Upstream]) -> Value:  # n
         note_upstream(reference, upstream)
         return RefValue(reference)
     if is_tstring(value):
-        template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
+        template = tstring_to_template(value, where)  # type: ignore[arg-type]
         for ref in template.references():
             note_upstream(ref, upstream)
         return TemplateValue(template)
@@ -875,7 +875,7 @@ def to_template(value: object, where: str, upstream: list[Upstream]) -> Template
         note_upstream(reference, upstream)
         return Template([TemplateRef(reference)])
     if is_tstring(value):
-        template = tstring_to_template(value, where, shell=False)  # type: ignore[arg-type]
+        template = tstring_to_template(value, where)  # type: ignore[arg-type]
         for ref in template.references():
             note_upstream(ref, upstream)
         return template

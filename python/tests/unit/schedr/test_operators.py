@@ -172,24 +172,54 @@ def test_command_reference_paths_must_exist() -> None:
         echo_missing_field()
 
 
-def test_a_t_string_shell_command(validate: Validate) -> None:
-    region = "eu west"
+def shell_with_a_reference() -> None:
     with Dag("d"):
         n = count()
-        CommandOperator("t", t"./run.sh {region} {n} {dag_ctx.run.planned_for:%Y-%m-%d}")
+        CommandOperator("t", t"./run.sh {n}")
+
+
+def shell_with_a_plain_value() -> None:
+    region = "eu west"
+    with Dag("d"):
+        CommandOperator("t", t"./run.sh {region}")
+
+
+def shell_with_dag_ctx() -> None:
+    with Dag("d"):
+        CommandOperator("t", t"./run.sh '{dag_ctx.run.planned_for:%Y-%m-%d}'")
+
+
+@pytest.mark.parametrize(
+    ("make", "placeholder"),
+    [
+        (shell_with_a_reference, "{n}"),
+        (shell_with_a_plain_value, "{region}"),
+        (shell_with_dag_ctx, "{dag_ctx.run.planned_for:%Y-%m-%d}"),
+    ],
+)
+def test_a_shell_command_takes_no_placeholders(make: Callable[[], None], placeholder: str) -> None:
+    """Decision 99: values never become shell source; the message shows the two rewrites."""
+    with pytest.raises(TypeError) as raised:
+        make()
+    message = str(raised.value)
+    assert message.startswith(f"task `t`: `{placeholder}` in a shell command:"), message
+    assert 'command=["./notify.sh", out.report_url]' in message
+    assert """command='./notify.sh "$URL"', env={"URL": out.report_url}""" in message
+
+
+def test_a_shell_t_string_without_placeholders_is_its_text(validate: Validate) -> None:
+    with Dag("d"):
+        CommandOperator("t", t"echo '{{}}' $HOME")
     model = only_dag()
-    assert model.tasks[1].kind.command == ShellCommand(
-        Template(
-            [
-                "./run.sh 'eu west' ",
-                TemplateRef(OutputRef("count")),
-                " ",
-                TemplateRef(DagCtxRef(DagCtxField.PLANNED_FOR), "%Y-%m-%d"),
-            ]
-        )
-    )
-    assert [(e.from_, e.to) for e in model.edges] == [("count", "t")]
+    assert model.tasks[0].kind.command == ShellCommand(Template(["echo '{}' $HOME"]))
     validate("Dag", model.to_json())
+
+
+def test_raw_is_an_unknown_format_spec() -> None:
+    with Dag("d"):
+        n = count()
+        with pytest.raises(ValueError, match=r"unknown format spec `:raw`"):
+            CommandOperator("t", ["./run.sh", t"{n:raw}"])
 
 
 def test_t_strings_in_arguments_and_env_are_not_quoted() -> None:
@@ -209,4 +239,4 @@ def test_a_strftime_spec_on_a_number_is_a_parse_error() -> None:
 def echo_count_as_date() -> None:
     with Dag("d"):
         n = count()
-        CommandOperator("t", t"echo {n:%Y}")
+        CommandOperator("t", ["echo", t"{n:%Y}"])

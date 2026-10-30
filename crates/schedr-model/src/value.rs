@@ -82,7 +82,7 @@ impl Reference {
     }
 }
 
-/// A reference inside a template, with its optional format spec (e.g. `raw`, `%Y-%m-%d`).
+/// A reference inside a template, with its optional format spec (e.g. `%Y-%m-%d`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TemplateRef {
     /// What is filled in.

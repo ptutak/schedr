@@ -414,3 +414,24 @@ fn a_mapped_tasks_names_are_checked() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_shell_command_with_a_placeholder_is_refused() {
+    let mut shell = task("notify", &json!({}));
+    shell["kind"] = json!("command");
+    shell["command"] = json!({"shell": [{"text": "./notify.sh "}, output_of("extract")]});
+    let mut argv = task("echo", &json!({}));
+    argv["kind"] = json!("command");
+    argv["command"] = json!({"argv": [[{"text": "echo"}], [output_of("extract")]]});
+    let found = problems(&json!({
+        "tasks": [task("extract", &json!({})), shell, argv],
+        "edges": [edge("extract", "notify", "data"), edge("extract", "echo", "data")]
+    }));
+    assert_eq!(
+        found,
+        [
+            "task `notify`: a shell command takes no placeholders (the shell would read a value \
+             as code): pass values as arguments or in `env`"
+        ]
+    );
+}

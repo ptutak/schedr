@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::{Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind, Value};
+use schedr_model::{
+    CommandLine, Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind, TemplatePart,
+    Value,
+};
 
 use crate::fire_times::FireTimes;
 
@@ -58,6 +61,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     }
     group_problems(dag, &mut problems);
     expand_problems(dag, &mut problems);
+    shell_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
@@ -68,6 +72,25 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         ));
     }
     problems
+}
+
+/// A shell command takes no placeholders (decision 99): a value in shell source can run as
+/// code whatever the quoting, so values go in as arguments or environment variables.
+fn shell_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        if let TaskKind::Command {
+            command: CommandLine::Shell(template),
+            ..
+        } = &task.kind
+            && template.0.iter().any(|p| matches!(p, TemplatePart::Ref(_)))
+        {
+            problems.push(format!(
+                "task `{}`: a shell command takes no placeholders (the shell would read a value \
+                 as code): pass values as arguments or in `env`",
+                task.id
+            ));
+        }
+    }
 }
 
 /// Mapped tasks (decision 69): a Python task only, not a `@branch`, with something to vary

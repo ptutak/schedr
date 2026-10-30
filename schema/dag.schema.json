@@ -5,7 +5,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A string run by a shell; interpolated values are shell-quoted unless `raw`.",
+          "description": "A string run by a shell; it takes no references (decision 99): values go in `env`.",
           "properties": {
             "shell": {
               "$ref": "#/$defs/Template"
@@ -584,7 +584,7 @@
       ]
     },
     "TemplateRef": {
-      "description": "A reference inside a template, with its optional format spec (e.g. `raw`, `%Y-%m-%d`).",
+      "description": "A reference inside a template, with its optional format spec (e.g. `%Y-%m-%d`).",
       "oneOf": [
         {
           "description": "An upstream task's output, or a part of it.",

@@ -94,13 +94,13 @@ def test_since_without_a_previous_fire_time_needs_initial_since(
         pytest.raises(ValueError, match=f"DAG `d` has {what}, so its first run has no previous"),
         Dag("d", trigger=trigger),
     ):
-        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+        CommandOperator("load", ["load", t"--since={dag_ctx.run.since}"])
     with Dag("d", trigger=trigger, initial_since="2020-01-01"):
-        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+        CommandOperator("load", ["load", t"--since={dag_ctx.run.since}"])
     with Dag("e", trigger=trigger):
-        CommandOperator("load", t"load --until {dag_ctx.run.planned_for}")
+        CommandOperator("load", ["load", t"--until={dag_ctx.run.planned_for}"])
     with Dag("f", trigger=Every(timedelta(hours=1))):
-        CommandOperator("load", t"load --since {dag_ctx.run.since}")
+        CommandOperator("load", ["load", t"--since={dag_ctx.run.since}"])
     assert [d.id for d in registry.take_defined()] == ["d", "e", "f"]
 
 

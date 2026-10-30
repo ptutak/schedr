@@ -21,7 +21,7 @@ from schedr._model import (
     ShellCommand,
     Template,
 )
-from schedr._templates import is_tstring, to_template
+from schedr._templates import is_tstring, shell_text
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
 from schedr.tasks import Output
 from schedr.types import ProcessResult
@@ -108,16 +108,16 @@ class Operator:
 class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     """Runs an inline command.
 
-    A string or a t-string is run by a shell; in a t-string every interpolated value is
-    shell-quoted unless its format spec is ``:raw`` (``t"./run.sh {flags:raw}"``). A list is a
-    program and its arguments, run without a shell (each element one argument, so nothing needs
-    quoting). List elements and ``env`` values may be strings, t-strings or references, filled
-    in at run time. The output is a ``ProcessResult``; ``.stdout`` and ``.stderr`` reference its
-    parts.
+    A string is run by a shell, and takes no placeholders (a t-string with one is refused):
+    the shell would read a value as code. A list is a program and its arguments, run without a
+    shell (each element one argument, so nothing needs quoting). List elements and ``env``
+    values may be strings, t-strings or references, filled in at run time; a shell command
+    reads values from ``env`` (``command='./notify.sh "$URL"', env={"URL": out.report_url}``).
+    The output is a ``ProcessResult``; ``.stdout`` and ``.stderr`` reference its parts.
 
     Args:
         task_id: The task's ID.
-        command: A shell string or t-string, or a list of arguments.
+        command: A shell string, or a list of arguments.
         env: Extra environment variables for the process.
         retries: How many times a failed attempt is retried.
         retry_delay: The delay before each retry.
@@ -160,9 +160,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         if isinstance(command, str):
             line = ShellCommand(Template([command]))
         elif is_tstring(command):
-            line = ShellCommand(to_template(command, where, shell=True))  # type: ignore[arg-type]
-            for ref in line.template.references():
-                _build.note_upstream(ref, upstream)
+            line = ShellCommand(Template([shell_text(command, where)]))  # type: ignore[arg-type]
         elif isinstance(command, Sequence):
             line = ArgvCommand(
                 [

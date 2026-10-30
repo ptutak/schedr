@@ -1,9 +1,8 @@
 //! Rendering templates and command lines: references filled in from the run's inputs and
 //! context, values written as text the same way the Python API writes literals.
 //!
-//! In a shell command every interpolated value is shell-quoted exactly like Python's
-//! `shlex.quote`, unless its format spec is `raw` (see PROJECT.md, Templating: safe
-//! substitution into shell commands).
+//! A shell command takes no references (decision 99): a value in shell source can run as code
+//! whatever the quoting, so values reach a shell program as arguments or environment variables.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -19,9 +18,6 @@ mod tests;
 
 /// The program that runs shell commands.
 pub const SHELL: &str = "/bin/sh";
-
-/// The format spec that inserts a value into a shell command unquoted.
-pub const RAW: &str = "raw";
 
 /// Why a template can't be rendered.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -53,6 +49,12 @@ pub enum RenderError {
         /// Why.
         reason: String,
     },
+    /// A shell command with a reference: refused, as the master and the Python API refuse it.
+    #[error(
+        "`{0}` in a shell command: the shell would read the value as code (pass values as \
+         arguments or in `env`)"
+    )]
+    ShellPlaceholder(String),
 }
 
 /// What references are filled in from.
@@ -238,7 +240,7 @@ fn zoned(text: &str, is_date: bool) -> Option<jiff::Zoned> {
 /// Returns [`RenderError::NotRenderable`] for None, lists and objects, or
 /// [`RenderError::BadFormat`] for a spec that doesn't fit (strftime only on dates and times).
 pub fn to_text(value: &Value, spec: Option<&str>, label: &str) -> Result<String, RenderError> {
-    let spec = spec.filter(|s| !s.is_empty() && *s != RAW);
+    let spec = spec.filter(|s| !s.is_empty());
     let bad = |reason: &str| RenderError::BadFormat {
         reference: label.to_owned(),
         spec: spec.unwrap_or_default().to_owned(),
@@ -290,44 +292,23 @@ pub fn to_text(value: &Value, spec: Option<&str>, label: &str) -> Result<String,
     }
 }
 
-/// Quotes a string for a POSIX shell, exactly like Python's `shlex.quote`.
-#[must_use]
-pub fn shell_quote(text: &str) -> String {
-    if text.is_empty() {
-        return "''".to_owned();
-    }
-    let safe = text
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
-    if safe {
-        text.to_owned()
-    } else {
-        format!("'{}'", text.replace('\'', r#"'"'"'"#))
-    }
-}
-
-/// Renders a template; in a shell command, references are quoted unless `raw`.
+/// Renders a template, each reference written as text.
 ///
 /// # Errors
 ///
 /// Returns a [`RenderError`] if a reference can't be resolved or written as text.
-pub fn render(
-    template: &Template,
-    ctx: &RenderContext,
-    shell: bool,
-) -> Result<String, RenderError> {
+pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, RenderError> {
     let mut out = String::new();
     for part in &template.0 {
         match part {
             TemplatePart::Text(text) => out.push_str(text),
             TemplatePart::Ref(r) => {
                 let label = reference_label(&r.reference);
-                let text = to_text(resolve(&r.reference, ctx)?, r.format.as_deref(), &label)?;
-                if shell && r.format.as_deref() != Some(RAW) {
-                    out.push_str(&shell_quote(&text));
-                } else {
-                    out.push_str(&text);
-                }
+                out.push_str(&to_text(
+                    resolve(&r.reference, ctx)?,
+                    r.format.as_deref(),
+                    &label,
+                )?);
             }
         }
     }
@@ -336,25 +317,35 @@ pub fn render(
 
 /// The program and arguments of a command line.
 ///
-/// A shell command runs as `/bin/sh -c <rendered>`; an argument list renders each element
-/// unquoted, the first being the program.
+/// A shell command runs as `/bin/sh -c <text>`; an argument list renders each element, the
+/// first being the program.
 ///
 /// # Errors
 ///
-/// Returns a [`RenderError`] if a template can't be rendered.
+/// Returns a [`RenderError`] if a template can't be rendered, or for a shell command with a
+/// reference.
 pub fn command_line(
     command: &CommandLine,
     ctx: &RenderContext,
 ) -> Result<(String, Vec<String>), RenderError> {
     match command {
-        CommandLine::Shell(template) => Ok((
-            SHELL.to_owned(),
-            vec!["-c".to_owned(), render(template, ctx, true)?],
-        )),
+        CommandLine::Shell(template) => {
+            if let Some(TemplatePart::Ref(r)) = template
+                .0
+                .iter()
+                .find(|p| matches!(p, TemplatePart::Ref(_)))
+            {
+                return Err(RenderError::ShellPlaceholder(reference_label(&r.reference)));
+            }
+            Ok((
+                SHELL.to_owned(),
+                vec!["-c".to_owned(), render(template, ctx)?],
+            ))
+        }
         CommandLine::Argv(templates) => {
             let mut args = templates
                 .iter()
-                .map(|t| render(t, ctx, false))
+                .map(|t| render(t, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             let program = if args.is_empty() {
                 String::new()

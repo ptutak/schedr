@@ -46,13 +46,13 @@ and `TaskDefaults(...)`, and the task's own argument wins. What the worker does 
 
 | `command` | How it runs |
 |---|---|
-| A `str` or a t-string | A shell. In a t-string each interpolated value is shell-quoted. `:raw` inserts it as written: `t"./run.sh {flags:raw}"`. |
+| A `str` | A shell. It takes no placeholders: a t-string with one is refused when the file loads, because the shell would read the value as code. |
 | A list | The program and its arguments, with no shell. Each element is one argument, so nothing is quoted. An empty list is a `ValueError`. |
 
 An element, and a value in `env`, may be a string, a t-string or a reference such as
-`names[0]`. A name in `env` matches `[A-Za-z_][A-Za-z0-9_]*`. In
-`t"echo loaded {count} in $REGION"`, `{count}` is the task's output and `$REGION` is the
-shell, from `env`.
+`names[0]`. A name in `env` matches `[A-Za-z_][A-Za-z0-9_]*`. To pass a value, use a list,
+`["./notify.sh", out.report_url]`, or `env` read by the shell:
+`command='./notify.sh "$URL"', env={"URL": out.report_url}`.
 
 Without `outcomes=`, exit code 0 is success (`DefaultOutcome.SUCCESS`). With
 `outcomes=`, a declared exit code is success with that outcome; any other code, or a

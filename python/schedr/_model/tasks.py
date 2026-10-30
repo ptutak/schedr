@@ -86,7 +86,7 @@ class TaskSettings:
 
 @dataclass(frozen=True, slots=True)
 class ShellCommand:
-    """A string run by a shell; interpolated values are shell-quoted unless ``raw``.
+    """A string run by a shell; it takes no references (decision 99): values go in ``env``.
 
     Attributes:
         template: The command.

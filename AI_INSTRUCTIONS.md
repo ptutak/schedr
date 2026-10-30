@@ -136,6 +136,26 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 - A bug found while working on something else goes into `BUGS.md` (B-number, found, symptom,
   repro, suspect or cause, plan) and into the step's summary. **Don't fix it on the spot**
   unless it blocks the step; I schedule fixes.
+- **Every bug is rated** when it is logged, its rating the entry's first line, revised as more
+  is known (the scales are in `BUGS.md`, Ratings):
+  - **Severity**, what happens when it occurs: critical (a security hole, silent wrong results
+    or wrong code run, a task run twice, the whole system stuck), high (in normal operation,
+    with no mistake by the user, work fails wrongly, stalls or runs on after a cancel), medium
+    (a visible, repeatable failure that testing would catch, slowness growing with scale, a
+    misleading UI or CLI), low (cosmetic, a message, a test-only flake).
+  - **Probability** in a real deployment: likely (ordinary use, routine events), possible (a
+    specific but plausible situation), rare (unusual input, exact timing, extreme sizes, a
+    hostile actor; for a security bug, how easily it is triggered on purpose).
+  - **Kind:** security, data, correctness, reliability, performance, usability or tests.
+    Security is a kind, not a third score: its worst case is already the severity.
+  - **Score** = severity (4 to 1) × probability (3 to 1). The **ranking** at the top of
+    `BUGS.md` puts every security bug first, whatever its score, then the rest by score, then
+    severity; regenerate it whenever an entry is added, re-rated or removed.
+- **What gets fixed when:** every high or critical bug, in the ranking's order, then features
+  go on; a newly found high or critical bug interrupts the feature work and is fixed next.
+  Medium and low bugs wait, fixed when a step touches their code or when I schedule them.
+- A colleague's finding comes rated (its review prompt asks for severity, probability and
+  kind); check the rating as you check the finding, before logging it.
 - When you fix one, **start with a test that reproduces it**: run it on the unfixed code and
   show it failing, then fix, then show the same test passing. Remove the entry in the fixing
   commit. Only if the bug can't be simulated in a test, say why and how the fix is checked

@@ -21,8 +21,8 @@ with Dag("tasks_demo", trigger=None):
 
     CommandOperator(
         "announce",
-        command=t"echo loaded {count} in $REGION",
-        env={"REGION": "eu"},
+        command='echo loaded "$COUNT" in "$REGION"',
+        env={"COUNT": count, "REGION": "eu"},
     )
     CommandOperator("list_one", command=["echo", names[0]])
     done = EmptyOperator("done")

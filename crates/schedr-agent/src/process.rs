@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use rustix::process::{Pid, kill_process_group};
+use rustix::process::{Pid, kill_process_group, test_kill_process_group};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -23,6 +23,9 @@ use crate::output::TailBuffer;
 use crate::status::Termination;
 use crate::supervise::{Process, Signal};
 use crate::usage::{Ended, clock_ticks, exited, zombie_usage};
+
+#[cfg(test)]
+mod tests;
 
 /// What to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +177,62 @@ impl OsProcess {
     }
 }
 
+/// Whether a process of `group` still runs. A zombie (ended, not yet reaped) doesn't: a forked
+/// task's shim holds its leader as one, and an agent that is a container's first process (or
+/// a subreaper) adopts its tasks' orphans, which stay zombies until it reaps them. A process
+/// whose main thread ended (`pthread_exit`) shows as a zombie too while its other threads run:
+/// it still runs. Read from `/proc`; without it, whether the group has any process at all.
+#[must_use]
+pub fn group_running(group: Pid) -> bool {
+    if test_kill_process_group(group).is_err() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+    let group = group.as_raw_nonzero().get();
+    entries.flatten().any(|entry| {
+        let is_pid = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()));
+        is_pid
+            && std::fs::read_to_string(entry.path().join("stat")).is_ok_and(|stat| {
+                stat_fields(&stat).is_some_and(|(state, pgrp)| {
+                    pgrp == group && (!ended(state) || a_thread_runs(&entry.path()))
+                })
+            })
+    })
+}
+
+/// Whether a thread of the process at `/proc/<pid>` hasn't ended; if its threads can't be
+/// listed, it may still run.
+fn a_thread_runs(process: &Path) -> bool {
+    let Ok(threads) = std::fs::read_dir(process.join("task")) else {
+        return true;
+    };
+    threads.flatten().any(|thread| {
+        std::fs::read_to_string(thread.path().join("stat"))
+            .is_ok_and(|stat| stat_fields(&stat).is_some_and(|(state, _)| !ended(state)))
+    })
+}
+
+/// The state (field 3) and process group (field 5) of a `/proc/.../stat` line.
+fn stat_fields(stat: &str) -> Option<(&str, i32)> {
+    // The command name (field 2) is in parentheses and may contain anything: the fields
+    // after it start at its closing parenthesis.
+    let (_, rest) = stat.rsplit_once(')')?;
+    let mut fields = rest.split_whitespace();
+    let state = fields.next()?;
+    let pgrp = fields.nth(1)?.parse().ok()?;
+    Some((state, pgrp))
+}
+
+/// Whether a state means ended: a zombie, or dead.
+fn ended(state: &str) -> bool {
+    matches!(state, "Z" | "X" | "x")
+}
+
 impl Process for OsProcess {
     async fn wait(&mut self) -> io::Result<Termination> {
         // Its zombie is read before `wait` reaps it (decision 18A).
@@ -204,7 +263,7 @@ impl Process for OsProcess {
     }
 
     fn group_alive(&self) -> bool {
-        rustix::process::test_kill_process_group(self.group).is_ok()
+        group_running(self.group)
     }
 
     fn ended(&self) -> Ended {

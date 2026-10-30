@@ -24,5 +24,5 @@ with Dag(
 
     CommandOperator(  # depends on load: its command uses `count`
         "notify",
-        command=t"echo synced {count} customers for {dag_ctx.run.planned_for}",
+        command=["echo", t"synced {count} customers for {dag_ctx.run.planned_for}"],
     )

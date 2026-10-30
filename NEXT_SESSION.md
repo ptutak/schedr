@@ -7,33 +7,37 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 ## State (2026-10-30)
 
 - **M1–M3 done; M4 in progress.** M4.1 (outcomes), M4.2 (`@branch`, groups, import errors) and
-  M4.3 (mapping, a–c) are done, reviewed and fixed. **Now: a pause for bugs, M4.3e** (the
-  user: "finish bugfixing before we move on with M4.4"; M4.4 not today). Then M4.3d (the CLI's
-  `runs show`, `tasks attempts`, `tasks output`: B37), then M4.4 (concurrency limits:
-  decisions 87–92, 95–96 taken), in PLAN.md's order.
-- **Commits of 2026-10-30:** `5b451e1` the M4.3 review fix-up (decisions 93, 94, 97; the docs
-  round; B37–B77 logged; Codex and the sandbox in AI_SETUP / AI_INSTRUCTIONS); `a8bf777` B39
-  partly fixed (a group drawn as a rigid column; the rest in M6). CI: `gh run list`.
-- **Uncommitted, under Grok's review (`5e2b8d14`, worktree `schedr-grok-harness`):** M4.3e
-  part 1: the fault-injection harness (decision 98) and B49's fix. On acceptance: commit.
-- **Next in M4.3e:** B42's core half (`Core::forget` removes the connection before its
-  writes, which are two transactions), then B79 (a run's preparation in three writes), each
-  as a harness scenario first; then the high-severity bugs section by section: F1's
-  B41, B43, B44; F2's B50 (B51, B52 medium); F6's B53 (**decision 99**: refuse a placeholder
-  inside quotes, or quote by context), B54, B55; F7's B58, B59; F8's B64; F3's B78.
-  Medium and low wait in BUGS.md.
+  M4.3a–c (mapping) are done. **Next: M4.3d** (the CLI's `runs show`, `tasks attempts`,
+  `tasks output` with `--map-index` and `--json`: B37; decision 86 settles what users see), which
+  closes M4.3. **Then the bugs of severity high or critical** (the user, 2026-10-30: fix down
+  to "high", then features; a new ≥ high bug interrupts), in BUGS.md's ranking, security first:
+  B62 + B46 (security), B58 + B59 (code identity under git-sync), B50 + B41 + B43 + B44 (the
+  reconnect batch), then B86, B84, B78, B64, B54, B66, B45, B63, B57, B47. Then M4.4
+  (concurrency limits: decisions 87–92, 95–96 taken).
+- **Commits of 2026-10-30:** `5b451e1` (the M4.3 review fix-up), `a8bf777` (B39 partly),
+  `819dcbb` (the harness, B49, B51), `fbcfd34` (B42, B79, B55, decisions 99–100, B84–B87
+  logged), then the evening's: B53 by decision 99, B55's review fixes (including a process whose
+  main thread ended still counting as running), B88 (never `kill(-1)` from the journal), and
+  **BUGS.md's ratings** (severity × probability + kind, the ranking, security first). CI:
+  `gh run list`.
+- **2026-10-30, 19:53:** a Grok throwaway test ran `kill -KILL -<pgid>`, which procps 4.0.4
+  reads as `kill -1`: every process of the user died ("WSL died"; the VM stayed up). The
+  sandboxes now have `--unshare-pid` and the prompts forbid that form; a later Grok turn
+  killed itself inside the sandbox and nothing else (it worked). If `/run/user/1002` is missing
+  after such an event, restart WSL (podman needs it).
 
 ## Open when this session ended
 
 - **Codex's whole-repository review** (the Codex skill's `reviews/schedr-full-2026-10-30.md`;
-  ~50% of Codex's week): done F1, F2, F3, F6, F7, F8 (B41–B83, all logged). Next F4 (the
-  database layer), F5 (scheduling and discovery), then F9–F14. One section at a time; its
-  worktree is `schedr-codex-f1` (detached at `a8bf777`; move it to `main` before a section,
-  copy the current BUGS.md in). Its 5-hour window reached 63%: wait for it before more.
-- **Usage:** Grok 31% of its week (resets Fridays 9:00; ask the user for the %); Codex 21%
-  weekly (read from its turns; resets Thursdays 01:57).
-- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B83
-  (B49 fixed in the uncommitted work). The next number is **B84**.
+  ~50% of Codex's week): done F1–F4, F6–F8 (B41–B87, all logged). Next F5 (scheduling and
+  discovery), then F9–F14, one section at a time; its worktree is `schedr-codex-f1` (detached
+  at `819dcbb`; move it to `main` before a section, copy the current BUGS.md in). A section's
+  findings now come rated (severity, probability, kind).
+- **Usage:** Grok 39% of its week after the lost review (resets Fridays 9:00; ask the user for
+  the %), plus the fresh review `56b72408` (two turns) not yet logged; Codex 25% weekly (read
+  from its turns; resets Thursdays 01:57).
+- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B87
+  (B42, B49, B51, B53, B55, B79 fixed; B88 found and fixed the same day). The next number is **B89**.
 
 ## How we work now (2026-10-30)
 
@@ -48,7 +52,7 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   worktree. Prepare a worktree (its pyenv, `uv sync`, a build) before a colleague's turn.
 - **Every finding is verified before acting;** rejected ones reported with why. Code Grok
   wrote is reviewed by Codex (or a fresh Grok session).
-- **Decisions:** numbered (the next is **99**), lettered options, the recommended first, a
+- **Decisions:** numbered (the next is **101**), lettered options, the recommended first, a
   "Who (does the work)" column. Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one. Check CI with `gh run list`.
 - **Stress tests:** never without the user asking. **Processes:** kill only your own.
@@ -78,7 +82,8 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B84); fix them
+- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B89), each rated
+  (severity, probability, kind: BUGS.md "Ratings") and the "Ranking" table regenerated; fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.
@@ -174,3 +179,6 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+Resume this session with:
+claude --resume 8b1bd615-ec70-4343-ae4d-2552c481b4b4

@@ -188,6 +188,13 @@ impl Process for TaskProcess {
         }
     }
 
+    fn group_alive(&self) -> bool {
+        match self {
+            Self::Spawned(process) => process.group_alive(),
+            Self::Forked(process) => process.group_alive(),
+        }
+    }
+
     fn ended(&self) -> crate::usage::Ended {
         match self {
             Self::Spawned(process) => process.ended(),

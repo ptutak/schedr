@@ -126,7 +126,7 @@ impl Default for TaskSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandLine {
-    /// A string run by a shell; interpolated values are shell-quoted unless `raw`.
+    /// A string run by a shell; it takes no references (decision 99): values go in `env`.
     Shell(Template),
     /// A program and its arguments, run without a shell; each element is one argument.
     Argv(Vec<Template>),
