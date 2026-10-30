@@ -559,6 +559,7 @@ fn mapped_run_per_instance(standalone: &Standalone, run_id: &str) {
     );
     let (code, _, err) = standalone.cli(&["tasks", "logs", run_id, "fetch", "--map-index", "0"]);
     assert_eq!(code, 0, "{err}");
+    mapped_run_in_the_cli(standalone, run_id);
     // The UI: the mapped task's panel lists its instances.
     let panel = standalone
         .page(&format!("/d/default/runs/{run_id}?task=fetch"))
@@ -586,6 +587,69 @@ fn mapped_run_per_instance(standalone: &Standalone, run_id: &str) {
             .is_some()
     );
     assert_eq!(standalone.page(&format!("{download}?map_index=nope")), None);
+}
+
+/// The mapped run in the CLI's reads (decision 86, M4.3d): `runs show`, `tasks attempts` and
+/// `tasks output`.
+fn mapped_run_in_the_cli(standalone: &Standalone, run_id: &str) {
+    // `runs show` lists the whole task, then its instances (decision 86).
+    let (code, out, err) = standalone.cli(&["runs", "show", run_id]);
+    assert_eq!(code, 0, "{err}");
+    let names: Vec<&str> = out
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| name.starts_with("fetch"))
+        .collect();
+    assert_eq!(
+        names,
+        ["fetch", "fetch[0]", "fetch[1]", "fetch[2]"],
+        "{out}"
+    );
+    let whole = out.lines().find(|l| l.starts_with("fetch ")).unwrap();
+    assert_eq!(
+        whole.split_whitespace().collect::<Vec<_>>(),
+        ["fetch", "success", "SUCCESS", "0", "3"],
+        "{out}"
+    );
+    // Attempts of an instance; a mapped task needs one.
+    let (code, out, err) =
+        standalone.cli(&["tasks", "attempts", run_id, "fetch", "--map-index", "2"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.lines()
+            .nth(1)
+            .is_some_and(|l| l.starts_with("1    success")),
+        "{out}"
+    );
+    // That instance's attempt, not another's: every instance succeeded, so compare IDs.
+    let api = |index: u32| {
+        standalone
+            .get(&format!(
+                "/api/v1/runs/{run_id}/tasks/fetch/attempts?map_index={index}"
+            ))
+            .unwrap()["attempts"][0]["attempt_id"]
+            .clone()
+    };
+    let cli = standalone.cli_json(&["tasks", "attempts", run_id, "fetch", "--map-index", "2"]);
+    assert_eq!(cli["attempts"][0]["attempt_id"], api(2), "{cli}");
+    assert_ne!(api(2), api(0));
+    let (code, _, err) = standalone.cli(&["tasks", "attempts", run_id, "fetch"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("map_index"), "{err}");
+    // The gathered list as JSON, ready for a pipe; one instance's output and outcome.
+    let (code, out, err) = standalone.cli(&["tasks", "output", run_id, "count"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&out).unwrap(),
+        serde_json::json!([50, null, 60])
+    );
+    let one = standalone.cli_json(&["tasks", "output", run_id, "fetch", "--map-index", "1"]);
+    assert_eq!(one["outcome"], "Missing", "{one}");
+    assert_eq!(one["value"]["reason"], "raw/missing.csv not found", "{one}");
+    // A task the run doesn't have is an error, not an empty table.
+    let (code, _, err) = standalone.cli(&["tasks", "attempts", run_id, "ghost"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("no task `ghost` in run"), "{err}");
 }
 
 #[test]

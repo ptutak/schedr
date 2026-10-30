@@ -73,7 +73,7 @@ pub enum Command {
         #[command(subcommand)]
         command: DagsCommand,
     },
-    /// Trigger, list, cancel and backfill runs.
+    /// Trigger, list, show, cancel and backfill runs.
     Runs {
         /// How to reach the server.
         #[command(flatten)]
@@ -82,7 +82,7 @@ pub enum Command {
         #[command(subcommand)]
         command: RunsCommand,
     },
-    /// Cancel or retry single tasks of a run, or read their logs.
+    /// Cancel or retry single tasks of a run, or read their attempts, logs and outputs.
     Tasks {
         /// How to reach the server.
         #[command(flatten)]
@@ -223,6 +223,11 @@ pub enum RunsCommand {
         #[arg(long = "for", value_name = "TIME")]
         planned_for: Option<String>,
     },
+    /// Show a run and its tasks (a mapped task's instances as `fetch[0]`, `fetch[1]`, ...).
+    Show {
+        /// The run's ID.
+        run_id: String,
+    },
     /// Cancel a run, or what's left of a backfill.
     #[command(group(clap::ArgGroup::new("target").required(true).args(["run_id", "backfill"])))]
     Cancel {
@@ -286,6 +291,10 @@ pub enum TasksCommand {
     Retry(TaskTarget),
     /// Print an attempt's log, read from the worker that ran it.
     Logs(LogsArgs),
+    /// List a task's attempts (of one instance, for a mapped task).
+    Attempts(TaskTarget),
+    /// Print a task's output (a mapped task's gathered list, or one instance's).
+    Output(TaskTarget),
 }
 
 /// `schedr workers ...`.

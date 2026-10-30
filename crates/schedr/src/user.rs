@@ -8,12 +8,14 @@
 use std::io::Write;
 
 use jiff::tz::TimeZone;
-use schedr_api::views::{CommandView, DagView, RunView, WorkerView};
+use schedr_api::views::{
+    AttemptView, CommandView, DagView, RunDetail, RunView, TaskView, WorkerView,
+};
 
 use crate::app::AppError;
 use crate::cli::{DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand};
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
-use crate::times::{parse_for, show, trigger_text};
+use crate::times::{parse_for, show, show_short, trigger_text};
 
 #[cfg(test)]
 mod tests;
@@ -217,6 +219,13 @@ pub async fn run_runs<T: Transport>(
                 .collect();
             write_table(out, &["RUN", "KIND", "STATE", "FOR", "BY"], &rows)?;
         }
+        RunsCommand::Show { run_id } => {
+            let detail = client.run(run_id).await?;
+            if output.json {
+                return print_json(out, &detail);
+            }
+            print_run(&detail, &output.local, out)?;
+        }
         RunsCommand::Cancel { run_id, backfill } => {
             let Some(run_id) = run_id.as_deref().filter(|_| backfill.is_none()) else {
                 return Err(not_yet("runs cancel --backfill", "M4"));
@@ -239,7 +248,8 @@ pub async fn run_runs<T: Transport>(
     Ok(())
 }
 
-/// `schedr tasks cancel` and `retry`: each waits for the master's decision.
+/// `schedr tasks cancel` and `retry`: each waits for the master's decision; `logs`,
+/// `attempts` and `output` read.
 ///
 /// # Errors
 ///
@@ -254,6 +264,34 @@ pub async fn run_tasks<T: Transport>(
         TasksCommand::Cancel(target) => (target, TaskAction::Cancel),
         TasksCommand::Retry(target) => (target, TaskAction::Retry),
         TasksCommand::Logs(args) => return print_log(args, client, output, out).await,
+        TasksCommand::Attempts(target) => {
+            let attempts = client
+                .instance_attempts(&target.run_id, &target.task_id, target.map_index)
+                .await?;
+            if output.json {
+                return print_json(out, &attempts);
+            }
+            let rows: Vec<Vec<String>> = attempts
+                .attempts
+                .iter()
+                .map(|attempt| attempt_row(attempt, &output.local))
+                .collect();
+            let headers = [
+                "TRY", "STATUS", "WORKER", "STARTED", "ENDED", "DURATION", "EXIT", "ERROR",
+            ];
+            return write_table(out, &headers, &rows);
+        }
+        TasksCommand::Output(target) => {
+            let found = client
+                .instance_output(&target.run_id, &target.task_id, target.map_index)
+                .await?;
+            // Text output is the value alone, ready for a pipe; `--json` adds the outcome.
+            return if output.json {
+                print_json(out, &found)
+            } else {
+                print_json(out, &found.value)
+            };
+        }
     };
     let (run_id, task_id) = (&target.run_id, &target.task_id);
     let instance = (task_id.as_str(), target.map_index);
@@ -341,6 +379,102 @@ async fn print_log<T: Transport>(
         }
         tokio::time::sleep(client.poll()).await;
     }
+}
+
+/// `schedr runs show`: the run, then its tasks; a mapped task's own row (with its instance
+/// count) comes before its instances, `fetch[0]`, `fetch[1]`, ... (decision 86).
+fn print_run(detail: &RunDetail, local: &TimeZone, out: &mut impl Write) -> Result<(), AppError> {
+    let run = &detail.run;
+    writeln!(
+        out,
+        "run {} of {} ({}) for {}: {}",
+        run.run_id,
+        run.dag_id,
+        run.kind,
+        show(run.planned_for, local),
+        run.state
+    )?;
+    if detail.code_hashes.len() > 1 {
+        // Its code changed while it ran.
+        writeln!(out, "ran on code {}", detail.code_hashes.join(", "))?;
+    }
+    let rows: Vec<Vec<String>> = detail.tasks.iter().map(task_row).collect();
+    write_table(
+        out,
+        &["TASK", "STATE", "OUTCOME", "TRIES", "INSTANCES", "REASON"],
+        &rows,
+    )
+}
+
+fn task_row(task: &TaskView) -> Vec<String> {
+    let index = u32::try_from(task.map_index).ok();
+    vec![
+        shown_task(&task.task_id, index),
+        task.state.clone(),
+        task.outcome.clone().unwrap_or_default(),
+        task.try_number.to_string(),
+        task.instances.map_or_else(String::new, |n| n.to_string()),
+        task.reason.clone().unwrap_or_default(),
+    ]
+}
+
+fn attempt_row(attempt: &AttemptView, local: &TimeZone) -> Vec<String> {
+    let status = attempt.status.clone().unwrap_or_else(|| {
+        if attempt.started_at.is_some() {
+            "running"
+        } else {
+            "assigned"
+        }
+        .to_owned()
+    });
+    let time = |at: Option<jiff::Timestamp>| at.map_or_else(String::new, |t| show_short(t, local));
+    vec![
+        attempt.try_number.to_string(),
+        status,
+        attempt.worker_id.clone().unwrap_or_default(),
+        time(attempt.started_at),
+        time(attempt.ended_at),
+        // Measured by the worker; the timestamps are the master's.
+        attempt.duration_ms.map_or_else(String::new, seconds),
+        attempt
+            .exit_code
+            .map_or_else(String::new, |c| c.to_string()),
+        attempt_error(attempt),
+    ]
+}
+
+/// A duration measured in milliseconds, in seconds rounded to a tenth (half up): `0.1s` for
+/// 99 ms, `0.3s` for 250 ms. `tasks attempts` and `dags test` both show it so.
+pub(crate) fn seconds(ms: u64) -> String {
+    let tenths = (ms + 50) / 100;
+    format!("{}.{}s", tenths / 10, tenths % 10)
+}
+
+/// What went wrong, in a cell: the error kind schedr recognised, else the task's own
+/// exception and the first line of its message (the whole summary is in `--json`).
+fn attempt_error(attempt: &AttemptView) -> String {
+    const WIDTH: usize = 60;
+    if let Some(kind) = &attempt.error_kind {
+        return kind.clone();
+    }
+    let Some(summary) = &attempt.error_summary else {
+        return String::new();
+    };
+    let exception = summary["exception"].as_str().unwrap_or_default();
+    let message = summary["message"]
+        .as_str()
+        .and_then(|m| m.lines().next())
+        .unwrap_or_default();
+    let text = match (exception.is_empty(), message.is_empty()) {
+        (false, false) => format!("{exception}: {message}"),
+        (false, true) => exception.to_owned(),
+        _ => message.to_owned(),
+    };
+    if text.chars().count() <= WIDTH {
+        return text;
+    }
+    let cut: String = text.chars().take(WIDTH - 1).collect();
+    format!("{cut}…")
 }
 
 /// A task as shown: `fetch`, or `fetch[2]` for an instance of a mapped task (decision 86).
@@ -444,6 +578,8 @@ pub(crate) fn write_table(
                 text.push_str(&" ".repeat(width - cell.chars().count()));
             }
         }
+        // Empty cells at the end of a row leave no padding behind.
+        text.truncate(text.trim_end().len());
         text
     };
     writeln!(out, "{}", line(headers.to_vec()))?;

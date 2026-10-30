@@ -772,3 +772,100 @@ async fn a_log_in_json_is_one_part_per_line() {
         .to_string();
     assert!(error.contains("has no try 7"), "{error}");
 }
+
+#[tokio::test]
+async fn a_run_its_attempts_and_a_missing_output_are_shown() {
+    let (client, run_id, _) = running_task(vec![]).await;
+    let show = RunsCommand::Show {
+        run_id: run_id.clone(),
+    };
+    let (out, _) = runs(&client, show.clone(), &text()).await;
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!("run {run_id} of sync (manual) for 2026-10-15 01:00 UTC (03:00 CEST): running"),
+        "{out}"
+    );
+    assert_eq!(
+        lines[1..],
+        [
+            "TASK     STATE    OUTCOME  TRIES  INSTANCES  REASON",
+            "extract  running           1",
+        ],
+        "{out}"
+    );
+    let (json, _) = runs(&client, show, &json_output()).await;
+    let detail: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(detail["run"]["run_id"], run_id.as_str());
+    assert_eq!(detail["tasks"][0]["state"], "running");
+
+    let attempts = tasks(&client, TasksCommand::Attempts(target(&run_id, None)))
+        .await
+        .unwrap();
+    let lines: Vec<&str> = attempts.lines().collect();
+    assert_eq!(
+        lines[0],
+        "TRY  STATUS   WORKER  STARTED                        ENDED  DURATION  EXIT  ERROR",
+        "{attempts}"
+    );
+    assert_eq!(
+        lines[1], "1    running  w1      2026-10-21 08:00Z (local:+2h)",
+        "{attempts}"
+    );
+
+    // No output before the task succeeds: the API's 404 is the error.
+    let error = tasks(&client, TasksCommand::Output(target(&run_id, None)))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no output"), "{error}");
+}
+
+#[tokio::test]
+async fn a_failed_attempt_shows_its_exception_and_a_rounded_duration() {
+    let (client, run_id, _, attempt_id) = assigned_task(vec![]).await;
+    let db = &client.transport().db;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    // The task's own exception: no error kind, only the summary.
+    let summary =
+        json!({"exception": "ValueError", "message": "no rows\nin table x", "traceback": ""});
+    let end = schedr_db::attempts::AttemptEnd {
+        exit_code: Some(1),
+        error_summary: Some(summary.to_string()),
+        duration_ms: Some(99),
+        ..schedr_db::attempts::AttemptEnd::by_master(schedr_model::AttemptStatus::Failed)
+    };
+    db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap();
+    let out = tasks(&client, TasksCommand::Attempts(target(&run_id, None)))
+        .await
+        .unwrap();
+    let row: Vec<&str> = out
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split("  ")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect();
+    assert_eq!(
+        row[row.len() - 3..],
+        ["0.1s", "1", "ValueError: no rows"],
+        "{out}"
+    );
+}
+
+#[test]
+fn durations_are_seconds_rounded_half_up_to_a_tenth() {
+    let shown: Vec<String> = [0, 49, 50, 99, 150, 250, 950, 1_499, 61_234]
+        .into_iter()
+        .map(super::seconds)
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "0.0s", "0.0s", "0.1s", "0.1s", "0.2s", "0.3s", "1.0s", "1.5s", "61.2s"
+        ]
+    );
+}

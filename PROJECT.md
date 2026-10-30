@@ -1049,10 +1049,13 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   | `schedr runs trigger <dag> [--for <time>] [-p …] [--params '{…}']` | a manual run |
   | `schedr runs backfill <dag> --from … [--to …] [--all] [-p …]` | a backfill |
   | `schedr runs list <dag> [--for <time>]` | runs, with their IDs |
+  | `schedr runs show <run id>` | a run and its tasks; a mapped task's instances as `fetch[0]`, `fetch[1]`, ... after its own row (decision 86) |
   | `schedr runs cancel <run id>`, `schedr runs cancel --backfill <id>` | cancel a run; what's left of a backfill |
   | `schedr tasks cancel <run id> <task id> [--map-index N]` | cancel one unfinished task, stopping it if it runs (see Task assignment) |
   | `schedr tasks retry <run id> <task id> [--map-index N]` | retry an `unschedulable` task of an unfinished run |
   | `schedr tasks logs <run id> <task id> [--try N] [-f]` | an attempt's log (the latest try by default), read from its worker; `--follow` until the attempt ends |
+  | `schedr tasks attempts <run id> <task id> [--map-index N]` | its attempts: status, worker, times, duration, exit code, error |
+  | `schedr tasks output <run id> <task id> [--map-index N]` | its output as JSON (`--json`: with its outcome); a mapped task's gathered list without `--map-index` |
   | `schedr workers list` | the workers and their state, gone ones included |
   | `schedr workers drain <worker>` / `resume <worker>` | maintenance drain |
  The master's gRPC API stays internal to the workers.

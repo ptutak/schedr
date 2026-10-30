@@ -197,7 +197,7 @@ async fn actions_become_pending_commands_by_the_user() {
         assert_eq!(body["kind"], format!("{action}_worker"));
     }
     for action in ["cancel", "retry"] {
-        let path = format!("/api/v1/runs/{run_id}/tasks/load/{action}");
+        let path = format!("/api/v1/runs/{run_id}/tasks/extract/{action}");
         let (status, body) = send(&app, Method::POST, &path, "").await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(body["kind"], format!("{action}_task"));
@@ -243,12 +243,12 @@ async fn actions_become_pending_commands_by_the_user() {
             },
             Command::CancelTask {
                 run_id: run_id.clone(),
-                task_id: TaskId::new("load").unwrap(),
+                task_id: TaskId::new("extract").unwrap(),
                 map_index: None,
             },
             Command::RetryTask {
                 run_id,
-                task_id: TaskId::new("load").unwrap(),
+                task_id: TaskId::new("extract").unwrap(),
                 map_index: None,
             },
         ]
@@ -928,6 +928,35 @@ async fn an_unmapped_task_has_no_instance_to_cancel() {
         body["error"],
         "task `extract` isn't mapped: it has no instance 0"
     );
+}
+
+#[tokio::test]
+async fn a_task_the_run_doesnt_have_is_not_found_by_every_task_endpoint() {
+    // Not an empty list nor "no output yet", which a real task not tried yet gets.
+    let (app, _, run_id) = api().await;
+    let task = format!("/api/v1/runs/{run_id}/tasks/ghost");
+    for (method, path) in [
+        (Method::GET, format!("{task}/attempts")),
+        (Method::GET, format!("{task}/output")),
+        (Method::GET, format!("{task}/attempts/1/log")),
+        (Method::POST, format!("{task}/cancel")),
+        (Method::POST, format!("{task}/retry")),
+    ] {
+        let (status, body) = send(&app, method, &path, "").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+        assert_eq!(
+            body["error"],
+            format!("no task `ghost` in run `{run_id}`"),
+            "{path}"
+        );
+    }
+    let (status, body) = get(
+        &app,
+        &format!("/api/v1/runs/{run_id}/tasks/extract/attempts"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({"attempts": []}));
 }
 
 #[tokio::test]

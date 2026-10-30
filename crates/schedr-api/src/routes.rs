@@ -8,6 +8,8 @@
     reason = "handler docs become OpenAPI descriptions; errors are listed as responses"
 )]
 
+use std::collections::BTreeSet;
+
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
@@ -319,13 +321,20 @@ pub async fn get_output(
 }
 
 /// How many instances `task_id` has in the run when it is mapped (decision 80); `None` for
-/// an unmapped task.
+/// an unmapped task; a 404 for a task the run doesn't have.
 async fn mapped_count(
     state: &ApiState,
     run_id: &str,
     task_id: &TaskId,
 ) -> Result<Option<usize>, ApiError> {
-    let mapped = mapped_tasks(state, run_id).await?;
+    let Some((tasks, mapped)) = run_tasks(state, run_id).await? else {
+        return Ok(None);
+    };
+    if !tasks.contains(task_id) {
+        return Err(ApiError::NotFound(format!(
+            "no task `{task_id}` in run `{run_id}`"
+        )));
+    }
     if !mapped.contains(task_id) {
         return Ok(None);
     }
@@ -337,25 +346,26 @@ async fn mapped_count(
     ))
 }
 
-/// The run's mapped tasks, from the DAG version it runs.
-async fn mapped_tasks(
+/// The run's tasks and, of those, its mapped ones, from the DAG version it runs (`None` when
+/// that version can't be read).
+async fn run_tasks(
     state: &ApiState,
     run_id: &str,
-) -> Result<std::collections::BTreeSet<TaskId>, ApiError> {
+) -> Result<Option<(BTreeSet<TaskId>, BTreeSet<TaskId>)>, ApiError> {
     let dag: Option<schedr_model::Dag> = state
         .db
         .run_dag_json(run_id)
         .await?
         .and_then(|json| serde_json::from_value(json).ok());
-    Ok(dag
-        .map(|dag| {
-            dag.tasks
-                .into_iter()
-                .filter(|t| t.expand.is_some())
-                .map(|t| t.id)
-                .collect()
-        })
-        .unwrap_or_default())
+    Ok(dag.map(|dag| {
+        let mapped = dag
+            .tasks
+            .iter()
+            .filter(|t| t.expand.is_some())
+            .map(|t| t.id.clone())
+            .collect();
+        (dag.tasks.into_iter().map(|t| t.id).collect(), mapped)
+    }))
 }
 
 /// The `map_index` a request about `task_id` means: the instance asked for of a mapped task
@@ -414,7 +424,10 @@ pub async fn get_run(
     let run = known_run(&state, &run_id).await?;
     let run_id = &run.id;
     let tasks = state.db.run_instances(run_id).await?;
-    let mapped = mapped_tasks(&state, run_id).await?;
+    let mapped = run_tasks(&state, run_id)
+        .await?
+        .map(|(_, mapped)| mapped)
+        .unwrap_or_default();
     let count = |task: &TaskId| {
         tasks
             .iter()
@@ -457,7 +470,11 @@ pub async fn cancel_run(
         ("task_id" = String, Path, description = "The task's ID"),
         InstanceQuery
     ),
-    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+    responses(
+        (status = 202, body = CommandView),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)
+    ))]
 pub async fn cancel_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
@@ -490,7 +507,11 @@ pub async fn cancel_task(
         ("task_id" = String, Path, description = "The task's ID"),
         InstanceQuery
     ),
-    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+    responses(
+        (status = 202, body = CommandView),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)
+    ))]
 pub async fn retry_task(
     State(state): State<ApiState>,
     Path((run_id, task_id)): Path<(String, String)>,

@@ -206,6 +206,35 @@ fn test_runs_the_dag_and_reports_each_task() {
 }
 
 #[test]
+fn test_names_a_mapped_tasks_outputs_by_instance() {
+    let mapped = r#"
+from schedr import Dag, task
+
+@task
+def double(x: int) -> int:
+    return x * 2
+
+with Dag("mapped"):
+    double.expand(x=[1, 2])
+"#;
+    let local = Local::new(&[("mapped.py", mapped)]);
+    let (code, out, err) = local.test("mapped", &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    // The gathered list under the task's name, each instance's under its own (decision 86).
+    let outputs: Vec<&str> = out
+        .lines()
+        .skip_while(|l| *l != "outputs:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        outputs,
+        ["  double: [2,4]", "  double[0]: 2", "  double[1]: 4"],
+        "{out}"
+    );
+}
+
+#[test]
 fn test_with_json_gives_the_run_and_its_tasks() {
     let local = Local::new(&[("sync.py", GOOD)]);
     let (code, out, err) = local.test("sync", &["--json"]);

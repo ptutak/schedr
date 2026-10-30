@@ -111,8 +111,11 @@ A gather sees every instance only if none of them is skipped, and none of them f
   the gathered list, with `?map_index=1` that instance's; `attempts`, `log` and `retry` need
   `?map_index` for a mapped task; `cancel` without it, or with `-1`, cancels the whole task.
   An index outside `0` to `N-1` is a 400, on every one of those endpoints, cancel included.
-- **In the CLI,** `schedr tasks logs / cancel / retry` take `--map-index N`; `schedr dags
-  test` lists the instances as `fetch[0]`, `fetch[1]`, ... after the task.
+- **In the CLI,** `schedr tasks logs / attempts / output / cancel / retry` take
+  `--map-index N`: `logs`, `attempts` and `retry` need it for a mapped task; `output` without
+  it prints the gathered list, and `cancel` without it cancels the whole task. `schedr runs
+  show` and `schedr dags test` list the instances as `fetch[0]`, `fetch[1]`, ... after the
+  task.
 - **In tests,** `run_dag(...).tasks["fetch"]` is the whole task (its `output` the list) and
   `tasks["fetch"][1]` an instance ([Testing a DAG](07-testing.md#run_dag)).
 

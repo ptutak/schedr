@@ -1702,6 +1702,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "summary": "Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if\nit hasn't started; the tasks downstream of it are cancelled. Applied by the master; poll\nthe command for the decision.",
@@ -1822,6 +1831,15 @@
             }
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {

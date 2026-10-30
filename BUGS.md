@@ -58,42 +58,41 @@ step touches their code or the user schedules them.
 | 12 | B41: a result the master failed to store isn't sent again while the link stays up | 6 | high | possible | correctness |
 | 13 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
 | 14 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
-| 15 | B37: the CLI has no `tasks attempts`, `tasks output` nor `runs show` | 6 | medium | likely | usability |
-| 16 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 17 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 18 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
-| 19 | B59: a new content hash can import stale bytecode | 4 | critical | rare | data |
-| 20 | B45: a registration with many new roots deadlocks before its stream is returned | 4 | critical | rare | reliability |
-| 21 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
-| 22 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
-| 23 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
-| 24 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
-| 25 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
-| 26 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
-| 27 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
-| 28 | B63: hashing a root reads every file whole into memory | 3 | high | rare | reliability |
-| 29 | B57: an interrupted read of a forked process's exit status loses its framing | 3 | high | rare | correctness |
-| 30 | B47: a replayed result ignores a lowered master message limit | 3 | high | rare | reliability |
-| 31 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 32 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 33 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 34 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
-| 35 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
-| 36 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
-| 37 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
-| 38 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 39 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 40 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 41 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 42 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 43 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 44 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 45 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 46 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 47 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 48 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 49 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 50 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 15 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 16 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 17 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
+| 18 | B59: a new content hash can import stale bytecode | 4 | critical | rare | data |
+| 19 | B45: a registration with many new roots deadlocks before its stream is returned | 4 | critical | rare | reliability |
+| 20 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
+| 21 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
+| 22 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
+| 23 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
+| 24 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
+| 25 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
+| 26 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
+| 27 | B63: hashing a root reads every file whole into memory | 3 | high | rare | reliability |
+| 28 | B57: an interrupted read of a forked process's exit status loses its framing | 3 | high | rare | correctness |
+| 29 | B47: a replayed result ignores a lowered master message limit | 3 | high | rare | reliability |
+| 30 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 31 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 32 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 33 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
+| 34 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
+| 35 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
+| 36 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
+| 37 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 38 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 39 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 40 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 41 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 42 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 43 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 44 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 45 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 46 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 47 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 48 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 49 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B87: per-tick queries lack indexes excluding completed history
 
@@ -456,18 +455,6 @@ step touches their code or the user schedules them.
   `A = {A0, A1}`, `B = {B0, B1}`: `U` lands right of `B`, its edges cross `B`'s box.
 - **Cosmetic:** every task is in the right box. **A fix:** route such edges around boxes,
   or order layers so that it can't happen; with B39.
-
-## B37: the CLI has no `tasks attempts`, `tasks output` nor `runs show`
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): no CLI to read a run, its attempts or an output; anyone using the CLI.
-- **Found:** 2026-10-30, by Grok's review of M4.3c: decision 86 (PROJECT.md, Mapping) puts
-  `--map-index N` on `tasks logs / attempts / output / cancel / retry` and has `runs show`
-  list a mapped task's instances, but `schedr tasks` has only `cancel`, `retry` and `logs`,
-  and `schedr runs` no `show`. The API has every one of them (`/runs/{run}`,
-  `/runs/{run}/tasks/{task}/attempts`, `.../output`, each with `?map_index`).
-- **A fix:** the three commands over the client's existing methods, with `--map-index` and
-  the `fetch[i]` rows after the task's own (as `dags test` prints them); or decision 86
-  narrowed to what exists.
 
 ## B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected)
 

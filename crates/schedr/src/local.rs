@@ -945,12 +945,8 @@ fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {
     writeln!(out, "outputs:")?;
     for task in tasks {
         if !task["output"].is_null() {
-            writeln!(
-                out,
-                "  {}: {}",
-                task["task_id"].as_str().unwrap_or_default(),
-                task["output"]
-            )?;
+            // Named as in the table: `fetch` the gathered list, `fetch[0]` an instance's.
+            writeln!(out, "  {}: {}", reported_name(task), task["output"])?;
         }
     }
     writeln!(
@@ -970,10 +966,7 @@ fn duration(task: &Value) -> String {
         .as_array()
         .and_then(|a| a.last())
         .and_then(|last| last["duration_ms"].as_u64())
-        .map_or_else(
-            || "-".to_owned(),
-            |ms| format!("{:.1}s", Duration::from_millis(ms).as_secs_f64()),
-        )
+        .map_or_else(|| "-".to_owned(), crate::user::seconds)
 }
 
 const fn not_yet(command: &'static str, milestone: &'static str) -> AppError {
