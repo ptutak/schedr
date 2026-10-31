@@ -20,12 +20,14 @@ flowchart LR
 1. **Detect.** Every `[dags] poll_interval` (30 s) the agent scans each root, following
    symbolic links, which is how git-sync switches checkouts. A changed root must then stay
    unchanged for `[dags] settle_time` (5 s), so a half-written checkout is never read.
-2. **Hash.** The agent hashes every file of the root, not only `.py` files, by path and
-   contents. Every worker with the same code gets the same hash. Only a new hash is reported.
+2. **Hash and copy.** The agent copies the root's files into its own read-only copy (below)
+   and hashes every file, not only `.py` files, by path and contents. Every worker with the
+   same code gets the same hash. Only a new hash is reported.
 3. **Report.** `CodeVersionChanged(root, hash)` goes to the master. Every worker reports on its
    own, but the master creates **one parse job per (root, hash, schedr version)**.
 4. **Parse.** One worker that reported the hash gets `AssignParse`. Its parse slot (one per
-   worker, separate from task slots) runs a Python runner that imports each `.py` file. When
+   worker, separate from task slots) runs a Python runner that imports each `.py` file from
+   the copy of that hash. When
    the worker has fork servers, that runner is a fresh child for the job: the preloaded
    server, then the bare one, then a new process. `schedr dags check` starts a new process
    and does not ask the fork servers. The native API only *records* DAGs while a file is
@@ -123,6 +125,27 @@ schedr keeps no old code, so it runs **only the newest code**:
 - A task waiting for code says so ("waiting for workers serving queue `default` to have the
   newest code of root `etl`"). A task that waits longer than `[master] code_wait` (10 min)
   becomes `unschedulable`; `schedr tasks retry` gives it another chance.
+
+What a worker imports, for a parse job and for a task, is **its own copy of the code it
+hashed**. When a root settles, the agent copies its scanned files into its data directory
+(`code/<worker ID>/…`), hashing the bytes it copies, so the hash is the copy's. Whatever then
+happens to the root (git-sync moving its link and deleting the old checkout, or an edit in
+place) leaves running jobs alone. So:
+
+- Tracebacks, `__file__` and a Python task's working directory show the copy's path
+  (`…/code/w-0/etl-1a2b3c4d/sha256-3f2a…/team/sync.py`), not `/git/current/…`.
+- **The copy is read-only.** Attempts of the same code share it, so a task writes its files
+  elsewhere (a temporary directory, an output folder). It guards against mistakes, not against
+  the task: the code runs as the worker's user, which owns the copy (workers and their DAG code
+  are trusted, decision 101).
+- **Only the hashed files are in it.** What `.schedrignore` excludes is not, so read such a
+  file by its full path under the configured root.
+- A copy is removed once newer code replaced it and nothing running uses it: one or two per
+  root at a time.
+
+Code under a DAG root is compiled from its source at every import, never taken from a
+`.pyc` (Python's own check can miss a change made within a second), and no `.pyc` is written
+there.
 
 A run keeps the DAG version it started with, but its tasks run the newest code. If a task or
 its file is gone from the newest code, the attempt fails (`task_not_found`,

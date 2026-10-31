@@ -215,13 +215,16 @@ fn in_group(groups: &[GroupSpec], node_group: &[Option<usize>], n: usize, g: usi
 }
 
 /// The staggered side-by-side bound, plus `2 * GROUP_PAD` for each nesting level past the
-/// first, plus one extra row so a rigid column can slide the tasks that follow it.
+/// first, plus one extra row so a rigid column can slide the tasks that follow it, plus 10%
+/// (the user, 2026-10-31: a random 13-node, two-deep grouping drew 5,830 px against 5,612,
+/// one of B39's shapes the merged layout draws wider; its redesign is in M6).
 fn width_bound(count: usize, depth: usize) -> f64 {
     let extra = depth.saturating_sub(1);
-    to_f64(count) * (NODE_WIDTH + GAP + 2.0 * GROUP_PAD)
+    let bound = to_f64(count) * (NODE_WIDTH + GAP + 2.0 * GROUP_PAD)
         + 2.0 * MARGIN
         + to_f64(extra) * 2.0 * GROUP_PAD
-        + to_f64(count.saturating_sub(1)) * (NODE_WIDTH + GAP)
+        + to_f64(count.saturating_sub(1)) * (NODE_WIDTH + GAP);
+    bound * 1.1
 }
 
 fn nesting_depth(groups: &[GroupSpec], node_group: &[Option<usize>]) -> usize {

@@ -66,8 +66,10 @@ was registered, the backoff starts from 200 ms again.
    SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
 5. **Result.** It is written to the journal, then sent as `Finished` until the master
-   acknowledges it with `FinishedAck`. `Finished` includes `usage` and `core_dumped`
-   (below).
+   acknowledges it with `FinishedAck`: again on a reconnect, and while the connection stays up
+   (the master may have failed to store it) after one heartbeat interval, then ever less often
+   (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's
+   answer to its journal settles the result. `Finished` includes `usage` and `core_dumped` (below).
 
 ## The fork server
 

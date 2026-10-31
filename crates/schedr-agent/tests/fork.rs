@@ -788,8 +788,16 @@ async fn a_forked_parse_dropped_unfinished_is_killed() {
         })
         .await
         .unwrap();
-    until("the file is being imported", || pid_file.exists()).await;
-    let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    // Its PID written, not only the file created (an empty read raced the write).
+    let read_pid = || {
+        std::fs::read_to_string(&pid_file)
+            .ok()?
+            .trim()
+            .parse::<i32>()
+            .ok()
+    };
+    until("the file is being imported", || read_pid().is_some()).await;
+    let pid = read_pid().unwrap();
     assert!(!gone(pid));
     // Dropped without `stop` (its parse task aborted): killed, as a spawned runner would be.
     drop(session);

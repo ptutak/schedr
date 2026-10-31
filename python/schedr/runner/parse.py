@@ -7,6 +7,7 @@ raises reports an import error and doesn't stop the others.
 """
 
 import hashlib
+import importlib.machinery
 import importlib.util
 import os
 import re
@@ -19,6 +20,7 @@ from typing import Any
 from schedr._model import Dag, registry
 from schedr.outcomes import TypingHint
 from schedr.runner.protocol import Channel
+from schedr.runner.sources import SourceOnlyLoader, import_from_source
 
 TRACEBACK_LINES = 20
 """How many traceback lines an import error keeps."""
@@ -55,7 +57,13 @@ def import_dag_entries(root: str, root_dir: Path, path: str) -> list[registry.De
             ``sys.modules`` and its partial DAGs are dropped).
     """
     name = module_name(root, path)
-    spec = importlib.util.spec_from_file_location(name, root_dir / path)
+    # From its source, never stale bytecode (B59); a given loader would take any file.
+    location = str(root_dir / path)
+    if not location.endswith(tuple(importlib.machinery.SOURCE_SUFFIXES)):
+        raise ImportError(f"can't import {path}: not a Python source file")
+    spec = importlib.util.spec_from_file_location(
+        name, location, loader=SourceOnlyLoader(name, location)
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"can't import {path}: not a Python source file")
     module = importlib.util.module_from_spec(spec)
@@ -147,9 +155,12 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
 def extend_sys_path(entries: list[str]) -> None:
     """Puts directories first on ``sys.path``, in order, each at most once.
 
+    Modules found there are imported from their source, never from bytecode (B59).
+
     Args:
         entries: The directories (every DAG root).
     """
+    import_from_source(entries)
     for entry in reversed(list(dict.fromkeys(entries))):
         if entry not in sys.path:
             sys.path.insert(0, entry)

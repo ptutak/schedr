@@ -1972,7 +1972,10 @@ SchedrScriptOperator(
   (new incarnation).
 - A registration with a worker ID that already has a **live** stream is rejected. If the old
   stream is dead, the new incarnation takes over and the old incarnation's attempts are
-  reconciled.
+  reconciled. From then on only the new stream speaks for the worker: messages still arriving
+  on an old stream (its transport open after its lease was lost) are dropped, and its end
+  doesn't disconnect the worker (B44). A stream of a worker taken for lost is ended at its next
+  message, which changes nothing: the worker registers again.
 
 **States (master's view):** `ACTIVE` → `DRAINING` → `OFFLINE` (clean deregistration);
 `ACTIVE` → `DISCONNECTED` (stream dropped) → back to `ACTIVE` on reconnect with the same
@@ -1990,7 +1993,9 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
 2. **Registered** (master → worker): timing settings (heartbeat interval, lease timeout, cancel
    timeout; **owned by the master's configuration** so all workers behave the same) and a
    decision per reported attempt: **continue**, **kill** (already abandoned/reassigned), or
-   **ack** (result stored; remove from the journal).
+   **ack** (result stored; remove from the journal). A continued attempt counts as started (its
+   `Started` may have been lost with the old stream; it is never taken back for want of one,
+   B50), and is cancelled again if its run or the task itself was cancelled meanwhile (B43).
 3. **Heartbeat** (worker → master), every 10 s by default: free task and watcher slots and
    running attempts.
    Kept small.
@@ -2014,7 +2019,14 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   it with `FAILED_PRECONDITION` and the reason.
 - **Messages for a worker without a live stream are dropped**, not queued: an assignment then
   expires (no `Started`), a cancel is sent again on reconnect (above), and everything else is
-  either repeated by the worker (`Finished` until `FinishedAck`) or recomputed by the master.
+  either repeated by the worker (`Finished` until `FinishedAck`: on reconnect, and while the
+  stream stays up after one heartbeat interval, then after 2, 4, ... up to 32, B41; after 8
+  such sends the worker reconnects, its journal then settling the result) or recomputed by
+  the master. A worker's outgoing stream never makes the master wait: a worker 1024 messages
+  behind has stopped reading, and is disconnected (it registers again, its journal
+  reconciled). A `Started` or `Finished` that couldn't be stored keeps its attempt
+  from being taken back as never started, as one waiting for the master's lock does; so do the
+  attempts a registration's journal reports while it waits.
 - **The master's loop** ticks on a timer: commands, then the scheduler, then dispatching (new
   runs' tasks, retries, expired assignments, assignments), then parse jobs past their timeout
   and workers past their lease. A failing tick is logged and the next one goes on.
@@ -2536,8 +2548,8 @@ permission to create pods.
   - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`,
     imports the files one at a time (native API calls only record DAGs), and sends back the
     DAG JSON and per-file import errors.
-  - `task`: gets the task specification from the agent, imports the DAG file (latest code on
-    disk), finds the task by ID, fills in t-strings (secrets fetched by the agent), calls the
+  - `task`: gets the task specification from the agent, imports the DAG file (from the
+    agent's copy of the root's current code, decision 102), finds the task by ID, fills in t-strings (secrets fetched by the agent), calls the
     function, and sends back the output or a structured error summary; exit code 0 or non-zero.
     Python resource setups (`@resource`) run in this mode too: a setup is a task.
   - `cleanup`: like `task`, for a per-task cleanup (gets the task's inputs and the attempt's
@@ -2603,7 +2615,8 @@ permission to create pods.
     root_dir, path }, dag_id, task, inputs, run, sys_path }`: the task as in the DAG JSON, the
     upstream outputs it references (stored JSON, by task ID) and the run information (`dag_id`,
     `run_id`, `kind`, `planned_for`, `since`, `try_number`, `map_index`). The runner imports
-    the file (latest code on the worker), finds the task's function, builds each argument from
+    the file (from the agent's copy of the code it reported last, decision 102), finds the
+    task's function, builds each argument from
     its stored form decoded against the parameter's type (templates rendered as on the agent),
     calls it and answers `task_succeeded { output, outcome }` (encoded against the return
     type; outcome `SUCCESS` until outcome types arrive in M4) or `task_failed { error, kind }`.
@@ -3035,7 +3048,9 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 
 ### Code versions and change detection
 
-- **Tasks run on the latest code** the worker has. schedr does not keep old code versions.
+- **Tasks run on the latest code** the worker has: the copy of the hash it reported last,
+  taken when the task starts (decision 102). schedr keeps no other old code versions; a copy
+  goes once nothing running uses it.
 - **Only the newest code runs** (M2.5). Workers may report different hashes of a root while
   git-sync catches up. The root's **current** hash is the newest one an alive worker
   (registered, not lost or deregistered) reports, newest meaning the hash workers **switched
@@ -3085,6 +3100,31 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   during hashing restarts the settle time. Only a **new hash** is reported: files touched
   without changing (same contents) report nothing. A scan that fails (a file removed during
   the scan, a dangling link, a path that isn't UTF-8) is retried at the next poll.
+- **The code that runs is the code hashed** (decision 102, the user's, 2026-10-31; B58, B59).
+  When a root's scan settles, the agent **copies its scanned files into its own data
+  directory** (`<data_dir>/code/<worker ID>/<root>-…/sha256-…`) and hashes the bytes it
+  copied, read once for both: the hash reported is the copy's. Parse jobs and task attempts
+  import from that copy (the DAG file, the working directory, the root's `sys.path` entry),
+  never through the configured path, so git-sync moving its link and deleting the old checkout
+  (by default in the same loop that publishes the new one, `--stale-worktree-timeout` 0), or
+  an edit in place, can't change the code a job runs. A followed link is copied as its
+  target's contents. **Only the scanned files are copied**: what `.schedrignore` excludes,
+  `.git` and `__pycache__` aren't there (the user: A), so a task reading one by a relative path
+  doesn't find it. **The copy is read-only** (executable bits kept; the user: A): attempts of
+  one hash share it, so a task writes its files elsewhere. A copy is removed once a newer hash
+  replaced it and no running parse or attempt imports from it; the same code again (a commit
+  outside the root) reuses its copy. Tracebacks, `__file__` and a task's working directory show
+  the copy's path. Code under a root is also **imported from its source, never from
+  bytecode**, and no `.pyc` is written there: Python's check (modification time in whole
+  seconds, and size) misses an edit of the same length within a second. Not chosen (the user
+  first chose A, then the copy once git-sync's cleanup showed A's weakness; Codex
+  recommended the copy independently): A importing from git-sync's resolved checkout (the
+  checkout can be deleted before the next scan; an edit in place still changes the code), B
+  the checkout for parse jobs only (a task's recorded hash could be another's), C the
+  configured path with a full re-hash after each parse and at each task's start (each re-hash
+  reads the whole root, and the code can still change after the check); hard links instead of
+  a copy (an edit in place shows through); for bytecode, hash-checked `.pyc` files (Python
+  decides the check when it writes one, so a timestamp `.pyc` already there is still trusted).
 
 ### Upgrades and compatibility
 
@@ -3219,7 +3259,8 @@ list) and likewise has no Python.
 18. **Fetch the spec.** The runner asks the agent over the socket for the task specification
     and inputs. [D]
 19. **Prepare.** The runner imports `team_a/sync.py` again (the latest code on the worker:
-    `H2` or newer [D]) and finds task `extract`. It fills in t-strings; any `secrets[...]`
+    the agent's copy of `H2` or a newer hash, taken at the start and kept while the task runs
+    [D]) and finds task `extract`. It fills in t-strings; any `secrets[...]`
     values are fetched from secret storage **by the agent** and passed over the socket. [D]
 20. **Run.** The runner calls the task's function. Meanwhile the agent's memory watchdog checks
     the process tree's memory about once a second. [D]

@@ -1,0 +1,22 @@
+title = "a module imported from another DAG root comes from its live checkout, not a copy"
+severity = "critical"  # critical, high, medium, low
+probability = "rare"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a task or parse imports another root's newer code than ran before, unrecorded; a DAG file importing from a second root while git-sync moves that root"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Grok's review of decision 102's code copy (B58), with a proof:
+  `sync.py` in root `etl`'s copy did `import helper`, `helper.py` in a second root behind a
+  link; moving the link (and deleting the old checkout) changed what the next import got,
+  from `old` to `new`. Checked against the code by Claude.
+  `WorkerSetup::sys_path_with` (`crates/schedr-agent/src/attempt.rs`) puts only the parsed or
+  run root at its copy; every other root stays at its configured path, the live checkout. An
+  attempt records only its own root's hash (`code_hash`), and a change in the other root
+  doesn't reparse this one. Not new with decision 102 (before it, every root was imported
+  from its checkout); the copy fixed it for the task's own root only.
+- **A fix:** decision 103 (open): A, pin every root at its current copy for a parse or
+  attempt, kept while it runs (the copies kept per attempt and parse, not one hash); B,
+  document that roots don't import from each other (each root's dependencies inside it);
+  C, put only the root's own copy on `sys.path` (a cross-root import fails at once).
+'''

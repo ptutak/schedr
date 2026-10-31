@@ -96,7 +96,8 @@ fn without_a_settle_time_a_change_settles_at_once() {
 fn a_watcher_reports_a_hash_once_settled_then_only_new_hashes() {
     let dir = root_with("x");
     let start = Instant::now();
-    let mut watcher = RootWatcher::new(dir.path(), SETTLE);
+    let code = TempDir::new().unwrap();
+    let mut watcher = RootWatcher::new(dir.path(), code.path(), SETTLE);
     assert_eq!(watcher.dir(), dir.path());
     assert_eq!(watcher.poll(start).unwrap(), Poll::Settling(SETTLE));
     assert_eq!(watcher.hash(), None);
@@ -123,7 +124,8 @@ fn a_watcher_reports_a_hash_once_settled_then_only_new_hashes() {
 fn touching_files_without_changing_them_reports_nothing() {
     let dir = root_with("x");
     let start = Instant::now();
-    let mut watcher = RootWatcher::new(dir.path(), Duration::ZERO);
+    let code = TempDir::new().unwrap();
+    let mut watcher = RootWatcher::new(dir.path(), code.path(), Duration::ZERO);
     assert!(matches!(watcher.poll(start).unwrap(), Poll::Changed { .. }));
     let file = fs::File::options()
         .write(true)
@@ -137,7 +139,8 @@ fn touching_files_without_changing_them_reports_nothing() {
 #[test]
 fn scan_errors_are_returned() {
     let dir = TempDir::new().unwrap();
-    let mut watcher = RootWatcher::new(dir.path().join("missing"), SETTLE);
+    let code = TempDir::new().unwrap();
+    let mut watcher = RootWatcher::new(dir.path().join("missing"), code.path(), SETTLE);
     assert!(matches!(
         watcher.poll(Instant::now()),
         Err(ScanError::Root { .. })

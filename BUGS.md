@@ -53,54 +53,66 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B58: parsing can attribute a root's new code to its old hash | 8 | critical | possible | data |
-| 2 | B50: a running task can be expired and assigned again after a reconnect | 8 | critical | possible | correctness |
-| 3 | B86: accepted strings containing NUL cannot be stored in production | 6 | high | possible | correctness |
-| 4 | B84: cancelling transaction startup returns an open transaction to the pool | 6 | high | possible | reliability |
-| 5 | B78: expansion reads instance states before the current result is stored | 6 | high | possible | correctness |
-| 6 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
-| 7 | B54: an unreaped child switches off a forked task's memory budget | 6 | high | possible | reliability |
-| 8 | B44: an old stream of a worker can change and disconnect its new incarnation | 6 | high | possible | reliability |
-| 9 | B43: cancelling one task while its worker is away is lost on reconnect | 6 | high | possible | correctness |
-| 10 | B41: a result the master failed to store isn't sent again while the link stays up | 6 | high | possible | correctness |
-| 11 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
-| 12 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
-| 13 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 14 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 15 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
-| 16 | B59: a new content hash can import stale bytecode | 4 | critical | rare | data |
-| 17 | B45: a registration with many new roots deadlocks before its stream is returned | 4 | critical | rare | reliability |
-| 18 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
-| 19 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
-| 20 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
-| 21 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
-| 22 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
-| 23 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
-| 24 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
-| 25 | B63: hashing a root reads every file whole into memory | 3 | high | rare | reliability |
-| 26 | B57: an interrupted read of a forked process's exit status loses its framing | 3 | high | rare | correctness |
-| 27 | B47: a replayed result ignores a lowered master message limit | 3 | high | rare | reliability |
-| 28 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 29 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 30 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 31 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
-| 32 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
-| 33 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
-| 34 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
-| 35 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 36 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 37 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 38 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 39 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 40 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 41 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 42 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 43 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 44 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 45 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 46 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 47 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 48 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B86: accepted strings containing NUL cannot be stored in production | 6 | high | possible | correctness |
+| 2 | B84: cancelling transaction startup returns an open transaction to the pool | 6 | high | possible | reliability |
+| 3 | B78: expansion reads instance states before the current result is stored | 6 | high | possible | correctness |
+| 4 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
+| 5 | B54: an unreaped child switches off a forked task's memory budget | 6 | high | possible | reliability |
+| 6 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
+| 7 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
+| 8 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 9 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 10 | B90: a module imported from another DAG root comes from its live checkout, not a copy | 4 | critical | rare | correctness |
+| 11 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
+| 12 | B45: a registration with many new roots deadlocks before its stream is returned | 4 | critical | rare | reliability |
+| 13 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
+| 14 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
+| 15 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
+| 16 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
+| 17 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
+| 18 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
+| 19 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
+| 20 | B63: hashing a root reads every file whole into memory | 3 | high | rare | reliability |
+| 21 | B57: an interrupted read of a forked process's exit status loses its framing | 3 | high | rare | correctness |
+| 22 | B47: a replayed result ignores a lowered master message limit | 3 | high | rare | reliability |
+| 23 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 24 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 25 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 26 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
+| 27 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
+| 28 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
+| 29 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
+| 30 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 31 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 32 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 33 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 34 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 35 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 36 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 37 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 38 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 39 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 40 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 41 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 42 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 43 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B90: a module imported from another DAG root comes from its live checkout, not a copy
+
+- **Rating:** severity **critical**, probability **rare**, correctness (score 4): a task or parse imports another root's newer code than ran before, unrecorded; a DAG file importing from a second root while git-sync moves that root.
+- **Found:** 2026-10-31, by Grok's review of decision 102's code copy (B58), with a proof:
+  `sync.py` in root `etl`'s copy did `import helper`, `helper.py` in a second root behind a
+  link; moving the link (and deleting the old checkout) changed what the next import got,
+  from `old` to `new`. Checked against the code by Claude.
+  `WorkerSetup::sys_path_with` (`crates/schedr-agent/src/attempt.rs`) puts only the parsed or
+  run root at its copy; every other root stays at its configured path, the live checkout. An
+  attempt records only its own root's hash (`code_hash`), and a change in the other root
+  doesn't reparse this one. Not new with decision 102 (before it, every root was imported
+  from its checkout); the copy fixed it for the task's own root only.
+- **A fix:** decision 103 (open): A, pin every root at its current copy for a parse or
+  attempt, kept while it runs (the copies kept per attempt and parse, not one hash); B,
+  document that roots don't import from each other (each root's dependencies inside it);
+  C, put only the root's own copy on `sys.path` (a cross-root import fails at once).
 
 ## B89: a run whose stored DAG no longer reads looks unmapped to the API
 
@@ -302,22 +314,6 @@ step touches their code or the user schedules them.
   The executor uses the configured directory both as the child's working directory and as `root_dir` in the request (`crates/schedr-agent/src/agent.rs:295`; tasks the same, `attempt.rs:245`, `:252`); configuration keeps relative paths (`schedr-config/src/roots.rs:155`), so `dags/etl` becomes `dags/etl/dags/etl/dag.py` (Codex's proof: `FileNotFoundError` after a successful scan). `WorkerSetup::sys_path` keeps them relative too.
 - **A fix:** make roots absolute when the configuration is read (or the request's `root_dir`).
 
-## B59: a new content hash can import stale bytecode
-
-- **Rating:** severity **critical**, probability **rare**, data (score 4): old code runs under the new hash; an edit of the same length within the same second (git-sync).
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
-  and parsing), with a failing proof each; checked against the code by Claude.
-  The runner imports DAG files with the standard source loader (`python/schedr/runner/parse.py:65`; tasks at `task.py:290`), whose `.pyc` check is the source's mtime in whole seconds and its size: an edit of the same length within the same second (git-sync switching revisions does that) reuses the old bytecode, while the agent's scan saw the change and hashed the new source (Codex's proof: hash changed, the source says `new`, a fresh runner parsed `old`).
-- **A fix:** no bytecode cache for DAG roots (`sys.dont_write_bytecode` and not reading `__pycache__`), or hash-based `.pyc` checked against the source.
-
-## B58: parsing can attribute a root's new code to its old hash
-
-- **Rating:** severity **critical**, probability **possible**, data (score 8): one revision's DAGs stored under another revision's hash; git-sync switching the root between hashing and parsing.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
-  and parsing), with a failing proof each; checked against the code by Claude.
-  A parse job takes the file list from the settled snapshot but the directory from the watcher's path (`crates/schedr-agent/src/agent.rs:1047`), and the result keeps the assignment's hash with no check after: when the root's symlink switches revision between hashing and parsing (git-sync), revision B's DAGs are uploaded under A's hash (Codex's proof: cached hash old, content new, parsed `new`). `code_mismatch` and `remember_code` use the cached hash too (`:1014`, `:965`).
-- **A fix:** parse the snapshot's resolved directory (the revision the hash is of), or re-hash after parsing and drop a result whose hash changed.
-
 ## B57: an interrupted read of a forked process's exit status loses its framing
 
 - **Rating:** severity **high**, probability **rare**, correctness (score 3): a healthy forked attempt killed and ended `unknown`; a stop arriving while its exit status is being read.
@@ -350,14 +346,6 @@ step touches their code or the user schedules them.
   `pending_commands` (`crates/schedr-db/src/commands.rs:299`) has no `LIMIT` (`fetch_all`); the master keeps `COMMANDS_PER_ROUND` (50) after reading and decoding every pending row (`schedr-master/src/commands.rs:129`): draining N commands reads N, N-50, ... rows (Codex: 2,000 commands, 32 MB of audit strings loaded for 50 applied). Expired attempts the same (`unstarted_attempts`, then `truncate`, `dispatch.rs:864`).
 - **A fix:** `LIMIT` in the queries (the round's cap).
 
-## B50: a running task can be expired and assigned again after a reconnect
-
-- **Rating:** severity **critical**, probability **possible**, correctness (score 8): the same task runs twice at once; needs a lost `Started` and a reconnect within the 10 s start timeout.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
-  attempts), with a failing proof each; checked against the code by Claude.
-  When `Started` is lost with the stream and the worker reconnects within the start timeout (10 s) with the attempt `Running` in its journal, the master adopts it (`crates/schedr-master/src/dispatch.rs:381`: only the slot reserved) and answers `Continue`, but records no start; the expiry (`started_at IS NULL`) then ends it as `AssignmentExpired` and assigns the task again while the first process runs (Codex's proof: one new assignment). The agent resends `Finished` on `Continue` but no `Started`.
-- **A fix:** record the start on adoption (the journal says it runs), or have the agent resend `Started`.
-
 ## B48: every attempt message copies the master's whole worker registry under its lock
 
 - **Rating:** severity **medium**, probability **rare**, performance (score 2): each worker message costs in proportion to the whole registry; hundreds of workers.
@@ -381,30 +369,6 @@ step touches their code or the user schedules them.
   loop and the worker link), with a failing proof each; checked against the code by Claude.
   `Control` delivers `Registered` and every `AssignParse` into the worker's channel (`STREAM_BUFFER` 1,024) before returning the receiver that drains it (`crates/schedr-master/src/service.rs:568`); 1,024 new roots fill it and `deliver` waits for ever, holding the streams mutex (other deliveries and stream changes wait too). Codex's proof: registration with 1,024 unseen roots never returns.
 - **A fix:** return the stream first and deliver after, or never block delivery on one worker's full channel (and not under the shared mutex).
-
-## B44: an old stream of a worker can change and disconnect its new incarnation
-
-- **Rating:** severity **high**, probability **possible**, reliability (score 6): the live worker marked disconnected and a second registration let in; a lease lost while the old transport stays open.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  Messages and the disconnect are keyed by worker ID only (`crates/schedr-master/src/service.rs:446`, `:467`); the incarnation check (`same_channel`) guards only the outgoing map. An incarnation `i1` whose lease was lost while its transport stays open: `i2` registers; `i1`'s messages still change the worker, and `i1` closing marks `i2` disconnected, which also lets another registration in despite `i2`'s open stream (Codex's gRPC proof: `Disconnected` instead of `Active`).
-- **A fix:** tie each stream's messages and its disconnect to its incarnation; ignore those of a replaced one.
-
-## B43: cancelling one task while its worker is away is lost on reconnect
-
-- **Rating:** severity **high**, probability **possible**, correctness (score 6): a cancelled task runs on; a cancel while its worker is away.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  The journal reconciliation resends a cancel only when the run is cancelled (`crates/schedr-master/src/core.rs:830`: `run.cancel_requested`); a `CancelTask` sets the instance's flag, so after a reconnect the attempt gets `Continue` and runs on (Codex's proof: 0 cancels where 1 was due). Rejections and completions check both flags; the reconnect test covers `CancelRun` only.
-- **A fix:** check the instance's `cancel_requested` too, with a test of `CancelTask` across a reconnect.
-
-## B41: a result the master failed to store isn't sent again while the link stays up
-
-- **Rating:** severity **high**, probability **possible**, correctness (score 6): a finished task stays running for as long as the link lives; one failed result write (a database stall).
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  The agent sends `Finished` once and keeps it in `unacked` (`crates/schedr-agent/src/agent.rs:1114`); heartbeats don't resend it, only a reconnect's `decide` does. The master logs a handling error and keeps the stream (`crates/schedr-master/src/service.rs:448`). One failed write: the attempt stays running for as long as the link lives (Codex's proofs: 12 healthy heartbeats and ticks, still open). Contradicts the Worker lifecycle's "`Finished` until `FinishedAck`".
-- **A fix:** resend unacknowledged results on a timer (or with heartbeats) until acknowledged.
 
 ## B40: a lease test times out its 2 s query limit under load
 
@@ -452,6 +416,10 @@ step touches their code or the user schedules them.
   the right; push by the largest single intrusion, always the outermost group), 10 A (one
   work counter over the four scans, bound 8n), 11 A (the seven-task R3 graph), 12 B (every
   populated group has a box, plus a populated-and-empty fixed test).
+- **Seen again, 2026-10-31:** `grouped_nodes_never_overlap_and_fit` found a random 13-node,
+  two-deep grouping 5,830 px wide against the bound's 5,612 (seed saved in
+  `crates/schedr-ui/proptest-regressions/graph/tests.txt`); the test bound now has 10% more
+  room (the user), the shape stays replayed, the layout itself waits for M6.
 - **Parked** (the user, 2026-10-30): back in M6, as a layout correct by construction (each
   group a block, placed recursively) plus a safety net (check, then fall back to strips),
   PLAN.md M6. It affects only how DAGs with many groups are drawn, nothing that runs; each

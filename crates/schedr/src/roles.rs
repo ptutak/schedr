@@ -220,6 +220,7 @@ pub fn agent_settings(
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
         journal_dir: data_dir.join("journal").join(file_name(&worker_id)),
+        code_dir: data_dir.join("code").join(file_name(&worker_id)),
         drain: DrainPeriods {
             grace: config.worker.termination_grace_period,
             terminate_period: config.worker.drain_terminate_period,

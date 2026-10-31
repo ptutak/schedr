@@ -188,3 +188,106 @@ fn a_file_removed_after_the_scan_is_a_read_error() {
     assert!(matches!(error, ScanError::Read { .. }));
     assert!(error.to_string().starts_with("reading "));
 }
+
+#[test]
+fn a_capture_is_a_read_only_copy_with_the_same_hash() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, store) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    std::fs::create_dir(root.path().join("team")).unwrap();
+    std::fs::write(root.path().join("team/sync.py"), "x = 1\n").unwrap();
+    let script = root.path().join("run.sh");
+    std::fs::write(&script, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A linked file is copied as what it points at, as the scan follows it.
+    let outside = TempDir::new().unwrap();
+    std::fs::write(outside.path().join("shared.sql"), "select 1").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("shared.sql"), root.path().join("q.sql"))
+        .unwrap();
+    let snapshot = scan(root.path()).unwrap();
+    let captured = capture(&snapshot, store.path()).unwrap();
+    assert_eq!(captured.hash, content_hash(&snapshot).unwrap());
+    assert_eq!(
+        captured.dir,
+        store.path().join(captured.hash.replace(':', "-"))
+    );
+    let copy = |path: &str| captured.dir.join(path);
+    assert_eq!(
+        std::fs::read_to_string(copy("team/sync.py")).unwrap(),
+        "x = 1\n"
+    );
+    assert!(!copy("q.sql").symlink_metadata().unwrap().is_symlink());
+    assert_eq!(std::fs::read_to_string(copy("q.sql")).unwrap(), "select 1");
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&copy("run.sh")), 0o555, "executable, not writable");
+    assert_eq!(mode(&copy("team/sync.py")), 0o444);
+    assert_eq!(mode(&copy("team")), 0o555, "no file added or removed");
+    assert_eq!(mode(&captured.dir), 0o555);
+    // Edited in place afterwards: the copy keeps the hashed bytes.
+    std::fs::write(root.path().join("team/sync.py"), "x = 2\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(copy("team/sync.py")).unwrap(),
+        "x = 1\n"
+    );
+    remove_capture(&captured.dir).unwrap();
+}
+
+#[test]
+fn the_same_code_again_reuses_its_copy_and_leaves_nothing_behind() {
+    let (root, store) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    std::fs::write(root.path().join("sync.py"), "x = 1\n").unwrap();
+    let first = capture(&scan(root.path()).unwrap(), store.path()).unwrap();
+    assert!(first.fresh);
+    // Nothing written for it: not even with the store full or read-only.
+    let mode = |mode| std::os::unix::fs::PermissionsExt::from_mode(mode);
+    std::fs::set_permissions(store.path(), mode(0o555)).unwrap();
+    let second = capture(&scan(root.path()).unwrap(), store.path());
+    std::fs::set_permissions(store.path(), mode(0o755)).unwrap();
+    let second = second.unwrap();
+    assert_eq!((&second.hash, &second.dir), (&first.hash, &first.dir));
+    assert!(!second.fresh);
+    let names: Vec<_> = std::fs::read_dir(store.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 1, "no partial copy left: {names:?}");
+    remove_capture(&first.dir).unwrap();
+    assert!(!first.dir.exists());
+}
+
+#[test]
+fn a_capture_that_cant_read_a_file_leaves_no_partial_copy() {
+    let (root, store) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    std::fs::write(root.path().join("sync.py"), "x").unwrap();
+    let snapshot = scan(root.path()).unwrap();
+    std::fs::remove_file(root.path().join("sync.py")).unwrap();
+    assert!(matches!(
+        capture(&snapshot, store.path()),
+        Err(ScanError::Read { .. })
+    ));
+    assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_removed_copy_never_leaves_its_hashs_name_behind() {
+    // Renamed away before it is deleted: a removal cut short leaves a temporary name, never
+    // a partial copy a later capture of the same hash would use as it is.
+    let (root, store) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    std::fs::create_dir(root.path().join("team")).unwrap();
+    std::fs::write(root.path().join("team/helper.py"), "x").unwrap();
+    let first = capture(&scan(root.path()).unwrap(), store.path()).unwrap();
+    // A leftover of a removal cut short (a killed agent): a temporary name only.
+    let leftover = store.path().join(".removing-1-0");
+    std::fs::create_dir(&leftover).unwrap();
+    remove_capture(&first.dir).unwrap();
+    let names: Vec<_> = std::fs::read_dir(store.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [leftover.file_name().unwrap()]);
+    let again = capture(&scan(root.path()).unwrap(), store.path()).unwrap();
+    assert!(again.fresh, "copied again, whole");
+    assert!(again.dir.join("team/helper.py").is_file());
+    remove_capture(&again.dir).unwrap();
+    remove_capture(&leftover).unwrap();
+    assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 0);
+}

@@ -1,10 +1,10 @@
 """Task mode: run one Python task attempt.
 
-The runner imports the DAG file (latest code on the worker) under the same module name as
-parse mode, finds the task's function, builds its arguments from the stored values, calls it
-with ``dag_ctx`` giving values, and sends back the encoded output or an error summary. It
-doesn't enforce timeouts or watch memory: the agent does (see PROJECT.md, Rust/Python
-integration).
+The runner imports the DAG file (the agent's copy of the root's latest code) under the same
+module name as parse mode, finds the task's function, builds its arguments from the stored
+values, calls it with ``dag_ctx`` giving values, and sends back the encoded output or an error
+summary. It doesn't enforce timeouts or watch memory: the agent does (see PROJECT.md,
+Rust/Python integration).
 """
 
 import types

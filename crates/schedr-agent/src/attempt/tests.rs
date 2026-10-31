@@ -188,6 +188,41 @@ fn a_python_task_runs_the_runner_with_the_request() {
 }
 
 #[test]
+fn a_task_planned_at_a_revision_runs_and_imports_from_it() {
+    // Decision 102: the revision behind the configured root (git-sync's link), for the DAG
+    // file, the working directory and the root's `sys.path` entry; other roots stay.
+    let (dir, mut setup) = setup();
+    setup
+        .roots
+        .insert("shared".to_owned(), dir.path().join("shared"));
+    let revision = dir.path().join("rev-a");
+    std::fs::create_dir_all(revision.join("team")).unwrap();
+    std::fs::write(revision.join("team/sync.py"), "").unwrap();
+    let spec = AttemptSpec::from_assign(&assign(&python_task()), None).unwrap();
+    let Plan::Python { process, request } = plan_at(&spec, &setup, &revision).unwrap() else {
+        panic!("expected a Python plan")
+    };
+    assert_eq!(process.working_dir, revision);
+    assert_eq!(request.dag_file.root_dir, revision.to_string_lossy());
+    let shared = dir.path().join("shared");
+    assert_eq!(
+        request.sys_path,
+        [revision.to_string_lossy(), shared.to_string_lossy()]
+    );
+    assert_eq!(setup.sys_path_with("etl", &revision), request.sys_path);
+    // A revision without the DAG file is code not there yet.
+    let empty = dir.path().join("rev-b");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(matches!(
+        plan_at(&spec, &setup, &empty),
+        Err(NotRun::Rejected {
+            reason: pb::RejectReason::DagFileMissing,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn a_command_is_rendered_with_its_inputs_and_environment() {
     let (_dir, setup) = setup();
     let command = json!({"argv": [

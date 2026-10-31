@@ -31,6 +31,10 @@ details = '''
   the right; push by the largest single intrusion, always the outermost group), 10 A (one
   work counter over the four scans, bound 8n), 11 A (the seven-task R3 graph), 12 B (every
   populated group has a box, plus a populated-and-empty fixed test).
+- **Seen again, 2026-10-31:** `grouped_nodes_never_overlap_and_fit` found a random 13-node,
+  two-deep grouping 5,830 px wide against the bound's 5,612 (seed saved in
+  `crates/schedr-ui/proptest-regressions/graph/tests.txt`); the test bound now has 10% more
+  room (the user), the shape stays replayed, the layout itself waits for M6.
 - **Parked** (the user, 2026-10-30): back in M6, as a layout correct by construction (each
   group a block, placed recursively) plus a safety net (check, then fall back to strips),
   PLAN.md M6. It affects only how DAGs with many groups are drawn, nothing that runs; each

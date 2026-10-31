@@ -42,7 +42,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{
-    AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan,
+    AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan, plan_at,
 };
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
@@ -99,6 +99,9 @@ pub struct AgentSettings {
     pub settle_time: Duration,
     /// Where the journal is kept (see [`crate::journal`]).
     pub journal_dir: PathBuf,
+    /// Where each root's code is copied, a folder per root (decision 102): parse jobs and
+    /// tasks import from the copy of the hash they are for.
+    pub code_dir: PathBuf,
     /// How long the running attempts get when the agent is asked to stop (the pod's
     /// `terminationGracePeriodSeconds`), and how the end of that time is split.
     pub drain: DrainPeriods,
@@ -301,10 +304,10 @@ impl Executor for ProcessExecutor {
             forks: self.forks.clone(),
         };
         let request = ParseRequest {
+            sys_path: self.setup.sys_path_with(&root, &dir),
             root,
             root_dir: dir.to_string_lossy().into_owned(),
             files,
-            sys_path: self.setup.sys_path(),
         };
         parse_files(&mut runner, request, self.parse_file_timeout)
             .await
@@ -326,6 +329,16 @@ pub fn with_memory(finished: &mut pb::Finished, seen: MemorySeen, budget: Option
 
 /// How often the agent's loop beats at least (liveness, see [`Agent::beat`]).
 pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The most heartbeats between two sends of an unacknowledged result: the gap doubles from
+/// one (B41), so a long stall of the master queues a few copies of each result, not one a
+/// heartbeat.
+pub const MAX_RESEND_GAP: u32 = 32;
+
+/// How many times a result is sent again over one session before the agent gives the session
+/// up and reconnects: its registration's journal then settles the result (acknowledged, or
+/// sent again on `Continue`), and no session queues more copies of a result than this.
+pub const MAX_RESENDS: u32 = 8;
 
 /// The exception named in the error summary of an attempt killed over its memory budget.
 pub const MEMORY_EXCEPTION: &str = "MemoryBudgetExceeded";
@@ -367,6 +380,8 @@ pub struct Agent<E> {
     unacked: BTreeMap<String, pb::Finished>,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
+    /// The parse jobs running, by the hash they parse (their copy is kept meanwhile).
+    parsing: BTreeMap<String, usize>,
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
     /// What is wrong with the worker now (the executor's), sent after `Register` and on change.
@@ -393,7 +408,13 @@ impl<E: Executor> Agent<E> {
             .setup
             .roots
             .iter()
-            .map(|(name, dir)| (name.clone(), RootWatcher::new(dir, settings.settle_time)))
+            .map(|(name, dir)| {
+                let store = settings.code_dir.join(code_folder(name));
+                (
+                    name.clone(),
+                    RootWatcher::new(dir, store, settings.settle_time),
+                )
+            })
             .collect();
         let (done_tx, done_rx) = mpsc::unbounded_channel();
         let journal = Journal::new(settings.journal_dir.clone());
@@ -408,6 +429,7 @@ impl<E: Executor> Agent<E> {
             running: BTreeMap::new(),
             unacked: BTreeMap::new(),
             code_hashes: BTreeMap::new(),
+            parsing: BTreeMap::new(),
             done_tx,
             done_rx,
             heartbeat: Duration::from_secs(10),
@@ -715,10 +737,13 @@ impl<E: Executor> Agent<E> {
             warnings,
         })));
         let mut warnings_open = true;
-        let mut heartbeat = tokio::time::interval(self.heartbeat);
+        let mut heartbeat = heartbeat_timer(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
         let mut tick = tokio::time::interval(DRAIN_TICK);
         let mut alive = tokio::time::interval(ALIVE_INTERVAL);
+        // The unacknowledged results' resends (B41: the master failed to store one and kept
+        // the stream).
+        let mut resends = Resends::default();
         loop {
             tokio::select! {
                 count = next_request(&mut self.shutdown) => {
@@ -756,11 +781,9 @@ impl<E: Executor> Agent<E> {
                     self.on_done(done, Some((&to_master, &mut client))).await;
                 }
                 _ = heartbeat.tick() => {
-                    let message = worker_message::Message::Heartbeat(pb::Heartbeat {
-                        free_slots: self.free_slots(),
-                        running_attempt_ids: self.running(),
-                    });
-                    let _ = to_master.send(wrap(message));
+                    if let Some(end) = self.send_heartbeat(&mut resends, &to_master) {
+                        return end;
+                    }
                 }
                 _ = watch.tick() => self.watch(&to_master),
                 _ = alive.tick() => self.alive(),
@@ -776,6 +799,33 @@ impl<E: Executor> Agent<E> {
                 }
             }
         }
+    }
+
+    /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
+    /// if one was sent too often already.
+    fn send_heartbeat(
+        &self,
+        resends: &mut Resends,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) -> Option<SessionEnd> {
+        let message = worker_message::Message::Heartbeat(pb::Heartbeat {
+            free_slots: self.free_slots(),
+            running_attempt_ids: self.running(),
+        });
+        let _ = to_master.send(wrap(message));
+        let Some(due) = resends.due(self.unacked.keys()) else {
+            return Some(SessionEnd::Lost(format!(
+                "a result is still unacknowledged after {MAX_RESENDS} sends; reconnecting, so \
+                 the master's reconciliation settles it"
+            )));
+        };
+        for id in due {
+            if let Some(finished) = self.unacked.get(&id) {
+                let message = worker_message::Message::Finished(finished.clone());
+                let _ = to_master.send(wrap(message));
+            }
+        }
+        None
     }
 
     async fn on_master(
@@ -794,7 +844,7 @@ impl<E: Executor> Agent<E> {
                 }
                 if let Some(timing) = registered.timing.filter(|t| t.heartbeat_interval_ms > 0) {
                     self.heartbeat = Duration::from_millis(timing.heartbeat_interval_ms);
-                    *heartbeat = tokio::time::interval(self.heartbeat);
+                    *heartbeat = heartbeat_timer(self.heartbeat);
                 }
                 for decision in registered.decisions {
                     self.decide(&decision, to_master).await;
@@ -983,7 +1033,17 @@ impl<E: Executor> Agent<E> {
     /// Plans an attempt here; a DAG file missing from the code the master expects fails it
     /// (the file is gone) instead of rejecting it as "code not there yet".
     fn plan(&self, spec: &AttemptSpec, assign: &pb::AssignTask) -> Result<Plan, NotRun> {
-        match plan(spec, &self.settings.setup) {
+        // The copy of the code the root's reported hash is of (decision 102); the configured
+        // path until the root's first scan.
+        let code = self
+            .watchers
+            .get(&spec.dag_root)
+            .and_then(RootWatcher::code_dir);
+        let planned = match code {
+            Some(dir) => plan_at(spec, &self.settings.setup, dir),
+            None => plan(spec, &self.settings.setup),
+        };
+        match planned {
             Err(NotRun::Rejected {
                 reason: pb::RejectReason::DagFileMissing,
                 detail,
@@ -1017,7 +1077,34 @@ impl<E: Executor> Agent<E> {
             .then(|| format!("root `{root}` here is at {here}, the task expects {expected}"))
     }
 
-    fn parse(&self, job: pb::AssignParse) {
+    /// Removes the copies of code (decision 102) nothing needs any more: each root's but its
+    /// current hash's and those a running attempt or parse job imports from.
+    fn collect_code(&self) {
+        let in_use: std::collections::BTreeSet<String> = self
+            .code_hashes
+            .values()
+            .chain(self.parsing.keys())
+            .map(|hash| hash.replace(':', "-"))
+            .collect();
+        for watcher in self.watchers.values() {
+            let Ok(entries) = std::fs::read_dir(watcher.store()) else {
+                continue;
+            };
+            let current = watcher.code_dir();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if Some(path.as_path()) == current || in_use.contains(&name) {
+                    continue;
+                }
+                if let Err(error) = crate::scan::remove_capture(&path) {
+                    tracing::warn!(path = %path.display(), %error, "can't remove old DAG code");
+                }
+            }
+        }
+    }
+
+    fn parse(&mut self, job: pb::AssignParse) {
         let Some(root) = job.root else {
             return;
         };
@@ -1040,11 +1127,14 @@ impl<E: Executor> Agent<E> {
             // The root changed since: its new hash was (or will be) reported.
             return;
         }
-        let files = watcher
-            .snapshot()
-            .map(crate::scan::Snapshot::python_files)
-            .unwrap_or_default();
-        let dir = watcher.dir().to_path_buf();
+        let (Some(snapshot), Some(code)) = (watcher.snapshot(), watcher.code_dir()) else {
+            return;
+        };
+        // The copy of the code that hash is of (decision 102), not the configured path, which
+        // git-sync may have moved on (B58).
+        let files = snapshot.python_files();
+        let dir = code.to_path_buf();
+        *self.parsing.entry(root.content_hash.clone()).or_default() += 1;
         let executor = self.executor.clone();
         let done = self.done_tx.clone();
         tokio::spawn(async move {
@@ -1095,6 +1185,7 @@ impl<E: Executor> Agent<E> {
                 self.metrics.attempt_ended(&status);
                 if let Some(hash) = self.code_hashes.remove(&finished.attempt_id) {
                     finished.code_hash = hash;
+                    self.collect_code();
                 }
                 if let Err(error) = self
                     .record(
@@ -1121,45 +1212,70 @@ impl<E: Executor> Agent<E> {
                 job_id,
                 root,
                 files,
-            } => match (files, link) {
-                (Ok(_), None) => tracing::warn!(
-                    root = root.root.as_str(),
-                    "parse result dropped: no master connection (the job is given out again)"
-                ),
-                (Ok(files), Some((_, client))) => {
-                    let limit = self.master_limit;
-                    let result = pb::ParseResult {
-                        parse_job_id: job_id,
-                        worker_id: self.settings.worker_id.clone(),
-                        root: Some(root),
-                        schedr_version: AGENT_VERSION.to_owned(),
-                        files: files
-                            .iter()
-                            .map(|file| fitted_file(parsed_file_to_proto(file), limit))
-                            .collect(),
-                    };
-                    // In a task of its own: a large root's upload takes a while, and the
-                    // session's loop must keep sending heartbeats meanwhile (B34). A file a
-                    // message, so only one file's size counts against the limit (B35).
-                    let parts = tokio_stream::iter(parse_upload_parts(result));
-                    let mut client = client.clone();
-                    tokio::spawn(async move {
-                        if let Err(status) = client.upload_parse_result(parts).await {
-                            tracing::error!(%status, "parse result not uploaded");
-                        }
-                    });
+            } => {
+                if let Some(count) = self.parsing.get_mut(&root.content_hash) {
+                    *count -= 1;
+                    if *count == 0 {
+                        self.parsing.remove(&root.content_hash);
+                    }
                 }
-                (Err(error), _) => {
-                    tracing::error!(root = root.root.as_str(), error, "parse job failed");
-                }
-            },
+                self.collect_code();
+                self.report_parse(job_id, root, files, link);
+            }
+        }
+    }
+
+    /// Uploads a parse job's result over `link`, or says why it can't.
+    fn report_parse(
+        &self,
+        job_id: String,
+        root: pb::RootHash,
+        files: Result<Vec<ParsedFile>, String>,
+        link: Option<(
+            &mpsc::UnboundedSender<pb::WorkerMessage>,
+            &mut MasterClient<Channel>,
+        )>,
+    ) {
+        match (files, link) {
+            (Ok(_), None) => tracing::warn!(
+                root = root.root.as_str(),
+                "parse result dropped: no master connection (the job is given out again)"
+            ),
+            (Ok(files), Some((_, client))) => {
+                let limit = self.master_limit;
+                let result = pb::ParseResult {
+                    parse_job_id: job_id,
+                    worker_id: self.settings.worker_id.clone(),
+                    root: Some(root),
+                    schedr_version: AGENT_VERSION.to_owned(),
+                    files: files
+                        .iter()
+                        .map(|file| fitted_file(parsed_file_to_proto(file), limit))
+                        .collect(),
+                };
+                // In a task of its own: a large root's upload takes a while, and the
+                // session's loop must keep sending heartbeats meanwhile (B34). A file a
+                // message, so only one file's size counts against the limit (B35).
+                let parts = tokio_stream::iter(parse_upload_parts(result));
+                let mut client = client.clone();
+                tokio::spawn(async move {
+                    if let Err(status) = client.upload_parse_result(parts).await {
+                        tracing::error!(%status, "parse result not uploaded");
+                    }
+                });
+            }
+            (Err(error), _) => {
+                tracing::error!(root = root.root.as_str(), error, "parse job failed");
+            }
         }
     }
 
     fn watch(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        let mut changed_any = false;
         for (name, watcher) in &mut self.watchers {
             match watcher.poll(Instant::now()) {
                 Ok(Poll::Changed { hash, .. }) => {
+                    changed_any = true;
                     let changed =
                         worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
                             root: Some(root_hash(name, &hash)),
@@ -1169,6 +1285,10 @@ impl<E: Executor> Agent<E> {
                 Ok(_) => {}
                 Err(error) => tracing::warn!(root = name.as_str(), %error, "can't scan DAG root"),
             }
+        }
+        if changed_any {
+            // The previous code's copy, unless something still runs from it.
+            self.collect_code();
         }
     }
 
@@ -1192,6 +1312,86 @@ impl<E: Executor> Agent<E> {
             .slots
             .saturating_sub(u32::try_from(self.running.len()).unwrap_or(u32::MAX))
     }
+}
+
+/// A heartbeat timer of `period`: a tick missed (the loop busy, the process paused) is
+/// delayed, not caught up in a burst.
+fn heartbeat_timer(period: Duration) -> tokio::time::Interval {
+    let mut interval = tokio::time::interval(period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    interval
+}
+
+/// When each unacknowledged result is sent again over a session, counted in heartbeats:
+/// first at the second heartbeat that finds it unacknowledged (at least one interval after it
+/// was sent), then after twice the last gap, up to [`MAX_RESEND_GAP`]; at most
+/// [`MAX_RESENDS`] times.
+#[derive(Debug, Default)]
+struct Resends {
+    /// Heartbeats so far.
+    beat: u64,
+    /// Per result: the heartbeat it is due at, the gap after that, and the sends so far.
+    due: BTreeMap<String, Resend>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Resend {
+    at: u64,
+    gap: u32,
+    sent: u32,
+}
+
+impl Resends {
+    /// A heartbeat, `unacked` the results unacknowledged now: those due to be sent again; none
+    /// when one has been sent [`MAX_RESENDS`] times already and is due again (the session is
+    /// given up).
+    fn due<'a>(&mut self, unacked: impl Iterator<Item = &'a String>) -> Option<Vec<String>> {
+        self.beat += 1;
+        let beat = self.beat;
+        let mut due = BTreeMap::new();
+        let mut send = Vec::new();
+        for id in unacked {
+            let mut resend = self.due.get(id).copied().unwrap_or(Resend {
+                at: beat + 1,
+                gap: 1,
+                sent: 0,
+            });
+            if resend.at <= beat {
+                if resend.sent == MAX_RESENDS {
+                    return None;
+                }
+                send.push(id.clone());
+                resend.gap = resend.gap.saturating_mul(2).min(MAX_RESEND_GAP);
+                resend.at = beat + u64::from(resend.gap);
+                resend.sent += 1;
+            }
+            due.insert(id.clone(), resend);
+        }
+        self.due = due;
+        Some(send)
+    }
+}
+
+/// The folder of root `name`'s code copies under the code directory: its name with anything
+/// but letters, digits, `-` and `_` replaced, and a hash of the real name, so two roots never
+/// share one (each root's cleanup removes what its folder holds).
+fn code_folder(name: &str) -> String {
+    use sha2::Digest as _;
+    let readable: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let digest = sha2::Sha256::digest(name.as_bytes());
+    format!(
+        "{readable}-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
 }
 
 async fn fetch_inputs(

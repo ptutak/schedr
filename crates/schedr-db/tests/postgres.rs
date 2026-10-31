@@ -582,6 +582,8 @@ async fn attempts_and_outputs_move_a_task_forward() {
         .unwrap()
         .unwrap();
     assert_eq!(try_number, 1);
+    db.mark_adopted(&attempt_id, ts(NOW)).await.unwrap();
+    assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
     assert!(
         db.mark_started(&attempt_id, "spawn", ts(NOW))
             .await

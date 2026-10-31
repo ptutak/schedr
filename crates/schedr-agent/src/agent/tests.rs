@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,16 +25,21 @@ use super::*;
 #[derive(Clone, Default)]
 struct Fake {
     parsed: Arc<Mutex<Vec<Vec<String>>>>,
+    /// The directory of each parse, and each Python task's working directory.
+    dirs: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl Executor for Fake {
     async fn run(
         &self,
         spec: AttemptSpec,
-        _plan: Plan,
+        plan: Plan,
         mut stop: Stops,
         spawned: Spawned,
     ) -> pb::Finished {
+        if let Plan::Python { process, .. } = &plan {
+            self.dirs.lock().unwrap().push(process.working_dir.clone());
+        }
         // A task named `forked` stands for one forked from a fork server.
         spawned(NO_PROCESS, spec.task.id.as_str() == "forked");
         let status = if spec.task.id.as_str() == "wait" {
@@ -55,10 +61,11 @@ impl Executor for Fake {
     async fn parse(
         &self,
         root: String,
-        _dir: PathBuf,
+        dir: PathBuf,
         files: Vec<String>,
     ) -> Result<Vec<ParsedFile>, String> {
         tokio::task::yield_now().await; // a real parse starts a runner
+        self.dirs.lock().unwrap().push(dir.clone());
         self.parsed.lock().unwrap().push(files.clone());
         Ok(files
             .iter()
@@ -110,9 +117,19 @@ struct World {
 /// A master over SQLite, and an agent with a fake executor connected to it in process,
 /// watching root `etl` (files `sync.py` and `wait.py`).
 async fn world() -> World {
+    world_in(|dir| {
+        let root = dir.join("etl");
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    })
+    .await
+}
+
+/// As [`world`], with root `etl` where `make_root` puts it in the test's directory (it
+/// returns the configured path, e.g. a symbolic link to a revision as git-sync makes).
+async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
     let dir = TempDir::new().unwrap();
-    let root = dir.path().join("etl");
-    std::fs::create_dir_all(&root).unwrap();
+    let root = make_root(dir.path());
     std::fs::write(root.join("sync.py"), "").unwrap();
     std::fs::write(root.join("wait.py"), "").unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -155,6 +172,7 @@ async fn world() -> World {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
+        code_dir: dir.path().join("code"),
         drain: DrainPeriods {
             grace: Duration::from_secs(30),
             ..DrainPeriods::default()
@@ -179,6 +197,27 @@ async fn world() -> World {
         fake,
         stop,
         agent,
+    }
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        // The code copies are read-only: made removable, for the temporary directory.
+        let Some(dir) = self.root.parent() else {
+            return;
+        };
+        let Ok(stores) = std::fs::read_dir(dir.join("code")) else {
+            return;
+        };
+        for store in stores.flatten() {
+            for copy in std::fs::read_dir(store.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let _ = crate::scan::remove_capture(&copy.path());
+            }
+        }
     }
 }
 
@@ -230,9 +269,10 @@ async fn run_state(db: &Database, dag: &str) -> Option<RunState> {
 }
 
 /// Asks the agent to stop and waits until it has drained.
-async fn shut_down(world: World) {
+async fn shut_down(mut world: World) {
     let _ = world.stop.send(1);
-    tokio::time::timeout(Duration::from_secs(20), world.agent)
+    let agent = std::mem::replace(&mut world.agent, tokio::spawn(async {}));
+    tokio::time::timeout(Duration::from_secs(20), agent)
         .await
         .expect("the agent drains")
         .unwrap();
@@ -536,6 +576,7 @@ async fn against_master(
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: journal.dir().to_path_buf(),
+        code_dir: journal.dir().parent().unwrap().join("code"),
         drain: DrainPeriods {
             grace: Duration::from_secs(30),
             ..DrainPeriods::default()
@@ -568,7 +609,10 @@ async fn against_master(
     );
 }
 
+/// What the agent sent, by kind; heartbeats, warnings and results sent again (B41: until
+/// acknowledged, which these scripted masters seldom do) left out.
 fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
+    let mut results = BTreeSet::new();
     messages
         .iter()
         .filter_map(|m| match m.message.as_ref()? {
@@ -587,6 +631,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
                     _ => "rejected",
                 })
             }
+            worker_message::Message::Finished(f) if !results.insert(&f.attempt_id) => None,
             worker_message::Message::Finished(f) => {
                 Some(match pb::AttemptStatus::try_from(f.status) {
                     Ok(pb::AttemptStatus::Success) => "finished: success",
@@ -782,6 +827,36 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
 }
 
 #[tokio::test]
+async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
+    // B41: the master failed to store it (a database stall) and keeps the stream; nothing
+    // but a reconnect sent it again.
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![pb::JournalDecision {
+            attempt_id: "old-1".to_owned(),
+            decision: pb::AttemptDecision::Continue.into(),
+        }],
+    }));
+    let finished = |m: &[pb::WorkerMessage]| {
+        m.iter()
+            .filter(|m| matches!(m.message, Some(worker_message::Message::Finished(_))))
+            .count()
+    };
+    let start = Start::With(vec![("old-1", success("old-1"))]);
+    let done = |m: &[pb::WorkerMessage]| finished(m) >= 3 || heartbeats(m) >= 20;
+    let (seen, left) = against_script(1, start, vec![registered], done).await;
+    assert!(finished(&seen) >= 3, "{:?}", kinds(&seen));
+    // Not with every heartbeat: one interval at least between two sends.
+    assert!(heartbeats(&seen) >= 2, "{:?}", kinds(&seen));
+    assert_eq!(left, ["old-1"]);
+}
+
+#[tokio::test]
 async fn an_attempt_the_journal_cant_record_is_rejected() {
     let python = task_json(&json!({"kind": "python"}));
     let script = vec![assign("a1", &python, "sync.py", false)];
@@ -923,6 +998,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
+        code_dir: dir.path().join("code"),
         drain: DrainPeriods {
             grace: Duration::from_secs(30),
             ..DrainPeriods::default()
@@ -998,14 +1074,17 @@ async fn an_assignment_for_other_code_than_the_workers_is_rejected() {
     );
 }
 
-/// Each of the `count` results sent names the code it ran with.
+/// Each of the `count` results sent names the code it ran with (one per attempt: a result
+/// is sent again until acknowledged).
 fn assert_results_name_their_code(seen: &[pb::WorkerMessage], count: usize) {
     let code_hashes: Vec<&str> = seen
         .iter()
         .filter_map(|m| match m.message.as_ref()? {
-            worker_message::Message::Finished(f) => Some(f.code_hash.as_str()),
+            worker_message::Message::Finished(f) => Some((&f.attempt_id, f.code_hash.as_str())),
             _ => None,
         })
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
         .collect();
     assert_eq!(code_hashes.len(), count);
     assert!(
@@ -1019,7 +1098,8 @@ async fn a_dag_file_missing_from_the_expected_code_fails_the_attempt_at_once() {
     // The content hash depends only on the root's files: a copy of the root has the same.
     let copy = TempDir::new().unwrap();
     std::fs::write(copy.path().join("sync.py"), "").unwrap();
-    let mut watcher = RootWatcher::new(copy.path(), Duration::ZERO);
+    let code = TempDir::new().unwrap();
+    let mut watcher = RootWatcher::new(copy.path(), code.path(), Duration::ZERO);
     let hash = loop {
         watcher.poll(Instant::now()).unwrap();
         if let Some(hash) = watcher.hash() {
@@ -1125,6 +1205,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: settings_dir.path().join("journal"),
+        code_dir: settings_dir.path().join("code"),
         drain: DrainPeriods {
             grace: Duration::from_secs(600),
             ..DrainPeriods::default()
@@ -1167,6 +1248,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
         journal_dir: dir.path().join("journal"),
+        code_dir: dir.path().join("code"),
         drain: DrainPeriods {
             grace: Duration::from_secs(30),
             ..DrainPeriods::default()
@@ -1356,4 +1438,148 @@ async fn a_result_past_the_masters_limit_is_sent_as_output_too_large() {
         summary.contains("[master] grpc_max_message_size"),
         "{summary}"
     );
+}
+
+/// Root `etl` as git-sync lays it out: a symbolic link to the revision `rev-a`.
+fn git_sync_root(dir: &Path) -> PathBuf {
+    let revision = dir.join("rev-a");
+    std::fs::create_dir_all(&revision).unwrap();
+    let root = dir.join("etl");
+    std::os::unix::fs::symlink(&revision, &root).unwrap();
+    root
+}
+
+#[tokio::test]
+async fn parses_and_tasks_import_the_copy_of_the_code_hashed() {
+    // B58 (decision 102): the agent's own copy of the hashed code, not the root's link (nor
+    // the checkout behind it, which git-sync may delete or move on from).
+    let world = world_in(git_sync_root).await;
+    let checkout = world.root.canonicalize().unwrap();
+    eventually(&world, "the DAGs", || async {
+        dag_ids(&world.db).await == ["sync", "wait"]
+    })
+    .await;
+    // git-sync deletes the checkout the hash is of: the code is in the copy.
+    std::fs::remove_dir_all(&checkout).unwrap();
+    trigger(&world.db, "sync").await;
+    eventually(&world, "the run", || async {
+        run_state(&world.db, "sync").await == Some(RunState::Success)
+    })
+    .await;
+    let dirs = world.fake.dirs.lock().unwrap().clone();
+    assert!(dirs.len() >= 2, "a parse and a task: {dirs:?}");
+    let code = world.root.parent().unwrap().join("code");
+    assert!(
+        dirs.iter().all(|d| d == &dirs[0] && d.starts_with(&code)),
+        "{dirs:?}"
+    );
+    assert!(dirs[0].join("sync.py").is_file());
+    shut_down(world).await;
+}
+
+#[tokio::test]
+async fn an_old_copy_of_the_code_goes_once_nothing_runs_from_it() {
+    let world = world().await;
+    eventually(&world, "the DAGs", || async {
+        dag_ids(&world.db).await == ["sync", "wait"]
+    })
+    .await;
+    let store = world
+        .root
+        .parent()
+        .unwrap()
+        .join("code")
+        .join(code_folder("etl"));
+    let copies = || {
+        let mut names: Vec<String> = std::fs::read_dir(&store)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let first = copies();
+    assert_eq!(first.len(), 1, "{first:?}");
+    // A task running from the first copy keeps it while the root changes.
+    trigger(&world.db, "wait").await;
+    eventually(&world, "the task running", || async {
+        world.fake.dirs.lock().unwrap().len() >= 2
+    })
+    .await;
+    std::fs::write(world.root.join("new.py"), "").unwrap();
+    eventually(&world, "the new code", || async { copies().len() == 2 }).await;
+    assert!(copies().contains(&first[0]));
+    // Once the task ends, only the new copy is left.
+    let run = world
+        .db
+        .dag_runs(&DagId::new("wait").unwrap(), None, 1)
+        .await
+        .unwrap();
+    let cancel = Command::CancelRun {
+        run_id: run[0].id.clone(),
+    };
+    world
+        .db
+        .insert_command(&cancel, "anna", jiff::Timestamp::now())
+        .await
+        .unwrap();
+    eventually(&world, "the old copy removed", || async {
+        let left = copies();
+        left.len() == 1 && left[0] != first[0]
+    })
+    .await;
+    shut_down(world).await;
+}
+
+#[test]
+fn an_unacknowledged_result_is_sent_again_ever_less_often() {
+    let mut resends = Resends::default();
+    let (a, b) = ("a".to_owned(), "b".to_owned());
+    let mut sent_at = Vec::new();
+    for beat in 1..=150_u64 {
+        // `b` is acknowledged at the 5th heartbeat.
+        let unacked: Vec<&String> = if beat < 5 { vec![&a, &b] } else { vec![&a] };
+        let due = resends.due(unacked.into_iter()).unwrap();
+        if beat == 4 {
+            assert_eq!(due, ["a", "b"]);
+        }
+        assert!(!due.contains(&b) || beat < 5);
+        if due.contains(&a) {
+            sent_at.push(beat);
+        }
+    }
+    // A heartbeat after the first that found it, then gaps of 2, 4, ... up to the cap.
+    assert_eq!(sent_at[..7], [2, 4, 8, 16, 32, 64, 96]);
+    assert!(
+        sent_at
+            .windows(2)
+            .all(|w| w[1] - w[0] <= u64::from(MAX_RESEND_GAP))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn heartbeats_missed_while_the_loop_was_stuck_are_not_caught_up() {
+    let mut interval = heartbeat_timer(Duration::from_secs(10));
+    interval.tick().await;
+    tokio::time::advance(Duration::from_secs(300)).await;
+    interval.tick().await;
+    // The next is a whole period later, not at once.
+    let next = tokio::time::timeout(Duration::from_secs(9), interval.tick()).await;
+    assert!(next.is_err(), "missed ticks came in a burst");
+}
+
+#[test]
+fn a_result_sent_again_too_often_gives_the_session_up() {
+    let mut resends = Resends::default();
+    let a = "a".to_owned();
+    let mut sends = 0;
+    let mut beat = 0;
+    while let Some(due) = resends.due([&a].into_iter()) {
+        beat += 1;
+        sends += due.len();
+        assert!(beat < 1000, "never given up");
+    }
+    assert_eq!(sends, usize::try_from(MAX_RESENDS).unwrap());
+    // Due a ninth time at the 160th heartbeat (sent at 2, 4, 8, ... 96, 128).
+    assert_eq!(beat + 1, 160);
 }

@@ -397,9 +397,22 @@ impl Dispatcher {
         self.workers.report_root(worker_id, root, hash);
     }
 
-    /// A reconnecting worker still runs `attempt_id`: it keeps its slot.
-    pub fn adopt(&mut self, worker_id: &str, attempt_id: &str, now: Timestamp) {
+    /// A reconnecting worker still runs `attempt_id` (or holds its result): it keeps its
+    /// slot, and the attempt counts as started, so it isn't taken back for want of a
+    /// `Started` lost with the old stream (B50).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails.
+    pub async fn adopt(
+        &mut self,
+        worker_id: &str,
+        attempt_id: &str,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        self.db.mark_adopted(attempt_id, now).await?;
         self.workers.reserve(worker_id, attempt_id, now);
+        Ok(())
     }
 
     /// The inputs of an open attempt as JSON (see [`attempt_inputs`]).

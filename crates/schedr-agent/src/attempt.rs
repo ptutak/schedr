@@ -169,6 +169,17 @@ impl WorkerSetup {
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
     }
+
+    /// As [`Self::sys_path`], with root `root` at `dir` instead (the copy of its code,
+    /// decision 102), so its modules come from the same code as its DAG file.
+    #[must_use]
+    pub fn sys_path_with(&self, root: &str, dir: &Path) -> Vec<String> {
+        self.roots
+            .iter()
+            .map(|(name, p)| if name == root { dir } else { p.as_path() })
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
 }
 
 /// How to run an attempt.
@@ -219,6 +230,18 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
             reason: pb::RejectReason::DagFileMissing,
             detail: format!("DAG root `{}` isn't on this worker", spec.dag_root),
         })?;
+    plan_at(spec, setup, root_dir)
+}
+
+/// As [`plan`], with the task's root at `root_dir`: the agent's copy of the code whose hash
+/// it reported (decision 102), so the code that runs is the code hashed whatever happens to
+/// the configured root meanwhile (git-sync moving its link and deleting the old checkout, an
+/// edit in place).
+///
+/// # Errors
+///
+/// As [`plan`].
+pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Result<Plan, NotRun> {
     let file = root_dir.join(&spec.dag_path);
     if !file.is_file() {
         return Err(NotRun::Rejected {
@@ -242,7 +265,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                         "task".to_owned(),
                     ],
                     env,
-                    working_dir: root_dir.clone(),
+                    working_dir: root_dir.to_path_buf(),
                     log_file,
                     max_output_size,
                 },
@@ -257,7 +280,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                     inputs: spec.inputs.clone(),
                     outcomes: spec.outcomes.clone(),
                     run: spec.run.clone(),
-                    sys_path: setup.sys_path(),
+                    sys_path: setup.sys_path_with(&spec.dag_root, root_dir),
                 }),
             })
         }
@@ -286,7 +309,7 @@ pub fn plan(spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
                 env,
                 working_dir: file
                     .parent()
-                    .map_or_else(|| root_dir.clone(), Path::to_path_buf),
+                    .map_or_else(|| root_dir.to_path_buf(), Path::to_path_buf),
                 log_file,
                 max_output_size,
             }))

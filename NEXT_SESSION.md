@@ -10,9 +10,16 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   **M4.3 (mapping) are done**, M4.3d (the CLI's `runs show`, `tasks attempts`, `tasks output`)
   included. **Now: the bugs of severity high or critical** (the user, 2026-10-30: fix down to
   "high", then features; a new ≥ high bug interrupts), in the ranking's order, security first:
-  B62 + B46 (security; small, so Codex reviews: the user, 2026-10-30), B58 + B59 (code identity
-  under git-sync), B50 + B41 + B43 + B44 (the reconnect batch), then B86, B84, B78, B64, B54,
-  B66, B45, B63, B57, B47. Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
+  B90 (critical, waiting on decision 103), then B86, B84, B78, B64, B54, B66, B45, B63, B57,
+  B47 (the reconnect batch B50, B41, B43, B44 done 2026-10-31). Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
+- **Decision 102 (the code copy, B58 + B59), committed 2026-10-31:** the agent copies each
+  settled root into `<data_dir>/code/<worker ID>/<root>-<hash8>/sha256-…` (`scan::capture`:
+  hashed first, a complete copy reused, written under a temporary name and renamed into
+  place; removed by renaming away first; read-only; links copied as contents; only the scanned
+  files), and parse jobs and tasks import from it (`RootWatcher::code_dir`, `attempt::plan_at`,
+  `WorkerSetup::sys_path_with`); `Agent::collect_code` removes copies nothing running uses;
+  `python/schedr/runner/sources.py` imports DAG roots from source (extension modules too),
+  never `.pyc`. Other roots are still imported live: B90, decision 103.
 - **Bugs live in `bugs/`** (the user, 2026-10-30): one `bugs/B<n>.toml` per bug (title,
   severity, probability, kind, summary, found, suspected, details), `bugs/README.md` the rules,
   `bugs/next-id` the next number; `BUGS.md` is generated (`make bugs`; `make bugs-check` in
@@ -30,6 +37,36 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   sandboxes now have `--unshare-pid` and the prompts forbid that form; a later Grok turn
   killed itself inside the sandbox and nothing else (it worked). If `/run/user/1002` is missing
   after such an event, restart WSL (podman needs it).
+
+## The night of 2026-10-31 (the user asleep)
+
+The user: "I go to sleep you work with grok and codex on bugs, if anything to decide leave it
+for morning, you can commit and push if everything passes". So: commits that pass `make
+check` (and their review) are committed and pushed without asking; every decision waits for
+the morning, listed below.
+
+- **Committed and pushed (the night's commit):** B58 + B59 by decision 102 (the code copy),
+  the reconnect batch B50, B43, B44, B41, and three review rounds' fixes (Grok on the copy;
+  Codex on the reconnect batch; a fresh Codex on the fix-up, then a second look). The last two
+  fixes (a refused registration keeps starts known before it; a worker 1024 messages behind is
+  disconnected) were not reviewed by a colleague: each has a test shown failing without it.
+  `make check` and `make docs` pass. Next: decision 103 (B90) below, then B86, B84, B78,
+  B64, B54, B66, B45, B63, B57, B47 (the ≥ high list), then M4.4.
+- Grok's weekly % after its review (session `b3ccfd8a`, 46 calls, 199k context): ask the
+  user. Codex: 27% → 31% over the night's three rounds.
+
+Decisions for the morning:
+
+- **103 (B90, critical × rare):** a module a task or parse imports from **another** DAG root
+  comes from that root's live checkout, not a copy (Grok's review of the code copy; not new:
+  before decision 102 every root was imported live). Options: **A** pin every root at its
+  current copy for each parse or attempt, kept while it runs (Claude; recommended: it is what
+  decision 102 means); **B** document that roots don't import from each other; **C** only the
+  root's own copy on `sys.path` (a cross-root import fails at once). Being critical, it is
+  fixed before M4.4 whichever is chosen.
+- Rejected from Grok's review (no decision needed, for the record): a task can `chmod` or
+  rename its own read-only copy (it runs as the copy's owner): within decision 101 (workers and
+  their DAG code are trusted); the guide now says the copy guards against mistakes only.
 
 ## Open when this session ended
 
@@ -57,7 +94,7 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   worktree. Prepare a worktree (its pyenv, `uv sync`, a build) before a colleague's turn.
 - **Every finding is verified before acting;** rejected ones reported with why. Code Grok
   wrote is reviewed by Codex (or a fresh Grok session).
-- **Decisions:** numbered (the next is **102**), lettered options, the recommended first, a
+- **Decisions:** numbered (the next is **103**, open: B90), lettered options, the recommended first, a
   "Who (does the work)" column. Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one. Check CI with `gh run list`.
 - **Stress tests:** never without the user asking. **Processes:** kill only your own.

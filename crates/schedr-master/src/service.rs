@@ -28,18 +28,22 @@ use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
 #[cfg(test)]
 mod tests;
 
-/// How many messages wait for a worker before the oldest sender waits.
-const STREAM_BUFFER: usize = 1024;
-
 /// The size of one `FetchInputs` chunk.
 pub const INPUT_CHUNK: usize = 1024 * 1024;
 
+/// How many messages wait for a worker before it is taken for one that stopped reading.
+const STREAM_BUFFER: usize = 1024;
+
+/// A worker's stream of messages. Sending never waits (see [`Hub::deliver`]).
 type Outbound = mpsc::Sender<Result<pb::MasterMessage, Status>>;
 
 /// The core and the workers' outgoing streams.
 #[derive(Debug, Clone)]
 pub struct Hub {
     core: Arc<Mutex<MasterCore>>,
+    /// Each worker's current stream. Held only briefly (a send never waits), so the core's
+    /// lock, which can be held while waiting for it, never waits on a slow worker; a delivery
+    /// goes out whole under it, one after another.
     streams: Arc<Mutex<BTreeMap<String, Outbound>>>,
     clock: fn() -> Timestamp,
     /// When the loop last turned (the master's liveness).
@@ -401,16 +405,52 @@ impl Hub {
     /// Sends messages to their workers' streams; one for a worker without a live stream is
     /// dropped (an assignment then expires without `Started`; a cancel is sent again when the
     /// worker comes back and reports the attempt in its journal).
+    ///
+    /// A send never waits: a worker [`STREAM_BUFFER`] messages behind has stopped reading.
+    /// Its stream is dropped and the worker disconnected, so it registers again and its
+    /// journal is reconciled; it never holds up the master's rounds, registrations or other
+    /// workers' messages, nor its messages pile up.
     async fn deliver(&self, outgoing: Vec<Outgoing>) {
-        let streams = self.streams.lock().await;
+        let mut stuck = Vec::new();
+        let mut streams = self.streams.lock().await;
         for Outgoing { worker_id, message } in outgoing {
-            if let Some(stream) = streams.get(&worker_id) {
-                if stream.send(Ok(message)).await.is_err() {
+            let Some(stream) = streams.get(&worker_id) else {
+                tracing::warn!(worker_id, "no stream for worker; message dropped");
+                continue;
+            };
+            match stream.try_send(Ok(message)) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::error!(
+                        worker_id,
+                        "worker doesn't read its stream ({STREAM_BUFFER} messages waiting): \
+                         disconnected"
+                    );
+                    streams.remove(&worker_id);
+                    stuck.push(worker_id);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
                     tracing::warn!(worker_id, "worker stream closed; message dropped");
                 }
-            } else {
-                tracing::warn!(worker_id, "no stream for worker; message dropped");
             }
+        }
+        drop(streams);
+        for worker_id in stuck {
+            // Not here: the caller may hold the core's lock.
+            tokio::spawn(self.clone().disconnect_stuck(worker_id));
+        }
+    }
+
+    /// Disconnects a worker whose stream was dropped for not being read, unless it has
+    /// registered again since. (Its stream's reader stops at its next message, which ends
+    /// the worker's side.)
+    async fn disconnect_stuck(self, worker_id: String) {
+        let mut core = self.core.lock().await;
+        if self.streams.lock().await.contains_key(&worker_id) {
+            return;
+        }
+        if let Err(error) = core.disconnected(&worker_id, (self.clock)()).await {
+            tracing::error!(worker_id, %error, "worker disconnect not recorded");
         }
     }
 
@@ -438,6 +478,22 @@ impl Hub {
             let mut outgoing = Vec::new();
             {
                 let mut core = self.core.lock().await;
+                if !self.is_current(&worker_id, &stream).await {
+                    // Replaced by a newer stream of the worker: what this one still says is
+                    // out of date, and must not change the newer one's state (B44).
+                    reader.abort();
+                    tracing::warn!(worker_id, "messages of a replaced stream dropped");
+                    return;
+                }
+                if !core.is_live(&worker_id) {
+                    // The worker was taken for lost (its lease) while this stream stayed open:
+                    // ended, so it registers again and its journal is reconciled; meanwhile
+                    // its messages change nothing.
+                    reader.abort();
+                    self.streams.lock().await.remove(&worker_id);
+                    tracing::warn!(worker_id, "stream of a worker taken for lost ended");
+                    return;
+                }
                 let mut next = Some(first);
                 let mut handled = 0;
                 let mut finished = false;
@@ -463,17 +519,32 @@ impl Hub {
         if let Err(error) = reader.await {
             tracing::error!(worker_id, %error, "worker stream reader failed");
         }
-        let now = (self.clock)();
-        if let Err(error) = self.core.lock().await.disconnected(&worker_id, now).await {
-            tracing::error!(worker_id, %error, "worker disconnect not recorded");
-        }
+        // Only the worker's current stream ending disconnects it: a replaced one's end says
+        // nothing of the newer stream (B44). Checked and removed under the core's lock, which
+        // a registration holds while it puts its stream in place.
+        let mut core = self.core.lock().await;
         let mut streams = self.streams.lock().await;
-        if streams
+        if !streams
             .get(&worker_id)
             .is_some_and(|s| s.same_channel(&stream))
         {
-            streams.remove(&worker_id);
+            return;
         }
+        streams.remove(&worker_id);
+        drop(streams);
+        let now = (self.clock)();
+        if let Err(error) = core.disconnected(&worker_id, now).await {
+            tracing::error!(worker_id, %error, "worker disconnect not recorded");
+        }
+    }
+
+    /// Whether `stream` is still `worker_id`'s stream (not replaced by a newer registration).
+    async fn is_current(&self, worker_id: &str, stream: &Outbound) -> bool {
+        self.streams
+            .lock()
+            .await
+            .get(worker_id)
+            .is_some_and(|s| s.same_channel(stream))
     }
 }
 
@@ -539,16 +610,40 @@ impl Master for Hub {
             ));
         };
         // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
-        // a stall).
+        // a stall); and the attempts its journal reports have started, so none is taken back
+        // for want of a `Started` meanwhile (B50: lost with the old stream). Adopted, they are
+        // marked started, after which the reconciliation's decision stands.
         self.arrivals.arrived(&register.worker_id, (self.clock)());
+        let added: Vec<&str> = register
+            .journal
+            .iter()
+            .filter(|entry| {
+                self.arrivals
+                    .start_known(&register.worker_id, &entry.attempt_id)
+            })
+            .map(|entry| entry.attempt_id.as_str())
+            .collect();
         // Not while paused: another master may be leading.
         self.while_leading().await;
-        let registered = self
-            .core
-            .lock()
-            .await
-            .register(&register, (self.clock)())
-            .await;
+        let mut core = self.core.lock().await;
+        let registered = core.register(&register, (self.clock)()).await;
+        match &registered {
+            // Its journal is the whole truth now: what it reports is adopted (started) or
+            // ended, and a start known of an attempt it doesn't report (a `Started` that
+            // couldn't be stored, its process gone with a restart) protects nothing any more:
+            // never started, it expires.
+            Ok(_) => self.arrivals.forget_starts(&register.worker_id),
+            // Never to be registered as it is: what it added goes; a start known before (a
+            // `Started` that couldn't be stored, its stream still live) stays.
+            Err(CoreError::Refused(_)) => {
+                for attempt_id in &added {
+                    self.arrivals.start_handled(attempt_id);
+                }
+            }
+            // A database failure: the worker registers again with the same journal; kept
+            // till then (and gone with the worker if it never comes back, by its lease).
+            Err(_) => {}
+        }
         let (registered, outgoing) = registered.map_err(|error| match error {
             CoreError::Refused(reason) => Status::failed_precondition(reason),
             other => Status::internal(other.to_string()),
@@ -558,13 +653,16 @@ impl Master for Hub {
             message: Some(master_message::Message::Registered(registered)),
         };
         stream
-            .send(Ok(first))
-            .await
+            .try_send(Ok(first))
             .map_err(|_| Status::internal("the stream closed at once"))?;
+        // The worker's stream from now on, put in place before the lock is let go: a message
+        // of the old stream handled after this registration is known to be the old one's
+        // (B44).
         self.streams
             .lock()
             .await
             .insert(register.worker_id.clone(), stream.clone());
+        drop(core);
         self.deliver(outgoing).await;
         tokio::spawn(
             self.clone()

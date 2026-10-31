@@ -1229,3 +1229,286 @@ async fn a_root_past_the_limit_is_stored_when_each_file_fits() {
         ["sync"]
     );
 }
+
+#[tokio::test]
+async fn an_old_stream_of_a_worker_neither_changes_nor_disconnects_its_new_one() {
+    // B44: an old stream whose transport stays open after the worker was taken for gone
+    // (here: marked disconnected, as a lost lease does) and registered again.
+    let (hub, db, client) = connected().await;
+    let open = |message: pb::WorkerMessage| {
+        let mut client = client.clone();
+        async move {
+            let (to_master, outbound) = mpsc::channel(16);
+            to_master.send(message).await.unwrap();
+            let stream = client
+                .control(ReceiverStream::new(outbound))
+                .await
+                .unwrap()
+                .into_inner();
+            (to_master, stream)
+        }
+    };
+    let (old, mut old_stream) = open(register(PROTOCOL_VERSION)).await;
+    assert!(matches!(
+        next(&mut old_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    hub.core()
+        .lock()
+        .await
+        .disconnected("w1", fixed_now())
+        .await
+        .unwrap();
+    let mut again = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
+        register.incarnation_id = "i2".to_owned();
+    }
+    let (_new, mut new_stream) = open(again).await;
+    assert!(matches!(
+        next(&mut new_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let state = || {
+        let db = db.clone();
+        async move { db.workers().await.unwrap()[0].state }
+    };
+    // The old stream's message is dropped, and its end changes nothing (given time to be
+    // handled: without the fix this fails well within it).
+    old.send(wrap(worker_message::Message::Draining(pb::Draining {})))
+        .await
+        .unwrap();
+    drop(old);
+    drop(old_stream);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(state().await, schedr_model::WorkerState::Active);
+    assert!(hub.core().lock().await.is_live("w1"));
+}
+
+#[tokio::test]
+async fn a_reconnect_waiting_behind_a_round_keeps_its_running_attempts() {
+    // B50, through a stall: the round that would take the attempt back as never started runs
+    // before the registration reporting it running is handled.
+    move_to(0);
+    let (hub, db, mut client) = connected_with(moving_now).await;
+    let (to_master, stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", moving_now())
+        .await
+        .unwrap();
+    let mut stream = stream;
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    // Its `Started` is lost with the connection.
+    drop(to_master);
+    drop(stream);
+    for _ in 0..100 {
+        if !hub.core().lock().await.is_live("w1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let stuck = hub.core().lock_owned().await;
+    move_to(5);
+    let round = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.tick().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut again = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
+        register.journal = vec![pb::JournalEntry {
+            attempt_id: assign.attempt_id.clone(),
+            state: pb::JournalState::Running.into(),
+        }];
+    }
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(again).await.unwrap();
+    let reconnect = tokio::spawn({
+        let mut client = client.clone();
+        async move { client.control(ReceiverStream::new(outbound)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The round goes first, past the start timeout.
+    move_to(11);
+    drop(stuck);
+    round.await.unwrap().unwrap();
+    let mut stream = reconnect.await.unwrap().unwrap().into_inner();
+    let master_message::Message::Registered(registered) = next(&mut stream).await else {
+        panic!("expected Registered")
+    };
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue)
+    );
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None);
+    assert!(attempt.started);
+    drop(to_master);
+}
+
+#[tokio::test]
+async fn an_open_stream_of_a_worker_taken_for_lost_changes_nothing_and_ends() {
+    move_to(0);
+    let (hub, db, client) = connected_with(moving_now).await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .clone()
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // Silent past its lease (its transport open).
+    move_to(61);
+    hub.tick().await.unwrap();
+    let state = || {
+        let db = db.clone();
+        async move { db.workers().await.unwrap()[0].state }
+    };
+    assert_eq!(state().await, schedr_model::WorkerState::Lost);
+    to_master
+        .send(wrap(worker_message::Message::Draining(pb::Draining {})))
+        .await
+        .unwrap();
+    // The stream ends: the worker registers again and its journal is reconciled.
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.message().await {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return,
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the stream stayed open");
+    assert_eq!(state().await, schedr_model::WorkerState::Lost);
+}
+
+#[tokio::test]
+async fn a_worker_that_stops_reading_holds_up_no_delivery() {
+    // Deliveries never wait on a worker: one that stops reading backs up only its own
+    // messages, not the master's rounds, registrations or other workers' messages.
+    let (hub, _db, _client) = connected().await;
+    let (slow, _unread) = mpsc::channel(STREAM_BUFFER);
+    let (other, mut read) = mpsc::channel(STREAM_BUFFER);
+    {
+        let mut streams = hub.streams.lock().await;
+        streams.insert("slow".to_owned(), slow);
+        streams.insert("other".to_owned(), other);
+    }
+    let to = |worker: &str| Outgoing {
+        worker_id: worker.to_owned(),
+        message: pb::MasterMessage::default(),
+    };
+    let outgoing: Vec<Outgoing> = (0..5000).map(|_| to("slow")).chain([to("other")]).collect();
+    let delivered = tokio::time::timeout(Duration::from_secs(5), hub.deliver(outgoing)).await;
+    assert!(delivered.is_ok(), "a delivery waited on a worker");
+    assert!(read.try_recv().is_ok(), "the other worker got its message");
+    // Its messages don't pile up: the stream of the one that stopped reading is dropped.
+    assert!(!hub.streams.lock().await.contains_key("slow"));
+}
+
+#[tokio::test]
+async fn a_refused_registration_keeps_no_start_of_its_journal() {
+    let (hub, _db, mut client) = connected().await;
+    // `a0`'s start known before (a `Started` that couldn't be stored): it stays.
+    hub.arrivals.start_arrived("w1", "a0");
+    let mut old = register(pb::ProtocolVersion { major: 9, minor: 0 });
+    if let Some(worker_message::Message::Register(register)) = old.message.as_mut() {
+        register.journal = ["a0", "a1"]
+            .map(|id| pb::JournalEntry {
+                attempt_id: id.to_owned(),
+                state: pb::JournalState::Running.into(),
+            })
+            .to_vec();
+    }
+    let status = client
+        .control(tokio_stream::iter(vec![old]))
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    assert!(!hub.arrivals.start_waiting("a1"));
+    assert!(hub.arrivals.start_waiting("a0"));
+}
+
+#[tokio::test]
+async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it() {
+    // A `Started` that couldn't be stored keeps its attempt from expiring; once the worker
+    // registers again (restarted: the process gone) without it in its journal, it expires.
+    move_to(0);
+    let (hub, db, mut client) = connected_with(moving_now).await;
+    let (to_master, mut stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", moving_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    hub.arrivals.start_arrived("w1", &assign.attempt_id);
+    drop(to_master);
+    drop(stream);
+    for _ in 0..100 {
+        if !hub.core().lock().await.is_live("w1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut again = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
+        register.incarnation_id = "i2".to_owned();
+    }
+    let (_to_master, mut stream) = {
+        let (to_master, outbound) = mpsc::channel(16);
+        to_master.send(again).await.unwrap();
+        let stream = client
+            .control(ReceiverStream::new(outbound))
+            .await
+            .unwrap()
+            .into_inner();
+        (to_master, stream)
+    };
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    move_to(11);
+    hub.tick().await.unwrap();
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        attempt.status,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
+async fn a_worker_that_stops_reading_is_disconnected() {
+    let (hub, _db, mut client) = connected().await;
+    let (_to_master, _unread) = parsed_worker(&mut client).await;
+    let core = hub.core();
+    for _ in 0..100 {
+        let flood: Vec<Outgoing> = (0..STREAM_BUFFER)
+            .map(|_| Outgoing {
+                worker_id: "w1".to_owned(),
+                message: pb::MasterMessage::default(),
+            })
+            .collect();
+        hub.deliver(flood).await;
+        if !hub.streams.lock().await.contains_key("w1") {
+            break;
+        }
+    }
+    assert!(!hub.streams.lock().await.contains_key("w1"), "never full");
+    for _ in 0..100 {
+        if !core.lock().await.is_live("w1") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the worker stayed live");
+}

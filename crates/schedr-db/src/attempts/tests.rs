@@ -365,6 +365,43 @@ async fn attempts_start_and_end_once() {
 }
 
 #[tokio::test]
+async fn an_adopted_attempt_counts_as_started_keeping_an_earlier_start() {
+    let (db, run_id) = with_run().await;
+    let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let (attempt_id, _) = db
+        .assign_attempt(&instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    db.mark_adopted(&attempt_id, ts("2026-10-21T08:00:05Z"))
+        .await
+        .unwrap();
+    assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
+    assert_eq!(
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"))
+            .await
+            .unwrap(),
+        []
+    );
+    // A `Started` arriving after still sets the method; the first start time stays.
+    assert!(
+        db.mark_started(&attempt_id, "fork", ts("2026-10-21T08:00:09Z"))
+            .await
+            .unwrap()
+    );
+    db.mark_adopted(&attempt_id, ts("2026-10-21T08:00:20Z"))
+        .await
+        .unwrap();
+    let stored = &db.task_attempts(&run_id, &id("extract")).await.unwrap()[0];
+    assert_eq!(
+        (stored.started_at, stored.start_method.as_deref()),
+        (Some(ts("2026-10-21T08:00:05Z")), Some("fork"))
+    );
+}
+
+#[tokio::test]
 async fn run_outputs_are_the_stored_outputs_by_task() {
     let (db, run_id) = with_run().await;
     assert_eq!(db.run_outputs(&run_id).await.unwrap(), BTreeMap::new());

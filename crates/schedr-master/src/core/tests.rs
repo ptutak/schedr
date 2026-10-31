@@ -544,6 +544,113 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
     assert_eq!(cancels, [assign.attempt_id.as_str()]);
 }
 
+#[tokio::test]
+async fn a_task_cancelled_while_its_worker_is_away_is_cancelled_on_reconnect() {
+    // B43: a `CancelTask` (not the run's) missed while away is sent again too.
+    let mut core = with_dag().await;
+    let attempt = started_attempt(&mut core).await;
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    let runs = core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap();
+    let cancel = schedr_model::commands::Command::CancelTask {
+        run_id: runs[0].id.clone(),
+        task_id: schedr_model::TaskId::new("extract").unwrap(),
+        map_index: None,
+    };
+    core.db
+        .insert_command(&cancel, "anna", ts(NOW))
+        .await
+        .unwrap();
+    core.tick(later(1)).await.unwrap();
+    let journal = vec![pb::JournalEntry {
+        attempt_id: attempt.clone(),
+        state: pb::JournalState::Running.into(),
+    }];
+    let (_, out) = core
+        .register(&register("w1", "i1", journal), later(2))
+        .await
+        .unwrap();
+    let cancels: Vec<&str> = out
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::CancelAttempt(c) => Some(c.attempt_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cancels, [attempt.as_str()]);
+}
+
+#[tokio::test]
+async fn an_attempt_running_on_reconnect_whose_start_was_lost_is_not_assigned_again() {
+    // B50: `Started` lost with the stream; the journal says it runs, so it has started.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", later(1)).await.unwrap();
+    let journal = vec![pb::JournalEntry {
+        attempt_id: assign.attempt_id.clone(),
+        state: pb::JournalState::Running.into(),
+    }];
+    core.register(&register("w1", "i1", journal), later(2))
+        .await
+        .unwrap();
+    let out = core.tick(later(30)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None, "still running, not expired");
+    assert!(attempt.started);
+    assert!(
+        !out.iter()
+            .any(|o| matches!(message(o), master_message::Message::AssignTask(_))),
+        "{out:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_start_or_result_that_couldnt_be_stored_keeps_the_attempt_from_being_taken_back() {
+    // The worker runs it: a failed write of its `Started` (or `Finished`) mustn't let the
+    // attempt expire as never started and run again elsewhere.
+    for result in [false, true] {
+        let mut core = with_dag().await;
+        trigger(&mut core).await;
+        let out = core.tick(ts(NOW)).await.unwrap();
+        let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+            panic!("expected AssignTask")
+        };
+        let id = assign.attempt_id.clone();
+        let reported = if result {
+            worker_message::Message::Finished(pb::Finished {
+                attempt_id: id.clone(),
+                status: pb::AttemptStatus::Success.into(),
+                ..pb::Finished::default()
+            })
+        } else {
+            worker_message::Message::Started(pb::Started {
+                attempt_id: id.clone(),
+                start_method: pb::StartMethod::Spawn.into(),
+            })
+        };
+        // As the stream's reader records it on arrival.
+        core.arrivals().start_arrived("w1", &id);
+        core.db.fail_write(1);
+        assert!(core.handle("w1", reported, later(1)).await.is_err());
+        core.db.count_writes();
+        let out = core.tick(later(30)).await.unwrap();
+        let attempt = core.db.attempt(&id).await.unwrap().unwrap();
+        assert_eq!(attempt.status, None, "taken back (result: {result})");
+        assert!(
+            !out.iter()
+                .any(|o| matches!(message(o), master_message::Message::AssignTask(_))),
+            "{out:?}"
+        );
+    }
+}
+
 async fn registry_state(core: &MasterCore, worker: &str) -> (WorkerState, Option<Timestamp>) {
     let record = core
         .db

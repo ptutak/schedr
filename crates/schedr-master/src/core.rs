@@ -164,15 +164,28 @@ impl Arrivals {
 
     /// A `Started` or `Finished` for `attempt_id` arrived from `worker_id`: the attempt started.
     pub fn start_arrived(&self, worker_id: &str, attempt_id: &str) {
+        let _ = self.start_known(worker_id, attempt_id);
+    }
+
+    /// As [`Self::start_arrived`]; returns whether the start wasn't known already.
+    #[must_use]
+    pub fn start_known(&self, worker_id: &str, attempt_id: &str) -> bool {
         self.inner()
             .started
-            .insert(attempt_id.to_owned(), worker_id.to_owned());
+            .insert(attempt_id.to_owned(), worker_id.to_owned())
+            .is_none()
     }
 
     /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
     #[must_use]
     pub fn start_waiting(&self, attempt_id: &str) -> bool {
         self.inner().started.contains_key(attempt_id)
+    }
+
+    /// Forgets the starts of `worker_id`'s that wait: it registered, and its journal is what
+    /// stands now.
+    pub fn forget_starts(&self, worker_id: &str) {
+        self.inner().started.retain(|_, worker| worker != worker_id);
     }
 
     /// The message about `attempt_id`'s start was handled (or failed to be).
@@ -500,12 +513,16 @@ impl MasterCore {
                 let handled =
                     Box::pin(db.atomically(self.dispatcher.started(worker_id, &started, now)))
                         .await;
-                self.arrivals.start_handled(&started.attempt_id);
                 let id = started.attempt_id.as_str();
-                match self
+                let settled = self
                     .settle(handled, memory, id, |a| a.is_some_and(|a| a.started))
-                    .await?
-                {
+                    .await;
+                // Not stored, the start stays known in memory: the attempt runs, and isn't
+                // taken back meanwhile; its `Finished` (or a reconnect's journal) settles it.
+                if settled.is_ok() {
+                    self.arrivals.start_handled(id);
+                }
+                match settled? {
                     Some(out) => out.into_iter().collect(),
                     None => Vec::new(),
                 }
@@ -525,16 +542,18 @@ impl MasterCore {
                 let handled =
                     Box::pin(db.atomically(self.dispatcher.finished(worker_id, &finished, now)))
                         .await;
-                self.arrivals.start_handled(&finished.attempt_id);
                 let id = finished.attempt_id.as_str();
-                let settled = self.settle(handled, memory, id, |a| {
-                    a.is_some_and(|a| a.status.is_some())
-                });
-                vec![
-                    settled
-                        .await?
-                        .unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id)),
-                ]
+                let settled = self
+                    .settle(handled, memory, id, |a| {
+                        a.is_some_and(|a| a.status.is_some())
+                    })
+                    .await;
+                // As for `Started`: not stored, the worker sends it again (B41), and the
+                // attempt isn't taken back meanwhile.
+                if settled.is_ok() {
+                    self.arrivals.start_handled(id);
+                }
+                vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
             }
             worker_message::Message::Draining(_) => {
                 self.dispatcher.draining(worker_id);
@@ -819,14 +838,21 @@ impl MasterCore {
             // The master ended it (lost, expired) while the worker still runs it.
             (Some(_), false) => (pb::AttemptDecision::Kill, None),
             // Still open: keep running (or send its `Finished` again). A cancel sent while
-            // the worker was away was dropped, so it is sent again.
+            // the worker was away was dropped, so it is sent again: the run's or the task's
+            // (B43).
             (None, _) => {
-                self.dispatcher.adopt(worker_id, &attempt.id, now);
+                self.dispatcher.adopt(worker_id, &attempt.id, now).await?;
                 let cancelling = self
                     .db
                     .run_tasks(&attempt.run_id)
                     .await?
-                    .is_some_and(|run| run.cancel_requested);
+                    .is_some_and(|run| {
+                        run.cancel_requested
+                            || run
+                                .instances
+                                .iter()
+                                .any(|i| i.id == attempt.instance_id && i.cancel_requested)
+                    });
                 let cancel = cancelling.then(|| Outgoing {
                     worker_id: worker_id.to_owned(),
                     message: pb::MasterMessage {

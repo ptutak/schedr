@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::scan::{ScanError, Snapshot, content_hash, scan};
+use crate::scan::{Captured, ScanError, Snapshot, capture, remove_capture, scan};
 
 #[cfg(test)]
 mod tests;
@@ -86,25 +86,28 @@ pub enum Poll {
     },
 }
 
-/// Watches one root: scans it, waits for it to settle and hashes it.
+/// Watches one root: scans it, waits for it to settle and copies and hashes it.
 #[derive(Debug, Clone)]
 pub struct RootWatcher {
     dir: PathBuf,
+    store: PathBuf,
     settle: Duration,
     detector: ChangeDetector,
-    hash: Option<String>,
+    code: Option<Captured>,
     snapshot: Option<Snapshot>,
 }
 
 impl RootWatcher {
-    /// A watcher for the root at `dir`, with no hash yet.
+    /// A watcher for the root at `dir`, its code copied into `store` (decision 102), with no
+    /// hash yet.
     #[must_use]
-    pub fn new(dir: impl Into<PathBuf>, settle: Duration) -> Self {
+    pub fn new(dir: impl Into<PathBuf>, store: impl Into<PathBuf>, settle: Duration) -> Self {
         Self {
             dir: dir.into(),
+            store: store.into(),
             settle,
             detector: ChangeDetector::new(settle),
-            hash: None,
+            code: None,
             snapshot: None,
         }
     }
@@ -115,10 +118,22 @@ impl RootWatcher {
         &self.dir
     }
 
+    /// Where its code is copied.
+    #[must_use]
+    pub fn store(&self) -> &Path {
+        &self.store
+    }
+
     /// The last reported content hash.
     #[must_use]
     pub fn hash(&self) -> Option<&str> {
-        self.hash.as_deref()
+        self.code.as_ref().map(|code| code.hash.as_str())
+    }
+
+    /// The copy of the code the last reported hash is of: what parse jobs and tasks import.
+    #[must_use]
+    pub fn code_dir(&self) -> Option<&Path> {
+        self.code.as_ref().map(|code| code.dir.as_path())
     }
 
     /// The scan the last reported hash was computed from (its `.py` files are what a parse
@@ -128,30 +143,46 @@ impl RootWatcher {
         self.snapshot.as_ref()
     }
 
-    /// Scans the root at `now`; when it has settled, hashes it and checks that it didn't
-    /// change while being hashed.
+    /// Scans the root at `now`; when it has settled, copies and hashes it and checks that it
+    /// didn't change meanwhile.
     ///
     /// # Errors
     ///
-    /// [`ScanError`] if the root can't be scanned or a file can't be read; the next poll
-    /// tries again.
+    /// [`ScanError`] if the root can't be scanned, a file can't be read or the copy can't be
+    /// written; the next poll tries again.
     pub fn poll(&mut self, now: Instant) -> Result<Poll, ScanError> {
         let snapshot = match self.detector.observe(now, scan(&self.dir)?) {
             Observation::Unchanged => return Ok(Poll::Unchanged),
             Observation::Settling(wait) => return Ok(Poll::Settling(wait)),
             Observation::Settled(snapshot) => snapshot,
         };
-        let hash = content_hash(&snapshot)?;
-        let after = scan(&self.dir)?;
+        let captured = capture(&snapshot, &self.store)?;
+        // Changed while copied (or gone): a copy made for it is of no use, never reported.
+        let drop_fresh = || {
+            if captured.fresh
+                && let Err(error) = remove_capture(&captured.dir)
+            {
+                tracing::warn!(dir = %captured.dir.display(), %error, "can't remove a copy of DAG code");
+            }
+        };
+        let after = match scan(&self.dir) {
+            Ok(after) => after,
+            Err(error) => {
+                drop_fresh();
+                return Err(error);
+            }
+        };
         if after != snapshot {
+            drop_fresh();
             self.detector.observe(now, after);
             return Ok(Poll::Settling(self.settle));
         }
         self.detector.accept(snapshot.clone());
-        if self.hash.as_deref() == Some(hash.as_str()) {
+        if self.hash() == Some(captured.hash.as_str()) {
             return Ok(Poll::Unchanged);
         }
-        self.hash = Some(hash.clone());
+        let hash = captured.hash.clone();
+        self.code = Some(captured);
         self.snapshot = Some(snapshot.clone());
         Ok(Poll::Changed { hash, snapshot })
     }

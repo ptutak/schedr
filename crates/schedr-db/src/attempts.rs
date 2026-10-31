@@ -373,6 +373,27 @@ impl Database {
         Ok(updated == 1)
     }
 
+    /// Records that a running attempt has started, with no start method: its worker
+    /// reconnected with it in its journal, its `Started` perhaps lost (B50). A start already
+    /// recorded is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn mark_adopted(&self, attempt_id: &str, now: Timestamp) -> Result<(), DbError> {
+        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}) \
+            WHERE id = $2{uuid} AND status IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, START))
+                .bind(db_time(now))
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(())
+    }
+
     /// Records how an attempt ended, unless an end is already recorded. Returns whether this
     /// call recorded it.
     ///
