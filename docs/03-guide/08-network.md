@@ -4,9 +4,9 @@
 
 | Link | Protocol | Opened by | Security |
 |---|---|---|---|
-| browser → web UI | HTTP, the pages, and long-lived streams for live updates | the browser | none of its own yet (see below) |
-| CLI → webserver | HTTP, REST API | the CLI | none of its own yet (see below) |
-| web UI → webserver | HTTP, REST API, including one long-lived events stream per deployment | the UI | none of its own yet (see below) |
+| browser → web UI | HTTP, the pages, and long-lived streams for live updates | the browser | `[ui.auth]`: none, a sign-in proxy's header, or Basic (see [Sign-in](#sign-in)); TLS in front of it |
+| CLI → webserver | HTTP, REST API | the CLI | `[webserver.auth]`, as above (see [Sign-in](#sign-in)) |
+| web UI → webserver | HTTP, REST API, including one long-lived events stream per deployment | the UI | mTLS on the UI port, or the UI's token (see [Sign-in](#how-schedr-ui-proves-itself-to-a-webserver)); redirects are never followed |
 | worker → master | gRPC over HTTP/2: one bidirectional stream per worker, plus unary calls | the worker | mTLS, or the mesh |
 | webserver → worker | HTTP, the log endpoint | the webserver | mTLS, or the mesh |
 | master, webserver → database | Postgres or SQLite | the role | the database's own |
@@ -139,6 +139,13 @@ The UI port follows `[tls] mode` as the links between the master and the workers
 `app` mode schedr's own mTLS guards it. In `mesh` mode the mesh does, and nothing in schedr
 does. So `ui_port_in_mesh` is off by default, is refused in `app` mode, and logs a warning
 when it is on.
+
+**Redirects are never followed**, by `schedr ui`, the CLI or a webserver fetching a worker's
+log: a request carries the UI's token, a password or a person's name, which would go
+wherever the redirect points (an ingress's sign-in page, another origin, plain HTTP). A
+redirect is an error naming its target, e.g. "it answered 302 Found redirecting to
+https://login.example/; schedr follows no redirect": configure the address the request
+should reach instead.
 
 ### Which combinations are allowed
 

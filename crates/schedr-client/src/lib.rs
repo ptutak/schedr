@@ -215,6 +215,7 @@ impl HttpTransport {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("the HTTP client builds with connect and request timeouts");
         Self {
@@ -318,6 +319,7 @@ impl Transport for HttpTransport {
             server: self.server.clone(),
             reason: e.to_string(),
         })?;
+        refuse_redirect(&self.server, &response)?;
         let status = response.status().as_u16();
         let bytes = response.bytes().await.map_err(|e| ClientError::Connect {
             server: self.server.clone(),
@@ -342,6 +344,7 @@ impl Transport for HttpTransport {
             reason: e.to_string(),
         };
         let mut response = builder.send().await.map_err(connect)?;
+        refuse_redirect(&self.server, &response)?;
         if !response.status().is_success() {
             return Err(ClientError::Server {
                 status: response.status().as_u16(),
@@ -371,11 +374,34 @@ impl Transport for HttpTransport {
     }
 }
 
+/// A redirect is an error: it is never followed (B133), since the request carries
+/// credentials (the UI's token, a password, the person's name) that would go wherever it
+/// points. The message names that address, to be configured instead.
+fn refuse_redirect(server: &str, response: &reqwest::Response) -> Result<(), ClientError> {
+    if !response.status().is_redirection() {
+        return Ok(());
+    }
+    let to = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .unwrap_or("an address it didn't give");
+    Err(ClientError::Connect {
+        server: server.to_owned(),
+        reason: format!(
+            "it answered {} redirecting to {to}; schedr follows no redirect (the request's \
+             credentials would go there too): configure the address it should reach",
+            response.status()
+        ),
+    })
+}
+
 /// An HTTP client presenting `tls`'s certificate (its `api_client` configuration).
 fn mtls_client(tls: &schedr_tls::Tls) -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .tls_backend_preconfigured((*tls.api_client()).clone())
         .build()
         .expect("the HTTP client builds with its timeouts and TLS configuration")

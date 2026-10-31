@@ -1,0 +1,11 @@
+title = "per-task API reads parse the whole run DAG every time"
+severity = "medium"
+probability = "possible"
+kind = "performance"
+summary = "polling one task's log or attempts in a big DAG parses every task's definition each time, bypassing the DAG version cache"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:355`: `run_dag_json` then `serde_json::from_value` per request; `mapped_count()` reads every instance. Codex's proof: 10 attempt reads 27 ms for a 1-task DAG, 1.52 s for 5,000 tasks. Output, attempts, logs, cancel and retry share the path.
+- **A fix:** to decide when it is scheduled.
+'''

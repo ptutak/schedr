@@ -52,13 +52,13 @@ fn auth(mode: AuthMode, identity_header: Option<&str>, token: Option<&str>) -> A
     .unwrap()
 }
 
-#[test]
-fn users_are_read_and_checked() {
+#[tokio::test]
+async fn users_are_read_and_checked() {
     let users = Users::parse(&users_text()).unwrap();
     assert_eq!(users.len(), 2);
-    assert!(users.verify("anna", "secret"));
-    assert!(!users.verify("anna", "other"));
-    assert!(!users.verify("nobody", "secret"));
+    assert!(users.verify("anna", "secret").await);
+    assert!(!users.verify("anna", "other").await);
+    assert!(!users.verify("nobody", "secret").await);
     for (text, why) in [
         ("anna", "isn't `name:bcrypt-hash`"),
         (":$2b$04$x", "the name isn't usable"),
@@ -70,23 +70,23 @@ fn users_are_read_and_checked() {
     }
 }
 
-#[test]
-fn a_check_that_passed_is_remembered_and_a_failed_one_is_not() {
+#[tokio::test]
+async fn a_check_that_passed_is_remembered_and_a_failed_one_is_not() {
     let users = Users::parse(&users_text()).unwrap();
-    let timed = |name: &str, password: &str| {
+    let timed = async |name: &str, password: &str| {
         let started = std::time::Instant::now();
-        let valid = users.verify(name, password);
+        let valid = users.verify(name, password).await;
         (valid, started.elapsed())
     };
-    let (valid, first) = timed("anna", "secret");
+    let (valid, first) = timed("anna", "secret").await;
     assert!(valid);
-    let (valid, again) = timed("anna", "secret");
+    let (valid, again) = timed("anna", "secret").await;
     assert!(valid);
     // bcrypt's cost 4 is about a millisecond; remembered, a lookup.
     assert!(again * 10 < first, "{again:?} vs {first:?}");
     // The same name with another password isn't taken from what was remembered.
-    assert!(!users.verify("anna", "secreT"));
-    assert!(!users.verify("anna", "secreT"));
+    assert!(!users.verify("anna", "secreT").await);
+    assert!(!users.verify("anna", "secreT").await);
 }
 
 #[rstest]
@@ -108,26 +108,32 @@ fn a_check_that_passed_is_remembered_and_a_failed_one_is_not() {
 // The UI's token: its name taken, whatever the mode.
 #[case::token(AuthMode::Basic, None, &[("x-schedr-ui-token", "t0ken"), ("x-schedr-user", "anna")], Ok("anna"))]
 #[case::token_nobody(AuthMode::ProxyHeader, None, &[("x-schedr-ui-token", "t0ken")], Ok("anonymous"))]
-fn the_user_is_who_the_mode_says(
+#[tokio::test]
+async fn the_user_is_who_the_mode_says(
     #[case] mode: AuthMode,
     #[case] identity_header: Option<&str>,
     #[case] pairs: &[(&str, &str)],
     #[case] expected: Result<&str, Refused>,
 ) {
-    let got = auth(mode, identity_header, Some("t0ken")).user(&headers(pairs), false);
+    let got = auth(mode, identity_header, Some("t0ken"))
+        .user(&headers(pairs), false)
+        .await;
     assert_eq!(got, expected.map(str::to_owned));
 }
 
-#[test]
-fn a_proven_ui_passes_the_name_on_and_an_empty_token_proves_nothing() {
+#[tokio::test]
+async fn a_proven_ui_passes_the_name_on_and_an_empty_token_proves_nothing() {
     let auth = auth(AuthMode::Basic, None, Some(""));
     let named = headers(&[("x-schedr-user", "anna")]);
-    assert_eq!(auth.user(&named, true), Ok("anna".to_owned()));
+    assert_eq!(auth.user(&named, true).await, Ok("anna".to_owned()));
     let with_empty = headers(&[("x-schedr-ui-token", ""), ("x-schedr-user", "anna")]);
-    assert_eq!(auth.user(&with_empty, false), Err(Refused::Credentials));
+    assert_eq!(
+        auth.user(&with_empty, false).await,
+        Err(Refused::Credentials)
+    );
     // A control character in a name (a forged log line) isn't taken.
     let forged = headers(&[("x-schedr-user", "anna\tadmin")]);
-    assert_eq!(auth.user(&forged, true), Ok("anonymous".to_owned()));
+    assert_eq!(auth.user(&forged, true).await, Ok("anonymous".to_owned()));
 }
 
 #[test]
@@ -242,32 +248,32 @@ fn due<T>(followed: &Followed<T>) {
     file.looked.lock().unwrap().0 = Instant::now().checked_sub(RECHECK).unwrap();
 }
 
-#[test]
-fn the_users_follow_their_file() {
+#[tokio::test]
+async fn the_users_follow_their_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("users");
     std::fs::write(&path, users_text()).unwrap();
     let users = Users::read(&path).unwrap();
-    assert!(users.verify("anna", "secret"));
+    assert!(users.verify("anna", "secret").await);
     // Anna's password changed and Ben removed: the old password (remembered) and Ben refused.
     let hash = bcrypt::hash("changed", 4).unwrap();
     std::fs::write(&path, format!("# changed\nanna:{hash}\n")).unwrap();
     assert!(
-        users.verify("anna", "secret"),
+        users.verify("anna", "secret").await,
         "looked at only every RECHECK"
     );
     due(&users.loaded);
-    assert!(!users.verify("anna", "secret"));
-    assert!(users.verify("anna", "changed"));
-    assert!(!users.verify("ben", "other"));
+    assert!(!users.verify("anna", "secret").await);
+    assert!(users.verify("anna", "changed").await);
+    assert!(!users.verify("ben", "other").await);
     assert_eq!(users.len(), 1);
     // A file that doesn't read (half-written, gone) leaves them as they were.
     std::fs::write(&path, "anna\n").unwrap();
     due(&users.loaded);
-    assert!(users.verify("anna", "changed"));
+    assert!(users.verify("anna", "changed").await);
     std::fs::remove_file(&path).unwrap();
     due(&users.loaded);
-    assert!(users.verify("anna", "changed"));
+    assert!(users.verify("anna", "changed").await);
 }
 
 #[test]
@@ -285,8 +291,8 @@ fn an_unknown_name_costs_what_the_files_hashes_cost() {
     );
 }
 
-#[test]
-fn a_header_sent_twice_names_no_one() {
+#[tokio::test]
+async fn a_header_sent_twice_names_no_one() {
     // A client's header, then the proxy's appended after it: neither is taken.
     let twice = |name: &'static str, first: &str, second: &str| {
         let mut map = HeaderMap::new();
@@ -296,12 +302,15 @@ fn a_header_sent_twice_names_no_one() {
     };
     let proxy = auth(AuthMode::ProxyHeader, None, Some("t0ken"));
     assert_eq!(
-        proxy.user(&twice("x-forwarded-user", "forged", "anna"), false),
+        proxy
+            .user(&twice("x-forwarded-user", "forged", "anna"), false)
+            .await,
         Err(Refused::NoProxyHeader("x-forwarded-user".to_owned()))
     );
     let none = auth(AuthMode::None, Some("x-forwarded-user"), None);
     assert_eq!(
-        none.user(&twice("x-forwarded-user", "forged", "anna"), false),
+        none.user(&twice("x-forwarded-user", "forged", "anna"), false)
+            .await,
         Ok("anonymous".to_owned())
     );
     let basic_twice = twice(
@@ -310,12 +319,17 @@ fn a_header_sent_twice_names_no_one() {
         &basic("ben", "other"),
     );
     assert_eq!(
-        auth(AuthMode::Basic, None, None).user(&basic_twice, false),
+        auth(AuthMode::Basic, None, None)
+            .user(&basic_twice, false)
+            .await,
         Err(Refused::Credentials)
     );
     let mut named_twice = twice("x-schedr-user", "admin", "anna");
     named_twice.insert("x-schedr-ui-token", HeaderValue::from_static("t0ken"));
-    assert_eq!(proxy.user(&named_twice, false), Ok("anonymous".to_owned()));
+    assert_eq!(
+        proxy.user(&named_twice, false).await,
+        Ok("anonymous".to_owned())
+    );
 }
 
 #[test]
@@ -333,13 +347,16 @@ fn the_token_is_equal_only_to_itself() {
     }
 }
 
-#[test]
-fn the_rules_without_the_uis_token_take_none() {
+#[tokio::test]
+async fn the_rules_without_the_uis_token_take_none() {
     let auth = auth(AuthMode::Basic, None, Some("t0ken"));
     let with_token = headers(&[("x-schedr-ui-token", "t0ken")]);
-    assert_eq!(auth.user(&with_token, false), Ok("anonymous".to_owned()));
     assert_eq!(
-        auth.without_ui_token().user(&with_token, false),
+        auth.user(&with_token, false).await,
+        Ok("anonymous".to_owned())
+    );
+    assert_eq!(
+        auth.without_ui_token().user(&with_token, false).await,
         Err(Refused::Credentials)
     );
 }
@@ -387,8 +404,8 @@ async fn the_api_takes_no_write_from_another_sites_page(
     assert_eq!(status, StatusCode::OK);
 }
 
-#[test]
-fn a_users_file_is_read_again_once_it_can_be_read() {
+#[tokio::test]
+async fn a_users_file_is_read_again_once_it_can_be_read() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("users");
@@ -402,16 +419,16 @@ fn a_users_file_is_read_again_once_it_can_be_read() {
         return; // root reads it anyway: nothing to fail
     }
     due(&users.loaded);
-    assert!(users.verify("anna", "secret"), "kept as it was");
+    assert!(users.verify("anna", "secret").await, "kept as it was");
     // Readable again, unchanged otherwise: read at the next look.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     due(&users.loaded);
-    assert!(users.verify("anna", "changed"));
-    assert!(!users.verify("anna", "secret"));
+    assert!(users.verify("anna", "changed").await);
+    assert!(!users.verify("anna", "secret").await);
 }
 
-#[test]
-fn the_uis_token_follows_its_file() {
+#[tokio::test]
+async fn the_uis_token_follows_its_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("token");
     std::fs::write(&path, "0123456789abcdef\n").unwrap();
@@ -419,18 +436,18 @@ fn the_uis_token_follows_its_file() {
     let auth = Auth::from_config(&AuthSection::default(), Some(Arc::clone(&token))).unwrap();
     let named = |token: &str| headers(&[("x-schedr-ui-token", token), ("x-schedr-user", "anna")]);
     assert_eq!(
-        auth.user(&named("0123456789abcdef"), false),
+        auth.user(&named("0123456789abcdef"), false).await,
         Ok("anna".to_owned())
     );
     // A new token, as the Secret's volume brings it: the old one stops proving anything.
     std::fs::write(&path, "fedcba9876543210-new\n").unwrap();
     due(&token);
     assert_eq!(
-        auth.user(&named("fedcba9876543210-new"), false),
+        auth.user(&named("fedcba9876543210-new"), false).await,
         Ok("anna".to_owned())
     );
     assert_eq!(
-        auth.user(&named("0123456789abcdef"), false),
+        auth.user(&named("0123456789abcdef"), false).await,
         Ok("anonymous".to_owned())
     );
     // One too short is refused, the token kept.
@@ -441,5 +458,34 @@ fn the_uis_token_follows_its_file() {
         read_ui_token(&path)
             .unwrap_err()
             .contains("shorter than 16")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrong_passwords_dont_hold_the_runtime() {
+    // B134: bcrypt ran on the runtime's workers; two checks at once held both, and a 10 ms
+    // timer waited for them.
+    let hash = bcrypt::hash("secret", 11).unwrap();
+    let users = Users::parse(&format!("anna:{hash}\n")).unwrap();
+    let started = std::time::Instant::now();
+    let checks: Vec<_> = (0..2)
+        .map(|_| {
+            let users = users.clone();
+            tokio::spawn(async move { users.verify("anna", "wrong").await })
+        })
+        .collect();
+    tokio::task::yield_now().await;
+    let timer = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        started.elapsed()
+    });
+    let fired = timer.await.unwrap();
+    for check in checks {
+        assert!(!check.await.unwrap());
+    }
+    let checked = started.elapsed();
+    assert!(
+        fired * 3 < checked,
+        "the timer fired after {fired:?}, the checks took {checked:?}"
     );
 }

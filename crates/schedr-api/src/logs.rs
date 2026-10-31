@@ -94,8 +94,11 @@ impl HttpLogSource {
         {
             return Ok(client.clone());
         }
+        // Never redirected (B133): a log comes only from the worker's own address, over the
+        // TLS asked for.
         let mut builder = reqwest::Client::builder()
             .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT);
         if let Some(tls) = &self.tls {

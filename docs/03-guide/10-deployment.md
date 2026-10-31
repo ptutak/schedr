@@ -286,9 +286,10 @@ What to know:
   20–25 MiB in measurements. Size the pod for those two processes as well as the slots.
 - **Upgrades restart every role at once:** running tasks get the grace period, then are
   interrupted and run again.
-- **The REST API and the web UI have no authentication of their own** until M3.5: keep the
-  Service internal, or put it behind the mesh (below). On this pod the UI is on the API's
-  port, so that Service is the UI too.
+- **Who may reach the REST API and the web UI** is set by `[webserver.auth]` (none, a
+  sign-in proxy's header, or Basic against a users file; see
+  [Sign-in](08-network.md#sign-in)); with none, keep the Service internal or put it behind
+  the mesh (below). On this pod the UI is on the API's port, so that Service is the UI too.
 - **The web UI** is at `/` on the API's port. Its deployment is named `default`. `/docs`
   serves the image's documentation. What the pages show is [The web UI](12-ui.md).
 - `scripts/kind-standalone.sh` installs the chart on a local kind cluster on SQLite, switches

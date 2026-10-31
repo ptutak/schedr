@@ -55,26 +55,61 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
 | 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
-| 4 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 5 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 6 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 7 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 8 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 9 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 22 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B138: dropping a streamed response doesn't close it | 4 | medium | possible | reliability |
+| 4 | B137: per-task API reads parse the whole run DAG every time | 4 | medium | possible | performance |
+| 5 | B136: one DAG's API reads deserialize every stored DAG | 4 | medium | possible | performance |
+| 6 | B135: a truncated bcrypt hash replaces the working users on reload | 4 | medium | possible | reliability |
+| 7 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
+| 8 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 9 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 10 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
+| 11 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 12 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 13 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 14 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 15 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 16 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 17 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 18 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 19 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 20 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 21 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 22 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 23 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 24 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 25 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 26 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 27 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B139: DAG IDs `.` and `..` can't be addressed over HTTP
+
+- **Rating:** severity **medium**, probability **rare**, usability (score 2): a DAG named `..` (accepted by validation) is reachable in process but 404 through the HTTP client and the UI's links.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-client/src/lib.rs:999` leaves dots unescaped, and URL parsing normalizes `.`/`..` segments away; the UI's `path_segment()` too. Either refuse such IDs at validation or encode them.
+- **A fix:** to decide when it is scheduled.
+
+## B138: dropping a streamed response doesn't close it
+
+- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a stalled SSE stream whose reader is dropped keeps its task and socket open up to the 24 h stream timeout.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-client/src/lib.rs:355`: the spawned task awaits `response.chunk()` and notices the dropped consumer only at `send`; the same in `RouterTransport::open` (`lib.rs:470`). The API's own event producer uses `sender.closed()`. Codex's proof: no EOF within 250 ms after the consumer dropped.
+- **A fix:** to decide when it is scheduled.
+
+## B137: per-task API reads parse the whole run DAG every time
+
+- **Rating:** severity **medium**, probability **possible**, performance (score 4): polling one task's log or attempts in a big DAG parses every task's definition each time, bypassing the DAG version cache.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:355`: `run_dag_json` then `serde_json::from_value` per request; `mapped_count()` reads every instance. Codex's proof: 10 attempt reads 27 ms for a 1-task DAG, 1.52 s for 5,000 tasks. Output, attempts, logs, cancel and retry share the path.
+- **A fix:** to decide when it is scheduled.
+
+## B136: one DAG's API reads deserialize every stored DAG
+
+- **Rating:** severity **medium**, probability **possible**, performance (score 4): `GET /dags/{id}` and a DAG's runs list read every DAG's JSON; an unrelated big or unreadable DAG slows or breaks them.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:718`: `stored_dags().await?.into_iter().find(...)`. Codex's proof: 10 run-list requests 21 ms alone, 830 ms with an unrelated 5,000-task DAG; a corrupt unrelated definition gives 500.
+- **A fix:** to decide when it is scheduled.
+
+## B135: a truncated bcrypt hash replaces the working users on reload
+
+- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a users file rotated with a malformed hash is accepted and locks the user out, though an unreadable update should keep the previous users.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/auth.rs:296` checks only `cost(hash)`, not the salt and hash body. Codex's proof: `anna:$2b$04$unfinished` accepted on reload, Anna's password no longer works.
+- **A fix:** to decide when it is scheduled.
 
 ## B119: a literal `.expand([...])` list travels in every instance's task JSON
 

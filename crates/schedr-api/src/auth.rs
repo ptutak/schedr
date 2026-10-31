@@ -352,9 +352,9 @@ impl Users {
     }
 
     /// Whether `password` is `name`'s (a check that passed within [`REMEMBERED`] isn't run
-    /// again).
-    #[must_use]
-    pub fn verify(&self, name: &str, password: &str) -> bool {
+    /// again). The bcrypt check runs on the blocking pool (B134): about a second of CPU at
+    /// cost 12, it would otherwise hold a runtime worker, and a few at once every worker.
+    pub async fn verify(&self, name: &str, password: &str) -> bool {
         let (loaded, read) = self.loaded.current();
         let now = Instant::now();
         let digest = {
@@ -366,12 +366,18 @@ impl Users {
             }
             digest
         };
-        let valid = if let Some(hash) = loaded.hashes.get(name) {
-            bcrypt::verify(password, hash).unwrap_or(false)
-        } else {
-            let _ = bcrypt::verify(password, &loaded.dummy);
-            false
-        };
+        // An unknown name is checked against the dummy hash all the same: as slow as a known
+        // one, so the time doesn't tell which names exist.
+        let (hash, known) = loaded.hashes.get(name).map_or_else(
+            || (loaded.dummy.clone(), false),
+            |hash| (hash.clone(), true),
+        );
+        let password = password.to_owned();
+        let checked =
+            tokio::task::spawn_blocking(move || bcrypt::verify(&password, &hash).unwrap_or(false))
+                .await
+                .unwrap_or(false);
+        let valid = known && checked;
         if valid {
             let mut passed = lock(&self.passed);
             // Read again while this was checked: not remembered.
@@ -514,7 +520,7 @@ impl Auth {
     /// # Errors
     ///
     /// [`Refused`] in `proxy_header` and `basic` modes.
-    pub fn user(&self, headers: &HeaderMap, proven: bool) -> Result<String, Refused> {
+    pub async fn user(&self, headers: &HeaderMap, proven: bool) -> Result<String, Refused> {
         let value = |name: &str| {
             single(headers, name)
                 .map(str::trim)
@@ -539,7 +545,7 @@ impl Auth {
             }
             AuthMode::Basic => {
                 let (name, password) = basic_credentials(headers).ok_or(Refused::Credentials)?;
-                if self.users.verify(&name, &password) {
+                if self.users.verify(&name, &password).await {
                     Ok(name)
                 } else {
                     Err(Refused::Credentials)
@@ -686,7 +692,7 @@ pub async fn require(
         return next.run(request).await;
     }
     let proven = request.extensions().get::<ProvenUi>().is_some();
-    match state.auth.user(request.headers(), proven) {
+    match state.auth.user(request.headers(), proven).await {
         Ok(user) => {
             request.extensions_mut().insert(User(user));
             next.run(request).await

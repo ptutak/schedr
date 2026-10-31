@@ -396,3 +396,56 @@ async fn the_api_in_process_takes_its_ui_as_proven() {
         (json!(true), json!("anna"))
     );
 }
+
+#[tokio::test]
+async fn a_redirect_is_never_followed_with_the_uis_token() {
+    // B133: reqwest's default policy followed a redirect to another origin with the UI's
+    // token and the person's name, which then opened the API without a password.
+    use axum::http::HeaderMap;
+    let reached = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let reached = std::sync::Arc::clone(&reached);
+        move |headers: HeaderMap| {
+            let reached = std::sync::Arc::clone(&reached);
+            async move {
+                let token = headers
+                    .get(schedr_api::auth::UI_TOKEN_HEADER)
+                    .map(|v| v.to_str().unwrap().to_owned());
+                reached.lock().unwrap().push(token);
+                axum::Json(json!({"dags": []}))
+            }
+        }
+    };
+    let elsewhere = axum::Router::new().route("/{*path}", axum::routing::get(record));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, elsewhere).await.unwrap() });
+    let redirecting = axum::Router::new().route(
+        "/{*path}",
+        axum::routing::get(move || async move {
+            axum::response::Redirect::temporary(&format!("http://{other}/login"))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, redirecting).await.unwrap() });
+    let transport = HttpTransport::new(&format!("http://{address}"), Auth::None).with_ui_token(
+        std::sync::Arc::new(schedr_api::auth::Followed::fixed(
+            "0123456789abcdef".to_owned(),
+        )),
+    );
+    let api = Client::new(transport, Duration::ZERO, Duration::ZERO);
+    let error = USER.scope("anna".to_owned(), api.dags()).await.unwrap_err();
+    assert!(
+        reached.lock().unwrap().is_empty(),
+        "{:?}",
+        reached.lock().unwrap()
+    );
+    // Said plainly, with where it pointed.
+    let message = error.to_string();
+    assert!(message.contains("redirect"), "{message}");
+    assert!(
+        message.contains(&format!("http://{other}/login")),
+        "{message}"
+    );
+}

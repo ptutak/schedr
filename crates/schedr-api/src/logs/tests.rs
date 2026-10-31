@@ -53,3 +53,35 @@ async fn an_unreachable_worker_is_reported_with_the_reason() {
     // The client is built once and reused.
     assert!(plain.client().is_ok());
 }
+
+#[tokio::test]
+async fn a_worker_redirecting_isnt_followed() {
+    // B133: the log client followed a redirect, also to plain HTTP in app TLS mode.
+    let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let elsewhere = {
+        let reached = std::sync::Arc::clone(&reached);
+        axum::Router::new().route(
+            "/{*path}",
+            axum::routing::get(move || {
+                reached.store(true, std::sync::atomic::Ordering::SeqCst);
+                async { "a log from elsewhere" }
+            }),
+        )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, elsewhere).await.unwrap() });
+    let worker = axum::Router::new().route(
+        "/{*path}",
+        axum::routing::get(move || async move {
+            axum::response::Redirect::temporary(&format!("http://{other}/log"))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, worker).await.unwrap() });
+    let plain = HttpLogSource::new(None);
+    let fetched = plain.fetch(&format!("http://{address}"), "a1", 0, 10).await;
+    assert!(fetched.is_err(), "{fetched:?}");
+    assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
+}

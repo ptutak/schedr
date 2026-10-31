@@ -137,7 +137,7 @@ async fn signed_in<T: Transport>(
     if request.uri().path().starts_with("/assets/") {
         return next.run(request).await;
     }
-    match ui.auth.user(request.headers(), false) {
+    match ui.auth.user(request.headers(), false).await {
         Ok(user) => schedr_client::USER.scope(user, next.run(request)).await,
         Err(refused) => {
             let page = page::Page::new(request.headers(), ui.docs_dir.is_some());

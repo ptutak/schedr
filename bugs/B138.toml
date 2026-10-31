@@ -1,0 +1,11 @@
+title = "dropping a streamed response doesn't close it"
+severity = "medium"
+probability = "possible"
+kind = "reliability"
+summary = "a stalled SSE stream whose reader is dropped keeps its task and socket open up to the 24 h stream timeout"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-client/src/lib.rs:355`: the spawned task awaits `response.chunk()` and notices the dropped consumer only at `send`; the same in `RouterTransport::open` (`lib.rs:470`). The API's own event producer uses `sender.closed()`. Codex's proof: no EOF within 250 ms after the consumer dropped.
+- **A fix:** to decide when it is scheduled.
+'''

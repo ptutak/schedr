@@ -1,0 +1,11 @@
+title = "one DAG's API reads deserialize every stored DAG"
+severity = "medium"
+probability = "possible"
+kind = "performance"
+summary = "`GET /dags/{id}` and a DAG's runs list read every DAG's JSON; an unrelated big or unreadable DAG slows or breaks them"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:718`: `stored_dags().await?.into_iter().find(...)`. Codex's proof: 10 run-list requests 21 ms alone, 830 ms with an unrelated 5,000-task DAG; a corrupt unrelated definition gives 500.
+- **A fix:** to decide when it is scheduled.
+'''
