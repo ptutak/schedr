@@ -82,8 +82,8 @@ the morning, listed below.
   before a removal's rename). The macOS fix has no test that can fail on Linux: macOS CI is
   its check, and it passed (run 41178099349, every job green). `dags test` meanwhile retried for ever: B103.
   The two stuck CI runs: the older one cancelled by Claude (to read its log).
-- Grok's weekly % after its review (session `b3ccfd8a`, 46 calls, 199k context): ask the
-  user. Codex: 27% → 31% over the night's first three rounds, 35% after the next three.
+- Grok: 48% of its week after its review (session `b3ccfd8a`, 46 calls, 199k context; about
+  4%). Codex: 27% → 31% over the night's first three rounds, 38% after the next five.
 
 Decisions for the morning:
 
@@ -144,8 +144,8 @@ Decisions for the morning:
   then F10–F14, one section at a time; its worktree is `schedr-codex-f1` (detached
   at `819dcbb`; move it to `main` before a section, copy the current BUGS.md in). A section's
   findings now come rated (severity, probability, kind).
-- **Usage:** Grok 44% of its week before M4.3d's follow-up (resets Fridays 9:00; ask the user
-  for the %); Codex 25% weekly (read from its turns; resets Thursdays 01:57). Grok for brittle
+- **Usage:** Grok 48% of its week on 2026-10-31 morning (resets Fridays 9:00, so today; ask
+  the user for the %); Codex 38% weekly (read from its turns; resets Thursdays 01:57). Grok for brittle
   work only, Codex for small fixes, follow-ups in the same session (the user, 2026-10-30).
 - **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B90
   (fixed: B41–B45, B47, B49–B51, B53–B55, B57–B59, B63, B78, B79, B84; B88 found and fixed the
