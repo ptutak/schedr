@@ -175,7 +175,9 @@ impl Database {
         match self.pool() {
             Pool::Postgres(pool) => {
                 let verb = if on { "ENABLE" } else { "DISABLE" };
-                let mut tx = pool.begin().await?;
+                // Not `pool.begin()`: a start cut short mustn't go back to the pool (B84).
+                let mut starting = crate::query::Starting::new(pool.acquire().await?);
+                let mut tx = starting.begin("BEGIN").await?;
                 for (table, name) in triggers() {
                     let statement = format!("ALTER TABLE {table} {verb} TRIGGER {name}");
                     sqlx::query(sqlx::AssertSqlSafe(statement))

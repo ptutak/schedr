@@ -347,6 +347,7 @@ fires, it kills everything in the container, the agent included. So the agent en
   for a process whose PSS can't be read. A forked task shares pages with its fork server, so
   its RSS counts those pages and would look far bigger than the task's own memory. If a
   process in its group has no PSS, that sample is skipped and the task is not killed for it.
+  A zombie (a child not yet reaped) holds no memory and counts as nothing.
 - A group over its budget gets **SIGKILL at once**: a spike can't wait for a grace period.
   The attempt ends `oom_killed` (using a retry), with "exceeded memory budget … (… used)".
 - With no limit found (cgroup v1, a Linux laptop), memory is measured but never limited.

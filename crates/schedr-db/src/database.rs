@@ -9,6 +9,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use crate::backend::{Backend, UnsupportedUrl};
+use crate::query::Starting;
 use crate::status::SchemaStatus;
 
 #[cfg(test)]
@@ -420,9 +421,20 @@ impl Database {
     /// the built-in ones.
     pub async fn migrate(&self) -> Result<(), DbError> {
         let migrator = self.backend().migrator();
+        // As in `migrate`: on a guarded connection (B84). `run_direct` is what `run` does after
+        // acquiring, without its "`Acquire` is not general enough" error on a connection
+        // (sqlx's own words; doc-hidden, pinned with sqlx).
         match &self.pool {
-            Pool::Sqlite(pool) => migrator.run(pool).await?,
-            Pool::Postgres(pool) => migrator.run(pool).await?,
+            Pool::Sqlite(pool) => {
+                let mut whole = Starting::new(pool.acquire().await?);
+                migrator.run_direct(None, whole.conn(), false).await?;
+                whole.completed();
+            }
+            Pool::Postgres(pool) => {
+                let mut whole = Starting::new(pool.acquire().await?);
+                migrator.run_direct(None, whole.conn(), false).await?;
+                whole.completed();
+            }
         }
         Ok(())
     }
@@ -447,9 +459,18 @@ impl Database {
             create_schemas: locked.create_schemas.clone(),
         };
         migrator.set_locking(false);
+        // As in `migrate`: on a guarded connection (B84).
         match &self.pool {
-            Pool::Sqlite(pool) => migrator.run(pool).await?,
-            Pool::Postgres(pool) => migrator.run(pool).await?,
+            Pool::Sqlite(pool) => {
+                let mut whole = Starting::new(pool.acquire().await?);
+                migrator.run_direct(None, whole.conn(), false).await?;
+                whole.completed();
+            }
+            Pool::Postgres(pool) => {
+                let mut whole = Starting::new(pool.acquire().await?);
+                migrator.run_direct(None, whole.conn(), false).await?;
+                whole.completed();
+            }
         }
         Ok(())
     }

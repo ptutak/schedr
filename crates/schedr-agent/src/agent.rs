@@ -820,10 +820,7 @@ impl<E: Executor> Agent<E> {
             )));
         };
         for id in due {
-            if let Some(finished) = self.unacked.get(&id) {
-                let message = worker_message::Message::Finished(finished.clone());
-                let _ = to_master.send(wrap(message));
-            }
+            self.send_again(&id, to_master);
         }
         None
     }
@@ -889,12 +886,18 @@ impl<E: Executor> Agent<E> {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
-            _ => {
-                if let Some(finished) = self.unacked.get(id) {
-                    let message = worker_message::Message::Finished(finished.clone());
-                    let _ = to_master.send(wrap(message));
-                }
-            }
+            _ => self.send_again(id, to_master),
+        }
+    }
+
+    /// Sends unacknowledged result `id` again, fitted to the master's limit now: it was
+    /// journalled under the limit of its time, which a master since may have lowered (B47).
+    /// The journal keeps it whole, for a master accepting it.
+    fn send_again(&self, id: &str, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        if let Some(finished) = self.unacked.get(id) {
+            let mut finished = finished.clone();
+            fit_result(&mut finished, self.master_limit);
+            let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
         }
     }
 

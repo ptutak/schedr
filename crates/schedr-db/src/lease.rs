@@ -139,7 +139,9 @@ impl Database {
                             .await?
                     }
                     Pool::Postgres(pool) => {
-                        let mut tx = pool.begin().await?;
+                        // Not `pool.begin()`: a start cut short mustn't go back to the pool (B84).
+                        let mut starting = crate::query::Starting::new(pool.acquire().await?);
+                        let mut tx = starting.begin("BEGIN").await?;
                         sqlx::query(LOCK_POSTGRES).execute(&mut *tx).await?;
                         let epoch = sqlx::query_scalar(TAKE_POSTGRES)
                             .bind(holder)

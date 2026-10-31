@@ -10,8 +10,9 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   **M4.3 (mapping) are done**, M4.3d (the CLI's `runs show`, `tasks attempts`, `tasks output`)
   included. **Now: the bugs of severity high or critical** (the user, 2026-10-30: fix down to
   "high", then features; a new ≥ high bug interrupts), in the ranking's order, security first:
-  B90 (critical, waiting on decision 103), then B86, B84, B78, B64, B54, B66, B45, B63, B57,
-  B47 (the reconnect batch B50, B41, B43, B44 done 2026-10-31). Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
+  every one left needs a decision first: B90 (critical, decision 103), B66, B64, B86 (see
+  "Decisions for the morning"); the night of 2026-10-31 fixed the reconnect batch (B50, B41,
+  B43, B44) and B84, B78, B45, B54, B47, B63, B57. Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
 - **Decision 102 (the code copy, B58 + B59), committed 2026-10-31:** the agent copies each
   settled root into `<data_dir>/code/<worker ID>/<root>-<hash8>/sha256-…` (`scan::capture`:
   hashed first, a complete copy reused, written under a temporary name and renamed into
@@ -52,8 +53,18 @@ the morning, listed below.
   disconnected) were not reviewed by a colleague: each has a test shown failing without it.
   `make check` and `make docs` pass. Next: decision 103 (B90) below, then B86, B84, B78,
   B64, B54, B66, B45, B63, B57, B47 (the ≥ high list), then M4.4.
+- **Second commit of the night:** B84 (every transaction the DB crate starts, the
+  migrations' too, goes through `query::Starting`: a start cut short closes its connection;
+  Postgres tests with a TCP proxy holding `BEGIN`'s answer), B78 (an expansion sees its own
+  step's states and outcomes), B45 (a registration's stream holds its own messages), B54 (a
+  zombie counts as nothing unless its threads run), B47 (a result sent again fits the current
+  limit), B63 (files hashed and copied through a buffer; the hash unchanged), B57 (`Messages`,
+  a cancel-safe frame reader, for a forked task's status). Three Codex rounds (findings 2, 4
+  and 2; one stale, the rest confirmed and fixed). The third round's two fixes (a zombie
+  leader's memory read through a live thread; the notification probe's connections guarded)
+  were not reviewed by a colleague: each has a test shown failing without it.
 - Grok's weekly % after its review (session `b3ccfd8a`, 46 calls, 199k context): ask the
-  user. Codex: 27% → 31% over the night's three rounds.
+  user. Codex: 27% → 31% over the night's first three rounds, 35% after the next three.
 
 Decisions for the morning:
 
@@ -64,6 +75,23 @@ Decisions for the morning:
   decision 102 means); **B** document that roots don't import from each other; **C** only the
   root's own copy on `sys.path` (a cross-root import fails at once). Being critical, it is
   fixed before M4.4 whichever is chosen.
+- **B66 (critical × rare, data):** a user dict whose only key is a serialization tag
+  (`{"$date": "x"}`) decodes as the tagged value, silently. Options: **A** escape such a dict
+  when encoding (e.g. wrap it as `{"$dict": {...}}`), decode unchanged otherwise (Claude;
+  recommended: old outputs still read, only colliding dicts change form); **B** refuse a dict
+  whose key is a tag when encoding (an error the user sees); **C** a tag key no JSON object
+  from users can have (a format change for every tagged value).
+- **B64 (high × possible, data):** numbers through the channel: a float may change in its last
+  digit (serde_json without `float_roundtrip`), an integer beyond 64 bits becomes a float.
+  Options: **A** `float_roundtrip` plus refusing integers outside i64/u64 when encoding, with a
+  message (Claude; recommended); **B** `float_roundtrip` plus `arbitrary_precision` (big
+  integers kept exact; a serde_json feature affecting every crate that uses it); **C** big
+  integers tagged as strings (a new tag).
+- **B86 (high × possible, correctness):** a string with NUL (e.g. `find -print0`'s output)
+  is accepted by the Python codec but Postgres's jsonb refuses it, rolling back the attempt's
+  completion. Options: **A** refuse NUL when the task's value is encoded (the attempt fails
+  with a clear error; Claude; recommended); **B** escape NUL in a tagged form (a new tag);
+  **C** store outputs as text, not jsonb (a migration; loses jsonb queries).
 - Rejected from Grok's review (no decision needed, for the record): a task can `chmod` or
   rename its own read-only copy (it runs as the copy's owner): within decision 101 (workers and
   their DAG code are trusted); the guide now says the copy guards against mistakes only.
@@ -78,8 +106,9 @@ Decisions for the morning:
 - **Usage:** Grok 44% of its week before M4.3d's follow-up (resets Fridays 9:00; ask the user
   for the %); Codex 25% weekly (read from its turns; resets Thursdays 01:57). Grok for brittle
   work only, Codex for small fixes, follow-ups in the same session (the user, 2026-10-30).
-- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B87
-  (B42, B49, B51, B53, B55, B79 fixed; B88 found and fixed the same day). The next number is **B90** (`bugs/next-id`).
+- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B90
+  (fixed: B41–B45, B47, B49–B51, B53–B55, B57–B59, B63, B78, B79, B84; B88 found and fixed the
+  same day). The next number is **B91** (`bugs/next-id`).
 
 ## How we work now (2026-10-30)
 

@@ -143,7 +143,8 @@ macro_rules! in_tx {
                     // The write lock at once, waiting for it under the busy timeout: a
                     // transaction begun deferred that reads first (the fence) fails at once if
                     // another connection writes before it does (B14).
-                    let mut $tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+                    let mut starting = $crate::query::Starting::new(pool.acquire().await?);
+                    let mut $tx = starting.begin("BEGIN IMMEDIATE").await?;
                     db.check_fence_sqlite(&mut *$tx).await?;
                     let done = $body;
                     $tx.commit().await?;
@@ -151,21 +152,11 @@ macro_rules! in_tx {
                 }
                 $crate::database::Pool::Postgres(pool) => {
                     let $backend = $crate::backend::Backend::Postgres;
-                    let mut conn = pool.acquire().await?;
-                    let (begun, failed) =
-                        match sqlx::Connection::begin_with(&mut *conn, db.begin_postgres()).await {
-                            Ok(tx) => (Some(tx), None),
-                            Err(error) => (None, Some(error)),
-                        };
-                    if let Some(error) = failed {
-                        // Ends the borrow of `conn` before it is marked.
-                        drop(begun);
-                        conn.close_on_drop();
-                        return Err($crate::database::DbError::from_begin(error));
-                    }
-                    let Some(mut $tx) = begun else {
-                        unreachable!("a failed start returned above")
-                    };
+                    let mut starting = $crate::query::Starting::new(pool.acquire().await?);
+                    let mut $tx = starting
+                        .begin(db.begin_postgres())
+                        .await
+                        .map_err($crate::database::DbError::from_begin)?;
                     let done = $body;
                     $tx.commit().await?;
                     done
@@ -176,6 +167,59 @@ macro_rules! in_tx {
     }};
 }
 pub(crate) use in_tx;
+
+/// A pooled connection whose transaction is starting: closed, not returned to the pool,
+/// unless the start completed. A start that failed may have left the connection in an
+/// unknown state, and one cut short (its write cancelled: a timeout) is finished by the
+/// database afterwards, the connection then inside a transaction sqlx doesn't know of, which
+/// no rollback ends (B84): on Postgres holding the lease's row and the transaction's settings.
+/// (On SQLite, whose `BEGIN IMMEDIATE` waits for the write lock, a test didn't show it; the
+/// same guard costs nothing there.)
+/// Every transaction this crate starts starts here, a migration's too.
+pub(crate) struct Starting<DB: sqlx::Database> {
+    conn: sqlx::pool::PoolConnection<DB>,
+    /// The start completed: from here on, the transaction rolls itself back if dropped.
+    begun: bool,
+}
+
+impl<DB: sqlx::Database> Starting<DB> {
+    pub(crate) const fn new(conn: sqlx::pool::PoolConnection<DB>) -> Self {
+        Self { conn, begun: false }
+    }
+
+    /// The connection, for work that begins transactions of its own (a migration's run);
+    /// [`Self::completed`] once it has completed.
+    pub(crate) fn conn(&mut self) -> &mut DB::Connection {
+        &mut self.conn
+    }
+
+    /// The work on [`Self::conn`] completed: the connection goes back to the pool.
+    pub(crate) const fn completed(&mut self) {
+        self.begun = true;
+    }
+
+    /// Begins the transaction with `statement`; the connection goes back to the pool once
+    /// it has.
+    pub(crate) fn begin(
+        &mut self,
+        statement: impl sqlx::SqlSafeStr,
+    ) -> impl Future<Output = Result<sqlx::Transaction<'_, DB>, sqlx::Error>> + Send + '_ {
+        let statement = statement.into_sql_str();
+        async move {
+            let tx = sqlx::Connection::begin_with(&mut *self.conn, statement).await?;
+            self.begun = true;
+            Ok(tx)
+        }
+    }
+}
+
+impl<DB: sqlx::Database> Drop for Starting<DB> {
+    fn drop(&mut self) {
+        if !self.begun {
+            self.conn.close_on_drop();
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;

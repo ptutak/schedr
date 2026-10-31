@@ -68,6 +68,47 @@ fn a_forked_groups_memory_is_unknown_without_every_pss() {
 }
 
 #[test]
+fn a_zombie_in_a_forked_group_counts_as_nothing() {
+    // B54: an unreaped child has no PSS to read, and no memory either; the sample stands.
+    let proc = fake_proc(&[(100, 100, Some(1000), 1), (101, 100, None, 3)]);
+    zombie(proc.path(), 101, &[]);
+    assert_eq!(group_memory(proc.path(), 100, false), Some(1000 * 1024));
+    assert_eq!(group_memory(proc.path(), 100, true), Some(1000 * 1024));
+}
+
+#[test]
+fn a_process_whose_main_thread_ended_while_others_run_is_counted() {
+    // Codex's reviews of B54: its other threads still hold its memory, read through one of
+    // them (as on Linux, the ended main thread's own files have none).
+    let proc = fake_proc(&[(100, 100, Some(1000), 1), (101, 100, None, 0)]);
+    zombie(proc.path(), 101, &[(102, 2000, 5)]);
+    assert_eq!(group_memory(proc.path(), 100, false), Some(3000 * 1024));
+    assert_eq!(group_memory(proc.path(), 100, true), Some(3000 * 1024));
+}
+
+/// Makes process `pid` in a fake `/proc` a zombie: its state, and its main thread's, `Z`;
+/// `running` its other threads, still running: `(tid, Pss in kB, statm resident pages)`.
+fn zombie(proc: &Path, pid: i32, running: &[(i32, u64, u64)]) {
+    let process = proc.join(pid.to_string());
+    let stat = |state: &str| format!("{pid} (python3 -m x)) {state} 100 100 100 0 -1 4194372 0 0");
+    std::fs::write(process.join("stat"), stat("Z")).unwrap();
+    let main = process.join("task").join(pid.to_string());
+    std::fs::create_dir_all(&main).unwrap();
+    std::fs::write(main.join("stat"), stat("Z")).unwrap();
+    for (tid, kib, resident) in running {
+        let thread = process.join("task").join(tid.to_string());
+        std::fs::create_dir_all(&thread).unwrap();
+        std::fs::write(thread.join("stat"), stat("S")).unwrap();
+        std::fs::write(
+            thread.join("smaps_rollup"),
+            format!("00400000-7ffd [rollup]\nRss:    9999 kB\nPss:    {kib} kB\n"),
+        )
+        .unwrap();
+        std::fs::write(thread.join("statm"), format!("100 {resident} 10 1 0 50 0")).unwrap();
+    }
+}
+
+#[test]
 fn the_process_group_is_read_after_the_command() {
     assert_eq!(process_group("42 (a b) c)) S 1 40 40 0"), Some(40));
     assert_eq!(process_group("42 (sh) S 1 7 7"), Some(7));

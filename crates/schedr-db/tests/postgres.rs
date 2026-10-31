@@ -1302,3 +1302,207 @@ fn plain_update(task: &str, state: TaskInstanceState) -> InstanceUpdate {
         map_sizes: None,
     }
 }
+
+#[tokio::test]
+async fn a_write_cancelled_while_its_transaction_starts_leaves_no_open_transaction_behind() {
+    // B84: a write waiting in its start (the fence, behind a lock on the lease's row) is
+    // cancelled; Postgres then finishes the start. Its connection must not go back to the pool
+    // inside that transaction (holding the row's lock and its settings).
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let period = std::time::Duration::from_secs(30);
+    assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));
+    let fenced = db.fenced("a", 1);
+    let mut locker = sqlx::PgConnection::connect(&url).await.unwrap();
+    let mut held = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM master_lease FOR UPDATE")
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    // Cancelled only once it waits for the lock in its start, not before it got there.
+    let mut write = Box::pin(fenced.worker_seen("w1", ts(NOW)));
+    let mut probe = sqlx::PgConnection::connect(&url).await.unwrap();
+    let mut waits = 0;
+    while waits == 0 {
+        tokio::select! {
+            done = &mut write => panic!("the write didn't wait for the lock: {done:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        waits = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&mut probe)
+        .await
+        .unwrap();
+    }
+    drop(write);
+    held.commit().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Every connection the pool hands out is outside any transaction.
+    let pool = admin_pool(&db);
+    let mut connections = Vec::new();
+    for _ in 0..8 {
+        let Ok(Ok(mut connection)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), pool.acquire()).await
+        else {
+            break;
+        };
+        let savepoint = sqlx::query("SAVEPOINT b84").execute(&mut *connection).await;
+        assert!(
+            savepoint.is_err(),
+            "a pooled connection was inside a transaction"
+        );
+        connections.push(connection);
+    }
+    assert!(!connections.is_empty());
+}
+
+/// A TCP proxy to the test server for `url`: its URL through the proxy, without TLS, and a
+/// switch that, once armed, holds the server's answers back from the next `BEGIN` the client
+/// sends until released (`send_replace(false)`): a transaction's start cut short.
+async fn begin_holding_proxy(
+    url: &str,
+) -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tokio::sync::watch::Sender<bool>,
+) {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let at = url.find('@').unwrap() + 1;
+    let end = at + url[at..].find('/').unwrap();
+    let upstream = url[at..end].to_owned();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxied = format!(
+        "{}{}{}?sslmode=disable",
+        &url[..at],
+        listener.local_addr().unwrap(),
+        &url[end..]
+    );
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (held, _) = tokio::sync::watch::channel(false);
+    let (armed_for_all, held_for_all) = (armed.clone(), held.clone());
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let server = tokio::net::TcpStream::connect(&upstream).await.unwrap();
+            let (mut client_read, mut client_write) = client.into_split();
+            let (mut server_read, mut server_write) = server.into_split();
+            let (armed, held) = (armed_for_all.clone(), held_for_all.clone());
+            tokio::spawn(async move {
+                let mut buffer = vec![0; 1 << 16];
+                // The end of the last read: a `BEGIN` split between two reads is still seen.
+                let mut seen = Vec::new();
+                while let Ok(read @ 1..) = client_read.read(&mut buffer).await {
+                    seen.extend_from_slice(&buffer[..read]);
+                    if seen.windows(5).any(|w| w == b"BEGIN") && armed.swap(false, Ordering::SeqCst)
+                    {
+                        held.send_replace(true);
+                    }
+                    seen.drain(..seen.len().saturating_sub(4));
+                    if server_write.write_all(&buffer[..read]).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut released = held_for_all.subscribe();
+            tokio::spawn(async move {
+                let mut buffer = vec![0; 1 << 16];
+                while let Ok(read @ 1..) = server_read.read(&mut buffer).await {
+                    let _ = released.wait_for(|held| !held).await;
+                    if client_write.write_all(&buffer[..read]).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (proxied, armed, held)
+}
+
+/// A start of a transaction cut short where it can be, other than a write's (see
+/// [`a_write_cancelled_while_its_transaction_starts_leaves_no_open_transaction_behind`]).
+#[derive(Debug, Clone, Copy)]
+enum Start {
+    Lease,
+    ChangeNotifications,
+    Migration,
+    MigrationAsLeaseHolder,
+    NotificationProbe,
+}
+
+#[rstest::rstest]
+#[case(Start::Lease)]
+#[case(Start::ChangeNotifications)]
+#[case(Start::Migration)]
+#[case(Start::MigrationAsLeaseHolder)]
+#[case(Start::NotificationProbe)]
+#[tokio::test]
+async fn a_start_cancelled_before_begin_answers_leaves_no_open_transaction_behind(
+    #[case] start: Start,
+) {
+    // B84, Codex's reviews: the lease's, the change notifications', the migrations' and the
+    // notifications' check's own transactions.
+    let url = fresh_url().await;
+    if !matches!(start, Start::Migration | Start::MigrationAsLeaseHolder) {
+        Database::connect(&url)
+            .await
+            .unwrap()
+            .migrate()
+            .await
+            .unwrap();
+    }
+    let (proxied, armed, held) = begin_holding_proxy(&url).await;
+    let db = Database::connect(&proxied).await.unwrap();
+    let on = db.change_notifications().await.unwrap();
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let period = std::time::Duration::from_secs(30);
+    let started: std::pin::Pin<Box<dyn Future<Output = ()> + Send>> = match start {
+        Start::Lease => Box::pin(async {
+            let _ = db.take_lease("a", period).await;
+        }),
+        Start::ChangeNotifications => Box::pin(async {
+            let _ = db.set_change_notifications(!on).await;
+        }),
+        Start::Migration => Box::pin(async {
+            let _ = db.migrate().await;
+        }),
+        Start::MigrationAsLeaseHolder => Box::pin(async {
+            let _ = db.migrate_as_lease_holder().await;
+        }),
+        // Its check that no pooler in transaction mode is in the way (on the pool's own
+        // connections).
+        Start::NotificationProbe => Box::pin(async {
+            let _ = db.command_notifications().await;
+        }),
+    };
+    // Cut short once its `BEGIN` is sent, its answer held back.
+    let mut on_hold = held.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            () = started => panic!("{start:?} ended with its BEGIN unanswered"),
+            _ = on_hold.wait_for(|held| *held) => {}
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{start:?} never began a transaction"));
+    held.send_replace(false);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let pool = admin_pool(&db);
+    let mut connections = Vec::new();
+    for _ in 0..8 {
+        let Ok(Ok(mut connection)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), pool.acquire()).await
+        else {
+            break;
+        };
+        let savepoint = sqlx::query("SAVEPOINT b84").execute(&mut *connection).await;
+        assert!(
+            savepoint.is_err(),
+            "{start:?}: a pooled connection was inside a transaction"
+        );
+        connections.push(connection);
+    }
+    assert!(!connections.is_empty());
+}

@@ -93,6 +93,65 @@ pub async fn read_message<R: AsyncRead + Unpin, T: DeserializeOwned>(
     }
 }
 
+/// A stream read a message at a time, safe to cancel: a message read in part when its read
+/// is dropped (a `select!` another branch won) waits here for its rest, where
+/// [`read_message`] would lose it and read the rest as a new message (B57).
+#[derive(Debug)]
+pub struct Messages<R> {
+    reader: R,
+    /// Bytes read and not yet a whole message.
+    pending: Vec<u8>,
+}
+
+impl<R: AsyncRead + Unpin> From<R> for Messages<R> {
+    fn from(reader: R) -> Self {
+        Self {
+            reader,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> Messages<R> {
+    /// Receives the next message; cancel-safe.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_message`]'s.
+    pub async fn next<T: DeserializeOwned>(&mut self) -> Result<T, ChannelError> {
+        loop {
+            if let Some(message) = self.whole()? {
+                return Ok(message);
+            }
+            let mut chunk = [0; 8192];
+            // `read` is cancel-safe: dropped, it has read nothing.
+            let read = self.reader.read(&mut chunk).await?;
+            if read == 0 {
+                return Err(ChannelError::Closed);
+            }
+            self.pending.extend_from_slice(&chunk[..read]);
+        }
+    }
+
+    /// The first whole message in what was read, taken out of it; `None` until there is one.
+    fn whole<T: DeserializeOwned>(&mut self) -> Result<Option<T>, ChannelError> {
+        let Some(header) = self.pending.first_chunk::<4>() else {
+            return Ok(None);
+        };
+        let size = u32::from_be_bytes(*header);
+        if size > MAX_MESSAGE_SIZE {
+            return Err(ChannelError::TooLarge(u64::from(size)));
+        }
+        let end = 4 + size as usize;
+        if self.pending.len() < end {
+            return Ok(None);
+        }
+        let message = serde_json::from_slice(&self.pending[4..end]);
+        self.pending.drain(..end);
+        Ok(Some(message?))
+    }
+}
+
 /// Accepts a newly connected runner: reads its `hello`, refuses a version mismatch, and
 /// welcomes it otherwise.
 ///

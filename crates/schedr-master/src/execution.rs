@@ -655,7 +655,32 @@ impl Execution {
             .flatten()
             .filter_map(Reference::upstream_task)
             .collect();
-        let sources = mapping::sources(&self.db, dag, run_id, &used).await?;
+        // The states as this step has them: a result it applies isn't stored yet (B78).
+        let known = |task: &TaskId, index: i32| {
+            let index = usize::try_from(index).ok()?;
+            progress.instances(task)?.states.get(index).copied()
+        };
+        let mut sources = mapping::sources(&self.db, dag, run_id, &used, known).await?;
+        // Each whole task's outcome as this step has it too: `None` for skipped, absent while
+        // it hasn't ended.
+        for task in &used {
+            match progress.states().get(*task) {
+                Some(TaskInstanceState::Success) => {
+                    let outcome = progress
+                        .outcome(task)
+                        .unwrap_or(schedr_model::DEFAULT_OUTCOME);
+                    sources
+                        .outcomes
+                        .insert((*task).clone(), Some(outcome.to_owned()));
+                }
+                Some(TaskInstanceState::Skipped) => {
+                    sources.outcomes.insert((*task).clone(), None);
+                }
+                _ => {
+                    sources.outcomes.remove(*task);
+                }
+            }
+        }
         let mut sizes = Vec::with_capacity(dims.len());
         for (name, dim) in &dims {
             let what = name.map_or_else(

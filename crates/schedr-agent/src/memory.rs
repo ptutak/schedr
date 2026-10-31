@@ -133,7 +133,7 @@ pub fn budget(
 }
 
 /// The memory of the processes in group `pgid`, in bytes (PSS, else RSS where
-/// `rss_fallback`); 0 when none is left. `None` when a process's PSS can't be read and RSS
+/// `rss_fallback`); 0 when none is left. A zombie counts as nothing. `None` when a process's PSS can't be read and RSS
 /// mustn't stand in: a forked process's RSS counts the pages it shares with its fork server
 /// (most of the server's), so it would look far bigger than it is.
 #[must_use]
@@ -156,6 +156,20 @@ pub fn group_memory(proc_root: &Path, pgid: i32, rss_fallback: bool) -> Option<u
         if process_group(&stat) != Some(pgid) {
             continue;
         }
+        // An unreaped child has no memory left, and no PSS to read (B54). A process whose
+        // main thread ended while others run still has its memory, read through one of them
+        // (the main thread's own files no longer show it).
+        let dir = if crate::process::stat_fields(&stat)
+            .is_some_and(|(state, _)| crate::process::ended(state))
+        {
+            match crate::process::live_thread(&dir) {
+                Ok(Some(thread)) => thread,
+                Ok(None) => continue,
+                Err(_) => dir,
+            }
+        } else {
+            dir
+        };
         match pss(&dir) {
             Some(bytes) => total += bytes,
             None if rss_fallback => total += rss(&dir, page).unwrap_or(0),

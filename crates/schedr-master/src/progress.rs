@@ -394,6 +394,12 @@ impl<'a> RunProgress<'a> {
         self
     }
 
+    /// A task's outcome, if it succeeded with one recorded.
+    #[must_use]
+    pub fn outcome(&self, task: &TaskId) -> Option<&str> {
+        self.outcomes.get(task).map(String::as_str)
+    }
+
     /// Records a task's outcome (after an attempt that succeeded).
     pub fn set_outcome(&mut self, task: &TaskId, outcome: &str) {
         self.outcomes.insert(task.clone(), outcome.to_owned());

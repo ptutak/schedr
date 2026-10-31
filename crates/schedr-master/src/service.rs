@@ -648,7 +648,13 @@ impl Master for Hub {
             CoreError::Refused(reason) => Status::failed_precondition(reason),
             other => Status::internal(other.to_string()),
         })?;
-        let (stream, receiver) = mpsc::channel(STREAM_BUFFER);
+        // Room for the registration's own messages (`Registered` and a parse for each new
+        // root, all sent before the worker reads any) on top of the usual buffer (B45).
+        let own = outgoing
+            .iter()
+            .filter(|message| message.worker_id == register.worker_id)
+            .count();
+        let (stream, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
         let first = pb::MasterMessage {
             message: Some(master_message::Message::Registered(registered)),
         };

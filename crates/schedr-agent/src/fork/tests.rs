@@ -102,3 +102,45 @@ fn a_warning_says_what_a_disabled_server_means_for_tasks() {
     board.record(Kind::Bare, None);
     assert_eq!(messages(), Vec::<String>::new());
 }
+
+#[tokio::test]
+async fn a_wait_cut_short_mid_message_reads_the_rest_when_called_again() {
+    // B57: the supervisor's `select!` drops a `wait` when a stop or deadline wins, and calls
+    // it again; a status message read in part must not be lost then.
+    use tokio::io::AsyncWriteExt as _;
+    let mut child = tokio::process::Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let group = Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()).unwrap();
+    let (ours, mut theirs) = UnixStream::pair().unwrap();
+    let mut process = ForkedProcess {
+        group,
+        status: Some(ours.into()),
+        ended: None,
+        usage: Ended::default(),
+        stdout: None,
+        stderr: None,
+    };
+    let mut frame = Vec::new();
+    crate::channel::write_message(
+        &mut frame,
+        &RunnerMessage::ProcessExited {
+            code: None,
+            signal: Some(9),
+            core_dumped: false,
+            usage: None,
+        },
+    )
+    .await
+    .unwrap();
+    let (first, rest) = frame.split_at(frame.len() / 2);
+    theirs.write_all(first).await.unwrap();
+    let cut = tokio::time::timeout(Duration::from_millis(100), process.wait()).await;
+    assert!(cut.is_err(), "the wait ended on half a message: {cut:?}");
+    theirs.write_all(rest).await.unwrap();
+    assert_eq!(process.wait().await.unwrap(), Termination::Signaled(9));
+    child.kill().await.unwrap();
+}

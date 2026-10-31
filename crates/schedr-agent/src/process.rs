@@ -238,17 +238,27 @@ pub fn group_running(group: Pid) -> bool {
 /// Whether a thread of the process at `/proc/<pid>` hasn't ended; if its threads can't be
 /// listed, it may still run.
 fn a_thread_runs(process: &Path) -> bool {
-    let Ok(threads) = std::fs::read_dir(process.join("task")) else {
-        return true;
-    };
-    threads.flatten().any(|thread| {
-        std::fs::read_to_string(thread.path().join("stat"))
-            .is_ok_and(|stat| stat_fields(&stat).is_some_and(|(state, _)| !ended(state)))
-    })
+    live_thread(process).map_or(true, |thread| thread.is_some())
+}
+
+/// A thread of the process at `/proc/<pid>` that hasn't ended, as `/proc/<pid>/task/<tid>`;
+/// `None` if every one has.
+///
+/// # Errors
+///
+/// If its threads can't be listed.
+pub(crate) fn live_thread(process: &Path) -> io::Result<Option<std::path::PathBuf>> {
+    Ok(std::fs::read_dir(process.join("task"))?
+        .flatten()
+        .map(|thread| thread.path())
+        .find(|thread| {
+            std::fs::read_to_string(thread.join("stat"))
+                .is_ok_and(|stat| stat_fields(&stat).is_some_and(|(state, _)| !ended(state)))
+        }))
 }
 
 /// The state (field 3) and process group (field 5) of a `/proc/.../stat` line.
-fn stat_fields(stat: &str) -> Option<(&str, i32)> {
+pub(crate) fn stat_fields(stat: &str) -> Option<(&str, i32)> {
     // The command name (field 2) is in parentheses and may contain anything: the fields
     // after it start at its closing parenthesis.
     let (_, rest) = stat.rsplit_once(')')?;
@@ -259,7 +269,7 @@ fn stat_fields(stat: &str) -> Option<(&str, i32)> {
 }
 
 /// Whether a state means ended: a zombie, or dead.
-fn ended(state: &str) -> bool {
+pub(crate) fn ended(state: &str) -> bool {
     matches!(state, "Z" | "X" | "x")
 }
 

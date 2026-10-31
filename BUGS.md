@@ -54,48 +54,41 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B86: accepted strings containing NUL cannot be stored in production | 6 | high | possible | correctness |
-| 2 | B84: cancelling transaction startup returns an open transaction to the pool | 6 | high | possible | reliability |
-| 3 | B78: expansion reads instance states before the current result is stored | 6 | high | possible | correctness |
-| 4 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
-| 5 | B54: an unreaped child switches off a forked task's memory budget | 6 | high | possible | reliability |
-| 6 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
-| 7 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
-| 8 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 9 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 10 | B90: a module imported from another DAG root comes from its live checkout, not a copy | 4 | critical | rare | correctness |
-| 11 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
-| 12 | B45: a registration with many new roots deadlocks before its stream is returned | 4 | critical | rare | reliability |
-| 13 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
-| 14 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
-| 15 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
-| 16 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
-| 17 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
-| 18 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
-| 19 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
-| 20 | B63: hashing a root reads every file whole into memory | 3 | high | rare | reliability |
-| 21 | B57: an interrupted read of a forked process's exit status loses its framing | 3 | high | rare | correctness |
-| 22 | B47: a replayed result ignores a lowered master message limit | 3 | high | rare | reliability |
-| 23 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 24 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 25 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 26 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
-| 27 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
-| 28 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
-| 29 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
-| 30 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 31 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 32 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 33 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 34 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 35 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 36 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 37 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 38 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 39 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 40 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 41 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 42 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 43 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 2 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
+| 3 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
+| 4 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
+| 5 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 6 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 7 | B90: a module imported from another DAG root comes from its live checkout, not a copy | 4 | critical | rare | correctness |
+| 8 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
+| 9 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
+| 10 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
+| 11 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
+| 12 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
+| 13 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
+| 14 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
+| 15 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
+| 16 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 17 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 18 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 19 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
+| 20 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
+| 21 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
+| 22 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
+| 23 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 24 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 25 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 26 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 27 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 28 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 29 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 30 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 31 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 32 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 33 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 34 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 35 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 36 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B90: a module imported from another DAG root comes from its live checkout, not a copy
 
@@ -149,13 +142,6 @@ step touches their code or the user schedules them.
   medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/changes.rs:220`. Only the first receive handles `None` as `Change::Missed`. The subsequent drain accepts only notifications: This discards a disconnect result or cancels reconnection after the listener has consumed its disconnect state. **Scenario:** one notification is queued → the listening connection dies → another change occurs while disconnected → draining consumes the disconnect → following resumes without reporting `Missed`. The API feed sends a refresh for `Missed` (`schedr-api/src/events.rs:122`), so clients can retain stale data. **
 - **A fix:** to decide when it is scheduled.
 
-## B84: cancelling transaction startup returns an open transaction to the pool
-
-- **Rating:** severity **high**, probability **possible**, reliability (score 6): a pooled connection left inside a transaction holding the lease row's lock; a write cancelled while starting (query timeouts during a stall).
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
-  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/query.rs:156`. The connection is closed only when `begin_with(...).await` returns an error: Cancelling that future bypasses this branch. In the pinned sqlx implementation, transaction depth advances only after startup completes, so its cancellation rollback does nothing at this point. **Scenario:** a fenced write waits for a lock during startup → its future is cancelled → the lock becomes available → PostgreSQL finishes the cancelled startup → another borrower receives that connection inside the unfinished transaction, including its transaction-local settings and lease-row lock. **
-- **A fix:** to decide when it is scheduled.
-
 ## B83: mapping repeats the entire source list in every instance’s inputs
 
 - **Rating:** severity **medium**, probability **likely**, performance (score 6): each mapped instance's inputs carry the whole source list: quadratic, and it can reach the message limit; any `.expand` over an upstream output.
@@ -182,13 +168,6 @@ step touches their code or the user schedules them.
 - **Rating:** severity **medium**, probability **possible**, correctness (score 4): per-element `.on(...)` fails when the mapped output is also used elsewhere.
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
   medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:84`. Lane detection requires exactly one reference: With another reference, narrowing falls through to whole-output resolution. At `mapping.rs:170`, `.on(Rows)` is then compared against the whole mapped task’s synthetic `SUCCESS` outcome, producing `null`. **Scenario:** the Python API accepts: After both fetches succeed, finishing `gate` should allow the matching element to proceed. Instead, expansion fails. This also contradicts the mapping guide’s statements that `.on(...)` works per element and an additional use makes the task wait for the whole upstream.
-- **A fix:** to decide when it is scheduled.
-
-## B78: expansion reads instance states before the current result is stored
-
-- **Rating:** severity **high**, probability **possible**, correctness (score 6): a run fails although its producers succeeded; expanding over one element of a mapped task, depending on which instance finishes last.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
-  high severity, confirmed by Codex's failing test; read and judged sound by Claude; at `crates/schedr-master/src/execution.rs:597`. `advance()` applies the result to memory, then calls: Only afterwards does it call `store()`. Meanwhile, `expansion()` reads `mapping::sources()` from the database. At `mapping.rs:241`, that reader substitutes `null` for any instance whose stored state is not yet `Success`. **Scenario:** `producer.expand(x=[0,1])` returns `[10,20]` from both instances; `consumer.expand(x=produced[1])` waits for the whole producer. When producer instance 1 finishes last, expansion sees its old `Running` state and resolves `produced[1]` as `null`. The consumer and run fail despite successful producers.
 - **A fix:** to decide when it is scheduled.
 
 ## B77: valid large timedeltas cannot render in agent templates
@@ -290,14 +269,6 @@ step touches their code or the user schedules them.
   has neither `float_roundtrip` nor `arbitrary_precision`); at `python/schedr/_serialization/codec.py:129`; `Cargo.toml:46`. The encoder accepts unrestricted integers (`isinstance(value, int)`) and finite floats. The agent reads them using `serde_json::from_slice` at `crates/schedr-agent/src/channel.rs:90`, with the default `serde_json` configuration. A task’s exact integer `18446744073709551617` becomes an approximate float in the agent. A downstream `int` decoder rejects that float. Finite floats can also change value during the read.
 - **A fix:** to decide when it is scheduled.
 
-## B63: hashing a root reads every file whole into memory
-
-- **Rating:** severity **high**, probability **rare**, reliability (score 3): a worker can't register (it retries for ever); a file in a root bigger than the worker can allocate.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
-  and parsing), with a failing proof each; checked against the code by Claude.
-  `content_hash` (`crates/schedr-agent/src/scan.rs:169`) reads each scanned file with `std::fs::read`, Python or not: a data file bigger than the worker can allocate fails the hash, and before registration `Agent::hashes` retries for ever (`agent.rs:659`); Codex's proof: a 256 MiB sparse file under a 192 MiB address-space limit, `OutOfMemory`.
-- **A fix:** stream each file into the hasher (a buffered reader).
-
 ## B61: a DAG file reached through a followed symlink gets an unusable location
 
 - **Rating:** severity **medium**, probability **possible**, correctness (score 4): a DAG under a symlinked directory is refused by the master.
@@ -314,14 +285,6 @@ step touches their code or the user schedules them.
   The executor uses the configured directory both as the child's working directory and as `root_dir` in the request (`crates/schedr-agent/src/agent.rs:295`; tasks the same, `attempt.rs:245`, `:252`); configuration keeps relative paths (`schedr-config/src/roots.rs:155`), so `dags/etl` becomes `dags/etl/dags/etl/dag.py` (Codex's proof: `FileNotFoundError` after a successful scan). `WorkerSetup::sys_path` keeps them relative too.
 - **A fix:** make roots absolute when the configuration is read (or the request's `root_dir`).
 
-## B57: an interrupted read of a forked process's exit status loses its framing
-
-- **Rating:** severity **high**, probability **rare**, correctness (score 3): a healthy forked attempt killed and ended `unknown`; a stop arriving while its exit status is being read.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
-  execution), with a failing proof each; checked against the code by Claude.
-  `ForkedProcess::wait` awaits `read_message(status)` (`crates/schedr-agent/src/fork.rs:861`), whose header and partial body live in the future; the supervisor's `select!` drops it when a stop or deadline wins and calls `wait` again, which reads the rest as a new header, fails, kills the group and returns `Termination::Unknown` for a healthy shim (Codex's proof with the real fork server, the frame split at a barrier: `Unknown` instead of `Signaled(9)`). Frequency in practice not measured.
-- **A fix:** a cancel-safe reader (the partial frame kept in the struct), or the read in its own task.
-
 ## B56: a cancel or timeout is ignored while a runner hasn't said hello
 
 - **Rating:** severity **medium**, probability **possible**, correctness (score 4): a cancel or timeout waits up to 30 s for a slow runner start, and is lost if the start fails.
@@ -329,14 +292,6 @@ step touches their code or the user schedules them.
   execution), with a failing proof each; checked against the code by Claude.
   `run_python` starts the runner and waits for its hello (up to 30 s) and sends the request before `supervise` starts (`crates/schedr-agent/src/launch.rs:274`); a cancel queued meanwhile, or the execution timeout, does nothing until then, and a failed start afterwards is reported `start_failed`, the cancel lost (Codex's proof: a runner stalled before its hello, still running 2 s after a cancel and a 100 ms timeout). Spawned and forked paths alike.
 - **A fix:** the stop channel and the deadline raced against the handshake too; a cancel during it reported as a cancel.
-
-## B54: an unreaped child switches off a forked task's memory budget
-
-- **Rating:** severity **high**, probability **possible**, reliability (score 6): a forked task's memory budget off, so the worker can run out of memory; a task leaving a child unreaped.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
-  execution), with a failing proof each; checked against the code by Claude.
-  For a forked group (`crates/schedr-agent/src/memory.rs:159`) any process whose PSS can't be read discards the whole sample (`None => return None`); a zombie in the group has none, so while a task leaves one child unreaped every sample is skipped and the budget never applies (Codex's proof: a live parent at 32 MiB with a 16 MiB budget, no kill). Skipping an unreadable live process is the documented choice; a zombie (state `Z`) has no memory to count. Forked parse runners use the same watchdog.
-- **A fix:** count a zombie as 0 (its `stat` says `Z`) instead of discarding the sample.
 
 ## B52: the per-round caps still read the whole backlog
 
@@ -353,22 +308,6 @@ step touches their code or the user schedules them.
   loop and the worker link), with a failing proof each; checked against the code by Claude.
   `Started`, `Rejected` and `Finished` each take `Dispatcher::memory` (the D1 snapshot: `workers`, `rejections`, `code_missing` cloned, `crates/schedr-master/src/core.rs:499`, `dispatch.rs:280`) under the core lock, so each message costs in proportion to the whole registry and its outstanding attempts; Codex measured 10 vs 1,000 workers (4 attempts each), 500 snapshots each, unrelated attempts included.
 - **A fix:** a snapshot of what the message can change (its attempt and worker) instead of everything; measure first with M4.5.1's per-turn timings.
-
-## B47: a replayed result ignores a lowered master message limit
-
-- **Rating:** severity **high**, probability **rare**, reliability (score 3): every replay ends the stream, so the worker can't reconnect; a master message limit lowered under a journalled large result.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  On `Continue`, the agent resends an unacknowledged `Finished` as stored (`crates/schedr-agent/src/agent.rs:843`); `fit_result` (which truncates a result to `Registered`'s `master_limit`) runs only on new completions. A 5 MiB result journalled under a larger limit, then a master announcing 4 MiB: every replay ends the stream (Codex's probe: 5,242,891 bytes sent against 4,194,304).
-- **A fix:** fit the replayed result to the current limit, as a new one is.
-
-## B45: a registration with many new roots deadlocks before its stream is returned
-
-- **Rating:** severity **critical**, probability **rare**, reliability (score 4): the master's stream mutex blocked for ever, every worker stalls; a registration with 1,024 or more new roots.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
-  loop and the worker link), with a failing proof each; checked against the code by Claude.
-  `Control` delivers `Registered` and every `AssignParse` into the worker's channel (`STREAM_BUFFER` 1,024) before returning the receiver that drains it (`crates/schedr-master/src/service.rs:568`); 1,024 new roots fill it and `deliver` waits for ever, holding the streams mutex (other deliveries and stream changes wait too). Codex's proof: registration with 1,024 unseen roots never returns.
-- **A fix:** return the stream first and deliver after, or never block delivery on one worker's full channel (and not under the shared mutex).
 
 ## B40: a lease test times out its 2 s query limit under load
 

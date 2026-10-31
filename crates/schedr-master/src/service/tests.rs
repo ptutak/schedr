@@ -1512,3 +1512,45 @@ async fn a_worker_that_stops_reading_is_disconnected() {
     }
     panic!("the worker stayed live");
 }
+
+#[tokio::test]
+async fn a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse() {
+    // B45: a registration's own messages (`Registered`, then a parse for each new root) go
+    // into its stream before the worker can read any; more than the stream holds once took
+    // the worker for one that stopped reading.
+    let (hub, _db, mut client) = connected().await;
+    let roots = STREAM_BUFFER + 10;
+    let mut message = register(PROTOCOL_VERSION);
+    let Some(worker_message::Message::Register(registration)) = &mut message.message else {
+        unreachable!()
+    };
+    registration.roots = (0..roots)
+        .map(|i| pb::RootHash {
+            root: format!("etl{i}"),
+            ..root()
+        })
+        .collect();
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(message).await.unwrap();
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(10),
+        client.control(ReceiverStream::new(outbound)),
+    )
+    .await
+    .expect("registered in time")
+    .unwrap()
+    .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    for _ in 0..roots {
+        assert!(matches!(
+            next(&mut stream).await,
+            master_message::Message::AssignParse(_)
+        ));
+    }
+    assert!(hub.core().lock().await.is_live("w1"));
+    assert!(hub.streams.lock().await.contains_key("w1"));
+    drop(to_master);
+}

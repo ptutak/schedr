@@ -291,3 +291,42 @@ fn a_removed_copy_never_leaves_its_hashs_name_behind() {
     remove_capture(&leftover).unwrap();
     assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 0);
 }
+
+/// This process's peak resident memory (`VmHWM`), in bytes. Each test runs in a process of
+/// its own (nextest).
+fn peak_memory() -> u64 {
+    let status = fs::read_to_string("/proc/self/status").unwrap();
+    let kib: u64 = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))
+        .unwrap()
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .unwrap();
+    kib * 1024
+}
+
+#[test]
+fn a_big_file_is_hashed_and_copied_without_reading_it_whole() {
+    // B63: a data file bigger than the worker can hold once failed the hash.
+    const SIZE: u64 = 32 << 20;
+    let dir = root_with(&[("a.py", "x = 1\n")]);
+    fs::File::create(dir.path().join("data.bin"))
+        .unwrap()
+        .set_len(SIZE)
+        .unwrap();
+    let snapshot = scan(dir.path()).unwrap();
+    let store = TempDir::new().unwrap();
+    let before = peak_memory();
+    let hash = content_hash(&snapshot).unwrap();
+    let captured = capture(&snapshot, store.path()).unwrap();
+    let grew = peak_memory() - before;
+    assert!(grew < SIZE / 4, "peak memory grew by {grew} bytes");
+    assert_eq!(captured.hash, hash);
+    assert_eq!(
+        fs::metadata(captured.dir.join("data.bin")).unwrap().len(),
+        SIZE
+    );
+}

@@ -827,6 +827,48 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
 }
 
 #[tokio::test]
+async fn a_result_sent_again_fits_the_limit_the_master_has_now() {
+    // B47: a result journalled under a larger limit, reported to a master accepting less:
+    // sent as stored, it would end the stream on every send.
+    let big = JournalRecord::Finished(pb::Finished {
+        attempt_id: "old-1".to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: vec![b'1'; 4096],
+        ..pb::Finished::default()
+    });
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 1,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![pb::JournalDecision {
+            attempt_id: "old-1".to_owned(),
+            decision: pb::AttemptDecision::Continue.into(),
+        }],
+    }));
+    let finished = |m: &[pb::WorkerMessage]| -> Vec<pb::Finished> {
+        m.iter()
+            .filter_map(|m| match &m.message {
+                Some(worker_message::Message::Finished(f)) => Some(f.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // Its `Continue`, then a resend.
+    let done = |m: &[pb::WorkerMessage]| finished(m).len() >= 2;
+    let start = Start::With(vec![("old-1", big)]);
+    let (seen, left) = against_script(2, start, vec![registered], done).await;
+    for sent in finished(&seen) {
+        assert_eq!(sent.status, i32::from(pb::AttemptStatus::Failed));
+        assert_eq!(sent.error_kind, "output_too_large");
+        assert_eq!(sent.output_json, Vec::<u8>::new());
+    }
+    assert_eq!(left, ["old-1"]);
+}
+
+#[tokio::test]
 async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
     // B41: the master failed to store it (a database stall) and keeps the stream; nothing
     // but a reconnect sent it again.

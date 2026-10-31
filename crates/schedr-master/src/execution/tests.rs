@@ -1095,3 +1095,97 @@ async fn a_result_after_its_mapped_task_failed_is_ignored() {
         [s(-1, S::Failed), s(0, S::Failed), s(1, S::Cancelled)]
     );
 }
+
+#[tokio::test]
+async fn an_expansion_over_an_instance_that_just_finished_sees_its_output() {
+    // B78: `pick` expands over `load[1]`'s output (`load` is mapped, `pick` waits for all of
+    // it); when `load[1]` is the last to finish, its success isn't stored yet while `pick`
+    // expands, which then saw `null` and failed.
+    let python = |name: &str| {
+        let mut t = task(name, "python", 0);
+        t["module"] = json!("m");
+        t["function"] = json!(name);
+        t["arguments"] = json!({});
+        t
+    };
+    let output_of = |task: &str| json!({"ref": {"kind": "output", "task": task}});
+    let mut load = python("load");
+    load["expand"] = json!({"product": [{"name": "path", "value": output_of("files")}]});
+    let mut pick = python("pick");
+    pick["expand"] = json!({"product": [{"name": "x", "value":
+        {"ref": {"kind": "output", "task": "load", "path": [1]}}}]});
+    let dag = dag(
+        &json!([python("files"), load, pick]),
+        &json!([
+            {"from": "files", "to": "load", "kind": "data"},
+            {"from": "load", "to": "pick", "kind": "data"}
+        ]),
+    );
+    let (execution, db, run_id) = with_run(dag, RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("files"),
+            -1,
+            &with_output(json!(["a", "b"])),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    for index in [0, 1] {
+        start_instance(&db, &run_id, "load", index).await;
+        let output = json!([10 * (index + 1), 20 * (index + 1)]);
+        execution
+            .attempt_finished(&run_id, &id("load"), index, &with_output(output), ts(NOW))
+            .await
+            .unwrap();
+    }
+    assert_eq!(run_state(&db, &run_id).await, RunState::Running);
+    assert_eq!(
+        db.map_sizes(&run_id, &id("pick")).await.unwrap(),
+        Some(vec![2]),
+        "{:?}",
+        rows(&db, &run_id).await
+    );
+}
+
+#[tokio::test]
+async fn an_expansion_narrowed_to_an_outcome_sees_the_outcome_just_reported() {
+    // B78's outcome side: `files` finishes `EMPTY` in the step that expands `load` over its
+    // output narrowed to `ROWS`; its outcome isn't stored yet then, and the narrowing was
+    // skipped (the list taken) where it stands for null.
+    let mut dag_json = serde_json::to_value(mapped()).unwrap();
+    for task in dag_json["tasks"].as_array_mut().unwrap() {
+        if task["id"] == "load" {
+            task["expand"]["product"][0]["value"] =
+                json!({"ref": {"kind": "output", "task": "files", "on": ["ROWS"]}});
+        }
+    }
+    let dag: Dag = serde_json::from_value(dag_json).unwrap();
+    let (execution, db, run_id) = with_run(dag, RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start_instance(&db, &run_id, "files", -1).await;
+    let result = AttemptResult {
+        outcome: Some("EMPTY".to_owned()),
+        ..with_output(json!(["a.csv", "b.csv"]))
+    };
+    execution
+        .attempt_finished(&run_id, &id("files"), -1, &result, ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let load = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("load") && i.map_index == -1)
+        .unwrap();
+    assert_eq!(
+        (load.state, load.reason.as_deref()),
+        (
+            S::Failed,
+            Some("mapped argument `path`: expected a list, got null")
+        )
+    );
+}

@@ -16,7 +16,9 @@ use sqlx::postgres::PgListener;
 use uuid::Uuid;
 
 use crate::database::{Database, DbError, Pool};
-use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json};
+use crate::query::{
+    Starting, db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json,
+};
 
 #[cfg(test)]
 mod tests;
@@ -252,9 +254,14 @@ impl Database {
                     let mut x = sqlx::PgConnection::connect(url).await?;
                     listening_is_safe(&mut y, &mut x).await?
                 } else {
-                    let mut y = pool.acquire().await?;
-                    let mut x = pool.acquire().await?;
-                    listening_is_safe(&mut y, &mut x).await?
+                    // Guarded: a check cut short (its time up) closes them, never handing back
+                    // `x` inside the transaction it was starting (B84).
+                    let mut y = Starting::new(pool.acquire().await?);
+                    let mut x = Starting::new(pool.acquire().await?);
+                    let safe = listening_is_safe(y.conn(), x.conn()).await?;
+                    y.completed();
+                    x.completed();
+                    safe
                 })
             })
             .await;

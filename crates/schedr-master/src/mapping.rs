@@ -213,7 +213,9 @@ pub fn kind_of(json: &Json) -> &'static str {
 
 /// The whole outputs and outcomes of `tasks` in a run, to resolve mapped values against: a
 /// mapped task's output is the list of its instances' outputs, in `map_index` order, `null`
-/// for one that didn't succeed (decision 77).
+/// for one that didn't succeed (decision 77). `known` gives an instance's state when the
+/// caller knows it ahead of the database (a result being applied, its state not stored yet,
+/// B78): it is used instead of the stored one.
 ///
 /// # Errors
 ///
@@ -223,6 +225,7 @@ pub async fn sources(
     dag: &Dag,
     run_id: &str,
     tasks: &BTreeSet<&TaskId>,
+    known: impl Fn(&TaskId, i32) -> Option<TaskInstanceState>,
 ) -> Result<Sources, DbError> {
     let all: Vec<&TaskId> = tasks.iter().copied().collect();
     let (mapped, plain): (Vec<&TaskId>, Vec<&TaskId>) = all
@@ -238,7 +241,8 @@ pub async fn sources(
             .await?
             .into_iter()
             .map(|r| {
-                if r.state == TaskInstanceState::Success {
+                let state = known(task, r.map_index).unwrap_or(r.state);
+                if state == TaskInstanceState::Success {
                     r.output.unwrap_or(Json::Null)
                 } else {
                     Json::Null
@@ -290,7 +294,7 @@ pub async fn inputs(
         .filter_map(Reference::upstream_task)
         .filter(|upstream| !lanes.contains(upstream))
         .collect();
-    let sources = sources(db, dag, run_id, &used).await?;
+    let sources = sources(db, dag, run_id, &used, |_, _| None).await?;
     let mut inputs: serde_json::Map<String, Json> = sources
         .outputs
         .iter()

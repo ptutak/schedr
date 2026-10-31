@@ -2453,7 +2453,8 @@ OpenShift's restricted security policy doesn't grant.
 - **What is measured:** the **PSS** (`/proc/<pid>/smaps_rollup`) of every process in the
   task's **process group** (what SIGTERM and SIGKILL reach), RSS (`/proc/<pid>/statm`) where
   PSS can't be read, except for a task forked from a fork server (M2.5.4a): its RSS counts the
-  pages it shares with the server, so a sample without every PSS is skipped instead. PSS splits shared pages between the processes sharing them, so a task
+  pages it shares with the server, so a sample without every PSS is skipped instead (a zombie,
+  holding no memory, counts as nothing; B54). PSS splits shared pages between the processes sharing them, so a task
   with many processes isn't counted many times, and the fork server (M2.5) needs it anyway. A
   process that leaves the group (`setsid`) isn't counted, as it isn't cancelled. Not chosen:
   RSS (shared libraries counted once per process); the tree by parent PID (the group is what

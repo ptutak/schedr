@@ -173,9 +173,8 @@ pub fn content_hash(snapshot: &Snapshot) -> Result<String, ScanError> {
     let mut hasher = Sha256::new();
     for path in snapshot.files.keys() {
         let full = snapshot.root.join(path);
-        let bytes =
-            std::fs::read(&full).map_err(|source| ScanError::Read { path: full, source })?;
-        hash_file(&mut hasher, path, &bytes);
+        hash_file(&mut hasher, path, &full)
+            .map_err(|source| ScanError::Read { path: full, source })?;
     }
     Ok(hex_hash(hasher))
 }
@@ -228,22 +227,32 @@ pub fn capture(snapshot: &Snapshot, store: &Path) -> Result<Captured, ScanError>
     let mut hasher = Sha256::new();
     for path in snapshot.files.keys() {
         let full = snapshot.root.join(path);
-        let bytes = std::fs::read(&full).map_err(|source| ScanError::Read {
+        let read_error = |source| ScanError::Read {
             path: full.clone(),
             source,
-        })?;
-        let mode = std::fs::metadata(&full)
-            .map_err(|source| ScanError::Read { path: full, source })?
-            .permissions()
-            .mode();
+        };
+        let mut source = std::fs::File::open(&full).map_err(read_error)?;
+        let mode = source.metadata().map_err(read_error)?.permissions().mode();
         let target = partial.path().join(path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(copy_error(parent))?;
         }
-        std::fs::write(&target, &bytes).map_err(copy_error(&target))?;
+        // Streamed, never whole in memory (B63); a read error is the root's, a write
+        // error the copy's.
+        let mut copy = std::fs::File::create(&target).map_err(copy_error(&target))?;
+        let mut buffer = vec![0; COPY_BUFFER];
+        loop {
+            let read = io::Read::read(&mut source, &mut buffer).map_err(read_error)?;
+            if read == 0 {
+                break;
+            }
+            io::Write::write_all(&mut copy, &buffer[..read]).map_err(copy_error(&target))?;
+        }
+        drop(copy);
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode & 0o555))
             .map_err(copy_error(&target))?;
-        hash_file(&mut hasher, path, &bytes);
+        // The copy's bytes: nothing changes them now.
+        hash_file(&mut hasher, path, &target).map_err(copy_error(&target))?;
     }
     // What was copied: the files may have changed since they were hashed above.
     let hash = hex_hash(hasher);
@@ -348,12 +357,38 @@ pub fn remove_capture(dir: &Path) -> io::Result<()> {
     std::fs::remove_dir_all(&doomed)
 }
 
-/// Adds one file to a content hash: its path, a NUL, its length and its bytes.
-fn hash_file(hasher: &mut Sha256, path: &str, bytes: &[u8]) {
+/// The buffer a file is read through when hashed or copied: a file is never read whole
+/// (B63), however big.
+const COPY_BUFFER: usize = 64 << 10;
+
+/// Adds file `full`, at `path` in its root, to a content hash: its path, a NUL, its length
+/// and its bytes, read through a buffer. Its length is its size when opened; a file whose
+/// size changes while it is read is an error (it was being written: the scan is retried).
+fn hash_file(hasher: &mut Sha256, path: &str, full: &Path) -> io::Result<()> {
+    let mut file = std::fs::File::open(full)?;
+    let size = file.metadata()?.len();
     hasher.update(path.as_bytes());
     hasher.update([0]);
-    hasher.update((bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
+    hasher.update(size.to_be_bytes());
+    let mut buffer = vec![0; COPY_BUFFER];
+    let mut read_total = 0;
+    loop {
+        let read = io::Read::read(&mut file, &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        read_total += read as u64;
+        if read_total > size {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if read_total != size {
+        return Err(io::Error::other(format!(
+            "its size changed while it was read ({size} bytes, then {read_total})"
+        )));
+    }
+    Ok(())
 }
 
 /// `sha256:` and the hex digest.

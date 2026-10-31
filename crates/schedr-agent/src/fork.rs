@@ -36,7 +36,7 @@ use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 
 use crate::attempt::WorkerSetup;
-use crate::channel::{ChannelError, read_message};
+use crate::channel::{ChannelError, Messages, read_message};
 use crate::launch::{LaunchError, RUNNER_START_TIMEOUT, start_runner};
 use crate::metrics::{ForkFallbackLabels, ForkServerLabels};
 use crate::output::TailBuffer;
@@ -692,7 +692,7 @@ async fn fork_on(
     Ok(Forked {
         process: ForkedProcess {
             group,
-            status: Some(status),
+            status: Some(status.into()),
             ended: None,
             usage: Ended::default(),
             stdout: Some(tokio::spawn(collect(stdout, Arc::clone(&log), limit))),
@@ -807,7 +807,7 @@ pub struct GroupHold {
 #[derive(Debug)]
 pub struct ForkedProcess {
     group: Pid,
-    status: Option<UnixStream>,
+    status: Option<Messages<UnixStream>>,
     ended: Option<Termination>,
     usage: Ended,
     /// Taken by [`ForkedProcess::output`].
@@ -858,7 +858,8 @@ impl Process for ForkedProcess {
             return Ok(Termination::Unknown);
         };
         let ended = loop {
-            match read_message(status).await {
+            // Cancel-safe: `wait` is called again after a stop or deadline won (B57).
+            match status.next().await {
                 Ok(RunnerMessage::ProcessExited {
                     code,
                     signal,
