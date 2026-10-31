@@ -26,6 +26,7 @@ from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
 from schedr.context import RunValues, TaskValues, running
 from schedr.runner.parse import extend_sys_path, import_dag_entries
+from schedr.runner.task import member_named
 from schedr.types import Json, ProcessResult
 
 RUN_KINDS = frozenset({"scheduled", "manual", "backfill", "chained", "event"})
@@ -193,7 +194,7 @@ class TaskResult:
     output_json: Json
     attempts: tuple[Attempt, ...]
     log: str
-    _decode: Callable[[str, Json], object] = field(repr=False, compare=False)
+    _decode: Callable[[str, Json, str | None], object] = field(repr=False, compare=False)
     map_index: int | None = None
     instances: tuple[TaskResult, ...] | None = None
 
@@ -226,10 +227,17 @@ class TaskResult:
         if self.output_json is None:
             return None
         if self.instances is not None and isinstance(self.output_json, list):
-            # The list of the instances' outputs, each decoded by the task's return type.
+            # The list of the instances' outputs, each decoded by the task's return type and
+            # its own outcome (B117).
             items: list[Json] = self.output_json
-            return [None if item is None else self._decode(self.task_id, item) for item in items]
-        return self._decode(self.task_id, self.output_json)
+            outcomes = [instance.outcome for instance in self.instances]
+            if len(outcomes) != len(items):
+                outcomes = [None] * len(items)
+            return [
+                None if item is None else self._decode(self.task_id, item, outcome)
+                for item, outcome in zip(items, outcomes, strict=True)
+            ]
+        return self._decode(self.task_id, self.output_json, self.outcome)
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,14 +272,15 @@ class _OutputTypes:
         self._location = location
         self._entry: registry.DefinedDag | None = None
 
-    def decode(self, task_id: str, data: Json) -> object:
+    def decode(self, task_id: str, data: Json, outcome: str | None) -> object:
+        # The recorded outcome picks the member of a union, as for a downstream task (B117).
         if self._location is None:
             return decode_any(data)
         entry = self._load(self._location)
         kind = next((t.kind for t in entry.model.tasks if t.id == task_id), None)
         if isinstance(kind, PythonKind):
             hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
-            return decode(data, hints.get("return", Any))
+            return decode(data, member_named(hints.get("return", Any), outcome))
         if isinstance(kind, CommandKind):
             return decode(data, ProcessResult)
         return decode_any(data)

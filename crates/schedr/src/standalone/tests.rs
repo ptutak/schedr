@@ -70,6 +70,7 @@ fn everything_listens_on_localhost_with_the_configured_settings() {
     configured.dag_roots = vec![Root {
         name: "etl".to_owned(),
         path: PathBuf::from("/dags/etl"),
+        only: None,
     }];
     let setup = plan(&configured, &env(&[("HOME", "/h"), ("HOSTNAME", "pod-1")])).unwrap();
     assert_eq!(setup.grpc.to_string(), "127.0.0.1:9070");

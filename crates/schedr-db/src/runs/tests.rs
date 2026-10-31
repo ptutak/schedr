@@ -522,7 +522,9 @@ async fn the_latest_scheduled_run_is_one_index_lookup_per_dag() {
                 )
                 .collect();
         let opcodes: Vec<&str> = steps.iter().map(|(_, o)| o.as_str()).collect();
-        assert!(opcodes.contains(&"SeekLE"), "{opcodes:?}");
+        // Once per DAG, not again for a filter on it (B130).
+        let seeks = opcodes.iter().filter(|o| **o == "SeekLE").count();
+        assert_eq!(seeks, 1, "{opcodes:?}");
         assert!(opcodes.contains(&"DecrJumpZero"), "{opcodes:?}");
     }
 }

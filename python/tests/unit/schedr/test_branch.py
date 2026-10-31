@@ -77,8 +77,11 @@ from schedr import Dag, EmptyOperator, Task, branch
 @branch
 def targets(which: str) -> list[Task]:
     choices = {"a": [to_a], "ab": [to_a, to_b], "none": [], "one": to_b, "outside": [other],
-               "bad": ["to_a"], "nothing": None}
+               "bad": ["to_a"], "nothing": None, "foreign": [foreign]}
     return choices[which]
+
+with Dag("x"):
+    foreign = EmptyOperator("to_a")
 
 with Dag("d"):
     other = EmptyOperator("other")
@@ -94,7 +97,7 @@ def request_for(tmp_path: Path) -> Callable[[str], dict[str, Any]]:
     (tmp_path / "d.py").write_text(DAG)
 
     def make(which: str) -> dict[str, Any]:
-        (dag,) = import_dag_file("etl", tmp_path, "d.py")
+        (dag,) = [d for d in import_dag_file("etl", tmp_path, "d.py") if d.id == "d"]
         (targets,) = [t for t in dag.to_json()["tasks"] if t["id"] == "targets"]
         targets["arguments"] = {"which": {"literal": which}}
         return {
@@ -138,6 +141,8 @@ def test_a_branchs_handles_become_the_chosen_ids(
         ("outside", "`other` isn't right after the branch"),
         ("bad", "returns task handles, got str"),
         ("nothing", r"or \[\] for none \(not None\)"),
+        # B126: another DAG's task of the same ID as one right after the branch.
+        ("foreign", "`to_a` is a task of DAG `x`, not `d`"),
     ],
 )
 def test_a_branch_can_choose_only_its_own_targets(
@@ -151,6 +156,8 @@ def test_a_branch_can_choose_only_its_own_targets(
                 "outside": [type("H", (), {"_schedr_task_id": "other"})()],
                 "bad": ["to_a"],
                 "nothing": None,
+                "foreign": [type("H", (), {"_schedr_task_id": "to_a", "_schedr_dag_id": "x"})()],
             }[which],
             frozenset({"to_a", "to_b"}),
+            "d",
         )

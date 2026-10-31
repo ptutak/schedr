@@ -53,67 +53,49 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
-| 4 | B118: `run_dag(file)` imports unrelated files beside it | 4 | medium | possible | correctness |
-| 5 | B117: `run_dag().output` ignores the recorded outcome when decoding a union | 4 | medium | possible | tests |
-| 6 | B112: a TypedDict written with references inside isn't checked for its required keys | 4 | medium | possible | correctness |
-| 7 | B111: a mixed container need not fit any one member of a union | 4 | medium | possible | correctness |
-| 8 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 9 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
-| 10 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
-| 11 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
-| 12 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
-| 13 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
-| 14 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 15 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 16 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 17 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 18 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
-| 19 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 20 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 21 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 22 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 23 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 24 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 25 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 26 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 27 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 28 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 29 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 30 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 31 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 32 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B132: an order edge narrowed with .on() from a mapped task is never taken | 6 | high | possible | correctness |
+| 2 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 3 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 4 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
+| 5 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 6 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 7 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 8 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 9 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 10 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 23 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B132: an order edge narrowed with .on() from a mapped task is never taken
+
+- **Rating:** severity **high**, probability **possible**, correctness (score 6): `results.on(Rows) >> report()` over a mapped `results` always skips `report`, silently (the run succeeds).
+- **Found:** 2026-10-31, by Claude while fixing B80, confirmed by a side note and a run:
+  `fetch.expand(p=["a", "b"])` with both instances returning `Rows`, then
+  `results.on(Rows) >> report()`: `report` ends `skipped`, the run `success`. The DAG loads
+  (`_build.py`, `>>` takes `_schedr_on` from a `Mapped`); the master compares the order
+  edge's `Rows` with the whole mapped task's own outcome, `SUCCESS`, which only says its
+  instances ended (`progress.rs`, `edge_state`). The same for `.on(...)` on a group whose
+  leaf is mapped, probably.
+- **A fix:** to decide: A refuse `.on(...)` on a mapped task outside `.expand()` at load, as
+  arguments already are (`_refuse_whole_mapped`: "narrowing the list has no single
+  meaning"); B give it a meaning (taken when every instance, or any, ended with one of the
+  outcomes).
 
 ## B119: a literal `.expand([...])` list travels in every instance's task JSON
 
 - **Rating:** severity **medium**, probability **possible**, performance (score 4): assignments grow with the square of the list's length; a task mapped over a long literal list.
 - **Found:** 2026-10-31, by Codex, 2026-10-31. Found by Codex's review of group 2 (B83): `crates/schedr-master/src/dispatch.rs:1397` serializes the whole task, `expand` included, into each `AssignTask` (16 × 4 KiB strings: 65 KB task JSON per instance). Decided (the user, 2026-10-31): fixed with the protocol work of M4.4.
-- **A fix:** to decide when it is scheduled.
-
-## B118: `run_dag(file)` imports unrelated files beside it
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a sibling script's import-time side effects run in a test.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/testing.py:373`, `crates/schedr/src/local.rs:619`: the CLI keeps only the root's directory, dropping the selected files; `ensure_defined()` scans the directory again.
-- **A fix:** to decide when it is scheduled.
-
-## B117: `run_dag().output` ignores the recorded outcome when decoding a union
-
-- **Rating:** severity **medium**, probability **possible**, tests (score 4): a test sees `A()` where the task returned `B()` (both fit the JSON).
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/testing.py:274`: `decode(data, annotation)` without the outcome; mapped outputs the same.
-- **A fix:** to decide when it is scheduled.
-
-## B112: a TypedDict written with references inside isn't checked for its required keys
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `{"x": number()}` for a TypedDict needing `x` and `y` runs without `y`.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/tasks.py:630`, `python/schedr/_build.py:750`: whole-value checks only for literals; the runner's `_built_map` doesn't check required keys either.
-- **A fix:** to decide when it is scheduled.
-
-## B111: a mixed container need not fit any one member of a union
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `[number(), "bad"]` for `list[int] | list[str]` runs.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/_build.py:721,765`: element types are merged across union members; the runner builds a union target as `Any`.
 - **A fix:** to decide when it is scheduled.
 
 ## B103: `dags test` waits for ever when a DAG root can't be scanned
@@ -161,20 +143,6 @@ step touches their code or the user schedules them.
 - **Rating:** severity **medium**, probability **rare**, performance (score 2): the master's lock held for seconds; a long chain listed in reverse order.
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
   medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/progress.rs:454`. Each pass visits all tasks and calls `edges_into()` for scheduled tasks. That helper scans the entire edge vector (`crates/schedr-model/src/dag.rs:116`): The outer loop repeats until nothing changes. A chain listed in reverse dependency order advances one task per pass, yielding Θ(T²E) work—Θ(T³) for a chain. **Scenario:** preparing an 800-task empty chain occupies the master’s core lock for seconds; the service holds that lock while ticking. Batch measurement `f3_settle_scaling`, unoptimized test build: Both task orders produced the same successful result. The same edge-scanning helper is used in mapped settling at `progress.rs:554` and `:600`. **Confidence: high for the complexity; measured timings are debug-build figures.**
-- **A fix:** to decide when it is scheduled.
-
-## B81: valid elements inside mapped lists are rejected as though they must themselves be lists
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a valid mapped DAG fails its run at preparation, visibly.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
-  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:152` and `:158`. Recursive resolution contains unconditional errors: **Scenario:** both of these pass Python DAG construction, but fail the run during preparation: The outer value is already a list; its elements should resolve to strings.
-- **A fix:** to decide when it is scheduled.
-
-## B80: using a mapped output elsewhere breaks per-element narrowing
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): per-element `.on(...)` fails when the mapped output is also used elsewhere.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
-  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:84`. Lane detection requires exactly one reference: With another reference, narrowing falls through to whole-output resolution. At `mapping.rs:170`, `.on(Rows)` is then compared against the whole mapped task’s synthetic `SUCCESS` outcome, producing `null`. **Scenario:** the Python API accepts: After both fetches succeed, finishing `gate` should allow the matching element to proceed. Instead, expansion fails. This also contradicts the mapping guide’s statements that `.on(...)` works per element and an additional use makes the task wait for the whole upstream.
 - **A fix:** to decide when it is scheduled.
 
 ## B77: valid large timedeltas cannot render in agent templates
@@ -225,38 +193,6 @@ step touches their code or the user schedules them.
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
   and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:132`. `from_desc()` nests a model’s schema and `$defs` under `items` or another enclosing schema. `_Compare` continues resolving references from the outer root. At `schemas.py:444`, a missing definition becomes `{}`, which `fits()` accepts as unrestricted. Thus `list[TextBox]`, containing a model field `x: str`, is accepted for `list[IntBox]`, whose corresponding field is `x: int`. The same comparison without the enclosing list correctly rejects it.
 - **A fix:** to decide when it is scheduled.
-
-## B61: a DAG file reached through a followed symlink gets an unusable location
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a DAG under a symlinked directory is refused by the master.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
-  and parsing), with a failing proof each; checked against the code by Claude.
-  Scanning follows symbolic links (documented), but `registry.py:71` resolves the file's path and keeps only its name (`DagLocation(LOCAL_ROOT, file.name)`): `root/linked -> ../shared` with `dag.py` scans as `linked/dag.py` and parses as `local:dag.py`, which the master refuses (`validate.rs:36`: located at `local:dag.py`, parsed from `etl:linked/dag.py`). Codex ran the real parser and validator.
-- **A fix:** keep the scanned (root-relative) path as the location, unresolved.
-
-## B60: a relative DAG root breaks parsing and task imports
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a relative root in the configuration breaks parsing and task imports.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
-  and parsing), with a failing proof each; checked against the code by Claude.
-  The executor uses the configured directory both as the child's working directory and as `root_dir` in the request (`crates/schedr-agent/src/agent.rs:295`; tasks the same, `attempt.rs:245`, `:252`); configuration keeps relative paths (`schedr-config/src/roots.rs:155`), so `dags/etl` becomes `dags/etl/dags/etl/dag.py` (Codex's proof: `FileNotFoundError` after a successful scan). `WorkerSetup::sys_path` keeps them relative too.
-- **A fix:** make roots absolute when the configuration is read (or the request's `root_dir`).
-
-## B56: a cancel or timeout is ignored while a runner hasn't said hello
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a cancel or timeout waits up to 30 s for a slow runner start, and is lost if the start fails.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
-  execution), with a failing proof each; checked against the code by Claude.
-  `run_python` starts the runner and waits for its hello (up to 30 s) and sends the request before `supervise` starts (`crates/schedr-agent/src/launch.rs:274`); a cancel queued meanwhile, or the execution timeout, does nothing until then, and a failed start afterwards is reported `start_failed`, the cancel lost (Codex's proof: a runner stalled before its hello, still running 2 s after a cancel and a 100 ms timeout). Spawned and forked paths alike.
-- **A fix:** the stop channel and the deadline raced against the handshake too; a cancel during it reported as a cancel.
-
-## B52: the per-round caps still read the whole backlog
-
-- **Rating:** severity **medium**, probability **rare**, performance (score 2): thousands of pending commands read whole on each round.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
-  attempts), with a failing proof each; checked against the code by Claude.
-  `pending_commands` (`crates/schedr-db/src/commands.rs:299`) has no `LIMIT` (`fetch_all`); the master keeps `COMMANDS_PER_ROUND` (50) after reading and decoding every pending row (`schedr-master/src/commands.rs:129`): draining N commands reads N, N-50, ... rows (Codex: 2,000 commands, 32 MB of audit strings loaded for 50 applied). Expired attempts the same (`unstarted_attempts`, then `truncate`, `dispatch.rs:864`).
-- **A fix:** `LIMIT` in the queries (the round's cap).
 
 ## B48: every attempt message copies the master's whole worker registry under its lock
 

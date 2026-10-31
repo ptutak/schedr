@@ -14,6 +14,7 @@ from schedr import (
     TaskDefaults,
     chain,
     dag_ctx,
+    group,
     task,
 )
 from schedr._model import IdError, NoTrigger, TaskSettings, registry
@@ -282,5 +283,24 @@ def test_tasks_reference_only_their_own_dag() -> None:
             lambda: consume(start.output),  # type: ignore[arg-type]
         ):
             with pytest.raises(ValueError, match="belongs to DAG `one`, not `three`"):
+                use()
+    registry.take_entries()
+
+
+def test_groups_reference_only_their_own_dag() -> None:
+    # B125: a group kept from one DAG stood for this DAG's tasks of the same IDs.
+    with Dag("one"), group("g") as foreign:
+        EmptyOperator("a")
+    with Dag("two"):
+        with group("g") as own:
+            EmptyOperator("a")
+        finish = EmptyOperator("finish")
+        for use in (
+            lambda: foreign >> finish,
+            lambda: finish >> foreign,
+            lambda: [foreign, own] >> finish,
+            lambda: chain(foreign, finish),
+        ):
+            with pytest.raises(ValueError, match="group `g` belongs to DAG `one`, not `two`"):
                 use()
     registry.take_entries()

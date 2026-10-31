@@ -54,6 +54,11 @@ class Operator:
         return self._task_id
 
     @property
+    def _schedr_dag_id(self) -> str | None:
+        """The DAG the task belongs to, checked when a branch returns it (B126)."""
+        return self._dag.dag_id if self._dag is not None else None
+
+    @property
     def _schedr_task_id(self) -> str:
         _build.check_same_dag(self._dag, self._task_id)
         return self._task_id

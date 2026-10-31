@@ -582,7 +582,7 @@ impl<'a> RunProgress<'a> {
     fn whole_edge_state(&self, edge: &Edge) -> TaskInstanceState {
         use TaskInstanceState as S;
         if !mapping::is_lane(self.dag, edge) {
-            return self.edge_state(edge);
+            return self.whole_edge(edge);
         }
         match self.states.get(&edge.from).copied().unwrap_or(S::Scheduled) {
             S::Running if self.instances.contains_key(&edge.from) => S::Success,
@@ -601,12 +601,17 @@ impl<'a> RunProgress<'a> {
                 continue;
             }
             let place = mapping::coordinates(index, &sizes);
-            let mut lane_skipped = false;
+            // An element narrowed with `.on(...)` that its upstream instance didn't end with
+            // (decision 119).
+            let mut lane_skipped = dims.iter().enumerate().any(|(d, (_, dim))| {
+                mapping::narrowed_whole(self.dag, dim)
+                    .is_some_and(|(upstream, on)| !self.instance_taken(upstream, place[d], on))
+            });
             let mut edges = Vec::new();
             let dag = self.dag;
             for edge in dag.edges_into(&task.id) {
                 if !mapping::is_lane(dag, edge) {
-                    edges.push(self.edge_state(edge));
+                    edges.push(self.whole_edge(edge));
                     continue;
                 }
                 let state = dims
@@ -662,6 +667,35 @@ impl<'a> RunProgress<'a> {
         };
         self.instance_moved = true;
         Some(next)
+    }
+
+    /// An edge that isn't a lane: as usual, except that one whose outcomes are taken per
+    /// element counts as its upstream task's state ([`mapping::narrows_per_element`]).
+    fn whole_edge(&self, edge: &Edge) -> TaskInstanceState {
+        if mapping::narrows_per_element(self.dag, edge) {
+            return self
+                .states
+                .get(&edge.from)
+                .copied()
+                .unwrap_or(TaskInstanceState::Scheduled);
+        }
+        self.edge_state(edge)
+    }
+
+    /// Whether instance `place` of the mapped task `upstream` succeeded with one of `on`.
+    fn instance_taken(&self, upstream: &TaskId, place: usize, on: &[String]) -> bool {
+        let Some(instances) = self.instances.get(upstream) else {
+            return false;
+        };
+        if instances.states.get(place) != Some(&TaskInstanceState::Success) {
+            return false;
+        }
+        let outcome = instances
+            .outcomes
+            .get(place)
+            .and_then(Option::as_deref)
+            .unwrap_or(DEFAULT_OUTCOME);
+        on.iter().any(|o| o == outcome)
     }
 
     /// The state a lane into an instance counts as: its upstream instance's, or skipped when

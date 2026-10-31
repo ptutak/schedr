@@ -210,6 +210,11 @@ pub fn agent_settings(
                 .iter()
                 .map(|r| (r.name.clone(), r.path.clone()))
                 .collect(),
+            parse_only: config
+                .dag_roots
+                .iter()
+                .filter_map(|r| Some((r.name.clone(), r.only.clone()?)))
+                .collect(),
             python,
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),

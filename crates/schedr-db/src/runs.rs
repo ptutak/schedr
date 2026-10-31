@@ -29,16 +29,16 @@ fn among(column: &str, count: usize) -> String {
     format!(" AND {column} IN ({})", wanted.join(", "))
 }
 
-/// Each DAG's latest scheduled run, of `count` DAGs (every DAG when 0): one index lookup per
-/// DAG, not its whole scheduled history (`MAX ... GROUP BY` read every scheduled run of each
-/// DAG every round, B120).
+/// Each DAG's latest scheduled run, of `count` DAGs (every DAG when 0), `NULL` for none: one
+/// index lookup per DAG, not its whole scheduled history (`MAX ... GROUP BY` read every
+/// scheduled run of each DAG every round, B120). The `NULL`s are left to the caller: a filter
+/// on the lookup's value ran it a second time (B130).
 fn last_scheduled_query(count: usize) -> String {
     let among = among("d.dag_id", count);
     format!(
-        "SELECT dag_id, {{ts<}}last{{>ts}} FROM (SELECT d.dag_id, \
-         (SELECT MAX(r.planned_for) FROM runs r \
-          WHERE r.kind = 'scheduled' AND r.dag_id = d.dag_id) AS last \
-         FROM dags d WHERE TRUE{among}) latest WHERE last IS NOT NULL"
+        "SELECT d.dag_id, {{ts<}}(SELECT MAX(r.planned_for) FROM runs r \
+          WHERE r.kind = 'scheduled' AND r.dag_id = d.dag_id){{>ts}} \
+         FROM dags d WHERE TRUE{among}"
     )
 }
 
@@ -368,7 +368,7 @@ impl Database {
     ) -> Result<(), DbError> {
         type Rows = (
             Vec<(String, i64)>,
-            Vec<(String, String)>,
+            Vec<(String, Option<String>)>,
             Vec<(String, String, String, String)>,
         );
         let among = among("dag_id", dags.len());
@@ -402,6 +402,8 @@ impl Database {
                 .insert(dag, u32::try_from(count).unwrap_or(u32::MAX));
         }
         for (dag, at) in last {
+            // A DAG without a scheduled run has none.
+            let Some(at) = at else { continue };
             overview
                 .last_scheduled
                 .insert(dag, parse_time("runs.planned_for", &at)?);

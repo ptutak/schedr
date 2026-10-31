@@ -96,6 +96,37 @@ pub fn is_lane(dag: &Dag, edge: &Edge) -> bool {
             .is_some_and(|task| lane_sources(dag, task).contains(&edge.from))
 }
 
+/// The mapped upstream task a dimension narrows element by element though it counts as a
+/// whole (used elsewhere in the task, so not a lane), with the outcomes taken:
+/// `.partial(all=results).expand(rows=results.on(Rows))`. Its instance whose upstream
+/// instance ended with another outcome, or was skipped, is skipped, as on a lane (decision
+/// 119).
+#[must_use]
+pub fn narrowed_whole<'a>(dag: &Dag, dim: &Dim<'a>) -> Option<(&'a TaskId, &'a [String])> {
+    match dim {
+        Dim::Values(Value::Ref(Reference::Output { task, path, on }))
+            if path.is_empty() && !on.is_empty() && dag.task(task).is_some_and(is_mapped) =>
+        {
+            Some((task, on))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `edge`'s outcomes are taken per element ([`narrowed_whole`]), not on the whole
+/// upstream task, whose own outcome is only that its instances ended.
+#[must_use]
+pub fn narrows_per_element(dag: &Dag, edge: &Edge) -> bool {
+    edge.kind == EdgeKind::Data
+        && !edge.on.is_empty()
+        && dag.task(&edge.to).is_some_and(|task| {
+            dims(dag, task).iter().any(|(_, dim)| {
+                narrowed_whole(dag, dim)
+                    .is_some_and(|(up, on)| *up == edge.from && on == edge.on.as_slice())
+            })
+        })
+}
+
 /// Instance `index`'s place in each dimension of `sizes` (the first varying slowest).
 #[must_use]
 pub fn coordinates(index: usize, sizes: &[usize]) -> Vec<usize> {
@@ -126,6 +157,10 @@ pub struct Sources {
     pub outputs: BTreeMap<TaskId, Json>,
     /// Outcomes by task, of those that succeeded or were skipped.
     pub outcomes: BTreeMap<TaskId, Option<String>>,
+    /// The mapped tasks among them: a whole mapped task's outcome only says its instances
+    /// ended, so `.on(...)` over its output narrows its elements one by one (decision 119),
+    /// never the list.
+    pub mapped: BTreeSet<TaskId>,
 }
 
 /// The stored JSON `value` stands for, as the runner would resolve it (`None` for a
@@ -153,6 +188,54 @@ pub fn resolve(value: &Value, sources: &Sources) -> Result<Json, String> {
     }
 }
 
+/// Whether a value is left to its instance's runner to build: it holds a template or a
+/// `dag_ctx` reference, which the master doesn't render (decision 118).
+#[must_use]
+pub fn built_by_runner(value: &Value) -> bool {
+    match value {
+        Value::Template(_) | Value::Ref(Reference::DagCtx { .. }) => true,
+        Value::List(items) => items.iter().any(built_by_runner),
+        Value::Map(entries) => entries.values().any(built_by_runner),
+        Value::Literal(_) | Value::Ref(_) => false,
+    }
+}
+
+/// What a mapped value stands for, as [`resolve`], except that the elements of a list
+/// written in the file that its runners build ([`built_by_runner`]) are `null` here (in a
+/// dict, its entries the runners build): each reaches its instance in its stored form
+/// (decision 118), and the list's length is known.
+///
+/// # Errors
+///
+/// As [`resolve`].
+pub fn resolve_mapped(value: &Value, sources: &Sources) -> Result<Json, String> {
+    match value {
+        Value::List(items) => items
+            .iter()
+            .map(|item| match item {
+                // A dict keeps its keys, for `.expand_kwargs()`: only its entries the runner
+                // builds are `null`.
+                Value::Map(entries) => entries
+                    .iter()
+                    .map(|(key, entry)| {
+                        let entry = if built_by_runner(entry) {
+                            Json::Null
+                        } else {
+                            resolve(entry, sources)?
+                        };
+                        Ok((key.clone(), entry))
+                    })
+                    .collect::<Result<serde_json::Map<_, _>, String>>()
+                    .map(Json::Object),
+                item if built_by_runner(item) => Ok(Json::Null),
+                item => resolve(item, sources),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Json::Array),
+        _ => resolve(value, sources),
+    }
+}
+
 fn resolve_ref(reference: &Reference, sources: &Sources) -> Result<Json, String> {
     match reference {
         Reference::DagCtx { .. } => Err("the run's context isn't a list".to_owned()),
@@ -164,7 +247,13 @@ fn resolve_ref(reference: &Reference, sources: &Sources) -> Result<Json, String>
             .map_or(Json::Null, Json::String)),
         Reference::Output { task, path, on } => {
             if let Some(outcome) = sources.outcomes.get(task) {
-                // Skipped, or another outcome than it was narrowed to: `None`.
+                // Skipped, or another outcome than it was narrowed to: `None` (a mapped task:
+                // only skipped, its `.on(...)` being per element).
+                let on: &[String] = if sources.mapped.contains(task) {
+                    &[]
+                } else {
+                    on
+                };
                 let taken = outcome
                     .as_ref()
                     .is_some_and(|o| on.is_empty() || on.contains(o));
@@ -238,6 +327,7 @@ pub async fn sources(
     let mut sources = Sources {
         outputs: db.outputs_of(run_id, &plain).await?,
         outcomes: db.upstream_outcomes(run_id, &all).await?,
+        mapped: BTreeSet::new(),
     };
     for task in mapped {
         let list = db
@@ -254,6 +344,7 @@ pub async fn sources(
             })
             .collect();
         sources.outputs.insert(task.clone(), Json::Array(list));
+        sources.mapped.insert(task.clone());
     }
     Ok(sources)
 }
@@ -276,7 +367,8 @@ pub enum InputsError {
 
 /// A task instance's inputs, as JSON: the whole outputs of the upstream tasks it uses (not
 /// its lanes), and for an instance of a mapped task its own arguments under `$expand`, with
-/// the outcome of each taken from a lane under `$expand_outcomes` (decision 76). A lane reads
+/// the outcome of each taken from a lane under `$expand_outcomes` (decision 76), and those its
+/// runner builds in their stored form under `$expand_values` (decision 118). A lane reads
 /// its one upstream instance; a mapped list is resolved once per `resolved`.
 ///
 /// # Errors
@@ -303,13 +395,20 @@ pub async fn inputs(
     // Whole outputs only for the arguments' output references: what the task is mapped over
     // reaches each instance as its element, under `$expand`, and an outcome reference is
     // answered from the outcomes, so neither is sent again whole (B83).
+    let dims = dims(dag, task);
+    // An element its runner builds (decision 118) needs the outputs its template references,
+    // as an argument does.
+    let runner_built = dims.iter().filter_map(|(_, dim)| match dim {
+        Dim::Values(Value::List(items)) => Some(items.iter().filter(|i| built_by_runner(i))),
+        _ => None,
+    });
     let whole = upstream(
         task.argument_references()
             .into_iter()
+            .chain(runner_built.flatten().flat_map(Value::references))
             .filter(|r| matches!(r, Reference::Output { .. }))
             .collect(),
     );
-    let dims = dims(dag, task);
     // The mapped values' sources only while their resolved lists aren't known yet.
     let unresolved = dims.iter().enumerate().any(|(d, (_, dim))| {
         matches!(dim, Dim::Values(_))
@@ -333,8 +432,7 @@ pub async fn inputs(
     };
     let sizes = db.map_sizes(run_id, &task.id).await?.unwrap_or_default();
     let place = coordinates(index, &sizes);
-    let mut expand = serde_json::Map::new();
-    let mut outcomes = serde_json::Map::new();
+    let mut arguments = InstanceArguments::default();
     for (d, ((name, dim), at)) in dims.into_iter().zip(place).enumerate() {
         let lane = match dim {
             Dim::Lane(upstream) => Some(upstream),
@@ -345,14 +443,26 @@ pub async fn inputs(
                 let list = resolved
                     .entry((run_id.to_owned(), task.id.clone(), d))
                     .or_insert_with(|| {
-                        resolve(value, &sources).unwrap_or_else(|error| {
+                        resolve_mapped(value, &sources).unwrap_or_else(|error| {
                             tracing::warn!(
                                 task_id = %task.id, %error, "a mapped value no longer resolves"
                             );
                             Json::Null
                         })
                     });
-                (list.get(at).cloned().unwrap_or(Json::Null), None)
+                let element = list.get(at).cloned().unwrap_or(Json::Null);
+                // The whole output of a mapped task used whole: the element is its instance's
+                // output, decoded as that instance's outcome, as on a lane.
+                let outcome = match lane_of(value) {
+                    Some(upstream) if dag.task(upstream).is_some_and(is_mapped) => {
+                        let place = i32::try_from(at).unwrap_or(i32::MAX);
+                        db.instance_result(run_id, upstream, place)
+                            .await?
+                            .and_then(|r| r.outcome)
+                    }
+                    _ => None,
+                };
+                (element, outcome)
             }
             Dim::Lane(upstream) => {
                 let place = i32::try_from(at).unwrap_or(i32::MAX);
@@ -361,16 +471,86 @@ pub async fn inputs(
                 (output.unwrap_or(Json::Null), result.and_then(|r| r.outcome))
             }
         };
+        // An element its runner builds, in its stored form (decision 118).
+        let runner_element = match dim {
+            Dim::Values(Value::List(items)) => items.get(at).filter(|i| built_by_runner(i)),
+            _ => None,
+        };
+        let element = Element {
+            name,
+            value: element,
+            outcome,
+            stored: runner_element,
+        };
+        arguments.place(element, at, lane)?;
+    }
+    arguments.into_inputs(&mut inputs);
+    Ok(Json::Object(inputs))
+}
+
+/// One dimension's element for an instance.
+struct Element<'a> {
+    /// The parameter it fills; `None` for `.expand_kwargs()`.
+    name: Option<&'a str>,
+    /// What it resolved to.
+    value: Json,
+    /// The outcome of its lane's upstream instance.
+    outcome: Option<String>,
+    /// Written with a template or the run's context: built by the runner (decision 118).
+    stored: Option<&'a Value>,
+}
+
+/// An instance's own arguments: `$expand`, `$expand_outcomes` and `$expand_values`.
+#[derive(Default)]
+struct InstanceArguments {
+    expand: serde_json::Map<String, Json>,
+    stored: serde_json::Map<String, Json>,
+    outcomes: serde_json::Map<String, Json>,
+}
+
+impl InstanceArguments {
+    /// Places element `at` of a dimension (`lane`: its mapped upstream task, if a lane).
+    fn place(
+        &mut self,
+        element: Element<'_>,
+        at: usize,
+        lane: Option<&TaskId>,
+    ) -> Result<(), InputsError> {
+        let Element {
+            name,
+            value,
+            outcome,
+            stored,
+        } = element;
         match name {
             Some(name) => {
                 if let Some(outcome) = outcome {
-                    outcomes.insert(name.to_owned(), Json::String(outcome));
+                    self.outcomes.insert(name.to_owned(), Json::String(outcome));
                 }
-                expand.insert(name.to_owned(), element);
+                match stored {
+                    Some(item) => {
+                        let item = serde_json::to_value(item).unwrap_or(Json::Null);
+                        self.stored.insert(name.to_owned(), item);
+                    }
+                    None => {
+                        self.expand.insert(name.to_owned(), value);
+                    }
+                }
             }
             // `.expand_kwargs()`: the element is a dict of arguments.
-            None => match (element, lane) {
-                (Json::Object(arguments), _) => expand.extend(arguments),
+            None => match (value, lane) {
+                (Json::Object(mut arguments), _) => {
+                    // Arguments written with a template or the run's context are built by the
+                    // runner (decision 118).
+                    if let Some(Value::Map(entries)) = stored {
+                        for (key, entry) in entries.iter().filter(|(_, e)| built_by_runner(e)) {
+                            arguments.remove(key);
+                            let entry = serde_json::to_value(entry).unwrap_or(Json::Null);
+                            self.stored.insert(key.clone(), entry);
+                        }
+                    }
+                    self.expand.extend(arguments);
+                }
                 (element, Some(upstream)) => {
                     return Err(InputsError::NotArguments(format!(
                         "element {at} of `{upstream}` isn't a dict of arguments for \
@@ -381,8 +561,14 @@ pub async fn inputs(
                 (_, None) => {}
             },
         }
+        Ok(())
     }
-    inputs.insert("$expand".to_owned(), Json::Object(expand));
-    inputs.insert("$expand_outcomes".to_owned(), Json::Object(outcomes));
-    Ok(Json::Object(inputs))
+
+    fn into_inputs(self, inputs: &mut serde_json::Map<String, Json>) {
+        inputs.insert("$expand".to_owned(), Json::Object(self.expand));
+        inputs.insert("$expand_outcomes".to_owned(), Json::Object(self.outcomes));
+        if !self.stored.is_empty() {
+            inputs.insert("$expand_values".to_owned(), Json::Object(self.stored));
+        }
+    }
 }

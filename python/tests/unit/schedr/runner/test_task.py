@@ -4,12 +4,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from schedr._serialization import CodecError
 from schedr.context import RunValues
+from schedr.outcomes import Outcome
 from schedr.runner.parse import import_dag_file
 from schedr.runner.protocol import Channel
 from schedr.runner.task import (
@@ -20,6 +22,9 @@ from schedr.runner.task import (
     execute,
     failure,
     find_function,
+    mapped_arguments,
+    member_named,
+    outcome_of,
     render,
     resolve,
     run_task,
@@ -493,3 +498,87 @@ def test_a_union_parameter_written_with_references_inside_is_built_as_its_member
     assert build({"map": {"pair": pair}}, _Box, inputs, RUN) == _Box((3, 4))
     with pytest.raises(TaskInputError, match="fits none of"):
         build(pair, int | None, inputs, RUN)
+
+
+class _Other(TypedDict):
+    other: int
+
+
+@dataclass
+class _Count:
+    n: int
+
+
+@dataclass
+class _Text:
+    n: str
+
+
+def test_a_union_member_is_built_only_when_the_value_fits_it() -> None:
+    # B124: the first member built won, a TypedDict without its keys, a template as an int.
+    inputs = {"a": 3}
+    three = {"ref": {"kind": "output", "task": "a"}}
+    assert build({"map": {"n": three}}, _Other | _Count, inputs, RUN) == _Count(3)
+    text = {"template": [{"text": "x"}]}
+    assert build({"map": {"n": text}}, _Count | _Text, inputs, RUN) == _Text("x")
+    with pytest.raises(TaskInputError, match="`_Other` needs `other`"):
+        build({"map": {}}, _Other, inputs, RUN)
+    with pytest.raises(TaskInputError, match="`_Other` has no field `n`"):
+        build({"map": {"other": three, "n": three}}, _Other, inputs, RUN)
+
+
+@dataclass
+class _First:
+    n: int
+
+
+@dataclass
+class _Second:
+    n: int
+
+
+def test_the_member_named_by_an_outcome_is_found_through_annotated() -> None:
+    # B123: `Annotated` members are outcomes too (B113); the recorded one picks the member.
+    union = Annotated[_First, "doc"] | Annotated[_Second, "doc"]
+    assert member_named(union, "_Second") == Annotated[_Second, "doc"]
+    assert member_named(_First | _Second, "_Second") is _Second
+    assert member_named(Annotated[_First | _Second, "doc"], "_Second") is _Second
+    # Not a union, no name, or no such member: the annotation as it is.
+    assert member_named(_First, "_First") is _First
+    assert member_named(union, None) == union
+    assert member_named(union, "Other") == union
+
+
+def test_an_outcome_name_with_nul_isnt_stored() -> None:
+    # B129: the result path stored the member's name unchecked.
+    bad = Outcome("Bad", {"OK": 1, "BAD\0NAME": 2})  # type: ignore[misc]
+    assert outcome_of(bad.OK, bad) == ("OK", None, None)
+    with pytest.raises(CodecError, match=r"an outcome name containing NUL"):
+        outcome_of(bad["BAD\0NAME"], bad)
+    with pytest.raises(CodecError, match="expected a member of Bad"):
+        outcome_of("OK", bad)
+
+
+def test_a_mapped_instance_gets_its_elements_resolved_or_built() -> None:
+    # `$expand`: resolved by the master; `$expand_outcomes` picks a union's member;
+    # `$expand_values`: written with a t-string or a `dag_ctx` value, built here (B81,
+    # decision 118).
+    hints = {"n": int, "point": _First | _Second, "region": str, "kind": str}
+    inputs = {
+        "cfg": "2026",
+        "$expand": {"n": 3, "point": {"n": 1}},
+        "$expand_outcomes": {"point": "_Second"},
+        "$expand_values": {
+            "region": {"template": [{"text": "eu-"}, {"ref": {"kind": "output", "task": "cfg"}}]},
+            "kind": {"ref": {"kind": "dag_ctx", "field": "run_kind"}},
+        },
+    }
+    assert mapped_arguments(inputs, hints, RUN, {}) == {
+        "n": 3,
+        "point": _Second(1),
+        "region": "eu-2026",
+        "kind": "manual",
+    }
+    assert mapped_arguments({}, hints) == {}
+    with pytest.raises(TaskInputError, match="mapped argument `n`"):
+        mapped_arguments({"$expand_values": {"n": {"template": [{"text": "x"}]}}}, hints, RUN)

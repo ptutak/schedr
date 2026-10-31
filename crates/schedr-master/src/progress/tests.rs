@@ -631,3 +631,40 @@ fn an_empty_expansion_succeeds_and_a_failed_one_has_its_reason() {
     assert_eq!(run.reason(&id("size")), Some("too many"));
     assert_eq!(run.states()[&id("check")], S::UpstreamFailed);
 }
+
+#[test]
+fn an_element_narrowed_from_a_list_also_used_whole_is_skipped_on_another_outcome() {
+    // B80 (decision 119): `check.partial(all=sizes).expand(n=sizes.on(Rows))` waits for the
+    // whole of `size`, and `.on(Rows)` still goes element by element. The edge's `Rows` was
+    // compared with the whole task's own outcome, and every instance was skipped.
+    let mut dag = mapped_dag("all_succeeded", &json!([]));
+    let narrowed = json!({"ref": {"kind": "output", "task": "size", "on": ["Rows"]}});
+    let mut check = mapped_task("check", Some(&narrowed), "all_succeeded");
+    check["arguments"] = json!({"all": output_of("size")});
+    dag.tasks[1] = serde_json::from_value(check).unwrap();
+    dag.edges[0] = serde_json::from_value(
+        json!({"from": "size", "to": "check", "kind": "data", "on": ["Rows"]}),
+    )
+    .unwrap();
+    dag.edges.push(
+        serde_json::from_value(json!({"from": "size", "to": "check", "kind": "data"})).unwrap(),
+    );
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![3]), ("check", vec![3])]);
+    settle_expanding(&mut run, &sizes);
+    run.set_instance(&id("size"), 0, S::Success);
+    run.set_instance_outcome(&id("size"), 0, "Rows");
+    settle_expanding(&mut run, &sizes);
+    // Not a lane: `check` waits for the whole of `size`.
+    assert_eq!(run.states()[&id("check")], S::Scheduled);
+    for (i, outcome) in [(1, "Missing"), (2, "Rows")] {
+        run.set_instance(&id("size"), i, S::Success);
+        run.set_instance_outcome(&id("size"), i, outcome);
+    }
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(run.states()[&id("size")], S::Success);
+    assert_eq!(
+        instance_states(&run, "check"),
+        [S::Queued, S::Skipped, S::Queued]
+    );
+}

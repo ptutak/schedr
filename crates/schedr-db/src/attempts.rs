@@ -173,7 +173,7 @@ const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.started_at IS NULL AND a.assigned_at < $1{ts} \
-    ORDER BY a.assigned_at, a.id";
+    ORDER BY a.assigned_at, a.id LIMIT $2";
 
 impl Database {
     /// Queued task instances of running runs not being cancelled, ready at `now`, oldest
@@ -329,7 +329,8 @@ impl Database {
         rows.into_iter().map(stored_attempt).collect()
     }
 
-    /// Attempts assigned before `cutoff` that never reported `Started`.
+    /// The oldest `limit` attempts assigned before `cutoff` that never reported `Started`,
+    /// oldest assigned first (a backlog read a round's worth at a time, B52).
     ///
     /// # Errors
     ///
@@ -337,11 +338,13 @@ impl Database {
     pub async fn unstarted_attempts(
         &self,
         cutoff: Timestamp,
+        limit: u32,
     ) -> Result<Vec<StoredAttempt>, DbError> {
         let query = UNSTARTED_ATTEMPTS;
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, query))
                 .bind(db_time(cutoff))
+                .bind(i64::from(limit))
                 .fetch_all(pool)
                 .await?
         });

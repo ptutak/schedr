@@ -1556,7 +1556,7 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
 - Currently: **git-sync** sidecar. **Shared volumes** must also work, and so must other ways of
   filling the directories (e.g. code baked into the image).
 - The directories are listed in **`SCHEDR_DAG_PATH`**, using the usual `PATH` syntax
-  (colon-separated).
+  (colon-separated). A relative one is taken from the directory the role starts in (B60).
 - Each directory is scanned **recursively**, so git submodules inside a DAG repository work.
 - **Every `.py` file is parsed**, unless excluded by an ignore file.
 - Ignore files are named **`.schedrignore`**, use **gitignore syntax**, and may appear in any
@@ -1996,7 +1996,10 @@ SchedrScriptOperator(
   messages behind it: a `Finished` is stored instead as the attempt's failure, kind
   `result_not_stored` (not retried: the same result would be refused again), with "the
   result couldn't be stored: ..." and what ran (duration, usage) kept, and acknowledged; any
-  other such message is logged and dropped, and the stream goes on. Not chosen: B ending the
+  other such message is logged and dropped, and the stream goes on. A registration likewise:
+  an open attempt from the worker's journal whose start is refused for its data is adopted
+  without that record, its slot taken (B128), so the worker registers and sends its
+  `Finished`. Not chosen: B ending the
   stream on every error (decision 108 as it was: a refused result came back for ever); C
   dropping a refused `Finished` too (its attempt would stay running until its worker is
   lost).
@@ -2313,6 +2316,16 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   with `runner_failed` (retried). A command's `ProcessResult` is its output on success and its
   error summary on failure. Python tasks run in their root's directory, commands in their DAG
   file's directory; each attempt's log is `<log_dir>/<attempt_id>.log`.
+- **A task's timeout counts from its launch** (decision 116, the user's, 2026-10-31: B; B56):
+  a Python task's runner start (up to 30 s for its hello) is part of the attempt, so its
+  `timeout` runs from when the worker starts launching it, and a task never runs past launch
+  plus timeout (more robust, the user). A cancel or the timeout arriving before the hello stops
+  the runner then, as a running task is stopped (SIGTERM, the grace, SIGKILL), and the attempt
+  ends `cancelled` or `timed_out`, not `start_failed` 30 s later. So do waiting for a fork
+  server (another runner's fork may hold it; a fork abandoned midway restarts that server)
+  and sending the request (a runner that reads nothing). Not chosen: A the timeout
+  starting at the hello, as before (start-up bounded by the 30 s hello limit only; a tight
+  timeout wouldn't fail for slow imports on a busy worker).
 - **The worker's journal** holds running attempts and results not yet acknowledged,
   reported in `Register` after a reconnect; in memory in M1, on disk since M2.3, surviving an
   agent restart (see Worker lifecycle).
@@ -4248,6 +4261,12 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     A reference to `size` anywhere else in `check` (`.partial(all=sizes)`, `sizes[0]`) also
     makes the edge whole. Not chosen: A the barrier always (slower: each step waits for its
     slowest instance); C a per-task setting (the edge does it).
+    **`.on(...)` stays per element when the edge is whole** (decision 119, the user's,
+    2026-10-31: A; B80): `check.partial(all=sizes).expand(n=sizes.on(Rows))` waits for the
+    whole of `size`, then skips each instance whose `size[i]` ended with another outcome (or
+    was skipped), as a lane does. The whole mapped task's own outcome only says its
+    instances ended, so it never decides an `.on(...)`. Not chosen: B refusing `.on(...)` at
+    load when the output is used again (a form the API accepts, and the guide promised).
   - **How a mapped task is stored** (decision 74, the user's: A): every task keeps its
     `map_index = -1` row. For an unmapped task it is the one runnable instance; for a mapped
     task it is the task **as a whole** (what edges, trigger rules and the run's result look
@@ -4317,6 +4336,15 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     master too, which also refuses a mapped `@branch`); an expansion is stored in one
     transaction; `.on(...)` naming every outcome of a task is an unconditioned edge (no
     `None` to allow).
+  - **An element written with a t-string or `dag_ctx` is built per instance** (decision 118,
+    the user's, 2026-10-31: A; B81): `region.expand(name=[t"eu-{year}", "us"])`,
+    `.expand(of=[dag_ctx.run.kind, "other"])`, and an entry of an `.expand_kwargs()` dict
+    alike. The master doesn't render such an element (it renders nothing user-written): it
+    counts it when the task expands and sends it to that instance in its stored form, under
+    `$expand_values`, with the outputs its template references; the instance's runner builds
+    it as it builds an argument. Airflow renders Jinja per mapped instance too. Not chosen:
+    B refusing it at load (workaround: build the list in a task, or pass the value through
+    `.partial()`), surprising for a form the language accepts.
 - **Strict arguments.** An unknown argument is a plain Python `TypeError` when the DAG file is
   imported (so an import error). The native API never "accepts and warns"; that applies only to
   the Airflow layer (see Airflow compatibility: Thin translating classes).
@@ -5771,7 +5799,7 @@ float's shortest exact text, and the agent and the master read it back to the sa
 exactly, `-2**63` to `2**64 - 1`; a larger one fails the attempt with "outside the 64-bit
 range ... store a larger number as a str", where the value was written, not later where it
 would arrive as an inexact float. The same holds for a `Literal` integer and for a
-`timedelta`'s microseconds (about 213,503 days at most). Not chosen: B `arbitrary_precision` (every number kept as
+`timedelta`'s microseconds (about -106,751,991 to 213,503,982 days, B131). Not chosen: B `arbitrary_precision` (every number kept as
 text through the agent and the master, a change to every place that reads one, and an integer
 Postgres's `jsonb` keeps but other readers may not); C storing large integers tagged (a new
 tag, for a rare value).
@@ -6058,7 +6086,13 @@ and no cluster. Four levels, from cheapest to fullest.
     chosen by the system (0) and a temporary data directory (SQLite, logs) removed afterwards;
     the run is a `manual` run triggered and followed through the REST API, like the CLI does.
     The DAG roots are `--path <file or dir>` if given, else the configured roots, else the
-    current directory. **Before starting anything the files are parsed** (as in `dags check`):
+    current directory. **A file is tested alone** (decision 117, the user's, 2026-10-31: A;
+    B118): its directory is the root, but only that file is parsed, by the check and by the
+    worker, so a file beside it isn't imported (nor its side effects run); what the file
+    imports from beside it still imports, the directory being on `sys.path`. The selection
+    is internal (`Root::only`), never from the configuration file. Not chosen: B every file
+    of the directory parsed, documented (a sibling script run by a test of another file).
+    **Before starting anything the files are parsed** (as in `dags check`):
     an unknown DAG fails at once, naming the files that didn't import. Shown while it runs:
     each task's state changes; at the end, each task's log lines prefixed `task | `, each
     failed attempt's error (`task | try 1 failed (task_failed):` and the traceback), a table

@@ -828,3 +828,50 @@ async fn the_fork_servers_start_before_the_log_directory_exists() {
     .await;
     assert!(logs.join("fork-server-preloaded.log").exists());
 }
+
+/// Codex's review of B56: waiting for a fork server is part of the start, so the timeout
+/// (and a cancel) stops it too, rather than once the fork answered.
+#[tokio::test]
+async fn the_timeout_covers_waiting_for_the_fork_server() {
+    let dir = root();
+    let dag = the_dag(dir.path()).await;
+    // Every fork in the preloaded server takes three seconds.
+    std::fs::write(
+        dir.path().join("schedr_slower_fork.py"),
+        "import os, time\n_fork = os.fork\nos.fork = lambda: (time.sleep(3), _fork())[1]\n",
+    )
+    .unwrap();
+    let (forks, metrics) = servers(python(), dir.path(), &["schedr_slower_fork"]);
+    until("the preloaded server is up", || {
+        state(&metrics, "preloaded", "up") == 1
+    })
+    .await;
+    let task = spec(
+        python(),
+        &["-m", "schedr.runner", "task"],
+        dir.path(),
+        "task.log",
+    );
+    let started = Instant::now();
+    let ran = run_python(
+        &task,
+        request(dir.path(), &dag, "slow"),
+        limits(Some(Duration::from_millis(300))),
+        Stops::new().1,
+        Some(&forks),
+        &mut None,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        ran.supervised.stopped,
+        Some(schedr_agent::status::StopReason::TimedOut)
+    );
+    assert_eq!(ran.runner_result, None);
+}

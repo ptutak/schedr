@@ -67,9 +67,9 @@ async fn a_masters_write_is_refused_once_its_lease_was_taken_over() {
     assert_eq!(db.take_lease("b", period).await.unwrap(), Some(2));
     let refused = master.insert_command(&command, "test", now).await;
     assert!(matches!(refused, Err(DbError::NotLeading)), "{refused:?}");
-    assert_eq!(db.pending_commands().await.unwrap().len(), 2);
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 2);
     // Reads aren't fenced, nor writes through a database that isn't a master's.
-    assert_eq!(master.pending_commands().await.unwrap().len(), 2);
+    assert_eq!(master.pending_commands(100).await.unwrap().len(), 2);
     db.insert_command(&command, "test", now).await.unwrap();
 }
 

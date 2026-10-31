@@ -236,6 +236,11 @@ impl Workers {
             .map(|w| w.id.as_str())
     }
 
+    /// Every registered worker.
+    pub fn all(&self) -> impl Iterator<Item = &Worker> {
+        self.workers.values()
+    }
+
     /// Takes a slot of `worker` for `attempt`.
     pub fn reserve(&mut self, worker: &str, attempt: &str, now: Timestamp) {
         if let Some(w) = self.workers.get_mut(worker) {

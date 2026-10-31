@@ -6,6 +6,7 @@ collected the same way, located as ``local:<file name>``.
 """
 
 import contextlib
+import os
 from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -17,7 +18,8 @@ from schedr._model.dag import Dag, DagLocation
 LOCAL_ROOT = "local"
 """The root name of DAGs defined outside any configured DAG root."""
 
-_ROOT: ContextVar[tuple[str, Path] | None] = ContextVar("schedr_parse_root", default=None)
+_ROOT: ContextVar[tuple[str, Path, Path] | None] = ContextVar("schedr_parse_root", default=None)
+"""The parse root: its name, its absolute path as given, and that path resolved."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +52,7 @@ def parse_root(name: str, path: Path) -> Iterator[None]:
     Yields:
         Nothing; DAGs defined in files under ``path`` get locations relative to it.
     """
-    token = _ROOT.set((name, path.resolve()))
+    token = _ROOT.set((name, _absolute(path), path.resolve()))
     try:
         yield
     finally:
@@ -69,9 +71,19 @@ def location_for(filename: str) -> DagLocation:
     """
     root = _ROOT.get()
     file = Path(filename).resolve()
-    if root is not None and file.is_relative_to(root[1]):
-        return DagLocation(root[0], PurePosixPath(file.relative_to(root[1])).as_posix())
+    if root is not None:
+        name, given, resolved = root
+        # As scanned, through links (B61: a file in a linked directory was located by its
+        # target's name), else resolved (a root reached through a link itself).
+        for base, path in ((given, _absolute(Path(filename))), (resolved, file)):
+            if path.is_relative_to(base):
+                return DagLocation(name, PurePosixPath(path.relative_to(base)).as_posix())
     return DagLocation(LOCAL_ROOT, file.name)
+
+
+def _absolute(path: Path) -> Path:
+    """``path`` made absolute and normalized, links kept."""
+    return Path(os.path.normpath(os.path.abspath(path)))
 
 
 def register(

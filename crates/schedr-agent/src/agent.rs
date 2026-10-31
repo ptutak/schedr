@@ -1135,7 +1135,11 @@ impl<E: Executor> Agent<E> {
         };
         // The copy of the code that hash is of (decision 102), not the configured path, which
         // git-sync may have moved on (B58).
-        let files = snapshot.python_files();
+        let mut files = snapshot.python_files();
+        // Only the files chosen, for `schedr dags test` of one file (decision 117).
+        if let Some(only) = self.settings.setup.parse_only.get(&root.root) {
+            files.retain(|file| only.contains(file));
+        }
         let dir = code.to_path_buf();
         *self.parsing.entry(root.content_hash.clone()).or_default() += 1;
         let executor = self.executor.clone();

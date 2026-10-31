@@ -32,6 +32,11 @@ that vary, each a list. `fetch.partial(bucket="raw").expand(path=list_files())` 
 - **What `.expand()` maps over is checked when the file loads:** each list against the
   parameter's type (`path: str` needs a `list[str]`), names that exist, nothing both fixed
   and mapped.
+- **An element can be a t-string or a [run context](06-context.md) value**, like an
+  argument: `region.expand(name=[t"eu-{year}", "us"])` gives `eu-2026` and `us`, and
+  `.expand(of=[dag_ctx.run.kind, "other"])` the run's kind and `other`. So can a value in an
+  `.expand_kwargs()` dict. Each is built when its instance starts, from the outputs it
+  references, exactly as the same t-string passed as an argument.
 - **The instances** are numbered from 0 in that order (their `map_index`). They run in
   parallel as worker slots allow, and each retries on its own.
 - **An empty list** runs no instance: the task succeeds, and its output is `[]`.
@@ -56,7 +61,9 @@ without waiting for the slowest file.
   `results >> counts` (the two mapped outputs) next to the expansion. Then nothing of `count`
   starts before every `fetch` has finished, and nothing of it runs if one failed.
 - Using the upstream task anywhere else in the same task (`.partial(all=results)`,
-  `results[0]`) also makes it wait for the whole task.
+  `results[0]`) also makes it wait for the whole task. `.on(...)` still goes per element
+  then: `count.partial(all=results).expand(rows=results.on(Rows))` starts once every `fetch`
+  has finished and skips the instances whose `fetch` ended with another outcome.
 
 ## Gathering
 

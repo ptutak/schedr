@@ -65,6 +65,8 @@ pub struct Limits {
 pub struct Stops {
     reasons: mpsc::UnboundedReceiver<StopReason>,
     sender: StopSender,
+    /// A reason taken already and given back: the next one.
+    first: Option<StopReason>,
 }
 
 /// Sends an attempt its reasons to stop (cheap to clone).
@@ -75,7 +77,14 @@ impl Stops {
     #[must_use]
     pub fn new() -> (StopSender, Self) {
         let (sender, reasons) = mpsc::unbounded_channel();
-        (sender.clone(), Self { reasons, sender })
+        (
+            sender.clone(),
+            Self {
+                reasons,
+                sender,
+                first: None,
+            },
+        )
     }
 
     /// Another sender to this channel (the memory watchdog's).
@@ -84,9 +93,17 @@ impl Stops {
         self.sender.clone()
     }
 
+    /// Gives back `reason`, taken already: it is the next one, before those queued since.
+    pub const fn give_back(&mut self, reason: StopReason) {
+        self.first = Some(reason);
+    }
+
     /// The next reason; never ready while none comes (the channel keeps a sender of its own,
     /// so it never ends).
     pub async fn next_reason(&mut self) -> StopReason {
+        if let Some(reason) = self.first.take() {
+            return reason;
+        }
         match self.reasons.recv().await {
             Some(reason) => reason,
             None => std::future::pending().await,

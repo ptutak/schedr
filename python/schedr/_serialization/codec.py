@@ -204,7 +204,13 @@ def _encode_time(value: object, annotation: object, at: str) -> Any:
         raise CodecError(at, f"expected timedelta, got {_type_of(value)}")
     micros = (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
     if micros not in INTEGERS:
-        raise CodecError(at, f"{value} can't be stored: a timedelta is at most about 213,503 days")
+        raise CodecError(
+            at,
+            (
+                f"{value} can't be stored: a timedelta is from about -106,751,991 to "
+                "213,503,982 days"
+            ),
+        )
     return {"$timedelta": micros}
 
 

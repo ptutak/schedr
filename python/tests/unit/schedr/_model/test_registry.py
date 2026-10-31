@@ -23,6 +23,23 @@ def test_inside_a_parse_root_paths_are_relative_with_slashes(tmp_path: Path) -> 
     assert location == DagLocation("etl-repo", "team_a/sync.py")
 
 
+def test_a_file_in_a_linked_directory_is_located_as_scanned(tmp_path: Path) -> None:
+    # B61: the path was resolved, then only its name kept: `linked/sync.py` (a link to
+    # `../shared`) was `local:sync.py`, which the master refused.
+    root = tmp_path / "root"
+    (tmp_path / "shared").mkdir()
+    root.mkdir()
+    (root / "linked").symlink_to(tmp_path / "shared", target_is_directory=True)
+    with parse_root("etl-repo", root):
+        location = location_for(str(root / "linked" / "sync.py"))
+    assert location == DagLocation("etl-repo", "linked/sync.py")
+    # A root reached through a link: its files by their place in it.
+    (tmp_path / "alias").symlink_to(root, target_is_directory=True)
+    with parse_root("etl-repo", tmp_path / "alias"):
+        location = location_for(str(root / "team" / "x.py"))
+    assert location == DagLocation("etl-repo", "team/x.py")
+
+
 def test_files_outside_the_parse_root_are_local(tmp_path: Path) -> None:
     with parse_root("etl-repo", tmp_path / "root"):
         location = location_for(str(tmp_path / "elsewhere" / "x.py"))

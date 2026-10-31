@@ -24,8 +24,9 @@ use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, wa
 use crate::output::TailBuffer;
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
-use crate::status::Termination;
-use crate::supervise::{Limits, Process, Signal, Stops, supervise};
+use crate::status::{StopReason, Termination};
+use crate::supervise::{Limits, Process, Signal, Stops, Supervised, supervise};
+use crate::usage::Ended;
 
 /// The environment variable with the runner's descriptor of its socket to the agent.
 pub const FD_ENV: &str = "SCHEDR_AGENT_FD";
@@ -89,6 +90,29 @@ pub async fn start_runner(
     mode: RunnerMode,
     spawned: impl FnOnce(i32),
 ) -> Result<Runner, LaunchError> {
+    let (process, mut stream, starting) = spawn_runner(spec, spawned).await?;
+    match handshake(&mut stream, mode, None).await {
+        Handshake::Said(Ok(())) => Ok(Runner {
+            process,
+            stream,
+            hello_after: starting.elapsed(),
+        }),
+        Handshake::Said(Err(error)) => {
+            abandon(process).await;
+            Err(error)
+        }
+        // Without stops, the handshake isn't cut short.
+        Handshake::Stopped(_) => unreachable!("a handshake without stops isn't stopped"),
+    }
+}
+
+/// Starts the runner described by `spec`, handing it its end of a new socket pair; `spawned`
+/// gets its process ID as soon as it runs. Returns the process, the agent's end of the
+/// socket, and when it was started.
+async fn spawn_runner(
+    spec: &ProcessSpec,
+    spawned: impl FnOnce(i32),
+) -> Result<(OsProcess, UnixStream, Instant), LaunchError> {
     let start = |what: &str, source| LaunchError::Start {
         what: what.to_owned(),
         source,
@@ -105,35 +129,65 @@ pub async fn start_runner(
     spawned(process.id());
     ours.set_nonblocking(true)
         .map_err(|e| start("the runner's socket", e))?;
-    let mut stream = UnixStream::from_std(ours).map_err(|e| start("the runner's socket", e))?;
-    match tokio::time::timeout(
-        RUNNER_START_TIMEOUT,
-        accept_runner(&mut stream, AGENT_VERSION),
-    )
-    .await
-    {
-        Ok(Ok(said)) if said == mode => {}
-        Ok(Ok(said)) => {
-            abandon(process).await;
-            return Err(LaunchError::WrongMode {
+    let stream = UnixStream::from_std(ours).map_err(|e| start("the runner's socket", e))?;
+    Ok((process, stream, starting))
+}
+
+/// How a runner's handshake ended.
+enum Handshake {
+    /// It said hello in `mode` (`Ok`), or didn't in time, or said something else.
+    Said(Result<(), LaunchError>),
+    /// A reason to stop the attempt came first (B56): its cancel, or its deadline passing.
+    Stopped(StopReason),
+}
+
+/// Waits for the runner's hello in `mode`, for at most [`RUNNER_START_TIMEOUT`]. With
+/// `stops`, an attempt's reasons to stop and its deadline (`None` for none) are raced
+/// against it: the first to come ends the wait.
+async fn handshake(
+    stream: &mut UnixStream,
+    mode: RunnerMode,
+    stops: Option<(&mut Stops, Option<tokio::time::Instant>)>,
+) -> Handshake {
+    let hello = async {
+        match tokio::time::timeout(RUNNER_START_TIMEOUT, accept_runner(stream, AGENT_VERSION)).await
+        {
+            Ok(Ok(said)) if said == mode => Ok(()),
+            Ok(Ok(said)) => Err(LaunchError::WrongMode {
                 expected: mode,
                 got: said,
-            });
+            }),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => Err(LaunchError::NoHello(RUNNER_START_TIMEOUT)),
         }
-        Ok(Err(error)) => {
-            abandon(process).await;
-            return Err(error.into());
-        }
-        Err(_) => {
-            abandon(process).await;
-            return Err(LaunchError::NoHello(RUNNER_START_TIMEOUT));
-        }
+    };
+    match unless_stopped(hello, stops).await {
+        Ok(said) => Handshake::Said(said),
+        Err(reason) => Handshake::Stopped(reason),
     }
-    Ok(Runner {
-        process,
-        stream,
-        hello_after: starting.elapsed(),
-    })
+}
+
+/// `work`'s result, unless a reason in `stops` or their deadline comes first (reasons first,
+/// as in `supervise`); `work` is then dropped. Without `stops`, `work` alone.
+async fn unless_stopped<T>(
+    work: impl Future<Output = T>,
+    stops: Option<(&mut Stops, Option<tokio::time::Instant>)>,
+) -> Result<T, StopReason> {
+    let Some((stops, deadline)) = stops else {
+        return Ok(work.await);
+    };
+    let deadline = async {
+        match deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        biased;
+        reason = stops.next_reason() => Err(reason),
+        () = deadline => Err(StopReason::TimedOut),
+        done = work => Ok(done),
+    }
 }
 
 /// How long a stopped runner's output may take to reach its log. A process it started in a
@@ -203,54 +257,70 @@ impl Process for TaskProcess {
     }
 }
 
+/// A task's runner as its start left it.
+enum Start {
+    /// It said hello: its process, its socket, and how long it took.
+    Ready(TaskProcess, UnixStream, Duration),
+    /// A reason to stop the attempt came first (B56): the process still runs, for
+    /// `supervise` to stop.
+    Stopped(TaskProcess, StopReason),
+    /// A reason to stop came while waiting for a fork server: no runner was started.
+    NotStarted(StopReason),
+}
+
 /// Starts a Python task's runner, forked by `forks` if they can (from the preloaded server
-/// only with `preload`), else spawned, and completes the handshake; `spawned` gets its process ID (and whether it was forked) as soon as it
-/// runs, and `hold` a forked one's [`GroupHold`]. A forked runner that fails the handshake
-/// isn't spawned again: it ran.
+/// only with `preload`), else spawned, and completes the handshake, unless a reason in `stops`
+/// or their deadline comes first (an attempt's; a parse runner has none); `spawned` gets its process ID (and whether it was forked) as
+/// soon as it runs, and `hold` a forked one's [`GroupHold`]. A forked runner that fails the
+/// handshake isn't spawned again: it ran.
 async fn start_task_runner(
     spec: &ProcessSpec,
     mode: RunnerMode,
     forks: Option<&ForkServers>,
     preload: bool,
     hold: &mut Option<GroupHold>,
+    stops: Option<(&mut Stops, Option<tokio::time::Instant>)>,
     spawned: impl FnOnce(i32, bool),
-) -> Result<(TaskProcess, UnixStream, Duration), LaunchError> {
+) -> Result<Start, LaunchError> {
     let starting = Instant::now();
-    if let Some(forks) = forks
-        && let Ok(Forked {
-            process,
-            mut stream,
-            hold: held,
-        }) = forks.fork(spec, mode, preload).await
+    let mut stops = stops;
+    // Waiting for a fork server (another runner's fork may hold it) is part of the start
+    // too (B56): a fork abandoned midway is the fork server's to recover from (out of step,
+    // restarted), and its runner, its channel closed, ends.
+    let forked = match forks {
+        Some(forks) => {
+            let again = stops
+                .as_mut()
+                .map(|(stops, deadline)| (&mut **stops, *deadline));
+            match unless_stopped(forks.fork(spec, mode, preload), again).await {
+                Ok(forked) => forked.ok(),
+                Err(reason) => return Ok(Start::NotStarted(reason)),
+            }
+        }
+        None => None,
+    };
+    let (mut process, mut stream) = if let Some(Forked {
+        process,
+        stream,
+        hold: held,
+    }) = forked
     {
         *hold = Some(held);
         spawned(process.id(), true);
-        let mut process = TaskProcess::Forked(process);
-        let said = tokio::time::timeout(
-            RUNNER_START_TIMEOUT,
-            accept_runner(&mut stream, AGENT_VERSION),
-        )
-        .await;
-        let error = match said {
-            Ok(Ok(said)) if said == mode => return Ok((process, stream, starting.elapsed())),
-            Ok(Ok(said)) => LaunchError::WrongMode {
-                expected: mode,
-                got: said,
-            },
-            Ok(Err(error)) => error.into(),
-            Err(_) => LaunchError::NoHello(RUNNER_START_TIMEOUT),
-        };
-        let _ = process.signal(Signal::Kill);
-        let _ = process.wait().await;
-        let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
-        return Err(error);
-    }
-    let runner = start_runner(spec, mode, |pid| spawned(pid, false)).await?;
-    Ok((
-        TaskProcess::Spawned(runner.process),
-        runner.stream,
-        runner.hello_after,
-    ))
+        (TaskProcess::Forked(process), stream)
+    } else {
+        let (process, stream, _) = spawn_runner(spec, |pid| spawned(pid, false)).await?;
+        (TaskProcess::Spawned(process), stream)
+    };
+    let error = match handshake(&mut stream, mode, stops).await {
+        Handshake::Said(Ok(())) => return Ok(Start::Ready(process, stream, starting.elapsed())),
+        Handshake::Stopped(reason) => return Ok(Start::Stopped(process, reason)),
+        Handshake::Said(Err(error)) => error,
+    };
+    let _ = process.signal(Signal::Kill);
+    let _ = process.wait().await;
+    let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+    Err(error)
 }
 
 /// Runs a Python task: starts the runner (forked by `forks` when there are any and they can,
@@ -267,22 +337,82 @@ pub async fn run_python(
     process: &ProcessSpec,
     request: TaskRequest,
     limits: Limits,
-    stop: Stops,
+    mut stop: Stops,
     forks: Option<&ForkServers>,
     hold: &mut Option<GroupHold>,
     spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
+    // The timeout counts from here: the runner's start is part of the attempt (B56).
+    let deadline = limits
+        .timeout
+        .map(|timeout| tokio::time::Instant::from_std(started) + timeout);
     // The task's own choice: never forked (`fresh_process`), or not from the preloaded server.
     let settings = &request.task.settings;
     let forks = forks.filter(|_| !settings.fresh_process);
     let preload = settings.preload;
-    let (mut process, mut stream, hello_after) =
-        start_task_runner(process, RunnerMode::Task, forks, preload, hold, spawned).await?;
+    let stops = Some((&mut stop, deadline));
+    let start = start_task_runner(
+        process,
+        RunnerMode::Task,
+        forks,
+        preload,
+        hold,
+        stops,
+        spawned,
+    );
+    let (mut process, mut stream, hello_after) = match start.await? {
+        Start::Ready(process, stream, hello_after) => (process, stream, hello_after),
+        // Cancelled or timed out before its hello: stopped as a running task is, the reason
+        // given back for `supervise` to take first; no request was sent, so no result.
+        Start::NotStarted(reason) => {
+            return Ok(Ran {
+                supervised: Supervised {
+                    termination: Termination::Unknown,
+                    stopped: Some(reason),
+                    killed: false,
+                },
+                runner_result: None,
+                output: None,
+                duration: started.elapsed(),
+                start: None,
+                forked: false,
+                ended: Ended::default(),
+            });
+        }
+        Start::Stopped(mut process, reason) => {
+            let forked = matches!(process, TaskProcess::Forked(_));
+            stop.give_back(reason);
+            let supervised = supervise(&mut process, limits, stop)
+                .await
+                .map_err(LaunchError::Supervise)?;
+            let ended = process.ended();
+            // A process it started in a session of its own may hold the pipes open.
+            let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+            return Ok(Ran {
+                supervised,
+                runner_result: None,
+                output: None,
+                duration: started.elapsed(),
+                start: None,
+                forked,
+                ended,
+            });
+        }
+    };
+    let limits = Limits {
+        timeout: deadline
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now())),
+        ..limits
+    };
     let forked = matches!(process, TaskProcess::Forked(_));
-    write_message(&mut stream, &AgentMessage::Task(Box::new(request))).await?;
-    let sent = Instant::now();
+    // Sent while supervised: a runner that doesn't read is stopped on time all the same (B56).
     let result = async {
+        let request = AgentMessage::Task(Box::new(request));
+        if write_message(&mut stream, &request).await.is_err() {
+            return (None, None);
+        }
+        let sent = Instant::now();
         let mut import = None;
         loop {
             let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
@@ -423,6 +553,7 @@ impl ParseRunner for ProcessParseRunner {
             forks,
             true,
             &mut hold,
+            None,
             |pgid, forked| {
                 // Told through `seen`, read when the runner's connection breaks (no one listens
                 // to its reason).
@@ -437,8 +568,12 @@ impl ParseRunner for ProcessParseRunner {
             },
         )
         .await;
-        let (process, stream, _) = match started {
-            Ok(started) => started,
+        let (process, stream) = match started {
+            Ok(Start::Ready(process, stream, _)) => (process, stream),
+            // Without stops, the handshake isn't cut short.
+            Ok(Start::Stopped(..) | Start::NotStarted(_)) => {
+                unreachable!("a parse runner's start has no stops")
+            }
             Err(error) => {
                 drop(watching);
                 drop(hold);

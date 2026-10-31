@@ -347,10 +347,22 @@ def test_an_output_nested_too_deeply_is_refused() -> None:
 
 def test_a_timedelta_beyond_64_bits_of_microseconds_is_refused() -> None:
     # Grok: it would come back from the agent as an inexact float, unreadable.
+    # B131: the limits are 2**64 - 1 and -2**63 microseconds, about 213,503,982 and
+    # -106,751,991 days (the message said 213,503).
     assert encode(timedelta(days=100_000), timedelta) == {"$timedelta": 8_640_000_000_000_000}
-    with pytest.raises(CodecError, match="at most about 213,503 days"):
+    assert encode(timedelta(days=213_503_982), timedelta) == {
+        "$timedelta": 213_503_982 * 86_400_000_000
+    }
+    assert encode(timedelta(days=-106_751_991), timedelta) == {
+        "$timedelta": -106_751_991 * 86_400_000_000
+    }
+    limits = "from about -106,751,991 to 213,503,982 days"
+    for beyond in (timedelta(days=213_503_983), timedelta(days=-106_751_992)):
+        with pytest.raises(CodecError, match=limits):
+            encode(beyond, timedelta)
+    with pytest.raises(CodecError, match=limits):
         encode(timedelta.max, timedelta)
-    with pytest.raises(CodecError, match="at most about 213,503 days"):
+    with pytest.raises(CodecError, match=limits):
         encode_any(timedelta.min)
 
 

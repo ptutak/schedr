@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
@@ -523,6 +524,60 @@ def test_a_literal_beside_a_reference_in_an_optional_container_is_checked() -> N
         take([number(), "nope"], None)  # type: ignore[list-item]
     with pytest.raises(TypeError, match=r"argument `pair`\[1\]: expected str, got int"), Dag("f"):
         take(None, (number(), 2))  # type: ignore[arg-type]
+
+
+class _Pair(TypedDict):
+    x: int
+    y: int
+
+
+@dataclass
+class _Point:
+    x: int
+    y: int = 0
+
+
+def test_a_container_with_references_must_fit_one_form_of_a_union() -> None:
+    # B111: the elements were checked against the members' element types taken together.
+    @task
+    def number() -> int:
+        return 1
+
+    @task
+    def take(xs: list[int] | list[str]) -> None: ...
+
+    with Dag("d"):
+        take([number(), 2])
+    with (
+        pytest.raises(TypeError, match=r"a list that fits no form of `list\[int\] \| list\[str\]`"),
+        Dag("e"),
+    ):
+        take([number(), "bad"])  # type: ignore[list-item]
+    registry.take_defined()
+
+
+def test_a_record_with_references_needs_its_required_keys_and_no_others() -> None:
+    # B112: a TypedDict, dataclass or model written with references inside wasn't checked
+    # for its keys.
+    @task
+    def number() -> int:
+        return 1
+
+    @task
+    def pair(p: _Pair) -> None: ...
+
+    @task
+    def point(p: _Point) -> None: ...
+
+    with Dag("d"):
+        n = number()
+        pair({"x": n, "y": 2})
+        point({"x": n})  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="`_Pair` needs `y`"), Dag("e"):
+        pair({"x": number()})  # type: ignore[typeddict-item]
+    with pytest.raises(TypeError, match="expects `_Point`, but gets a dict"), Dag("f"):
+        point({"x": number(), "z": 1})  # type: ignore[arg-type]
+    registry.take_defined()
 
 
 def test_a_dict_shaped_like_a_tag_beside_a_reference_is_escaped() -> None:

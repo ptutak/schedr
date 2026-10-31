@@ -1437,6 +1437,42 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
     assert_eq!(expired().await, i64::try_from(width).unwrap());
 }
 
+#[tokio::test]
+async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
+    // B52: unstarted attempts are read a round's worth at a time; those whose `Started`
+    // waits in memory are left out after reading, so they must not use up the read.
+    let width = EXPIRIES_PER_ROUND + 5;
+    let tasks: Vec<Json> = (0..width)
+        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
+        .collect();
+    let wide: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": []
+    }))
+    .unwrap();
+    let (dispatcher, db, _run_id) = with_run(wide).await;
+    let arrivals = crate::core::Arrivals::default();
+    let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
+    dispatcher
+        .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
+        .await
+        .unwrap();
+    while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
+    let unstarted = db.unstarted_attempts(later(11), 1000).await.unwrap();
+    assert_eq!(unstarted.len(), width);
+    // The oldest ones' starts arrived and wait for a busy master.
+    for attempt in &unstarted[..EXPIRIES_PER_ROUND] {
+        arrivals.start_arrived("w1", &attempt.id);
+    }
+    dispatcher.step(later(11)).await.unwrap();
+    let left = db.unstarted_attempts(later(11), 1000).await.unwrap();
+    let ids = |attempts: &[schedr_db::attempts::StoredAttempt]| -> Vec<String> {
+        attempts.iter().map(|a| a.id.clone()).collect()
+    };
+    assert_eq!(ids(&left), ids(&unstarted[..EXPIRIES_PER_ROUND]));
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_read_back_checks_through_its_window_and_stops_when_it_sees_the_work() {
     let read_back = ReadBack {

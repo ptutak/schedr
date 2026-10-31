@@ -104,7 +104,8 @@ active worker). `message` is the same line the text output prints (`ok: ...` on 
 
 `schedr dags test <dag> [--for TIME] [--path PATH]` runs one real run in a temporary
 standalone: its own SQLite database, and every task in its own process. `--path` is a
-file or a directory. Without it, the command uses the configured DAG roots, or the
+file or a directory. A file is tested alone: only it is parsed, though it can import the
+modules beside it. Without `--path`, the command uses the configured DAG roots, or the
 current directory.
 
 The run is manual. `--for` is its `planned_for`; omitted, it is now. The window follows

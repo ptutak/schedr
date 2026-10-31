@@ -1,0 +1,20 @@
+title = "an order edge narrowed with .on() from a mapped task is never taken"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "`results.on(Rows) >> report()` over a mapped `results` always skips `report`, silently (the run succeeds)"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Claude while fixing B80, confirmed by a side note and a run:
+  `fetch.expand(p=["a", "b"])` with both instances returning `Rows`, then
+  `results.on(Rows) >> report()`: `report` ends `skipped`, the run `success`. The DAG loads
+  (`_build.py`, `>>` takes `_schedr_on` from a `Mapped`); the master compares the order
+  edge's `Rows` with the whole mapped task's own outcome, `SUCCESS`, which only says its
+  instances ended (`progress.rs`, `edge_state`). The same for `.on(...)` on a group whose
+  leaf is mapped, probably.
+- **A fix:** to decide: A refuse `.on(...)` on a mapped task outside `.expand()` at load, as
+  arguments already are (`_refuse_whole_mapped`: "narrowing the list has no single
+  meaning"); B give it a meaning (taken when every instance, or any, ended with one of the
+  outcomes).
+'''

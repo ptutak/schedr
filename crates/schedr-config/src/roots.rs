@@ -20,6 +20,10 @@ pub struct Root {
     pub name: String,
     /// The directory.
     pub path: PathBuf,
+    /// Only these `.py` files of it are parsed (paths relative to it), the others still
+    /// importable: `schedr dags test` of one file (decision 117, B118). Never from the
+    /// configuration file: every configured root is parsed whole.
+    pub only: Option<Vec<String>>,
 }
 
 /// Why a path list and its renames don't make a valid set of roots.
@@ -229,7 +233,15 @@ pub fn resolve_roots(
                 second: path,
             });
         }
-        roots.push(Root { name, path });
+        // Absolute, against the working directory the role starts in: the agent runs parse
+        // jobs and tasks in the root's directory, and gives them the root's path too (B60: a
+        // relative `dags/etl` became `dags/etl/dags/etl/dag.py`).
+        let path = std::path::absolute(&path).unwrap_or(path);
+        roots.push(Root {
+            name,
+            path,
+            only: None,
+        });
     }
     Ok(roots)
 }

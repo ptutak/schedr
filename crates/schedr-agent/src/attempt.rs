@@ -140,6 +140,9 @@ impl AttemptSpec {
 pub struct WorkerSetup {
     /// The DAG roots, by name.
     pub roots: BTreeMap<String, PathBuf>,
+    /// The roots of which only some `.py` files are parsed, those files by root (decision
+    /// 117: `schedr dags test` of one file); a root not here is parsed whole.
+    pub parse_only: BTreeMap<String, Vec<String>>,
     /// The interpreter for Python tasks (`[dags] interpreter`).
     pub python: PathBuf,
     /// The agent's own environment (the allow-listed variables pass to tasks).

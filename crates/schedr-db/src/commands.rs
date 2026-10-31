@@ -295,18 +295,20 @@ impl Database {
         }))
     }
 
-    /// The pending commands, oldest first.
+    /// The oldest `limit` pending commands, oldest first: a backlog is read a round's worth at
+    /// a time, not whole each round (B52).
     ///
     /// # Errors
     ///
     /// [`DbError::Sqlx`] if the query fails.
-    pub async fn pending_commands(&self) -> Result<Vec<PendingCommand>, DbError> {
+    pub async fn pending_commands(&self, limit: u32) -> Result<Vec<PendingCommand>, DbError> {
         const PENDING: &str = "SELECT id{text}, payload{text}, requested_by, \
             {ts<}requested_at{>ts}, {ts<}applying_at{>ts} FROM commands \
-            WHERE status = 'pending' ORDER BY requested_at, id";
+            WHERE status = 'pending' ORDER BY requested_at, id LIMIT $1";
         type Row = (String, String, String, String, Option<String>);
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, PENDING))
+                .bind(i64::from(limit))
                 .fetch_all(pool)
                 .await?
         });

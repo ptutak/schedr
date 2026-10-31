@@ -46,7 +46,10 @@ from schedr._model import (
 )
 from schedr._serialization import (
     CodecError,
+    TypeModelError,
+    assignment_problem,
     decode,
+    describe,
     encode_any,
     escaped,
     follow_path,
@@ -58,6 +61,7 @@ from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
     SEQUENCE_ORIGINS,
     is_union,
+    label,
     shaped_members,
     tuple_items,
     type_hints,
@@ -202,12 +206,14 @@ class GroupScope:
         options: The options its tasks get unless they set their own (its parents' under
             its own).
         members: The tasks in it, nested groups' included, in definition order.
+        dag: The DAG it belongs to (a group used in another is refused, B125).
     """
 
     id: str
     parent: str | None
     options: TaskOptions
     members: list[str] = field(default_factory=list)
+    dag: DagBuilder | None = field(default=None, compare=False, repr=False)
 
 
 class DagBuilder:
@@ -273,7 +279,9 @@ class DagBuilder:
             raise IdError(f"group `{group_id}` has the ID of a task of DAG `{self.dag_id}`")
         parent = self.open_groups[-1] if self.open_groups else None
         inherited = parent.options if parent is not None else TaskOptions()
-        scope = GroupScope(group_id, parent.id if parent else None, options.over(inherited))
+        scope = GroupScope(
+            group_id, parent.id if parent else None, options.over(inherited), dag=self
+        )
         self.groups[group_id] = scope
         self.open_groups.append(scope)
         return scope
@@ -647,14 +655,15 @@ def active() -> DagBuilder | None:
     return _ACTIVE[-1] if _ACTIVE else None
 
 
-def check_same_dag(owner: DagBuilder | None, task_id: str) -> None:
-    """Refuses a task's handle from one DAG used while defining another (B107).
+def check_same_dag(owner: DagBuilder | None, task_id: str, kind: str = "task") -> None:
+    """Refuses a task's handle, or a group, from one DAG used while defining another (B107).
 
     Task IDs are per DAG: taken by ID alone, it would stand for this DAG's task of that name.
 
     Args:
-        owner: The DAG the handle's task belongs to.
-        task_id: The task.
+        owner: The DAG the handle's task (or the group) belongs to.
+        task_id: The task (or the group).
+        kind: ``task`` or ``group``, for the message.
 
     Raises:
         ValueError: If another DAG is being defined.
@@ -662,8 +671,9 @@ def check_same_dag(owner: DagBuilder | None, task_id: str) -> None:
     builder = active()
     if owner is not None and builder is not None and owner is not builder:
         raise ValueError(
-            f"task `{task_id}` belongs to DAG `{owner.dag_id}`, not `{builder.dag_id}`: a task "
-            "or output of one DAG can't be used in another (call the task again in this DAG)"
+            f"{kind} `{task_id}` belongs to DAG `{owner.dag_id}`, not `{builder.dag_id}`: a "
+            "task, output or group of one DAG can't be used in another (define it again in "
+            "this DAG)"
         )
 
 
@@ -818,6 +828,150 @@ def check_literals(value: Value, annotation: object, where: str) -> None:
                     raise TypeError(f"{where}[{step!r}]: {e.reason}") from None
         else:
             check_literals(child, element, f"{where}[{step!r}]")
+
+
+def check_fits(builder: DagBuilder, value: Value, annotation: object, where: str) -> None:
+    """Checks that a list or dict holding references fits its parameter's type as a whole.
+
+    The checks of each element (references, literals, t-strings) take a union's element types
+    together; this one asks that the whole value fit one member (B111), with a model's,
+    dataclass's or ``TypedDict``'s required keys present and no unknown ones (B112), as the
+    task builds it.
+
+    Args:
+        builder: The DAG being defined (for upstream output types).
+        value: The converted argument.
+        annotation: The parameter's annotation.
+        where: The argument, for messages.
+
+    Raises:
+        TypeError: When it fits no form of the type.
+    """
+    if isinstance(value, ListValue | MapValue):
+        problem = _misfit(builder, value, annotation, where)
+        if problem is not None:
+            raise TypeError(f"{where}: {problem}")
+
+
+def _misfit(builder: DagBuilder, value: Value, annotation: object, where: str) -> str | None:  # noqa: PLR0911
+    """Why ``value`` isn't a value of ``annotation`` (see :func:`check_fits`), else ``None``."""
+    annotation = unwrap(annotation)
+    if annotation is Any or annotation is object:
+        return None
+    match value:
+        case LiteralValue(value=literal):
+            try:
+                decode(literal, annotation)
+            except CodecError as e:
+                return e.reason
+            return None
+        case RefValue(reference=reference):
+            return _reference_misfit(builder, reference, annotation, where)
+        case TemplateValue():
+            return _place_misfit(ScalarType("str"), annotation, "a t-string")
+        case ListValue() | MapValue():
+            if not is_union(annotation):
+                return _container_misfit(builder, value, annotation, where)
+            shape = list if isinstance(value, ListValue) else dict
+            members = shaped_members(annotation, shape)
+            problems = [_container_misfit(builder, value, m, where) for m in members]
+            if any(problem is None for problem in problems):
+                return None
+            first = f": {problems[0]}" if problems else ""
+            return f"a {shape.__name__} that fits no form of `{label(annotation)}`{first}"
+    return None
+
+
+def _reference_misfit(
+    builder: DagBuilder, reference: Reference, annotation: object, where: str
+) -> str | None:
+    """Why a reference's data can't fill a place of type ``annotation``, else ``None``."""
+    produced = reference_type(builder, reference, where)
+    return _place_misfit(produced, annotation, f"`{reference_label(reference)}`")
+
+
+def _place_misfit(produced: TypeDesc, annotation: object, what: str) -> str | None:
+    """Why ``what``, of type ``produced``, can't fill a place of type ``annotation``."""
+    try:
+        expected = describe(annotation, "input")
+    except TypeModelError:
+        return None  # described, and refused, where the parameter is
+    problem = assignment_problem(produced, expected)
+    if problem is None:
+        return None
+    reason = f": {problem}" if problem else ""
+    return f"expects `{type_name(expected)}`, but {what} is `{type_name(produced)}`{reason}"
+
+
+def _container_misfit(  # noqa: PLR0911
+    builder: DagBuilder, value: ListValue | MapValue, annotation: object, where: str
+) -> str | None:
+    """Why a written list or dict isn't a value of ``annotation`` (no union), else ``None``."""
+    annotation = unwrap(annotation)
+    if annotation is Any or annotation is object:
+        return None
+    origin, args = get_origin(annotation), get_args(annotation)
+    if isinstance(value, ListValue):
+        if origin is tuple:
+            types_ = tuple_items(args)
+            if len(types_) != len(value.items):
+                return f"expects a tuple of {len(types_)}, but gets {len(value.items)} values"
+            pairs = list(zip(value.items, types_, strict=True))
+        elif origin in SEQUENCE_ORIGINS or annotation in SEQUENCE_ORIGINS:
+            item = args[0] if args else Any
+            pairs = [(v, item) for v in value.items]
+        else:
+            return f"expects `{label(annotation)}`, but gets a list"
+        return _first_misfit(builder, pairs, where)
+    if origin in MAPPING_ORIGINS or annotation in MAPPING_ORIGINS:
+        item = args[1] if len(args) == 2 else Any  # noqa: PLR2004
+        return _first_misfit(builder, [(v, item) for v in value.entries.values()], where)
+    keys = _record_keys(annotation)
+    if keys is None:
+        return f"expects `{label(annotation)}`, but gets a dict"
+    hints, required = keys
+    name = label(annotation)
+    if unknown := sorted(set(value.entries) - set(hints)):
+        return f"`{name}` has no field {', '.join(f'`{k}`' for k in unknown)}"
+    if missing := sorted(required - set(value.entries)):
+        return f"`{name}` needs {', '.join(f'`{k}`' for k in missing)}"
+    return _first_misfit(builder, [(v, hints[k]) for k, v in value.entries.items()], where)
+
+
+def _first_misfit(
+    builder: DagBuilder, pairs: Sequence[tuple[Value, object]], where: str
+) -> str | None:
+    """The first element that doesn't fit its type."""
+    for child, element in pairs:
+        problem = _misfit(builder, child, element, where)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _record_keys(annotation: object) -> tuple[dict[str, object], set[str]] | None:
+    """A model's, dataclass's or ``TypedDict``'s fields and the required ones, else ``None``."""
+    if not isinstance(annotation, type):
+        return None
+    if is_model(annotation):
+        fields = getattr(annotation, "model_fields", {})
+        hints = {name: f.annotation for name, f in fields.items()}
+        return hints, {name for name, f in fields.items() if f.is_required()}
+    if dataclasses.is_dataclass(annotation):
+        hints = type_hints(annotation, f"`{annotation.__name__}`")
+        required = {
+            f.name
+            for f in dataclasses.fields(annotation)
+            if f.init
+            and f.default is dataclasses.MISSING
+            and f.default_factory is dataclasses.MISSING
+        }
+        init = {f.name for f in dataclasses.fields(annotation) if f.init}
+        return {k: v for k, v in hints.items() if k in init}, required
+    if is_typeddict(annotation):
+        hints = type_hints(annotation, f"`{annotation.__name__}`")
+        return hints, set(getattr(annotation, "__required_keys__", ()))
+    return None
 
 
 def _element_annotation(annotation: object, step: str | int) -> object:  # noqa: PLR0911
@@ -978,6 +1132,7 @@ def task_ids_of(operand: object, what: str, *, upstream: bool = True) -> list[st
     for item in items:
         scope = getattr(item, "_schedr_group", None)
         if isinstance(scope, GroupScope):
+            check_same_dag(scope.dag, scope.id, "group")
             ends = require_active(f"`{what}`").ends(scope, upstream=upstream)
             if not ends:
                 raise ValueError(
@@ -1013,7 +1168,8 @@ def _check_operand(operand: object, what: str) -> None:
     """Refuses a ``>>`` operand that is no task, output or group, where it is written."""
     items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]
     for item in items:
-        if isinstance(getattr(item, "_schedr_group", None), GroupScope):
+        if isinstance(scope := getattr(item, "_schedr_group", None), GroupScope):
+            check_same_dag(scope.dag, scope.id, "group")
             continue
         if not isinstance(getattr(item, "_schedr_task_id", None), str):
             raise TypeError(f"`{what}` needs tasks or outputs, got {type(item).__name__}")

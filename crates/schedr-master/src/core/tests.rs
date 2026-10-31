@@ -267,6 +267,34 @@ async fn a_result_the_database_refuses_is_stored_as_the_attempts_failure() {
 }
 
 #[tokio::test]
+async fn a_refused_results_failure_keeps_nothing_that_would_be_refused_again() {
+    // B127: the fallback kept the worker's code hash as it was; one holding NUL (which
+    // Postgres refuses, stood in for here by a trigger) refused the fallback too, and the
+    // `Finished` was dropped unacknowledged, its attempt left running.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    refuse(&core, "attempts", "instr(NEW.code_hash, char(0)) > 0").await;
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: assign.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: b"null".to_vec(),
+        code_hash: "sha256-ab\0cd".to_owned(),
+        ..pb::Finished::default()
+    });
+    let ack = core.handle("w1", finished, ts(NOW)).await.unwrap();
+    assert!(matches!(
+        message(&ack[0]),
+        master_message::Message::FinishedAck(_)
+    ));
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Failed));
+}
+
+#[tokio::test]
 async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end() {
     let mut core = with_dag().await;
     trigger(&mut core).await;
@@ -491,6 +519,91 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
     assert_eq!(
         registered.decisions[0].decision,
         i32::from(pb::AttemptDecision::Kill)
+    );
+}
+
+#[tokio::test]
+async fn a_registration_goes_on_when_adopting_an_attempt_is_refused_for_its_data() {
+    // B128: the database refusing an open attempt's start, for its data, refused every
+    // registration, so the worker could never send that attempt's `Finished` again.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    refuse(
+        &core,
+        "attempts",
+        "NEW.started_at IS NOT NULL AND OLD.started_at IS NULL AND NEW.status IS NULL",
+    )
+    .await;
+    let journal = vec![pb::JournalEntry {
+        attempt_id: assign.attempt_id.clone(),
+        state: pb::JournalState::Finished.into(),
+    }];
+    let (registered, _) = core
+        .register(&register("w1", "i1", journal), later(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue)
+    );
+    // The worker runs it still, as far as the master knows: its slot is taken.
+    let w1 = core.dispatcher().workers().get("w1").unwrap();
+    assert_eq!(w1.free_slots(), w1.slots - 1);
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: assign.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: b"null".to_vec(),
+        ..pb::Finished::default()
+    });
+    core.handle("w1", finished, later(6)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
+}
+
+#[tokio::test]
+async fn an_attempt_adopted_unrecorded_isnt_taken_back_while_its_worker_runs_it() {
+    // Codex's review of B128: the start left unrecorded, the attempt counted as never started
+    // and expired while the worker ran it, and its task was assigned again (run twice).
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    refuse(
+        &core,
+        "attempts",
+        "NEW.started_at IS NOT NULL AND OLD.started_at IS NULL AND NEW.status IS NULL",
+    )
+    .await;
+    let journal = vec![pb::JournalEntry {
+        attempt_id: assign.attempt_id.clone(),
+        state: pb::JournalState::Running.into(),
+    }];
+    core.register(&register("w1", "i1", journal), later(5))
+        .await
+        .unwrap();
+    let out = core.tick(later(11)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None, "{out:?}");
+    assert!(
+        !out.iter()
+            .any(|o| matches!(message(o), master_message::Message::AssignTask(_))),
+        "{out:?}"
+    );
+    // Once its worker is lost, it is taken back as an attempt never started.
+    core.disconnected("w1", later(12)).await.unwrap();
+    core.tick(later(73)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        attempt.status,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
     );
 }
 

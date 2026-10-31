@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -78,11 +78,13 @@ fn resolves_dag_and_script_roots() {
         vec![
             Root {
                 name: "etl".into(),
-                path: "/git/dags/etl-repo".into()
+                path: "/git/dags/etl-repo".into(),
+                only: None
             },
             Root {
                 name: "ml".into(),
-                path: "/git/dags/ml".into()
+                path: "/git/dags/ml".into(),
+                only: None
             },
         ]
     );
@@ -90,7 +92,8 @@ fn resolves_dag_and_script_roots() {
         config.script_roots,
         vec![Root {
             name: "ops".into(),
-            path: "/git/scripts/ops".into()
+            path: "/git/scripts/ops".into(),
+            only: None
         }]
     );
 }
@@ -202,9 +205,11 @@ fn every_figment_error_is_kept_in_the_message() {
 }
 
 #[test]
-fn paths_in_roots_are_kept_as_given() {
+fn a_relative_path_in_roots_is_made_absolute() {
+    // B60: kept as given, a relative root broke parsing and task imports.
     let config = load(None, &env(&[("SCHEDR_DAG_PATH", "dags/local")]), &[]).unwrap();
-    assert_eq!(config.dag_roots[0].path, PathBuf::from("dags/local"));
+    let here = std::env::current_dir().unwrap();
+    assert_eq!(config.dag_roots[0].path, here.join("dags/local"));
 }
 
 #[test]

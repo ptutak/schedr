@@ -203,7 +203,7 @@ async fn actions_become_pending_commands_by_the_user() {
         assert_eq!(body["kind"], format!("{action}_task"));
     }
     let commands: Vec<_> = db
-        .pending_commands()
+        .pending_commands(100)
         .await
         .unwrap()
         .into_iter()
@@ -301,7 +301,7 @@ async fn bad_bodies_and_ids_are_rejected_before_any_command() {
             json!({"error": "`nope` isn't a command ID"})
         )
     );
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
 }
 
 #[tokio::test]
@@ -894,7 +894,7 @@ async fn a_mapped_tasks_instance_must_be_one_it_has() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let commands: Vec<_> = db
-        .pending_commands()
+        .pending_commands(100)
         .await
         .unwrap()
         .into_iter()

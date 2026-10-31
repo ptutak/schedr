@@ -39,7 +39,7 @@ async fn commands_wait_as_pending_oldest_first() {
         )
         .await
         .unwrap();
-    let pending = db.pending_commands().await.unwrap();
+    let pending = db.pending_commands(100).await.unwrap();
     let ids: Vec<&str> = pending.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids, [first.as_str(), second.as_str()]);
     assert_eq!(pending[1].command, Ok(pause()));
@@ -51,6 +51,20 @@ async fn commands_wait_as_pending_oldest_first() {
         ("pause_dag", CommandStatus::Pending, None)
     );
     assert_eq!(record.requested_at, ts("2026-10-21T08:00:01Z"));
+}
+
+#[tokio::test]
+async fn pending_commands_are_read_so_many_at_a_time() {
+    // B52: a backlog read a round's worth at a time, the oldest first.
+    let db = migrated().await;
+    let mut ids = Vec::new();
+    for second in 0..3 {
+        let at = ts(&format!("2026-10-21T08:00:0{second}Z"));
+        ids.push(db.insert_command(&pause(), "anna", at).await.unwrap());
+    }
+    let pending = db.pending_commands(2).await.unwrap();
+    let read: Vec<&str> = pending.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(read, [ids[0].as_str(), ids[1].as_str()]);
 }
 
 #[tokio::test]
@@ -77,7 +91,7 @@ async fn a_command_is_decided_once() {
     assert_eq!(record.result, Some(result));
     assert_eq!(record.reason, None);
     assert_eq!(record.decided_at, Some(now));
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
     assert_eq!(
         db.command("0190a3e5-0000-7000-8000-000000000000")
             .await
@@ -102,7 +116,7 @@ async fn payloads_that_dont_read_are_reported_for_rejection() {
     .execute(pool)
     .await
     .unwrap();
-    let pending = db.pending_commands().await.unwrap();
+    let pending = db.pending_commands(100).await.unwrap();
     assert_eq!(pending[0].id, id);
     assert!(pending[0].command.is_err());
     // Damaged outside schedr: the index over `result` (evaluated on every write) refuses
@@ -140,11 +154,11 @@ async fn a_command_marked_applying_reads_so_until_decided() {
         .insert_command(&pause(), "anna", ts("2026-10-21T08:00:00Z"))
         .await
         .unwrap();
-    assert!(!db.pending_commands().await.unwrap()[0].applying);
+    assert!(!db.pending_commands(100).await.unwrap()[0].applying);
     db.mark_applying(&id, ts("2026-10-21T08:00:01Z"))
         .await
         .unwrap();
-    assert!(db.pending_commands().await.unwrap()[0].applying);
+    assert!(db.pending_commands(100).await.unwrap()[0].applying);
     db.decide_command(
         &id,
         CommandStatus::Applied,
@@ -158,7 +172,7 @@ async fn a_command_marked_applying_reads_so_until_decided() {
     db.mark_applying(&id, ts("2026-10-21T08:00:03Z"))
         .await
         .unwrap();
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
 }
 
 #[tokio::test]

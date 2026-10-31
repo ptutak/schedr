@@ -117,6 +117,11 @@ class Output[T]:
         self._dag = dag or _build.active()
 
     @property
+    def _schedr_dag_id(self) -> str | None:
+        """The DAG the task belongs to, checked when a branch returns it (B126)."""
+        return self._dag.dag_id if self._dag is not None else None
+
+    @property
     def _schedr_task_id(self) -> str:
         _build.check_same_dag(self._dag, self._task)
         return self._task
@@ -329,6 +334,11 @@ class _OutcomeOutput:
     def __init__(self, task_id: str, dag: _build.DagBuilder | None) -> None:
         self._task = task_id
         self._dag = dag
+
+    @property
+    def _schedr_dag_id(self) -> str | None:
+        """The DAG the task belongs to, checked when a branch returns it (B126)."""
+        return self._dag.dag_id if self._dag is not None else None
 
     @property
     def _schedr_task_id(self) -> str:
@@ -702,6 +712,8 @@ class TaskFunction[**P, R]:
             whole = elementwise and isinstance(converted, RefValue)
             if isinstance(reference, OutputRef | OutcomeRef) and not whole:
                 builder.none_checks.append((task_id, where, reference, at))
+        # The whole value against one form of the type (B111, B112).
+        _build.check_fits(builder, converted, annotation, where)
         if isinstance(converted, LiteralValue):
             try:
                 converted = LiteralValue(encode(value, annotation))

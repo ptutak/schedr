@@ -689,7 +689,7 @@ impl Execution {
             );
             let size = match dim {
                 Dim::Lane(upstream) => progress.instances(upstream).map_or(0, |i| i.states.len()),
-                Dim::Values(value) => match mapping::resolve(value, &sources) {
+                Dim::Values(value) => match mapping::resolve_mapped(value, &sources) {
                     Ok(serde_json::Value::Array(items)) => {
                         if name.is_none() && items.iter().any(|item| !item.is_object()) {
                             return Ok(Expansion::Fail(format!(

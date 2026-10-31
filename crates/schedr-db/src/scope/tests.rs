@@ -39,11 +39,11 @@ async fn work_that_succeeds_is_stored_at_once_and_reads_its_own_writes() {
         db.insert_command(&trigger(), "anna", now()).await?;
         db.insert_command(&trigger(), "anna", now()).await?;
         // Inside, the work's own writes are there (they go through its transaction).
-        let inside = db.pending_commands().await?.len();
+        let inside = db.pending_commands(100).await?.len();
         // Outside (another task, another connection), not yet.
         let outside = tokio::spawn({
             let db = db.clone();
-            async move { db.pending_commands().await.unwrap().len() }
+            async move { db.pending_commands(100).await.unwrap().len() }
         })
         .await
         .unwrap();
@@ -52,7 +52,7 @@ async fn work_that_succeeds_is_stored_at_once_and_reads_its_own_writes() {
     .await
     .unwrap();
     assert_eq!(seen, (2, 0));
-    assert_eq!(db.pending_commands().await.unwrap().len(), 2);
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -65,10 +65,10 @@ async fn work_that_fails_stores_nothing() {
     }))
     .await;
     assert!(matches!(failed, Err(DbError::NotLeading)), "{failed:?}");
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
     // The connection went back usable.
     db.insert_command(&trigger(), "anna", now()).await.unwrap();
-    assert_eq!(db.pending_commands().await.unwrap().len(), 1);
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -87,7 +87,7 @@ async fn work_inside_work_joins_its_transaction() {
     .await;
     assert!(failed.is_err());
     // The inner work was part of the outer one: rolled back with it.
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
 }
 
 #[tokio::test]
@@ -111,7 +111,7 @@ async fn a_masters_work_is_refused_once_its_lease_was_taken_over() {
     }))
     .await;
     assert!(matches!(refused, Err(DbError::NotLeading)), "{refused:?}");
-    assert_eq!(db.pending_commands().await.unwrap().len(), 1);
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -138,7 +138,7 @@ async fn a_write_that_failed_voids_the_work_even_if_its_error_was_handled() {
     }))
     .await;
     assert!(matches!(done, Err(DbError::TransactionFailed)), "{done:?}");
-    assert_eq!(db.pending_commands().await.unwrap(), []);
+    assert_eq!(db.pending_commands(100).await.unwrap(), []);
 }
 
 #[tokio::test]

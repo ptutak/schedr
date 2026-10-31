@@ -12,7 +12,7 @@ import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin
+from typing import Any, Union, get_args, get_origin, is_typeddict
 
 from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
 from schedr._serialization.annotations import (
@@ -196,7 +196,8 @@ def build(
                 _narrowed(value["ref"], annotation, outcomes),
             )
         if "template" in value:
-            return render(value["template"], inputs, run, outcomes)
+            # Text, which must fit the place it fills (B124: a union member taking it).
+            return decode(render(value["template"], inputs, run, outcomes), annotation)
         return _built(value, unwrap(annotation), inputs, run, outcomes)
     except CodecError as e:
         raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
@@ -265,6 +266,12 @@ def _built_map(
         item = args[1] if origin in MAPPING_ORIGINS and args else Any
         return {k: build(v, item, inputs, run, outcomes) for k, v in fields.items()}
     hints = type_hints(target, f"`{target.__name__}`")
+    if is_typeddict(target):
+        # Its keys, as a dataclass or a model checks its fields when built (B124).
+        if unknown := sorted(set(fields) - set(hints)):
+            raise TaskInputError(f"`{target.__name__}` has no field `{unknown[0]}`")
+        if missing := sorted(set(getattr(target, "__required_keys__", ())) - set(fields)):
+            raise TaskInputError(f"`{target.__name__}` needs `{missing[0]}`")
     built = {k: build(v, hints.get(k, Any), inputs, run, outcomes) for k, v in fields.items()}
     try:
         if dataclasses.is_dataclass(target):
@@ -287,32 +294,53 @@ def _narrowed(
     outcome = (outcomes or {}).get(reference.get("task", ""))
     if reference.get("kind") != "output" or reference.get("path"):
         return annotation
-    return _member_named(annotation, outcome)
+    return member_named(annotation, outcome)
 
 
-def _member_named(annotation: object, outcome: object) -> object:
-    """The member of a union annotation named `outcome`, else the annotation."""
+def member_named(annotation: object, outcome: object) -> object:
+    """The member of a union annotation named by an outcome.
+
+    A member is named by its class, through ``Annotated`` and generic parameters (B123),
+    as outcome detection names it.
+
+    Args:
+        annotation: The receiving type.
+        outcome: The recorded outcome's name (anything else picks nothing).
+
+    Returns:
+        The member, else the annotation as it is.
+    """
     if not isinstance(outcome, str) or get_origin(unwrap(annotation)) not in {
         Union,
         types.UnionType,
     }:
         return annotation
     for member in get_args(unwrap(annotation)):
-        if getattr(get_origin(member) or member, "__name__", None) == outcome:
+        target = unwrap(member)
+        if getattr(get_origin(target) or target, "__name__", None) == outcome:
             return member
     return annotation
 
 
-def mapped_arguments(inputs: Mapping[str, Any], hints: Mapping[str, Any]) -> dict[str, Any]:
+def mapped_arguments(
+    inputs: Mapping[str, Any],
+    hints: Mapping[str, Any],
+    run: Mapping[str, Any] | None = None,
+    upstream_outcomes: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """A mapped task instance's own arguments: the elements the master resolved for it.
 
     They come with the inputs under ``$expand`` (decision 76); one taken element by element
     from a mapped upstream task has that instance's outcome under ``$expand_outcomes``, which
-    picks the member of a union to decode it as.
+    picks the member of a union to decode it as. An element written in the file with a
+    t-string or a ``dag_ctx`` value comes in its stored form under ``$expand_values``, built
+    here as an argument is (decision 118).
 
     Args:
         inputs: The instance's inputs.
         hints: The task function's type hints.
+        run: The run information, for ``$expand_values``.
+        upstream_outcomes: The upstream tasks' outcomes, for ``$expand_values``.
 
     Returns:
         The arguments by parameter name (none for a task that isn't mapped).
@@ -323,13 +351,20 @@ def mapped_arguments(inputs: Mapping[str, Any], hints: Mapping[str, Any]) -> dic
     outcomes = inputs.get("$expand_outcomes", {})
     arguments = {}
     for name, value in inputs.get("$expand", {}).items():
-        annotation = _member_named(hints.get(name, Any), outcomes.get(name))
+        annotation = member_named(hints.get(name, Any), outcomes.get(name))
         try:
             arguments[name] = decode(value, annotation)
         except CodecError as e:
             raise TaskInputError(
                 f"mapped argument `{name}`: the element doesn't fit the parameter's type, {e}"
             ) from e
+    for name, value in inputs.get("$expand_values", {}).items():
+        try:
+            arguments[name] = build(
+                value, hints.get(name, Any), inputs, run or {}, upstream_outcomes
+            )
+        except TaskInputError as e:
+            raise TaskInputError(f"mapped argument `{name}`: {e}") from e
     return arguments
 
 
@@ -391,12 +426,14 @@ def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset
     )
 
 
-def chosen_ids(result: object, downstream: frozenset[str]) -> list[str]:
+def chosen_ids(result: object, downstream: frozenset[str], dag_id: str) -> list[str]:
     """The task IDs a ``@branch`` function's result chose.
 
     Args:
         result: What it returned: a task handle, or a list of them.
         downstream: Its direct downstream tasks, the ones it may choose.
+        dag_id: The DAG being run: a handle of another DAG's task is refused, though a task of
+            this DAG has its ID (B126).
 
     Returns:
         The IDs, in the order returned, without repeats.
@@ -412,6 +449,12 @@ def chosen_ids(result: object, downstream: frozenset[str]) -> list[str]:
         task_id = getattr(handle, "_schedr_task_id", None)
         if not isinstance(task_id, str):
             raise CodecError("", f"a branch returns task handles, got {type(handle).__name__}")
+        owner = getattr(handle, "_schedr_dag_id", None)
+        if isinstance(owner, str) and owner != dag_id:
+            raise CodecError(
+                "",
+                f"`{task_id}` is a task of DAG `{owner}`, not `{dag_id}`: return this DAG's task",
+            )
         if task_id not in downstream:
             raise CodecError("", f"`{task_id}` isn't right after the branch, so it can't choose it")
         if task_id not in chosen:
@@ -459,7 +502,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
             name: build(value, hints.get(name, Any), inputs, run, outcomes)
             for name, value in task.get("arguments", {}).items()
         }
-        arguments.update(mapped_arguments(inputs, hints))
+        arguments.update(mapped_arguments(inputs, hints, run, outcomes))
     except TaskSetupError as e:
         return failure(e, "task_not_found")
     except (TaskInputError, TypeModelError) as e:
@@ -476,7 +519,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     if not task.get("branch"):
         return _stored(result, hints.get("return", Any), task)
     try:
-        chosen = chosen_ids(result, downstream)
+        chosen = chosen_ids(result, downstream, request["dag_id"])
     except CodecError as e:
         return failure(e, "output_not_serializable", f"`{task_id}`: {e.reason}")
     return _stored(chosen, list[str], task)
@@ -498,9 +541,8 @@ def outcome_of(result: object, annotation: object) -> tuple[str, object, object]
     """
     spec = from_return_type(annotation, "the task")
     if outcome_enum(annotation) is not None:
-        if not isinstance(result, spec.enum):
-            raise CodecError("", f"expected a member of {spec.enum.__name__}, got {result!r}")
-        return result.name, None, None
+        # The member's name is what is stored: checked as `encode` checks it (B129).
+        return encode(result, spec.enum), None, None
     if spec.is_union:
         member = type(result)
         if member not in spec.classes:

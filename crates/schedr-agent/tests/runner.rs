@@ -391,3 +391,139 @@ async fn a_file_whose_import_takes_too_much_memory_is_an_import_error_and_parsin
     );
     assert_eq!(files[1].dags[0].id.as_str(), "fine");
 }
+
+/// A cancel or the timeout reaching a runner before its hello stops it then, reported as
+/// that, not as a failed start 30 s later (B56).
+#[tokio::test]
+async fn a_cancel_or_timeout_during_the_runners_start_stops_it() {
+    let dir = TempDir::new().unwrap();
+    let dag = the_dag().await;
+    let silent = ProcessSpec {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+        env: BTreeMap::new(),
+        working_dir: dir.path().to_path_buf(),
+        log_file: dir.path().join("silent.log"),
+        max_output_size: 1024,
+    };
+    let limits = |timeout| Limits {
+        timeout,
+        grace: Duration::from_secs(1),
+        interrupt_grace: Duration::from_secs(1),
+    };
+    for (timeout, cancel, reason) in [
+        (None, true, StopReason::Cancelled),
+        (
+            Some(Duration::from_millis(300)),
+            false,
+            StopReason::TimedOut,
+        ),
+    ] {
+        let (sender, stops) = Stops::new();
+        if cancel {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let _ = sender.send(StopReason::Cancelled);
+            });
+        }
+        let request = request(dir.path(), &dag, "slow", json!({}));
+        let mut hold = None;
+        let running = run_python(
+            &silent,
+            request,
+            limits(timeout),
+            stops,
+            None,
+            &mut hold,
+            |_, _| {},
+        );
+        let ran = tokio::time::timeout(Duration::from_secs(10), running)
+            .await
+            .expect("stopped within its grace, not after the 30 s start timeout")
+            .expect("a stopped start is a run, not a failed start");
+        assert_eq!(ran.supervised.stopped, Some(reason));
+        assert_eq!(ran.runner_result, None);
+        assert_eq!(ran.start, None);
+    }
+}
+
+/// Codex's review of B56: the reason a start was stopped for is the one recorded, before
+/// another queued meanwhile; a stopped start doesn't wait forever for output held by a
+/// process that escaped the runner's group; and the request is sent within the timeout.
+#[tokio::test]
+async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
+    let dir = TempDir::new().unwrap();
+    let dag = the_dag().await;
+    let shell = |script: &str| ProcessSpec {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".to_owned(), script.to_owned()],
+        env: BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]),
+        working_dir: dir.path().to_path_buf(),
+        log_file: dir.path().join("start.log"),
+        max_output_size: 1024,
+    };
+    let limits = |timeout| Limits {
+        timeout,
+        grace: Duration::from_secs(1),
+        interrupt_grace: Duration::from_secs(1),
+    };
+    let start = async |spec: &ProcessSpec, stops, timeout, inputs| {
+        let mut hold = None;
+        let running = run_python(
+            spec,
+            request(dir.path(), &dag, "slow", inputs),
+            limits(timeout),
+            stops,
+            None,
+            &mut hold,
+            |_, _| {},
+        );
+        let began = std::time::Instant::now();
+        let ran = tokio::time::timeout(Duration::from_secs(12), running)
+            .await
+            .expect("ended on time")
+            .unwrap_or_else(|e| {
+                let log = std::fs::read_to_string(dir.path().join("start.log"));
+                panic!("{e}: {log:?}")
+            });
+        (ran, began.elapsed())
+    };
+    // A cancel, then a drain's interrupt, both before the hello: cancelled.
+    let (sender, stops) = Stops::new();
+    sender.send(StopReason::Cancelled).unwrap();
+    sender.send(StopReason::Interrupted).unwrap();
+    let (ran, _) = start(&shell("sleep 30"), stops, None, json!({})).await;
+    assert_eq!(ran.supervised.stopped, Some(StopReason::Cancelled));
+    // A process in a session of its own holds the output open: given up after a while.
+    let (sender, stops) = Stops::new();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = sender.send(StopReason::Cancelled);
+    });
+    let escaped = shell("setsid sleep 20 & sleep 30");
+    let (ran, took) = start(&escaped, stops, None, json!({})).await;
+    assert_eq!(ran.supervised.stopped, Some(StopReason::Cancelled));
+    assert!(took < Duration::from_secs(9), "{took:?}");
+    // A runner that says hello, then reads nothing: a big request can't be sent, and the
+    // timeout still stops it.
+    let deaf = ProcessSpec {
+        program: python(),
+        args: vec![
+            "-c".to_owned(),
+            "import os, time\n\
+             from importlib.metadata import version\n\
+             from schedr.runner.protocol import from_fd\n\
+             c = from_fd(int(os.environ['SCHEDR_AGENT_FD']))\n\
+             c.send({'type': 'hello', 'schedr_version': version('schedr'), 'mode': 'task'})\n\
+             c.receive()\n\
+             time.sleep(30)\n"
+                .to_owned(),
+        ],
+        ..shell("")
+    };
+    let (_, stops) = Stops::new();
+    let big = json!({"rows": "x".repeat(4 << 20)});
+    let (ran, took) = start(&deaf, stops, Some(Duration::from_millis(500)), big).await;
+    assert_eq!(ran.supervised.stopped, Some(StopReason::TimedOut));
+    assert!(took < Duration::from_secs(5), "{took:?}");
+}

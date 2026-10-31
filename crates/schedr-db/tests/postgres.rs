@@ -589,7 +589,7 @@ async fn attempts_and_outputs_move_a_task_forward() {
     assert_eq!(db.open_attempts(Some("w1")).await.unwrap().len(), 1);
     assert_eq!(db.open_attempts(None).await.unwrap().len(), 1);
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"))
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), 100)
             .await
             .unwrap()
             .len(),
@@ -757,7 +757,7 @@ async fn commands_are_written_decided_and_read_back() {
         )
         .await
         .unwrap();
-    let pending = db.pending_commands().await.unwrap();
+    let pending = db.pending_commands(100).await.unwrap();
     assert_eq!(pending[0].id, id);
     assert!(pending[0].command.is_ok());
     let result = json!({"run_id": "r1"});
@@ -945,7 +945,7 @@ async fn a_query_past_the_query_timeout_is_cut_off_by_schedr() {
         .await
         .unwrap();
     let started = std::time::Instant::now();
-    let error = limited.pending_commands().await.unwrap_err();
+    let error = limited.pending_commands(100).await.unwrap_err();
     assert!(
         matches!(error, schedr_db::DbError::QueryTimeout(_)),
         "{error}"
@@ -1106,7 +1106,7 @@ async fn several_writes_in_one_transaction_commit_together_or_roll_back_on_postg
         db.insert_command(&trigger, "anna", ts(NOW)).await?;
         db.insert_command(&trigger, "anna", ts(NOW)).await?;
         // The work reads its own writes.
-        assert_eq!(db.pending_commands().await?.len(), 2);
+        assert_eq!(db.pending_commands(100).await?.len(), 2);
         Ok::<_, schedr_db::DbError>(())
     }))
     .await
@@ -1117,7 +1117,7 @@ async fn several_writes_in_one_transaction_commit_together_or_roll_back_on_postg
     }))
     .await;
     assert!(failed.is_err());
-    assert_eq!(db.pending_commands().await.unwrap().len(), 2);
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 2);
     // A master whose lease was taken over: refused at the start, nothing stored.
     let period = std::time::Duration::from_millis(300);
     assert_eq!(db.take_lease("a", period).await.unwrap(), Some(1));

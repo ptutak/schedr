@@ -496,7 +496,7 @@ async fn a_database_failure_leaves_a_task_command_pending() {
         .apply_pending(&world.scheduler, &mut world.dispatcher, ts(NOW))
         .await;
     assert!(applied.is_err(), "{applied:?}");
-    assert_eq!(world.db.pending_commands().await.unwrap().len(), 1);
+    assert_eq!(world.db.pending_commands(100).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -638,6 +638,9 @@ async fn a_round_applies_at_most_so_many_commands_the_rest_in_the_next() {
         };
         world.ask(&command).await;
     }
-    assert_eq!(world.apply().await.decided.len(), COMMANDS_PER_ROUND);
+    assert_eq!(
+        world.apply().await.decided.len(),
+        COMMANDS_PER_ROUND as usize
+    );
     assert_eq!(world.apply().await.decided.len(), 5);
 }

@@ -14,6 +14,7 @@ fn root(name: &str, path: &str) -> Root {
     Root {
         name: name.into(),
         path: path.into(),
+        only: None,
     }
 }
 
@@ -225,4 +226,16 @@ fn error_messages_explain_the_fix() {
         .to_string(),
         "SCHEDR_DAG_PATH: `/` has no name; rename it in [dags.roots]"
     );
+}
+
+#[test]
+fn a_relative_root_is_made_absolute_against_the_working_directory() {
+    // B60: kept relative, the agent joined it to itself (its working directory is the root).
+    let roots = resolve(&["dags/etl", "/git/ml"], &[]).unwrap();
+    let here = std::env::current_dir().unwrap();
+    assert_eq!(
+        roots[0],
+        root("etl", here.join("dags/etl").to_str().unwrap())
+    );
+    assert_eq!(roots[1], root("ml", "/git/ml"));
 }

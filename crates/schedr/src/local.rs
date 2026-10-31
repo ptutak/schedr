@@ -616,10 +616,13 @@ async fn test_dag(
 ) -> Result<(), AppError> {
     let roots: Vec<Root> = match path {
         Some(path) => {
+            // A file is tested alone: only it is parsed, its siblings importable (B118).
+            let only = path.is_file().then_some(());
             let root = LocalRoot::at(path)?;
             vec![Root {
                 name: root.name,
                 path: root.dir,
+                only: only.map(|()| root.files),
             }]
         }
         None if !config.dag_roots.is_empty() => config.dag_roots.clone(),
@@ -628,6 +631,7 @@ async fn test_dag(
             vec![Root {
                 name: root.name,
                 path: root.dir,
+                only: None,
             }]
         }
     };
@@ -697,6 +701,9 @@ async fn ensure_defined(
     for root in roots {
         let mut local = LocalRoot::at(&root.path)?;
         local.name.clone_from(&root.name);
+        if let Some(only) = &root.only {
+            local.files.clone_from(only);
+        }
         for file in check_root(&local, config, env).await? {
             if file.dags.iter().any(|d| d.id.as_str() == dag) {
                 return Ok(());

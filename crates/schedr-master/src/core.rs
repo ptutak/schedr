@@ -140,7 +140,8 @@ fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
             &format!("the result couldn't be stored: {error}"),
         )
         .into_bytes(),
-        code_hash: finished.code_hash.clone(),
+        // The worker's text, kept, must not be refused again (B127): Postgres stores no NUL.
+        code_hash: finished.code_hash.replace('\0', "\u{fffd}"),
         usage: finished.usage,
         core_dumped: finished.core_dumped,
     }
@@ -221,6 +222,12 @@ impl Arrivals {
     #[must_use]
     pub fn start_waiting(&self, attempt_id: &str) -> bool {
         self.inner().started.contains_key(attempt_id)
+    }
+
+    /// How many `Started` or `Finished` messages arrived and aren't handled yet.
+    #[must_use]
+    pub fn starts_waiting(&self) -> usize {
+        self.inner().started.len()
     }
 
     /// Forgets the starts of `worker_id`'s that wait: it registered, and its journal is what

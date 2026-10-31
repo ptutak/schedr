@@ -162,6 +162,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root.clone())]),
+            parse_only: BTreeMap::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -566,6 +567,7 @@ async fn against_master(
         slots,
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root)]),
+            parse_only: BTreeMap::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1030,6 +1032,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         slots: 1,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
+            parse_only: BTreeMap::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1237,6 +1240,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         slots: 1,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
+            parse_only: BTreeMap::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1280,6 +1284,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         slots: 1,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
+            parse_only: BTreeMap::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],

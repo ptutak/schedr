@@ -211,6 +211,9 @@ pub struct Dispatcher {
     stops: Vec<Outgoing>,
     /// Mapped lists resolved during a step, shared by a task's instances.
     resolved: mapping::Resolved,
+    /// Attempts a reconnecting worker runs whose start the database refused to record (B128):
+    /// not taken back as never started while a worker holds them.
+    adopted_unrecorded: BTreeSet<String>,
 }
 
 /// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
@@ -257,6 +260,7 @@ impl Dispatcher {
             current_code: BTreeMap::new(),
             metrics: MasterMetrics::default(),
             arrivals: Arrivals::default(),
+            adopted_unrecorded: BTreeSet::new(),
             set_aside: BTreeMap::new(),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
@@ -410,7 +414,17 @@ impl Dispatcher {
         attempt_id: &str,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        self.db.mark_adopted(attempt_id, now).await?;
+        match self.db.mark_adopted(attempt_id, now).await {
+            Ok(()) => {}
+            // Refused for its data, it would be refused at every registration, and the worker
+            // could never send the attempt's `Finished` (B128, as decision 115): left
+            // unrecorded, while its slot is taken all the same (the worker runs it).
+            Err(error) if error.is_data_fault() => {
+                tracing::warn!(attempt_id, worker_id, %error, "can't record an adopted attempt's start");
+                self.adopted_unrecorded.insert(attempt_id.to_owned());
+            }
+            Err(error) => return Err(error.into()),
+        }
         self.workers.reserve(worker_id, attempt_id, now);
         Ok(())
     }
@@ -925,9 +939,21 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
         let cutoff = now.checked_sub(START_TIMEOUT).unwrap_or(Timestamp::MIN);
-        let mut expired = self.db.unstarted_attempts(cutoff).await?;
-        expired.retain(|attempt| !self.arrivals.start_waiting(&attempt.id));
         // At most so many a round (several writes each): after an outage, over a few (B18).
+        // Read only so many, and as many more as starts wait in memory, which are left out
+        // after reading: they can't fill the round's share (B52).
+        // Adopted attempts whose start wasn't recorded are kept while a worker holds them.
+        let workers = &self.workers;
+        self.adopted_unrecorded
+            .retain(|attempt| workers.all().any(|w| w.attempts.contains(attempt)));
+        let limit =
+            EXPIRIES_PER_ROUND + self.arrivals.starts_waiting() + self.adopted_unrecorded.len();
+        let limit = u32::try_from(limit).unwrap_or(u32::MAX);
+        let mut expired = self.db.unstarted_attempts(cutoff, limit).await?;
+        expired.retain(|attempt| {
+            !self.arrivals.start_waiting(&attempt.id)
+                && !self.adopted_unrecorded.contains(&attempt.id)
+        });
         expired.truncate(EXPIRIES_PER_ROUND);
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);

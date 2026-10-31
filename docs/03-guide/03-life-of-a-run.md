@@ -96,6 +96,11 @@ imported and the arguments are built, the runner sends `task_imported` (no field
 the function; it does not send that message when the import or the arguments fail. The agent
 times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
 [Observability](09-observability.md)). The result comes back over the same local socket.
+The task's timeout counts from the moment the agent starts launching it, so the runner's start
+is part of it: a cancel or the timeout arriving before the runner's `hello` stops the runner
+then (SIGTERM, the grace, SIGKILL), and the attempt ends `cancelled` or `timed_out`. The
+same holds while it waits for a fork server and while it sends the task's request. A runner
+that doesn't say `hello` within 30 s fails the attempt with `start_failed`.
 The memory watchdog samples the group's memory every second. With `fork_server = true` on
 the DAG interpreter, a Linux worker starts that Python runner from a fork server (see
 [The fork server](05-workers.md#the-fork-server)), and the attempts API shows `start_method`
@@ -170,15 +175,19 @@ reason and with nothing run, when what it maps over is not a list, when an
 `.expand_kwargs()` list it waits for as a whole has an element that is not a dict, or when
 it would have more than `[mapping] max_instances` instances (1024). On a lane, an
 `.expand_kwargs()` element that is not a dict fails that instance when it is assigned, as
-`input_mismatch`, which is not retried.
+`input_mismatch`, which is not retried. The master doesn't render an element written with
+a t-string or a `dag_ctx` value: it counts it, and sends it to its instance in its stored
+form, under `$expand_values`, for the runner to build like an argument.
 
 A lane is an element-wise data edge: the task is mapped over the whole output of a mapped
 task, and it uses that task nowhere else. A lane counts as ready once that upstream task
 has expanded, so the downstream task can expand before those instances finish, and instance
 `i` then waits only for upstream instance `i`. Any other edge waits for the upstream task
 as a whole: an order edge, `.partial(all=…)`, or `results[0]`. If that upstream task
-failed, nothing of the downstream
-task runs.
+failed, nothing of the downstream task runs. A whole mapped task's own outcome only says
+that its instances ended, so `.on(…)` over its output is still decided per element: once
+the task expands, an instance whose upstream instance ended with another outcome is
+skipped, as on a lane.
 
 One failed instance, or a lane whose upstream instance failed, fails the mapped task at
 once. The task is `failed` when one of its own instances failed, and `upstream_failed` when

@@ -21,7 +21,7 @@ use crate::scheduler::{Scheduler, SchedulerError};
 
 /// The most commands a round applies (about 8 ms each in stress runs): a burst (101 triggers
 /// at once, about 0.85 s) goes over a few rounds, the oldest first (B18).
-pub const COMMANDS_PER_ROUND: usize = 50;
+pub const COMMANDS_PER_ROUND: u32 = 50;
 #[cfg(test)]
 mod tests;
 
@@ -121,13 +121,8 @@ impl Commander {
     ) -> Result<(), CommandError> {
         // At most so many a round, oldest first: a burst is applied over a few rounds rather
         // than in one long one (B18).
-        for pending in self
-            .db
-            .pending_commands()
-            .await?
-            .into_iter()
-            .take(COMMANDS_PER_ROUND)
-        {
+        // Read so many only: a backlog isn't read whole each round (B52).
+        for pending in self.db.pending_commands(COMMANDS_PER_ROUND).await? {
             // Marked before its first write: should this round fail before the decision is
             // stored, the next application knows it may find its own work done (B7).
             if !pending.applying {

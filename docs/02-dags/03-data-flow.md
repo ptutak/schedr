@@ -62,7 +62,7 @@ member first: `batch.on(Rows).rows`.
 When a task returns, its value is checked against the return type and stored as JSON. These
 fail the attempt, with a message naming where in the value: a type schedr doesn't store
 (`Decimal`, `set`), a dict key that isn't a `str`, `NaN` or infinity, an integer outside the
-64-bit range (store it as a `str`; a `timedelta` of more than about 213,503 days is one), a
+64-bit range (store it as a `str`; a `timedelta` beyond about 213,503,982 days, or -106,751,991, is one), a
 string, key or outcome name containing NUL (`\0`), lists and dicts
 nested more than 100 deep, and any other error while writing it (a model's serializer
 failing, a list containing itself). Every other

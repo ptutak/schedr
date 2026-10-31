@@ -106,3 +106,36 @@ fn values_resolve_as_the_runner_resolves_them() {
     assert_eq!(resolve(&narrowed, &sources), Ok(Json::Null));
     assert!(resolve(&path(json!(["nope"])), &sources).is_err());
 }
+
+#[test]
+fn elements_with_a_template_or_the_runs_context_are_left_to_the_runner() {
+    // B81 (decision 118): the master can't render them; the list's length is still known.
+    let value = |json: Json| -> Value { serde_json::from_value(json).unwrap() };
+    let template =
+        json!({"template": [{"text": "eu-"}, {"ref": {"kind": "output", "task": "cfg"}}]});
+    let context = json!({"ref": {"kind": "dag_ctx", "field": "run_kind"}});
+    assert!(built_by_runner(&value(template.clone())));
+    assert!(built_by_runner(&value(context.clone())));
+    assert!(built_by_runner(&value(
+        json!({"map": {"k": template.clone()}})
+    )));
+    assert!(!built_by_runner(&value(json!({"literal": "us"}))));
+    assert!(!built_by_runner(&value(output("cfg"))));
+    let mut sources = Sources::default();
+    sources
+        .outputs
+        .insert(TaskId::new("cfg").unwrap(), json!("2026"));
+    let list =
+        value(json!({"list": [template.clone(), {"literal": "us"}, output("cfg"), context]}));
+    assert_eq!(
+        resolve_mapped(&list, &sources),
+        Ok(json!([null, "us", "2026", null]))
+    );
+    assert!(resolve(&list, &sources).is_err());
+    // A dict, as `.expand_kwargs()` maps over, keeps its keys: only its entries are `null`.
+    let kwargs = value(json!({"list": [{"map": {"left": template, "right": output("cfg")}}]}));
+    assert_eq!(
+        resolve_mapped(&kwargs, &sources),
+        Ok(json!([{"left": null, "right": "2026"}]))
+    );
+}
