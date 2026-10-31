@@ -80,7 +80,7 @@ the morning, listed below.
   macOS the copy was never renamed into place (macOS renames a directory only with write
   permission on it; the top directory is now made read-only after the rename, and writable
   before a removal's rename). The macOS fix has no test that can fail on Linux: macOS CI is
-  its check; look at it first (`gh run list`). `dags test` meanwhile retried for ever: B103.
+  its check, and it passed (run 41178099349, every job green). `dags test` meanwhile retried for ever: B103.
   The two stuck CI runs: the older one cancelled by Claude (to read its log).
 - Grok's weekly % after its review (session `b3ccfd8a`, 46 calls, 199k context): ask the
   user. Codex: 27% → 31% over the night's first three rounds, 35% after the next three.
