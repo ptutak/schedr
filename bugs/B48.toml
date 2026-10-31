@@ -1,0 +1,13 @@
+title = "every attempt message copies the master's whole worker registry under its lock"
+severity = "medium"
+probability = "rare"
+kind = "performance"
+summary = "each worker message costs in proportion to the whole registry; hundreds of workers"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
+  loop and the worker link), with a failing proof each; checked against the code by Claude.
+  `Started`, `Rejected` and `Finished` each take `Dispatcher::memory` (the D1 snapshot: `workers`, `rejections`, `code_missing` cloned, `crates/schedr-master/src/core.rs:499`, `dispatch.rs:280`) under the core lock, so each message costs in proportion to the whole registry and its outstanding attempts; Codex measured 10 vs 1,000 workers (4 attempts each), 500 snapshots each, unrelated attempts included.
+- **A fix:** a snapshot of what the message can change (its attempt and worker) instead of everything; measure first with M4.5.1's per-turn timings.
+'''

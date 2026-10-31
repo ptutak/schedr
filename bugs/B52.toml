@@ -1,0 +1,13 @@
+title = "the per-round caps still read the whole backlog"
+severity = "medium"
+probability = "rare"
+kind = "performance"
+summary = "thousands of pending commands read whole on each round"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
+  attempts), with a failing proof each; checked against the code by Claude.
+  `pending_commands` (`crates/schedr-db/src/commands.rs:299`) has no `LIMIT` (`fetch_all`); the master keeps `COMMANDS_PER_ROUND` (50) after reading and decoding every pending row (`schedr-master/src/commands.rs:129`): draining N commands reads N, N-50, ... rows (Codex: 2,000 commands, 32 MB of audit strings loaded for 50 applied). Expired attempts the same (`unstarted_attempts`, then `truncate`, `dispatch.rs:864`).
+- **A fix:** `LIMIT` in the queries (the round's cap).
+'''

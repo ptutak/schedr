@@ -1,0 +1,12 @@
+title = "settling can perform cubic work on a chain"
+severity = "medium"
+probability = "rare"
+kind = "performance"
+summary = "the master's lock held for seconds; a long chain listed in reverse order"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/progress.rs:454`. Each pass visits all tasks and calls `edges_into()` for scheduled tasks. That helper scans the entire edge vector (`crates/schedr-model/src/dag.rs:116`): The outer loop repeats until nothing changes. A chain listed in reverse dependency order advances one task per pass, yielding Θ(T²E) work—Θ(T³) for a chain. **Scenario:** preparing an 800-task empty chain occupies the master’s core lock for seconds; the service holds that lock while ticking. Batch measurement `f3_settle_scaling`, unoptimized test build: Both task orders produced the same successful result. The same edge-scanning helper is used in mapped settling at `progress.rs:554` and `:600`. **Confidence: high for the complexity; measured timings are debug-build figures.**
+- **A fix:** to decide when it is scheduled.
+'''

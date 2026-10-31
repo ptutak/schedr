@@ -1,0 +1,24 @@
+title = "a draining worker once missed its 8 s grace under load"
+severity = "low"
+probability = "possible"
+kind = "tests"
+summary = "a drain test misses its grace under load"
+found = 2026-10-26
+suspected = false
+details = '''
+- **Seen:** 2026-10-26, one `make check` while other role tests were running.
+  `roles::a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period`
+  (`crates/schedr/tests/roles.rs`) panicked: `terminate_within` for the worker, grace 8 s,
+  was not success ("the worker didn't stop within the grace period"). 37 role tests had
+  passed; that one failed and `make check` exited 2.
+- **Not reproduced** on the next full `make check` (1257 Rust unit tests, 662 Python unit
+  tests, 99 Rust integration tests, 27 Python integration tests, then `make docs`).
+- **Suspect:** the 8 s grace under load, the same kind of limit as B21 (a bound that is
+  long enough until the machine is busy). Not fixed.
+- **Seen again:** 2026-10-28, `make check` during M4.1b (the same message, `None`: the
+  worker hadn't ended at all). Alone it passed three times in about 10.5 s, so it is the
+  load again, not a hang. Two misses in three days.
+- **Next:** look at the grace and what the worker was doing in those 8 s (its log in the
+  test's output shows the drain's steps), then decide whether the limit or the drain is
+  what's slow under load.
+'''

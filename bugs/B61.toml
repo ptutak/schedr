@@ -1,0 +1,13 @@
+title = "a DAG file reached through a followed symlink gets an unusable location"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a DAG under a symlinked directory is refused by the master"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
+  and parsing), with a failing proof each; checked against the code by Claude.
+  Scanning follows symbolic links (documented), but `registry.py:71` resolves the file's path and keeps only its name (`DagLocation(LOCAL_ROOT, file.name)`): `root/linked -> ../shared` with `dag.py` scans as `linked/dag.py` and parses as `local:dag.py`, which the master refuses (`validate.rs:36`: located at `local:dag.py`, parsed from `etl:linked/dag.py`). Codex ran the real parser and validator.
+- **A fix:** keep the scanned (root-relative) path as the location, unresolved.
+'''

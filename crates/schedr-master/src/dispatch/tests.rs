@@ -419,6 +419,42 @@ async fn a_repeated_finish_is_acknowledged_and_changes_nothing() {
 }
 
 #[tokio::test]
+async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
+    // B46: `w2` knowing `w1`'s attempt ID can't end it, nor free `w1`'s slot.
+    let (mut dispatcher, db, run_id) = with_run(dag(1)).await;
+    dispatcher
+        .register("w2", "i2", &[], 2, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let assigned = assignment(&out[0]);
+    let (attempt, owner) = (assigned.attempt_id.clone(), out[0].worker_id.clone());
+    let other = if owner == "w1" { "w2" } else { "w1" };
+    dispatcher
+        .started(&owner, &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let done = finished(&attempt, pb::AttemptStatus::Success, &json!([1]));
+    let answer = dispatcher.finished(other, &done, ts(NOW)).await.unwrap();
+    assert!(matches!(
+        answer.message.message,
+        Some(Message::FinishedAck(_))
+    ));
+    assert_eq!(answer.worker_id, other);
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Running
+    );
+    // Its own worker's finish still counts.
+    dispatcher.finished(&owner, &done, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Success
+    );
+}
+
+#[tokio::test]
 async fn a_start_for_an_attempt_taken_back_is_answered_with_a_cancel() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();

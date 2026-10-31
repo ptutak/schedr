@@ -1,0 +1,13 @@
+title = "hashing a root reads every file whole into memory"
+severity = "high"
+probability = "rare"
+kind = "reliability"
+summary = "a worker can't register (it retries for ever); a file in a root bigger than the worker can allocate"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
+  and parsing), with a failing proof each; checked against the code by Claude.
+  `content_hash` (`crates/schedr-agent/src/scan.rs:169`) reads each scanned file with `std::fs::read`, Python or not: a data file bigger than the worker can allocate fails the hash, and before registration `Agent::hashes` retries for ever (`agent.rs:659`); Codex's proof: a 256 MiB sparse file under a 192 MiB address-space limit, `OutOfMemory`.
+- **A fix:** stream each file into the hasher (a buffered reader).
+'''

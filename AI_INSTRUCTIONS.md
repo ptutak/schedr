@@ -133,11 +133,13 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 
 ## Bugs
 
-- A bug found while working on something else goes into `BUGS.md` (B-number, found, symptom,
-  repro, suspect or cause, plan) and into the step's summary. **Don't fix it on the spot**
-  unless it blocks the step; I schedule fixes.
-- **Every bug is rated** when it is logged, its rating the entry's first line, revised as more
-  is known (the scales are in `BUGS.md`, Ratings):
+- A bug found while working on something else gets its own file in `bugs/` (`python3
+  scripts/bugs.py new "<title>"`, then fill in its rating, found, symptom, repro, suspect or
+  cause, plan; `make bugs` regenerates `BUGS.md`, which is never edited by hand) and goes into
+  the step's summary. **Don't fix it on the spot** unless it blocks the step; I schedule
+  fixes. A fix deletes the bug's file.
+- **Every bug is rated** when it is logged, in its file's `severity`, `probability` and
+  `kind`, revised as more is known (the scales are in `bugs/README.md`, Ratings):
   - **Severity**, what happens when it occurs: critical (a security hole, silent wrong results
     or wrong code run, a task run twice, the whole system stuck), high (in normal operation,
     with no mistake by the user, work fails wrongly, stalls or runs on after a cancel), medium
@@ -148,9 +150,9 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
     hostile actor; for a security bug, how easily it is triggered on purpose).
   - **Kind:** security, data, correctness, reliability, performance, usability or tests.
     Security is a kind, not a third score: its worst case is already the severity.
-  - **Score** = severity (4 to 1) × probability (3 to 1). The **ranking** at the top of
-    `BUGS.md` puts every security bug first, whatever its score, then the rest by score, then
-    severity; regenerate it whenever an entry is added, re-rated or removed.
+  - **Score** = severity (4 to 1) × probability (3 to 1), computed by the script. The
+    **ranking** at the top of `BUGS.md` puts every security bug first, whatever its score,
+    then the rest by score, then severity.
 - **What gets fixed when:** every high or critical bug, in the ranking's order, then features
   go on; a newly found high or critical bug interrupts the feature work and is fixed next.
   Medium and low bugs wait, fixed when a step touches their code or when I schedule them.

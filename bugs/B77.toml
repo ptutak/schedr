@@ -1,0 +1,12 @@
+title = "valid large timedeltas cannot render in agent templates"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "a timedelta beyond ~292,000 years can't be rendered into a command"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), low severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/codec.py:159`. Python stores the full supported timedelta range as integer microseconds. Agent rendering accepts the tag only through `Value::as_i64` at `crates/schedr-agent/src/render.rs:261`. `timedelta(days=200000000)` encodes successfully and its microsecond count survives the channel exactly, but rendering treats it as an unsupported object.
+- **A fix:** to decide when it is scheduled.
+'''

@@ -1,0 +1,16 @@
+title = "an edge between two tasks outside a group can be drawn through its box"
+severity = "low"
+probability = "possible"
+kind = "usability"
+summary = "an edge drawn through a group's box (M6)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout. On a layer a group spans
+  without a task there, a task outside it is pushed right of the box on that layer only;
+  the edge from it to a task on the other side is a curve between the two, through the box.
+  Decision 65 keeps tasks out of boxes, not lines. Grok's case: `A0 -> U -> A1`, `U -> B1`,
+  `A = {A0, A1}`, `B = {B0, B1}`: `U` lands right of `B`, its edges cross `B`'s box.
+- **Cosmetic:** every task is in the right box. **A fix:** route such edges around boxes,
+  or order layers so that it can't happen; with B39.
+'''

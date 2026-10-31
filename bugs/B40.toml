@@ -1,0 +1,23 @@
+title = "a lease test times out its 2 s query limit under load"
+severity = "low"
+probability = "likely"
+kind = "tests"
+summary = "a lease test fails under load"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, in `make check` while two other builds and test runs shared the
+  machine: `lease::tests::a_master_taken_over_never_writes_itself_back_as_the_holder` failed
+  with `QueryTimeout(2s)` (`crates/schedr-master/src/lease/tests.rs:101`, an `unwrap` on a
+  query). Alone it passed 5 times out of 5 (6-9 s each).
+- **The cause, likely:** the test runs with the production 2 s query limit; SQLite under a
+  loaded CPU can exceed it. Not investigated: whether the test exercises a write that should
+  be retried rather than a limit that should be longer in tests.
+- **Seen again:** 2026-10-30, `make check` while a worktree's full build ran:
+  `schedr-db` `scope::tests::a_masters_work_is_refused_once_its_lease_was_taken_over`
+  (`QueryTimeout(2s)`), `scope::tests::work_that_fails_stores_nothing` (`QueryTimeout(4s)`)
+  and `query::tests::an_sqlite_write_waits_for_another_writer_instead_of_failing` (SQLite's
+  "database is locked"); all three use the production limits.
+- **A fix:** the test's own query limit (or a retry of what the master retries itself), and
+  the same check over the other tests using the default limit.
+'''

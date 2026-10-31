@@ -1,0 +1,13 @@
+title = "a relative DAG root breaks parsing and task imports"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a relative root in the configuration breaks parsing and task imports"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
+  and parsing), with a failing proof each; checked against the code by Claude.
+  The executor uses the configured directory both as the child's working directory and as `root_dir` in the request (`crates/schedr-agent/src/agent.rs:295`; tasks the same, `attempt.rs:245`, `:252`); configuration keeps relative paths (`schedr-config/src/roots.rs:155`), so `dags/etl` becomes `dags/etl/dags/etl/dag.py` (Codex's proof: `FileNotFoundError` after a successful scan). `WorkerSetup::sys_path` keeps them relative too.
+- **A fix:** make roots absolute when the configuration is read (or the request's `root_dir`).
+'''

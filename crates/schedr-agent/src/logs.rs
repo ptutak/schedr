@@ -154,7 +154,9 @@ async fn read_part(
     from: u64,
     limit: u64,
 ) -> std::io::Result<(u64, Vec<u8>)> {
-    let mut file = tokio::fs::File::open(path).await?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    let mut file = crate::process::open_regular(options, path).await?;
     let size = file.metadata().await?.len();
     let from = from.min(size);
     file.seek(SeekFrom::Start(from)).await?;

@@ -1,0 +1,22 @@
+title = "a forked attempt started while the master link is down is recorded as `spawn`"
+severity = "low"
+probability = "rare"
+kind = "usability"
+summary = "a forked attempt shown as `spawn` after a reconnect (suspected)"
+found = 2026-10-27
+suspected = true
+details = '''
+- **Found:** 2026-10-27, by Grok's review of M2.5.4a (by reading; not executed). The agent
+  sends `Started` before the process exists, with `spawn`, and a second `Started` with
+  `fork` once a fork server has forked it (`Done::Spawned` in
+  `crates/schedr-agent/src/agent.rs`). That second message is sent only while the master
+  link is up (`if forked && let Some((to_master, _)) = &link`); when it is down, it is
+  skipped, and the `Register` sent on reconnecting carries the attempt's journal state but no
+  start method (`journal_entries`).
+- **Effect:** the attempt shows `start_method: spawn` in the attempts API although it was
+  forked; nothing else (the start-time metric is the agent's own and counts `fork`).
+- **To confirm:** an agent test that forks an attempt while disconnected, then reconnects,
+  and checks the methods the master gets. **A fix:** keep the method in the journal record
+  (`JournalRecord::Running` with the process identity) and send it with the journal entries on
+  `Register`, or send `Started{fork}` again on reconnecting.
+'''

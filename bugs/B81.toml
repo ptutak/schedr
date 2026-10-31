@@ -1,0 +1,12 @@
+title = "valid elements inside mapped lists are rejected as though they must themselves be lists"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a valid mapped DAG fails its run at preparation, visibly"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:152` and `:158`. Recursive resolution contains unconditional errors: **Scenario:** both of these pass Python DAG construction, but fail the run during preparation: The outer value is already a list; its elements should resolve to strings.
+- **A fix:** to decide when it is scheduled.
+'''

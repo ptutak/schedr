@@ -1,0 +1,13 @@
+title = "an interrupted read of a forked process's exit status loses its framing"
+severity = "high"
+probability = "rare"
+kind = "correctness"
+summary = "a healthy forked attempt killed and ended `unknown`; a stop arriving while its exit status is being read"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
+  execution), with a failing proof each; checked against the code by Claude.
+  `ForkedProcess::wait` awaits `read_message(status)` (`crates/schedr-agent/src/fork.rs:861`), whose header and partial body live in the future; the supervisor's `select!` drops it when a stop or deadline wins and calls `wait` again, which reads the rest as a new header, fails, kills the group and returns `Termination::Unknown` for a healthy shim (Codex's proof with the real fork server, the frame split at a barrier: `Unknown` instead of `Signaled(9)`). Frequency in practice not measured.
+- **A fix:** a cancel-safe reader (the partial frame kept in the struct), or the read in its own task.
+'''

@@ -1,0 +1,12 @@
+title = "accepted strings containing NUL cannot be stored in production"
+severity = "high"
+probability = "possible"
+kind = "correctness"
+summary = "on Postgres an attempt's completion is rolled back and the task stays running (with B41); an output string with NUL, such as `find -print0`'s stdout"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/migrations/postgres/0001_initial.sql:176`. Outputs use: `store_output()` binds the serializer’s JSON through `$3{json}`, expanded to `::jsonb`. The Python codec accepts NUL-containing strings, but PostgreSQL rejects their escaped representation. **Scenario:** a task successfully returns `"before\0after"` → SQLite stores it → PostgreSQL rejects the output write. In worker-message handling, that error rolls back the transaction containing the attempt’s completion (`core.rs:526`, `dispatch.rs:1096`, `execution.rs:284`). **
+- **A fix:** to decide when it is scheduled.
+'''

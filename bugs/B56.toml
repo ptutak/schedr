@@ -1,0 +1,13 @@
+title = "a cancel or timeout is ignored while a runner hasn't said hello"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a cancel or timeout waits up to 30 s for a slow runner start, and is lost if the start fails"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F6 (the agent's task
+  execution), with a failing proof each; checked against the code by Claude.
+  `run_python` starts the runner and waits for its hello (up to 30 s) and sends the request before `supervise` starts (`crates/schedr-agent/src/launch.rs:274`); a cancel queued meanwhile, or the execution timeout, does nothing until then, and a failed start afterwards is reported `start_failed`, the cancel lost (Codex's proof: a runner stalled before its hello, still running 2 s after a cancel and a 100 ms timeout). Spawned and forked paths alike.
+- **A fix:** the stop channel and the deadline raced against the handshake too; a cancel during it reported as a cancel.
+'''

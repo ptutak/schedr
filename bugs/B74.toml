@@ -1,0 +1,12 @@
+title = "`Literal` compatibility conflates booleans with integers"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "`Literal[True]` accepted for `Literal[1]` at load, failing at run time"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/compatibility.py:151`. The check uses `v in target.values`, so Python equality makes `True` fit `1`. The runtime Literal codec requires both equal value and equal type. A `Literal[True]` producer therefore connects successfully to a `Literal[1]` parameter, then fails at execution.
+- **A fix:** to decide when it is scheduled.
+'''

@@ -1,0 +1,18 @@
+title = "a finished task stays `scheduled` on the UI long after it ended"
+severity = "medium"
+probability = "likely"
+kind = "usability"
+summary = "a finished task shown `scheduled` for up to ~15 s; seen by the user (the cause suspected)"
+found = 2026-10-28
+suspected = true
+details = '''
+- **Found:** 2026-10-28, by the user (dev notes): during a run a task stays `scheduled` on
+  the run page for quite a long time before it shows `success`, while its times say it
+  finished a second after its upstream task.
+- **Suspect:** the run page isn't told of the change and waits for the webserver's fallback
+  `refresh`, every 15 s (`REFRESH_INTERVAL`, `crates/schedr-api/src/events.rs`), e.g. when
+  the database's changes can't be followed (SQLite, standalone) or a change of that kind isn't
+  announced. Not checked.
+- **To confirm:** a test running a two-task DAG in standalone with a run page's live stream
+  open, timing each task's state change against when the page hears of it.
+'''

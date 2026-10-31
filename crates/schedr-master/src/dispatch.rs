@@ -829,7 +829,8 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// A worker reported `Finished`: stored once, and always acknowledged.
+    /// A worker reported `Finished`: stored once (only from the worker the attempt was assigned
+    /// to, B46), and always acknowledged.
     ///
     /// # Errors
     ///
@@ -846,6 +847,17 @@ impl Dispatcher {
                 reason: e.to_string(),
             })?;
         if let Some(attempt) = self.db.attempt(&finished.attempt_id).await? {
+            if attempt.worker_id != worker_id {
+                // Not its attempt (B46): only the worker it was assigned to ran it. Acknowledged
+                // so the sender stops resending, never stored, as `Started` is refused.
+                tracing::warn!(
+                    worker_id,
+                    attempt_id = %finished.attempt_id,
+                    owner = %attempt.worker_id,
+                    "a worker reported the end of another worker's attempt; ignored"
+                );
+                return Ok(finished_ack(worker_id, &finished.attempt_id));
+            }
             let output = (status == AttemptStatus::Success)
                 .then(|| serde_json::from_slice(&finished.output_json).ok())
                 .flatten();

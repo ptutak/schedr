@@ -126,12 +126,42 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
 ///
 /// Returns an I/O error if it can't be opened.
 pub(crate) async fn open_log(spec: &ProcessSpec) -> io::Result<SharedLog> {
-    let log = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&spec.log_file)
-        .await?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create(true).append(true);
+    let log = open_regular(options, &spec.log_file).await?;
     Ok(Arc::new(Mutex::new(log)))
+}
+
+/// Opens `path` with `options` only if it is a regular file with no other name, never
+/// following a symbolic link (B62): a link planted where a log goes, symbolic or hard, would
+/// make the agent read or write its target, and a FIFO would block the open (`O_NONBLOCK`,
+/// which a regular file ignores).
+///
+/// # Errors
+///
+/// Returns the I/O error of the open (`ELOOP` for a symbolic link), or `InvalidInput` for a
+/// file that isn't regular or has another hard link.
+pub(crate) async fn open_regular(
+    mut options: tokio::fs::OpenOptions,
+    path: &Path,
+) -> io::Result<tokio::fs::File> {
+    use rustix::fs::OFlags;
+    options.custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits().cast_signed());
+    let file = options.open(path).await?;
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{}` isn't a regular file", path.display()),
+        ));
+    }
+    if std::os::unix::fs::MetadataExt::nlink(&metadata) != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{}` has another hard link", path.display()),
+        ));
+    }
+    Ok(file)
 }
 
 /// A log file written by a process's two output collectors.

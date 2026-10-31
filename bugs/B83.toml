@@ -1,0 +1,12 @@
+title = "mapping repeats the entire source list in every instance’s inputs"
+severity = "medium"
+probability = "likely"
+kind = "performance"
+summary = "each mapped instance's inputs carry the whole source list: quadratic, and it can reach the message limit; any `.expand` over an upstream output"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:293`. Before consulting the resolved-list cache, every `inputs()` call reloads sources and clones their complete outputs: **Scenario:** a plain task returns N strings, used only by `.expand(x=source)`. Each instance receives its selected string under `$expand` **plus all N strings under `source`**. Fetching, cloning and serializing inputs therefore grows quadratically. The runner uses `$expand` for these mapped arguments. Batch measurement `f3_mapped_inputs_repeat_the_whole_list`, with 256-byte strings and one shared cache: **Confidence: high.** I searched the other call sites and matching implementations for these problems. I did not run the full suite, stress tests, distributed process tests, PostgreSQL fault injection, or release-build benchmarks. The reproductions used SQLite; restart checks recreated the master core against the same database. All throwaway files were removed. `git status --short` was empty before and after; `git diff --exit-code` passed. No tracked files changed. DONE: --- session 01a18d2e-d496-74a2-be56-b991ff6fee40 | 34 commands | tokens in 3111663 (cached 2947456), out 17085 | weekly 21.0%, 5 h 63.0% | /home/ptutak/.claude/skills/codex/logs/01a18d2e-d496-74a2-be56-b991ff6fee40.1.jsonl [exited with code 0]
+- **A fix:** to decide when it is scheduled.
+'''

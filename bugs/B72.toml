@@ -1,0 +1,12 @@
+title = "approximate divisibility admits incompatible `multipleOf` constraints"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "huge `multipleOf` constraints compared approximately at load"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:538`. The proof uses `math.isclose(ratio, round(ratio))`. Its relative tolerance accepts nonintegral ratios at sufficiently large magnitudes. A source with `multiple_of=10**12` is accepted for a target with `multiple_of=3`, although `10**12` itself fails that target.
+- **A fix:** to decide when it is scheduled.
+'''

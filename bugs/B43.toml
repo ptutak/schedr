@@ -1,0 +1,13 @@
+title = "cancelling one task while its worker is away is lost on reconnect"
+severity = "high"
+probability = "possible"
+kind = "correctness"
+summary = "a cancelled task runs on; a cancel while its worker is away"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
+  loop and the worker link), with a failing proof each; checked against the code by Claude.
+  The journal reconciliation resends a cancel only when the run is cancelled (`crates/schedr-master/src/core.rs:830`: `run.cancel_requested`); a `CancelTask` sets the instance's flag, so after a reconnect the attempt gets `Continue` and runs on (Codex's proof: 0 cancels where 1 was due). Rejections and completions check both flags; the reconnect test covers `CancelRun` only.
+- **A fix:** check the instance's `cancel_requested` too, with a test of `CancelTask` across a reconnect.
+'''

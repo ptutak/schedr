@@ -1,0 +1,12 @@
+title = "mixed structured arguments reach functions in the wrong Python shape"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a tuple, dataclass or model argument built from references arrives as a list or dict"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/runner/task.py:181`. `build()` constructs mixed arguments with `return [build(...)]` or `return {k: build(...)}`, without constructing the annotated tuple, dataclass or model. A DAG declaring `consume((produce(), 3))` for `value: tuple[int, int]` passes parsing, but receives a list. Likewise, `consume({"x": produce()})` passes parsing for a dataclass or Pydantic parameter, then receives a dict.
+- **A fix:** to decide when it is scheduled.
+'''

@@ -1,0 +1,12 @@
+title = "reference memoization skips comparisons against different inline target schemas"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "one reference compared against two different inline targets, cached as one"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:246`. The cache key contains only reference strings:
+- **A fix:** to decide when it is scheduled.
+'''

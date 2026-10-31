@@ -1,0 +1,12 @@
+title = "exceptions during result serialization escape without a structured failure"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "a task whose result can't be serialised ends without a structured failure"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/runner/task.py:423`. Both encoding and size checking catch only `CodecError`. Recursive values, failing Pydantic serializers, and exceptions from JSON/UTF-8 conversion escape those handlers. The task function completes, but the runner closes its channel without sending `task_failed`.
+- **A fix:** to decide when it is scheduled.
+'''

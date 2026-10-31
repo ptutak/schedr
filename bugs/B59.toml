@@ -1,0 +1,13 @@
+title = "a new content hash can import stale bytecode"
+severity = "critical"
+probability = "rare"
+kind = "data"
+summary = "old code runs under the new hash; an edit of the same length within the same second (git-sync)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F7 (the agent's files
+  and parsing), with a failing proof each; checked against the code by Claude.
+  The runner imports DAG files with the standard source loader (`python/schedr/runner/parse.py:65`; tasks at `task.py:290`), whose `.pyc` check is the source's mtime in whole seconds and its size: an edit of the same length within the same second (git-sync switching revisions does that) reuses the old bytecode, while the agent's scan saw the change and hashed the new source (Codex's proof: hash changed, the source says `new`, a fresh runner parsed `old`).
+- **A fix:** no bytecode cache for DAG roots (`sys.dont_write_bytecode` and not reading `__pycache__`), or hash-based `.pyc` checked against the source.
+'''

@@ -1,0 +1,12 @@
+title = "using a mapped output elsewhere breaks per-element narrowing"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "per-element `.on(...)` fails when the mapped output is also used elsewhere"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/mapping.rs:84`. Lane detection requires exactly one reference: With another reference, narrowing falls through to whole-output resolution. At `mapping.rs:170`, `.on(Rows)` is then compared against the whole mapped task’s synthetic `SUCCESS` outcome, producing `null`. **Scenario:** the Python API accepts: After both fetches succeed, finishing `gate` should allow the matching element to proceed. Instead, expansion fails. This also contradicts the mapping guide’s statements that `.on(...)` works per element and an additional use makes the task wait for the whole upstream.
+- **A fix:** to decide when it is scheduled.
+'''

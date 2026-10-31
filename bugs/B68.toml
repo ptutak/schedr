@@ -1,0 +1,12 @@
+title = "a strict model can encode successfully but cannot read its own output"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a strict model with a datetime field can't read its own output"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/models.py:135`. `dump()` uses JSON mode, turning datetimes into strings. `validate()` then calls `cls.model_validate(data, ...)` in Python mode. A strict datetime field rejects that string, although the parse-time compatibility check accepts the model-to-itself connection.
+- **A fix:** to decide when it is scheduled.
+'''

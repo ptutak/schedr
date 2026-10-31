@@ -1,0 +1,12 @@
+title = "ordinary dictionaries collide with serialization tags"
+severity = "critical"
+probability = "rare"
+kind = "data"
+summary = "a dict such as `{\"$date\": \"x\"}` comes back as a different value, silently; a user key equal to a tag"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/codec.py:433`. The encoder preserves arbitrary string keys. The decoder interprets any singleton dictionary whose key is in `TAGS` as a tagged value: `if len(data) == 1 and next(iter(data)) in TAGS`. Consequently, even a value encoded and decoded against the same `dict[str, Any]` annotation changes:
+- **A fix:** to decide when it is scheduled.
+'''

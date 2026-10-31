@@ -24,6 +24,8 @@ jobs:
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - run: uv sync --frozen --no-install-project --inexact
       - run: make pin-check
+      # BUGS.md must match bugs/ (see the Makefile, bugs-check).
+      - run: make bugs-check
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: "1.99.1"

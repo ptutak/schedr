@@ -1,0 +1,13 @@
+title = "a running task can be expired and assigned again after a reconnect"
+severity = "critical"
+probability = "possible"
+kind = "correctness"
+summary = "the same task runs twice at once; needs a lost `Started` and a reconnect within the 10 s start timeout"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F2 (dispatch and
+  attempts), with a failing proof each; checked against the code by Claude.
+  When `Started` is lost with the stream and the worker reconnects within the start timeout (10 s) with the attempt `Running` in its journal, the master adopts it (`crates/schedr-master/src/dispatch.rs:381`: only the slot reserved) and answers `Continue`, but records no start; the expiry (`started_at IS NULL`) then ends it as `AssignmentExpired` and assigns the task again while the first process runs (Codex's proof: one new assignment). The agent resends `Finished` on `Continue` but no `Started`.
+- **A fix:** record the start on adoption (the journal says it runs), or have the agent resend `Started`.
+'''

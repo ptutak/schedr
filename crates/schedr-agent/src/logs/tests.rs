@@ -114,6 +114,35 @@ async fn a_log_that_cant_be_read_is_a_server_error() {
     assert!(error(&body).starts_with("worker `w1` can't read the log: "));
 }
 
+#[tokio::test]
+async fn a_link_or_a_fifo_named_like_a_log_is_never_served() {
+    // B62: a task or a local user plants `<uuid>.log`; the endpoint serves logs, not what the
+    // worker can read, and doesn't hang on a FIFO no one writes.
+    let (dir, endpoint) = endpoint();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "a private key").unwrap();
+    std::os::unix::fs::symlink(&secret, endpoint.log_dir.join(format!("{ATTEMPT}.log"))).unwrap();
+    let (status, _, body) = get(&endpoint, &format!("/logs/{ATTEMPT}")).await;
+    assert_eq!(status, 500);
+    assert!(!String::from_utf8_lossy(&body).contains("a private key"));
+    assert!(error(&body).starts_with("worker `w1` can't read the log: "));
+
+    let fifo = "0199f0c2-7b3e-7d10-8000-00000000a002";
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        endpoint.log_dir.join(format!("{fifo}.log")),
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get(&endpoint, &format!("/logs/{fifo}")),
+    )
+    .await
+    .expect("a FIFO hangs the endpoint");
+    assert_eq!(answer.0, 500);
+}
+
 #[test]
 fn attempt_ids_are_uuids() {
     assert!(is_attempt_id(ATTEMPT));

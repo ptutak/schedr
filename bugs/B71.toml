@@ -1,0 +1,12 @@
+title = "integer constraint comparisons lose precision"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "integer bounds above 2^53 compared as floats at load"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:517`. `_limit()` converts integer boundaries with `float(schema[plain])`. This collapses distinct boundaries above the exact integer range of a float. A source allowing `x >= 9007199254740992` is accepted for a target requiring `x >= 9007199254740993`. The source’s minimum value then fails decoding.
+- **A fix:** to decide when it is scheduled.
+'''

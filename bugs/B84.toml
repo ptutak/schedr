@@ -1,0 +1,12 @@
+title = "cancelling transaction startup returns an open transaction to the pool"
+severity = "high"
+probability = "possible"
+kind = "reliability"
+summary = "a pooled connection left inside a transaction holding the lease row's lock; a write cancelled while starting (query timeouts during a stall)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/query.rs:156`. The connection is closed only when `begin_with(...).await` returns an error: Cancelling that future bypasses this branch. In the pinned sqlx implementation, transaction depth advances only after startup completes, so its cancellation rollback does nothing at this point. **Scenario:** a fenced write waits for a lock during startup → its future is cancelled → the lock becomes available → PostgreSQL finishes the cancelled startup → another borrower receives that connection inside the unfinished transaction, including its transaction-local settings and lease-row lock. **
+- **A fix:** to decide when it is scheduled.
+'''

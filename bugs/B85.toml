@@ -1,0 +1,12 @@
+title = "disconnects during notification draining can silently lose changes"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "the UI's live feed misses changes until the next one; the database listener disconnecting with a notification queued"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
+  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/changes.rs:220`. Only the first receive handles `None` as `Change::Missed`. The subsequent drain accepts only notifications: This discards a disconnect result or cancels reconnection after the listener has consumed its disconnect state. **Scenario:** one notification is queued → the listening connection dies → another change occurs while disconnected → draining consumes the disconnect → following resumes without reporting `Missed`. The API feed sends a refresh for `Missed` (`schedr-api/src/events.rs:122`), so clients can retain stale data. **
+- **A fix:** to decide when it is scheduled.
+'''

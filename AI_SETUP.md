@@ -23,7 +23,7 @@ names and versions to the project; keep the principles. How to work with the use
 README.md               # what it is, how to install and run
 PROJECT.md              # decision log (see Project documents)
 PLAN.md                 # milestones and steps
-BUGS.md                 # open bugs
+BUGS.md                 # open bugs, generated from bugs/ (one TOML file per bug)
 NEXT_SESSION.md         # hand-off for the next working session
 AI_SETUP.md, AI_INSTRUCTIONS.md   # the Grok and Codex skills live in ~/.claude/skills, not here
 Makefile                # every task has a target; `make help` lists them
@@ -314,12 +314,17 @@ Separate jobs. The ones that run on this machine each have a make target:
   decided.
 - **`PLAN.md`:** milestones, each with a "done when"; steps in dependency order, each with
   its own "done when"; a status line when a milestone is done.
-- **`BUGS.md`:** open bugs with stable IDs (B1, B2, …, never reused): a rating (severity
-  critical/high/medium/low × probability likely/possible/rare, and a kind: security, data,
-  correctness, reliability, performance, usability, tests), found, symptom, repro, cause or
-  suspect, plan. At the top, the scales ("Ratings") and the ranking table (security first,
-  then by score), regenerated with every change. A fix removes its entry in the same commit,
-  with a test that would have caught it. The rule for when bugs are fixed is in
+- **`bugs/` and `BUGS.md`:** open bugs with stable IDs (B1, B2, …, never reused), one TOML
+  file each, `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low ×
+  probability likely/possible/rare, and a kind: security, data, correctness, reliability,
+  performance, usability, tests), a one-line summary, the date found, whether it is only
+  suspected, and the details (found, symptom, repro, cause or suspect, plan) in Markdown.
+  `bugs/README.md` holds the rules and scales, `bugs/next-id` the next free number (fixed
+  bugs' files are gone). `scripts/bugs.py` validates the files and generates `BUGS.md` (the
+  rules, the ranking with security first, then the entries); `make bugs` writes it,
+  `make bugs-check` (in `make check` and CI) fails when a file is invalid or `BUGS.md` is
+  stale, and `scripts/bugs.py new "<title>"` starts a new one. A fix deletes its file in the
+  same commit, with a test that would have caught it. The rule for when bugs are fixed is in
   `AI_INSTRUCTIONS.md`, Bugs.
 - **`NEXT_SESSION.md`:** where things stand, next steps in order, working rules, environment
   notes, a short code map; rewritten at the end of a milestone or session.

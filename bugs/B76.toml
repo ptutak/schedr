@@ -1,0 +1,12 @@
+title = "Python accepts output nesting that the agent refuses"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "an output nested over 128 levels fails after the task succeeded"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/codec.py:260`. Recursive encoding checks values and byte size without enforcing the receiving JSON parser’s nesting limit. A small `Any` output containing 140 nested lists passes encoding and `check_size()` and is emitted as `task_succeeded`, but the agent cannot read it.
+- **A fix:** to decide when it is scheduled.
+'''

@@ -1,0 +1,19 @@
+title = "a run whose stored DAG no longer reads looks unmapped to the API"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "a mapped task's instances refused as unmapped and a missing task given an empty list; a stored DAG JSON that no longer deserializes (a field the model lost)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Grok's follow-up review of M4.3d (`324d99d5`), with a probe that
+  added an unknown field to a run's `dag_versions.dag_json` (`Dag` is `deny_unknown_fields`).
+  `run_tasks` (`crates/schedr-api/src/routes.rs`) turns the serde error into `None` (`.ok()`),
+  so `mapped_count` treats every task as unmapped and known: a missing task's attempts are
+  200 `{"attempts": []}`, `?map_index=0` on a mapped task is a 400 "isn't mapped", `retry`
+  without an index is accepted; `get_run` shows the whole task's `instances` as null. A
+  value that isn't JSON at all is a 500. The earlier `mapped_tasks` behaved the same.
+- **A fix:** a DAG that doesn't read is the API's error (a 500 naming the run), not an
+  unmapped DAG; or keep reading it leniently for `get_run` only. Before 1.0.0 the stored
+  JSON follows the model (edited in place); after it, migrations must keep it readable.
+'''

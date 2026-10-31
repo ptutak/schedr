@@ -1,0 +1,12 @@
+title = "truncation detection applies to unrelated user dictionaries"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "an output dict with a `<field>_truncated: True` key refused as truncated"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/runner/task.py:96`. `resolve()` checks `value.get(f"{step}_truncated") is True` for every dictionary field, rather than only process-result streams. Referencing `data` in a complete output `{"data": "complete", "data_truncated": True}` raises a truncation error.
+- **A fix:** to decide when it is scheduled.
+'''

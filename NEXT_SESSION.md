@@ -13,14 +13,12 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   B62 + B46 (security; small, so Codex reviews: the user, 2026-10-30), B58 + B59 (code identity
   under git-sync), B50 + B41 + B43 + B44 (the reconnect batch), then B86, B84, B78, B64, B54,
   B66, B45, B63, B57, B47. Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
-- **Uncommitted: the `bugs/` folder** (the user: "do bugs/ now just don't commit it"), in the
-  worktree `../schedr-bugs` (branch `bugs-folder`, from `fd56430` plus M4.3d's BUGS.md): one
-  TOML file per bug, `bugs/README.md` (the rules), `bugs/next-id` (B90), `scripts/bugs.py`
-  (`render`, `check`, `new`) with its tests (`python/tests/unit/test_bugs.py`), `make bugs` /
-  `make bugs-check` (in `make check` and CI), AI_INSTRUCTIONS / AI_SETUP updated, B40's new
-  sightings and **B89** logged there. To land it: rebase it on `main`, re-run the converter's
-  check (`make bugs-check`), `make check`, then commit on the user's acceptance. Until then
-  BUGS.md on `main` is the old hand-edited file.
+- **Bugs live in `bugs/`** (the user, 2026-10-30): one `bugs/B<n>.toml` per bug (title,
+  severity, probability, kind, summary, found, suspected, details), `bugs/README.md` the rules,
+  `bugs/next-id` the next number; `BUGS.md` is generated (`make bugs`; `make bugs-check` in
+  `make check` and CI), never edited by hand. A new bug: `python3 scripts/bugs.py new
+  "<title>"`; a fix deletes its file. `scripts/bugs.py` has its tests (scripts Claude writes
+  get tests: the user, 2026-10-30).
 - **Commits of 2026-10-30:** `5b451e1` (the M4.3 review fix-up), `a8bf777` (B39 partly),
   `819dcbb` (the harness, B49, B51), `fbcfd34` (B42, B79, B55, decisions 99–100, B84–B87
   logged), then the evening's: B53 by decision 99, B55's review fixes (including a process whose
@@ -44,7 +42,7 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   for the %); Codex 25% weekly (read from its turns; resets Thursdays 01:57). Grok for brittle
   work only, Codex for small fixes, follow-ups in the same session (the user, 2026-10-30).
 - **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B87
-  (B42, B49, B51, B53, B55, B79 fixed; B88 found and fixed the same day). The next number is **B90** (B89 is in the `bugs/` worktree).
+  (B42, B49, B51, B53, B55, B79 fixed; B88 found and fixed the same day). The next number is **B90** (`bugs/next-id`).
 
 ## How we work now (2026-10-30)
 
@@ -59,7 +57,7 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   worktree. Prepare a worktree (its pyenv, `uv sync`, a build) before a colleague's turn.
 - **Every finding is verified before acting;** rejected ones reported with why. Code Grok
   wrote is reviewed by Codex (or a fresh Grok session).
-- **Decisions:** numbered (the next is **101**), lettered options, the recommended first, a
+- **Decisions:** numbered (the next is **102**), lettered options, the recommended first, a
   "Who (does the work)" column. Ask all coming decisions at once before unattended work.
 - **Commit and push only after the user accepts** each one. Check CI with `gh run list`.
 - **Stress tests:** never without the user asking. **Processes:** kill only your own.
@@ -89,8 +87,8 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
   `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
 - **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `BUGS.md`** (B-numbers never reused, next is B90), each rated
-  (severity, probability, kind: BUGS.md "Ratings") and the "Ranking" table regenerated; fix them
+- **Bugs found on the way go to `bugs/`** (`scripts/bugs.py new`; B-numbers never reused), each
+  rated (severity, probability, kind: `bugs/README.md`, Ratings), `make bugs` after; fix them
   when the user schedules it, removing the entry in the fixing commit. A bug that a step's
   own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
   summary and in PROJECT.md.

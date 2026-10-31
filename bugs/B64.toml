@@ -1,0 +1,13 @@
+title = "the channel does not preserve Python numbers"
+severity = "high"
+probability = "possible"
+kind = "data"
+summary = "a float can change in its last digit silently, an integer beyond 64 bits fails downstream; any numeric output"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), high severity, with a failing check, confirmed by Claude (`serde_json`
+  has neither `float_roundtrip` nor `arbitrary_precision`); at `python/schedr/_serialization/codec.py:129`; `Cargo.toml:46`. The encoder accepts unrestricted integers (`isinstance(value, int)`) and finite floats. The agent reads them using `serde_json::from_slice` at `crates/schedr-agent/src/channel.rs:90`, with the default `serde_json` configuration. A task’s exact integer `18446744073709551617` becomes an approximate float in the agent. A downstream `int` decoder rejects that float. Finite floats can also change value during the read.
+- **A fix:** to decide when it is scheduled.
+'''

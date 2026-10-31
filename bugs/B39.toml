@@ -1,0 +1,38 @@
+title = "sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)"
+severity = "low"
+probability = "possible"
+kind = "usability"
+summary = "DAGs with many groups drawn far too wide (M6)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout (decision 65). A group was
+  moved only on the layers holding its tasks while its box covers every layer between, so
+  boxes stretched and pushed the next group further each pass: 8 sibling groups of 3 tasks
+  reached tens of thousands of px.
+- **Partly fixed, merged 2026-10-30** (Grok sessions `e9ee40d3`, `3b1e9c47`, reviewed by Codex
+  `01a18cef`; the user merged it after a comparison with the earlier layout on 3,000 random
+  grouped DAGs: 1,669 narrower by over 10%, 1,192 about the same, **139 wider** by over 10%
+  (up to 2.7x, 6,000-14,000 px); the widest from 51,250 to 13,963 px; 8 / 16 flat staggered
+  groups from 29,987 / 7,145,763 px to 2,992 / 5,825; layout time about the same).
+  Decisions with the user,
+  1 A (a group is a rigid column: its layers share the rightmost left edge, moving only right;
+  a pushed item takes its outermost group along, on every layer, each item once), 5 A
+  (outermost first), 7 A (a nested group whose layers don't line up is its own column; its
+  parent doesn't drag a layer holding it); tests 2 A, 3 A (random trees of 1-6 groups, a
+  4-deep nest, a group skipping layers), 8 B (one extra row in the random width bound). The
+  original shape is fixed (8 groups: 29,987 px before, now within the side-by-side bound).
+- **Open (Codex's review), for M6:** the 139 random shapes the merged layout draws wider; R1
+  (high) nested staggered siblings still grow about 4x per doubling (16 parents 27,169 px, 32:
+  100,629, against 7.4 million and 4.6e11 px before); R2 quadratic scans per round (`take_group`,
+  `align_group`, `shift_closure`, `clear`); R3 a transitive push moves only the innermost
+  group; R4 the random properties pass when no box is drawn. **Chosen, not implemented:**
+  9 A (pull a nested group left of its parent's column onto it, indented; don't chase one to
+  the right; push by the largest single intrusion, always the outermost group), 10 A (one
+  work counter over the four scans, bound 8n), 11 A (the seven-task R3 graph), 12 B (every
+  populated group has a box, plus a populated-and-empty fixed test).
+- **Parked** (the user, 2026-10-30): back in M6, as a layout correct by construction (each
+  group a block, placed recursively) plus a safety net (check, then fall back to strips),
+  PLAN.md M6. It affects only how DAGs with many groups are drawn, nothing that runs; each
+  review round of the repair approach found the next shape.
+'''

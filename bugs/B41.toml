@@ -1,0 +1,13 @@
+title = "a result the master failed to store isn't sent again while the link stays up"
+severity = "high"
+probability = "possible"
+kind = "correctness"
+summary = "a finished task stays running for as long as the link lives; one failed result write (a database stall)"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
+  loop and the worker link), with a failing proof each; checked against the code by Claude.
+  The agent sends `Finished` once and keeps it in `unacked` (`crates/schedr-agent/src/agent.rs:1114`); heartbeats don't resend it, only a reconnect's `decide` does. The master logs a handling error and keeps the stream (`crates/schedr-master/src/service.rs:448`). One failed write: the attempt stays running for as long as the link lives (Codex's proofs: 12 healthy heartbeats and ticks, still open). Contradicts the Worker lifecycle's "`Finished` until `FinishedAck`".
+- **A fix:** resend unacknowledged results on a timer (or with heartbeats) until acknowledged.
+'''

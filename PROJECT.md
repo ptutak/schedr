@@ -1938,6 +1938,14 @@ SchedrScriptOperator(
     per-pod issuance, e.g. the cert-manager CSI driver); checking only that the CA signed it
     (any schedr certificate could pose as the master); checking that a worker's certificate
     names its worker ID (worth it only against a compromised worker posing as another).
+  - **Workers are trusted, and so is the DAG code on them** (decision 101, the user's,
+    2026-10-30: A, on Codex's review of B46). Tasks run as the agent's own user in its pod, so
+    a task can read its worker's key and act as that worker; a worker can also register under
+    another worker's ID once that one's stream is gone, and report its attempts. The checks
+    that a message's attempt belongs to its sender (`Started`, `Finished` since B46, the
+    journal on `Register`) stop a confused or buggy worker, not a hostile one. Not chosen: B
+    per-worker certificates naming the worker ID, checked at registration (per-pod issuance,
+    and a task could still act as its own worker); C logging it as a bug for after 1.0.0.
   - **Reloading:** the files are read again every `reload_interval` and used once all three
     read and go together; a broken change (a half-written file, a key of another
     certificate) keeps the previous material and is logged once. New connections use the new

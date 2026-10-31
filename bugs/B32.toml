@@ -1,0 +1,19 @@
+title = "the UI briefly freezes on Trigger and other links, the request left pending"
+severity = "medium"
+probability = "likely"
+kind = "usability"
+summary = "UI clicks hang for a moment; seen by the user (the cause suspected)"
+found = 2026-10-28
+suspected = true
+details = '''
+- **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other
+  links, the page hangs for a moment with nothing happening; the browser's Inspect shows the
+  request `Pending`; then it goes through and the DAG is triggered properly.
+- **Suspect:** the browser's limit of six HTTP/1.1 connections per host: the run and log
+  pages hold SSE streams (live changes, the log tail), and other tabs on the same UI hold
+  theirs, so a new request waits for a free connection (B25 and B26 reduced this, not to
+  zero). Not checked.
+- **To confirm:** a browser test with several live pages open on one UI, timing a click
+  until its request is sent. **A fix** depends on the cause (one shared stream per browser,
+  HTTP/2, fewer streams per page).
+'''

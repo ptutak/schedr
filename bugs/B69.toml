@@ -1,0 +1,12 @@
+title = "embedding a model descriptor loses its `$ref` resolution context"
+severity = "low"
+probability = "possible"
+kind = "correctness"
+summary = "a wrong `list[Model]` connection accepted at load, failing at run time"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:132`. `from_desc()` nests a model’s schema and `$defs` under `items` or another enclosing schema. `_Compare` continues resolving references from the outer root. At `schemas.py:444`, a missing definition becomes `{}`, which `fits()` accepts as unrestricted. Thus `list[TextBox]`, containing a model field `x: str`, is accepted for `list[IntBox]`, whose corresponding field is `x: int`. The same comparison without the enclosing list correctly rejects it.
+- **A fix:** to decide when it is scheduled.
+'''

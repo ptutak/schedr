@@ -1,0 +1,12 @@
+title = "optional TypedDict keys are falsely promised as present"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "an optional nested TypedDict key accepted as required at load"
+found = 2026-10-30
+suspected = false
+details = '''
+- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
+  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/models.py:105`. `_all_required()` sets `copied["required"] = list(node["properties"])` on every nested object schema. A model’s nested TypedDict can legitimately omit `NotRequired` keys; dumping the model does not add them. A model containing `row: {x: NotRequired[int]}` is consequently accepted for one requiring `row.x`.
+- **A fix:** to decide when it is scheduled.
+'''
