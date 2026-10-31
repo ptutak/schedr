@@ -1,6 +1,7 @@
 """Reading type annotations: resolving aliases and wrappers, and naming types in messages."""
 
 import collections.abc
+import dataclasses
 import types
 import typing
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from typing import (
     Union,
     get_args,
     get_origin,
+    is_typeddict,
 )
 
 _QUALIFIERS = (Annotated, NotRequired, Required, ReadOnly)
@@ -82,6 +84,50 @@ SEQUENCE_ORIGINS = (list, collections.abc.Sequence)
 
 MAPPING_ORIGINS = (dict, collections.abc.Mapping)
 """Origins accepted as dictionaries."""
+
+
+def shaped_members(annotation: object, shape: type) -> list[object]:
+    """The members of a type that a list (``shape=list``) or a dict written in a DAG file fits.
+
+    A union gives each member that fits (``Any`` fits both; ``None`` and scalars neither),
+    in order; any other type gives itself if it fits. A list fits a ``list``, ``Sequence`` or
+    ``tuple``; a dict a ``dict``, ``Mapping``, dataclass, ``TypedDict`` or Pydantic model.
+
+    Args:
+        annotation: A type annotation.
+        shape: ``list`` or ``dict``.
+
+    Returns:
+        The fitting members (unwrapped).
+    """
+    from schedr._serialization import models  # noqa: PLC0415 (models imports this module)
+
+    annotation = unwrap(annotation)
+    if is_union(annotation):
+        return [m for member in get_args(annotation) for m in shaped_members(member, shape)]
+    origin = get_origin(annotation)
+    if annotation is Any:
+        fits = True
+    elif shape is list:
+        fits = (
+            origin is tuple
+            or origin in SEQUENCE_ORIGINS
+            or annotation in (*SEQUENCE_ORIGINS, tuple)
+        )
+    else:
+        fits = (
+            origin in MAPPING_ORIGINS
+            or annotation in MAPPING_ORIGINS
+            or (
+                isinstance(annotation, type)
+                and (
+                    dataclasses.is_dataclass(annotation)
+                    or is_typeddict(annotation)
+                    or models.is_model(annotation)
+                )
+            )
+        )
+    return [annotation] if fits else []
 
 
 def label(annotation: object) -> str:

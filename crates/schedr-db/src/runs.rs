@@ -29,6 +29,19 @@ fn among(column: &str, count: usize) -> String {
     format!(" AND {column} IN ({})", wanted.join(", "))
 }
 
+/// Each DAG's latest scheduled run, of `count` DAGs (every DAG when 0): one index lookup per
+/// DAG, not its whole scheduled history (`MAX ... GROUP BY` read every scheduled run of each
+/// DAG every round, B120).
+fn last_scheduled_query(count: usize) -> String {
+    let among = among("d.dag_id", count);
+    format!(
+        "SELECT dag_id, {{ts<}}last{{>ts}} FROM (SELECT d.dag_id, \
+         (SELECT MAX(r.planned_for) FROM runs r \
+          WHERE r.kind = 'scheduled' AND r.dag_id = d.dag_id) AS last \
+         FROM dags d WHERE TRUE{among}) latest WHERE last IS NOT NULL"
+    )
+}
+
 fn dag_id_of(text: String) -> Result<DagId, DbError> {
     DagId::new(text).map_err(|e| DbError::InvalidData {
         what: "dag_id",
@@ -362,10 +375,7 @@ impl Database {
         let running = format!(
             "SELECT dag_id, COUNT(*) FROM runs WHERE state = 'running'{among} GROUP BY dag_id"
         );
-        let last = format!(
-            "SELECT dag_id, {{ts<}}MAX(planned_for){{>ts}} FROM runs \
-             WHERE kind = 'scheduled'{among} GROUP BY dag_id"
-        );
+        let last = last_scheduled_query(dags.len());
         let queued = format!(
             "SELECT dag_id, id{{text}}, kind, {{ts<}}triggered_at{{>ts}} FROM runs \
              WHERE state = 'queued'{among} ORDER BY dag_id, triggered_at, id"

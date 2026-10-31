@@ -24,7 +24,7 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 | | |
 |---|---|
 | Return annotation | Required. `-> None` means no output. `-> Any` skips the parse-time check of the return type; the value still has to be storable when the task runs. |
-| Parameters | Each one is declared. `*args` and `**kwargs` are a `TypeError`: arguments are stored by name. |
+| Parameters | Each one is declared. `*args`, `**kwargs` and positional-only parameters (before `/`) are a `TypeError`: arguments are stored and passed by name. |
 | Arguments | Checked against the signature when the DAG is imported. A missing or extra argument is a `TypeError` naming the task. |
 | Calling it twice | The second call needs another ID: `load.override(task_id="load_again")(names)`. The same ID twice is `` task ID `load` is defined twice in DAG `tasks_demo` ``. |
 | `async def` | A `TypeError`. Async tasks, sensors and event triggers are [Async task functions](../_generated/05-design/07-python-api-structure.md#async-task-functions) and [Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers). |
@@ -59,7 +59,9 @@ Without `outcomes=`, exit code 0 is success (`DefaultOutcome.SUCCESS`). With
 signal, fails the attempt. [Routing by outcome](08-outcomes.md) is the enum and
 `.on(...)`. The output is a `ProcessResult`: `stdout`, `stderr`, `exit_code`,
 `stdout_truncated`, `stderr_truncated`. `announce.stdout` and `announce.stderr` are
-references to those strings. The size limit applies to each stream.
+references to those strings. The size limit applies to each stream. They are text: invalid
+UTF-8 and NUL bytes appear as `�` (U+FFFD), so `find -print0`'s names are separated by `�`;
+the task's log keeps the bytes as written.
 
 `EmptyOperator(task_id, *, run_if=...)` has no output. The master completes it when its
 upstream edges allow it to run, and no worker runs it.

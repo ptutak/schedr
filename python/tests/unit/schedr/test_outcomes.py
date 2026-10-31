@@ -2,7 +2,7 @@ import dataclasses
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 
@@ -129,6 +129,16 @@ def test_outcomes_come_from_the_return_type(annotation: object, names: tuple[str
 def test_an_alias_of_an_outcome_union_is_one() -> None:
     type Fetched = Rows | Unavailable
     assert from_return_type(Fetched, "f").names == ("Rows", "Unavailable")
+
+
+def test_an_annotated_outcome_type_is_one() -> None:
+    # B113: `Annotated` hid the union (and the enum), so the task had only SUCCESS, while its
+    # output was still stored as a member.
+    assert from_return_type(Annotated[Rows | Unavailable, "doc"], "f").names == (
+        "Rows",
+        "Unavailable",
+    )
+    assert from_return_type(Annotated[Check, "doc"], "f").enum is Check
 
 
 @pytest.mark.parametrize(

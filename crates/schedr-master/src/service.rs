@@ -470,6 +470,7 @@ impl Hub {
             self.clock,
             queue,
         ));
+        let mut unhandled = false;
         while let Some(first) = queued.recv().await {
             // Not while paused: another master may be leading.
             self.while_leading().await;
@@ -501,8 +502,27 @@ impl Hub {
                     finished |= matches!(message, worker_message::Message::Finished(_));
                     match core.handle(&worker_id, message, (self.clock)()).await {
                         Ok(out) => outgoing.extend(out),
+                        // Refused for its data, it would be refused again after a reconnect,
+                        // and the worker's later messages with it: dropped, the stream goes on
+                        // (B106; a `Finished` is stored as the attempt's failure instead).
+                        Err(error) if error.is_data_fault() => {
+                            tracing::error!(
+                                worker_id,
+                                %error,
+                                "worker message dropped: the database refuses its data"
+                            );
+                        }
                         Err(error) => {
-                            tracing::error!(worker_id, %error, "worker message not handled");
+                            // Not sent again on this stream (a code report is sent once):
+                            // ended, so the worker registers again and reports afresh (B101).
+                            tracing::error!(
+                                worker_id,
+                                %error,
+                                "worker message not handled: its stream is ended, so the \
+                                 worker registers again"
+                            );
+                            unhandled = true;
+                            break;
                         }
                     }
                     handled += 1;
@@ -515,8 +535,14 @@ impl Hub {
                 }
             }
             self.deliver(outgoing).await;
+            if unhandled {
+                reader.abort();
+                break;
+            }
         }
-        if let Err(error) = reader.await {
+        if let Err(error) = reader.await
+            && !error.is_cancelled()
+        {
             tracing::error!(worker_id, %error, "worker stream reader failed");
         }
         // Only the worker's current stream ending disconnects it: a replaced one's end says

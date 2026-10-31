@@ -15,7 +15,9 @@ fn ctx() -> RenderContext {
     ctx.inputs.insert("count".into(), json!(120));
     ctx.inputs.insert(
         "extract".into(),
-        json!({"rows": [{"id": "a b"}, {"id": "c"}], "pair": {"$tuple": [1, "x"]}}),
+        json!({"rows": [{"id": "a b"}, {"id": "c"}], "pair": {"$tuple": [1, "x"]},
+               "data": "complete", "data_truncated": true,
+               "tagged": {"$dict": {"$date": "y"}}}),
     );
     ctx.inputs.insert(
         "listing".into(),
@@ -87,6 +89,20 @@ fn resolve_follows_paths_tuples_and_dag_ctx() {
         )
         .unwrap(),
         &json!("x")
+    );
+    // B75: only a ProcessResult's stream is truncated; a user's `data_truncated` is data.
+    assert_eq!(
+        resolve(&output("extract", vec![field("data")]), &ctx).unwrap(),
+        &json!("complete")
+    );
+    // A dict shaped like a tag is stored escaped (B66); a path goes through the escape.
+    assert_eq!(
+        resolve(
+            &output("extract", vec![field("tagged"), field("$date")]),
+            &ctx
+        )
+        .unwrap(),
+        &json!("y")
     );
     assert_eq!(
         resolve(&PLANNED_FOR, &ctx).unwrap(),

@@ -486,3 +486,41 @@ async fn stored_values_that_dont_read_are_errors() {
         "{error}"
     );
 }
+
+/// SQLite's plan for `query`, one line per step.
+async fn query_plan(db: &Database, query: &str) -> String {
+    let crate::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let rows: Vec<(i64, i64, i64, String)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {query}")))
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    rows.into_iter()
+        .map(|(_, _, _, step)| step)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn each_rounds_reads_of_pending_work_dont_scan_the_history() {
+    // B87: with no retry due and no attempt running, a round must not read every finished
+    // task instance and attempt.
+    let (db, _) = with_run().await;
+    let unstarted = query_plan(
+        &db,
+        &sql(crate::backend::Backend::Sqlite, UNSTARTED_ATTEMPTS).0,
+    )
+    .await;
+    assert!(unstarted.contains("attempts_open"), "{unstarted}");
+    let open = query_plan(&db, &sql(crate::backend::Backend::Sqlite, OPEN_ATTEMPTS).0).await;
+    assert!(open.contains("attempts_open"), "{open}");
+    let due = query_plan(
+        &db,
+        "SELECT run_id, task_id, map_index FROM task_instances \
+         WHERE state = 'up_for_retry' AND ready_at <= '2026-10-21' ORDER BY ready_at, id",
+    )
+    .await;
+    assert!(due.contains("task_instances_retry_due"), "{due}");
+}

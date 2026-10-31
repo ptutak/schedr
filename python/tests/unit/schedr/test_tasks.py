@@ -246,6 +246,14 @@ def test_var_args_are_rejected() -> None:
         task(stars)
 
 
+def test_positional_only_parameters_are_rejected() -> None:
+    # B114: accepted at import, the runner then called the function by name and failed.
+    def slash(a: int, /, b: int) -> None: ...
+
+    with pytest.raises(TypeError, match=r"`a` is positional-only"):
+        task(slash)
+
+
 def test_only_plain_functions_can_be_tasks() -> None:
     async def coro() -> None: ...
 
@@ -497,3 +505,75 @@ def render_list_in_t_string() -> None:
 
     with Dag("d"):
         say(t"{extract()}")
+
+
+def test_a_literal_beside_a_reference_in_an_optional_container_is_checked() -> None:
+    # B121: a union's elements weren't checked; `list[int] | None` took a str.
+    @task
+    def number() -> int:
+        return 1
+
+    @task
+    def take(xs: list[int] | None, pair: tuple[int, str] | None) -> None: ...
+
+    with Dag("d"):
+        n = number()
+        take([n, 2], (n, "a"))
+    with pytest.raises(TypeError, match=r"argument `xs`\[1\]: expected int, got str"), Dag("e"):
+        take([number(), "nope"], None)  # type: ignore[list-item]
+    with pytest.raises(TypeError, match=r"argument `pair`\[1\]: expected str, got int"), Dag("f"):
+        take(None, (number(), 2))  # type: ignore[arg-type]
+
+
+def test_a_dict_shaped_like_a_tag_beside_a_reference_is_escaped() -> None:
+    # B122: only a wholly literal argument went through the escape.
+    @task
+    def number() -> int:
+        return 1
+
+    @task
+    def take(holder: dict[str, Any]) -> None: ...
+
+    with Dag("d"):
+        take({"payload": {"$date": "2026-10-31"}, "n": number()})
+    payload = only_dag().tasks[1].kind.arguments["holder"].entries["payload"]
+    assert payload == LiteralValue({"$dict": {"$date": "2026-10-31"}})
+    with pytest.raises(TypeError, match="NUL"), Dag("e"):
+        take({"payload": {"k\0": 1}, "n": number()})
+
+
+def test_a_t_string_inside_a_list_or_dict_is_checked_against_its_place() -> None:
+    # B109: only a t-string passed whole was checked; `[t"{n}"]` for `list[int]` passed a str.
+    @task
+    def number() -> int:
+        return 1
+
+    @task
+    def take(xs: list[int], named: dict[str, str]) -> None: ...
+
+    with Dag("d"):
+        n = number()
+        take([n], {"a": t"{n}"})
+    with Dag("e"):
+        m = number()
+        with pytest.raises(TypeError, match=r"argument `xs`\[0\]: expects `int`, but a t-str"):
+            take([t"{m}"], {})  # type: ignore[list-item]
+
+
+def test_an_output_or_outcome_compared_in_the_dag_body_is_refused() -> None:
+    # B108: `if flag() == True:` was a plain False, deciding the graph once, at import.
+    @task
+    def flag() -> bool:
+        return True
+
+    with Dag("d"):
+        out = flag()
+        for compare in (lambda: out == True, lambda: out != 1, lambda: out.outcome == "x"):  # noqa: E712
+            with pytest.raises(TypeError, match="exists only at run time"):
+                compare()
+        with pytest.raises(TypeError, match="exists only at run time"):
+            bool(out.outcome)
+        with pytest.raises(TypeError, match="exists only at run time"):
+            str(out.outcome)
+        assert {out: 1}[out] == 1, "still usable as a key, by identity"
+    registry.take_entries()

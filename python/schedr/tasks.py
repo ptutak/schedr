@@ -31,7 +31,6 @@ from schedr._model import (
     Reference,
     RefValue,
     ScalarType,
-    TemplateValue,
     Value,
 )
 from schedr._serialization import (
@@ -94,10 +93,15 @@ class Output[T]:
     the master extracts them when it builds the downstream task's inputs.
     """
 
-    __slots__ = ("_on", "_path", "_task")
+    __slots__ = ("_dag", "_on", "_path", "_task")
 
     def __init__(
-        self, task_id: str, path: tuple[str | int, ...] = (), on: tuple[str, ...] = ()
+        self,
+        task_id: str,
+        path: tuple[str | int, ...] = (),
+        on: tuple[str, ...] = (),
+        *,
+        dag: _build.DagBuilder | None = None,
     ) -> None:
         """References ``task_id``'s output at ``path``.
 
@@ -105,13 +109,16 @@ class Output[T]:
             task_id: The task that produces the output.
             path: Fields, keys and indexes into it.
             on: The outcomes it is narrowed to (``.on(...)``); empty for any.
+            dag: The DAG the task belongs to (the one being defined if not given).
         """
         self._task = task_id
         self._path = path
         self._on = on
+        self._dag = dag or _build.active()
 
     @property
     def _schedr_task_id(self) -> str:
+        _build.check_same_dag(self._dag, self._task)
         return self._task
 
     @property
@@ -119,6 +126,7 @@ class Output[T]:
         return self._on
 
     def _schedr_reference(self) -> Reference:
+        _build.check_same_dag(self._dag, self._task)
         return OutputRef(self._task, self._path, self._on)
 
     @overload
@@ -159,6 +167,7 @@ class Output[T]:
                 f"{self!r}.on(): narrow the whole output first, e.g. `{self._task}.on(...)`"
             )
         builder = _build.require_active("`.on()`")
+        _build.check_same_dag(self._dag, self._task)
         task = builder.tasks.get(self._task)
         if task is not None and isinstance(task.kind, PythonKind) and task.kind.branch:
             raise TypeError(
@@ -166,7 +175,7 @@ class Output[T]:
                 "task, not on outcomes; return an outcome from a @task to route with .on()"
             )
         spec = builder.outcomes.get(self._task, _outcomes.DEFAULT)
-        return Output(self._task, on=_outcomes.names_for(spec, kinds, self._task))
+        return Output(self._task, on=_outcomes.names_for(spec, kinds, self._task), dag=self._dag)
 
     @property
     def outcome(self) -> _OutcomeOutput:
@@ -179,6 +188,7 @@ class Output[T]:
         if self._path or self._on:
             raise TypeError(f"{self!r}.outcome: take it from the whole output")
         builder = _build.require_active("`.outcome`")
+        _build.check_same_dag(self._dag, self._task)
         if builder.outcomes.get(self._task, _outcomes.DEFAULT).is_union:
             raise TypeError(
                 f"`{self._task}.outcome`: its outcomes are a union of classes; the value's "
@@ -189,7 +199,7 @@ class Output[T]:
                 f"`{self._task}.outcome` is the task's outcome, but its output may also have "
                 f'a field `outcome`: write `{self._task}["outcome"]` for the field'
             )
-        return _OutcomeOutput(self._task)
+        return _OutcomeOutput(self._task, self._dag)
 
     def __getattr__(self, name: str) -> Output[object]:
         """References a field of the output.
@@ -205,7 +215,7 @@ class Output[T]:
         """
         if name.startswith("_"):
             raise AttributeError(name)
-        return Output(self._task, (*self._path, name), self._on)
+        return Output(self._task, (*self._path, name), self._on, dag=self._dag)
 
     def __getitem__(self, key: str | int) -> Output[object]:
         """References a key or an index of the output.
@@ -224,7 +234,7 @@ class Output[T]:
             raise TypeError(f"output keys are str or int, got {type(key).__name__}")
         if isinstance(key, int) and key < 0:
             raise ValueError(f"output index {key}: negative indexes aren't supported")
-        return Output(self._task, (*self._path, key), self._on)
+        return Output(self._task, (*self._path, key), self._on, dag=self._dag)
 
     def __rshift__(self, other: object) -> object:
         """``self >> other``: ``other`` runs after this task.
@@ -286,6 +296,24 @@ class Output[T]:
         """
         raise TypeError(_VALUE_IN_DAG_BODY)
 
+    def __eq__(self, other: object) -> bool:
+        """Refuses to be compared: the value exists only at run time (B108).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __ne__(self, other: object) -> bool:
+        """Refuses to be compared, as ``==``.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    __hash__ = object.__hash__
+
     def __repr__(self) -> str:
         """A readable form, e.g. ``Output(extract.rows[0])``."""
         on = f".on({', '.join(self._on)})" if self._on else ""
@@ -296,17 +324,54 @@ class Output[T]:
 class _OutcomeOutput:
     """A task's outcome as data (``task.outcome``), a reference in the DAG body."""
 
-    __slots__ = ("_task",)
+    __slots__ = ("_dag", "_task")
 
-    def __init__(self, task_id: str) -> None:
+    def __init__(self, task_id: str, dag: _build.DagBuilder | None) -> None:
         self._task = task_id
+        self._dag = dag
 
     @property
     def _schedr_task_id(self) -> str:
+        _build.check_same_dag(self._dag, self._task)
         return self._task
 
     def _schedr_reference(self) -> Reference:
+        _build.check_same_dag(self._dag, self._task)
         return OutcomeRef(self._task)
+
+    def __bool__(self) -> bool:
+        """Refuses to be used as a value (B108).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __str__(self) -> str:
+        """Refuses to be formatted into a plain string (use a t-string or pass it directly).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __eq__(self, other: object) -> bool:
+        """Refuses to be compared: the value exists only at run time (B108).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __ne__(self, other: object) -> bool:
+        """Refuses to be compared, as ``==``.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    __hash__ = object.__hash__
 
     def __repr__(self) -> str:
         """A readable form, e.g. ``Output(check.outcome)``."""
@@ -346,6 +411,11 @@ def _check_function(fn: Callable[..., Any]) -> inspect.Signature:
             raise TypeError(
                 f"@task `{fn.__name__}`: `{stars}{parameter.name}` isn't supported; arguments "
                 "are stored by name, so declare each parameter"
+            )
+        if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
+            raise TypeError(
+                f"@task `{fn.__name__}`: `{parameter.name}` is positional-only (before `/`); "
+                "arguments are stored and passed by name, so remove the `/`"
             )
     return signature
 
@@ -531,7 +601,7 @@ class TaskFunction[**P, R]:
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
         # A reference, which type checkers read as the value (see above).
-        return Output[R](task_id)
+        return Output[R](task_id, dag=builder)
 
     def _mapped(
         self,
@@ -605,8 +675,13 @@ class TaskFunction[**P, R]:
         converted = _build.to_value(value, where, upstream)
         for template in _build.templates_in(converted):
             _build.check_template_references(builder, template, where)
-        if isinstance(converted, TemplateValue) and not is_assignable(ScalarType("str"), expected):
-            raise TypeError(f"{where}: expects `{type_name(expected)}`, but a t-string gives `str`")
+        try:
+            templates = _build.typed_templates(converted, expected, where)
+        except TypeError as e:
+            raise TypeError(f"{where}: {e}") from None
+        for spot, place in templates:
+            if not is_assignable(ScalarType("str"), place):
+                raise TypeError(f"{spot}: expects `{type_name(place)}`, but a t-string gives `str`")
         # Each reference, at any depth, against the type of the place it fills; the literals
         # beside them against theirs.
         try:

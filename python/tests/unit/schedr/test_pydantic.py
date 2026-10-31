@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from schedr import CommandOperator, Dag, TypingHint, task
 from schedr._model import ModelType, registry
@@ -12,6 +12,7 @@ from schedr._serialization import (
     CodecError,
     assignment_problem,
     decode,
+    decode_any,
     describe,
     encode,
     encode_any,
@@ -303,3 +304,66 @@ def test_a_container_that_cant_be_the_parameters_shape_is_refused() -> None:
         pytest.raises(TypeError, match=r"argument `settings`: expects `Settings`, but gets a list"),
     ):
         use([name()])  # type: ignore[arg-type]
+
+
+class Tagged(BaseModel):
+    meta: dict[str, str]
+
+
+def test_a_models_dict_shaped_like_a_tag_comes_back_as_written() -> None:
+    # B66: a model's dict whose only key is a tag is escaped, not read as the tag.
+    value = Tagged(meta={"$date": "next friday"})
+    assert decode(encode(value, Tagged), Tagged) == value
+    assert decode_any(encode_any(value)) == {"meta": {"$date": "next friday"}}
+
+
+class Counted(BaseModel):
+    count: int
+
+
+def test_a_models_integer_beyond_64_bits_is_refused() -> None:
+    with pytest.raises(CodecError, match="outside the 64-bit range"):
+        encode(Counted(count=2**64), Counted)
+
+
+class Named(BaseModel):
+    name: str
+
+
+def test_a_models_string_with_nul_is_refused() -> None:
+    with pytest.raises(CodecError, match="NUL"):
+        encode(Named(name="a\0b"), Named)
+
+
+class StrictStamped(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    at: datetime
+    day: date
+    took: timedelta
+    pair: tuple[int, str]
+    count: int
+
+
+def test_a_strict_model_reads_back_its_own_output() -> None:
+    # B68: stored as JSON (dates as text), read back as Pydantic reads JSON: strict fields
+    # take text dates there, and refuse what JSON would not give them.
+    value = StrictStamped(
+        at=datetime(2026, 10, 29, 3, tzinfo=UTC),
+        day=date(2026, 10, 29),
+        took=timedelta(days=-1, microseconds=7),
+        pair=(1, "a"),
+        count=3,
+    )
+    assert decode(encode(value, StrictStamped), StrictStamped) == value
+    # schedr's tagged values (a dataclass's or plain output) read as their JSON text.
+    tagged = {
+        "at": encode(value.at, datetime),
+        "day": encode(value.day, date),
+        "took": encode(value.took, timedelta),
+        "pair": encode(value.pair, tuple[int, str]),
+        "count": 3,
+    }
+    assert decode(tagged, StrictStamped) == value
+    with pytest.raises(CodecError, match="StrictStamped"):
+        decode({**tagged, "count": "3"}, StrictStamped)

@@ -420,7 +420,7 @@ impl Database {
                         .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
                 )
                 .bind(end.error_kind.as_deref())
-                .bind(end.error_summary.as_deref())
+                .bind(end.error_summary.clone().map(crate::query::storable_json))
                 .bind(end.code_hash.as_deref())
                 .bind(db_time(now))
                 .bind(

@@ -194,8 +194,9 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
         start_method: pb::StartMethod::Spawn.into(),
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
-    // The run's own write fails: the last of the `Finished`'s writes.
-    refuse(&core, "runs", "NEW.state = 'success'").await;
+    // The run's own write fails: the last of the `Finished`'s writes (and so does the run's
+    // failure the master stores instead of a refused result, B106).
+    refuse(&core, "runs", "NEW.state IN ('success', 'failed')").await;
     let finished = worker_message::Message::Finished(pb::Finished {
         attempt_id: assign.attempt_id.clone(),
         status: pb::AttemptStatus::Success.into(),
@@ -211,6 +212,57 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
         w1.free_slots(),
         w1.slots - 1,
         "the slot was freed in memory"
+    );
+}
+
+#[tokio::test]
+async fn a_result_the_database_refuses_is_stored_as_the_attempts_failure() {
+    // B106: refused for its data, it was refused again after every reconnect, the worker's
+    // later results stuck behind it.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    refuse(&core, "runs", "NEW.state = 'success'").await;
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: assign.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: b"null".to_vec(),
+        duration_ms: Some(1500),
+        ..pb::Finished::default()
+    });
+    let ack = core.handle("w1", finished, ts(NOW)).await.unwrap();
+    assert!(matches!(
+        message(&ack[0]),
+        master_message::Message::FinishedAck(_)
+    ));
+    let runs = core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 10)
+        .await
+        .unwrap();
+    // Not retried: the same result would be refused again.
+    assert_eq!(runs[0].state, schedr_model::RunState::Failed);
+    let extract = schedr_model::TaskId::new("extract").unwrap();
+    let attempts = core
+        .db
+        .instance_attempts(&runs[0].id, &extract, -1)
+        .await
+        .unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(
+        attempts[0].status,
+        Some(schedr_model::AttemptStatus::Failed)
+    );
+    assert_eq!(attempts[0].error_kind.as_deref(), Some("result_not_stored"));
+    assert_eq!(attempts[0].duration_ms, Some(1500));
+    let summary = attempts[0].error_summary.as_deref().unwrap_or_default();
+    assert!(
+        summary.contains("the result couldn't be stored")
+            && summary.contains("refused by the test"),
+        "{summary}"
     );
 }
 
@@ -1106,4 +1158,56 @@ async fn a_revert_in_a_registration_that_failed_is_recorded_when_it_registers_ag
         .unwrap();
     let switches = core.db.root_hash_switches("etl").await.unwrap();
     assert!(switches["h1"] > switches["h2"], "{switches:?}");
+}
+
+async fn rename_table(core: &MasterCore, from: &str, to: &str) {
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "ALTER TABLE {from} RENAME TO {to}"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_resume_whose_follow_up_failed_is_retried_in_later_rounds() {
+    // B99: the resume command is applied once; its follow-up (the worker's parse jobs) must
+    // be tried again until it succeeds.
+    let mut core = core().await;
+    core.register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let db = core.db.clone();
+    let ask = |command| {
+        let db = db.clone();
+        async move { db.insert_command(&command, "anna", ts(NOW)).await.unwrap() }
+    };
+    ask(schedr_model::commands::Command::DrainWorker {
+        worker_id: "w1".to_owned(),
+    })
+    .await;
+    core.tick(later(1)).await.unwrap();
+    ask(schedr_model::commands::Command::ResumeWorker {
+        worker_id: "w1".to_owned(),
+    })
+    .await;
+    rename_table(&core, "parse_results", "parse_results_away").await;
+    let (out, _) = core.tick_partial(later(2)).await;
+    assert!(
+        !out.iter()
+            .any(|o| matches!(message(o), master_message::Message::AssignParse(_))),
+        "{out:?}"
+    );
+    rename_table(&core, "parse_results_away", "parse_results").await;
+    let mut assigned = false;
+    for round in 3..6 {
+        let out = core.tick(later(round)).await.unwrap();
+        assigned |= out.iter().any(|o| {
+            o.worker_id == "w1" && matches!(message(o), master_message::Message::AssignParse(_))
+        });
+    }
+    assert!(assigned, "the resumed worker got no parse job");
 }

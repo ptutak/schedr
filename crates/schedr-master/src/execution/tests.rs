@@ -725,7 +725,11 @@ fn mapped() -> Dag {
     };
     let output_of = |task: &str| json!({"ref": {"kind": "output", "task": task}});
     let mut load = python("load");
-    load["arguments"] = json!({"bucket": {"literal": "raw"}});
+    // Its outcome only: the list isn't needed whole (B83, Codex's review).
+    load["arguments"] = json!({
+        "bucket": {"literal": "raw"},
+        "status": {"ref": {"kind": "outcome", "task": "files"}},
+    });
     load["expand"] = json!({"product": [{"name": "path", "value": output_of("files")}]});
     let mut check = python("check");
     check["expand"] = json!({"product": [{"name": "n", "value": output_of("load")}]});
@@ -811,6 +815,8 @@ async fn a_mapped_task_expands_over_an_output_and_its_instances_get_their_elemen
         .await
         .unwrap();
     assert_eq!(inputs["$expand"], json!({"path": "b.csv"}));
+    // B83: the list mapped over is sent as each instance's element, not again whole.
+    assert!(inputs.get("files").is_none(), "{inputs}");
 
     // `load[1]` succeeds: `check[1]` is queued with that output as its element.
     start_instance(&db, &run_id, "load", 1).await;

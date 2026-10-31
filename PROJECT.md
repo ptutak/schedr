@@ -1564,6 +1564,8 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
 - Only DAGs defined with **schedr's own APIs** (the native API or a compatibility layer such
   as `schedr.airflow`) are recognized.
 - A `.py` file that defines no DAG is **ignored silently** (helper modules are common).
+- A file's DAGs are only those **defined in it**: a module it imports may define DAGs too,
+  found when that module's own file is parsed, not taken as the importing file's (B110).
   Parsing imports the file, so its top-level code runs on every parse; helper modules with
   heavy import-time work should be ignored or refactored. This will be documented.
 - **New DAGs are paused** when first found; a user unpauses them from the UI or CLI.
@@ -1611,7 +1613,10 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
     parse job for the same code, after 30 s, doubling with each retry up to 10 min, given to
     another worker reporting that code when there is one. A retry replaces only the files
     that failed transiently (a file that loaded keeps its result); the DAG list is worked out
-    again. A restarted master plans the retry when a worker reports the code again.
+    again. A restarted master plans the retry when a worker reports the code again. A retry
+    stored but not taken into the DAG list (a database error after the store) isn't lost:
+    its job isn't finished, and the master forgets which parse the root is on, so the same
+    retry uploaded again, though it stores nothing new, decides the root afresh (B100).
   - A file that keeps timing out never takes effect (its DAGs stay on their last good
     version): each failure logs a warning naming the files, and the import error stays
     listed.
@@ -1976,6 +1981,25 @@ SchedrScriptOperator(
   on an old stream (its transport open after its lease was lost) are dropped, and its end
   doesn't disconnect the worker (B44). A stream of a worker taken for lost is ended at its next
   message, which changes nothing: the worker registers again.
+- **A message the master fails to handle ends the worker's stream** (decision 108, the
+  user's, 2026-10-31: A; B101), a database error for instance: its effects are undone, and
+  some messages aren't sent again on the same stream (a code report, sent once per hash).
+  The worker registers again, reporting its roots and its journal afresh; messages queued
+  behind it are dropped, and the worker sends again what it still needs acknowledged.
+  Not chosen: B the master retrying the failed message itself (a queue of failed messages
+  per worker, kept across rounds, its order against newer messages to decide).
+- **Only the database's own trouble ends the stream** (decision 115, the user's, 2026-10-31:
+  A; B106). An error of the database itself (unreachable, a time limit, a deadlock, a lock,
+  a busy SQLite) may pass when the message comes again, so the stream ends as above. A
+  message the database refuses for its data (a constraint, a trigger, data that won't read:
+  `DbError::is_data_fault`) would be refused after every reconnect, the worker's later
+  messages behind it: a `Finished` is stored instead as the attempt's failure, kind
+  `result_not_stored` (not retried: the same result would be refused again), with "the
+  result couldn't be stored: ..." and what ran (duration, usage) kept, and acknowledged; any
+  other such message is logged and dropped, and the stream goes on. Not chosen: B ending the
+  stream on every error (decision 108 as it was: a refused result came back for ever); C
+  dropping a refused `Finished` too (its attempt would stay running until its worker is
+  lost).
 
 **States (master's view):** `ACTIVE` → `DRAINING` → `OFFLINE` (clean deregistration);
 `ACTIVE` → `DISCONNECTED` (stream dropped) → back to `ACTIVE` on reconnect with the same
@@ -2175,6 +2199,12 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   tasks get another chance, and hashes it reported while drained get parse jobs. Draining an
   unknown worker, or resuming one that isn't drained, is refused. Not chosen: a deadline as for SIGTERM (an operator wanting
   that cancels the tasks or sends SIGTERM); a drain that ends with the worker's incarnation.
+  **A resume whose follow-up fails is tried again each round** (decision 109, the user's,
+  2026-10-31: A; B99): the command is applied once, and finding the worker's parse jobs (a
+  database read) can fail after it; the worker is kept and retried every round until that
+  succeeds, or until it is drained again. The failure is logged and doesn't fail the round.
+  Not chosen: B the command and its follow-up in one transaction (the parse jobs are in
+  memory, not undone by a rollback).
 - `schedr master` and `schedr webserver` log the address they actually bound (port 0 binds a
   free port).
 
@@ -2222,6 +2252,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   interrupted by draining or never started is try 2 without using up `retries`.
 - **Never retried** (certain to repeat): the error kinds `secret_not_found`,
   `secret_denied`, `input_mismatch`, `output_not_serializable`, `output_too_large`,
+  `result_not_stored` (the database refused the result, decision 115),
   `inputs_too_large`, `render_failed` (a command's templates can't be filled in from these
   inputs). A secret
   storage that is down (`secret_unavailable`), an import error, a task no longer in its
@@ -2546,7 +2577,8 @@ permission to create pods.
   any configured interpreter executable, whatever virtualenv it belongs to). Only the mode and
   the socket's descriptor are passed on the command line / environment; everything else comes from the
   agent over the channel, so no secrets appear in the command line.
-  - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`,
+  - `parse`: gets the root and file list from the agent, puts every DAG root on `sys.path`
+    (a root imports only from itself: decision 103),
     imports the files one at a time (native API calls only record DAGs), and sends back the
     DAG JSON and per-file import errors.
   - `task`: gets the task specification from the agent, imports the DAG file (from the
@@ -3041,6 +3073,16 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   conflict is resolved.
 - When the conflict is resolved, the DAG becomes runnable again on its own (its paused or
   unpaused setting is unchanged).
+- **A conflict resolved while the file left fails to import stays a conflict** until that
+  file imports, when the version stored is the removed file's (decision 107, the user's,
+  2026-10-31: A; B95). Otherwise the removed file's code would run again, under a DAG its
+  file no longer defines, and the import error would hold nothing (holds follow the stored
+  version's file). The master logs a warning saying so: the DAG stays in conflict, only one
+  file defines it, that file failed to import, and it runs again once the file imports. When
+  the stored version is the file left's own, it is kept, as for any file that fails. Not
+  chosen: B removing the DAG until the file imports (its history hidden, and paused again
+  when it comes back); C keeping the removed file's version but holding it under the file
+  left (code from a file that no longer exists, runnable once the hold lifts).
 - **The same ID twice in one file** is a conflict too (both places are the same file).
 - A DAG first seen in conflict is stored **paused** and with no version; it gets one when
   the conflict is resolved.
@@ -3058,10 +3100,16 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   to most recently** (table `root_hashes`, so a master restart decides the same; a switch's
   time is never before the root's latest one, so a clock stepped back doesn't reorder them,
   B93). A switch
-  is a worker moving **away from the current hash** (compared with what it reported before,
-  also across a reconnect), so a **revert** to earlier content is newest, while a lagging
-  worker catching up through older revisions, or reporting older code again, changes
-  nothing; a hash never seen before is newest when first reported. A worker that registers
+  is decided by the **move itself** (decision 113, the user's, 2026-10-31: A; replacing this morning's
+  "away from the newest recorded hash", which ignored a revert once the newest hash's workers
+  had left): a worker moving to a hash **not recorded yet** (new code) or to one **recorded
+  before** the hash it left (a **revert**) switches, and that hash is newest; moving to a hash
+  recorded **later** is catching up and changes nothing (B102: after a restart a lagging
+  worker reporting first, then catching up, would otherwise rank above the newest code).
+  Compared with what the worker reported before, also across a reconnect; a hash never seen
+  before is newest when first reported. Not chosen: the newest among the hashes reported now
+  (B102 again: the lagging worker may be the only one reporting); away from the current hash
+  (B102 again). A worker that registers
   again reports its roots afresh (a root it no longer has stops counting). The current
   hash's parse defines the root's DAGs, and the root's tasks go **only to workers at that
   hash, or at a newer one whose parse is on its way** (newer code still, so the root's tasks
@@ -3128,6 +3176,15 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   reads the whole root, and the code can still change after the check); hard links instead of
   a copy (an edit in place shows through); for bytecode, hash-checked `.pyc` files (Python
   decides the check when it writes one, so a timestamp `.pyc` already there is still trusted).
+- **A root imports only from itself** (decision 103, the user's, 2026-10-31: B; B90). Every
+  DAG root is on `sys.path`, the parsed or run root at its copy and the others at their
+  configured paths, so a module of another root is imported from that root's live checkout:
+  not the code hashed, not recorded with the attempt, and not reparsing this root when it
+  changes. A root's code depends only on itself and installed packages; code shared between
+  roots is a package (installed in the image or the interpreter's environment), or kept in
+  each root. Not chosen: A pinning every root at its copy for each parse and attempt, kept
+  while it runs (copies kept per attempt; the user preferred the rule); C only the root's own
+  copy on `sys.path` (a cross-root import fails at once, breaking setups that rely on it).
 
 ### Upgrades and compatibility
 
@@ -3209,7 +3266,7 @@ list) and likewise has no Python.
 5. **Parse job.** The master creates a parse job for `etl-repo@H2` and sends `AssignParse` to
    any `ACTIVE` worker that reported `H2`. That worker uses its dedicated parse slot. [D]
 6. **Runner start.** The agent starts `<python> -m schedr.runner parse` [D] with a Unix socket
-   [D]. Every DAG root is on `sys.path`. [D]
+   [D]. Every DAG root is on `sys.path` (a root imports only from itself, decision 103). [D]
 7. **Import.** The runner imports every `.py` file in the root, one at a time; `team_a/sync.py`
    is one of them.
    - Native API calls only **record** the DAG: tasks, edges, schedule, retries, t-strings as
@@ -3877,8 +3934,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   **Using a `@task` function more than once** in a DAG (e.g. in a loop): `fn.override(task_id=
   "load_eu")` (Airflow's name), which can also override `retries`, `retry_delay`, `timeout`,
   `queue`, `max_output_size`; the duplicate-ID error points to it.
-- **`@task` functions declare each parameter**: `*args` / `**kwargs` are a parse error
-  (arguments are stored by name). Async functions are a parse error until M4 (see Async
+- **`@task` functions declare each parameter**: `*args` / `**kwargs` and positional-only
+  parameters (B114) are a parse error (arguments are stored and passed by name). Async functions are a parse error until M4 (see Async
   task functions); sensors and triggers are always async (see Sensors and triggers).
 - **`start`, `end` (on the trigger) and `initial_since` (on `Dag`) without a time zone**
   (`start="2026-01-01"`, a `date`, a naive `datetime`) are read in the **trigger's time zone**,
@@ -4163,7 +4220,8 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     field of every element (`results.rows`) refused; `.on(...)` and `.outcome` on the whole
     output refused outside `.expand()` (element by element inside it). A list from a mapped
     task some of whose instances may be skipped (it maps over a narrowed mapped output, or
-    over such a task) has `None` for them: the receiving type must allow it.
+    over such a task) has `None` for them: the receiving type must allow it. Not under
+    `run_if=RunIf.ALL_SUCCEEDED`: there a skipped instance skips the whole task (B116).
   - **Mapping over a mapped output** (decision 70, the user's, 2026-10-29: A): the downstream
     task's instances are created once every upstream instance has finished, then `check[i]`
     gets `process[i]`'s output. Not chosen: B starting `check[i]` as soon as `process[i]`
@@ -4214,7 +4272,9 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     instance's mapped values and sends them with its inputs under `$expand` (with the
     element's outcome under `$expand_outcomes` for one from a mapped upstream, so a union
     decodes to the right member); the runner passes them as the mapped parameters. The task
-    JSON is the same for every instance. Not chosen: B a task JSON per instance (inline in
+    JSON is the same for every instance. The list mapped over isn't sent whole as well (each
+    instance would carry all of it: inputs growing with the square of its length, B83): only
+    what the task's other arguments reference is. Not chosen: B a task JSON per instance (inline in
     `AssignTask`, so a large element could exceed the message limit).
   - **A mapped task's whole output** (decision 77, the user's: A): stored per instance only;
     a downstream task's list is built when read, in `map_index` order, `None` for a skipped
@@ -4499,9 +4559,9 @@ task data: "data flow is the only way to pass task data" still holds).
 
 - **One name everywhere.** In the DAG body (parse time) `dag_ctx.params.region` is a
   **reference**, filled in at run time; in a running task the same expression gives the
-  **value**. Using it as a value in the DAG body (e.g. `if dag_ctx.params.full:`) is a parse
-  error ("a reference can't be used as a value in the DAG file; branch with a task"), as for
-  outputs. `from schedr import dag_ctx`. (Replaces the earlier `schedr.templates.run`
+  **value**. Using it as a value in the DAG body (e.g. `if dag_ctx.params.full:`, or
+  comparing it with `==`, B108) is a parse error ("a reference can't be used as a value in
+  the DAG file; branch with a task"), as for outputs. `from schedr import dag_ctx`. (Replaces the earlier `schedr.templates.run`
   placeholder.)
 - **Run information:** `dag_ctx.run.id`, `dag_ctx.run.kind`, `dag_ctx.run.planned_for`,
   `dag_ctx.run.since`, `dag_ctx.dag_id`, … (scripts also get it as `SCHEDR_*` environment variables,
@@ -5671,13 +5731,27 @@ sure an output can be serialized, from earliest to last:
      producer's type, for every reference at any depth.
    - **Literal arguments** are encoded against the parameter's type at parse time, so a wrong
      literal is a parse error too.
+   - **An argument written as a structure with references inside is built as the
+     parameter's type** (decision 112, the user's, 2026-10-31: A; B65): `consume((produce(),
+     3))` for `tuple[int, int]` gets a tuple, `consume({"x": produce()})` for a dataclass or a
+     Pydantic model gets an instance (the model validated by Pydantic's rules for Python
+     values, each field already its type), each part decoded against its own type at any
+     depth. For a union (`tuple[int, int] | None`, `Point | None`) it is built as the first
+     member of its shape that it fits (B121), and its literals are checked against that
+     member at parse time when only one member has its shape. A field missing or refused
+     fails the attempt (`input_mismatch`). Not chosen: B refusing such arguments at parse
+     time (DAGs using them today would stop loading).
    - **References in command lines and templates** must have a type that can be rendered as
      text: strings, numbers, booleans, dates, times, durations, `Any`, or unions of them.
      `None`, lists, dicts and classes are parse errors (pass a field, or convert in a task).
 3. **Run time (the actual value).** The runner encodes the returned value **guided by the
    annotation** and fails the attempt (`failed`) on: unsupported types (`Decimal`, `set`,
-   custom objects), non-`str` dict keys, `NaN`/`inf`, values not matching the annotation, or
-   values over the output size limit. The error summary names the exact location (e.g. "output
+   custom objects), non-`str` dict keys, `NaN`/`inf`, integers outside the 64-bit range,
+   strings or dict keys containing NUL (`\0`, decision 106), values nested more than 100 lists
+   and dicts deep (`MAX_DEPTH`, under the agent's JSON reader's 128 levels, B76), and any
+   other error while storing it (a model's serializer failing, a value containing itself:
+   `output_not_serializable` with the exception's type, B67),
+   values not matching the annotation, or values over the output size limit. The error summary names the exact location (e.g. "output
    of `extract` not serializable at `[3].created`: `Decimal` is not supported").
 
 **Tagged extra types.** `datetime`, `date`, `timedelta` and `tuple` are stored tagged, not as
@@ -5690,6 +5764,53 @@ task annotated `Any` still gets the real type back:
 | `date` | `{"$date": "2026-10-19"}` |
 | `timedelta` | `{"$timedelta": 3600000000}` (whole microseconds: exact, simple to read in Rust) |
 | `tuple` | `{"$tuple": [1, "a"]}` |
+
+**Numbers arrive exactly** (decision 105, the user's, 2026-10-31: A; B64). Python writes a
+float's shortest exact text, and the agent and the master read it back to the same bits
+(`serde_json`'s `float_roundtrip`). An integer is stored only in the range Rust reads
+exactly, `-2**63` to `2**64 - 1`; a larger one fails the attempt with "outside the 64-bit
+range ... store a larger number as a str", where the value was written, not later where it
+would arrive as an inexact float. The same holds for a `Literal` integer and for a
+`timedelta`'s microseconds (about 213,503 days at most). Not chosen: B `arbitrary_precision` (every number kept as
+text through the agent and the master, a change to every place that reads one, and an integer
+Postgres's `jsonb` keeps but other readers may not); C storing large integers tagged (a new
+tag, for a rare value).
+
+**No NUL in a stored string** (decision 106, the user's, 2026-10-31: A; B86). Postgres
+stores no NUL in `text` or `jsonb`, so a string or dict key holding one fails the attempt
+where the runner encodes it ("a string containing NUL (\0) can't be stored"), instead of
+the master failing to store the completion and the task staying `running`. Not chosen: B
+replacing NUL silently (a different value downstream); C escaping it in storage (every
+reader of outputs would need to undo it).
+
+**The master stores no NUL** (decision 114, the user's, 2026-10-31: A; B105). Text a worker
+sends may hold NUL that no runner check refused (an exception's message and traceback, an
+import error, a warning, a DAG's own strings, or an older agent's values): the database layer
+replaces it with U+FFFD in every string and key of the JSON it writes, so Postgres takes it and
+the attempt's end isn't refused for ever. JSON without NUL is written as it is (not parsed).
+Not chosen: B replacing it only in the runner's error summaries (older agents and other text
+still refused).
+
+**A command's output shows NUL as `�`** (decision 110, the user's, 2026-10-31: A; B104).
+The `stdout` and `stderr` of a `ProcessResult` are text: the agent already replaces invalid
+UTF-8 with U+FFFD, and replaces NUL the same way, so `find -print0`'s output is stored (and its
+names are separated by `�`). The log file keeps the bytes. Not chosen: B failing the attempt
+(every `-print0` or binary-ish command would fail); A' writing NUL as the text `\0`
+(ambiguous with a real backslash and zero).
+
+**A dict shaped like a tag is escaped** (decision 104, the user's, 2026-10-31: A; B66). A
+dict of the user's own whose only key is a tag (`$datetime`, `$date`, `$timedelta`, `$tuple`,
+or `$dict` itself) is stored as `{"$dict": {...}}`, so `{"$date": "x"}` reads back as that dict,
+not as a date (or an error). Only that shape is escaped; a dict with two keys, or with a key
+that isn't a tag, is stored as it is. It holds for `dict` and `TypedDict` values and for
+dicts inside a Pydantic model's dump. A path into the output (`out["$date"]`, by the master,
+the agent or the runner) goes through the escape, and so does a literal dict written beside
+a reference in an argument (B122). Outputs stored before read as they did: a tag there stays
+a tag; only a dict of the user's whose only key was `$dict` now reads as its inner dict
+(nothing to migrate before the first release). A worker older than this, during an upgrade, reads an escaped dict
+as `{"$dict": {...}}` (only for dicts shaped like a tag). Not chosen: B refusing such a dict
+as an output (a valid value refused, with no way around it but renaming the key); C storing
+every dict wrapped (every output larger and different from what users see).
 
 **One output per task; references can point inside it.** There is no separate "multiple
 outputs" concept in the native API. A task has **one output value**, stored once per (DAG run,
@@ -5717,7 +5838,9 @@ their output is a `ProcessResult` (a dataclass in the `schedr` package): `stdout
 - A downstream `@task` can take the whole result (`res: ProcessResult`) and gets the truncation
   flags and exit code explicitly.
 - "Reading a truncated output is an error" applies to `.stdout` / `.stderr` references; a task
-  taking the whole `ProcessResult` has opted in and sees the flags instead.
+  taking the whole `ProcessResult` has opted in and sees the flags instead. Only a
+  `ProcessResult` is checked (a stored object with exactly its five fields): a user's own dict
+  with a `data_truncated` key is data, its `data` read as any other (B75).
 - No automatic parsing of stdout (JSON, CSV, …): a downstream `@task` parses it and gives it a
   proper type.
 - In the Airflow layer, `.output` stays the last line of stdout (not a `ProcessResult`),
@@ -5775,7 +5898,7 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
   `schedr[pydantic]`, `pydantic>=2.11,<3`). Never a required dependency: the `schedr` package
   shares the user's environment and stays **dependency-free**, and importing Pydantic would
   add start-up time to every task. schedr hands validation to Pydantic
-  (`model_dump(mode="json", by_alias=False)` / `model_validate(..., by_name=True)`: keyed by
+  (`model_dump(mode="json", by_alias=False)` / `model_validate_json(..., by_name=True)`: keyed by
   field names, so a path `out.url` is by attribute name, as type checkers read it; `by_name`
   needs 2.11), so **Pydantic's own rules** apply (lax by default, strict if the model says
   so). Built in M4.1e (2026-10-29).
@@ -5792,12 +5915,20 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
     compared (`allOf`, `not`, `if`, differing patterns, schedr's tagged tuples against
     Pydantic's lists) fits only when identical (59.2). `$ref`s are followed; recursive models fit
     themselves. The error names the field and both sides' constraints.
+  - **A model is read back as JSON** (decision 111, the user's, 2026-10-31: A; B68): its
+    stored data is JSON, so the runner validates it as Pydantic validates JSON
+    (`model_validate_json`): a strict field takes a date as ISO text there, as from any JSON,
+    and refuses what JSON wouldn't give it (`"3"` for an `int`). schedr's own tags in the data
+    (a dataclass's or a plain output's) are written first as Pydantic writes those values in
+    JSON (dates as ISO text, durations as ISO 8601 durations, tuples as lists). schedr still
+    never imports Pydantic. Not chosen: B validating in Python mode with `strict=False` (it
+    would accept coercions the author forbade).
   - **A model's dates are dates** (decision 60, the user's, 2026-10-29: B; "the user sees
     `datetime` and expects it to just work"): Pydantic writes them as text (`date-time`,
     `date`, `duration`), schedr tags its own (`{"$datetime": ...}`); the comparison lets
     each fit the other, and the runner converts when the task receives the value: text
-    through Pydantic's own parser (`TypeAdapter`), schedr's tags removed before
-    `model_validate`. A date the model holds without a time zone stays naive: Pydantic
+    through Pydantic's own parser (`TypeAdapter`), schedr's tags written as the JSON text
+    Pydantic writes for those values before `model_validate_json`. A date the model holds without a time zone stays naive: Pydantic
     stored it, so schedr's own rule against naive datetimes (about what schedr stores)
     doesn't apply. Plain `str` still doesn't fit a `datetime` (no format proves it a date).
     Passed on, a naive value stays refused when schedr stores it (decision 63, the user's,

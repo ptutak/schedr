@@ -229,6 +229,22 @@ fn a_resolved_conflict_with_a_failing_file_keeps_the_stored_version() {
 }
 
 #[test]
+fn a_resolved_conflict_whose_remaining_file_fails_stays_a_conflict() {
+    // B95: the stored version is a.py's, removed; b.py, the one left, failed. a.py's version
+    // must not come back: the conflict stays until b.py loads.
+    let mut known = stored(dag("dup", "etl", "a.py"), "p1");
+    known.conflict = Some(vec![place("etl", "a.py"), place("etl", "b.py")]);
+    let sources = [source("etl", "p2", vec![failed("b.py")])];
+    assert_eq!(plan(&sources, &[known]), []);
+    // Once b.py loads, its version is defined.
+    let mut known = stored(dag("dup", "etl", "a.py"), "p1");
+    known.conflict = Some(vec![place("etl", "a.py"), place("etl", "b.py")]);
+    let b = dag("dup", "etl", "b.py");
+    let sources = [source("etl", "p3", vec![ok("b.py", vec![b.clone()])])];
+    assert_eq!(plan(&sources, &[known]), [define(b, "p3", false)]);
+}
+
+#[test]
 fn a_conflict_that_disappears_is_removed() {
     let mut known = stored(dag("dup", "etl", "a.py"), "p1");
     known.current = None;

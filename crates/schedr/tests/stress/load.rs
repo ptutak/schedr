@@ -284,7 +284,11 @@ with Dag("{id}"):
     n = plan()
     for k in range({tasks}):
         CommandOperator(
-            f"c{{k:04}}", t"{command} # {{n}}", retries={retries}, retry_delay=timedelta(0)
+            f"c{{k:04}}",
+            "{command}",
+            env={{"PLANNED": n}},
+            retries={retries},
+            retry_delay=timedelta(0),
         )
 "#
     )

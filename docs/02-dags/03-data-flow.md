@@ -32,7 +32,9 @@ The downstream call has to come after the upstream call, so the `Output` exists 
 Build a dataclass inside the task that returns it. A reference placed inside a dataclass
 or a set in the DAG body is a `TypeError` at import. The message names the task and the
 argument, then `Output is not supported` or `set is not supported`. Lists, tuples and
-dict values are the containers a reference may sit in.
+dict values are the containers a reference may sit in. The task receives the parameter's
+type: `consume((count, 3))` for `tuple[int, int]` gets a tuple, and `consume({"x": count,
+"y": 3})` for a dataclass or a Pydantic model gets an instance built from those fields.
 
 In the DAG body an `Output` is a reference. Using it as a value is a `TypeError`: `if
 batch`, `for x in batch`, `str(batch)` and an f-string. Pass it to a task, or write it in
@@ -56,6 +58,15 @@ The part is checked against the upstream return type at import.
 A mismatch is a `TypeError` naming the argument and both types. There is no coercion
 except `int` for `float`. When the upstream return type is an outcome union, name the
 member first: `batch.on(Rows).rows`.
+
+When a task returns, its value is checked against the return type and stored as JSON. These
+fail the attempt, with a message naming where in the value: a type schedr doesn't store
+(`Decimal`, `set`), a dict key that isn't a `str`, `NaN` or infinity, an integer outside the
+64-bit range (store it as a `str`; a `timedelta` of more than about 213,503 days is one), a
+string, key or outcome name containing NUL (`\0`), lists and dicts
+nested more than 100 deep, and any other error while writing it (a model's serializer
+failing, a list containing itself). Every other
+value reads back as it was written, a dict such as `{"$date": "x"}` included.
 
 ## t-strings
 
@@ -87,8 +98,9 @@ no dependency on the failure keep running.
 A task can return and take Pydantic models, with `pip install schedr[pydantic]`
 (Pydantic 2.11 or newer, before 3). schedr never imports Pydantic itself; it uses the
 model's own methods. A model is stored as `model_dump(mode="json")` writes it, keyed by
-field names, and read back with `model_validate`, so Pydantic's rules and validators apply
-when the downstream task receives it.
+field names, and read back as JSON with `model_validate_json`, so Pydantic's rules and
+validators apply when the downstream task receives it, a strict model's included: dates
+arrive as the ISO text JSON holds.
 
 ```{literalinclude} ../../examples/docs/pydantic_models.py
 :language: python
@@ -120,5 +132,5 @@ A model's text, number and boolean fields render into commands and t-strings lik
 value (`t"curl {found.url}"`). A model's date renders as the text Pydantic wrote: a format
 spec such as `:%Y` doesn't apply to it. A date a model holds without a time zone reaches a
 `datetime` parameter without one, and schedr refuses to store such a value again: declare
-the field `AwareDatetime`, or add a zone in the task. `NaN` and infinity in a model are
-refused, as in any output.
+the field `AwareDatetime`, or add a zone in the task. `NaN`, infinity and integers
+outside the 64-bit range in a model are refused, as in any output.

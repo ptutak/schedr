@@ -3,8 +3,8 @@
 schedr never imports Pydantic itself: a model is recognised by its base class's module and
 name, and Pydantic is used only through the model's own methods, so a DAG without models
 never loads it. A model is stored as ``model_dump(mode="json", by_alias=False)`` and read back
-with ``model_validate(..., by_name=True)``: Pydantic's own JSON, keyed by attribute names (so
-``out.url`` is a path by attribute name, as type checkers read it).
+with ``model_validate_json(..., by_name=True)``: Pydantic's own JSON, keyed by attribute names
+(so ``out.url`` is a path by attribute name, as type checkers read it).
 """
 
 import sys
@@ -119,12 +119,16 @@ def dump(value: object) -> Any:
     return value.model_dump(mode="json", by_alias=False)  # type: ignore[attr-defined]
 
 
-def validate(cls: type, data: Any) -> Any:
-    """A model instance from stored data, by Pydantic's own rules.
+def validate(cls: type, data: str) -> Any:
+    """A model instance from stored data, by Pydantic's own rules for JSON.
+
+    The data is JSON, so it is validated as JSON (B68): a strict field takes a date as text
+    there, as it would from any JSON, and refuses what JSON wouldn't give it.
 
     Args:
         cls: The receiving model class.
-        data: The stored data.
+        data: The stored data, as JSON text: schedr's tags written as Pydantic reads them
+            in JSON (see the codec's ``_json_form``).
 
     Returns:
         The instance.
@@ -132,7 +136,25 @@ def validate(cls: type, data: Any) -> Any:
     Raises:
         ValueError: Pydantic's ``ValidationError`` when the data doesn't fit.
     """
-    return cls.model_validate(data, by_name=True, by_alias=False)  # type: ignore[attr-defined]
+    return cls.model_validate_json(data, by_name=True, by_alias=False)  # type: ignore[attr-defined]
+
+
+def construct(cls: type, fields: dict[str, Any]) -> Any:
+    """A model instance from Python values, by Pydantic's own rules for Python data.
+
+    An argument written with references inside, each value already its field's type (B65).
+
+    Args:
+        cls: The receiving model class.
+        fields: Its fields by attribute name.
+
+    Returns:
+        The instance.
+
+    Raises:
+        ValueError: Pydantic's ``ValidationError`` when the values don't fit.
+    """
+    return cls.model_validate(fields, by_name=True, by_alias=False)  # type: ignore[attr-defined]
 
 
 def parse_date(text: str, kind: object) -> Any:

@@ -288,7 +288,43 @@ pub(crate) fn optional_time(
 
 /// Stored JSON of model types.
 pub(crate) fn to_json(value: &impl serde::Serialize) -> String {
-    serde_json::to_string(value).expect("model types always serialize")
+    storable_json(serde_json::to_string(value).expect("model types always serialize"))
+}
+
+/// JSON text as stored: NUL, which Postgres refuses in `jsonb` and `text`, replaced with
+/// U+FFFD in every string and key (B105, decision 114). Text a worker sent (an error's
+/// message, an import error, a warning) may hold one; refusing it would refuse the attempt's
+/// end. Unchanged, and not parsed, when it holds none (JSON writes NUL only as `\u0000`).
+pub(crate) fn storable_json(text: String) -> String {
+    if !text.contains("\\u0000") {
+        return text;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return text;
+    };
+    serde_json::to_string(&without_nul(value)).expect("JSON values always serialize")
+}
+
+fn without_nul(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    let clean = |text: String| {
+        if text.contains('\0') {
+            text.replace('\0', "\u{fffd}")
+        } else {
+            text
+        }
+    };
+    match value {
+        Value::String(text) => Value::String(clean(text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_nul).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, item)| (clean(key), without_nul(item)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// Stored JSON read back.

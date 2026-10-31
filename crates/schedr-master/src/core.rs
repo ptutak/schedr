@@ -5,13 +5,14 @@
 //! The gRPC service ([`crate::service`]) only moves messages between workers' streams and
 //! this core, so everything here is tested without a network.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::workers::{WorkerRegistration, WorkerWarning};
 use schedr_db::{Database, DbError};
+use schedr_model::runner::ErrorSummary;
 use schedr_model::{SchedrVersion, WorkerState};
 use schedr_proto::convert::parsed_file_from_proto;
 use schedr_proto::pb::{self, master_message, worker_message};
@@ -22,6 +23,7 @@ use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
     DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
 };
+use crate::execution::ExecutionError;
 use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey};
 use crate::quiet::{QuietSettings, Wakes};
@@ -103,6 +105,45 @@ pub enum CoreError {
     /// The scheduler failed.
     #[error(transparent)]
     Scheduler(#[from] SchedulerError),
+}
+
+impl CoreError {
+    /// Whether the database refused the data a message would store (see
+    /// [`DbError::is_data_fault`]): sent again, it is refused again.
+    #[must_use]
+    pub fn is_data_fault(&self) -> bool {
+        match self {
+            Self::Db(error)
+            | Self::Dispatch(
+                DispatchError::Db(error) | DispatchError::Execution(ExecutionError::Db(error)),
+            ) => error.is_data_fault(),
+            _ => false,
+        }
+    }
+}
+
+/// A `Finished` whose result the database refused, as the attempt's failure: kind
+/// `result_not_stored` (not retried: the same result would be refused again), what ran kept.
+fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
+    pb::Finished {
+        attempt_id: finished.attempt_id.clone(),
+        status: pb::AttemptStatus::Failed.into(),
+        exit_code: finished.exit_code,
+        signal: finished.signal,
+        output_json: Vec::new(),
+        outcome: String::new(),
+        duration_ms: finished.duration_ms,
+        peak_memory_bytes: finished.peak_memory_bytes,
+        error_kind: "result_not_stored".to_owned(),
+        error_summary_json: ErrorSummary::json(
+            "ResultNotStored",
+            &format!("the result couldn't be stored: {error}"),
+        )
+        .into_bytes(),
+        code_hash: finished.code_hash.clone(),
+        usage: finished.usage,
+        core_dumped: finished.core_dumped,
+    }
 }
 
 /// A connected (or recently disconnected) worker.
@@ -206,6 +247,9 @@ pub struct MasterCore {
     connections: BTreeMap<String, Connection>,
     arrivals: Arrivals,
     metrics: MasterMetrics,
+    /// Workers resumed whose follow-up (their parse jobs) failed: tried again each round, as
+    /// the resume command isn't applied again (B99).
+    unresumed: BTreeSet<String>,
 }
 
 impl MasterCore {
@@ -236,6 +280,7 @@ impl MasterCore {
             connections: BTreeMap::new(),
             arrivals,
             metrics: MasterMetrics::default(),
+            unresumed: BTreeSet::new(),
             settings,
             db,
         }
@@ -543,16 +588,23 @@ impl MasterCore {
                 Vec::new()
             }
             worker_message::Message::Finished(finished) => {
-                let (db, memory) = (self.db.clone(), self.dispatcher.memory());
-                let handled =
-                    Box::pin(db.atomically(self.dispatcher.finished(worker_id, &finished, now)))
-                        .await;
+                let settled = match self.finished(worker_id, &finished, now).await {
+                    // Refused for its data, it would be refused again after every reconnect,
+                    // the worker's later results waiting behind it: stored as the attempt's
+                    // failure instead, and acknowledged (B106).
+                    Err(error) if error.is_data_fault() => {
+                        tracing::error!(
+                            worker_id,
+                            attempt_id = finished.attempt_id,
+                            %error,
+                            "a result the database refuses is stored as the attempt's failure"
+                        );
+                        self.finished(worker_id, &not_stored(&finished, &error), now)
+                            .await
+                    }
+                    settled => settled,
+                };
                 let id = finished.attempt_id.as_str();
-                let settled = self
-                    .settle(handled, memory, id, |a| {
-                        a.is_some_and(|a| a.status.is_some())
-                    })
-                    .await;
                 // As for `Started`: not stored, the worker sends it again (B41), and the
                 // attempt isn't taken back meanwhile.
                 if settled.is_ok() {
@@ -622,9 +674,16 @@ impl MasterCore {
             .await;
         outgoing.append(&mut applied.outgoing);
         // The drains and resumes decided before a failing command get their follow-up too:
-        // being decided, they won't be applied again.
-        for (worker_id, drained) in std::mem::take(&mut applied.drained) {
+        // being decided, they won't be applied again. A resume whose follow-up failed is
+        // tried again each round until it succeeds, or the worker is drained again (B99).
+        let mut follow_ups: Vec<(String, bool)> = std::mem::take(&mut self.unresumed)
+            .into_iter()
+            .map(|worker_id| (worker_id, false))
+            .collect();
+        follow_ups.append(&mut applied.drained);
+        for (worker_id, drained) in follow_ups {
             if drained {
+                self.unresumed.remove(&worker_id);
                 let moved = self.discovery.stop_parsing(&worker_id, now);
                 outgoing.extend(moved.into_iter().map(assign_parse));
             } else if self
@@ -634,8 +693,18 @@ impl MasterCore {
                 .is_none_or(|w| w.state == crate::workers::WorkerState::Active)
             {
                 // Not if the agent itself is draining (shutting down).
-                let jobs = self.discovery.allow_parsing(&worker_id, now).await?;
-                outgoing.extend(jobs.into_iter().map(assign_parse));
+                match self.discovery.allow_parsing(&worker_id, now).await {
+                    Ok(jobs) => outgoing.extend(jobs.into_iter().map(assign_parse)),
+                    Err(error) => {
+                        // Logged, not failing the round: the rest of it doesn't depend on it.
+                        tracing::error!(
+                            worker_id,
+                            %error,
+                            "resumed worker's parse jobs not found: tried again next round"
+                        );
+                        self.unresumed.insert(worker_id);
+                    }
+                }
             }
         }
         commands?;
@@ -722,6 +791,22 @@ impl MasterCore {
     /// cut off and attempt `id` (or its absence) reads back as `landed` (see
     /// [`crate::dispatch::ReadBack`]), `Ok(None)`: stored after all, memory kept; otherwise
     /// the error, memory put back. A read that fails tells nothing.
+    /// A worker's `Finished` stored in one transaction (see [`Self::settle`]).
+    async fn finished(
+        &mut self,
+        worker_id: &str,
+        finished: &pb::Finished,
+        now: Timestamp,
+    ) -> Result<Option<Outgoing>, CoreError> {
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        let handled =
+            Box::pin(db.atomically(self.dispatcher.finished(worker_id, finished, now))).await;
+        self.settle(handled, memory, &finished.attempt_id, |a| {
+            a.is_some_and(|a| a.status.is_some())
+        })
+        .await
+    }
+
     async fn settle<T>(
         &mut self,
         handled: Result<T, DispatchError>,

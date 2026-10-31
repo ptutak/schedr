@@ -60,6 +60,24 @@ class DagCtxReference:
         """
         raise TypeError(_VALUE_IN_DAG_BODY)
 
+    def __eq__(self, other: object) -> bool:
+        """Refuses to be compared: the value is known only at run time (B108).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __ne__(self, other: object) -> bool:
+        """Refuses to be compared, as ``==``.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    __hash__ = object.__hash__
+
 
 @dataclass(frozen=True, slots=True)
 class RunValues:

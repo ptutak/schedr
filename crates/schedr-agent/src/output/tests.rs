@@ -67,3 +67,11 @@ fn process_result_has_the_documented_fields() {
         })
     );
 }
+
+#[test]
+fn nul_is_shown_as_the_replacement_character() {
+    // B104: Postgres stores no NUL; shown as invalid UTF-8 is (decision 110).
+    let mut buffer = TailBuffer::new(64);
+    buffer.push(b"a.csv\0b.csv\0\xff");
+    assert_eq!(buffer.text(), "a.csv\u{fffd}b.csv\u{fffd}\u{fffd}");
+}

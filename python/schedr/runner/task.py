@@ -7,17 +7,22 @@ summary. It doesn't enforce timeouts or watch memory: the agent does (see PROJEC
 Rust/Python integration).
 """
 
+import dataclasses
 import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin
 
-from schedr._serialization import CodecError, check_size, decode, decode_any, encode
+from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
 from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
     SEQUENCE_ORIGINS,
     TypeModelError,
+    is_union,
+    label,
+    shaped_members,
+    tuple_items,
     type_hints,
     unwrap,
 )
@@ -88,12 +93,28 @@ def resolve(
             return None
     if task not in inputs:
         raise TaskInputError(f"the output of `{task}` isn't among the task's inputs")
-    value = inputs[task]
-    for step in reference.get("path", []):
+    return _follow(task, inputs[task], reference.get("path", []))
+
+
+PROCESS_RESULT = frozenset(
+    {"stdout", "stderr", "exit_code", "stdout_truncated", "stderr_truncated"}
+)
+"""The fields of a stored ``ProcessResult``: only its streams are ever truncated (B75)."""
+
+
+def _is_process_result(value: Mapping[str, Any]) -> bool:
+    return value.keys() == PROCESS_RESULT
+
+
+def _follow(task: str, value: Any, path: list[Any]) -> Any:
+    """The part of ``task``'s stored output ``value`` at ``path`` (keys and indexes)."""
+    for step in path:
         if isinstance(step, str):
+            if isinstance(value, dict) and list(value) == ["$dict"]:
+                value = value["$dict"]  # a dict shaped like a tag, stored escaped (B66)
             if not isinstance(value, dict) or step not in value:
                 raise TaskInputError(f"`{task}`: `{step}` doesn't exist in the output")
-            if value.get(f"{step}_truncated") is True:
+            if _is_process_result(value) and value.get(f"{step}_truncated") is True:
                 raise TaskInputError(
                     f"`{task}.{step}` was truncated (over the output size limit); "
                     "take the whole ProcessResult instead"
@@ -176,15 +197,83 @@ def build(
             )
         if "template" in value:
             return render(value["template"], inputs, run, outcomes)
-        target = unwrap(annotation)
-        args = get_args(target)
-        if "list" in value:
-            item = args[0] if get_origin(target) in SEQUENCE_ORIGINS and args else Any
-            return [build(v, item, inputs, run, outcomes) for v in value["list"]]
-        item = args[1] if get_origin(target) in MAPPING_ORIGINS and args else Any
-        return {k: build(v, item, inputs, run, outcomes) for k, v in value["map"].items()}
+        return _built(value, unwrap(annotation), inputs, run, outcomes)
     except CodecError as e:
         raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
+
+
+def _built(
+    value: Mapping[str, Any],
+    target: object,
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None,
+) -> Any:
+    """A list or dict written with references inside, as the parameter's type.
+
+    For a union, as the first member of that shape it builds as (B121: ``tuple[int, int] |
+    None`` gets a tuple, not a list).
+    """
+    shape = list if "list" in value else dict
+    members = shaped_members(target, shape) if is_union(target) else [target]
+    error: Exception = TaskInputError(f"a {shape.__name__} fits none of `{label(target)}`")
+    for member in members:
+        try:
+            if shape is list:
+                return _built_list(value["list"], member, inputs, run, outcomes)
+            return _built_map(value["map"], member, inputs, run, outcomes)
+        except (TaskInputError, CodecError) as e:
+            error = e
+    raise error
+
+
+def _built_list(
+    items: list[Any],
+    target: object,
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None,
+) -> Any:
+    """A list written with references inside, as the parameter's type.
+
+    A tuple for a tuple parameter (B65), else a list.
+    """
+    origin, args = get_origin(target), get_args(target)
+    if origin is tuple:
+        types_ = tuple_items(args)
+        if len(types_) != len(items):
+            raise TaskInputError(f"expected a tuple of {len(types_)}, got {len(items)} values")
+        return tuple(build(v, t, inputs, run, outcomes) for v, t in zip(items, types_, strict=True))
+    item = args[0] if origin in SEQUENCE_ORIGINS and args else Any
+    return [build(v, item, inputs, run, outcomes) for v in items]
+
+
+def _built_map(
+    fields: Mapping[str, Any],
+    target: object,
+    inputs: Mapping[str, Any],
+    run: Mapping[str, Any],
+    outcomes: Mapping[str, Any] | None,
+) -> Any:
+    """A dict written with references inside, as the parameter's type.
+
+    A dataclass or a Pydantic model is built from its fields (B65); a ``TypedDict`` or a
+    ``dict`` is a dict, each value of its field's or item's type.
+    """
+    origin, args = get_origin(target), get_args(target)
+    if origin in MAPPING_ORIGINS or target in MAPPING_ORIGINS or not isinstance(target, type):
+        item = args[1] if origin in MAPPING_ORIGINS and args else Any
+        return {k: build(v, item, inputs, run, outcomes) for k, v in fields.items()}
+    hints = type_hints(target, f"`{target.__name__}`")
+    built = {k: build(v, hints.get(k, Any), inputs, run, outcomes) for k, v in fields.items()}
+    try:
+        if dataclasses.is_dataclass(target):
+            return target(**built)
+        if models.is_model(target):
+            return models.construct(target, built)
+    except (TypeError, ValueError) as e:  # a field missing or refused
+        raise TaskInputError(f"`{target.__name__}` can't be built: {e}") from e
+    return built
 
 
 def _narrowed(
@@ -428,10 +517,22 @@ def _stored(result: object, annotation: object, task: Mapping[str, Any]) -> dict
         return failure(
             e, "output_not_serializable", f"the output of `{task['id']}` can't be stored, {e}"
         )
+    except Exception as e:  # a model's serializer, a recursive value (B67)
+        return failure(
+            e,
+            "output_not_serializable",
+            f"the output of `{task['id']}` can't be stored, {type(e).__name__}: {e}",
+        )
     try:
         check_size(output, task["settings"]["max_output_size"])
     except CodecError as e:
         return failure(e, "output_too_large", f"the output of `{task['id']}`: {e.reason}")
+    except Exception as e:  # JSON or UTF-8 conversion (B67)
+        return failure(
+            e,
+            "output_not_serializable",
+            f"the output of `{task['id']}` can't be stored, {type(e).__name__}: {e}",
+        )
     return {"type": "task_succeeded", "output": output, "outcome": outcome}
 
 

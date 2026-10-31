@@ -73,9 +73,15 @@ and finds what they can't:
 - **Using an output as a value in the DAG body.** Type checkers read `rows` as a list, so
   they accept `if rows:`, `len(rows)`, `for r in rows:` or `rows[0].name.upper()`. When the
   file is loaded, `rows` is a reference that exists only at run time, and each of these
-  fails: `if` and `for` with "an output can't be used as a value in the DAG file", the
-  others with Python's own `TypeError`. In a DAG body, pass outputs, take their fields
-  (`rows[0].name`), and order tasks; decide in a task.
+  fails: `if`, `for`, `==`, `!=` and `str()` with "an output can't be used as a value in the
+  DAG file" (the same for `.outcome` and `dag_ctx` fields), the others with Python's own
+  `TypeError`. In a DAG body, pass outputs, take their fields (`rows[0].name`), and order
+  tasks; decide in a task.
+- **A t-string inside a list or dict** is a `str` in its place: `[t"{n}"]` for a `list[int]`
+  parameter is refused when the file loads, as a t-string passed whole is.
+- **An output or task of another DAG.** Type checkers accept `consume(first_out)` in a
+  second DAG; when the file loads it is refused ("task `x` belongs to DAG `a`, not `b`"),
+  even if this DAG has a task of the same ID. Call the task again in this DAG.
 - **`None` from a skipped edge.** Under `NONE_FAILED`, an argument is `None` when its edge
   isn't taken and the task runs through another edge. That is an `.on(...)` that leaves an
   outcome out, or an upstream task that may be skipped. An `.on(...)` that names every

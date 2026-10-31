@@ -547,6 +547,32 @@ async fn an_attempts_usage_and_core_dump_are_stored() {
 }
 
 #[tokio::test]
+async fn worker_text_holding_nul_is_stored_with_a_replacement_character() {
+    // B105: Postgres refuses NUL in `jsonb` and `text`; a task's error message holding one
+    // made the attempt's end fail for ever.
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let summary = json!({"exception": "ValueError", "message": "bad\u{0}", "k\u{0}": 1});
+    let end = AttemptEnd {
+        error_summary: Some(summary.to_string()),
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    };
+    assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_str(attempts[0].error_summary.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        stored,
+        json!({"exception": "ValueError", "message": "bad\u{fffd}", "k\u{fffd}": 1})
+    );
+}
+
+#[tokio::test]
 async fn attempts_and_outputs_move_a_task_forward() {
     let (db, run_id) = with_instances().await;
     let ready = db.ready_instances(ts(NOW)).await.unwrap();

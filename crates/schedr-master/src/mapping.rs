@@ -178,9 +178,13 @@ fn resolve_ref(reference: &Reference, sources: &Sources) -> Result<Json, String>
                 .ok_or_else(|| format!("the output of `{task}` isn't stored"))?;
             for step in path {
                 value = match (step, value) {
-                    (PathElem::Field(name), Json::Object(fields)) => fields
-                        .get(name)
-                        .ok_or_else(|| format!("`{task}`: `{name}` doesn't exist in the output"))?,
+                    (PathElem::Field(name), Json::Object(fields)) => match fields.get("$dict") {
+                        // A dict shaped like a tag is stored escaped (B66).
+                        Some(Json::Object(inner)) if fields.len() == 1 => inner,
+                        _ => fields,
+                    }
+                    .get(name)
+                    .ok_or_else(|| format!("`{task}`: `{name}` doesn't exist in the output"))?,
                     (PathElem::Index(i), Json::Array(items)) => usize::try_from(*i)
                         .ok()
                         .and_then(|i| items.get(i))
@@ -288,16 +292,40 @@ pub async fn inputs(
     resolved: &mut Resolved,
 ) -> Result<Json, InputsError> {
     let lanes = lane_sources(dag, task);
-    let used: BTreeSet<&TaskId> = task
-        .references()
-        .into_iter()
-        .filter_map(Reference::upstream_task)
-        .filter(|upstream| !lanes.contains(upstream))
-        .collect();
+    let upstream = |references: Vec<&Reference>| -> BTreeSet<TaskId> {
+        references
+            .into_iter()
+            .filter_map(Reference::upstream_task)
+            .filter(|upstream| !lanes.contains(upstream))
+            .cloned()
+            .collect()
+    };
+    // Whole outputs only for the arguments' output references: what the task is mapped over
+    // reaches each instance as its element, under `$expand`, and an outcome reference is
+    // answered from the outcomes, so neither is sent again whole (B83).
+    let whole = upstream(
+        task.argument_references()
+            .into_iter()
+            .filter(|r| matches!(r, Reference::Output { .. }))
+            .collect(),
+    );
+    let dims = dims(dag, task);
+    // The mapped values' sources only while their resolved lists aren't known yet.
+    let unresolved = dims.iter().enumerate().any(|(d, (_, dim))| {
+        matches!(dim, Dim::Values(_))
+            && !resolved.contains_key(&(run_id.to_owned(), task.id.clone(), d))
+    });
+    let used = if unresolved && map_index >= 0 {
+        upstream(task.references())
+    } else {
+        whole.clone()
+    };
+    let used: BTreeSet<&TaskId> = used.iter().collect();
     let sources = sources(db, dag, run_id, &used, |_, _| None).await?;
     let mut inputs: serde_json::Map<String, Json> = sources
         .outputs
         .iter()
+        .filter(|(task, _)| whole.contains(task))
         .map(|(task, output)| (task.to_string(), output.clone()))
         .collect();
     let Ok(index) = usize::try_from(map_index) else {
@@ -307,7 +335,7 @@ pub async fn inputs(
     let place = coordinates(index, &sizes);
     let mut expand = serde_json::Map::new();
     let mut outcomes = serde_json::Map::new();
-    for (d, ((name, dim), at)) in dims(dag, task).into_iter().zip(place).enumerate() {
+    for (d, ((name, dim), at)) in dims.into_iter().zip(place).enumerate() {
         let lane = match dim {
             Dim::Lane(upstream) => Some(upstream),
             Dim::Values(_) => None,

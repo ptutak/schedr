@@ -1,0 +1,11 @@
+title = "`run_dag().output` ignores the recorded outcome when decoding a union"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "tests"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a test sees `A()` where the task returned `B()` (both fit the JSON)"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/testing.py:274`: `decode(data, annotation)` without the outcome; mapped outputs the same.
+- **A fix:** to decide when it is scheduled.
+'''

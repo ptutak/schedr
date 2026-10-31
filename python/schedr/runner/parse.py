@@ -14,10 +14,10 @@ import re
 import sys
 import traceback
 import warnings
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from schedr._model import Dag, registry
+from schedr._model import Dag, DagLocation, registry
 from schedr.outcomes import TypingHint
 from schedr.runner.protocol import Channel
 from schedr.runner.sources import SourceOnlyLoader, import_from_source
@@ -75,7 +75,10 @@ def import_dag_entries(root: str, root_dir: Path, path: str) -> list[registry.De
         sys.modules.pop(name, None)
         registry.take_entries()
         raise
-    return registry.take_entries()
+    # Only this file's own: a module it imports may define DAGs too, found when that module's
+    # file is parsed (B110: they made the master refuse this file).
+    here = DagLocation(root, PurePosixPath(path).as_posix())
+    return [entry for entry in registry.take_entries() if entry.model.location == here]
 
 
 def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:

@@ -64,3 +64,16 @@ async fn an_sqlite_write_waits_for_another_writer_instead_of_failing() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(written.is_ok(), "{written:?}");
 }
+
+#[test]
+fn stored_json_has_no_nul() {
+    // B105: NUL in a string or key becomes U+FFFD; a backslash followed by `u0000` is text.
+    let with_nul = serde_json::json!({"m": "a\u{0}b", "k\u{0}": ["\u{0}"]}).to_string();
+    assert_eq!(
+        storable_json(with_nul),
+        serde_json::json!({"m": "a\u{fffd}b", "k\u{fffd}": ["\u{fffd}"]}).to_string()
+    );
+    let text = serde_json::json!({"m": "a\\u0000b"}).to_string();
+    assert_eq!(storable_json(text.clone()), text);
+    assert_eq!(storable_json("{\"m\":1}".to_owned()), "{\"m\":1}");
+}

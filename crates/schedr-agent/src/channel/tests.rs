@@ -136,3 +136,25 @@ fn io_errors_are_wrapped() {
     let err = ChannelError::from(std::io::Error::other("broken"));
     assert_eq!(err.to_string(), "runner channel: broken");
 }
+
+#[test]
+fn a_float_reads_back_exactly() {
+    // B64: Python writes a float's shortest exact text; reading it must give the same bits.
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut changed = Vec::new();
+    for _ in 0..100_000 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let value = f64::from_bits(state);
+        if !value.is_finite() {
+            continue;
+        }
+        let text = format!("{value:e}");
+        let read: f64 = serde_json::from_str(&text).unwrap();
+        if read.to_bits() != value.to_bits() {
+            changed.push(text);
+        }
+    }
+    assert_eq!(changed, Vec::<String>::new());
+}

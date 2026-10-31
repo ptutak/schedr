@@ -1,11 +1,13 @@
 import socket
 import sys
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from schedr.context import RunValues
 from schedr.runner.parse import import_dag_file
@@ -82,6 +84,14 @@ def two(x: int, when: datetime, label: str) -> dict[str, Any]:
 def coll(xs: list[int], m: dict[str, int]) -> int:
     return sum(xs) + sum(m.values())
 
+class Point(Data):
+    x: int
+    y: int
+
+@task
+def shapes(p: tuple[int, int], q: Point, many: list[tuple[int, int]]) -> str:
+    return f"{p!r} {q!r} {many!r}"
+
 @task
 def boom() -> None:
     raise ValueError("no rows")
@@ -93,6 +103,12 @@ def leaves() -> None:
 @task
 def opaque() -> Any:
     return object()
+
+@task
+def circular() -> Any:
+    loop: list[Any] = []
+    loop.append(loop)
+    return loop
 
 @task
 def big() -> str:
@@ -107,9 +123,11 @@ with Dag("d"):
     r = one()
     two(r["n"], dag_ctx.run.planned_for, t"at {dag_ctx.run.planned_for:%Y} by {dag_ctx.dag_id}")
     coll([r["n"], 2], {"k": r["n"]})
+    shapes((r["n"], 4), {"x": r["n"], "y": 5}, [(1, r["n"])])
     boom()
     leaves()
     opaque()
+    circular()
     big()
 """
 
@@ -162,6 +180,9 @@ def test_resolve_gives_run_fields_and_output_paths() -> None:
     inputs = {"a": {"rows": [1, {"$tuple": [2, 3]}]}}
     output = {"kind": "output", "task": "a", "path": ["rows", 1, 0]}
     assert resolve(output, inputs, RUN) == 2
+    # A dict shaped like a tag is stored escaped (B66); a path goes through the escape.
+    escaped = {"a": {"$dict": {"$date": {"$dict": {"$tuple": 7}}}}}
+    assert resolve({"kind": "output", "task": "a", "path": ["$date", "$tuple"]}, escaped, RUN) == 7
     assert resolve({"kind": "output", "task": "a"}, inputs, RUN) == inputs["a"]
     assert resolve({"kind": "dag_ctx", "field": "run_kind"}, inputs, RUN) == "manual"
     assert resolve({"kind": "dag_ctx", "field": "since"}, inputs, RUN) == {
@@ -199,13 +220,29 @@ def test_an_outcome_reference_is_the_outcomes_name() -> None:
         ({"kind": "output", "task": "a", "path": ["nope"]}, "`nope` doesn't exist"),
         ({"kind": "output", "task": "a", "path": ["rows", 5]}, "index 5 doesn't exist"),
         ({"kind": "output", "task": "a", "path": [0]}, "index 0 doesn't exist"),
-        ({"kind": "output", "task": "a", "path": ["stdout"]}, "`a.stdout` was truncated"),
+        ({"kind": "output", "task": "p", "path": ["stdout"]}, "`p.stdout` was truncated"),
     ],
 )
 def test_resolve_refuses_what_isnt_there(reference: dict[str, Any], message: str) -> None:
-    inputs = {"a": {"rows": [1], "stdout": "...", "stdout_truncated": True}}
+    inputs = {"a": {"rows": [1]}, "p": PROCESS}
     with pytest.raises(TaskInputError, match=message):
         resolve(reference, inputs, RUN)
+
+
+PROCESS = {
+    "stdout": "...tail",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_truncated": True,
+    "stderr_truncated": False,
+}
+
+
+def test_only_a_process_results_stream_is_truncated() -> None:
+    # B75: a dict of the user's own with a `<key>_truncated` field is just data.
+    inputs = {"a": {"data": "complete", "data_truncated": True}, "p": PROCESS}
+    assert resolve({"kind": "output", "task": "a", "path": ["data"]}, inputs, RUN) == "complete"
+    assert resolve({"kind": "output", "task": "p", "path": ["stderr"]}, inputs, RUN) == ""
 
 
 def test_render_writes_values_as_text_and_dates_with_a_pattern() -> None:
@@ -306,6 +343,13 @@ def test_execute_builds_collections(root: Path) -> None:
     assert result["output"] == 8
 
 
+def test_a_structure_with_references_is_built_as_the_parameters_type(root: Path) -> None:
+    # B65: a tuple or a dataclass written with references inside reaches the function as
+    # that type, not as a list or a dict.
+    result = execute(request_for(root, "shapes", {"one": {"n": 3}}))
+    assert result["output"] == "(3, 4) Point(x=3, y=5) [(1, 3)]", result
+
+
 @pytest.mark.parametrize(
     ("task_id", "inputs", "kind", "message"),
     [
@@ -314,6 +358,8 @@ def test_execute_builds_collections(root: Path) -> None:
         ("boom", {}, None, "no rows"),
         ("leaves", {}, None, "4"),
         ("opaque", {}, "output_not_serializable", "the output of `opaque` can't be stored"),
+        # B67: any error while storing the output is a structured failure, not a crash.
+        ("circular", {}, "output_not_serializable", "`circular` can't be stored, RecursionError"),
     ],
 )
 def test_execute_reports_failures_by_kind(
@@ -408,3 +454,42 @@ def test_the_outcome_tells_apart_members_the_json_would_fit_alike(root: Path) ->
     request = request_for(root, "pick", {"src": {"n": 1}}, outcomes={"src": "Mirror"})
     request["task"]["arguments"] = {"value": {"ref": {"kind": "output", "task": "src"}}}
     assert execute(request)["output"] == "Mirror"
+
+
+def test_a_model_written_with_references_inside_is_built() -> None:
+    class Window(BaseModel):
+        model_config = ConfigDict(strict=True)
+        start: datetime
+        size: int
+
+    inputs = {"a": {"at": {"$datetime": "2026-10-31T09:00:00+00:00"}}}
+    at = {"ref": {"kind": "output", "task": "a", "path": ["at"]}}
+    built = build({"map": {"start": at, "size": {"literal": 3}}}, Window, inputs, RUN)
+    assert built == Window(start=datetime(2026, 10, 31, 9, tzinfo=UTC), size=3)
+    with pytest.raises(TaskInputError, match="`Window` can't be built"):
+        build({"map": {"start": at}}, Window, inputs, RUN)
+
+
+@dataclass
+class _Point:
+    x: int
+    y: int
+
+
+@dataclass
+class _Box:
+    pair: tuple[int, int] | None
+
+
+def test_a_union_parameter_written_with_references_inside_is_built_as_its_member() -> None:
+    # B121: a union was built as a plain list or dict.
+    inputs = {"a": 3}
+    three = {"ref": {"kind": "output", "task": "a"}}
+    pair = {"list": [three, {"literal": 4}]}
+    assert build(pair, tuple[int, int] | None, inputs, RUN) == (3, 4)
+    assert build(pair, list[int] | tuple[int, int], inputs, RUN) == [3, 4]
+    point = {"map": {"x": three, "y": {"literal": 5}}}
+    assert build(point, _Point | None, inputs, RUN) == _Point(3, 5)
+    assert build({"map": {"pair": pair}}, _Box, inputs, RUN) == _Box((3, 4))
+    with pytest.raises(TaskInputError, match="fits none of"):
+        build(pair, int | None, inputs, RUN)

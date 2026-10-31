@@ -33,6 +33,7 @@ class Operator:
     """The base of the operator classes; not for subclassing outside schedr."""
 
     _task_id: str
+    _dag: _build.DagBuilder
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Refuses subclasses outside schedr.
@@ -54,15 +55,16 @@ class Operator:
 
     @property
     def _schedr_task_id(self) -> str:
+        _build.check_same_dag(self._dag, self._task_id)
         return self._task_id
 
     def _on(self, members: tuple[Outcome, ...]) -> Output[Any]:
         """The task's output narrowed to ``members`` (see ``Output.on``)."""
-        return Output[Any](self._task_id).on(*members)
+        return Output[Any](self._task_id, dag=self._dag).on(*members)
 
     def _outcome(self) -> object:
         """The task's outcome as data (see ``Output.outcome``)."""
-        return Output[Any](self._task_id).outcome
+        return Output[Any](self._task_id, dag=self._dag).outcome
 
     def __rshift__(self, other: object) -> object:
         """``self >> other``: ``other`` runs after this task.
@@ -154,6 +156,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         builder = _build.require_active("CommandOperator")
         task_id = builder.qualified(task_id)
         self._task_id = task_id
+        self._dag = builder
         upstream: list[_build.Upstream] = []
         where = f"task `{task_id}`"
         line: ShellCommand | ArgvCommand
@@ -190,7 +193,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     @property
     def output(self) -> ProcessResult:
         """The command's output: a reference, read by type checkers as its value."""
-        return Output[ProcessResult](self._task_id)  # type: ignore[return-value]
+        return Output[ProcessResult](self._task_id, dag=self._dag)  # type: ignore[return-value]
 
     def on(self, *members: E) -> ProcessResult:
         """The output, depended on only for these outcomes (see ``Output.on``).
@@ -211,12 +214,12 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     @property
     def stdout(self) -> str:
         """The command's standard output: a reference, read by type checkers as its value."""
-        return Output[str](self._task_id, ("stdout",))  # type: ignore[return-value]
+        return Output[str](self._task_id, ("stdout",), dag=self._dag)  # type: ignore[return-value]
 
     @property
     def stderr(self) -> str:
         """The command's standard error: a reference, read by type checkers as its value."""
-        return Output[str](self._task_id, ("stderr",))  # type: ignore[return-value]
+        return Output[str](self._task_id, ("stderr",), dag=self._dag)  # type: ignore[return-value]
 
 
 class EmptyOperator(Operator):
@@ -236,6 +239,7 @@ class EmptyOperator(Operator):
         builder = _build.require_active("EmptyOperator")
         task_id = builder.qualified(task_id)
         self._task_id = task_id
+        self._dag = builder
         builder.add_task(
             task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions(run_if=run_if)
         )
@@ -243,7 +247,7 @@ class EmptyOperator(Operator):
     @property
     def output(self) -> Done:
         """Its output (``None``): a reference, to order with ``>>``."""
-        return Output[None](self._task_id)
+        return Output[None](self._task_id, dag=self._dag)
 
     def on(self, *members: DefaultOutcome) -> Done:
         """Depends on it only for these outcomes (it has only ``SUCCESS``; see ``Output.on``).

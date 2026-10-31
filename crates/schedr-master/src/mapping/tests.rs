@@ -73,7 +73,8 @@ fn values_resolve_as_the_runner_resolves_them() {
     let t = |id: &str| TaskId::new(id).unwrap();
     sources.outputs.insert(
         t("cfg"),
-        json!({"files": ["a", "b"], "pair": {"$tuple": [1, 2]}}),
+        json!({"files": ["a", "b"], "pair": {"$tuple": [1, 2]},
+               "tagged": {"$dict": {"$date": "x"}}}),
     );
     sources
         .outcomes
@@ -86,6 +87,11 @@ fn values_resolve_as_the_runner_resolves_them() {
         Ok(json!(["a", "b"]))
     );
     assert_eq!(resolve(&path(json!(["pair", 1])), &sources), Ok(json!(2)));
+    // A dict shaped like a tag is stored escaped (B66); a path goes through the escape.
+    assert_eq!(
+        resolve(&path(json!(["tagged", "$date"])), &sources),
+        Ok(json!("x"))
+    );
     assert_eq!(
         resolve(
             &value(json!({"list": [{"literal": 1}, output("cfg")]})),

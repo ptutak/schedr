@@ -1,0 +1,11 @@
+title = "`run_dag(file)` imports unrelated files beside it"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a sibling script's import-time side effects run in a test"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/testing.py:373`, `crates/schedr/src/local.rs:619`: the CLI keeps only the root's directory, dropping the selected files; `ensure_defined()` scans the directory again.
+- **A fix:** to decide when it is scheduled.
+'''

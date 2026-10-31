@@ -157,8 +157,16 @@ pub fn resolve<'a>(
                 let missing = || RenderError::MissingPath(reference_label(reference));
                 value = match step {
                     PathElem::Field(name) => {
-                        let object = value.as_object().ok_or_else(missing)?;
-                        if object.get(&format!("{name}_truncated")) == Some(&Value::Bool(true)) {
+                        let mut object = value.as_object().ok_or_else(missing)?;
+                        // A dict shaped like a tag is stored escaped (B66).
+                        if object.len() == 1
+                            && let Some(Value::Object(inner)) = object.get("$dict")
+                        {
+                            object = inner;
+                        }
+                        if is_process_result(object)
+                            && object.get(&format!("{name}_truncated")) == Some(&Value::Bool(true))
+                        {
                             return Err(RenderError::Truncated(reference_label(reference)));
                         }
                         object.get(name).ok_or_else(missing)?
@@ -179,6 +187,19 @@ pub fn resolve<'a>(
             Ok(value)
         }
     }
+}
+
+/// Whether `object` is a stored `ProcessResult`: only its streams are ever truncated, a
+/// user's `<field>_truncated` is data (B75).
+fn is_process_result(object: &serde_json::Map<String, Value>) -> bool {
+    const FIELDS: [&str; 5] = [
+        "stdout",
+        "stderr",
+        "exit_code",
+        "stdout_truncated",
+        "stderr_truncated",
+    ];
+    object.len() == FIELDS.len() && FIELDS.iter().all(|f| object.contains_key(*f))
 }
 
 /// A float written like Python's `str()` (`1.0`, `1.5`, `1e+20`, `1e-05`).

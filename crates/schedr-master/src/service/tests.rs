@@ -1554,3 +1554,84 @@ async fn a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse
     assert!(hub.streams.lock().await.contains_key("w1"));
     drop(to_master);
 }
+
+#[tokio::test]
+async fn a_message_that_cant_be_handled_ends_the_stream() {
+    // B101: a report the master failed to handle isn't sent again on the same stream (the
+    // agent reports a hash once); ending the stream makes the worker register again,
+    // reporting its roots afresh.
+    let (_hub, db, client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .clone()
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // A failure of the database's own (not of the data): may pass when sent again.
+    db.fail_write(1);
+    to_master.send(code_version("h2")).await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.message().await {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return,
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the stream stayed open");
+    let state = db.workers().await.unwrap()[0].state;
+    assert_eq!(state, schedr_model::WorkerState::Disconnected);
+}
+
+#[tokio::test]
+async fn a_message_the_database_refuses_for_its_data_is_dropped_and_the_stream_goes_on() {
+    // B106: ended, the stream came back with the same message after every reconnect, refused
+    // again, the worker's later messages behind it.
+    let (_hub, db, client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .clone()
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // Only h2 refused: messages are handled in order, so h3's answer comes after h2's drop.
+    break_db(&db, "INSERT ON root_hashes WHEN NEW.content_hash = 'h2'").await;
+    to_master.send(code_version("h2")).await.unwrap();
+    to_master.send(code_version("h3")).await.unwrap();
+    loop {
+        // The registration's own parse (h1) first.
+        if let master_message::Message::AssignParse(job) = next(&mut stream).await
+            && job.root.as_ref().unwrap().content_hash != "h1"
+        {
+            assert_eq!(job.root.unwrap().content_hash, "h3");
+            break;
+        }
+    }
+    let state = db.workers().await.unwrap()[0].state;
+    assert_eq!(state, schedr_model::WorkerState::Active);
+    drop(to_master);
+}
+
+fn code_version(hash: &str) -> pb::WorkerMessage {
+    wrap(worker_message::Message::CodeVersionChanged(
+        pb::CodeVersionChanged {
+            root: Some(pb::RootHash {
+                content_hash: hash.to_owned(),
+                ..root()
+            }),
+        },
+    ))
+}

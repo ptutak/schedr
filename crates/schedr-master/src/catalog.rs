@@ -8,7 +8,8 @@
 //! - a DAG ID defined in **more than one place** (two files, two roots) is in **conflict**
 //!   and can't run;
 //! - a DAG whose file **failed to import** (or holds an invalid DAG) keeps its last good
-//!   version: a broken file doesn't remove its DAGs;
+//!   version: a broken file doesn't remove its DAGs; a conflict whose remaining file failed
+//!   stays a conflict when the version stored is another file's (B95);
 //! - a DAG of a reported root that its current parse no longer defines is **removed**.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,9 +63,24 @@ pub fn plan(sources: &[Source], stored: &[StoredDag]) -> Vec<DagChange> {
         }
         let new = match (defs[0].new, known.and_then(|d| d.current.as_ref())) {
             (Some((dag, parse_id)), _) => Some((dag.clone(), parse_id.to_owned())),
-            // The file failed: keep the stored version, only clearing a conflict.
+            // The file failed: keep the stored version, only clearing a conflict, when it is
+            // that file's. Another place's (a file removed) stays in conflict until the file
+            // left loads: its version must not come back (B95).
             (None, Some(current)) if known.is_some_and(|d| d.conflict.is_some()) => {
-                Some((current.dag.clone(), current.parse_id.clone()))
+                if current.dag.location == defs[0].place {
+                    Some((current.dag.clone(), current.parse_id.clone()))
+                } else {
+                    let left = &defs[0].place;
+                    tracing::warn!(
+                        dag_id = dag_id.as_str(),
+                        root = left.root.as_str(),
+                        path = left.path.as_str(),
+                        "DAG stays in conflict: only one file defines it now, but that file \
+                         failed to import, and the version stored is from the file removed; \
+                         it can't run until the file left imports (see its import error)"
+                    );
+                    None
+                }
             }
             (None, _) => None,
         };

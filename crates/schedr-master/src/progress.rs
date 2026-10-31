@@ -42,7 +42,7 @@ mod tests;
 /// isn't permitted, and what the same inputs always do again. (`secret_unavailable`, a secret
 /// storage that is down, and `import_failed` / `task_not_found`, which new code can fix, are
 /// retried.)
-pub const NOT_RETRIED_ERRORS: [&str; 7] = [
+pub const NOT_RETRIED_ERRORS: [&str; 8] = [
     "secret_not_found",
     "secret_denied",
     "inputs_too_large",
@@ -50,6 +50,7 @@ pub const NOT_RETRIED_ERRORS: [&str; 7] = [
     "input_mismatch",
     "output_not_serializable",
     "output_too_large",
+    "result_not_stored",
 ];
 
 /// What a task's upstream tasks decide for it.

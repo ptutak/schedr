@@ -143,6 +143,8 @@ CREATE TABLE task_instances (
 );
 
 CREATE INDEX task_instances_ready ON task_instances (ready_at) WHERE state = 'queued';
+-- Each round's retries due and running attempts: only the pending ones, not the history (B87).
+CREATE INDEX task_instances_retry_due ON task_instances (ready_at) WHERE state = 'up_for_retry';
 
 CREATE TABLE attempts (
     id                TEXT PRIMARY KEY,
@@ -169,6 +171,8 @@ CREATE TABLE attempts (
     ended_at          TEXT,
     UNIQUE (task_instance_id, try_number)
 );
+
+CREATE INDEX attempts_open ON attempts (assigned_at) WHERE status IS NULL;
 
 CREATE TABLE outputs (
     task_instance_id TEXT PRIMARY KEY REFERENCES task_instances (id) ON DELETE CASCADE,

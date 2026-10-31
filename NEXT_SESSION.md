@@ -4,16 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-10-30)
+## State (2026-10-31, afternoon)
 
-- **M1–M3 done; M4 in progress.** M4.1 (outcomes), M4.2 (`@branch`, groups, import errors) and
-  **M4.3 (mapping) are done**, M4.3d (the CLI's `runs show`, `tasks attempts`, `tasks output`)
-  included. **Now: the bugs of severity high or critical** (the user, 2026-10-30: fix down to
-  "high", then features; a new ≥ high bug interrupts), in the ranking's order, security first:
-  every one left needs a decision first: B90 (critical, decision 103), B102, B66, B64, B86,
-  B95, B99, B101, and B100 a reviewed round (see
-  "Decisions for the morning"); the night of 2026-10-31 fixed the reconnect batch (B50, B41,
-  B43, B44) and B84, B78, B45, B54, B47, B63, B57. Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
+- **M1–M3 done; M4 in progress.** M4.1–M4.3 done (M4.3d included). **Now: M4.3e, the bug
+  pause before M4.4.** No bug of severity high or critical is open. The user (2026-10-31)
+  chose to fix these mediums before M4.4 too: **B56** (a cancel or timeout raced against the
+  runner's handshake), **B52** (`LIMIT` on pending commands and unstarted attempts; expiry's
+  limit = the cap + the attempts whose `Started` waits in memory), **B111, B112, B117, B118**
+  (F9), **B80, B81** (mapping), **B60, B61** (a relative root, a symlinked folder). Then a
+  Codex review over them and over the F9 fixes B107–B110, B113–B116 (committed before review,
+  the user asked; its prompt: the session scratchpad's `codex-review-followup2.md`, rebased on
+  the new commit). Then F10–F14, then M4.4 (B119 inside it).
+- **Decisions 103–115 taken on 2026-10-31** (PROJECT.md has each, with "Not chosen").
+- **2026-10-31, 12:37:** WSL died from a full disk; the user freed space and removed stopped
+  containers (the test Postgres `schedr-pg-check` was recreated on 127.0.0.1:45243, with
+  `-c max_connections=300`). Codex's follow-up review was lost with it.
+- **Stress (scheduled) failed on 2026-10-31:** its generated DAGs had `{n}` in a shell
+  t-string, refused since decision 99; fixed (`env={"PLANNED": n}` in `stress/load.rs`).
 - **Decision 102 (the code copy, B58 + B59), committed 2026-10-31:** the agent copies each
   settled root into `<data_dir>/code/<worker ID>/<root>-<hash8>/sha256-…` (`scan::capture`:
   hashed first, a complete copy reused, written under a temporary name and renamed into
@@ -85,73 +92,14 @@ the morning, listed below.
 - Grok: 48% of its week after its review (session `b3ccfd8a`, 46 calls, 199k context; about
   4%). Codex: 27% → 31% over the night's first three rounds, 38% after the next five.
 
-Decisions for the morning:
-
-- **103 (B90, critical × rare):** a module a task or parse imports from **another** DAG root
-  comes from that root's live checkout, not a copy (Grok's review of the code copy; not new:
-  before decision 102 every root was imported live). Options: **A** pin every root at its
-  current copy for each parse or attempt, kept while it runs (Claude; recommended: it is what
-  decision 102 means); **B** document that roots don't import from each other; **C** only the
-  root's own copy on `sys.path` (a cross-root import fails at once). Being critical, it is
-  fixed before M4.4 whichever is chosen.
-- **B66 (critical × rare, data):** a user dict whose only key is a serialization tag
-  (`{"$date": "x"}`) decodes as the tagged value, silently. Options: **A** escape such a dict
-  when encoding (e.g. wrap it as `{"$dict": {...}}`), decode unchanged otherwise (Claude;
-  recommended: old outputs still read, only colliding dicts change form); **B** refuse a dict
-  whose key is a tag when encoding (an error the user sees); **C** a tag key no JSON object
-  from users can have (a format change for every tagged value).
-- **B64 (high × possible, data):** numbers through the channel: a float may change in its last
-  digit (serde_json without `float_roundtrip`), an integer beyond 64 bits becomes a float.
-  Options: **A** `float_roundtrip` plus refusing integers outside i64/u64 when encoding, with a
-  message (Claude; recommended); **B** `float_roundtrip` plus `arbitrary_precision` (big
-  integers kept exact; a serde_json feature affecting every crate that uses it); **C** big
-  integers tagged as strings (a new tag).
-- **B86 (high × possible, correctness):** a string with NUL (e.g. `find -print0`'s output)
-  is accepted by the Python codec but Postgres's jsonb refuses it, rolling back the attempt's
-  completion. Options: **A** refuse NUL when the task's value is encoded (the attempt fails
-  with a clear error; Claude; recommended); **B** escape NUL in a tagged form (a new tag);
-  **C** store outputs as text, not jsonb (a migration; loses jsonb queries).
-- **B95 (high × possible, correctness; F5):** a DAG ID in conflict between `a.py` and `b.py`;
-  `a.py` is removed and `b.py` fails to import: the catalog keeps the stored version, which
-  is `a.py`'s (the removed file's), and `b.py`'s error holds nothing (holds match the stored
-  location). Options: **A** keep the conflict until the remaining file loads (no runs
-  meanwhile; Claude; recommended: nothing runs from a file that no longer defines it); **B**
-  remove the DAG until `b.py` loads (its history kept, as any removed DAG); **C** keep
-  `a.py`'s version but hold it under `b.py`'s error.
-- **B102 (critical × possible, correctness):** after a master restart, a lagging worker
-  reconnecting first makes its old hash current, and its catch-up then counts as a switch,
-  recorded as newest (above the real newest). Options: **A** a switch only away from the
-  newest *recorded* hash, not the current one decided since the restart (Claude;
-  recommended: no new state, matches the guide's promise); **B** record no switches until
-  the master has heard from every worker it knew, or a settling period passed.
-- **B101 and B99 (high), one question:** a worker message, or a command's follow-up, whose
-  handling failed (a database error) is not retried: a `CodeVersionChanged` (the worker
-  keeps its stream, the master its old hash) and a resume's parse jobs. Options: **A** end the
-  worker's stream when its message can't be handled (it registers again, reporting all
-  afresh; Claude; recommended for B101); for B99, keep the failed follow-up and retry it each
-  round until it succeeds (Claude; recommended); **B** the master retries each message itself.
-- **B100 (high):** a read failing right after a parse retry's files are stored loses the
-  catalog update. A fix is likely mechanical (forget `current` on any failure after a store,
-  as `refresh_or_forget` does), but it reaches into the retry path: for a reviewed round.
-- Rejected from Grok's review (no decision needed, for the record): a task can `chmod` or
-  rename its own read-only copy (it runs as the copy's owner): within decision 101 (workers and
-  their DAG code are trusted); the guide now says the copy guards against mistakes only.
-
 ## Open when this session ended
 
-- **Codex's whole-repository review** (the Codex skill's `reviews/schedr-full-2026-10-30.md`;
-  ~50% of Codex's week): done F1–F8 (B41–B98, all logged). Next F9 (the Python DAG API),
-  then F10–F14, one section at a time; its worktree is `schedr-codex-f1` (detached
-  at `819dcbb`; move it to `main` before a section, copy the current BUGS.md in). A section's
-  findings now come rated (severity, probability, kind).
-- **Usage:** Grok 48% of its week on 2026-10-31 morning (resets Fridays 9:00, so today; ask
-  the user for the %); Codex 38% weekly (read from its turns; resets Thursdays 01:57). Grok for brittle
-  work only, Codex for small fixes, follow-ups in the same session (the user, 2026-10-30).
-- **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B90
-  (fixed: B41–B45, B47, B49–B51, B53–B55, B57–B59, B63, B78, B79, B84; B88 found and fixed the
-  same day); B91–B102 from F5 and its fixes' review (fixed: B91–B94, B96, B97); B103 (`dags
-  test` never giving up). The next number is **B104**
-  (`bugs/next-id`).
+- **Codex's whole-repository review** (the Codex skill's `reviews/schedr-full-2026-10-30.md`,
+  Codex at full capacity, mainly a reviewer): done F1–F9. Next F10–F14, one section at a time;
+  worktree `schedr-codex-f1` (move it to `main` before a section).
+- **Usage:** Grok's week reset on Friday 2026-10-31 9:00 (ask the user for the %); Codex
+  43% weekly (resets Thursdays 01:57).
+- **Bugs:** see `BUGS.md`; the next number is in `bugs/next-id`.
 
 ## How we work now (2026-10-30)
 

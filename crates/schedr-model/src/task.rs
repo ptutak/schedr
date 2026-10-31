@@ -234,7 +234,22 @@ impl Task {
     /// mapped over), in order.
     #[must_use]
     pub fn references(&self) -> Vec<&Reference> {
-        let mut found: Vec<&Reference> = match &self.kind {
+        let mut found = self.argument_references();
+        match &self.expand {
+            Some(Expand::Product(over)) => {
+                found.extend(over.iter().flat_map(|m| m.value.references()));
+            }
+            Some(Expand::Kwargs(over)) => found.extend(over.references()),
+            None => {}
+        }
+        found
+    }
+
+    /// The references of its arguments, command line and environment, in order: all but what
+    /// it is mapped over.
+    #[must_use]
+    pub fn argument_references(&self) -> Vec<&Reference> {
+        match &self.kind {
             TaskKind::Python { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
@@ -245,14 +260,6 @@ impl Task {
                 .flat_map(Template::references)
                 .collect(),
             TaskKind::Empty => Vec::new(),
-        };
-        match &self.expand {
-            Some(Expand::Product(over)) => {
-                found.extend(over.iter().flat_map(|m| m.value.references()));
-            }
-            Some(Expand::Kwargs(over)) => found.extend(over.references()),
-            None => {}
         }
-        found
     }
 }

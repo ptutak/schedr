@@ -493,3 +493,36 @@ fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
         held("SyntaxError")
     );
 }
+
+#[tokio::test]
+async fn the_latest_scheduled_run_is_one_index_lookup_per_dag() {
+    // B120: `MAX(planned_for) ... GROUP BY dag_id` read each DAG's whole scheduled history
+    // every round. The lookup reads backwards from the newest entry, one row.
+    let (db, _) = with_dag().await;
+    let crate::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    for count in [0, 2] {
+        let query = sql_text(
+            crate::backend::Backend::Sqlite,
+            &last_scheduled_query(count),
+        );
+        let steps: Vec<(i64, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN {}", query.0)))
+                .bind("a")
+                .bind("b")
+                .fetch_all(pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(
+                    |(addr, opcode, ..): (i64, String, i64, i64, i64, String, i64, String)| {
+                        (addr, opcode)
+                    },
+                )
+                .collect();
+        let opcodes: Vec<&str> = steps.iter().map(|(_, o)| o.as_str()).collect();
+        assert!(opcodes.contains(&"SeekLE"), "{opcodes:?}");
+        assert!(opcodes.contains(&"DecrJumpZero"), "{opcodes:?}");
+    }
+}

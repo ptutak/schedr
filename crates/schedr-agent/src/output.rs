@@ -46,8 +46,8 @@ impl TailBuffer {
         self.truncated
     }
 
-    /// The kept text. Invalid UTF-8 is replaced; when truncated, a character cut in two at
-    /// the start is dropped.
+    /// The kept text. Invalid UTF-8 and NUL (which Postgres can't store, B104) are replaced
+    /// with U+FFFD; when truncated, a character cut in two at the start is dropped.
     #[must_use]
     pub fn text(&self) -> String {
         let bytes: Vec<u8> = self.data.iter().copied().collect();
@@ -60,7 +60,7 @@ impl TailBuffer {
         } else {
             0
         };
-        String::from_utf8_lossy(&bytes[start..]).into_owned()
+        String::from_utf8_lossy(&bytes[start..]).replace('\0', "\u{fffd}")
     }
 }
 

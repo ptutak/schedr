@@ -12,6 +12,7 @@ from schedr import (
     Every,
     Once,
     TaskDefaults,
+    chain,
     dag_ctx,
     task,
 )
@@ -224,6 +225,23 @@ def define_cycle() -> None:
 def test_cycles_are_rejected() -> None:
     with pytest.raises(ValueError, match="DAG `d` has a dependency cycle: a -> b -> a"):
         define_cycle()
+
+
+def test_a_long_chain_is_checked_for_cycles_without_recursion() -> None:
+    # B115: the check recursed once per task of a path, past Python's recursion limit.
+    with Dag("long"):
+        tasks = [EmptyOperator(f"t{i}") for i in range(1500)]
+        chain(*tasks)
+    registry.take_entries()
+
+    def loop() -> None:
+        with Dag("loop"):
+            tasks = [EmptyOperator(f"t{i}") for i in range(1500)]
+            chain(*tasks)
+            tasks[-1] >> tasks[0]
+
+    with pytest.raises(ValueError, match="t1499 -> t0"):
+        loop()
     assert registry.take_defined() == []
 
 
@@ -245,5 +263,24 @@ def test_tasks_reference_only_their_own_dag() -> None:
 
     with Dag("one"):
         out = produce()
-    with pytest.raises(ValueError, match="task `produce` is not part of DAG `two`"), Dag("two"):
+        start = EmptyOperator("start")
+    with (
+        pytest.raises(ValueError, match="task `produce` belongs to DAG `one`, not `two`"),
+        Dag("two"),
+    ):
         consume(out)
+    registry.take_entries()
+    # B107: a task of the same ID in this DAG took the other DAG's handle silently.
+    with Dag("three"):
+        produce()
+        EmptyOperator("start")
+        for use in (
+            lambda: consume(out),
+            lambda: consume(out.on(None)),  # type: ignore[arg-type]
+            lambda: start >> produce.override(task_id="p2")(),
+            lambda: consume(t"{out}"),  # type: ignore[arg-type]
+            lambda: consume(start.output),  # type: ignore[arg-type]
+        ):
+            with pytest.raises(ValueError, match="belongs to DAG `one`, not `three`"):
+                use()
+    registry.take_entries()

@@ -291,3 +291,23 @@ def test_run_parse_doesnt_add_sys_path_entries_twice(root: Path) -> None:
     assert received(theirs) == [{"type": "parse_finished"}]
     ours.close()
     theirs.close()
+
+
+def test_a_file_importing_a_module_with_dags_gets_only_its_own(tmp_path: Path) -> None:
+    # B110: the imported module's DAGs were taken as the importing file's, and the master
+    # refused the whole file (their location is the other file).
+    (tmp_path / "shared_b110.py").write_text(
+        "from schedr import Dag, EmptyOperator, task\n\n"
+        "@task\ndef produce() -> int:\n    return 1\n\n"
+        'with Dag("shared"):\n    EmptyOperator("t")\n'
+    )
+    (tmp_path / "consumer.py").write_text(
+        "from schedr import Dag\nfrom shared_b110 import produce\n\n"
+        'with Dag("consumer"):\n    produce()\n'
+    )
+    extend_sys_path([str(tmp_path)])
+    try:
+        (dag,) = import_dag_file("etl", tmp_path, "consumer.py")
+        assert (dag.id, dag.location.path) == ("consumer", "consumer.py")
+    finally:
+        sys.modules.pop("shared_b110", None)

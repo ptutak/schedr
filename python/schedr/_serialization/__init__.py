@@ -14,6 +14,7 @@ from schedr._serialization.codec import (
     encode,
     encode_any,
     encoded_size,
+    escaped,
 )
 from schedr._serialization.compatibility import (
     assignment_problem,
@@ -34,6 +35,7 @@ __all__ = [
     "encode",
     "encode_any",
     "encoded_size",
+    "escaped",
     "follow_path",
     "is_assignable",
     "type_name",

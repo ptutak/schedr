@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from schedr import Dag, Data, Task, branch, task
+from schedr import Dag, Data, RunIf, Task, branch, task
 from schedr._model import IdError, registry
 
 
@@ -172,6 +172,16 @@ def test_a_list_from_partly_skipped_instances_must_allow_none() -> None:
         r"\(`int \| None` in the list\)",
     ):
         summed(total)
+
+
+def test_an_all_or_nothing_mapped_task_gives_a_list_without_none() -> None:
+    # B116: under ALL_SUCCEEDED a skipped instance skips the whole task, so its list never
+    # holds None; requiring `int | None` there was wrong.
+    with Dag("d"):
+        results = fetch.expand(path=list_files())
+        strict = count.override(run_if=RunIf.ALL_SUCCEEDED)
+        total(strict.expand(rows=results.on(Rows)))  # type: ignore[attr-defined]
+    registry.take_defined()
 
 
 def test_expand_names_are_checked() -> None:

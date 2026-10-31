@@ -29,8 +29,14 @@ def dag_body() -> Iterator[None]:
 @pytest.mark.usefixtures("dag_body")
 def test_in_a_dag_body_fields_are_references(read: Callable[[], Any], field: DagCtxField) -> None:
     reference = read()
-    assert reference == DagCtxReference(field)
+    assert isinstance(reference, DagCtxReference)
+    assert reference.field == field
     assert reference._schedr_reference() == DagCtxRef(field)
+    # B108: compared in the DAG body, it would decide the graph once, at import.
+    with pytest.raises(TypeError, match="known only at run time"):
+        _ = reference == "x"
+    with pytest.raises(TypeError, match="known only at run time"):
+        _ = reference != "x"
 
 
 @pytest.mark.parametrize(("read", "field"), FIELDS)

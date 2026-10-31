@@ -228,9 +228,14 @@ DEFAULT = OutcomeSpec(names=("SUCCESS",), exit_codes=True)
 
 
 def _resolve_alias(annotation: object) -> object:
-    while isinstance(annotation, TypeAliasType):
-        annotation = annotation.__value__
-    return annotation
+    """The type under ``type`` aliases and ``Annotated`` (B113: as serialization reads it)."""
+    while True:
+        if isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif get_origin(annotation) is typing.Annotated:
+            annotation = get_args(annotation)[0]
+        else:
+            return annotation
 
 
 def _is_outcome_member(member: object) -> bool:

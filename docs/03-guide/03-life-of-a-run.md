@@ -119,6 +119,12 @@ master handles it as soon as it arrives, between rounds:
   `run_if`, as soon as that result is certain, so `load` becomes `queued`;
 - it answers `FinishedAck`, and the agent deletes the journal file.
 
+The output is JSON, written by the runner. Dates, durations and tuples are stored tagged
+(`{"$date": "2026-10-19"}`, `{"$tuple": [1, "a"]}`), so the agent renders them without
+Python and a task taking `Any` gets the real type back. A dict of the user's own shaped like
+a tag (one key, a tag's name) is stored escaped as `{"$dict": {...}}` and reads back as
+written; a path into the output goes through the escape.
+
 Delivery is at least once. A worker that doesn't get the acknowledgement sends `Finished`
 again, and the master acknowledges the repeat without storing it twice.
 

@@ -1,0 +1,11 @@
+title = "a TypedDict written with references inside isn't checked for its required keys"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "`{\"x\": number()}` for a TypedDict needing `x` and `y` runs without `y`"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F9 (the Python DAG API), with a failing proof each; checked against the code by Claude. `python/schedr/tasks.py:630`, `python/schedr/_build.py:750`: whole-value checks only for literals; the runner's `_built_map` doesn't check required keys either.
+- **A fix:** to decide when it is scheduled.
+'''

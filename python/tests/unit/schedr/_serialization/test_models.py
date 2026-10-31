@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,9 +42,9 @@ def test_a_model_is_stored_by_attribute_names_and_read_back() -> None:
 
     stored = dump(Aliased(Value=3))
     assert stored == {"value": 3}
-    assert validate(Aliased, stored) == Aliased(Value=3)
+    assert validate(Aliased, json.dumps(stored)) == Aliased(Value=3)
     with pytest.raises(ValueError, match="validation error"):
-        validate(Point, {"x": "not a number"})
+        validate(Point, json.dumps({"x": "not a number"}))
 
 
 def test_the_schema_on_each_side() -> None:

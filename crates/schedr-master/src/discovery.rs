@@ -327,13 +327,20 @@ impl Discovery {
         key: ParseKey,
         now: Timestamp,
     ) -> Result<Option<ParseAssignment>, DbError> {
-        // A switch: moving away from the root's current hash (a revert, or new code).
+        // A switch: new code (a hash not recorded yet) or a revert (to a hash recorded before
+        // the one left). Moving to a hash recorded later is catching up, not a switch: after a
+        // restart a lagging worker reporting first would make its catch-up rank above the
+        // newest code (B102). Decided by the move itself, not by the current or the newest
+        // hash, which a worker leaving changes (decision 113).
+        let switch_times = self.switches_of(&key.root).await?;
+        let recorded = |hash: &String| switch_times.get(hash).map(|at| (*at, hash.clone()));
         let switched = previous.is_some_and(|p| {
             p.content_hash != key.content_hash
-                && self
-                    .current
-                    .get(&key.root)
-                    .is_some_and(|c| c.content_hash == p.content_hash)
+                && match (recorded(&key.content_hash), recorded(&p.content_hash)) {
+                    (None, _) => true,
+                    (Some(to), Some(from)) => to < from,
+                    (Some(_), None) => false,
+                }
         });
         self.record_switch(&key.root, &key.content_hash, switched, now)
             .await?;
@@ -447,14 +454,16 @@ impl Discovery {
             .db
             .find_parse(&key.root, &key.content_hash, &key.schedr_version)
             .await?;
-        let (parse_id, files, retried) = if let Some(parse_id) = stored {
+        let (parse_id, files, retry) = if let Some(parse_id) = stored {
             let before = self.db.parse_files(&parse_id).await?;
             let replaced = retried_files(&before, files);
             self.db
                 .replace_parse_files(&parse_id, &replaced, &upload.worker_id, now)
                 .await?;
-            let files = self.db.parse_files(&parse_id).await?;
-            (parse_id, files, !replaced.is_empty())
+            // A retry: the catalog is refreshed even when it replaced nothing, as a store
+            // that committed but reported an error (its acknowledgement lost) left it behind,
+            // and the same retry again finds nothing to replace (B100).
+            (parse_id, None, true)
         } else {
             let parse_id = self
                 .db
@@ -467,7 +476,35 @@ impl Discovery {
                     files: &files,
                 })
                 .await?;
-            (parse_id, files, false)
+            (parse_id, Some(files), false)
+        };
+        let published = self
+            .publish(&upload.key, &upload.worker_id, &parse_id, files, retry, now)
+            .await;
+        if published.is_err() {
+            // Stored, but not taken into the catalog: the same upload again finds nothing
+            // new to store, so the root is decided afresh then, as when a refresh fails
+            // (B100).
+            self.current.remove(&upload.key.root);
+        }
+        published.map(|()| parse_id)
+    }
+
+    /// Takes a stored upload into the catalog: plans retries of what failed transiently,
+    /// decides the root and refreshes the DAG list, and finishes the job. `files` are the
+    /// parse's files, `None` to read them back (a retry's, merged with the stored ones).
+    async fn publish(
+        &mut self,
+        key: &ParseKey,
+        worker_id: &str,
+        parse_id: &str,
+        files: Option<Vec<ParsedFile>>,
+        retry: bool,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        let files = match files {
+            Some(files) => files,
+            None => self.db.parse_files(parse_id).await?,
         };
         let failed: Vec<&str> = files
             .iter()
@@ -477,11 +514,11 @@ impl Discovery {
         if !failed.is_empty() {
             let candidates = self.candidates(key);
             self.jobs
-                .retry(key.clone(), candidates, Some(&upload.worker_id), now);
+                .retry(key.clone(), candidates, Some(worker_id), now);
             tracing::warn!(
                 root = key.root.as_str(),
                 content_hash = key.content_hash.as_str(),
-                worker_id = upload.worker_id.as_str(),
+                worker_id,
                 files = failed.join(", "),
                 "files failed to import transiently (a timeout or a runner that died): parsed \
                  again later; their DAGs keep their last good version meanwhile, so a file \
@@ -493,7 +530,7 @@ impl Discovery {
         self.decide(&key.root, now).await?;
         // A retry changes the files of a parse that may already be current: `decide` sees no
         // new parse then.
-        if retried
+        if retry
             && self
                 .current
                 .get(&key.root)
@@ -506,7 +543,7 @@ impl Discovery {
         if failed.is_empty() {
             self.jobs.finish(key);
         }
-        Ok(parse_id)
+        Ok(())
     }
 
     /// Works out the DAG list from every root's current parse and stores the changes.

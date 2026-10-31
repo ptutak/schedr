@@ -794,6 +794,94 @@ async fn a_catalog_that_failed_to_refresh_after_a_retry_is_refreshed_at_the_next
     assert_eq!(ids, ["a", "b"]);
 }
 
+#[tokio::test]
+async fn a_read_failing_after_a_retry_was_stored_doesnt_lose_its_catalog_update() {
+    // B100: the retry's files are stored, the read after it fails; the same retry uploaded
+    // again replaces nothing, and must still update the catalog.
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    // Storing the retry's `b.py` also writes a row that can't be read back.
+    for event in ["INSERT", "UPDATE"] {
+        sqlite(
+            &discovery,
+            &format!(
+                "CREATE TRIGGER unreadable_{event} AFTER {event} ON parse_files \
+                 WHEN NEW.path = 'b.py' BEGIN INSERT OR IGNORE INTO parse_files \
+                 SELECT parse_result_id, 'zz.py', 'not json', NULL, worker_id, parsed_at \
+                 FROM parse_files WHERE path = 'b.py'; END"
+            ),
+        )
+        .await;
+    }
+    let retry = || {
+        let mut again = upload("h1", vec![("b.py", vec![dag("b", "b.py", 1)])]);
+        again.worker_id = "w2".to_owned();
+        again
+    };
+    discovery
+        .parse_uploaded(retry(), later(31))
+        .await
+        .unwrap_err();
+    sqlite(
+        &discovery,
+        "DROP TRIGGER unreadable_INSERT; DROP TRIGGER unreadable_UPDATE; \
+         DELETE FROM parse_files WHERE path = 'zz.py'",
+    )
+    .await;
+    // The job wasn't finished: it goes out again, and the same retry comes back.
+    discovery.parse_uploaded(retry(), later(62)).await.unwrap();
+    let ids: Vec<String> = dags(&discovery)
+        .await
+        .iter()
+        .map(|d| d.dag_id.to_string())
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
+}
+
+#[tokio::test]
+async fn a_retry_stored_whose_acknowledgement_was_lost_still_updates_the_catalog() {
+    // B100, Codex's review: the store committed but reported an error (its acknowledgement
+    // lost), so nothing after it ran; the same retry uploaded again replaces nothing.
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    let parse_id = discovery
+        .parse_uploaded(failing(first, "b.py", "ParseTimeout"), now())
+        .await
+        .unwrap();
+    let mut retry = upload("h1", vec![("b.py", vec![dag("b", "b.py", 1)])]);
+    retry.worker_id = "w2".to_owned();
+    // What the lost acknowledgement left: the retry's file stored, nothing else done.
+    let stored = validate_files("etl", retry.files.clone(), discovery.master, 1 << 20);
+    discovery
+        .db
+        .replace_parse_files(&parse_id, &stored, "w2", later(31))
+        .await
+        .unwrap();
+    discovery.parse_uploaded(retry, later(62)).await.unwrap();
+    let ids: Vec<String> = dags(&discovery)
+        .await
+        .iter()
+        .map(|d| d.dag_id.to_string())
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
+}
+
 /// `w1` on `h1` (parsed), then `h2`, whose `a.py` timed out: a retry of `h2` is planned.
 async fn timed_out_on_h2() -> Discovery {
     let mut discovery = discovery().await;
@@ -1082,4 +1170,67 @@ async fn a_restarted_master_keeps_a_conflict_with_a_root_not_reported_yet() {
         .await
         .unwrap();
     assert!(dags(&restarted).await[0].conflict.is_some());
+}
+
+#[tokio::test]
+async fn a_worker_catching_up_after_a_restart_doesnt_rank_older_code_newest() {
+    // B102: after a restart, a lagging worker reporting first made its old hash current, and
+    // its catch-up then counted as a switch, recorded above the newest code.
+    let mut discovery = discovery().await;
+    for (seconds, hash) in [(0, "h1"), (1, "h2"), (2, "h3")] {
+        discovery
+            .root_reported("w1", key(hash), later(seconds))
+            .await
+            .unwrap();
+        let parsed = upload(hash, vec![("a.py", vec![dag("a", "a.py", 1)])]);
+        discovery
+            .parse_uploaded(parsed, later(seconds))
+            .await
+            .unwrap();
+    }
+    assert_eq!(code(&discovery), etl("h3"));
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    // w2, behind at h1, reconnects first and catches up to h2; then w1 is back, at h3.
+    for (worker, seconds, hash) in [("w2", 3, "h1"), ("w2", 4, "h2"), ("w1", 5, "h3")] {
+        restarted
+            .root_reported(worker, key(hash), later(seconds))
+            .await
+            .unwrap();
+    }
+    assert_eq!(code(&restarted), etl("h3"));
+}
+
+#[tokio::test]
+async fn a_revert_after_the_newest_worker_left_is_a_switch() {
+    // Codex's review of B102: `h3`'s only worker left; `h2` is current; a worker moving back
+    // to `h1` reverts, though `h2` isn't the newest hash recorded.
+    let mut discovery = discovery().await;
+    for (seconds, hash) in [(0, "h1"), (1, "h2"), (2, "h3")] {
+        discovery
+            .root_reported("w3", key(hash), later(seconds))
+            .await
+            .unwrap();
+        let parsed = upload(hash, vec![("a.py", vec![dag("a", "a.py", 1)])]);
+        discovery
+            .parse_uploaded(parsed, later(seconds))
+            .await
+            .unwrap();
+    }
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h2"), later(3))
+            .await
+            .unwrap();
+    }
+    discovery.worker_gone("w3", later(4)).await.unwrap();
+    assert_eq!(code(&discovery), etl("h2"));
+    discovery
+        .root_reported("w1", key("h1"), later(5))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h1"));
 }

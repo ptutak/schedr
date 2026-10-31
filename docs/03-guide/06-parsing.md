@@ -31,7 +31,8 @@ flowchart LR
    the worker has fork servers, that runner is a fresh child for the job: the preloaded
    server, then the bare one, then a new process. `schedr dags check` starts a new process
    and does not ask the fork servers. The native API only *records* DAGs while a file is
-   imported; no task runs. A file that takes longer than `[dags] parse_file_timeout` (60 s)
+   imported; no task runs. A file's DAGs are those defined in it: one defined in a module it
+   imports belongs to that module's own file. A file that takes longer than `[dags] parse_file_timeout` (60 s)
    is an import error, and so is a runner that died while importing it. Neither holds the
    file's DAGs: the file is parsed again ([Parsed again](#parsed-again)). The runner also
    returns the Python warnings each import raised (a `TypingHint` for an outcome class type
@@ -115,8 +116,9 @@ Workers can report different hashes of a root for a while, as git-sync catches u
 schedr keeps no old code, so it runs **only the newest code**:
 
 - The root's **current** hash is the one workers switched to most recently. A switch is a
-  worker moving away from the current hash, so a revert counts as new code. A lagging worker
-  catching up through older revisions changes nothing. This is kept in the database
+  worker moving to new code (a hash not seen before) or back to code recorded before the one
+  it leaves (a revert, which counts as new code). A worker moving to code recorded later is
+  catching up and changes nothing, as does a lagging worker going through older revisions. This is kept in the database
   (`root_hashes`), so a restarted master decides the same. Switches keep the order the master
   saw them in, even if its clock steps back.
 - The current hash's parse defines the root's DAGs.
@@ -140,6 +142,10 @@ place) leaves running jobs alone. So:
   the task: the code runs as the worker's user, which owns the copy (workers and their DAG code
   are trusted, decision 101). Its directories are read-only too, so deleting a worker's data
   directory by hand takes `chmod -R u+w <data_dir>` first.
+- **A root imports only from itself.** Other roots are on `sys.path` too, but at their live
+  checkout, not a copy: a module imported from another root isn't the code hashed, isn't
+  recorded with the attempt, and can change under a running task. Put code shared between
+  roots in a package installed with the interpreter, or keep a copy in each root.
 - **Only the hashed files are in it.** What `.schedrignore` excludes is not, so read such a
   file by its full path under the configured root.
 - A copy is removed once newer code replaced it and nothing running uses it: one or two per
@@ -171,3 +177,10 @@ upgrade needs no downtime.
 A DAG ID defined in two places within the current code (two files, or two roots) is in
 **conflict**. No new runs are created and nothing is assigned until it is resolved; running
 attempts finish. Workers on different code are never a conflict: only the newest code counts.
+
+A conflict is resolved by removing one of the places. If the file left fails to import at
+that moment, and the version stored came from the file removed, the DAG stays in conflict
+until the file left imports: the removed file's code doesn't come back. The master logs a
+warning: `DAG stays in conflict: only one file defines it now, but that file failed to
+import...`, with the DAG and the file. Fix the import error (it is shown with the root's
+parse) and the DAG takes that file's version.

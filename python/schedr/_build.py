@@ -48,6 +48,7 @@ from schedr._serialization import (
     CodecError,
     decode,
     encode_any,
+    escaped,
     follow_path,
     is_assignable,
     schemas,
@@ -57,6 +58,7 @@ from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
     SEQUENCE_ORIGINS,
     is_union,
+    shaped_members,
     tuple_items,
     type_hints,
     unwrap,
@@ -549,7 +551,9 @@ class DagBuilder:
 
         An instance is skipped when its element's edge isn't taken: it maps element by element
         over a narrowed mapped output (``.expand(r=results.on(Rows))``), or over a mapped task
-        whose instances may be skipped.
+        whose instances may be skipped. Only under ``RunIf.NONE_FAILED``: under
+        ``ALL_SUCCEEDED`` a skipped instance skips the whole task (B116), so its gathered list
+        never holds ``None``.
 
         Returns:
             Their IDs.
@@ -559,6 +563,8 @@ class DagBuilder:
         while changed:
             changed = False
             for task_id in self.mapped - found:
+                if self.tasks[task_id].settings.run_if != RunIf.NONE_FAILED:
+                    continue
                 expand = self.tasks[task_id].expand
                 assert expand is not None
                 for reference in expand.references():
@@ -584,24 +590,26 @@ class DagBuilder:
         for edge in self.edges:
             if edge.from_ in downstream and edge.to in downstream:
                 downstream[edge.from_].append(edge.to)
+        # Depth first with a stack of its own: a long chain mustn't hit Python's recursion
+        # limit (B115). 1: on the current path, 2: done.
         state: dict[str, int] = {}
-        path: list[str] = []
-
-        def visit(task: str) -> list[str] | None:
-            state[task] = 1
-            path.append(task)
-            for nxt in downstream[task]:
-                if state.get(nxt) == 1:
+        for start in tasks:
+            if start in state:
+                continue
+            state[start] = 1
+            path = [start]
+            pending = [iter(downstream[start])]
+            while pending:
+                nxt = next(pending[-1], None)
+                if nxt is None:
+                    state[path.pop()] = 2
+                    pending.pop()
+                elif state.get(nxt) == 1:
                     return [*path[path.index(nxt) :], nxt]
-                if nxt not in state and (cycle := visit(nxt)) is not None:
-                    return cycle
-            path.pop()
-            state[task] = 2
-            return None
-
-        for task in tasks:
-            if task not in state and (cycle := visit(task)) is not None:
-                return cycle
+                elif nxt not in state:
+                    state[nxt] = 1
+                    path.append(nxt)
+                    pending.append(iter(downstream[nxt]))
         return None
 
 
@@ -637,6 +645,26 @@ def active() -> DagBuilder | None:
         Its builder, or ``None`` outside ``with Dag(...)``.
     """
     return _ACTIVE[-1] if _ACTIVE else None
+
+
+def check_same_dag(owner: DagBuilder | None, task_id: str) -> None:
+    """Refuses a task's handle from one DAG used while defining another (B107).
+
+    Task IDs are per DAG: taken by ID alone, it would stand for this DAG's task of that name.
+
+    Args:
+        owner: The DAG the handle's task belongs to.
+        task_id: The task.
+
+    Raises:
+        ValueError: If another DAG is being defined.
+    """
+    builder = active()
+    if owner is not None and builder is not None and owner is not builder:
+        raise ValueError(
+            f"task `{task_id}` belongs to DAG `{owner.dag_id}`, not `{builder.dag_id}`: a task "
+            "or output of one DAG can't be used in another (call the task again in this DAG)"
+        )
 
 
 def require_active(what: str) -> DagBuilder:
@@ -711,6 +739,39 @@ def typed_references(value: Value, expected: TypeDesc) -> list[tuple[Reference, 
     return []
 
 
+def typed_templates(value: Value, expected: TypeDesc, where: str) -> list[tuple[str, TypeDesc]]:
+    """The t-strings inside a value, each with where it is and the type expected there (B109).
+
+    Args:
+        value: A DAG JSON value.
+        expected: The type it is passed as.
+        where: The argument's name, for messages.
+
+    Returns:
+        Each t-string's place (``where[0]['k']``) and type, at any depth.
+    """
+    match value:
+        case TemplateValue():
+            return [(where, expected)]
+        case ListValue(items=items):
+            return [
+                found
+                for index, item in enumerate(items)
+                for found in typed_templates(
+                    item, _element_type(expected, index, "a list"), f"{where}[{index}]"
+                )
+            ]
+        case MapValue(entries=entries):
+            return [
+                found
+                for key in sorted(entries)
+                for found in typed_templates(
+                    entries[key], _element_type(expected, key, "a dict"), f"{where}[{key!r}]"
+                )
+            ]
+    return []
+
+
 def _element_type(container: TypeDesc, step: str | int, written: str) -> TypeDesc:
     """The type of one element of a container type (of each form a union allows).
 
@@ -762,7 +823,11 @@ def check_literals(value: Value, annotation: object, where: str) -> None:
 def _element_annotation(annotation: object, step: str | int) -> object:  # noqa: PLR0911
     """The annotation of one element of a container annotation (``Any`` when unclear)."""
     annotation = unwrap(annotation)
-    if annotation is Any or is_union(annotation):
+    if is_union(annotation):
+        # The one member a list or dict can be (B121), else unclear.
+        members = shaped_members(annotation, list if isinstance(step, int) else dict)
+        annotation = members[0] if len(members) == 1 else Any
+    if annotation is Any:
         return Any
     origin, args = get_origin(annotation), get_args(annotation)
     if isinstance(step, int):
@@ -829,13 +894,11 @@ def to_value(value: object, where: str, upstream: list[Upstream]) -> Value:  # n
     if isinstance(value, Mapping):
         items: dict[str, Value] = {}
         for key, item in value.items():
-            if is_tstring(key):
-                raise TypeError(f"{where}: a t-string can't be a dictionary key")
-            if not isinstance(key, str):
-                raise TypeError(f"{where}: dictionary keys must be str, got {type(key).__name__}")
+            _check_key(key, where)
             items[key] = to_value(item, f"{where}[{key!r}]", upstream)
         if all(isinstance(v, LiteralValue) for v in items.values()):
-            return LiteralValue({k: v.value for k, v in items.items()})  # type: ignore[union-attr]
+            # Escaped like an encoded dict: one beside a reference isn't encoded again (B122).
+            return LiteralValue(escaped({k: v.value for k, v in items.items()}))  # type: ignore[union-attr]
         return MapValue(items)
     if isinstance(value, list | tuple):
         elements = [to_value(item, f"{where}[{i}]", upstream) for i, item in enumerate(value)]
@@ -852,6 +915,16 @@ def to_value(value: object, where: str, upstream: list[Upstream]) -> Value:  # n
         return LiteralValue(encode_any(value))
     except CodecError as e:
         raise TypeError(f"{where}: {e.reason}") from None
+
+
+def _check_key(key: object, where: str) -> None:
+    """Refuses a dict key that can't be stored (a t-string, not a ``str``, holding NUL)."""
+    if is_tstring(key):
+        raise TypeError(f"{where}: a t-string can't be a dictionary key")
+    if not isinstance(key, str):
+        raise TypeError(f"{where}: dictionary keys must be str, got {type(key).__name__}")
+    if "\0" in key:
+        raise TypeError(f"{where}: a key containing NUL (\\0) can't be stored: {key!r:.80}")
 
 
 def to_template(value: object, where: str, upstream: list[Upstream]) -> Template:
