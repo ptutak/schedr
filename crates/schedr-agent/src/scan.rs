@@ -265,8 +265,14 @@ pub fn capture(snapshot: &Snapshot, store: &Path) -> Result<Captured, ScanError>
         });
     }
     set_dirs_read_only(partial.path()).map_err(copy_error(partial.path()))?;
+    // macOS renames a directory only with write permission on it (its `..` changes; Linux
+    // doesn't ask): the top one is made read-only once in place.
+    std::fs::set_permissions(partial.path(), std::fs::Permissions::from_mode(0o755))
+        .map_err(copy_error(partial.path()))?;
     std::fs::rename(partial.path(), &dir).map_err(copy_error(&dir))?;
     partial.kept();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))
+        .map_err(copy_error(&dir))?;
     Ok(Captured {
         hash,
         dir,
@@ -348,6 +354,8 @@ pub fn remove_capture(dir: &Path) -> io::Result<()> {
     let doomed = match dir.parent() {
         Some(store) if !temporary_already => {
             let doomed = temporary(store, "removing");
+            // Writable first: macOS renames a directory only then (see `capture`).
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
             std::fs::rename(dir, &doomed)?;
             doomed
         }

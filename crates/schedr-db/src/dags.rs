@@ -410,6 +410,22 @@ impl Database {
         Ok(())
     }
 
+    /// Each root's current parse, as last recorded by [`Self::set_current_parse`]: root to
+    /// parse ID.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn current_parses(&self) -> Result<BTreeMap<String, String>, DbError> {
+        const CURRENT: &str = "SELECT root, parse_result_id{text} FROM current_parses";
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, CURRENT))
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(rows.into_iter().collect())
+    }
+
     /// The files of each root's current parse that failed to import, by root and path
     /// (decision 66).
     ///

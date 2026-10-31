@@ -1,0 +1,13 @@
+title = "a frequent cron schedule enumerates hours of fire times on every lookup"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "performance"  # security, data, correctness, reliability, performance, usability, tests
+summary = "the scheduler's rounds slow down, under the master's lock; secondly or many minutely schedules"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F5 (scheduling and
+  discovery), with a failing proof each; checked against the code by Claude.
+  `fire_times.rs:194`, `:215`: a lookup enumerates from three hours (`MARGIN`, for time zone changes) before to three hours after its answer, so a secondly cron walks ~43,000 times per lookup, in UTC too. Codex's measure (debug build): 10 lookups of `* * * * * *` 0.88 s, of `0 3 * * *` 0.45 ms.
+- **A fix:** enumerate only around the time zone's transitions, or no margin in a fixed-offset zone.
+'''

@@ -23,6 +23,8 @@ cleanup() {
         kill "$standalone_pid" 2>/dev/null || true
         wait "$standalone_pid" 2>/dev/null || true
     fi
+    # The agent's copies of the DAG code are read-only (decision 102): writable first.
+    chmod -R u+w "$work" 2>/dev/null || true
     rm -rf "$work"
 }
 trap cleanup EXIT

@@ -1,0 +1,13 @@
+title = "a resume whose follow-up failed is never retried"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a resumed worker takes no parse jobs until it reconnects or is resumed again; a database error while a resume command is applied"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  B96's fix puts the drained mark back when `allow_parsing` fails, but nothing calls it again: the resume command is already marked applied (`crates/schedr-master/src/commands.rs:144`) and its follow-up comes from the round's `applied.drained` (`core.rs:629`), used once. Codex's proof: `find_parse` failing during the resume's follow-up; 27 healthy rounds later the worker still gets no parse job.
+- **A fix:** to decide: retry a failed follow-up in later rounds (kept until it succeeds), or apply the command and its follow-up in one transaction.
+'''

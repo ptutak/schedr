@@ -1,0 +1,13 @@
+title = "a code report whose handling failed is never retried while the worker stays connected"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a worker's new code isn't parsed nor its tasks accepted until it reconnects or its code changes again; a database error while handling `CodeVersionChanged`"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  The service logs a message whose handling failed and keeps the stream (`crates/schedr-master/src/service.rs:502`); the agent sends `CodeVersionChanged` only for a newly seen hash (`crates/schedr-agent/src/agent.rs:1279`). With B91's fix discovery's memory goes back to before the report, so the master keeps the old hash for that worker. Codex's proof: the report's transaction fails once; the stream stays live, the worker at `h2`, no parse job, `root_hashes` without `h2`.
+- **A fix:** to decide: end the worker's stream when a message can't be handled (it registers again, reporting its roots afresh), or the master retries the report itself.
+'''

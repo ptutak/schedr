@@ -75,6 +75,20 @@ pub struct Discovery {
     no_parse: BTreeSet<String>,
 }
 
+/// What discovery keeps in memory, copied by [`Discovery::memory`] to put back when the
+/// transaction its changes were part of rolls back (B91).
+#[derive(Debug, Clone)]
+pub struct Memory {
+    jobs: ParseJobs,
+    reports: BTreeMap<String, BTreeMap<String, ParseKey>>,
+    current: BTreeMap<String, Current>,
+    hashes: BTreeMap<String, BTreeSet<String>>,
+    switches: BTreeMap<String, BTreeMap<String, Timestamp>>,
+    parses: BTreeMap<(String, String), Vec<StoredParse>>,
+    accepted: BTreeMap<String, BTreeSet<String>>,
+    no_parse: BTreeSet<String>,
+}
+
 /// A root's current parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Current {
@@ -120,6 +134,43 @@ impl Discovery {
         }
     }
 
+    /// A copy of what discovery keeps in memory, for [`Self::restore`].
+    #[must_use]
+    pub fn memory(&self) -> Memory {
+        Memory {
+            jobs: self.jobs.clone(),
+            reports: self.reports.clone(),
+            current: self.current.clone(),
+            hashes: self.hashes.clone(),
+            switches: self.switches.clone(),
+            parses: self.parses.clone(),
+            accepted: self.accepted.clone(),
+            no_parse: self.no_parse.clone(),
+        }
+    }
+
+    /// Puts back a copy taken by [`Self::memory`]: the work since was rolled back.
+    pub fn restore(&mut self, memory: Memory) {
+        let Memory {
+            jobs,
+            reports,
+            current,
+            hashes,
+            switches,
+            parses,
+            accepted,
+            no_parse,
+        } = memory;
+        self.jobs = jobs;
+        self.reports = reports;
+        self.current = current;
+        self.hashes = hashes;
+        self.switches = switches;
+        self.parses = parses;
+        self.accepted = accepted;
+        self.no_parse = no_parse;
+    }
+
     /// A worker drains (or is drained): it gets no parse jobs, and its unfinished ones go to
     /// other workers that reported the same hash. Returns those assignments.
     pub fn stop_parsing(&mut self, worker_id: &str, now: Timestamp) -> Vec<ParseAssignment> {
@@ -141,6 +192,21 @@ impl Discovery {
         if !self.no_parse.remove(worker_id) {
             return Ok(Vec::new());
         }
+        let resumed = self.resume_parsing(worker_id, now).await;
+        if resumed.is_err() {
+            // Still drained, so a retry resumes it (B96); a job requested before the error
+            // expires and goes out again.
+            self.no_parse.insert(worker_id.to_owned());
+        }
+        resumed
+    }
+
+    /// The parse jobs of what `worker_id` reports, now that it takes them again.
+    async fn resume_parsing(
+        &mut self,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<ParseAssignment>, DbError> {
         let keys: Vec<ParseKey> = self
             .reports
             .get(worker_id)
@@ -209,6 +275,12 @@ impl Discovery {
     ) -> Result<Vec<ParseAssignment>, DbError> {
         let previous = self.reports.remove(worker_id).unwrap_or_default();
         let mut roots: BTreeSet<String> = previous.keys().cloned().collect();
+        // A root it no longer has: it can't parse its code any more (B97).
+        for (root, key) in &previous {
+            if !keys.iter().any(|k| &k.root == root) {
+                self.jobs.moved_away(key, worker_id, now);
+            }
+        }
         let mut jobs = Vec::new();
         for key in keys {
             roots.insert(key.root.clone());
@@ -402,9 +474,7 @@ impl Discovery {
             .filter(|f| f.error.as_ref().is_some_and(ErrorSummary::is_transient))
             .map(|f| f.path.as_str())
             .collect();
-        if failed.is_empty() {
-            self.jobs.finish(key);
-        } else {
+        if !failed.is_empty() {
             let candidates = self.candidates(key);
             self.jobs
                 .retry(key.clone(), candidates, Some(&upload.worker_id), now);
@@ -431,6 +501,11 @@ impl Discovery {
         {
             self.refresh_or_forget(&key.root, now).await?;
         }
+        // Only now: a catalog that couldn't be updated leaves the job to expire and the code
+        // to be parsed again (B94).
+        if failed.is_empty() {
+            self.jobs.finish(key);
+        }
         Ok(parse_id)
     }
 
@@ -441,12 +516,18 @@ impl Discovery {
     ///
     /// [`DbError`] if reading or storing fails.
     pub async fn refresh(&self, now: Timestamp) -> Result<Vec<DagChange>, DbError> {
-        let mut sources = Vec::with_capacity(self.current.len());
-        for (root, current) in &self.current {
+        // Every root's current parse: a root no worker reported since this master started
+        // keeps its stored one, so its DAGs still count (a conflict with them stays, B92).
+        let mut current = self.db.current_parses().await?;
+        for (root, c) in &self.current {
+            current.insert(root.clone(), c.parse_id.clone());
+        }
+        let mut sources = Vec::with_capacity(current.len());
+        for (root, parse_id) in current {
             sources.push(Source {
-                root: root.clone(),
-                parse_id: current.parse_id.clone(),
-                files: self.db.parse_files(&current.parse_id).await?,
+                root,
+                files: self.db.parse_files(&parse_id).await?,
+                parse_id,
             });
         }
         let changes = catalog::plan(&sources, &self.db.stored_dags().await?);
@@ -469,13 +550,20 @@ impl Discovery {
         switched: bool,
         now: Timestamp,
     ) -> Result<(), DbError> {
-        let known = self.switches_of(root).await?.contains_key(hash);
+        let recorded = self.switches_of(root).await?;
+        let known = recorded.contains_key(hash);
         if switched || !known {
-            self.db.record_root_hash(root, hash, switched, now).await?;
+            // Never before the root's latest switch, whatever the clock did (B93): the order
+            // of switches is the order the master saw them in.
+            let latest = recorded.values().max().copied();
+            let at = latest
+                .and_then(|t| t.checked_add(jiff::SignedDuration::from_micros(1)).ok())
+                .map_or(now, |after| after.max(now));
+            self.db.record_root_hash(root, hash, switched, at).await?;
             self.switches
                 .entry(root.to_owned())
                 .or_default()
-                .insert(hash.to_owned(), now);
+                .insert(hash.to_owned(), at);
         }
         Ok(())
     }

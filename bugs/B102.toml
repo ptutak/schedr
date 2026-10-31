@@ -1,0 +1,13 @@
+title = "a worker catching up after a master restart can rank older code as newest"
+severity = "critical"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "older code runs, for good (its switch recorded as newest); a master restart while workers are on different revisions, a lagging worker reconnecting first"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  After a restart, `current` is decided from the first reports (`crates/schedr-master/src/discovery.rs:331`); a lagging worker that reconnects first at `h1` makes `h1` current, then its catch-up to `h2` counts as a switch away from the current hash (`:665`) and is recorded as newest, above `h3` (the real current one, its worker not back yet). Not new with B91-B97. Codex's proof: switches `h1 < h2 < h3`, `h3` current; after a restart the `h1` worker reconnects and moves to `h2` before the `h3` worker is back: `h2` current, recorded at 08:00:05 above `h3`. Contradicts the guide's "a restarted master decides the same" and "catching up through older revisions changes nothing".
+- **A fix:** to decide: a switch only away from the newest recorded hash (not the current one decided since the restart), or no switches recorded until the master has heard from every worker it knew (a settling period).
+'''

@@ -1,0 +1,16 @@
+title = "`dags test` waits for ever when a DAG root can't be scanned"
+severity = "medium"  # critical, high, medium, low
+probability = "rare"  # likely, possible, rare
+kind = "usability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "`schedr dags test` hangs, logging a warning every 200 ms, instead of failing; a root its agent can't scan or copy (permissions, a full disk)"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Claude, from CI: the macOS wheel's smoke test ran for over two
+  hours. Every scan of the root failed (copying the code: `Permission denied`, macOS refusing
+  to rename the read-only copy, fixed the same day), and `dags test` kept retrying ("can't
+  scan DAG root" every 200 ms), never ending. The smoke script's own waits are bounded, but
+  `dags test` itself has no deadline.
+- **A fix:** give `dags test` a deadline for its root to be parsed (failing with the last
+  scan error), or fail at the first scan error, its root being local.
+'''

@@ -191,6 +191,10 @@ async fn parses_and_the_dag_list_are_stored() {
     db.set_current_parse("etl", &parse_id, ts(NOW))
         .await
         .unwrap();
+    assert_eq!(
+        db.current_parses().await.unwrap(),
+        BTreeMap::from([("etl".to_owned(), parse_id.clone())])
+    );
     let errors = db.current_import_errors().await.unwrap();
     let failed: Vec<&ParsedFile> = expected.iter().filter(|f| f.error.is_some()).collect();
     assert_eq!(

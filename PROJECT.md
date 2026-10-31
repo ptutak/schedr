@@ -3055,7 +3055,9 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 - **Only the newest code runs** (M2.5). Workers may report different hashes of a root while
   git-sync catches up. The root's **current** hash is the newest one an alive worker
   (registered, not lost or deregistered) reports, newest meaning the hash workers **switched
-  to most recently** (table `root_hashes`, so a master restart decides the same). A switch
+  to most recently** (table `root_hashes`, so a master restart decides the same; a switch's
+  time is never before the root's latest one, so a clock stepped back doesn't reorder them,
+  B93). A switch
   is a worker moving **away from the current hash** (compared with what it reported before,
   also across a reconnect), so a **revert** to earlier content is newest, while a lagging
   worker catching up through older revisions, or reporting older code again, changes

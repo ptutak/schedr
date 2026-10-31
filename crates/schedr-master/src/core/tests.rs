@@ -1036,3 +1036,74 @@ mod faults {
         assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
     }
 }
+
+#[tokio::test]
+async fn a_code_switch_rolled_back_is_recorded_when_the_worker_reports_it_again() {
+    // B91: discovery kept a rolled-back switch in memory, so the retry (the worker registering
+    // again) recorded nothing, and a restarted master undid the switch.
+    let mut core = with_dag().await;
+    let switch = |hash: &str| {
+        worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+            root: Some(root(hash)),
+        })
+    };
+    let out = core.handle("w1", switch("h2"), later(1)).await.unwrap();
+    let master_message::Message::AssignParse(job) = message(&out[0]) else {
+        panic!("expected AssignParse, got {out:?}")
+    };
+    let mut parsed = upload(&job.parse_job_id);
+    parsed.root = Some(root("h2"));
+    core.upload(parsed, later(2)).await.unwrap();
+    // A revert to h1, whose second write (h1 current again) fails: rolled back whole.
+    core.db.fail_write(2);
+    core.handle("w1", switch("h1"), later(3)).await.unwrap_err();
+    // Its link drops; it registers again, at h1.
+    core.disconnected("w1", later(4)).await.unwrap();
+    core.register(&register("w1", "i1", vec![]), later(5))
+        .await
+        .unwrap();
+    let switches = core.db.root_hash_switches("etl").await.unwrap();
+    assert!(switches["h1"] > switches["h2"], "{switches:?}");
+}
+
+#[tokio::test]
+async fn a_revert_in_a_registration_that_failed_is_recorded_when_it_registers_again() {
+    // Codex's review of B91: registration dropped the worker's earlier reports before its
+    // writes; failing, it left them dropped, so the retry didn't see the revert as a switch.
+    let mut core = with_dag().await;
+    let out = core
+        .handle(
+            "w1",
+            worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+                root: Some(root("h2")),
+            }),
+            later(1),
+        )
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&out[0]) else {
+        panic!("expected AssignParse, got {out:?}")
+    };
+    let mut parsed = upload(&job.parse_job_id);
+    parsed.root = Some(root("h2"));
+    core.upload(parsed, later(2)).await.unwrap();
+    // w1 reverted to h1 while away; its registration's switch can't be stored this time.
+    core.disconnected("w1", later(3)).await.unwrap();
+    refuse(&core, "root_hashes", "NEW.content_hash = 'h1'").await;
+    core.register(&register("w1", "i1", vec![]), later(4))
+        .await
+        .unwrap_err();
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query("DROP TRIGGER refuse_root_hashes")
+        .execute(pool)
+        .await
+        .unwrap();
+    core.disconnected("w1", later(5)).await.unwrap();
+    core.register(&register("w1", "i1", vec![]), later(6))
+        .await
+        .unwrap();
+    let switches = core.db.root_hash_switches("etl").await.unwrap();
+    assert!(switches["h1"] > switches["h2"], "{switches:?}");
+}

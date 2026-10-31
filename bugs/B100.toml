@@ -1,0 +1,13 @@
+title = "a read failing after a parse retry's files were stored loses the retry's catalog update"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a DAG defined in a file that failed transiently never appears (its retry's result stored but not published); a read error right after a retry's upload"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  `parse_uploaded` stores the retry's files (`replace_parse_files`, `crates/schedr-master/src/discovery.rs:456`), then reads them back; an error there leaves `current` as it was. The next upload of the same retry replaces nothing (already stored), so `retried` is false, `decide` sees no new parse, the explicit refresh is skipped, and the job finishes. Codex's proof: `b.py`'s retry stored, the read after it failing once: the catalog stays `[a]`, no job left.
+- **A fix:** refresh whenever the parse is current and its stored files differ from what the catalog was built from (or forget `current` on any failure after a store, as `refresh_or_forget` does).
+'''

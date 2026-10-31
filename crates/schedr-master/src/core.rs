@@ -425,7 +425,15 @@ impl MasterCore {
                 now,
             )
             .await?;
-        let mut outgoing = self.report_roots(register, now).await?;
+        // Failing, discovery's memory goes back as it was: the worker registers again with the
+        // same reports, and a switch among them is seen again (B91).
+        let memory = self.discovery.memory();
+        let reported = self.report_roots(register, now).await;
+        if reported.is_err() {
+            self.discovery.restore(memory);
+            self.sync_code();
+        }
+        let mut outgoing = reported?;
         let mut decisions = Vec::with_capacity(register.journal.len());
         for entry in &register.journal {
             let (decision, cancel) = self.journal_decision(worker_id, entry, now).await?;
@@ -500,10 +508,7 @@ impl MasterCore {
             // A message's writes are one transaction: stored whole or not at all, with one
             // lease check and one commit (T1, 2.10b).
             worker_message::Message::CodeVersionChanged(changed) => match changed.root {
-                Some(root) => {
-                    let db = self.db.clone();
-                    Box::pin(db.atomically(self.root_reported(worker_id, &root, now))).await?
-                }
+                Some(root) => self.code_version_changed(worker_id, &root, now).await?,
                 None => Vec::new(),
             },
             // Rolled back, their changes to memory are put back too; a commit cut off is read
@@ -791,6 +796,24 @@ impl MasterCore {
         outgoing.extend(jobs.into_iter().map(assign_parse));
         self.sync_code();
         Ok(outgoing)
+    }
+
+    /// A worker's `CodeVersionChanged`, its writes one transaction.
+    async fn code_version_changed(
+        &mut self,
+        worker_id: &str,
+        root: &pb::RootHash,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        let (db, memory) = (self.db.clone(), self.discovery.memory());
+        let handled = Box::pin(db.atomically(self.root_reported(worker_id, root, now))).await;
+        if handled.is_err() {
+            // Rolled back, discovery's memory too: a retry decides afresh, and records the
+            // switch again (B91).
+            self.discovery.restore(memory);
+            self.sync_code();
+        }
+        handled
     }
 
     async fn root_reported(

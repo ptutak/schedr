@@ -53,42 +53,108 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B86: accepted strings containing NUL cannot be stored in production | 6 | high | possible | correctness |
-| 2 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
-| 3 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
-| 4 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
-| 5 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 6 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 7 | B90: a module imported from another DAG root comes from its live checkout, not a copy | 4 | critical | rare | correctness |
-| 8 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
-| 9 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
-| 10 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
-| 11 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
-| 12 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
-| 13 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
-| 14 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
-| 15 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
-| 16 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 17 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 18 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 19 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
-| 20 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
-| 21 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
-| 22 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
-| 23 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 24 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 25 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 26 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 27 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 28 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 29 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 30 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 31 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 32 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 33 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 34 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 35 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 36 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B102: a worker catching up after a master restart can rank older code as newest | 8 | critical | possible | correctness |
+| 2 | B101: a code report whose handling failed is never retried while the worker stays connected | 6 | high | possible | reliability |
+| 3 | B100: a read failing after a parse retry's files were stored loses the retry's catalog update | 6 | high | possible | correctness |
+| 4 | B99: a resume whose follow-up failed is never retried | 6 | high | possible | reliability |
+| 5 | B95: a resolved conflict can bring back the removed file's definition | 6 | high | possible | correctness |
+| 6 | B86: accepted strings containing NUL cannot be stored in production | 6 | high | possible | correctness |
+| 7 | B64: the channel does not preserve Python numbers | 6 | high | possible | data |
+| 8 | B87: per-tick queries lack indexes excluding completed history | 6 | medium | likely | performance |
+| 9 | B83: mapping repeats the entire source list in every instance’s inputs | 6 | medium | likely | performance |
+| 10 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 11 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 12 | B90: a module imported from another DAG root comes from its live checkout, not a copy | 4 | critical | rare | correctness |
+| 13 | B66: ordinary dictionaries collide with serialization tags | 4 | critical | rare | data |
+| 14 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 15 | B81: valid elements inside mapped lists are rejected as though they must themselves be lists | 4 | medium | possible | correctness |
+| 16 | B80: using a mapped output elsewhere breaks per-element narrowing | 4 | medium | possible | correctness |
+| 17 | B68: a strict model can encode successfully but cannot read its own output | 4 | medium | possible | correctness |
+| 18 | B65: mixed structured arguments reach functions in the wrong Python shape | 4 | medium | possible | correctness |
+| 19 | B61: a DAG file reached through a followed symlink gets an unusable location | 4 | medium | possible | correctness |
+| 20 | B60: a relative DAG root breaks parsing and task imports | 4 | medium | possible | correctness |
+| 21 | B56: a cancel or timeout is ignored while a runner hasn't said hello | 4 | medium | possible | correctness |
+| 22 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 23 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 24 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 25 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 26 | B76: Python accepts output nesting that the agent refuses | 2 | medium | rare | correctness |
+| 27 | B75: truncation detection applies to unrelated user dictionaries | 2 | medium | rare | correctness |
+| 28 | B67: exceptions during result serialization escape without a structured failure | 2 | medium | rare | correctness |
+| 29 | B52: the per-round caps still read the whole backlog | 2 | medium | rare | performance |
+| 30 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 31 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 32 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 33 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 34 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 35 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 36 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 37 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 38 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 39 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 40 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 41 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 42 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 43 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B103: `dags test` waits for ever when a DAG root can't be scanned
+
+- **Rating:** severity **medium**, probability **rare**, usability (score 2): `schedr dags test` hangs, logging a warning every 200 ms, instead of failing; a root its agent can't scan or copy (permissions, a full disk).
+- **Found:** 2026-10-31, by Claude, from CI: the macOS wheel's smoke test ran for over two
+  hours. Every scan of the root failed (copying the code: `Permission denied`, macOS refusing
+  to rename the read-only copy, fixed the same day), and `dags test` kept retrying ("can't
+  scan DAG root" every 200 ms), never ending. The smoke script's own waits are bounded, but
+  `dags test` itself has no deadline.
+- **A fix:** give `dags test` a deadline for its root to be parsed (failing with the last
+  scan error), or fail at the first scan error, its root being local.
+
+## B102: a worker catching up after a master restart can rank older code as newest
+
+- **Rating:** severity **critical**, probability **possible**, correctness (score 8): older code runs, for good (its switch recorded as newest); a master restart while workers are on different revisions, a lagging worker reconnecting first.
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  After a restart, `current` is decided from the first reports (`crates/schedr-master/src/discovery.rs:331`); a lagging worker that reconnects first at `h1` makes `h1` current, then its catch-up to `h2` counts as a switch away from the current hash (`:665`) and is recorded as newest, above `h3` (the real current one, its worker not back yet). Not new with B91-B97. Codex's proof: switches `h1 < h2 < h3`, `h3` current; after a restart the `h1` worker reconnects and moves to `h2` before the `h3` worker is back: `h2` current, recorded at 08:00:05 above `h3`. Contradicts the guide's "a restarted master decides the same" and "catching up through older revisions changes nothing".
+- **A fix:** to decide: a switch only away from the newest recorded hash (not the current one decided since the restart), or no switches recorded until the master has heard from every worker it knew (a settling period).
+
+## B101: a code report whose handling failed is never retried while the worker stays connected
+
+- **Rating:** severity **high**, probability **possible**, reliability (score 6): a worker's new code isn't parsed nor its tasks accepted until it reconnects or its code changes again; a database error while handling `CodeVersionChanged`.
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  The service logs a message whose handling failed and keeps the stream (`crates/schedr-master/src/service.rs:502`); the agent sends `CodeVersionChanged` only for a newly seen hash (`crates/schedr-agent/src/agent.rs:1279`). With B91's fix discovery's memory goes back to before the report, so the master keeps the old hash for that worker. Codex's proof: the report's transaction fails once; the stream stays live, the worker at `h2`, no parse job, `root_hashes` without `h2`.
+- **A fix:** to decide: end the worker's stream when a message can't be handled (it registers again, reporting its roots afresh), or the master retries the report itself.
+
+## B100: a read failing after a parse retry's files were stored loses the retry's catalog update
+
+- **Rating:** severity **high**, probability **possible**, correctness (score 6): a DAG defined in a file that failed transiently never appears (its retry's result stored but not published); a read error right after a retry's upload.
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  `parse_uploaded` stores the retry's files (`replace_parse_files`, `crates/schedr-master/src/discovery.rs:456`), then reads them back; an error there leaves `current` as it was. The next upload of the same retry replaces nothing (already stored), so `retried` is false, `decide` sees no new parse, the explicit refresh is skipped, and the job finishes. Codex's proof: `b.py`'s retry stored, the read after it failing once: the catalog stays `[a]`, no job left.
+- **A fix:** refresh whenever the parse is current and its stored files differ from what the catalog was built from (or forget `current` on any failure after a store, as `refresh_or_forget` does).
+
+## B99: a resume whose follow-up failed is never retried
+
+- **Rating:** severity **high**, probability **possible**, reliability (score 6): a resumed worker takes no parse jobs until it reconnects or is resumed again; a database error while a resume command is applied.
+- **Found:** 2026-10-31, by Codex's review of the F5 fixes (B91-B97), with a failing proof each; checked against the code by
+  Claude.
+  B96's fix puts the drained mark back when `allow_parsing` fails, but nothing calls it again: the resume command is already marked applied (`crates/schedr-master/src/commands.rs:144`) and its follow-up comes from the round's `applied.drained` (`core.rs:629`), used once. Codex's proof: `find_parse` failing during the resume's follow-up; 27 healthy rounds later the worker still gets no parse job.
+- **A fix:** to decide: retry a failed follow-up in later rounds (kept until it succeeds), or apply the command and its follow-up in one transaction.
+
+## B98: a frequent cron schedule enumerates hours of fire times on every lookup
+
+- **Rating:** severity **medium**, probability **possible**, performance (score 4): the scheduler's rounds slow down, under the master's lock; secondly or many minutely schedules.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F5 (scheduling and
+  discovery), with a failing proof each; checked against the code by Claude.
+  `fire_times.rs:194`, `:215`: a lookup enumerates from three hours (`MARGIN`, for time zone changes) before to three hours after its answer, so a secondly cron walks ~43,000 times per lookup, in UTC too. Codex's measure (debug build): 10 lookups of `* * * * * *` 0.88 s, of `0 3 * * *` 0.45 ms.
+- **A fix:** enumerate only around the time zone's transitions, or no margin in a fixed-offset zone.
+
+## B95: a resolved conflict can bring back the removed file's definition
+
+- **Rating:** severity **high**, probability **possible**, correctness (score 6): a DAG runs from a file that no longer defines it, the remaining file's import error not holding it; a conflict resolved by removing one file while the other fails to import.
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F5 (scheduling and
+  discovery), with a failing proof each; checked against the code by Claude.
+  With a single definition left whose file failed, `catalog::plan` (`crates/schedr-master/src/catalog.rs:66`) keeps the stored definition without checking it is the remaining file's: it can be the removed file's. Holds match the stored definition's location, so the remaining file's error holds nothing. Codex's proof (both databases): `a.py` defines `dup`, then `a.py` and `b.py` (a conflict); `a.py` is removed and `b.py` fails: `a.py`'s version is selected, not held, a trigger accepted.
+- **A fix:** to decide: keep the conflict (or no definition) until the remaining file loads, when the stored version isn't its own.
 
 ## B90: a module imported from another DAG root comes from its live checkout, not a copy
 

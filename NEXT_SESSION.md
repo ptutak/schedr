@@ -10,7 +10,8 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   **M4.3 (mapping) are done**, M4.3d (the CLI's `runs show`, `tasks attempts`, `tasks output`)
   included. **Now: the bugs of severity high or critical** (the user, 2026-10-30: fix down to
   "high", then features; a new ≥ high bug interrupts), in the ranking's order, security first:
-  every one left needs a decision first: B90 (critical, decision 103), B66, B64, B86 (see
+  every one left needs a decision first: B90 (critical, decision 103), B102, B66, B64, B86,
+  B95, B99, B101, and B100 a reviewed round (see
   "Decisions for the morning"); the night of 2026-10-31 fixed the reconnect batch (B50, B41,
   B43, B44) and B84, B78, B45, B54, B47, B63, B57. Then M4.4 (concurrency limits: decisions 87–92, 95–96 taken).
 - **Decision 102 (the code copy, B58 + B59), committed 2026-10-31:** the agent copies each
@@ -63,6 +64,24 @@ the morning, listed below.
   and 2; one stale, the rest confirmed and fixed). The third round's two fixes (a zombie
   leader's memory read through a live thread; the notification probe's connections guarded)
   were not reviewed by a colleague: each has a test shown failing without it.
+- **Codex's F5 (scheduling and discovery):** 8 findings, all confirmed, logged B91-B98. Fixed
+  the same night with a failing test each: B91 (discovery's memory put back when a
+  `CodeVersionChanged` rolls back), B92 (the catalog built from every root's stored current
+  parse, so a restart keeps a cross-root conflict), B93 (a switch never recorded before the
+  root's latest: a clock stepped back doesn't reorder code), B94 (a parse job finished only
+  after the catalog update), B96 (a failed resume keeps the drained mark), B97 (a root dropped
+  on re-registration moves away from its job). B95 waits for a decision (above); B98 (frequent
+  cron schedules enumerate six hours per lookup) is medium. Codex's review of those fixes: 5
+  findings, all confirmed; a failed registration now restores discovery's memory too (fixed,
+  its test failing first, not reviewed again); B99-B102 logged, each a decision below.
+- **CI broke with decision 102's commit (`d7b5581`), fixed in the third commit of the night:**
+  the wheel smoke test's cleanup couldn't `rm -rf` the read-only code copies (Linux and
+  aarch64 wheels; the script now makes them writable first, and the guide says to), and on
+  macOS the copy was never renamed into place (macOS renames a directory only with write
+  permission on it; the top directory is now made read-only after the rename, and writable
+  before a removal's rename). The macOS fix has no test that can fail on Linux: macOS CI is
+  its check; look at it first (`gh run list`). `dags test` meanwhile retried for ever: B103.
+  The two stuck CI runs: the older one cancelled by Claude (to read its log).
 - Grok's weekly % after its review (session `b3ccfd8a`, 46 calls, 199k context): ask the
   user. Codex: 27% → 31% over the night's first three rounds, 35% after the next three.
 
@@ -92,6 +111,28 @@ Decisions for the morning:
   completion. Options: **A** refuse NUL when the task's value is encoded (the attempt fails
   with a clear error; Claude; recommended); **B** escape NUL in a tagged form (a new tag);
   **C** store outputs as text, not jsonb (a migration; loses jsonb queries).
+- **B95 (high × possible, correctness; F5):** a DAG ID in conflict between `a.py` and `b.py`;
+  `a.py` is removed and `b.py` fails to import: the catalog keeps the stored version, which
+  is `a.py`'s (the removed file's), and `b.py`'s error holds nothing (holds match the stored
+  location). Options: **A** keep the conflict until the remaining file loads (no runs
+  meanwhile; Claude; recommended: nothing runs from a file that no longer defines it); **B**
+  remove the DAG until `b.py` loads (its history kept, as any removed DAG); **C** keep
+  `a.py`'s version but hold it under `b.py`'s error.
+- **B102 (critical × possible, correctness):** after a master restart, a lagging worker
+  reconnecting first makes its old hash current, and its catch-up then counts as a switch,
+  recorded as newest (above the real newest). Options: **A** a switch only away from the
+  newest *recorded* hash, not the current one decided since the restart (Claude;
+  recommended: no new state, matches the guide's promise); **B** record no switches until
+  the master has heard from every worker it knew, or a settling period passed.
+- **B101 and B99 (high), one question:** a worker message, or a command's follow-up, whose
+  handling failed (a database error) is not retried: a `CodeVersionChanged` (the worker
+  keeps its stream, the master its old hash) and a resume's parse jobs. Options: **A** end the
+  worker's stream when its message can't be handled (it registers again, reporting all
+  afresh; Claude; recommended for B101); for B99, keep the failed follow-up and retry it each
+  round until it succeeds (Claude; recommended); **B** the master retries each message itself.
+- **B100 (high):** a read failing right after a parse retry's files are stored loses the
+  catalog update. A fix is likely mechanical (forget `current` on any failure after a store,
+  as `refresh_or_forget` does), but it reaches into the retry path: for a reviewed round.
 - Rejected from Grok's review (no decision needed, for the record): a task can `chmod` or
   rename its own read-only copy (it runs as the copy's owner): within decision 101 (workers and
   their DAG code are trusted); the guide now says the copy guards against mistakes only.
@@ -99,8 +140,8 @@ Decisions for the morning:
 ## Open when this session ended
 
 - **Codex's whole-repository review** (the Codex skill's `reviews/schedr-full-2026-10-30.md`;
-  ~50% of Codex's week): done F1–F4, F6–F8 (B41–B87, all logged). Next F5 (scheduling and
-  discovery), then F9–F14, one section at a time; its worktree is `schedr-codex-f1` (detached
+  ~50% of Codex's week): done F1–F8 (B41–B98, all logged). Next F9 (the Python DAG API),
+  then F10–F14, one section at a time; its worktree is `schedr-codex-f1` (detached
   at `819dcbb`; move it to `main` before a section, copy the current BUGS.md in). A section's
   findings now come rated (severity, probability, kind).
 - **Usage:** Grok 44% of its week before M4.3d's follow-up (resets Fridays 9:00; ask the user
@@ -108,7 +149,9 @@ Decisions for the morning:
   work only, Codex for small fixes, follow-ups in the same session (the user, 2026-10-30).
 - **Bugs:** B4, B22, B24, B31, B32 (older, suspected); B37 (M4.3d); B38, B39 (M6); B40–B90
   (fixed: B41–B45, B47, B49–B51, B53–B55, B57–B59, B63, B78, B79, B84; B88 found and fixed the
-  same day). The next number is **B91** (`bugs/next-id`).
+  same day); B91–B102 from F5 and its fixes' review (fixed: B91–B94, B96, B97); B103 (`dags
+  test` never giving up). The next number is **B104**
+  (`bugs/next-id`).
 
 ## How we work now (2026-10-30)
 

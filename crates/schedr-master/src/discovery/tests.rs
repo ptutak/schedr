@@ -928,3 +928,158 @@ async fn a_gone_worker_whose_decision_failed_is_decided_again_on_the_retry() {
     discovery.worker_gone("w2", later(2)).await.unwrap();
     assert_eq!(max_active_runs(&discovery).await, Some(1));
 }
+
+#[tokio::test]
+async fn a_resume_whose_read_failed_hands_out_its_jobs_when_tried_again() {
+    // B96: the drained mark went before the reads; a retry found nothing to resume.
+    let mut discovery = discovery().await;
+    discovery.stop_parsing("w1", now());
+    let job = discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    assert_eq!(job, None);
+    sqlite(&discovery, "ALTER TABLE parse_results RENAME TO hidden").await;
+    discovery.allow_parsing("w1", now()).await.unwrap_err();
+    sqlite(&discovery, "ALTER TABLE hidden RENAME TO parse_results").await;
+    let jobs = discovery.allow_parsing("w1", now()).await.unwrap();
+    let assigned: Vec<(&str, &str)> = jobs
+        .iter()
+        .map(|j| (j.worker_id.as_str(), j.key.content_hash.as_str()))
+        .collect();
+    assert_eq!(assigned, [("w1", "h1")]);
+}
+
+#[tokio::test]
+async fn a_worker_registering_again_without_a_root_is_no_candidate_for_its_parse() {
+    // B97: its job went to it, which no longer has the root, instead of a worker that does.
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2", "w3"] {
+        discovery
+            .root_reported(worker, key("h1"), now())
+            .await
+            .unwrap();
+    }
+    discovery.registered("w2", Vec::new(), now()).await.unwrap();
+    let moved = discovery.stop_parsing("w1", now());
+    let workers: Vec<&str> = moved.iter().map(|j| j.worker_id.as_str()).collect();
+    assert_eq!(workers, ["w3"]);
+}
+
+#[tokio::test]
+async fn a_parse_whose_catalog_update_failed_is_parsed_again() {
+    // B94: its job was finished before the catalog was updated; with nothing left to expire,
+    // the new version never took effect.
+    let mut discovery = discovery().await;
+    discovery
+        .root_reported("w1", key("h1"), now())
+        .await
+        .unwrap();
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery.parse_uploaded(first, now()).await.unwrap();
+    discovery
+        .root_reported("w1", key("h2"), now())
+        .await
+        .unwrap();
+    sqlite(
+        &discovery,
+        "CREATE TRIGGER refuse_dags BEFORE UPDATE ON dags \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .await;
+    let second = upload("h2", vec![("a.py", vec![dag("a", "a.py", 2)])]);
+    discovery.parse_uploaded(second, now()).await.unwrap_err();
+    sqlite(&discovery, "DROP TRIGGER refuse_dags").await;
+    let timeout = i64::try_from(PARSE_JOB_TIMEOUT.as_secs()).unwrap();
+    let [again] = discovery
+        .jobs_mut()
+        .expire(later(timeout + 1))
+        .try_into()
+        .unwrap();
+    assert_eq!((again.worker_id.as_str(), again.key), ("w1", key("h2")));
+    let second = upload("h2", vec![("a.py", vec![dag("a", "a.py", 2)])]);
+    discovery
+        .parse_uploaded(second, later(timeout + 2))
+        .await
+        .unwrap();
+    assert_eq!(max_active_runs(&discovery).await, Some(2));
+}
+
+#[tokio::test]
+async fn new_code_reported_after_the_clock_stepped_back_is_still_the_newest() {
+    // B93: switches were ordered by the clock alone; new code reported after it stepped back
+    // ranked below the old, for as long as a worker reported the old.
+    let mut discovery = discovery().await;
+    for worker in ["w1", "w2"] {
+        discovery
+            .root_reported(worker, key("h1"), at("2026-10-21T08:01:40Z"))
+            .await
+            .unwrap();
+    }
+    let first = upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])]);
+    discovery
+        .parse_uploaded(first, at("2026-10-21T08:01:40Z"))
+        .await
+        .unwrap();
+    // The clock steps back 10 s.
+    discovery
+        .root_reported("w1", key("h2"), at("2026-10-21T08:01:30Z"))
+        .await
+        .unwrap();
+    let second = upload("h2", vec![("a.py", vec![dag("a", "a.py", 2)])]);
+    discovery
+        .parse_uploaded(second, at("2026-10-21T08:01:31Z"))
+        .await
+        .unwrap();
+    assert_eq!(code(&discovery), etl("h2"));
+    // And so it stays, after a restart.
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    for (worker, hash) in [("w2", "h1"), ("w1", "h2")] {
+        restarted
+            .root_reported(worker, key(hash), at("2026-10-21T08:01:35Z"))
+            .await
+            .unwrap();
+    }
+    assert_eq!(code(&restarted), etl("h2"));
+}
+
+/// DAG `id` at `root`/`path`, in an upload of `root` at `hash` by `worker`.
+fn upload_in(worker: &str, root: &str, hash: &str, id: &str, path: &str) -> ParseUpload {
+    let mut dag = dag(id, path, 1);
+    root.clone_into(&mut dag.location.root);
+    let mut upload = upload(hash, vec![(path, vec![dag])]);
+    worker.clone_into(&mut upload.worker_id);
+    root.clone_into(&mut upload.key.root);
+    upload
+}
+
+#[tokio::test]
+async fn a_restarted_master_keeps_a_conflict_with_a_root_not_reported_yet() {
+    // B92: the catalog was built only from the roots reported since the start, so the first
+    // root to report cleared its conflict with the other.
+    let mut discovery = discovery().await;
+    for (worker, root, hash, path) in [("w1", "etl", "h1", "a.py"), ("w2", "ops", "h2", "b.py")] {
+        let mut key = key(hash);
+        root.clone_into(&mut key.root);
+        discovery.root_reported(worker, key, now()).await.unwrap();
+        discovery
+            .parse_uploaded(upload_in(worker, root, hash, "d", path), now())
+            .await
+            .unwrap();
+    }
+    assert!(dags(&discovery).await[0].conflict.is_some());
+    let mut restarted = Discovery::new(
+        discovery.db.clone(),
+        SchedrVersion::new(0, 1),
+        ParseJobs::new(PARSE_JOB_TIMEOUT),
+    );
+    restarted
+        .root_reported("w1", key("h1"), later(1))
+        .await
+        .unwrap();
+    assert!(dags(&restarted).await[0].conflict.is_some());
+}

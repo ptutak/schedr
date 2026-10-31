@@ -1,0 +1,13 @@
+title = "a resolved conflict can bring back the removed file's definition"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a DAG runs from a file that no longer defines it, the remaining file's import error not holding it; a conflict resolved by removing one file while the other fails to import"
+found = 2026-10-31
+suspected = false
+details = '''
+- **Found:** 2026-10-31, by Codex's whole-repository review, section F5 (scheduling and
+  discovery), with a failing proof each; checked against the code by Claude.
+  With a single definition left whose file failed, `catalog::plan` (`crates/schedr-master/src/catalog.rs:66`) keeps the stored definition without checking it is the remaining file's: it can be the removed file's. Holds match the stored definition's location, so the remaining file's error holds nothing. Codex's proof (both databases): `a.py` defines `dup`, then `a.py` and `b.py` (a conflict); `a.py` is removed and `b.py` fails: `a.py`'s version is selected, not held, a trigger accepted.
+- **A fix:** to decide: keep the conflict (or no definition) until the remaining file loads, when the stored version isn't its own.
+'''

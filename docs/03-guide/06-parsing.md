@@ -117,7 +117,8 @@ schedr keeps no old code, so it runs **only the newest code**:
 - The root's **current** hash is the one workers switched to most recently. A switch is a
   worker moving away from the current hash, so a revert counts as new code. A lagging worker
   catching up through older revisions changes nothing. This is kept in the database
-  (`root_hashes`), so a restarted master decides the same.
+  (`root_hashes`), so a restarted master decides the same. Switches keep the order the master
+  saw them in, even if its clock steps back.
 - The current hash's parse defines the root's DAGs.
 - The root's tasks go **only to workers at the current hash**, or at a newer one being parsed.
   `AssignTask` carries the expected hash, and a worker whose code moved meanwhile rejects the
@@ -137,7 +138,8 @@ place) leaves running jobs alone. So:
 - **The copy is read-only.** Attempts of the same code share it, so a task writes its files
   elsewhere (a temporary directory, an output folder). It guards against mistakes, not against
   the task: the code runs as the worker's user, which owns the copy (workers and their DAG code
-  are trusted, decision 101).
+  are trusted, decision 101). Its directories are read-only too, so deleting a worker's data
+  directory by hand takes `chmod -R u+w <data_dir>` first.
 - **Only the hashed files are in it.** What `.schedrignore` excludes is not, so read such a
   file by its full path under the configured root.
 - A copy is removed once newer code replaced it and nothing running uses it: one or two per
