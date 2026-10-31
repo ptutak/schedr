@@ -136,6 +136,9 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             on 0. Type checkers then read the operator as ``CommandOperator[Check]``: ``.on``
             takes that enum's members and ``.outcome`` is one.
         run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
+        max_active: At most this many running at once, across all runs (``None``: no limit).
+        max_active_per_run: Accepted for symmetry with ``@task``; an operator isn't mapped,
+            so it limits nothing (a ``DagHint`` says so).
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -156,6 +159,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_output_size: int | None = None,
         outcomes: type[E] | None = None,
         run_if: RunIf | None = None,
+        max_active: int | None = None,
+        max_active_per_run: int | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
@@ -186,8 +191,16 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         for template in [*line.templates(), *variables.values()]:
             _build.check_template_references(builder, template, where)
         options = _build.TaskOptions(
-            retries, retry_delay, timeout, queue, max_output_size, run_if=run_if
+            retries,
+            retry_delay,
+            timeout,
+            queue,
+            max_output_size,
+            run_if=run_if,
+            max_active=max_active,
+            max_active_per_run=max_active_per_run,
         )
+        _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)
         builder.add_task(
             task_id, CommandKind(line, variables), ScalarType("process_result"), options, spec

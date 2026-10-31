@@ -82,6 +82,11 @@ pub struct Dag {
     pub initial_since: Option<Timestamp>,
     /// At most this many runs at a time; `None` for no limit.
     pub max_active_runs: Option<u32>,
+    /// At most this many of its tasks running at once, across all its runs (each instance of
+    /// a mapped task counts); `None` for no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_active_tasks: Option<u32>,
     /// The tasks, in declaration order.
     pub tasks: Vec<Task>,
     /// The dependencies between them.

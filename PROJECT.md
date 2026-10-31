@@ -1394,6 +1394,22 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     protocol still edited in place). Not chosen: before M4.4; at the end of M4.
   - Claude's: the page and the configuration endpoints are reads, under the same access as
     the other reads; the graph's node states update live, as the Workers page does.
+  - **The Workers page stays, with a Master column** (the user's, 2026-10-31): the master
+    each worker is registered with (`workers.master_id`, written at `Register`, so a
+    re-registration after a takeover shows the new leader; a disconnected worker keeps the
+    last one, greyed), linked to that master's node on the deployment's page. Drain and
+    Resume name the deployment and that master in their dialog, and say that the deployment's
+    leading master applies the command and the drained state holds across a takeover (it is
+    in the database), so the user knows which deployment and master a Drain targets.
+  - **The navigation** (the user's, 2026-10-31): DAGs, Runs, **Deployments**, **Config**,
+    Workers, Import errors.
+  - **The Config page** (decision 125, the user's, 2026-10-31: A): `/config`, the UI's own
+    side: its effective configuration masked as a node's is (122), its schedr version beside
+    each webserver's (a mismatch marked), each connection's state (reachable, latency, how
+    the UI proves itself: none, token or mTLS, the last error), and who is signed in (as
+    `[ui.auth]` sees it, and as passed on to the webservers). In standalone, the process's
+    configuration. Not chosen: B a "This UI" section on the Deployments list; C the
+    configuration and version only.
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):

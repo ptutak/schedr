@@ -49,6 +49,16 @@ pub struct TaskSettings {
     /// When it runs, from its upstream edges (its trigger rule).
     #[serde(default, skip_serializing_if = "RunIf::is_default")]
     pub run_if: RunIf,
+    /// At most this many of its instances running at once, across all runs (decided from
+    /// the DAG's current version, decision 87A); `None` for no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_active: Option<u32>,
+    /// At most this many of its instances running at once within one run (from the run's own
+    /// version); `None` for no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_active_per_run: Option<u32>,
 }
 
 /// A task's trigger rule: what its upstream edges must have done for it to run (see
@@ -118,6 +128,8 @@ impl Default for TaskSettings {
             preload: true,
             fresh_process: false,
             run_if: RunIf::NoneFailed,
+            max_active: None,
+            max_active_per_run: None,
         }
     }
 }

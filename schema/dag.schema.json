@@ -496,6 +496,24 @@
           "description": "A Python task: always a new process, never forked (for code that misbehaves after a\nfork). Not for other tasks.",
           "type": "boolean"
         },
+        "max_active": {
+          "description": "At most this many of its instances running at once, across all runs (decided from\nthe DAG's current version, decision 87A); `None` for no limit.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_active_per_run": {
+          "description": "At most this many of its instances running at once within one run (from the run's own\nversion); `None` for no limit.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_output_size": {
           "description": "The output size limit in bytes.",
           "format": "uint64",
@@ -1240,6 +1258,15 @@
       "description": "At most this many runs at a time; `None` for no limit.",
       "format": "uint32",
       "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "max_active_tasks": {
+      "description": "At most this many of its tasks running at once, across all its runs (each instance of\na mapped task counts); `None` for no limit.",
+      "format": "uint32",
+      "minimum": 1,
       "type": [
         "integer",
         "null"

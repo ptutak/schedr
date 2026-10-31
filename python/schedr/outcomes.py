@@ -106,6 +106,15 @@ class TypingHint(UserWarning):
     """
 
 
+class DagHint(UserWarning):
+    """A DAG that runs, but likely not as meant.
+
+    E.g. ``max_active_per_run`` on a task that isn't mapped: it has one instance a run, so the
+    limit limits nothing. ``schedr dags check`` prints these; pytest lists them in its warnings
+    summary.
+    """
+
+
 _DATACLASS_OPTIONS = frozenset({"frozen", "eq", "order", "kw_only", "unsafe_hash", "repr"})
 
 

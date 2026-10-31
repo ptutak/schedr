@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from schedr._model import Dag, DagLocation, registry
-from schedr.outcomes import TypingHint
+from schedr.outcomes import DagHint, TypingHint
 from schedr.runner.protocol import Channel
 from schedr.runner.sources import SourceOnlyLoader, import_from_source
 
@@ -136,11 +136,12 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
 
     Returns:
         The message, with the DAG JSON of each DAG, or the import error, and the warnings
-        importing it raised (``Category: message``; a ``TypingHint`` always, others as the
-        interpreter's warning filters let them through).
+        importing it raised (``Category: message``; a ``TypingHint`` or ``DagHint`` always,
+        others as the interpreter's warning filters let them through).
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", TypingHint)
+        warnings.simplefilter("always", DagHint)
         try:
             dags = import_dag_file(root, root_dir, path)
             documents = [d.to_json() for d in dags]

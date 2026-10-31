@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
@@ -8,6 +9,7 @@ from schedr import (
     CommandOperator,
     Cron,
     Dag,
+    DagHint,
     EmptyOperator,
     Every,
     Once,
@@ -135,6 +137,7 @@ def test_start_and_end_are_set_on_the_trigger() -> None:
         ({"trigger": "0 3 * * *"}, TypeError, "trigger must be Cron"),
         ({"tags": "sync"}, TypeError, "tags must be a list"),
         ({"max_active_runs": 0}, ValueError, "max_active_runs must be positive"),
+        ({"max_active_tasks": 0}, ValueError, "max_active_tasks must be positive"),
     ],
 )
 def test_bad_arguments_are_rejected(
@@ -304,3 +307,78 @@ def test_groups_reference_only_their_own_dag() -> None:
             with pytest.raises(ValueError, match="group `g` belongs to DAG `one`, not `two`"):
                 use()
     registry.take_entries()
+
+
+def test_concurrency_limits_reach_the_dag_json_and_follow_the_defaults() -> None:
+    @task(max_active=1)
+    def locked() -> int:
+        return 1
+
+    @task
+    def item(n: int) -> int:
+        return n
+
+    @task(max_active_per_run=2)
+    def own(n: int) -> int:
+        return n
+
+    with Dag("d", max_active_tasks=5, defaults=TaskDefaults(max_active=3, max_active_per_run=10)):
+        locked()
+        item.expand(n=[1, 2])
+        own.expand(n=[1, 2])
+    document = only_dag().to_json()
+    assert document["max_active_tasks"] == 5
+    limits = {
+        t["id"]: (t["settings"].get("max_active"), t["settings"].get("max_active_per_run"))
+        for t in document["tasks"]
+    }
+    assert limits == {"locked": (1, 10), "item": (3, 10), "own": (3, 2)}
+
+
+def test_no_limits_leave_the_dag_json_as_it_was() -> None:
+    @task
+    def one() -> int:
+        return 1
+
+    with Dag("d"):
+        one()
+    document = only_dag().to_json()
+    assert "max_active_tasks" not in document
+    assert set(document["tasks"][0]["settings"]) & {"max_active", "max_active_per_run"} == set()
+
+
+@pytest.mark.parametrize("limit", ["max_active", "max_active_per_run"])
+def test_a_task_limit_below_one_is_an_error(limit: str) -> None:
+    @task
+    def one(n: int) -> int:
+        return n
+
+    with Dag("d"), pytest.raises(ValueError, match=f"{limit} must be at least 1"):
+        one.override(**{limit: 0}).expand(n=[1])
+
+
+def test_max_active_per_run_on_an_unmapped_task_is_hinted_unless_a_default() -> None:
+    # Decision 90A: it limits nothing there; from `TaskDefaults` it is meant for the mapped
+    # tasks, so no hint.
+    @task(max_active_per_run=2)
+    def single() -> int:
+        return 1
+
+    @task
+    def plain() -> int:
+        return 1
+
+    @task(max_active_per_run=2)
+    def mapped(n: int) -> int:
+        return n
+
+    hint = "task `single`: `max_active_per_run` limits nothing"
+    with pytest.warns(DagHint, match=hint), Dag("d"):
+        single()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DagHint)
+        with Dag("e", defaults=TaskDefaults(max_active_per_run=2)):
+            plain()
+            mapped.expand(n=[1, 2])
+    with pytest.warns(DagHint, match="task `cmd`"), Dag("f"):
+        CommandOperator("cmd", "true", max_active_per_run=1)

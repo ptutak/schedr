@@ -41,6 +41,10 @@ class TaskDefaults:
         fresh_process: Python tasks are always a new process, never forked (for code that
             misbehaves after a fork).
         run_if: When tasks run, from their upstream edges (default ``RunIf.NONE_FAILED``).
+        max_active: At most this many instances of each task running at once, across all
+            runs.
+        max_active_per_run: At most this many instances of each task running at once within
+            one run (for mapped tasks).
     """
 
     retries: int | None = None
@@ -51,6 +55,8 @@ class TaskDefaults:
     preload: bool | None = None
     fresh_process: bool | None = None
     run_if: RunIf | None = None
+    max_active: int | None = None
+    max_active_per_run: int | None = None
 
     def options(self) -> _build.TaskOptions:
         """These defaults as task options.
@@ -67,6 +73,8 @@ class TaskDefaults:
             preload=self.preload,
             fresh_process=self.fresh_process,
             run_if=self.run_if,
+            max_active=self.max_active,
+            max_active_per_run=self.max_active_per_run,
         )
 
 
@@ -86,6 +94,8 @@ class Dag:
             run without one). A date or a datetime without a time zone is read in the
             trigger's time zone (UTC for ``Every`` and no trigger).
         max_active_runs: At most this many runs at a time (default 1; ``None``: no limit).
+        max_active_tasks: At most this many of its tasks running at once, across all its
+            runs (default ``None``: no limit); each instance of a mapped task counts.
         defaults: Defaults for every task.
         description: Shown in the UI.
         tags: Shown in the UI and used for filtering.
@@ -93,7 +103,8 @@ class Dag:
     Raises:
         IdError: If the DAG ID is invalid.
         TypeError: For a wrong argument type, e.g. a string trigger.
-        ValueError: For a bad date or a non-positive ``max_active_runs``.
+        ValueError: For a bad date or a non-positive ``max_active_runs`` or
+            ``max_active_tasks``.
     """
 
     def __init__(
@@ -103,6 +114,7 @@ class Dag:
         trigger: Trigger | None = None,
         initial_since: datetime | date | str | None = None,
         max_active_runs: int | None = 1,
+        max_active_tasks: int | None = None,
         defaults: TaskDefaults | None = None,
         description: str | None = None,
         tags: Sequence[str] = (),
@@ -122,6 +134,9 @@ class Dag:
         if max_active_runs is not None and max_active_runs <= 0:
             raise ValueError(f"max_active_runs must be positive or None, got {max_active_runs}")
         self.max_active_runs = max_active_runs
+        if max_active_tasks is not None and max_active_tasks <= 0:
+            raise ValueError(f"max_active_tasks must be positive or None, got {max_active_tasks}")
+        self.max_active_tasks = max_active_tasks
         self.defaults = defaults or TaskDefaults()
         self.description = description
         self.tags = tuple(tags)
@@ -178,6 +193,7 @@ class Dag:
             trigger=NoTrigger() if self.trigger is None else self.trigger.to_model(),
             initial_since=self.initial_since,
             max_active_runs=self.max_active_runs,
+            max_active_tasks=self.max_active_tasks,
             description=self.description,
             tags=self.tags,
             groups=[Group(g.id, g.parent) for g in builder.groups.values()],

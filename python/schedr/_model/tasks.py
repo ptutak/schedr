@@ -36,6 +36,9 @@ class TaskSettings:
             bare one).
         fresh_process: A Python task is always a new process, never forked.
         run_if: Its trigger rule, ``none_failed`` or ``all_succeeded``.
+        max_active: At most this many of its instances running at once, across all runs;
+            ``None`` for no limit.
+        max_active_per_run: The same within one run.
     """
 
     retries: int = 0
@@ -46,6 +49,8 @@ class TaskSettings:
     preload: bool = True
     fresh_process: bool = False
     run_if: str = "none_failed"
+    max_active: int | None = None
+    max_active_per_run: int | None = None
 
     def __post_init__(self) -> None:
         """Checks that the numbers are in range.
@@ -60,6 +65,12 @@ class TaskSettings:
             raise ValueError(f"timeout must be positive, got {self.timeout_ms} ms")
         if not self.queue:
             raise ValueError("queue must not be empty")
+        for name, limit in (
+            ("max_active", self.max_active),
+            ("max_active_per_run", self.max_active_per_run),
+        ):
+            if limit is not None and limit < 1:
+                raise ValueError(f"{name} must be at least 1 or None, got {limit}")
         if self.run_if not in {"none_failed", "all_succeeded"}:
             raise ValueError(f"run_if must be none_failed or all_succeeded, got {self.run_if!r}")
 
@@ -81,6 +92,10 @@ class TaskSettings:
         }
         if self.run_if != "none_failed":
             result["run_if"] = self.run_if
+        if self.max_active is not None:
+            result["max_active"] = self.max_active
+        if self.max_active_per_run is not None:
+            result["max_active_per_run"] = self.max_active_per_run
         return result
 
 

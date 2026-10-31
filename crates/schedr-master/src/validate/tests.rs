@@ -92,6 +92,27 @@ fn run_limits_and_the_window_are_checked() {
         ["max_active_runs must be at least 1"]
     );
     assert_eq!(
+        problems(&json!({"max_active_tasks": 0})),
+        ["max_active_tasks must be at least 1"]
+    );
+    let mut limited = task("extract", &json!({}));
+    limited["settings"]["max_active"] = json!(0);
+    limited["settings"]["max_active_per_run"] = json!(0);
+    assert_eq!(
+        problems(
+            &json!({"tasks": [limited, task("load", &json!({"rows": output_of("extract")}))]})
+        ),
+        [
+            "task `extract`: max_active must be at least 1",
+            "task `extract`: max_active_per_run must be at least 1"
+        ]
+    );
+    // Set, they read and pass.
+    assert_eq!(
+        problems(&json!({"max_active_tasks": 3})),
+        Vec::<String>::new()
+    );
+    assert_eq!(
         problems(&json!({"trigger": daily("2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z")})),
         ["start (2026-02-01T00:00:00Z) is after end (2026-01-01T00:00:00Z)"]
     );

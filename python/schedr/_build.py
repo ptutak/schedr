@@ -7,6 +7,7 @@ every upstream output they reference.
 
 import dataclasses
 import sys
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -70,7 +71,7 @@ from schedr._serialization.annotations import (
 from schedr._serialization.models import is_model
 from schedr._templates import is_tstring
 from schedr._templates import to_template as tstring_to_template
-from schedr.outcomes import DEFAULT, OutcomeSpec, RunIf
+from schedr.outcomes import DEFAULT, DagHint, OutcomeSpec, RunIf
 
 type Upstream = tuple[str, tuple[str, ...]]
 """An upstream task a value references, with the outcomes its edge is taken on (``()``: any)."""
@@ -109,6 +110,8 @@ class TaskOptions:
         preload: A Python task forks from the preloaded fork server.
         fresh_process: A Python task is always a new process.
         run_if: Its trigger rule.
+        max_active: At most this many instances running at once, across all runs.
+        max_active_per_run: The same within one run.
     """
 
     retries: int | None = None
@@ -119,6 +122,8 @@ class TaskOptions:
     preload: bool | None = None
     fresh_process: bool | None = None
     run_if: RunIf | None = None
+    max_active: int | None = None
+    max_active_per_run: int | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -140,6 +145,12 @@ class TaskOptions:
             preload=base.preload if self.preload is None else self.preload,
             fresh_process=base.fresh_process if self.fresh_process is None else self.fresh_process,
             run_if=base.run_if if self.run_if is None else self.run_if,
+            max_active=base.max_active if self.max_active is None else self.max_active,
+            max_active_per_run=(
+                base.max_active_per_run
+                if self.max_active_per_run is None
+                else self.max_active_per_run
+            ),
         )
 
     def settings(self) -> TaskSettings:
@@ -169,6 +180,29 @@ class TaskOptions:
                 defaults.fresh_process if self.fresh_process is None else self.fresh_process
             ),
             run_if=defaults.run_if if self.run_if is None else self.run_if.value,
+            max_active=self.max_active,
+            max_active_per_run=self.max_active_per_run,
+        )
+
+
+def hint_unmapped_per_run(options: TaskOptions, task_id: str, stacklevel: int) -> None:
+    """Warns that ``max_active_per_run`` set on an unmapped task limits nothing (decision 90A).
+
+    Only for a value the task sets itself: one from ``TaskDefaults`` is meant for the DAG's
+    mapped tasks.
+
+    Args:
+        options: The task's own options.
+        task_id: The task, for the message.
+        stacklevel: How far up the DAG file's line is, from this function's caller.
+    """
+    if options.max_active_per_run is not None:
+        warnings.warn(
+            DagHint(
+                f"task `{task_id}`: `max_active_per_run` limits nothing on a task that isn't "
+                "mapped (it has one instance a run); `max_active` limits it across runs"
+            ),
+            stacklevel=stacklevel + 1,
         )
 
 

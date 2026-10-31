@@ -123,6 +123,8 @@ class Dag:
         trigger: What starts its runs (besides people and other DAGs).
         initial_since: ``since`` of the run on the DAG's first fire time.
         max_active_runs: At most this many runs at a time; ``None`` for no limit.
+        max_active_tasks: At most this many of its tasks running at once, across all its
+            runs; ``None`` for no limit.
         description: Shown in the UI.
         tags: Shown in the UI and used for filtering.
         produced_by: The schedr version producing this JSON (the installed one by default).
@@ -136,6 +138,7 @@ class Dag:
     trigger: Trigger = field(default_factory=NoTrigger)
     initial_since: datetime | None = None
     max_active_runs: int | None = 1
+    max_active_tasks: int | None = None
     description: str | None = None
     tags: Sequence[str] = ()
     produced_by: SchedrVersion = field(default_factory=SchedrVersion.current)
@@ -161,6 +164,8 @@ class Dag:
                     raise ValueError(f"edge {edge.from_} -> {edge.to}: no task `{end}`")
         if self.max_active_runs is not None and self.max_active_runs <= 0:
             raise ValueError(f"max_active_runs must be positive, got {self.max_active_runs}")
+        if self.max_active_tasks is not None and self.max_active_tasks <= 0:
+            raise ValueError(f"max_active_tasks must be positive, got {self.max_active_tasks}")
 
     def to_json(self) -> dict[str, Any]:
         """The DAG as DAG JSON.
@@ -187,6 +192,8 @@ class Dag:
             "tasks": [t.to_json() for t in self.tasks],
             "edges": [e.to_json() for e in self.edges],
         }
+        if self.max_active_tasks is not None:
+            result["max_active_tasks"] = self.max_active_tasks
         if self.groups:
             result["groups"] = [g.to_json() for g in self.groups]
         return result

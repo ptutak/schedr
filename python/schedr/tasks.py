@@ -595,6 +595,8 @@ class TaskFunction[**P, R]:
             mapped = (
                 None if expand is None else self._mapped(builder, task_id, hints, expand, upstream)
             )
+            if expand is None:
+                _build.hint_unmapped_per_run(self._options, task_id, stacklevel=3)
             builder.add_task(
                 task_id,
                 PythonKind(arguments, branch=self._branch),
@@ -733,6 +735,8 @@ class TaskFunction[**P, R]:
         preload: bool | None = None,
         fresh_process: bool | None = None,
         run_if: _outcomes.RunIf | None = None,
+        max_active: int | None = None,
+        max_active_per_run: int | None = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -746,12 +750,23 @@ class TaskFunction[**P, R]:
             preload: Overrides whether it forks from the preloaded fork server.
             fresh_process: Overrides whether it is always a new process.
             run_if: Overrides its trigger rule.
+            max_active: Overrides its limit across runs.
+            max_active_per_run: Overrides its limit within a run.
 
         Returns:
             A new task function; this one is unchanged.
         """
         changes = _build.TaskOptions(
-            retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
+            retries,
+            retry_delay,
+            timeout,
+            queue,
+            max_output_size,
+            preload,
+            fresh_process,
+            run_if,
+            max_active=max_active,
+            max_active_per_run=max_active_per_run,
         )
         return TaskFunction(
             self._fn, task_id or self._task_id, changes.over(self._options), self._branch
@@ -925,6 +940,8 @@ def task(
     preload: bool | None = None,
     fresh_process: bool | None = None,
     run_if: _outcomes.RunIf | None = None,
+    max_active: int | None = None,
+    max_active_per_run: int | None = None,
 ) -> TaskDecorator: ...
 
 
@@ -941,6 +958,8 @@ def task[**P, R](
     preload: bool | None = None,
     fresh_process: bool | None = None,
     run_if: _outcomes.RunIf | None = None,
+    max_active: int | None = None,
+    max_active_per_run: int | None = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -963,6 +982,11 @@ def task[**P, R](
             fork.
         run_if: When it runs, from its upstream edges: ``RunIf.NONE_FAILED`` (the default)
             or ``RunIf.ALL_SUCCEEDED``.
+        max_active: At most this many of its instances running at once, across all runs
+            (``None``: no limit); e.g. 1 for a task holding an exclusive external lock.
+        max_active_per_run: At most this many of its instances running at once within one
+            run (``None``: no limit), for a mapped task: ``.expand()`` over 1,000 files, 10 at
+            a time.
 
     Returns:
         The task function, or a decorator making one.
@@ -971,7 +995,16 @@ def task[**P, R](
         TypeError: If the function can't be a task.
     """
     options = _build.TaskOptions(
-        retries, retry_delay, timeout, queue, max_output_size, preload, fresh_process, run_if
+        retries,
+        retry_delay,
+        timeout,
+        queue,
+        max_output_size,
+        preload,
+        fresh_process,
+        run_if,
+        max_active=max_active,
+        max_active_per_run=max_active_per_run,
     )
 
     decorator = TaskDecorator(task_id, options)

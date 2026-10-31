@@ -50,6 +50,7 @@ fn dag() -> Dag {
         },
         initial_since: None,
         max_active_runs: Some(1),
+        max_active_tasks: None,
         tasks: vec![empty_task("a"), empty_task("b"), empty_task("c")],
         edges: vec![
             edge("a", "c", EdgeKind::Data),

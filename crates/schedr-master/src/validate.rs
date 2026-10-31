@@ -48,6 +48,19 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     if dag.max_active_runs == Some(0) {
         problems.push("max_active_runs must be at least 1".to_owned());
     }
+    if dag.max_active_tasks == Some(0) {
+        problems.push("max_active_tasks must be at least 1".to_owned());
+    }
+    for task in &dag.tasks {
+        for (name, limit) in [
+            ("max_active", task.settings.max_active),
+            ("max_active_per_run", task.settings.max_active_per_run),
+        ] {
+            if limit == Some(0) {
+                problems.push(format!("task `{}`: {name} must be at least 1", task.id));
+            }
+        }
+    }
     if let (Some(start), Some(end)) = (dag.trigger.start(), dag.trigger.end())
         && start > end
     {
