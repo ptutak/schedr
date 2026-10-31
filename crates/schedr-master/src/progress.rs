@@ -426,7 +426,11 @@ impl<'a> RunProgress<'a> {
                 TaskInstanceState::Skipped
             };
         }
-        if state == TaskInstanceState::Success {
+        // A mapped task's own outcome only says its instances ended: its `.on(...)` is
+        // decided per instance ([`Self::edge_states`]); with none, the edge is taken, as the
+        // task with an empty list succeeds.
+        let mapped = self.dag.task(&edge.from).is_some_and(mapping::is_mapped);
+        if state == TaskInstanceState::Success && !mapped {
             let outcome = self
                 .outcomes
                 .get(&edge.from)
@@ -436,6 +440,33 @@ impl<'a> RunProgress<'a> {
             }
         }
         state
+    }
+
+    /// The states an edge counts as in the downstream task's rule: one, or for an edge
+    /// narrowed with `.on(...)` from a mapped task that succeeded, one per instance, taken
+    /// when it ended with one of those outcomes, so `RunIf::AllSucceeded` needs every
+    /// instance to and `RunIf::NoneFailed` any (decision 120).
+    fn edge_states(&self, edge: &Edge) -> Vec<TaskInstanceState> {
+        use TaskInstanceState as S;
+        let state = self.edge_state(edge);
+        if state != S::Success
+            || edge.on.is_empty()
+            || edge.kind == schedr_model::EdgeKind::Selection
+        {
+            return vec![state];
+        }
+        match self.instances.get(&edge.from) {
+            Some(instances) if !instances.states.is_empty() => (0..instances.states.len())
+                .map(|place| {
+                    if self.instance_taken(&edge.from, place, &edge.on) {
+                        S::Success
+                    } else {
+                        S::Skipped
+                    }
+                })
+                .collect(),
+            _ => vec![state],
+        }
     }
 
     /// Every task's state.
@@ -477,7 +508,7 @@ impl<'a> RunProgress<'a> {
                 let edges: Vec<TaskInstanceState> = self
                     .dag
                     .edges_into(&task.id)
-                    .map(|edge| self.edge_state(edge))
+                    .flat_map(|edge| self.edge_states(edge))
                     .collect();
                 let next = match readiness(&edges, task.settings.run_if) {
                     Readiness::Wait => continue,
@@ -559,7 +590,7 @@ impl<'a> RunProgress<'a> {
                 let edges: Vec<TaskInstanceState> = self
                     .dag
                     .edges_into(&task.id)
-                    .map(|edge| self.whole_edge_state(edge))
+                    .flat_map(|edge| self.whole_edge_state(edge))
                     .collect();
                 match readiness(&edges, task.settings.run_if) {
                     Readiness::Wait => None,
@@ -579,15 +610,17 @@ impl<'a> RunProgress<'a> {
 
     /// An edge into a mapped task that hasn't expanded: a lane counts as ready once its
     /// upstream has expanded (its count is known), any other edge as usual.
-    fn whole_edge_state(&self, edge: &Edge) -> TaskInstanceState {
+    fn whole_edge_state(&self, edge: &Edge) -> Vec<TaskInstanceState> {
         use TaskInstanceState as S;
         if !mapping::is_lane(self.dag, edge) {
             return self.whole_edge(edge);
         }
-        match self.states.get(&edge.from).copied().unwrap_or(S::Scheduled) {
-            S::Running if self.instances.contains_key(&edge.from) => S::Success,
-            state => state,
-        }
+        vec![
+            match self.states.get(&edge.from).copied().unwrap_or(S::Scheduled) {
+                S::Running if self.instances.contains_key(&edge.from) => S::Success,
+                state => state,
+            },
+        ]
     }
 
     /// Moves an expanded task's instances on; returns its new state as a whole, if any.
@@ -611,7 +644,7 @@ impl<'a> RunProgress<'a> {
             let dag = self.dag;
             for edge in dag.edges_into(&task.id) {
                 if !mapping::is_lane(dag, edge) {
-                    edges.push(self.whole_edge(edge));
+                    edges.extend(self.whole_edge(edge));
                     continue;
                 }
                 let state = dims
@@ -671,15 +704,11 @@ impl<'a> RunProgress<'a> {
 
     /// An edge that isn't a lane: as usual, except that one whose outcomes are taken per
     /// element counts as its upstream task's state ([`mapping::narrows_per_element`]).
-    fn whole_edge(&self, edge: &Edge) -> TaskInstanceState {
+    fn whole_edge(&self, edge: &Edge) -> Vec<TaskInstanceState> {
         if mapping::narrows_per_element(self.dag, edge) {
-            return self
-                .states
-                .get(&edge.from)
-                .copied()
-                .unwrap_or(TaskInstanceState::Scheduled);
+            return vec![self.edge_state(edge)];
         }
-        self.edge_state(edge)
+        self.edge_states(edge)
     }
 
     /// Whether instance `place` of the mapped task `upstream` succeeded with one of `on`.

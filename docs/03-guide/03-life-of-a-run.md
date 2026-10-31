@@ -187,7 +187,9 @@ as a whole: an order edge, `.partial(all=…)`, or `results[0]`. If that upstrea
 failed, nothing of the downstream task runs. A whole mapped task's own outcome only says
 that its instances ended, so `.on(…)` over its output is still decided per element: once
 the task expands, an instance whose upstream instance ended with another outcome is
-skipped, as on a lane.
+skipped, as on a lane. An order edge narrowed with `.on(…)` from a mapped task counts as
+one edge per instance in the downstream task's `run_if` (any instance for `none_failed`,
+every one for `all_succeeded`).
 
 One failed instance, or a lane whose upstream instance failed, fails the mapped task at
 once. The task is `failed` when one of its own instances failed, and `upstream_failed` when

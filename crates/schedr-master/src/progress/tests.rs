@@ -668,3 +668,41 @@ fn an_element_narrowed_from_a_list_also_used_whole_is_skipped_on_another_outcome
         [S::Queued, S::Skipped, S::Queued]
     );
 }
+
+#[rstest]
+#[case::none_failed_all("none_failed", &["Rows", "Rows", "Rows"], S::Queued)]
+#[case::none_failed_some("none_failed", &["Rows", "Missing", "Rows"], S::Queued)]
+#[case::none_failed_none("none_failed", &["Missing", "Missing", "Missing"], S::Skipped)]
+#[case::all_succeeded_all("all_succeeded", &["Rows", "Rows", "Rows"], S::Queued)]
+#[case::all_succeeded_some("all_succeeded", &["Rows", "Missing", "Rows"], S::Skipped)]
+#[case::all_succeeded_none("all_succeeded", &["Missing", "Missing", "Missing"], S::Skipped)]
+fn an_order_edge_narrowed_from_a_mapped_task_is_decided_per_instance_by_the_rule(
+    #[case] run_if: &str,
+    #[case] outcomes: &[&str],
+    #[case] expected: TaskInstanceState,
+) {
+    // B132 (decision 120): `sizes.on(Rows) >> report()` compared `Rows` with the whole mapped
+    // task's own outcome, and `report` was always skipped. Each instance is an edge now.
+    let mut report = mapped_task("report", None, run_if);
+    report["arguments"] = json!({});
+    let dag: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "m", "location": {"root": "etl", "path": "m.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": [
+            mapped_task("size", Some(&json!({"literal": [1, 2, 3]})), "none_failed"),
+            report
+        ],
+        "edges": [{"from": "size", "to": "report", "kind": "order", "on": ["Rows"]}]
+    }))
+    .unwrap();
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let sizes = BTreeMap::from([("size", vec![3])]);
+    settle_expanding(&mut run, &sizes);
+    for (i, outcome) in outcomes.iter().enumerate() {
+        run.set_instance(&id("size"), i, S::Success);
+        run.set_instance_outcome(&id("size"), i, outcome);
+    }
+    settle_expanding(&mut run, &sizes);
+    assert_eq!(run.states()[&id("size")], S::Success);
+    assert_eq!(run.states()[&id("report")], expected);
+}

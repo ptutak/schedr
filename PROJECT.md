@@ -1360,6 +1360,40 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   - **History and filters:** the runs list filters by result and date; a **per-task history
     page** shows one task across runs (state, outcome, cleanup, duration) with **filters by
     outcome** (e.g. runs where `fetch_primary` returned `Unavailable`).
+- **The Deployments page** (the user's request, 2026-10-31; built in M4.4b): `/deployments`
+  lists the deployments the UI is connected to (in standalone, `default` alone);
+  `/deployments/<name>` shows that deployment's configuration and a graph of its nodes. Each
+  master (leader and standbys) and each worker is a rectangle in a distributed deployment;
+  in standalone one rectangle, the process, holds a node for its master and one per worker.
+  The database and the webserver aren't drawn. Clicking a node shows its own configuration.
+  - **Its name** (decision 121, the user's: A): Deployments, the word the UI and `[ui]
+    deployments` already use. Not chosen: B Clusters (two words for one thing, or a rename
+    everywhere).
+  - **A deployment's configuration** (decision 122, the user's: A): every node's own,
+    effective configuration (secrets are never in it: they come only from environment
+    variables). A master writes its own to the database, a worker sends its own in
+    `Register` (protocol 0.1, edited in place before 1.0.0), and the webserver serves its
+    own and those through the REST API. Not chosen: B the webserver's own configuration
+    and what is known already (queues, slots, versions, the lease holder): the masters' and
+    workers' settings would stay unseen.
+    - **Secrets masked at the source** (the user's requirement, 2026-10-31): a node masks
+      its configuration before it leaves the process (written to the database, sent in
+      `Register`, served by the webserver), so no secret is stored or sent in clear. A URL
+      keeps its scheme, user, host, port and path, its password shown as `****`
+      (`postgres://schedr:****@db:5432/schedr`), and so do query parameters naming one
+      (`password`, `sslpassword`, `token`, `secret`, `key`, any case); a value under a key
+      naming one is `****` whole. Paths to secret files (`token_file`, `key`) are shown:
+      they are not the secret. Every configuration field is covered by a test that fills
+      each string with a secret-looking value and finds none of them in the output, so a
+      field added later can't leak by being forgotten.
+  - **Standby masters are recorded** (decision 123, the user's: A): a `masters` table, each
+    running master (leader or standby) heartbeating its row with its role and
+    configuration; one not heard from ages out, as a worker does. Not chosen: B the leader
+    only (the lease holder; standbys unseen).
+  - **When** (decision 124, the user's: A): M4.4b, after M4.4, before 1.0.0 (the schema and
+    protocol still edited in place). Not chosen: before M4.4; at the end of M4.
+  - Claude's: the page and the configuration endpoints are reads, under the same access as
+    the other reads; the graph's node states update live, as the Workers page does.
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):
@@ -4267,6 +4301,15 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     was skipped), as a lane does. The whole mapped task's own outcome only says its
     instances ended, so it never decides an `.on(...)`. Not chosen: B refusing `.on(...)` at
     load when the output is used again (a form the API accepts, and the guide promised).
+  - **`.on(...)` on an order edge from a mapped task** (decision 120, the user's,
+    2026-10-31; B132): `results.on(Rows) >> report()` counts as one edge per instance, each
+    taken when that instance ended with one of the outcomes, and `report`'s own `run_if`
+    decides over them with its other edges: `NONE_FAILED` (the default) runs it when any
+    instance ended `Rows`, `ALL_SUCCEEDED` only when every one did, as a mapped task applies
+    its rule to its instances (75b D). With no instances the edge is taken, as the mapped
+    task with an empty list succeeds. Before, `Rows` was compared with the whole task's own
+    outcome and `report` was always skipped. Not chosen: always every instance; always any;
+    refusing it at load as for arguments.
   - **How a mapped task is stored** (decision 74, the user's: A): every task keeps its
     `map_index = -1` row. For an unmapped task it is the one runnable instance; for a mapped
     task it is the task **as a whole** (what edges, trigger rules and the run's result look

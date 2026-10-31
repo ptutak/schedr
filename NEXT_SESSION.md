@@ -4,17 +4,20 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-10-31, afternoon)
+## State (2026-10-31, evening)
 
-- **M1–M3 done; M4 in progress.** M4.1–M4.3 done (M4.3d included). **Now: M4.3e, the bug
-  pause before M4.4.** No bug of severity high or critical is open. The user (2026-10-31)
-  chose to fix these mediums before M4.4 too: **B56** (a cancel or timeout raced against the
-  runner's handshake), **B52** (`LIMIT` on pending commands and unstarted attempts; expiry's
-  limit = the cap + the attempts whose `Started` waits in memory), **B111, B112, B117, B118**
-  (F9), **B80, B81** (mapping), **B60, B61** (a relative root, a symlinked folder). Then a
-  Codex review over them and over the F9 fixes B107–B110, B113–B116 (committed before review,
-  the user asked; its prompt: the session scratchpad's `codex-review-followup2.md`, rebased on
-  the new commit). Then F10–F14, then M4.4 (B119 inside it).
+- **M1–M3 done; M4 in progress.** M4.1–M4.3 done. **Now: M4.3e, the bug pause before
+  M4.4.** No bug of severity high or critical is open. The chosen mediums are fixed (B56,
+  B52, B111, B112, B117, B118, B80, B81, B60, B61; commit `d0b955f`, CI green), with Codex's
+  review of them (6 findings, all fixed in that commit) and B132 (decision 120, found while
+  fixing B80). **Next: F10–F14** (Codex's section scans; Codex weekly ~49%), **then M4.4
+  (B119 inside it), then M4.4b, the Deployments page** (decisions 121–124 with secrets masked
+  at the source, the user's requirement), then M4.5.
+- **Decisions 116–124 taken on 2026-10-31 evening** (PROJECT.md): 116 timeout from launch;
+  117 a file tested alone; 118 runner-built mapped elements (`.expand_kwargs` too); 119 `.on`
+  per element when the list is also used whole; 120 an `.on` order edge from a mapped task
+  decided per instance by `run_if`; 121–124 the Deployments page.
+- The session scratchpad of 2026-10-31 is gone; check logs now go to `target/*.log`.
 - **Decisions 103–115 taken on 2026-10-31** (PROJECT.md has each, with "Not chosen").
 - **2026-10-31, 12:37:** WSL died from a full disk; the user freed space and removed stopped
   containers (the test Postgres `schedr-pg-check` was recreated on 127.0.0.1:45243, with

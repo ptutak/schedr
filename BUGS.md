@@ -53,44 +53,28 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B132: an order edge narrowed with .on() from a mapped task is never taken | 6 | high | possible | correctness |
-| 2 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 3 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 4 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
-| 5 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 6 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 7 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 8 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 9 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 10 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 23 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
-
-## B132: an order edge narrowed with .on() from a mapped task is never taken
-
-- **Rating:** severity **high**, probability **possible**, correctness (score 6): `results.on(Rows) >> report()` over a mapped `results` always skips `report`, silently (the run succeeds).
-- **Found:** 2026-10-31, by Claude while fixing B80, confirmed by a side note and a run:
-  `fetch.expand(p=["a", "b"])` with both instances returning `Rows`, then
-  `results.on(Rows) >> report()`: `report` ends `skipped`, the run `success`. The DAG loads
-  (`_build.py`, `>>` takes `_schedr_on` from a `Mapped`); the master compares the order
-  edge's `Rows` with the whole mapped task's own outcome, `SUCCESS`, which only says its
-  instances ended (`progress.rs`, `edge_state`). The same for `.on(...)` on a group whose
-  leaf is mapped, probably.
-- **A fix:** to decide: A refuse `.on(...)` on a mapped task outside `.expand()` at load, as
-  arguments already are (`_refuse_whole_mapped`: "narrowing the list has no single
-  meaning"); B give it a meaning (taken when every instance, or any, ended with one of the
-  outcomes).
+| 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
+| 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 3 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
+| 4 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 5 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 6 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 7 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 8 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 9 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 22 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B119: a literal `.expand([...])` list travels in every instance's task JSON
 

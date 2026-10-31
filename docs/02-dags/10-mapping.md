@@ -64,6 +64,11 @@ without waiting for the slowest file.
   `results[0]`) also makes it wait for the whole task. `.on(...)` still goes per element
   then: `count.partial(all=results).expand(rows=results.on(Rows))` starts once every `fetch`
   has finished and skips the instances whose `fetch` ended with another outcome.
+- **`.on(...)` before `>>`** waits for the whole task and asks its instances:
+  `results.on(Rows) >> report()` counts one edge per instance, taken when that instance
+  ended `Rows`, and `report`'s `run_if` decides as over any edges. With the default
+  `RunIf.NONE_FAILED`, `report` runs when **any** instance ended `Rows`; with
+  `run_if=RunIf.ALL_SUCCEEDED`, only when **every** one did. An empty list takes the edge.
 
 ## Gathering
 

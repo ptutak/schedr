@@ -332,3 +332,48 @@ def test_an_element_of_a_list_also_used_whole_keeps_its_member(tmp_path: Path) -
     result = run_dag(tmp_path / "ambiguous.py", "ambiguous", for_=FOR)
     assert result.state == "success", result
     assert result.tasks["take"].output == ["A", "B", None]
+
+
+ORDERED = """
+from schedr import Dag, Data, RunIf, task
+
+
+class Rows(Data):
+    n: int
+
+
+class Missing(Data):
+    r: str
+
+
+@task
+def fetch(path: str) -> Rows | Missing:
+    return Missing(r=path) if path.startswith("missing") else Rows(n=1)
+
+
+@task
+def any_rows() -> str:
+    return "ran"
+
+
+@task(run_if=RunIf.ALL_SUCCEEDED)
+def all_rows() -> str:
+    return "ran"
+
+
+with Dag("ordered"):
+    results = fetch.expand(path=["a", "missing", "c"])
+    results.on(Rows) >> any_rows()
+    results.on(Rows) >> all_rows()
+"""
+
+
+def test_an_order_edge_narrowed_from_a_mapped_task_follows_the_rule(tmp_path: Path) -> None:
+    # B132 (decision 120): the edge's `Rows` was compared with the whole mapped task's own
+    # outcome, and both were always skipped. Per instance now: `NONE_FAILED` (the default)
+    # runs when any instance had `Rows`, `ALL_SUCCEEDED` only when every one had.
+    (tmp_path / "ordered.py").write_text(ORDERED)
+    result = run_dag(tmp_path / "ordered.py", "ordered", for_=FOR)
+    assert result.state == "success", result
+    assert result.tasks["any_rows"].state == "success"
+    assert result.tasks["all_rows"].state == "skipped"
