@@ -9,7 +9,7 @@ The native API and the compatibility layers build DAGs through this package. It 
 user API: names and signatures may change between versions.
 """
 
-from schedr._model.dag import Dag, DagLocation, Edge, EdgeKind, Group
+from schedr._model.dag import Dag, DagLocation, DagParams, Edge, EdgeKind, Group
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
 from schedr._model.tasks import (
     ArgvCommand,
@@ -54,6 +54,7 @@ from schedr._model.values import (
     MapValue,
     OutcomeRef,
     OutputRef,
+    ParamRef,
     Reference,
     RefValue,
     Template,
@@ -73,6 +74,7 @@ __all__ = [
     "DagCtxField",
     "DagCtxRef",
     "DagLocation",
+    "DagParams",
     "DataclassType",
     "DictType",
     "Edge",
@@ -95,6 +97,7 @@ __all__ = [
     "OnceTrigger",
     "OutcomeRef",
     "OutputRef",
+    "ParamRef",
     "PythonKind",
     "RefValue",
     "Reference",

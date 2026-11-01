@@ -7,17 +7,20 @@ can be passed to tasks and commands, but not used as a value in the DAG file. In
 running task (while the runner calls its function) the same expression gives the **value**
 (see PROJECT.md, Run parameters and the DAG context). Anywhere else it fails ("must be run
 inside a schedr task"); tests set values with ``schedr.testing.task_context(...)``.
-``dag_ctx.params`` comes with milestone M4.
+``dag_ctx.params.<field>`` is the same for the run's parameters (``Dag(params=...)``), and
+``dag_ctx.params(ReportParams)`` gives them typed by the class.
 """
 
 import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from schedr import _build
-from schedr._model import DagCtxField, DagCtxRef, Reference
+from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference
+from schedr._serialization.codec import CodecError, decode
 
 _VALUE_IN_DAG_BODY = (
     "a reference can't be used as a value in the DAG file (it is known only at run time); "
@@ -89,6 +92,8 @@ class RunValues:
         kind: The run's kind.
         planned_for: The moment the run is for.
         since: The start of the run's window.
+        params: The run's parameters, as stored (decision 138).
+        params_class: The class the DAG declared them with; ``None``: it takes none.
     """
 
     dag_id: str
@@ -96,6 +101,8 @@ class RunValues:
     kind: str
     planned_for: datetime
     since: datetime
+    params: Mapping[str, Any] = field(default_factory=dict)
+    params_class: type | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,13 +202,211 @@ class DagContext:
         return _current(DagCtxField.DAG_ID, lambda v: v.dag_id)
 
     @property
-    def params(self) -> None:
-        """The run's parameters (milestone M4).
+    def params(self) -> Params:
+        """The run's parameters: ``dag_ctx.params.region``, or ``dag_ctx.params(Cls)``.
+
+        A reference in the DAG body (its path checked against the declared class), the
+        values inside a running task.
 
         Raises:
-            NotImplementedError: Always, for now.
+            RuntimeError: Outside a DAG body and a running task.
+            TypeError: In a DAG body that declares no params.
         """
-        raise NotImplementedError("dag_ctx.params comes with run parameters (milestone M4)")
+        values = _RUNNING.get()
+        if values is not None:
+            return ParamsValues(values)
+        builder = _build.active()
+        if builder is None:
+            raise RuntimeError(_OUTSIDE)
+        _build.params_type(builder, (), f"DAG `{builder.dag_id}`")
+        return ParamsReference(builder, ())
+
+
+class Params:
+    """``dag_ctx.params``: a reference in the DAG body, the values in a running task.
+
+    Statically a field is untyped (``Any``), as an output's path is (PROJECT.md, Run
+    parameters); ``dag_ctx.params(ReportParams)`` is typed by the class passed.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        """A field of the parameters."""
+        raise NotImplementedError
+
+    def __getitem__(self, key: str | int) -> Any:
+        """A key or an index of the parameters."""
+        raise NotImplementedError
+
+    def __call__[P](self, cls: type[P]) -> P:
+        """The parameters as an instance of ``cls``, the class the DAG declared.
+
+        Args:
+            cls: The declared class.
+
+        Returns:
+            The instance (a reference to all of them in the DAG body).
+        """
+        raise NotImplementedError
+
+
+def _check_class(declared: type | None, cls: object) -> None:
+    if declared is None:
+        raise TypeError("the DAG declares no params (`Dag(params=...)`)")
+    if cls is not declared:
+        name = getattr(cls, "__name__", repr(cls))
+        raise TypeError(
+            f"`dag_ctx.params({name})`: the DAG's params are `{declared.__name__}`; pass that class"
+        )
+
+
+class ParamsReference(Params):
+    """The run's parameters, or a part of them, as a reference in the DAG body."""
+
+    def __init__(self, builder: _build.DagBuilder, path: tuple[str | int, ...]) -> None:
+        """A reference to the part at ``path``, checked against the declared class.
+
+        Args:
+            builder: The DAG being defined.
+            path: Field names and indexes.
+        """
+        self._builder = builder
+        self._path = path
+        if path:
+            _build.params_type(builder, path, f"DAG `{builder.dag_id}`")
+
+    def _schedr_reference(self) -> Reference:
+        return ParamRef(self._path)
+
+    def __getattr__(self, name: str) -> Any:
+        """A field, as a reference.
+
+        Raises:
+            AttributeError: For a dunder or private name (copy, pickle and type checks ask).
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return ParamsReference(self._builder, (*self._path, name))
+
+    def __getitem__(self, key: str | int) -> Any:
+        """A key or an index, as a reference.
+
+        Raises:
+            TypeError: For a key that is neither text nor a whole number.
+        """
+        if isinstance(key, bool) or not isinstance(key, str | int):
+            raise TypeError(f"`dag_ctx.params[{key!r}]`: a key is text or a whole number")
+        return ParamsReference(self._builder, (*self._path, key))
+
+    def __call__[P](self, cls: type[P]) -> P:
+        """All of the parameters, typed by the declared class.
+
+        Raises:
+            TypeError: For another class, or a part of the parameters.
+        """
+        if self._path:
+            raise TypeError(f"`{_build.reference_label(ParamRef(self._path))}` isn't callable")
+        _check_class(self._builder.params_class, cls)
+        return self  # type: ignore[return-value]  # a reference, read as the value
+
+    def __bool__(self) -> bool:
+        """Refuses to be used as a value.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __str__(self) -> str:
+        """Refuses to be formatted into a plain string.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __eq__(self, other: object) -> bool:
+        """Refuses to be compared (B108).
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __ne__(self, other: object) -> bool:
+        """Refuses to be compared, as ``==``.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    def __iter__(self) -> None:
+        """Refuses to be iterated: its length is known only at run time.
+
+        Raises:
+            TypeError: Always.
+        """
+        raise TypeError(_VALUE_IN_DAG_BODY)
+
+    __hash__ = object.__hash__
+
+
+class ParamsValues(Params):
+    """The run's parameters inside a running task, decoded into the declared class."""
+
+    def __init__(self, values: RunValues) -> None:
+        """The values of the running task's run.
+
+        Args:
+            values: The run's context.
+        """
+        self._values = values
+        self._decoded: object = None
+
+    def _instance(self) -> object:
+        if self._decoded is None:
+            self._decoded = self(_declared(self._values))
+        return self._decoded
+
+    def __getattr__(self, name: str) -> Any:
+        """A field's value.
+
+        Raises:
+            AttributeError: For a private name, or a field the class doesn't have.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._instance(), name)
+
+    def __getitem__(self, key: str | int) -> Any:
+        """A field's value by name.
+
+        Raises:
+            TypeError: For an index: the parameters are an object.
+        """
+        if not isinstance(key, str):
+            raise TypeError("dag_ctx.params is indexed by field name")
+        return getattr(self._instance(), key)
+
+    def __call__[P](self, cls: type[P]) -> P:
+        """The parameters as an instance of ``cls``, decoded strictly.
+
+        Raises:
+            TypeError: For another class than the declared one, or values that don't fit
+                it.
+        """
+        _check_class(self._values.params_class, cls)
+        try:
+            decoded: P = decode(self._values.params, cls, "dag_ctx.params")
+        except CodecError as e:
+            raise TypeError(f"the run's params don't fit `{cls.__name__}`: {e}") from None
+        return decoded
+
+
+def _declared(values: RunValues) -> type:
+    if values.params_class is None:
+        raise TypeError("the DAG declares no params (`Dag(params=...)`)")
+    return values.params_class
 
 
 dag_ctx = DagContext()

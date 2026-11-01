@@ -3,7 +3,7 @@
 Mirrors ``schedr-model`` (``dag.rs``).
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -13,6 +13,7 @@ from schedr._model.ids import IdError, validate_dag_id, validate_task_id
 from schedr._model.tasks import Task
 from schedr._model.timestamps import format_optional_timestamp
 from schedr._model.trigger import NoTrigger, Trigger
+from schedr._model.types import TypeDesc
 from schedr._model.version import SchedrVersion
 
 
@@ -112,6 +113,32 @@ class Group:
 
 
 @dataclass(frozen=True, slots=True)
+class DagParams:
+    """The run parameters a DAG takes (``Dag(params=...)``, decision 138).
+
+    Attributes:
+        type_desc: The declared class's type: a dataclass or a Pydantic model.
+        schema: A JSON Schema of it, as JSON values (a date as ``format: date``).
+        defaults: The fields' defaults, as JSON.
+    """
+
+    type_desc: TypeDesc
+    schema: Mapping[str, Any]
+    defaults: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        """The parameters as DAG JSON.
+
+        Returns:
+            ``{"type": ..., "schema": ..., "defaults": ...}`` (``defaults`` only if not empty).
+        """
+        result: dict[str, Any] = {"type": self.type_desc.to_json(), "schema": dict(self.schema)}
+        if self.defaults:
+            result["defaults"] = dict(self.defaults)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class Dag:
     """A DAG: its identity, trigger, tasks and dependencies.
 
@@ -129,6 +156,7 @@ class Dag:
         tags: Shown in the UI and used for filtering.
         produced_by: The schedr version producing this JSON (the installed one by default).
         groups: The task groups, outer before inner.
+        params: The run parameters it takes; ``None``: none.
     """
 
     id: str
@@ -143,6 +171,7 @@ class Dag:
     tags: Sequence[str] = ()
     produced_by: SchedrVersion = field(default_factory=SchedrVersion.current)
     groups: Sequence[Group] = ()
+    params: DagParams | None = None
 
     def __post_init__(self) -> None:
         """Validates the DAG ID, unique task IDs, edges between known tasks and the limits.
@@ -196,4 +225,6 @@ class Dag:
             result["max_active_tasks"] = self.max_active_tasks
         if self.groups:
             result["groups"] = [g.to_json() for g in self.groups]
+        if self.params is not None:
+            result["params"] = self.params.to_json()
         return result

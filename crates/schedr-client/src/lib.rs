@@ -935,7 +935,8 @@ impl<T: Transport> Client<T> {
         .await
     }
 
-    /// `POST /api/v1/dags/{dag}/runs`: the command.
+    /// `POST /api/v1/dags/{dag}/runs`: the command; `params`, values for the run's
+    /// parameters over the DAG's defaults.
     ///
     /// # Errors
     ///
@@ -944,8 +945,12 @@ impl<T: Transport> Client<T> {
         &self,
         dag: &str,
         planned_for: Option<Timestamp>,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Result<CommandView, ClientError> {
-        let body = to_body(&TriggerRequest { planned_for })?;
+        let body = to_body(&TriggerRequest {
+            planned_for,
+            params: params.cloned(),
+        })?;
         self.call(
             Method::Post,
             format!("/api/v1/dags/{}/runs", path(dag)),

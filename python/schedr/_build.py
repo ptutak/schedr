@@ -30,6 +30,7 @@ from schedr._model import (
     ModelType,
     OutcomeRef,
     OutputRef,
+    ParamRef,
     PythonKind,
     Reference,
     RefValue,
@@ -277,6 +278,10 @@ class DagBuilder:
         # Dependencies on groups, made once the DAG is complete (`make_group_dependencies`),
         # each with where it was written (`file:line`, for its errors).
         self.group_dependencies: list[tuple[object, object, str, str]] = []
+        # The run parameters it takes (`Dag(params=...)`): their class and type, for
+        # `dag_ctx.params` references.
+        self.params_class: type | None = None
+        self.params_type: TypeDesc | None = None
 
     def qualified(self, task_id: str) -> str:
         """A task's ID inside the open groups: their prefix, then ``task_id``.
@@ -1310,6 +1315,10 @@ def reference_label(reference: Reference) -> str:
     Returns:
         E.g. ``extract.rows[0]`` or ``dag_ctx.run.planned_for``.
     """
+    if isinstance(reference, ParamRef):
+        return "dag_ctx.params" + "".join(
+            f"[{p}]" if isinstance(p, int) else f".{p}" for p in reference.path
+        )
     if isinstance(reference, DagCtxRef):
         name = reference.field.value
         return "dag_ctx.dag_id" if name == "dag_id" else f"dag_ctx.run.{name.removeprefix('run_')}"
@@ -1341,6 +1350,8 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
     """
     if isinstance(reference, DagCtxRef):
         return _DAG_CTX_TYPES[reference.field]
+    if isinstance(reference, ParamRef):
+        return params_type(builder, reference.path, where)
     if reference.task not in builder.tasks:
         raise ValueError(f"task `{reference.task}` is not part of DAG `{builder.dag_id}`")
     if isinstance(reference, OutcomeRef):
@@ -1366,6 +1377,35 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
         raise TypeError(
             f"{where}: `{reference_label(reference)}` doesn't exist: the output of "
             f"`{reference.task}` is `{type_name(produced)}`"
+        )
+    return found
+
+
+def params_type(builder: DagBuilder, path: Sequence[str | int], where: str) -> TypeDesc:
+    """The type of the run's parameters at ``path`` (``dag_ctx.params.region``).
+
+    Args:
+        builder: The DAG being defined.
+        path: Field names and indexes into the parameters.
+        where: Where it is used, for messages.
+
+    Returns:
+        Its type.
+
+    Raises:
+        TypeError: If the DAG declares no params, or they have no such part.
+    """
+    label = reference_label(ParamRef(tuple(path)))
+    if builder.params_type is None:
+        raise TypeError(
+            f"{where}: `{label}`: DAG `{builder.dag_id}` declares no params; declare them with "
+            "`Dag(..., params=SomeDataclass)`"
+        )
+    found = follow_path(builder.params_type, tuple(path))
+    if found is None:
+        raise TypeError(
+            f"{where}: `{label}` doesn't exist: the DAG's params are "
+            f"`{type_name(builder.params_type)}`"
         )
     return found
 

@@ -465,11 +465,31 @@ struct RunPage {
     ended_at: String,
     summary: String,
     code_hashes: Vec<String>,
+    /// The run's parameters, each name with its value as given (masked, decision 134).
+    params: Vec<(String, String)>,
     graph: Graph,
     tasks: Vec<TaskRow>,
     commands: Vec<CommandRow>,
     /// The open panel's HTML (rendered by [`PanelFragment`]), empty when none is open.
     panel: String,
+}
+
+/// A run's parameters as shown: masked again (the webserver did, decision 134), a text as
+/// it is, any other value as JSON.
+fn shown_params(mut params: serde_json::Value) -> Vec<(String, String)> {
+    schedr_config::masked::mask_data(&mut params);
+    params
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, value)| {
+            let shown = match value {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            (name.clone(), shown)
+        })
+        .collect()
 }
 
 /// `GET /d/<deployment>/runs/<run>`: a run with its graph, tasks and commands; with `?task=`
@@ -558,6 +578,7 @@ pub async fn run<T: Transport>(
             summary: summary(&detail.run.state, &whole),
             run_href: run_href.clone(),
             code_hashes: detail.code_hashes,
+            params: shown_params(detail.params),
             commands: commands
                 .commands
                 .iter()

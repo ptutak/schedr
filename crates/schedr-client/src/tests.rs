@@ -92,7 +92,7 @@ async fn requests_go_to_the_api_paths_with_their_bodies() {
         .unwrap();
     api.set_paused("sync", true, true).await.unwrap();
     api.set_paused("sync", false, false).await.unwrap();
-    api.trigger("sync", None).await.unwrap();
+    api.trigger("sync", None, None).await.unwrap();
     api.cancel("r1").await.unwrap();
     assert_eq!(
         api.transport().seen(),

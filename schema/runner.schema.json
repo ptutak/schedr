@@ -286,6 +286,17 @@
             "null"
           ]
         },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Params"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run parameters it takes (`Dag(params=...)`); none: it takes none."
+        },
         "produced_by": {
           "$ref": "#/$defs/SchedrVersion",
           "description": "The schedr version whose runner produced this JSON."
@@ -593,6 +604,31 @@
       ],
       "type": "object"
     },
+    "Params": {
+      "additionalProperties": false,
+      "description": "The run parameters a DAG takes (`Dag(params=SomeDataclass)`, decision 138).",
+      "properties": {
+        "defaults": {
+          "additionalProperties": true,
+          "description": "The fields' defaults, as JSON: the values of a scheduled run, and of the fields a\ntrigger leaves out.",
+          "type": "object"
+        },
+        "schema": {
+          "additionalProperties": true,
+          "description": "A JSON Schema of the class, as JSON values (a date as `format: date`): what the master\nchecks a trigger's values against, and what the UI's form is built from.",
+          "type": "object"
+        },
+        "type": {
+          "$ref": "#/$defs/TypeDesc",
+          "description": "The declared class's type: a dataclass or a Pydantic model. Values are stored by it,\nas outputs are (tagged)."
+        }
+      },
+      "required": [
+        "type",
+        "schema"
+      ],
+      "type": "object"
+    },
     "PathElem": {
       "anyOf": [
         {
@@ -735,6 +771,26 @@
             "field"
           ],
           "type": "object"
+        },
+        {
+          "description": "The run's parameters, or a part of them (`dag_ctx.params.region`, decision 138).",
+          "properties": {
+            "kind": {
+              "const": "param",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path into the parameters; empty for all of them.",
+              "items": {
+                "$ref": "#/$defs/PathElem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -773,6 +829,12 @@
             "integer",
             "null"
           ]
+        },
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The run's parameters, as stored JSON (decision 138); `{}` when the DAG takes none.",
+          "type": "object"
         },
         "planned_for": {
           "description": "The moment the run is for.",
@@ -1485,6 +1547,26 @@
           "required": [
             "kind",
             "field"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The run's parameters, or a part of them (`dag_ctx.params.region`, decision 138).",
+          "properties": {
+            "kind": {
+              "const": "param",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path into the parameters; empty for all of them.",
+              "items": {
+                "$ref": "#/$defs/PathElem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind"
           ],
           "type": "object"
         }

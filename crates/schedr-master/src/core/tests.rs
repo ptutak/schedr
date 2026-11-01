@@ -103,6 +103,7 @@ async fn with_dag() -> MasterCore {
 
 async fn trigger(core: &mut MasterCore) {
     let command = schedr_model::commands::Command::TriggerRun {
+        params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
     };

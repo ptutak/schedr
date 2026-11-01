@@ -185,6 +185,9 @@ pub enum DagsCommand {
         /// A run parameter: `key=value` or `key:=json`.
         #[arg(short = 'p', long = "param", value_name = "FIELD")]
         params: Vec<String>,
+        /// All run parameters as one JSON object.
+        #[arg(long = "params", value_name = "JSON", conflicts_with = "params")]
+        params_json: Option<String>,
         /// A secret value for the run: `path#key=value`.
         #[arg(long = "secret", value_name = "SECRET")]
         secrets: Vec<String>,

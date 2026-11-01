@@ -52,6 +52,14 @@ pub enum SchedulerError {
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
+    /// The run's parameters are refused (decision 133): the reason is shown.
+    #[error("DAG `{dag_id}`: {reason}")]
+    Params {
+        /// The DAG.
+        dag_id: DagId,
+        /// Why.
+        reason: String,
+    },
     /// The fire times of the DAG's stored trigger can't be evaluated (it passed validation
     /// with another version of the master).
     #[error("DAG `{dag_id}`: {error}")]
@@ -209,7 +217,15 @@ impl Scheduler {
                     .into_iter()
                     .take(SCHEDULED_PER_ROUND)
                 {
-                    let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER);
+                    // The defaults, checked when the DAG was validated.
+                    let params = match run_params(&active, None) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            pass.skipped.push(error);
+                            break;
+                        }
+                    };
+                    let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER, &params);
                     if let Some(run_id) = self.db.insert_run(&new).await? {
                         running += 1;
                         new_runs += 1;
@@ -254,21 +270,24 @@ impl Scheduler {
         user: &str,
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
-        self.trigger_as(None, dag_id, requested, user, now).await
+        self.trigger_as(None, dag_id, requested, None, user, now)
+            .await
     }
 
     /// As [`Self::trigger`], the run's ID given (`trigger_run` passes its command's): a run
     /// with that ID already there (the command applied before its decision was stored) is
-    /// the one returned, not created again (B7).
+    /// the one returned, not created again (B7). `params`: the values given for the run's
+    /// parameters, over the DAG's defaults.
     ///
     /// # Errors
     ///
-    /// As [`Self::trigger`].
+    /// As [`Self::trigger`], and [`SchedulerError::Params`] for parameters refused.
     pub async fn trigger_as(
         &self,
         run_id: Option<&str>,
         dag_id: &DagId,
         requested: Option<Timestamp>,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
         user: &str,
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
@@ -298,7 +317,8 @@ impl Scheduler {
         let planned_for = manual_planned_for(requested, now);
         let nearest = self.db.nearest_earlier_run(dag_id, planned_for).await?;
         let times = plan.manual_times(requested, now, nearest)?;
-        let mut new = new_run(&active, RunKind::Manual, times, now, user);
+        let params = run_params(&active, params)?;
+        let mut new = new_run(&active, RunKind::Manual, times, now, user, &params);
         new.state = RunState::Queued;
         self.wakes.wake(dag_id, WakeReason::RunQueued);
         // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
@@ -337,12 +357,26 @@ fn created(active: &ActiveDag, run_id: String, kind: RunKind, times: RunTimes) -
     }
 }
 
+/// A run's parameters: `given`'s over the DAG's defaults, checked (decision 133).
+fn run_params(
+    active: &ActiveDag,
+    given: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<serde_json::Value, SchedulerError> {
+    crate::params::run_params(active.dag.params.as_ref(), given).map_err(|reason| {
+        SchedulerError::Params {
+            dag_id: active.dag.id.clone(),
+            reason,
+        }
+    })
+}
+
 fn new_run<'a>(
     active: &'a ActiveDag,
     kind: RunKind,
     times: RunTimes,
     now: Timestamp,
     by: &'a str,
+    params: &'a serde_json::Value,
 ) -> NewRun<'a> {
     NewRun {
         dag_id: &active.dag.id,
@@ -353,5 +387,6 @@ fn new_run<'a>(
         since: times.since,
         triggered_at: now,
         triggered_by: by,
+        params,
     }
 }

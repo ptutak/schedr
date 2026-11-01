@@ -299,6 +299,11 @@ pub struct RunDetail {
     /// The code hashes its attempts ran with, in the order first used. More than one: its
     /// tasks ran on different code (it changed during the run).
     pub code_hashes: Vec<String>,
+    /// Its parameters as JSON, masked like a task's output (decision 134); `{}` for a DAG
+    /// that takes none.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub params: serde_json::Value,
 }
 
 /// An attempt of a task.
@@ -437,7 +442,11 @@ impl From<&CommandRecord> for CommandView {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default(),
-            reason: command.reason.clone(),
+            // A reason may quote a value given (a run's parameter, decision 134).
+            reason: command
+                .reason
+                .as_deref()
+                .map(schedr_config::masked::mask_text),
             result: command.result.clone(),
             requested_by: command.requested_by.clone(),
             requested_at: command.requested_at,
@@ -453,6 +462,11 @@ pub struct TriggerRequest {
     /// The moment the run is for (`--for`); now if not given. Must not be in the future.
     #[serde(default)]
     pub planned_for: Option<Timestamp>,
+    /// Values for the run's parameters, as JSON (`{"region": "us"}`), over the DAG's
+    /// defaults; checked by the master against the DAG's schema (decision 133).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Pausing a DAG.

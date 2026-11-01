@@ -4811,7 +4811,79 @@ its summary.
 - Parameters are **not** environment variables (no clashes with other variables).
 - **What can't use parameters:** the master (it only validates them; scheduling never depends
   on them); edge conditions (no routing on a parameter: a task returns an outcome, or a
-  `@branch` decides); notification messages show the values but have no templating.
+  `@branch` decides); notification messages show the values but have no templating. Mapping
+  over a parameter (`.expand(x=dag_ctx.params.items)`) is refused at parse time: the number of
+  instances would depend on it.
+
+**How M4.5 builds it** (decisions 132-138, the user's, 2026-11-01: 1A 2A+E 3A 4A 5A 6A):
+
+- **132. Order:** M4.5a params (declaration, the master's check, stored with the run,
+  `runs trigger -p` / `--params`, `dags test -p`, references, `dag_ctx.params(Cls)`, the run's
+  summary); M4.5b the agent channel (`schedr dag-ctx`, `schedr.script`); M4.5c the UI's trigger
+  form. Not chosen: the channel first.
+- **133. The master checks values with the `jsonschema` crate** (default features off: it never
+  fetches a remote `$ref`; formats validated), **plus a check of every schema when the master
+  validates the DAG**: only the keywords and formats that crate checks (and annotations such as
+  `title`, `description`, `default`, `examples`, `discriminator`), only local `$ref`s; anything
+  else is a DAG error naming the keyword, so a schema never asks for a check the master
+  silently skips. Pydantic's own validators still run only when a task decodes the values. Not
+  chosen: a checker of our own (Pydantic constraints refused); `boon` (no release since
+  2025-01); a worker validating with the real class (user code before the run exists, a
+  trigger waiting for a worker).
+- **134. Shown masked:** a run's params are shown (API, UI, `runs show`) masked like a task's
+  output (decision 131: texts, and fields named by secret words); tasks get the real values.
+  Not chosen: shown as given.
+- **135. At most 64 KiB** of a run's params as JSON, defaults included, refused at trigger time
+  with the reason (and a DAG whose defaults are over it, at parse time): they travel in every
+  task's assignment. Not chosen: 1 MiB; no limit.
+- **136. Airflow `Param`** comes with the Airflow-compatibility work; M4.5 takes a dataclass or a
+  Pydantic model only.
+- **137. A queued run keeps its values**, validated against the version it was created on, and
+  is never checked again (a field dropped in a later version still reaches that run's tasks).
+  Not chosen: re-validated when the run starts.
+- **138. How values are kept** (Claude's, from 133): the DAG JSON's `params` holds the class's
+  type descriptor, a standard JSON Schema of it (a dataclass's written by schedr: dates as
+  `format: date` / `date-time`, a `timedelta` as ISO 8601 duration text (the master checks it
+  as it stores it), a tuple as
+  `prefixItems`; a model's by Pydantic) and the defaults, as JSON. A trigger's values are
+  JSON (`-p day=2026-10-01`); the master fills in the defaults, refuses unknown keys (a
+  Pydantic model's schema allows extra keys), validates, then stores them **as outputs are
+  stored** (tagged: `{"$date": ...}`), converted by the type descriptor, so the agent renders a
+  date with a format spec and the runner decodes it as it decodes an output. Scheduled runs
+  store the defaults. A DAG without `params` takes none (`-p` refused).
+
+**After the reviews** (decisions 139-142, 2026-11-01; 139-141 Claude's, accepted by the user):
+
+- **139. A duration may be given in weeks** (`P1W` = 7 days, a fixed length); years and months
+  are still refused. Not chosen: weeks refused.
+- **140. A whole number written with a fraction** (`-p count:=1.0`) fits an `int` field, stored
+  as `1`: JSON Schema's `integer` takes it, so refusing it after that check was inconsistent.
+  Not chosen: refused.
+- **141. The master checks `format: duration` itself, as ISO 8601** (fractions of a second
+  included: `PT1H0.5S`, as Pydantic writes a `timedelta`); the `jsonschema` crate's own is RFC
+  3339's, without fractions, and refused such a model's defaults. Not chosen: dropping
+  `format: duration` from models' schemas (the master would check no model duration).
+- **142. Masking covers values given at trigger time, not text written in DAG code** (the
+  user's, 2026-11-01, after Codex's third review): a value given when a run is triggered is
+  never shown in clear (refusals, run views, the run's DAG, errors, logs), and a run's stored
+  params and its defaults are shown masked; text written in the DAG's code (a default, a
+  `Literal`'s values, a field name, a schema) is code, shown as written where code is shown
+  (task output types, import and parse errors, `dags check`). The docs say not to put secrets
+  in DAG code; secrets have their own mechanism (M4). Not chosen: masking code-authored text
+  everywhere (open-ended, those paths predate M4.5a), now or as a later step.
+
+How decision 134 holds (after Grok's review and three of Codex's, 2026-11-01), fail-closed: a
+refusal's reason never quotes a value nor a value the schema holds; it is built by the master
+from what failed (the keyword, a missing or unknown field, the expected type, the format), with
+names masked as texts, and under a field named by a secret word (JSON pointer steps decoded)
+not even the keyword; a reason from the type (a duration in months) never quotes the value;
+text containing NUL is refused, by the webserver before the command is stored (its storage
+would replace it, decision 114); the run's DAG
+(`GET /runs/{run}/dag`) keeps only its params' defaults, masked (the schema and type can hold
+copies of values); a bad request body and a bad `-p` never quote the value and mask names; a
+dataclass default that doesn't fit is refused without its value or type, and a model's defaults
+are dumped without Pydantic's warnings (which quote the value). Not chosen: masking the
+`jsonschema` crate's messages (each fix left another way around).
 
 **Airflow** (see Airflow compatibility):
 

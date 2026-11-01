@@ -324,11 +324,11 @@ async fn a_manual_run_triggered_again_with_its_id_is_the_same_run() {
     let now = ts("2026-10-21T08:00:00Z");
     let id = "01a16884-4f28-7563-9d35-7d0555a017f1";
     let first = scheduler
-        .trigger_as(Some(id), &sync(), None, "anna", now)
+        .trigger_as(Some(id), &sync(), None, None, "anna", now)
         .await
         .unwrap();
     let again = scheduler
-        .trigger_as(Some(id), &sync(), None, "anna", now)
+        .trigger_as(Some(id), &sync(), None, None, "anna", now)
         .await
         .unwrap();
     assert_eq!((first.run_id.as_str(), again.run_id.as_str()), (id, id));
@@ -545,7 +545,15 @@ async fn a_queued_run_wakes_its_quiet_dag_whatever_stored_it() {
         planned_for: after(61),
         since: after(61),
     };
-    let mut run = new_run(&active, RunKind::Event, times, after(61), "an event");
+    let no_params = serde_json::json!({});
+    let mut run = new_run(
+        &active,
+        RunKind::Event,
+        times,
+        after(61),
+        "an event",
+        &no_params,
+    );
     run.state = RunState::Queued;
     let run_id = db.insert_run(&run).await.unwrap().unwrap();
     // The next round starts it: the queued run woke its DAG.

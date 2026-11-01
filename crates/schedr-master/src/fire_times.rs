@@ -213,9 +213,12 @@ impl CronTimes {
 
     /// The last match before `t`, as [`Self::quick_after`] does it.
     fn quick_before(&self, t: Timestamp) -> Option<Timestamp> {
+        // Cron's search drops the fraction of a second: past a whole second, a match at it is
+        // before `t`, so it is included.
+        let civil = self.civil(t);
         let found = self
             .cron
-            .find_previous_occurrence(&self.civil(t), false)
+            .find_previous_occurrence(&civil, civil.subsec_nanosecond() != 0)
             .ok()?;
         let at = self.unambiguous(found).filter(|at| *at < t)?;
         let (from, until) = (at.checked_sub(MARGIN).ok()?, t.checked_add(MARGIN).ok()?);

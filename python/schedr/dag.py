@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from types import TracebackType
 from typing import Self
 
-from schedr import _build
+from schedr import _build, _params
 from schedr._model import Dag as DagModel
 from schedr._model import (
     DagCtxField,
@@ -99,6 +99,9 @@ class Dag:
         defaults: Defaults for every task.
         description: Shown in the UI.
         tags: Shown in the UI and used for filtering.
+        params: The run parameters it takes: a dataclass or a Pydantic model class. With a
+            trigger, every field needs a default (scheduled runs use them). Read them with
+            ``dag_ctx.params.<field>`` in the DAG body (a reference) and in a task.
 
     Raises:
         IdError: If the DAG ID is invalid.
@@ -118,6 +121,7 @@ class Dag:
         defaults: TaskDefaults | None = None,
         description: str | None = None,
         tags: Sequence[str] = (),
+        params: type | None = None,
     ) -> None:
         """Records the DAG's settings; tasks are added inside the ``with`` block."""
         self.dag_id = validate_dag_id(dag_id)
@@ -140,6 +144,12 @@ class Dag:
         self.defaults = defaults or TaskDefaults()
         self.description = description
         self.tags = tuple(tags)
+        self.params = params
+        self._params = (
+            None
+            if params is None
+            else _params.declare(params, self.dag_id, scheduled=trigger is not None)
+        )
         self._filename = sys._getframe(1).f_code.co_filename
         self._location = registry.location_for(self._filename)
         self._builder: _build.DagBuilder | None = None
@@ -155,6 +165,9 @@ class Dag:
             RuntimeError: If another DAG is being defined.
         """
         self._builder = _build.DagBuilder(self.dag_id, self.defaults.options())
+        if self._params is not None:
+            self._builder.params_class = self.params
+            self._builder.params_type = self._params.type_desc
         _build.push(self._builder)
         return self
 
@@ -197,8 +210,9 @@ class Dag:
             description=self.description,
             tags=self.tags,
             groups=[Group(g.id, g.parent) for g in builder.groups.values()],
+            params=self._params,
         )
-        registry.register(self.model, builder.functions, self._filename)
+        registry.register(self.model, builder.functions, self._filename, self.params)
 
     def _check_since(self, builder: _build.DagBuilder) -> None:
         if self.initial_since is not None or isinstance(self.trigger, Cron | Every):

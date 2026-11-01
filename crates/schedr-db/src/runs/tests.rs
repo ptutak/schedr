@@ -56,6 +56,7 @@ fn run<'a>(
     planned_for: &str,
 ) -> NewRun<'a> {
     NewRun {
+        params: &crate::runs::NO_PARAMS,
         dag_id,
         dag_version_id: version,
         kind,

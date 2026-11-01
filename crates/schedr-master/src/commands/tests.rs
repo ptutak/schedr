@@ -166,6 +166,7 @@ async fn commands_about_unknown_dags_and_runs_are_rejected() {
         .await;
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: ghost,
             planned_for: None,
         })
@@ -187,6 +188,7 @@ async fn a_trigger_creates_a_manual_run_by_the_requesting_user() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: sync(),
             planned_for: Some(ts("2026-10-15T03:00:00Z")),
         })
@@ -215,6 +217,7 @@ async fn a_trigger_for_the_future_is_rejected() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: sync(),
             planned_for: Some(ts("2026-10-22T00:00:00Z")),
         })
@@ -235,6 +238,7 @@ async fn cancelling_a_running_run_stops_its_attempts_and_a_finished_one_is_rejec
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: sync(),
             planned_for: None,
         })
@@ -298,6 +302,7 @@ async fn pausing_with_cancel_cancels_the_runs_in_progress() {
     for _ in 0..2 {
         world
             .ask(&Command::TriggerRun {
+                params: None,
                 dag_id: sync(),
                 planned_for: None,
             })
@@ -366,6 +371,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
     let unknown_run = "0190a3e5-0000-7000-8000-000000000000".to_owned();
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: sync(),
             planned_for: None,
         })
@@ -466,6 +472,7 @@ async fn a_database_failure_leaves_a_task_command_pending() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            params: None,
             dag_id: sync(),
             planned_for: None,
         })
@@ -595,6 +602,7 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
     // applied; anything else wrong with it is still a rejection.
     let mut world = world().await;
     let trigger = Command::TriggerRun {
+        params: None,
         dag_id: sync(),
         planned_for: None,
     };
@@ -603,7 +611,7 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
     // The first try made the run, then its round failed.
     world
         .scheduler
-        .trigger_as(Some(&id), &sync(), None, "anna", ts(NOW))
+        .trigger_as(Some(&id), &sync(), None, None, "anna", ts(NOW))
         .await
         .unwrap();
     let missing = world

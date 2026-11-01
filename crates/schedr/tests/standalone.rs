@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use pretty_assertions::assert_eq;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_schedr");
@@ -1056,4 +1056,111 @@ fn no_ui_serves_only_the_api() {
     assert!(standalone.get("/api/v1/dags").is_some());
     assert_eq!(standalone.page("/"), None);
     assert_eq!(standalone.page("/runs"), None);
+}
+
+#[test]
+fn a_runs_params_reach_python_tasks_and_commands_and_are_shown_masked() {
+    let dag = r#"
+from dataclasses import dataclass
+from datetime import date
+from typing import Literal
+from schedr import CommandOperator, Dag, dag_ctx, task
+
+@dataclass
+class ReportParams:
+    name: str
+    region: Literal["eu", "us"] = "eu"
+    day: date | None = None
+    db_password: str = ""
+    start: date = date(2026, 1, 1)
+
+@task
+def extract(region: str, day: date | None) -> str:
+    return f"{region} {day.year if day else None}"
+
+@task
+def inside() -> str:
+    p = dag_ctx.params(ReportParams)
+    return f"{p.name} {dag_ctx.params.region} {len(p.db_password)}"
+
+with Dag("report", params=ReportParams):
+    extract(region=dag_ctx.params.region, day=dag_ctx.params.day)
+    inside()
+    CommandOperator("publish", ["echo", t"{dag_ctx.params.start:%Y/%m}", t"{dag_ctx.params.name}"])
+"#;
+    let standalone = Standalone::start(&[("report.py", dag)], None);
+    standalone.wait("DAG `report`", || standalone.dag_ids() == ["report"]);
+    let command = standalone.cli_json(&[
+        "runs",
+        "trigger",
+        "report",
+        "-p",
+        "name=q3",
+        "-p",
+        "region=us",
+        "-p",
+        "day=2026-10-01",
+        "-p",
+        "db_password=hunter2",
+        "-p",
+        "start=2026-10-01",
+    ]);
+    let run_id = command["result"]["run_id"].as_str().unwrap().to_owned();
+    let run = standalone.wait_for_state(&run_id, "success");
+    // Shown masked (decision 134): a field named by a secret word.
+    assert_eq!(
+        run["params"],
+        json!({"name": "q3", "region": "us", "day": "2026-10-01", "db_password": "****",
+               "start": "2026-10-01"})
+    );
+    let output = |task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap()["value"]
+            .clone()
+    };
+    // A typed argument (a date stays a date), the class read in the task, a t-string.
+    assert_eq!(output("extract"), "us 2026");
+    assert_eq!(output("inside"), "q3 us 7");
+    assert_eq!(output("publish")["stdout"], "2026/10 q3\n");
+    let (code, out, err) = standalone.cli(&["runs", "show", &run_id]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("params: day=2026-10-01 db_password=**** name=q3 region=us start=2026-10-01"),
+        "{out}"
+    );
+    // The defaults fill in what a trigger leaves out; `--params` takes one object.
+    let command =
+        standalone.cli_json(&["runs", "trigger", "report", "--params", r#"{"name": "x"}"#]);
+    let run_id = command["result"]["run_id"].as_str().unwrap().to_owned();
+    let run = standalone.wait_for_state(&run_id, "success");
+    assert_eq!(
+        run["params"],
+        json!({"name": "x", "region": "eu", "day": null, "db_password": "",
+               "start": "2026-01-01"})
+    );
+    // Refused before a run exists, with the master's reason.
+    for (given, reason) in [
+        (vec!["-p", "name=x", "-p", "region=asia"], "`region`: "),
+        (
+            vec!["-p", "name=x", "-p", "nope=1"],
+            "unknown parameter `nope`",
+        ),
+        (vec!["-p", "region=us"], "`name` is required"),
+        (vec!["-p", "name=x", "-p", "day=someday"], "`day`: "),
+        (
+            vec!["-p", "name=x", "-p", "db_password:=5"],
+            "`db_password`: doesn't fit its schema (the value isn't shown)",
+        ),
+    ] {
+        let mut args = vec!["runs", "trigger", "report"];
+        args.extend(given);
+        let (code, _, err) = standalone.cli(&args);
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(err.starts_with("error: rejected: DAG `report`: "), "{err}");
+        assert!(err.contains(reason), "{args:?}: {err}");
+    }
+    let (code, _, err) = standalone.cli(&["runs", "trigger", "report", "-p", "name"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("give `name=text` or `name:=json`"), "{err}");
 }

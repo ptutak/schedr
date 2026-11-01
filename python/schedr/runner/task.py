@@ -70,6 +70,8 @@ def resolve(
         TaskInputError: For a missing input or path, or a truncated stream.
     """
     outcomes = outcomes or {}
+    if reference["kind"] == "param":
+        return _follow("dag_ctx.params", run.get("params", {}), reference.get("path", []))
     if reference["kind"] == "dag_ctx":
         field = reference["field"]
         values = {
@@ -368,11 +370,12 @@ def mapped_arguments(
     return arguments
 
 
-def run_values(run: Mapping[str, Any]) -> RunValues:
+def run_values(run: Mapping[str, Any], params_class: type | None = None) -> RunValues:
     """The ``dag_ctx`` values for a request's run information.
 
     Args:
         run: The run information.
+        params_class: The class the DAG declares its parameters with.
 
     Returns:
         The values.
@@ -383,6 +386,8 @@ def run_values(run: Mapping[str, Any]) -> RunValues:
         kind=run["kind"],
         planned_for=datetime.fromisoformat(run["planned_for"]),
         since=datetime.fromisoformat(run["since"]),
+        params=run.get("params", {}),
+        params_class=params_class,
     )
 
 
@@ -406,6 +411,21 @@ def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset
 
     Returns:
         The function, and the IDs of the tasks right after it (a branch chooses among them).
+    """
+    function, downstream, _ = find_task_of_dag(request)
+    return function, downstream
+
+
+def find_task_of_dag(
+    request: Mapping[str, Any],
+) -> tuple[Callable[..., Any], frozenset[str], type | None]:
+    """As :func:`find_task`, with the class the DAG declares its parameters with.
+
+    Args:
+        request: The ``task`` message.
+
+    Returns:
+        The function, the IDs of the tasks right after it, and the params class.
 
     Raises:
         TaskSetupError: If the DAG or the task isn't in the file.
@@ -420,7 +440,7 @@ def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset
                     f"DAG `{request['dag_id']}` has no Python task `{task_id}` (any more?)"
                 )
             downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
-            return entry.functions[task_id], downstream
+            return entry.functions[task_id], downstream, entry.params_class
     raise TaskSetupError(
         f"`{dag_file['path']}` doesn't define DAG `{request['dag_id']}` (any more?)"
     )
@@ -496,7 +516,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     outcomes = request.get("outcomes", {})
     task_id = task["id"]
     try:
-        function, downstream = find_task(request)
+        function, downstream, params_class = find_task_of_dag(request)
         hints = type_hints(function, f"task `{task_id}`")
         arguments = {
             name: build(value, hints.get(name, Any), inputs, run, outcomes)
@@ -512,7 +532,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     imported()
     try:
         own = TaskValues(task_id, int(run.get("try_number", 1)), run.get("map_index"))
-        with running(run_values(run), own):
+        with running(run_values(run, params_class), own):
             result = function(**arguments)
     except (Exception, SystemExit) as e:
         return failure(e, None)

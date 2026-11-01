@@ -72,8 +72,13 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             problems.push(format!("task `{}` is defined more than once", task.id));
         }
     }
+    if let Some(params) = &dag.params {
+        let scheduled = !matches!(dag.trigger, schedr_model::Trigger::None);
+        problems.extend(crate::params::problems(params, scheduled));
+    }
     group_problems(dag, &mut problems);
     expand_problems(dag, &mut problems);
+    param_problems(dag, &mut problems);
     shell_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
@@ -184,6 +189,73 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// `dag_ctx.params` references (decision 138): the DAG declares params, each path exists in
+/// their type, and none is mapped over (the number of instances would depend on it).
+fn param_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        for reference in task.references() {
+            let Reference::Param { path } = reference else {
+                continue;
+            };
+            let label = param_label(path);
+            let Some(params) = &dag.params else {
+                problems.push(format!(
+                    "task `{}` uses `{label}`, but the DAG declares no params (`Dag(params=...)`)",
+                    task.id
+                ));
+                continue;
+            };
+            let mut ty = Some(&params.ty);
+            for step in path {
+                ty = ty.and_then(|t| match step {
+                    schedr_model::PathElem::Field(name) => t.field(name),
+                    schedr_model::PathElem::Index(i) => t.element(*i),
+                });
+            }
+            if ty.is_none() {
+                problems.push(format!(
+                    "task `{}` uses `{label}`, which the DAG's params don't have",
+                    task.id
+                ));
+            }
+        }
+        let mapped: Vec<&Value> = match &task.expand {
+            Some(Expand::Product(over)) => over.iter().map(|m| &m.value).collect(),
+            Some(Expand::Kwargs(over)) => vec![over],
+            None => Vec::new(),
+        };
+        if mapped
+            .iter()
+            .any(|v| matches!(v, Value::Ref(Reference::Param { .. })))
+        {
+            problems.push(format!(
+                "task `{}` is mapped over the run's params: the number of instances can't \
+                 depend on them",
+                task.id
+            ));
+        }
+    }
+}
+
+/// `dag_ctx.params` with a path, as written in Python.
+fn param_label(path: &[schedr_model::PathElem]) -> String {
+    let mut label = "dag_ctx.params".to_owned();
+    for step in path {
+        match step {
+            schedr_model::PathElem::Field(name) => {
+                label.push('.');
+                label.push_str(name);
+            }
+            schedr_model::PathElem::Index(i) => {
+                label.push('[');
+                label.push_str(&i.to_string());
+                label.push(']');
+            }
+        }
+    }
+    label
 }
 
 /// Groups (decision 64): unique, each parent a group of the DAG, no group inside itself, and

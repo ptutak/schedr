@@ -46,6 +46,7 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         map_index: -1,
         try_number: 2,
         run: Some(pb::RunInfo {
+            params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
             planned_for: Some(prost_types::Timestamp {

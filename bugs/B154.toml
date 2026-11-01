@@ -1,0 +1,17 @@
+title = "The scheduler's skipped DAGs are never logged"
+severity = "low"
+probability = "rare"
+kind = "reliability"
+summary = "a DAG whose fire times or default params fail in a scheduler pass creates no run, and nothing says why"
+found = 2026-11-01
+suspected = false
+details = '''
+- **Found:** 2026-11-01, by Grok writing the params docs; confirmed by Claude: `Pass.skipped`
+  (`crates/schedr-master/src/scheduler.rs`) gets `SchedulerError::FireTimes` and, since M4.5a,
+  `SchedulerError::Params` (a scheduled run's defaults refused), but nothing in the master reads
+  it.
+- **When:** rare: both are checked when the DAG is validated, so it takes a master whose checks
+  changed after the DAG was stored (an upgrade), or a bug in them.
+- **A fix:** log each skipped DAG once (warn) with the reason, and perhaps show it as the DAG's
+  problem, as a hold is shown.
+'''

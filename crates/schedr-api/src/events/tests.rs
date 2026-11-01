@@ -100,6 +100,7 @@ async fn a_change_arrives_as_its_event() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let run_id = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &DagId::new("sync").unwrap(),
             dag_version_id: &version,
             kind: RunKind::Manual,
@@ -169,6 +170,7 @@ async fn with_the_switch_off_pages_are_refreshed_and_turning_it_on_is_followed()
     tokio::time::sleep(std::time::Duration::from_millis(2_500)).await;
     let run_id = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &DagId::new("sync").unwrap(),
             dag_version_id: &version,
             kind: RunKind::Manual,

@@ -102,11 +102,11 @@ active worker). `message` is the same line the text output prints (`ok: ...` on 
 
 ## `schedr dags test`
 
-`schedr dags test <dag> [--for TIME] [--path PATH]` runs one real run in a temporary
-standalone: its own SQLite database, and every task in its own process. `--path` is a
-file or a directory. A file is tested alone: only it is parsed, though it can import the
-modules beside it. Without `--path`, the command uses the configured DAG roots, or the
-current directory.
+`schedr dags test <dag> [--for TIME] [--path PATH] [-p FIELD] [--params JSON]` runs one
+real run in a temporary standalone: its own SQLite database, and every task in its own
+process. `--path` is a file or a directory. A file is tested alone: only it is parsed,
+though it can import the modules beside it. Without `--path`, the command uses the
+configured DAG roots, or the current directory.
 
 The run is manual. `--for` is its `planned_for`; omitted, it is now. The window follows
 [Schedules](04-schedules.md#run-window). A `--for` in the future is rejected, and one
@@ -135,8 +135,13 @@ durations and tuples in `output` use the tags in
 [What a task may return](02-tasks.md#what-a-task-may-return).
 [Routing by outcome](08-outcomes.md) is what the `OUTCOME` column shows.
 
-`-p` / `--param`, `--secret` and `--task` are accepted and then report that they are not
-implemented yet (milestone M4). Run parameters, secrets and running one task are
+`-p` / `--param` and `--params` give the run's parameters, over the DAG's defaults, and are
+checked the same way as `schedr runs trigger`
+([Run parameters](12-params.md#giving-values-to-a-run)). `-p region=us` is text; `-p
+full:=true` and `-p 'limits:=[1,2]'` are JSON. The two forms can't be combined. The report
+does not print the parameters; `schedr runs show` does, for a run on a server. `--secret`
+and `--task` are accepted and then report that they are not implemented yet (milestone
+M4). Secrets and running one task are
 [Testing DAGs](../_generated/05-design/08-testing-dags.md).
 
 ## One task, and its context
@@ -157,14 +162,16 @@ no process.
 | `task_id` | `"test"` (`task_ctx.task_id`) |
 | `try_number` | `1` (`task_ctx.try_number`) |
 | `map_index` | `None`, an unmapped task (`task_ctx.map_index`) |
+| `params` | `None`. An instance of the DAG's params class (a dataclass or a Pydantic model). `dag_ctx.params(Cls)` then takes that class. A mapping is a `TypeError`. |
 
 Both times must be aware datetimes, and `since` must not be after `planned_for`.
-`params` and `secrets` raise `NotImplementedError` (milestone M4).
+`secrets` raises `NotImplementedError` (milestone M4). `params` does not ask the master:
+the block reads the instance you give.
 
 ## `run_dag`
 
-`run_dag(path, dag_id, *, for_=None)` runs `schedr dags test --json` and returns a
-`RunResult` whether the run succeeded or failed. `for_` is `--for` and must be aware.
+`run_dag(path, dag_id, *, for_=None, params=None)` runs `schedr dags test --json` and
+returns a `RunResult` whether the run succeeded or failed. `for_` is `--for` and must be aware.
 
 | `RunResult` | |
 |---|---|
@@ -195,6 +202,11 @@ that does not import. The binary is `$SCHEDR_BIN`, or else the `schedr` installe
 this Python, or else `schedr` on `PATH`. Unless
 `SCHEDR_CONFIG__INTERPRETERS__PYTHON` is already set, the tasks run with this Python.
 
-`params`, `secrets`, `step` and `replace` raise `NotImplementedError` (milestone M4).
-Those, and `schedr dags test --task`, are
-[Testing DAGs](../_generated/05-design/08-testing-dags.md).
+`params` is an instance of the DAG's params class, or a mapping of field names to JSON
+values (`{"region": "us"}`). It is sent as `--params`. An instance is encoded first, so a
+date goes as `"2026-10-01"` and the instance's own defaults are included. A mapping is
+sent as given, and the master fills the rest. The checks are the ones a trigger gets
+([Run parameters](12-params.md#giving-values-to-a-run)). A refusal raises `RunDagError`
+with the master's reason. `RunResult` does not carry the parameters. `secrets`, `step` and
+`replace` raise `NotImplementedError` (milestone M4). Those, and `schedr dags test
+--task`, are [Testing DAGs](../_generated/05-design/08-testing-dags.md).

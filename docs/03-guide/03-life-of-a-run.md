@@ -2,7 +2,7 @@
 
 This page follows one manual run of a two-task DAG `sync` (`extract` → `load`) from the CLI to
 its result. A scheduled run goes the same way, except that the scheduler creates it in step 3
-instead of a command.
+with the DAG's default parameters, instead of a command.
 
 ```mermaid
 sequenceDiagram
@@ -65,6 +65,14 @@ ID as its result. A command that can't apply (an unknown DAG, a time in the futu
 whose file fails to import) is marked `rejected` with the reason, and the CLI prints it and
 exits 1.
 
+A trigger may carry parameters ([Run parameters](../02-dags/12-params.md)). The webserver
+stores them on the command and does not check them. While the master applies the command it
+fills in the DAG's defaults, checks the values against the DAG's schema, and inserts the run
+only when they fit. A refusal marks the command `rejected` with the reason, and no run is
+stored. The values that were accepted stay with the run: every task is sent them, a queued
+run keeps the ones stored when it was created, and a later version of the DAG does not
+replace them. A scheduled run has no command. It is stored with the defaults.
+
 A DAG whose file fails to import, other than a timeout or a runner that died, is held. The
 scheduler creates no run of it, a fire time during the hold is missed as while it is paused,
 and a queued run is not started. A run that has already started is not cancelled. A timeout
@@ -83,7 +91,8 @@ Later in the same round the dispatcher:
    reported the root's current code come first; one that said it lacks the code is picked
    only when no other can take the task (it may have synced since, else it rejects again);
 3. stores the attempt in the database **before** sending anything, then builds `AssignTask`:
-   attempt ID, what to run, the expected code hash, the inputs, timeouts and memory budget.
+   attempt ID, what to run, the expected code hash, the inputs, the run's parameters, timeouts
+   and memory budget.
 
 When the round ends, the master sends the round's messages down the workers' streams.
 
@@ -143,8 +152,9 @@ again, and the master acknowledges the repeat without storing it twice.
 
 ## 7. The next task, and the end
 
-The next round assigns `load`. Its `AssignTask` carries `extract`'s output as input, and
-the outcomes of the upstream tasks `load` uses (`""` for a skipped one). A task whose
+The next round assigns `load`. Its `AssignTask` carries `extract`'s output as input, the
+run's parameters, and the outcomes of the upstream tasks `load` uses (`""` for a skipped
+one). A task whose
 edges and `run_if` are already decided is skipped or `upstream_failed` without being
 assigned: an edge not taken (`.on(...)` whose outcome didn't happen, a `@branch` that
 didn't choose that target, or a skipped upstream task) counts as skipped;

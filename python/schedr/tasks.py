@@ -27,6 +27,7 @@ from schedr._model import (
     LiteralValue,
     OutcomeRef,
     OutputRef,
+    ParamRef,
     PythonKind,
     Reference,
     RefValue,
@@ -647,6 +648,7 @@ class TaskFunction[**P, R]:
                 upstream,
                 elementwise=True,
             )
+            _refuse_param_mapping(converted, f"{where}, `.expand_kwargs()`")
             return ExpandKwargs(converted)
         assert isinstance(value, dict)
         over = {
@@ -660,6 +662,8 @@ class TaskFunction[**P, R]:
             )
             for name, values in value.items()
         }
+        for name, converted in over.items():
+            _refuse_param_mapping(converted, f"{where}, mapped argument `{name}`")
         return ExpandProduct(over)
 
     @staticmethod
@@ -868,6 +872,19 @@ class PartialTask[**P, R]:
             raise TypeError(f"{where}: {e}") from None
 
 
+def _refuse_param_mapping(converted: Value, where: str) -> None:
+    """Refuses mapping over the run's parameters: the number of instances would depend on them.
+
+    Raises:
+        TypeError: When the whole list is a ``dag_ctx.params`` reference.
+    """
+    if isinstance(converted, RefValue) and isinstance(converted.reference, ParamRef):
+        raise TypeError(
+            f"{where}: a task can't be mapped over the run's params (the number of instances "
+            "can't depend on them); map over a task's output instead"
+        )
+
+
 def _refuse_whole_mapped(
     builder: _build.DagBuilder, arguments: dict[str, Value], where: str
 ) -> None:
@@ -879,7 +896,7 @@ def _refuse_whole_mapped(
     """
     for name, value in arguments.items():
         for reference in value.references():
-            if isinstance(reference, DagCtxRef) or reference.task not in builder.mapped:
+            if isinstance(reference, DagCtxRef | ParamRef) or reference.task not in builder.mapped:
                 continue
             if isinstance(reference, OutcomeRef) or reference.on:
                 what = "`.outcome`" if isinstance(reference, OutcomeRef) else "`.on(...)`"

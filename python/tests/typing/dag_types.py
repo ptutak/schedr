@@ -219,3 +219,16 @@ with Dag("decorated"):
     marked: Done = side_with_options()
     wants_int(counted())
     wants_str(counted())  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+@dataclass
+class TypedParams:
+    region: str = "eu"
+
+
+with Dag("with_params", params=TypedParams):
+    # A field is untyped (as an output's path, so strict checkers flag it as Any); the call is
+    # typed by the class passed.
+    wants_str(dag_ctx.params.region)  # pyright: ignore[reportAny]
+    wants_str(dag_ctx.params(TypedParams).region)
+    wants_int(dag_ctx.params(TypedParams).region)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]

@@ -105,13 +105,12 @@ pub async fn run_local(
             dag,
             planned_for,
             params,
+            params_json,
             secrets,
             task,
             path,
         } => {
-            if !params.is_empty() {
-                return Err(not_yet("dags test -p", "M4"));
-            }
+            let params = crate::user::given_params(params, params_json.as_deref())?;
             if !secrets.is_empty() {
                 return Err(not_yet("dags test --secret", "M4"));
             }
@@ -124,7 +123,11 @@ pub async fn run_local(
                 .transpose()
                 .map_err(AppError::BadArgument)?
                 .map(|t| t.at);
-            test_dag(dag, at, path.as_deref(), config, env, client.json, out).await
+            let run = TestRun {
+                planned_for: at,
+                params,
+            };
+            test_dag(dag, &run, path.as_deref(), config, env, client.json, out).await
         }
         _ => Err(AppError::BadArgument("not a local command".to_owned())),
     }
@@ -605,9 +608,15 @@ fn write_text(
 }
 
 /// Runs one real run of `dag` locally and reports it.
+/// The run `dags test` makes: when for, and its parameters.
+struct TestRun {
+    planned_for: Option<jiff::Timestamp>,
+    params: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 async fn test_dag(
     dag: &str,
-    planned_for: Option<jiff::Timestamp>,
+    test: &TestRun,
     path: Option<&Path>,
     config: &Config,
     env: &BTreeMap<String, String>,
@@ -673,7 +682,7 @@ async fn test_dag(
         Ok(listening) => {
             drive(
                 dag,
-                planned_for,
+                test,
                 &format!("http://{}", listening.http),
                 (&data, &logs),
                 json,
@@ -750,7 +759,7 @@ async fn ensure_defined(
 /// Triggers the run, follows it, and prints the report.
 async fn drive(
     dag: &str,
-    planned_for: Option<jiff::Timestamp>,
+    test: &TestRun,
     api: &str,
     (data, logs): (&Path, &Path),
     json: bool,
@@ -765,7 +774,7 @@ async fn drive(
     let command = client
         .wait(
             client
-                .send_command(|| client.trigger(dag, planned_for))
+                .send_command(|| client.trigger(dag, test.planned_for, test.params.as_ref()))
                 .await?,
         )
         .await?;

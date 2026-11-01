@@ -456,3 +456,78 @@ fn a_shell_command_with_a_placeholder_is_refused() {
         ]
     );
 }
+
+fn params_decl() -> Json {
+    json!({
+        "type": {"type": "dataclass", "name": "P", "fields": [
+            {"name": "region", "type": {"type": "str"}, "required": false},
+            {"name": "days", "type": {"type": "list", "item": {"type": "int"}}, "required": false},
+        ]},
+        "schema": {"type": "object", "properties": {
+            "region": {"type": "string"}, "days": {"type": "array", "items": {"type": "integer"}},
+        }, "additionalProperties": false},
+        "defaults": {"region": "eu", "days": [1]},
+    })
+}
+
+fn param(path: &Json) -> Json {
+    json!({"ref": {"kind": "param", "path": path}})
+}
+
+#[test]
+fn a_dags_params_references_need_its_params_and_existing_paths() {
+    let uses = |path: &Json| {
+        json!({"tasks": [task("extract", &json!({"r": param(path)})),
+                         task("load", &json!({"rows": output_of("extract")}))]})
+    };
+    assert_eq!(
+        problems(&uses(&json!(["region"]))),
+        [
+            "task `extract` uses `dag_ctx.params.region`, but the DAG declares no params \
+          (`Dag(params=...)`)"
+        ]
+    );
+    let mut with_params = uses(&json!(["days", 0]));
+    with_params["params"] = params_decl();
+    assert_eq!(problems(&with_params), Vec::<String>::new());
+    let mut missing = uses(&json!(["nope"]));
+    missing["params"] = params_decl();
+    assert_eq!(
+        problems(&missing),
+        ["task `extract` uses `dag_ctx.params.nope`, which the DAG's params don't have"]
+    );
+}
+
+#[test]
+fn a_task_cant_be_mapped_over_the_runs_params() {
+    let mut mapped = task("extract", &json!({}));
+    mapped["expand"] = json!({"product": [{"name": "day", "value": param(&json!(["days"]))}]});
+    let found = problems(&json!({
+        "params": params_decl(),
+        "tasks": [mapped, task("load", &json!({"rows": output_of("extract")}))],
+    }));
+    assert_eq!(
+        found,
+        [
+            "task `extract` is mapped over the run's params: the number of instances can't depend \
+          on them"
+        ]
+    );
+}
+
+#[test]
+fn a_dags_params_are_checked_with_it() {
+    let mut decl = params_decl();
+    decl["schema"]["properties"]["region"]["x-widget"] = json!("select");
+    let found = problems(&json!({"params": decl}));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("keyword `x-widget`"), "{found:?}");
+    let mut required = params_decl();
+    required["defaults"] = json!({"days": [1]});
+    required["schema"]["required"] = json!(["region"]);
+    let scheduled = json!({"params": required, "trigger": {"kind": "every", "interval_ms": 60_000, "catchup": false}});
+    assert_eq!(
+        problems(&scheduled),
+        ["params: `region` has no default, but the DAG has a schedule (its runs use the defaults)"]
+    );
+}

@@ -266,6 +266,15 @@ pub struct RunInfo {
     pub try_number: u32,
     /// The instance of a mapped task.
     pub map_index: Option<u32>,
+    /// The run's parameters, as stored JSON (decision 138); `{}` when the DAG takes none.
+    #[serde(default = "no_params")]
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+    pub params: serde_json::Value,
+}
+
+/// A run of a DAG without parameters.
+fn no_params() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 /// One task attempt for the runner to run.

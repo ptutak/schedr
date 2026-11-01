@@ -62,6 +62,8 @@ pub enum RenderError {
 pub struct RenderContext {
     /// The run's context fields, as stored JSON (`planned_for` / `since` tagged).
     pub dag_ctx: BTreeMap<DagCtxField, Value>,
+    /// The run's parameters, as stored JSON (decision 138); `{}` when the DAG takes none.
+    pub params: Value,
     /// The upstream outputs the task uses, by task ID, as stored JSON.
     pub inputs: BTreeMap<String, Value>,
     /// The outcomes of the upstream tasks it uses, by task ID, as JSON strings; `null` for one
@@ -85,6 +87,7 @@ impl RenderContext {
                 (DagCtxField::PlannedFor, json!({"$datetime": planned_for})),
                 (DagCtxField::Since, json!({"$datetime": since})),
             ]),
+            params: json!({}),
             inputs: BTreeMap::new(),
             outcomes: BTreeMap::new(),
         }
@@ -104,21 +107,24 @@ pub fn reference_label(reference: &Reference) -> String {
             format!("dag_ctx.run.{name}")
         }
         Reference::Outcome { task } => format!("{task}.outcome"),
-        Reference::Output { task, path, .. } => {
-            let mut label = task.to_string();
-            for step in path {
-                match step {
-                    PathElem::Field(name) => {
-                        let _ = write!(label, ".{name}");
-                    }
-                    PathElem::Index(i) => {
-                        let _ = write!(label, "[{i}]");
-                    }
-                }
+        Reference::Param { path } => with_path("dag_ctx.params".to_owned(), path),
+        Reference::Output { task, path, .. } => with_path(task.to_string(), path),
+    }
+}
+
+/// `label` followed by a path as written in Python (`.rows[0]`).
+fn with_path(mut label: String, path: &[PathElem]) -> String {
+    for step in path {
+        match step {
+            PathElem::Field(name) => {
+                let _ = write!(label, ".{name}");
             }
-            label
+            PathElem::Index(i) => {
+                let _ = write!(label, "[{i}]");
+            }
         }
     }
+    label
 }
 
 /// The stored value a reference stands for.
@@ -135,6 +141,7 @@ pub fn resolve<'a>(
             .dag_ctx
             .get(field)
             .ok_or_else(|| RenderError::MissingInput(reference_label(reference))),
+        Reference::Param { path } => follow(&ctx.params, path, reference),
         Reference::Outcome { task } => match ctx.outcomes.get(task.as_str()) {
             Some(Value::Null) => Ok(&NOT_TAKEN),
             Some(outcome) => Ok(outcome),
@@ -149,44 +156,53 @@ pub fn resolve<'a>(
                 }
                 _ => {}
             }
-            let mut value = ctx
+            let value = ctx
                 .inputs
                 .get(task.as_str())
                 .ok_or_else(|| RenderError::MissingInput(task.to_string()))?;
-            for step in path {
-                let missing = || RenderError::MissingPath(reference_label(reference));
-                value = match step {
-                    PathElem::Field(name) => {
-                        let mut object = value.as_object().ok_or_else(missing)?;
-                        // A dict shaped like a tag is stored escaped (B66).
-                        if object.len() == 1
-                            && let Some(Value::Object(inner)) = object.get("$dict")
-                        {
-                            object = inner;
-                        }
-                        if is_process_result(object)
-                            && object.get(&format!("{name}_truncated")) == Some(&Value::Bool(true))
-                        {
-                            return Err(RenderError::Truncated(reference_label(reference)));
-                        }
-                        object.get(name).ok_or_else(missing)?
-                    }
-                    PathElem::Index(i) => {
-                        let items = value
-                            .get("$tuple")
-                            .unwrap_or(value)
-                            .as_array()
-                            .ok_or_else(missing)?;
-                        usize::try_from(*i)
-                            .ok()
-                            .and_then(|i| items.get(i))
-                            .ok_or_else(missing)?
-                    }
-                };
-            }
-            Ok(value)
+            follow(value, path, reference)
         }
     }
+}
+
+/// The part of a stored value at `path` (`reference`'s, for messages).
+fn follow<'a>(
+    mut value: &'a Value,
+    path: &[PathElem],
+    reference: &Reference,
+) -> Result<&'a Value, RenderError> {
+    for step in path {
+        let missing = || RenderError::MissingPath(reference_label(reference));
+        value = match step {
+            PathElem::Field(name) => {
+                let mut object = value.as_object().ok_or_else(missing)?;
+                // A dict shaped like a tag is stored escaped (B66).
+                if object.len() == 1
+                    && let Some(Value::Object(inner)) = object.get("$dict")
+                {
+                    object = inner;
+                }
+                if is_process_result(object)
+                    && object.get(&format!("{name}_truncated")) == Some(&Value::Bool(true))
+                {
+                    return Err(RenderError::Truncated(reference_label(reference)));
+                }
+                object.get(name).ok_or_else(missing)?
+            }
+            PathElem::Index(i) => {
+                let items = value
+                    .get("$tuple")
+                    .unwrap_or(value)
+                    .as_array()
+                    .ok_or_else(missing)?;
+                usize::try_from(*i)
+                    .ok()
+                    .and_then(|i| items.get(i))
+                    .ok_or_else(missing)?
+            }
+        };
+    }
+    Ok(value)
 }
 
 /// Whether `object` is a stored `ProcessResult`: only its streams are ever truncated, a

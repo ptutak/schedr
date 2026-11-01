@@ -61,21 +61,48 @@ step touches their code or the user schedules them.
 | 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
 | 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
 | 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 12 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 13 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 14 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 23 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 16 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 17 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 18 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 19 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 20 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 21 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 22 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 25 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B154: The scheduler's skipped DAGs are never logged
+
+- **Rating:** severity **low**, probability **rare**, reliability (score 1): a DAG whose fire times or default params fail in a scheduler pass creates no run, and nothing says why.
+- **Found:** 2026-11-01, by Grok writing the params docs; confirmed by Claude: `Pass.skipped`
+  (`crates/schedr-master/src/scheduler.rs`) gets `SchedulerError::FireTimes` and, since M4.5a,
+  `SchedulerError::Params` (a scheduled run's defaults refused), but nothing in the master reads
+  it.
+- **When:** rare: both are checked when the DAG is validated, so it takes a master whose checks
+  changed after the DAG was stored (an upgrade), or a bug in them.
+- **A fix:** log each skipped DAG once (warn) with the reason, and perhaps show it as the DAG's
+  problem, as a hold is shown.
+
+## B153: A `Literal` field can't be rendered into a command's t-string
+
+- **Rating:** severity **low**, probability **possible**, usability (score 2): `t"{dag_ctx.params.region}"` with `region: Literal["eu", "us"]` is refused at parse time, though its values are text.
+- **Found:** 2026-11-01, by Grok writing the params docs: PROJECT.md's own example
+  (`region: Literal["eu", "us"]` in `t"{dag_ctx.params.region}"`) fails to import with
+  ``a value of type `Literal['eu', 'us']` can't be rendered into text``.
+- **Cause:** `python/schedr/_build.py` `is_renderable` takes scalars, `Any`, unions of them and
+  a model's scalar field; a `LiteralType` is none of these. The same holds for a task output
+  typed `Literal[...]`.
+- **A fix:** a `Literal` whose values are all text, numbers or booleans is renderable (the agent
+  renders the stored JSON scalar); check the agent's render of such a value, and a format spec
+  on it.
 
 ## B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store
 

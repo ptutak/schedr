@@ -4,7 +4,7 @@ import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +69,7 @@ def test_task_context_keeps_given_values() -> None:
             "must not be after planned_for",
         ),
         ({"kind": "daily"}, ValueError, "unknown run kind `daily`"),
-        ({"params": {"region": "eu"}}, NotImplementedError, "run parameters \\(milestone M4\\)"),
+        ({"params": {"region": "eu"}}, TypeError, "an instance of the DAG's params class"),
         ({"secrets": {"a#b": "x"}}, NotImplementedError, "secrets \\(milestone M4\\)"),
     ],
 )
@@ -286,6 +286,19 @@ def test_no_report_is_an_error_with_what_schedr_said(
         run_dag(dags, "sync")
 
 
+def test_run_dag_passes_params_as_json(dags: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @dataclass
+    class P:
+        day: date
+        region: str = "eu"
+
+    run = fake(monkeypatch, json.dumps(report()))
+    run_dag(dags, "sync", params={"region": "us"})
+    assert list(run.command)[-2:] == ["--params", '{"region": "us"}']
+    run_dag(dags, "sync", params=P(date(2026, 10, 1)))
+    assert json.loads(list(run.command)[-1]) == {"day": "2026-10-01", "region": "eu"}
+
+
 def test_the_environments_interpreter_setting_wins(
     dags: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -299,7 +312,6 @@ def test_the_environments_interpreter_setting_wins(
     ("arguments", "error", "message"),
     [
         ({"for_": datetime(2026, 10, 15)}, ValueError, "for_ must have a time zone"),
-        ({"params": {"a": 1}}, NotImplementedError, "run_dag\\(params=...\\)` comes with run"),
         ({"secrets": {"a#b": "x"}}, NotImplementedError, "run_dag\\(secrets=...\\)"),
         ({"step": True}, NotImplementedError, "step-by-step runs \\(milestone M4\\)"),
         ({"replace": {"a": 1}}, NotImplementedError, "replaced task results"),

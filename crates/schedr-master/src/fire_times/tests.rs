@@ -387,3 +387,16 @@ fn a_secondly_cron_is_looked_up_without_walking_hours_of_seconds() {
     let took = started.elapsed();
     assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }
+
+/// Found by `the_quick_lookup_agrees_with_the_walk`: a moment just after a fire time, in the
+/// same second, has that fire time before it (cron's search drops the fraction).
+#[rstest]
+#[case("2026-03-24T15:45:00.001Z", "2026-03-24T15:45:00Z")]
+#[case("2026-03-24T15:45:00.999Z", "2026-03-24T15:45:00Z")]
+#[case("2026-03-24T15:45:00Z", "2026-03-24T15:30:00Z")]
+fn the_fire_time_in_the_same_second_is_before(#[case] at: &str, #[case] before: &str) {
+    let FireTimes::Cron(times) = warsaw("*/15 * * * *") else {
+        unreachable!()
+    };
+    assert_eq!(times.previous_before(ts(at)), Some(ts(before)));
+}

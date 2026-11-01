@@ -77,6 +77,7 @@ async fn with_run(dag: Dag, state: RunState) -> (Execution, Database, String) {
     let dag_id = DagId::new("sync").unwrap();
     let run_id = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &dag_id,
             dag_version_id: &version_id,
             kind: RunKind::Manual,
@@ -585,6 +586,7 @@ async fn a_round_creates_at_most_so_many_instances_a_run_whole() {
     let dag_id = DagId::new("sync").unwrap();
     let second = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &dag_id,
             dag_version_id: &version,
             kind: RunKind::Manual,

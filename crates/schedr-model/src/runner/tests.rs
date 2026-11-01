@@ -143,6 +143,7 @@ fn request() -> TaskRequest {
         inputs: [("extract".to_owned(), json!([1, 2]))].into(),
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
+            params: serde_json::json!({}),
             dag_id: "sync".into(),
             run_id: "0192c4e1".into(),
             kind: crate::states::RunKind::Manual,

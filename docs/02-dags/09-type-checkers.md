@@ -29,6 +29,8 @@ it would be for an ordinary call.
 | `EmptyOperator(...)` | Itself; `.on(...)` and `.output` are `Done` |
 | `dag_ctx.run.planned_for`, `.since` | `datetime` |
 | `dag_ctx.run.id`, `.kind`, `dag_ctx.dag_id` | `str` |
+| `dag_ctx.params.region` | `Any`. The path is checked when the file loads ([Run parameters](12-params.md)). |
+| `dag_ctx.params(ReportParams)` | `ReportParams`, the class passed |
 
 `>>` works where one side is a task call returning `None`, a branch call, an operator, an
 outcome class or enum, or a command's output. Between two values of builtin types
@@ -73,10 +75,12 @@ and finds what they can't:
 - **Using an output as a value in the DAG body.** Type checkers read `rows` as a list, so
   they accept `if rows:`, `len(rows)`, `for r in rows:` or `rows[0].name.upper()`. When the
   file is loaded, `rows` is a reference that exists only at run time, and each of these
-  fails: `if`, `for`, `==`, `!=` and `str()` with "an output can't be used as a value in the
-  DAG file" (the same for `.outcome` and `dag_ctx` fields), the others with Python's own
-  `TypeError`. In a DAG body, pass outputs, take their fields (`rows[0].name`), and order
-  tasks; decide in a task.
+  fails: `if`, `==`, `!=` and `str()` with "an output can't be used as a value in the
+  DAG file" (the same for `.outcome`), and `for` with that message for an output.
+  `dag_ctx` fields fail `if`, `==`, `!=` and `str()` with "a reference can't be used as a
+  value in the DAG file", and `dag_ctx.params` fails `for` with it too. The others fail
+  with Python's own `TypeError`. In a DAG body, pass outputs, take their fields
+  (`rows[0].name`), and order tasks; decide in a task.
 - **A t-string inside a list or dict** is a `str` in its place: `[t"{n}"]` for a `list[int]`
   parameter is refused when the file loads, as a t-string passed whole is.
 - **An output or task of another DAG.** Type checkers accept `consume(first_out)` in a

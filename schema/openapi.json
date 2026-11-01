@@ -692,6 +692,10 @@
             },
             "type": "array"
           },
+          "params": {
+            "description": "Its parameters as JSON, masked like a task's output (decision 134); `{}` for a DAG\nthat takes none.",
+            "type": "object"
+          },
           "run": {
             "$ref": "#/components/schemas/RunView",
             "description": "The run."
@@ -856,6 +860,13 @@
         "additionalProperties": false,
         "description": "A manual run to start.",
         "properties": {
+          "params": {
+            "description": "Values for the run's parameters, as JSON (`{\"region\": \"us\"}`), over the DAG's\ndefaults; checked by the master against the DAG's schema (decision 133).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "planned_for": {
             "description": "The moment the run is for (`--for`); now if not given. Must not be in the future.",
             "format": "date-time",

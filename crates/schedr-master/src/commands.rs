@@ -191,8 +191,10 @@ impl Commander {
             Command::TriggerRun {
                 dag_id,
                 planned_for,
+                params,
             } => {
-                self.trigger(pending, scheduler, dag_id, *planned_for, now)
+                let requested = (*planned_for, params.as_ref());
+                self.trigger(pending, scheduler, dag_id, requested, now)
                     .await
             }
             Command::CancelRun { run_id } => {
@@ -276,7 +278,10 @@ impl Commander {
         pending: &PendingCommand,
         scheduler: &Scheduler,
         dag_id: &DagId,
-        planned_for: Option<Timestamp>,
+        (planned_for, params): (
+            Option<Timestamp>,
+            Option<&serde_json::Map<String, serde_json::Value>>,
+        ),
         now: Timestamp,
     ) -> Result<Outcome, CommandError> {
         if pending.applying && self.db.run_tasks(&pending.id).await?.is_some() {
@@ -287,6 +292,7 @@ impl Commander {
                 Some(&pending.id),
                 dag_id,
                 planned_for,
+                params,
                 &pending.requested_by,
                 now,
             )

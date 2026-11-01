@@ -29,6 +29,7 @@ reads the value inside its tasks and fills a command from the reference.
 | `dag_ctx.run.kind` | `scheduled`, `manual`, `backfill`, `chained` or `event`. |
 | `dag_ctx.run.planned_for` | The moment the run is for. A scheduled run's is its fire time. |
 | `dag_ctx.run.since` | The start of the window `(since, planned_for]`. |
+| `dag_ctx.params` | The run's parameters. A field is a reference in the DAG body and the value inside a task. [Run parameters](12-params.md). |
 
 `{dag_ctx.run.planned_for:%Y-%m-%d}` in a command formats that moment when the command
 runs. The window itself, and when `initial_since` is required, is
@@ -44,12 +45,13 @@ The datetimes inside a task are aware and UTC. A task that returned a naive `dat
 would fail, because a naive datetime cannot be stored
 ([Tasks and operators](02-tasks.md#what-a-task-may-return)).
 
-`dag_ctx.params` raises `NotImplementedError`. Run parameters are
-[Run parameters and the DAG context](../_generated/05-design/07-python-api-structure.md#run-parameters-and-the-dag-context).
-Declared secrets are [Secret storage](../_generated/05-design/05-secret-storage.md); an
-`env` entry on a command is an ordinary environment variable
-([Tasks and operators](02-tasks.md#commands)). From a command, a t-string is how the run
-is read. Reading it with `schedr dag-ctx` is
+`dag_ctx.params.region` is a reference in the DAG body, as `planned_for` is, and the value
+inside a task. `dag_ctx.params(ReportParams)` is the whole instance, typed by that class.
+Declaring the class, giving a run its values, and what a field may be are
+[Run parameters](12-params.md). Declared secrets are
+[Secret storage](../_generated/05-design/05-secret-storage.md); an `env` entry on a command
+is an ordinary environment variable ([Tasks and operators](02-tasks.md#commands)). From a
+command, a t-string is how the run is read. Reading it with `schedr dag-ctx` is
 [In-task CLI: `schedr task-ctx` and `schedr dag-ctx`](../_generated/05-design/03-architecture.md#in-task-cli-schedr-task-ctx-and-schedr-dag-ctx).
 
 A test gives `dag_ctx` its values with `task_context`

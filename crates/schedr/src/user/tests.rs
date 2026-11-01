@@ -315,10 +315,19 @@ async fn later_features_and_bad_arguments_are_errors() {
             RunsCommand::Trigger {
                 dag: "sync".to_owned(),
                 planned_for: None,
+                params: vec!["a".to_owned()],
+                params_json: None,
+            },
+            "-p #1: give `name=text` or `name:=json`",
+        ),
+        (
+            RunsCommand::Trigger {
+                dag: "sync".to_owned(),
+                planned_for: None,
                 params: vec!["a=1".to_owned()],
                 params_json: None,
             },
-            "`schedr runs trigger -p / --params` isn't implemented yet (milestone M4)",
+            "rejected: DAG `sync`: the DAG takes no parameters (it declares no `params=`)",
         ),
         (
             RunsCommand::Cancel {
@@ -870,4 +879,17 @@ fn durations_are_seconds_rounded_half_up_to_a_tenth() {
             "0.0s", "0.0s", "0.1s", "0.1s", "0.2s", "0.3s", "1.0s", "1.5s", "61.2s"
         ]
     );
+}
+
+#[rstest::rstest]
+#[case::not_json(&["db_password:=hunter2"][..], "-p db_password: the value isn't JSON")]
+#[case::no_equals(&["region=eu", "hunter2"][..], "-p #2: give `name=text` or `name:=json`")]
+#[case::no_name(&["=hunter2"][..], "-p #1: no name before `=`")]
+#[case::secret_name(&["postgres://u:hunter2@db/x:=bad"][..], "-p postgres://u:****@db/x: the value")]
+#[case::twice(&["postgres://u:hunter2@db/x=a", "postgres://u:hunter2@db/x=b"][..], "-p: `postgres://u:****@db/x` is given twice")]
+fn a_bad_param_isnt_echoed(#[case] fields: &[&str], #[case] message: &str) {
+    let fields: Vec<String> = fields.iter().map(|f| (*f).to_owned()).collect();
+    let error = super::given_params(&fields, None).unwrap_err().to_string();
+    assert!(!error.contains("hunter2"), "{error}");
+    assert!(error.starts_with(message), "{error}");
 }

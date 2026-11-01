@@ -68,7 +68,13 @@ pub struct NewRun<'a> {
     pub triggered_at: Timestamp,
     /// `scheduler`, a user name, or the parent run.
     pub triggered_by: &'a str,
+    /// Its parameters, as stored JSON (decision 138); `{}` for a DAG that takes none.
+    pub params: &'a serde_json::Value,
 }
+
+/// The parameters of a run of a DAG that takes none.
+pub static NO_PARAMS: std::sync::LazyLock<serde_json::Value> =
+    std::sync::LazyLock::new(|| serde_json::Value::Object(serde_json::Map::new()));
 
 /// A run waiting for `max_active_runs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,9 +232,9 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const INSERT: &str = "INSERT INTO runs \
             (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
-             triggered_by, started_at) \
-            VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}) \
-            ON CONFLICT DO NOTHING";
+             triggered_by, started_at, params) \
+            VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}, \
+             $11{json}) ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, INSERT))
@@ -242,11 +248,29 @@ impl Database {
                 .bind(db_time(run.triggered_at))
                 .bind(run.triggered_by)
                 .bind(started_at)
+                .bind(run.params.to_string())
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
         });
         Ok((inserted == 1).then(|| id.to_owned()))
+    }
+
+    /// A run's parameters, as stored JSON (decision 138); `None` for an unknown run.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored JSON doesn't read.
+    pub async fn run_params(&self, run_id: &str) -> Result<Option<serde_json::Value>, DbError> {
+        const PARAMS: &str = "SELECT params{text} FROM runs WHERE id = $1{uuid}";
+        let text: Option<String> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, PARAMS))
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        text.map(|t| crate::query::from_json("runs.params", &t))
+            .transpose()
     }
 
     /// The latest `planned_for` of the DAG's scheduled runs: the scheduler's bookkeeping,

@@ -329,6 +329,15 @@ pub async fn trigger_run(
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
     let request: TriggerRequest = optional_body(&body)?;
+    // Refused here: the command's storage would replace it (decision 114), and the master
+    // would see other values than those given.
+    if let Some(params) = &request.params
+        && schedr_model::params::nul_at(&serde_json::Value::Object(params.clone())).is_some()
+    {
+        return Err(ApiError::BadRequest(
+            "params: text containing NUL (\\u0000) can't be stored".to_owned(),
+        ));
+    }
     submit(
         &state,
         &user,
@@ -336,6 +345,7 @@ pub async fn trigger_run(
         Command::TriggerRun {
             dag_id,
             planned_for: request.planned_for,
+            params: request.params,
         },
     )
     .await
@@ -386,12 +396,23 @@ pub async fn get_run_dag(
     Path(run_id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let run_id = known_run(&state, &run_id).await?.id;
-    state
+    let mut dag = state
         .db
         .run_dag_json(&run_id)
         .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("no run `{run_id}`")))
+        .ok_or_else(|| ApiError::NotFound(format!("no run `{run_id}`")))?;
+    // Its params hold values (the defaults, and the schema's and type's copies of them, such
+    // as a `Literal`'s): only the defaults are shown, masked (decision 134).
+    if let Some(params) = dag
+        .get_mut("params")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        params.retain(|key, _| key == "defaults");
+        if let Some(defaults) = params.get_mut("defaults") {
+            schedr_config::masked::mask_data(defaults);
+        }
+    }
+    Ok(Json(dag))
 }
 
 /// A task's stored output in a run, with its outcome; 404 while it has none.
@@ -585,6 +606,13 @@ pub async fn get_run(
             })
             .collect(),
         code_hashes: state.db.run_code_hashes(run_id).await?,
+        params: shown(schedr_model::params::shown(
+            &state
+                .db
+                .run_params(run_id)
+                .await?
+                .unwrap_or_else(|| serde_json::json!({})),
+        )),
     }))
 }
 
@@ -988,5 +1016,34 @@ fn optional_body<T: Default + serde::de::DeserializeOwned>(body: &[u8]) -> Resul
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(T::default());
     }
-    serde_json::from_slice(body).map_err(|e| ApiError::BadRequest(format!("invalid body: {e}")))
+    serde_json::from_slice(body).map_err(|e| {
+        ApiError::BadRequest(format!(
+            "invalid body: {}",
+            schedr_config::masked::mask_text(&without_quoted(&e.to_string()))
+        ))
+    })
+}
+
+/// `text` with each double-quoted part (a value from the body, which may be a secret) as
+/// `"…"`; names stay (serde quotes them in backticks), to be masked as texts.
+fn without_quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '"' {
+            out.push(c);
+            continue;
+        }
+        out.push_str("\"…\"");
+        let mut escaped = false;
+        for c in chars.by_ref() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => break,
+                _ => {}
+            }
+        }
+    }
+    out
 }

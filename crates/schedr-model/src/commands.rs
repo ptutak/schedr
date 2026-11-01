@@ -21,6 +21,9 @@ pub enum Command {
         /// The moment the run is for; now if not given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         planned_for: Option<Timestamp>,
+        /// Values for the run's parameters, as JSON, over the DAG's defaults (decision 138).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        params: Option<serde_json::Map<String, serde_json::Value>>,
     },
     /// Cancel a run (queued or running).
     CancelRun {

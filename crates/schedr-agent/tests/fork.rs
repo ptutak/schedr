@@ -186,6 +186,7 @@ fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
         inputs: BTreeMap::new(),
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
+            params: serde_json::json!({}),
             dag_id: "sync".to_owned(),
             run_id: "r1".to_owned(),
             kind: RunKind::Manual,

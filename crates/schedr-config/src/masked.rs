@@ -88,7 +88,8 @@ fn mask_keys(fields: &mut serde_json::Map<String, Value>) {
 /// digit, before an upper-case letter following a lower-case one or a digit (`apiKey`: `api`,
 /// `key`), and before the last of a run of upper-case letters followed by a lower-case one
 /// (`HTTPPassword`: `http`, `password`; `AWSAccessKeyId`: `aws`, `access`, `key`, `id`).
-fn names_secret_in_words(name: &str) -> bool {
+#[must_use]
+pub fn names_secret_in_words(name: &str) -> bool {
     let chars: Vec<char> = name.chars().collect();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();

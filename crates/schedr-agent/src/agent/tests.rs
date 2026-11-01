@@ -254,6 +254,7 @@ async fn dag_ids(db: &Database) -> Vec<String> {
 
 async fn trigger(db: &Database, dag: &str) -> String {
     let command = Command::TriggerRun {
+        params: None,
         dag_id: DagId::new(dag).unwrap(),
         planned_for: None,
     };
@@ -456,6 +457,7 @@ fn assign(
         map_index: -1,
         try_number: 1,
         run: Some(pb::RunInfo {
+            params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
             planned_for: Some(prost_types::Timestamp::default()),

@@ -26,6 +26,7 @@
   <dt>Triggered</dt><dd>{{ triggered_at }} by {{ run.triggered_by }}</dd>
   {% if !started_at.is_empty() %}<dt>Started</dt><dd>{{ started_at }}</dd>{% endif %}
   {% if !ended_at.is_empty() %}<dt>Ended</dt><dd>{{ ended_at }}</dd>{% endif %}
+  {% if !params.is_empty() %}<dt>Params</dt><dd class="params">{% for (name, value) in params %}<span class="param"><span class="mono">{{ name }}</span> = <span class="mono">{{ value }}</span></span>{% endfor %}</dd>{% endif %}
 </dl>
 </div>
 <div class="run-view">

@@ -16,6 +16,7 @@ pub mod lease;
 pub mod limits;
 pub mod mapping;
 pub mod metrics;
+pub mod params;
 pub mod parse_jobs;
 pub mod planning;
 pub mod problems;

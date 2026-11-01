@@ -63,6 +63,15 @@ async fn api_with(
     task: Json,
     instances: &[(&str, i32, TaskInstanceState)],
 ) -> (axum::Router, Database, String) {
+    api_over(None, task, instances).await
+}
+
+/// [`api_with`], the DAG declaring `params`.
+async fn api_over(
+    params: Option<Json>,
+    task: Json,
+    instances: &[(&str, i32, TaskInstanceState)],
+) -> (axum::Router, Database, String) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -81,7 +90,8 @@ async fn api_with(
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task],
-        "edges": []
+        "edges": [],
+        "params": params,
     }))
     .unwrap();
     let change = DagChange::Define {
@@ -94,6 +104,7 @@ async fn api_with(
     let dag_id = DagId::new("sync").unwrap();
     let run_id = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &dag_id,
             dag_version_id: &version,
             kind: RunKind::Manual,
@@ -225,10 +236,12 @@ async fn actions_become_pending_commands_by_the_user() {
                 dag_id: sync.clone()
             },
             Command::TriggerRun {
+                params: None,
                 dag_id: sync.clone(),
                 planned_for: Some(ts("2026-10-15T03:00:00Z"))
             },
             Command::TriggerRun {
+                params: None,
                 dag_id: sync,
                 planned_for: None
             },
@@ -1410,4 +1423,98 @@ async fn a_quoted_secret_begun_far_before_a_part_is_masked_in_it() {
         (&body["from"], &body["content"]),
         (&json!(5011), &json!("****'\nok\n"))
     );
+}
+
+#[tokio::test]
+async fn a_runs_dag_shows_its_params_defaults_masked() {
+    let extract = json!({
+        "id": "extract", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "none"}
+    });
+    let params = json!({
+        "type": {"type": "dataclass", "name": "P", "fields": [
+            {"name": "db_password", "type": {"type": "literal", "values": ["hunter2"]}, "required": false},
+            {"name": "region", "type": {"type": "str"}, "required": false},
+        ]},
+        "schema": {"type": "object", "properties": {
+            "db_password": {"type": "string", "default": "hunter2"},
+            "region": {"type": "string", "default": "postgres://u:hunter3@db/x"},
+        }},
+        "defaults": {"db_password": "hunter2", "region": "postgres://u:hunter3@db/x"},
+    });
+    let (app, _db, run_id) = api_over(
+        Some(params),
+        extract,
+        &[("extract", -1, TaskInstanceState::Queued)],
+    )
+    .await;
+    let (status, dag) = get(&app, &format!("/api/v1/runs/{run_id}/dag")).await;
+    assert_eq!(status, StatusCode::OK);
+    let text = dag.to_string();
+    assert!(
+        !text.contains("hunter2") && !text.contains("hunter3"),
+        "{text}"
+    );
+    assert_eq!(dag["params"]["defaults"]["db_password"], "****");
+    // The schema and the type hold copies of values (a `Literal`'s): not shown.
+    assert_eq!(
+        dag["params"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["defaults"]
+    );
+}
+
+#[tokio::test]
+async fn a_bad_body_doesnt_quote_its_text() {
+    let (app, _db, _run) = api().await;
+    let (status, body) = send(
+        &app,
+        Method::POST,
+        "/api/v1/dags/sync/runs",
+        r#"{"params": "postgres://u:hunter2@db/x"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().unwrap();
+    assert!(!error.contains("hunter2"), "{error}");
+    assert!(
+        error.starts_with("invalid body: invalid type: string"),
+        "{error}"
+    );
+    let (status, body) = send(
+        &app,
+        Method::POST,
+        "/api/v1/dags/sync/runs",
+        r#"{"postgres://u:hunter2@db/x": 1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().unwrap();
+    assert!(!error.contains("hunter2"), "{error}");
+}
+
+#[tokio::test]
+async fn params_with_nul_are_refused_before_any_command() {
+    let (app, db, _run) = api().await;
+    let (status, body) = send(
+        &app,
+        Method::POST,
+        "/api/v1/dags/sync/runs",
+        r#"{"params": {"db_password": "a\u0000hunter2"}}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error.contains("NUL") && !error.contains("hunter2"),
+        "{error}"
+    );
+    assert_eq!(db.pending_commands(10).await.unwrap().len(), 0);
 }

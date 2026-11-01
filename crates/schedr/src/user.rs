@@ -200,12 +200,14 @@ pub async fn run_runs<T: Transport>(
             params,
             params_json,
         } => {
-            if !params.is_empty() || params_json.is_some() {
-                return Err(not_yet("runs trigger -p / --params", "M4"));
-            }
+            let params = given_params(params, params_json.as_deref())?;
             let at = for_time(planned_for.as_deref(), err)?;
             let command = client
-                .wait(client.send_command(|| client.trigger(dag, at)).await?)
+                .wait(
+                    client
+                        .send_command(|| client.trigger(dag, at, params.as_ref()))
+                        .await?,
+                )
                 .await?;
             let run_id = command
                 .result
@@ -422,6 +424,17 @@ fn print_run(detail: &RunDetail, local: &TimeZone, out: &mut impl Write) -> Resu
         // Its code changed while it ran.
         writeln!(out, "ran on code {}", detail.code_hashes.join(", "))?;
     }
+    if let Some(params) = detail.params.as_object().filter(|p| !p.is_empty()) {
+        // As given with `-p` (masked by the webserver, decision 134).
+        let shown: Vec<String> = params
+            .iter()
+            .map(|(name, value)| match value {
+                serde_json::Value::String(text) => format!("{name}={text}"),
+                other => format!("{name}:={other}"),
+            })
+            .collect();
+        writeln!(out, "params: {}", shown.join(" "))?;
+    }
     let rows: Vec<Vec<String>> = detail.tasks.iter().map(task_row).collect();
     write_table(
         out,
@@ -535,6 +548,66 @@ fn print_json(out: &mut impl Write, value: &impl serde::Serialize) -> Result<(),
         serde_json::to_string_pretty(value).map_err(|e| AppError::BadArgument(e.to_string()))?;
     writeln!(out, "{text}")?;
     Ok(())
+}
+
+/// A run's parameters from `-p` fields (`key=value` a text, `key:=json` any JSON value, the
+/// field syntax of the in-task CLI) or `--params` (one JSON object); `None` when none given.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for a field without `=`, an empty or repeated name, JSON that
+/// doesn't read, or `--params` that isn't an object.
+pub fn given_params(
+    fields: &[String],
+    json: Option<&str>,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, AppError> {
+    if let Some(json) = json {
+        return match serde_json::from_str(json) {
+            Ok(serde_json::Value::Object(params)) => Ok(Some(params)),
+            Ok(_) => Err(AppError::BadArgument(
+                "--params takes a JSON object, e.g. '{\"region\": \"us\"}'".to_owned(),
+            )),
+            Err(e) => Err(AppError::BadArgument(format!("--params isn't JSON: {e}"))),
+        };
+    }
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    // A refusal names the field by its number, or by its name masked, never by its value: it
+    // may be a secret, mistyped.
+    let mut params = serde_json::Map::new();
+    for (n, field) in fields.iter().enumerate().map(|(i, f)| (i + 1, f)) {
+        let Some((name, value)) = field.split_once('=') else {
+            return Err(AppError::BadArgument(format!(
+                "-p #{n}: give `name=text` or `name:=json`"
+            )));
+        };
+        let json_name = name.strip_suffix(':');
+        let name = json_name.unwrap_or(name);
+        if name.is_empty() {
+            return Err(AppError::BadArgument(format!(
+                "-p #{n}: no name before `=`"
+            )));
+        }
+        let value = match json_name {
+            Some(_) => serde_json::from_str(value).map_err(|e| {
+                AppError::BadArgument(format!(
+                    "-p {}: the value isn't JSON (line {}, column {}); text is `name=...`",
+                    schedr_config::masked::mask_text(name),
+                    e.line(),
+                    e.column()
+                ))
+            })?,
+            None => serde_json::Value::String(value.to_owned()),
+        };
+        if params.insert(name.to_owned(), value).is_some() {
+            return Err(AppError::BadArgument(format!(
+                "-p: `{}` is given twice",
+                schedr_config::masked::mask_text(name)
+            )));
+        }
+    }
+    Ok(Some(params))
 }
 
 const fn not_yet(command: &'static str, milestone: &'static str) -> AppError {

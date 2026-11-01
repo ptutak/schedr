@@ -62,6 +62,7 @@ async fn with_run(state: RunState) -> (Database, String) {
     let dag_id = DagId::new("sync").unwrap();
     let run_id = db
         .insert_run(&NewRun {
+            params: &crate::runs::NO_PARAMS,
             dag_id: &dag_id,
             dag_version_id: &version_id,
             kind: RunKind::Manual,

@@ -17,6 +17,7 @@ fn client_args(json: bool) -> ClientArgs {
 
 fn test_command(changes: impl FnOnce(&mut DagsCommand)) -> DagsCommand {
     let mut command = DagsCommand::Test {
+        params_json: None,
         dag: "sync".to_owned(),
         planned_for: None,
         params: vec![],
@@ -60,7 +61,6 @@ fn a_missing_path_is_a_bad_argument() {
 }
 
 #[rstest]
-#[case(test_command(|c| if let DagsCommand::Test { params, .. } = c { params.push("a=1".to_owned()); }), "dags test -p", "M4")]
 #[case(test_command(|c| if let DagsCommand::Test { secrets, .. } = c { secrets.push("p#k=v".to_owned()); }), "dags test --secret", "M4")]
 #[case(test_command(|c| if let DagsCommand::Test { task, .. } = c { *task = Some("load".to_owned()); }), "dags test --task", "M4")]
 #[tokio::test]

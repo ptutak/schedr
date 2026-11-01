@@ -69,6 +69,12 @@ pub enum Reference {
         /// Which field.
         field: DagCtxField,
     },
+    /// The run's parameters, or a part of them (`dag_ctx.params.region`, decision 138).
+    Param {
+        /// The path into the parameters; empty for all of them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        path: Vec<PathElem>,
+    },
 }
 
 impl Reference {
@@ -77,7 +83,7 @@ impl Reference {
     pub fn upstream_task(&self) -> Option<&TaskId> {
         match self {
             Self::Output { task, .. } | Self::Outcome { task } => Some(task),
-            Self::DagCtx { .. } => None,
+            Self::DagCtx { .. } | Self::Param { .. } => None,
         }
     }
 }

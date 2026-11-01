@@ -189,11 +189,12 @@ pub fn resolve(value: &Value, sources: &Sources) -> Result<Json, String> {
 }
 
 /// Whether a value is left to its instance's runner to build: it holds a template or a
-/// `dag_ctx` reference, which the master doesn't render (decision 118).
+/// `dag_ctx` reference, which the master doesn't render (decision 118), the run's parameters
+/// included.
 #[must_use]
 pub fn built_by_runner(value: &Value) -> bool {
     match value {
-        Value::Template(_) | Value::Ref(Reference::DagCtx { .. }) => true,
+        Value::Template(_) | Value::Ref(Reference::DagCtx { .. } | Reference::Param { .. }) => true,
         Value::List(items) => items.iter().any(built_by_runner),
         Value::Map(entries) => entries.values().any(built_by_runner),
         Value::Literal(_) | Value::Ref(_) => false,
@@ -239,6 +240,8 @@ pub fn resolve_mapped(value: &Value, sources: &Sources) -> Result<Json, String> 
 fn resolve_ref(reference: &Reference, sources: &Sources) -> Result<Json, String> {
     match reference {
         Reference::DagCtx { .. } => Err("the run's context isn't a list".to_owned()),
+        // Refused when the DAG is validated: the number of instances would depend on them.
+        Reference::Param { .. } => Err("a run's parameters can't be mapped over".to_owned()),
         Reference::Outcome { task } => Ok(sources
             .outcomes
             .get(task)

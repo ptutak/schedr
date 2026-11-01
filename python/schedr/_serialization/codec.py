@@ -469,6 +469,19 @@ def decode(data: Any, annotation: object, at: str = "") -> Any:  # noqa: PLR0911
     raise TypeModelError(f"`{label(annotation)}` is not supported")
 
 
+def json_form(data: Any) -> Any:
+    """Stored data as plain JSON: schedr's tags written as Pydantic writes those values.
+
+    Args:
+        data: Stored data (as :func:`encode` produced it).
+
+    Returns:
+        Dates as ISO 8601 text, durations as ISO 8601 durations, tuples as lists, an escaped
+        dict unwrapped: what a run's parameters are given as (decision 138).
+    """
+    return _json_form(data)
+
+
 def _json_form(data: Any) -> Any:
     """Stored data with schedr's tags written as Pydantic writes those values in JSON.
 

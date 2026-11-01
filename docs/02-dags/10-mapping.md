@@ -36,7 +36,10 @@ that vary, each a list. `fetch.partial(bucket="raw").expand(path=list_files())` 
   argument: `region.expand(name=[t"eu-{year}", "us"])` gives `eu-2026` and `us`, and
   `.expand(of=[dag_ctx.run.kind, "other"])` the run's kind and `other`. So can a value in an
   `.expand_kwargs()` dict. Each is built when its instance starts, from the outputs it
-  references, exactly as the same t-string passed as an argument.
+  references, exactly as the same t-string passed as an argument. One element may be a run
+  parameter (`.expand(name=[dag_ctx.params.region, "us"])`). The list itself cannot
+  (`fetch.expand(path=dag_ctx.params.paths)`): the number of instances can't depend on the
+  run's parameters ([Run parameters](12-params.md#reading-them)).
 - **The instances** are numbered from 0 in that order (their `map_index`). They run in
   parallel as worker slots allow, and each retries on its own.
 - **An empty list** runs no instance: the task succeeds, and its output is `[]`.

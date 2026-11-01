@@ -72,6 +72,7 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
     let dag_id = DagId::new("sync").unwrap();
     let run_id = db
         .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
             dag_id: &dag_id,
             dag_version_id: &version_id,
             kind: RunKind::Scheduled,
@@ -1867,6 +1868,7 @@ fn limited(settings: &Json, top: &Json) -> Dag {
 async fn another_run(db: &Database) -> String {
     let version_id = db.active_dags().await.unwrap()[0].version_id.clone();
     db.insert_run(&NewRun {
+        params: &schedr_db::runs::NO_PARAMS,
         dag_id: &DagId::new("sync").unwrap(),
         dag_version_id: &version_id,
         kind: RunKind::Scheduled,

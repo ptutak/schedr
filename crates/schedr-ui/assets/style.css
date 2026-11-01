@@ -326,3 +326,6 @@ dl.facts dt { color: var(--dim); }
 dl.facts dd { margin: 0; overflow-wrap: anywhere; }
 .crumbs { margin: 0; color: var(--dim); }
 td .stale, .stale { color: var(--dim); }
+
+/* A run's parameters in its facts (decision 134: masked). */
+.facts dd.params { display: flex; flex-wrap: wrap; gap: 4px 16px; }

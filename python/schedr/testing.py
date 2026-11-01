@@ -4,10 +4,12 @@ Outside ``with Dag(...)`` a ``@task`` function is the plain function: calling it
 ``task_context(...)`` gives ``dag_ctx`` values to such calls, with no processes.
 ``run_dag(...)`` runs ``schedr dags test`` (one real run, every task its own process) and
 returns its result, every task inspectable on its own (see PROJECT.md, Testing DAGs).
-Run parameters, secrets, handles, ``step=`` and ``replace=`` come with milestone M4.
+Both take run parameters (``params=``); secrets, handles, ``step=`` and ``replace=`` come with
+milestone M4.
 """
 
 import contextlib
+import dataclasses
 import json
 import os
 import shutil
@@ -24,6 +26,8 @@ from typing import Any
 from schedr._model import CommandKind, PythonKind, registry
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
+from schedr._serialization.codec import encode, json_form
+from schedr._serialization.models import is_model
 from schedr.context import RunValues, TaskValues, running
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
@@ -77,7 +81,8 @@ def task_context(
         dag_id: ``dag_ctx.dag_id``.
         run_id: ``dag_ctx.run.id``; a new UUIDv7 by default.
         kind: ``dag_ctx.run.kind``: ``manual`` by default.
-        params: Run parameters (milestone M4).
+        params: ``dag_ctx.params``: an instance of the DAG's params class (a dataclass or a
+            Pydantic model); ``dag_ctx.params(Cls)`` then takes that class.
         secrets: Declared secrets (milestone M4).
         task_id: ``task_ctx.task_id``.
         try_number: ``task_ctx.try_number``.
@@ -89,10 +94,8 @@ def task_context(
     Raises:
         TypeError: For a time that isn't a ``datetime``.
         ValueError: For a naive time, ``since`` after ``planned_for``, or an unknown kind.
-        NotImplementedError: For ``params`` or ``secrets``.
+        NotImplementedError: For ``secrets``.
     """
-    if params is not None:
-        raise _milestone_m4("task_context(params=...)", "run parameters")
     if secrets is not None:
         raise _milestone_m4("task_context(secrets=...)", "secrets")
     if kind not in RUN_KINDS:
@@ -101,9 +104,26 @@ def task_context(
     start = _aware(since, "since") if since is not None else planned
     if start > planned:
         raise ValueError(f"since ({start}) must not be after planned_for ({planned})")
-    values = RunValues(dag_id, run_id or str(uuid.uuid7()), kind, planned, start)
+    stored, params_class = _given_params(params)
+    values = RunValues(
+        dag_id, run_id or str(uuid.uuid7()), kind, planned, start, stored, params_class
+    )
     with running(values, TaskValues(task_id, try_number, map_index)):
         yield values
+
+
+def _given_params(params: object) -> tuple[dict[str, Any], type | None]:
+    """A params instance as a run stores it, with its class."""
+    if params is None:
+        return {}, None
+    cls = type(params)
+    if not (dataclasses.is_dataclass(cls) or is_model(cls)):
+        raise TypeError(
+            f"params= takes an instance of the DAG's params class (a dataclass or a Pydantic "
+            f"model), got {cls.__name__}"
+        )
+    stored = encode(params, cls, "params")
+    return (stored["$dict"] if list(stored) == ["$dict"] else stored), cls
 
 
 def _now() -> datetime:
@@ -355,7 +375,8 @@ def run_dag(
         path: A DAG file, or a directory of DAG files (a DAG root).
         dag_id: The DAG to run.
         for_: The run's ``planned_for`` (aware); now by default.
-        params: Run parameters (milestone M4).
+        params: Values for the run's parameters: an instance of the DAG's params class, or a
+            mapping of field names to JSON values (``{"region": "us"}``), over its defaults.
         secrets: Secret values (milestone M4).
         step: Yield each task as it ends (milestone M4).
         replace: Results replacing tasks (milestone M4).
@@ -368,10 +389,9 @@ def run_dag(
             DAG, or a file that doesn't import).
         TypeError: If ``for_`` isn't a ``datetime``.
         ValueError: If ``for_`` is naive.
-        NotImplementedError: For ``params``, ``secrets``, ``step`` or ``replace``.
+        NotImplementedError: For ``secrets``, ``step`` or ``replace``.
     """
     for given, what, feature in (
-        (params is not None, "params", "run parameters"),
         (secrets is not None, "secrets", "secrets"),
         (step, "step", "step-by-step runs"),
         (replace is not None, "replace", "replaced task results"),
@@ -382,6 +402,8 @@ def run_dag(
     command = [schedr_binary(), "dags", "test", dag_id, "--path", str(root), "--json"]
     if for_ is not None:
         command += ["--for", _aware(for_, "for_").isoformat()]
+    if params is not None:
+        command += ["--params", json.dumps(_params_json(params))]
     env = dict(os.environ)
     env.setdefault("SCHEDR_CONFIG__INTERPRETERS__PYTHON", sys.executable)
     done = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
@@ -395,6 +417,14 @@ def run_dag(
             f"{done.stderr.strip() or done.stdout.strip()}"
         )
     return _result(report, root if root.is_dir() else root.parent)
+
+
+def _params_json(params: object) -> object:
+    """``run_dag``'s ``params=`` as the JSON a trigger gives."""
+    if isinstance(params, Mapping):
+        return dict(params)
+    stored, _ = _given_params(params)
+    return json_form(stored)
 
 
 def _result(report: Mapping[str, Any], root_dir: Path) -> RunResult:

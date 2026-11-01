@@ -178,7 +178,10 @@ fn failed_run() -> Vec<(&'static str, u16, Value)> {
                     task("load", "failed", None, None),
                     task("report", "upstream_failed", None, None),
                 ],
-                "code_hashes": ["sha256:a", "sha256:b"]
+                "code_hashes": ["sha256:a", "sha256:b"],
+                // Masked by the webserver; masked again here, as if it hadn't been.
+                "params": {"region": "us", "api_key": "abc", "limits": [1, 2],
+                           "url": "postgres://u:pw@db/x"}
             }),
         ),
         (
@@ -231,6 +234,27 @@ fn failed_run() -> Vec<(&'static str, u16, Value)> {
             log(951_433, 2_000_000, "\u{1b}[31mERROR\u{1b}[0m <boom>\n"),
         ),
     ]
+}
+
+#[tokio::test]
+async fn a_run_shows_its_params_masked() {
+    let app = ui(vec![deployment("etl", scripted(&failed_run()))]);
+    let (status, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let params = html
+        .split("<dt>Params</dt>")
+        .nth(1)
+        .and_then(|rest| rest.split("</dd>").next())
+        .expect("a Params fact");
+    for shown in [
+        "region</span> = <span class=\"mono\">us",
+        "api_key</span> = <span class=\"mono\">****",
+        "limits</span> = <span class=\"mono\">[1,2]",
+        "url</span> = <span class=\"mono\">postgres://u:****@db/x",
+    ] {
+        assert!(params.contains(shown), "{shown} in {params}");
+    }
+    assert!(!html.contains("abc") && !html.contains(":pw@"), "{html}");
 }
 
 #[tokio::test]

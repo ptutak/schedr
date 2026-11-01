@@ -108,7 +108,29 @@ class DagCtxRef:
         return {"kind": "dag_ctx", "field": self.field.value}
 
 
-type Reference = OutputRef | OutcomeRef | DagCtxRef
+@dataclass(frozen=True, slots=True)
+class ParamRef:
+    """The run's parameters, or a part of them (``dag_ctx.params.region``, decision 138).
+
+    Attributes:
+        path: Field names and list / tuple indexes into the parameters; empty for all of them.
+    """
+
+    path: Sequence[str | int] = ()
+
+    def to_json(self) -> dict[str, Any]:
+        """The reference as DAG JSON.
+
+        Returns:
+            ``{"kind": "param", "path": [...]}`` (``path`` only if not empty).
+        """
+        result: dict[str, Any] = {"kind": "param"}
+        if self.path:
+            result["path"] = list(self.path)
+        return result
+
+
+type Reference = OutputRef | OutcomeRef | DagCtxRef | ParamRef
 """Any reference."""
 
 

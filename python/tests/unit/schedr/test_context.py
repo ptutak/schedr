@@ -56,11 +56,6 @@ def test_a_reference_cant_be_used_as_a_value() -> None:
         str(dag_ctx.run.since)
 
 
-def test_params_come_later() -> None:
-    with pytest.raises(NotImplementedError, match="milestone M4"):
-        _ = dag_ctx.params
-
-
 def test_inside_a_running_task_fields_are_values() -> None:
     planned = datetime(2026, 1, 2, tzinfo=UTC)
     values = RunValues("sync", "0190-run", "manual", planned, planned - timedelta(days=1))

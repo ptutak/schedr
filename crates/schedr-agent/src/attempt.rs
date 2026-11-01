@@ -110,6 +110,12 @@ impl AttemptSpec {
                 since: time(run.since.as_ref()).ok_or_else(|| invalid("since", &"missing"))?,
                 try_number: assign.try_number,
                 map_index: u32::try_from(assign.map_index).ok(),
+                params: if run.params_json.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_slice(&run.params_json)
+                        .map_err(|e| invalid("run params", &e))?
+                },
             },
             inputs,
             outcomes: assign
@@ -297,6 +303,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             );
             ctx.inputs.clone_from(&spec.inputs);
             ctx.outcomes.clone_from(&spec.outcomes);
+            ctx.params.clone_from(&spec.run.params);
             let (program, args) =
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
             let task_env = env

@@ -183,6 +183,7 @@ async fn a_runs_commands_are_those_naming_it_and_its_trigger() {
     let trigger = db
         .insert_command(
             &Command::TriggerRun {
+                params: None,
                 dag_id: DagId::new("sync").unwrap(),
                 planned_for: None,
             },

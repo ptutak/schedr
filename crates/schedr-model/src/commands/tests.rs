@@ -10,12 +10,12 @@ fn sync() -> DagId {
 
 #[rstest]
 #[case(
-    Command::TriggerRun { dag_id: sync(), planned_for: None },
+    Command::TriggerRun { dag_id: sync(), planned_for: None, params: None },
     json!({"kind": "trigger_run", "dag_id": "sync"}),
     "trigger_run"
 )]
 #[case(
-    Command::TriggerRun { dag_id: sync(), planned_for: Some("2026-10-15T03:00:00Z".parse().unwrap()) },
+    Command::TriggerRun { dag_id: sync(), planned_for: Some("2026-10-15T03:00:00Z".parse().unwrap()), params: None },
     json!({"kind": "trigger_run", "dag_id": "sync", "planned_for": "2026-10-15T03:00:00Z"}),
     "trigger_run"
 )]

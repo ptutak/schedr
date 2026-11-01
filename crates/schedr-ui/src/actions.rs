@@ -371,7 +371,7 @@ impl Action<'_> {
             Self::Trigger {
                 dag_id,
                 planned_for,
-            } => client.trigger(dag_id, planned_for).await,
+            } => client.trigger(dag_id, planned_for, None).await,
             Self::CancelRun { run_id } => client.cancel(run_id).await,
             Self::Task {
                 run_id,

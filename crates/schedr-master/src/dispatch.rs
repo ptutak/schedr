@@ -771,6 +771,20 @@ impl Dispatcher {
 
     /// Assigns one ready task to a worker with a free slot, its message into `outgoing` once
     /// it is stored; or says why it waits.
+    /// The run's parameters as JSON, for the task; empty for a DAG that takes none (the runner
+    /// reads `{}`), so nothing is read.
+    async fn params_json(&self, ready: &ReadyInstance) -> Result<Vec<u8>, DispatchError> {
+        if ready.dag.params.is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .db
+            .run_params(&ready.run_id)
+            .await?
+            .map(|p| p.to_string().into_bytes())
+            .unwrap_or_default())
+    }
+
     async fn assign_one(
         &mut self,
         now: Timestamp,
@@ -849,6 +863,7 @@ impl Dispatcher {
         let inputs = serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec());
         let outcomes =
             upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+        let params = self.params_json(ready).await?;
         if inputs.len() > MAX_INPUTS {
             self.end(
                 &attempt_id,
@@ -868,7 +883,7 @@ impl Dispatcher {
             &worker_id,
             &attempt_id,
             try_number,
-            (inputs, outcomes),
+            (inputs, outcomes, params),
         );
         outgoing.push(Outgoing {
             worker_id,
@@ -1528,7 +1543,7 @@ impl Dispatcher {
         worker_id: &str,
         attempt_id: &str,
         try_number: u32,
-        (inputs, outcomes): (Vec<u8>, BTreeMap<String, String>),
+        (inputs, outcomes, params): (Vec<u8>, BTreeMap<String, String>, Vec<u8>),
     ) -> pb::AssignTask {
         let task = ready.dag.task(&ready.task_id);
         let external = inputs.len() > INLINE_INPUTS_LIMIT;
@@ -1538,6 +1553,7 @@ impl Dispatcher {
             map_index: ready.map_index,
             try_number,
             run: Some(pb::RunInfo {
+                params_json: params,
                 run_id: ready.run_id.clone(),
                 kind: run_kind_to_proto(ready.run_kind),
                 planned_for: Some(proto_time(ready.planned_for)),

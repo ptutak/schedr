@@ -94,6 +94,27 @@ pub struct Dag {
     /// The task groups (decision 64), for the UI and the API; the master schedules tasks only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// The run parameters it takes (`Dag(params=...)`); none: it takes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Params>,
+}
+
+/// The run parameters a DAG takes (`Dag(params=SomeDataclass)`, decision 138).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Params {
+    /// The declared class's type: a dataclass or a Pydantic model. Values are stored by it,
+    /// as outputs are (tagged).
+    #[serde(rename = "type")]
+    pub ty: crate::TypeDesc,
+    /// A JSON Schema of the class, as JSON values (a date as `format: date`): what the master
+    /// checks a trigger's values against, and what the UI's form is built from.
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+    pub schema: serde_json::Value,
+    /// The fields' defaults, as JSON: the values of a scheduled run, and of the fields a
+    /// trigger leaves out.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub defaults: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A group of tasks (`with group("load"):`): a name for some of a DAG's tasks, drawn as a box
