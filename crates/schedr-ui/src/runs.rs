@@ -1442,8 +1442,9 @@ async fn log_tab<T: Transport>(
         size: bytes(part.size),
         running: part.running,
         tries,
-        tail: part
-            .running
+        // Followed while it runs, and to its end when it grew past this part and ended
+        // between the two reads (B146).
+        tail: (part.running || part.next < part.size)
             .then(|| format!("{panel_href}/tail?try={shown}&from={}{instance}", part.next)),
     })
 }

@@ -287,7 +287,7 @@ async fn a_closed_pages_follower_ends_without_waiting_for_a_change_it_wants() {
         ..Follow::default()
     };
     tokio::spawn(forward(
-        changes.subscribe(),
+        (changes.subscribe(), false),
         sender,
         follow,
         "etl".to_owned(),
@@ -356,4 +356,109 @@ async fn streams_ask_proxies_not_to_buffer_them() {
             .unwrap();
         assert_eq!(response.headers()["x-accel-buffering"], "no", "{path}");
     }
+}
+
+#[tokio::test]
+async fn a_reconnecting_log_tail_resumes_after_what_it_showed() {
+    // B145: each part's event carries where the log continues; the browser's reconnect sends
+    // it back (`Last-Event-ID`), so what was shown isn't appended again.
+    let (mut streams, _) = Streams::new(0);
+    let log = |from: u64, next: u64, running: bool, content: &str| {
+        json!({"attempt_id": "a1", "try_number": 2, "worker_id": "w1", "from": from,
+               "next": next, "size": next, "running": running, "content": content})
+    };
+    let path =
+        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=65536");
+    *streams.answers.get_mut().unwrap() = vec![
+        (path(10), 200, log(10, 30, false, "shown before\n")),
+        (path(30), 200, log(30, 42, false, "all done\n")),
+    ];
+    let app = app(streams);
+    let mut first = open(&app, "/d/etl/runs/r1/tasks/load/tail?try=2&from=10").await;
+    let mut pending = String::new();
+    next_event(&mut first, &mut pending).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/d/etl/runs/r1/tasks/load/tail?try=2&from=10")
+                .header("last-event-id", "30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut raw = String::new();
+    assert_eq!(
+        next_event(&mut body, &mut raw).await,
+        ("log".to_owned(), "all done\n".to_owned())
+    );
+    // Its ID, for the next reconnect.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/d/etl/runs/r1/tasks/load/tail?try=2&from=30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut text = String::new();
+    while !text.contains("event: log") {
+        let frame = body.frame().await.expect("an event").unwrap();
+        if let Ok(data) = frame.into_data() {
+            text.push_str(std::str::from_utf8(&data).unwrap());
+        }
+    }
+    assert!(text.contains("id: 42"), "{text:?}");
+}
+
+#[tokio::test]
+async fn a_change_made_since_the_page_was_rendered_is_sent_when_its_stream_opens() {
+    // B144: a page whose stream opens (or reopens) after a change it didn't see refreshes at
+    // once; one rendered after the last change doesn't.
+    let (streams, feeds) = Streams::new(1);
+    let app = app(streams);
+    let millis = || jiff::Timestamp::now().as_millisecond();
+    // Before the relay ran, nothing is known: refreshed.
+    let rendered = millis() - 1;
+    let mut first = open(&app, &format!("/events?deployment=etl&since={rendered}")).await;
+    let mut pending = String::new();
+    assert_eq!(
+        next_event(&mut first, &mut pending).await,
+        ("change".to_owned(), "etl".to_owned())
+    );
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let before = millis();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    send(&feeds[0], "run", json!({"run_id": "r1", "dag_id": "sync"})).await;
+    // `first` follows everything: once it has the change, the relay recorded it.
+    tokio::time::sleep(COALESCE).await;
+    assert_eq!(
+        next_event(&mut first, &mut pending).await,
+        ("change".to_owned(), "etl".to_owned())
+    );
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let after = millis();
+    let mut missed = open(
+        &app,
+        &format!("/events?deployment=etl&run=r1&since={before}"),
+    )
+    .await;
+    let mut pending = String::new();
+    assert_eq!(
+        next_event(&mut missed, &mut pending).await,
+        ("change".to_owned(), "etl".to_owned())
+    );
+    let mut current = open(
+        &app,
+        &format!("/events?deployment=etl&run=r1&since={after}"),
+    )
+    .await;
+    let mut pending = String::new();
+    let none = tokio::time::timeout(COALESCE, next_event(&mut current, &mut pending)).await;
+    assert!(none.is_err(), "{none:?}");
 }

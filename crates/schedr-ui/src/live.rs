@@ -14,13 +14,14 @@
 //!   `log` event (HTML, colours converted), then `end`.
 
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::Extension;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use schedr_client::{ClientError, ServerEvent, Transport};
@@ -104,6 +105,9 @@ impl Change {
 #[derive(Debug)]
 pub struct Relays {
     senders: Vec<OnceLock<broadcast::Sender<Change>>>,
+    /// When each deployment last changed, in milliseconds since the epoch: its last change
+    /// relayed, or its relay's start (what came before that isn't known).
+    changed: Vec<Arc<AtomicI64>>,
 }
 
 impl Relays {
@@ -112,7 +116,16 @@ impl Relays {
     pub fn new(deployments: usize) -> Self {
         Self {
             senders: (0..deployments).map(|_| OnceLock::new()).collect(),
+            changed: (0..deployments)
+                .map(|_| Arc::new(AtomicI64::new(0)))
+                .collect(),
         }
+    }
+
+    /// Whether deployment `index` may have changed after `since` (milliseconds since the
+    /// epoch), by what its relay has seen.
+    fn changed_after(&self, index: usize, since: i64) -> bool {
+        self.changed[index].load(Ordering::Relaxed) > since
     }
 
     /// Deployment `index`'s changes from now on (its relay started if it isn't).
@@ -124,7 +137,9 @@ impl Relays {
         self.senders[index]
             .get_or_init(|| {
                 let (sender, _) = broadcast::channel(BACKLOG);
-                tokio::spawn(relay(Arc::clone(ui), index, sender.clone()));
+                let changed = Arc::clone(&self.changed[index]);
+                changed.store(now_millis(), Ordering::Relaxed);
+                tokio::spawn(relay(Arc::clone(ui), index, sender.clone(), changed));
                 sender
             })
             .subscribe()
@@ -136,6 +151,7 @@ async fn relay<T: Transport + Send + Sync>(
     ui: Arc<Ui<T>>,
     index: usize,
     sender: broadcast::Sender<Change>,
+    changed: Arc<AtomicI64>,
 ) {
     let deployment = &ui.deployments[index];
     let mut wait = RETRY_FIRST;
@@ -144,11 +160,13 @@ async fn relay<T: Transport + Send + Sync>(
         match deployment.client.events().await {
             Ok(mut events) => {
                 if lost {
+                    changed.store(now_millis(), Ordering::Relaxed);
                     let _ = sender.send(Change::Refresh);
                 }
                 wait = RETRY_FIRST;
                 while let Some(Ok(event)) = events.next().await {
                     if let Some(change) = Change::of(&event) {
+                        changed.store(now_millis(), Ordering::Relaxed);
                         // No one listening is fine.
                         let _ = sender.send(change);
                     }
@@ -184,6 +202,10 @@ pub struct Follow {
     /// absent).
     #[serde(default)]
     pub kinds: Option<String>,
+    /// When the page was made, in milliseconds since the epoch: a change after it is sent as
+    /// soon as the stream opens (one the page may not show, B144).
+    #[serde(default)]
+    pub since: Option<i64>,
 }
 
 impl Follow {
@@ -232,8 +254,11 @@ pub async fn events<T: Transport + Send + Sync + 'static>(
             continue;
         }
         let changes = relays.subscribe(&ui, index);
+        let missed = follow
+            .since
+            .is_some_and(|since| relays.changed_after(index, since));
         tokio::spawn(forward(
-            changes,
+            (changes, missed),
             sender.clone(),
             follow.clone(),
             deployment.name.clone(),
@@ -246,13 +271,14 @@ pub async fn events<T: Transport + Send + Sync + 'static>(
 /// away: the first at once, then at most one every [`COALESCE`], a change in between sent when
 /// that time is up (htmx then reloads once, and never misses the last change).
 async fn forward(
-    mut changes: broadcast::Receiver<Change>,
+    (mut changes, missed): (broadcast::Receiver<Change>, bool),
     sender: mpsc::Sender<Result<Event, Infallible>>,
     follow: Follow,
     deployment: String,
 ) {
     let mut last_sent: Option<tokio::time::Instant> = None;
-    let mut pending = false;
+    // A change the page may have missed: sent at once.
+    let mut pending = missed;
     let mut pings = tokio::time::interval_at(tokio::time::Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     loop {
         let due = last_sent.map_or_else(tokio::time::Instant::now, |at| at + COALESCE);
@@ -287,6 +313,11 @@ async fn forward(
             return;
         }
     }
+}
+
+/// Now, in milliseconds since the epoch.
+fn now_millis() -> i64 {
+    jiff::Timestamp::now().as_millisecond()
 }
 
 /// `receiver`'s events as a server-sent stream, a comment every [`KEEP_ALIVE`], proxies asked
@@ -328,6 +359,7 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     Path((deployment, run_id, task_id)): Path<(String, String, String)>,
     query: Result<Query<TailQuery>, QueryRejection>,
+    headers: HeaderMap,
 ) -> Response {
     let Ok(Query(query)) = query else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -335,10 +367,15 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
     let Some(index) = ui.deployments.iter().position(|d| d.name == deployment) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // A browser reconnecting says where the log it showed ends (each part's event ID, B145).
+    let resumed = headers
+        .get("last-event-id")
+        .and_then(|id| id.to_str().ok())
+        .and_then(|id| id.parse::<u64>().ok());
     let (sender, receiver) = mpsc::channel::<Result<Event, Infallible>>(16);
     tokio::spawn(async move {
         let client = &ui.deployments[index].client;
-        let mut from = query.from;
+        let mut from = resumed.unwrap_or(query.from);
         let mut colours = ansi::Converter::new();
         // Since when the log has been out of reach (a worker briefly unreachable is retried).
         let mut failing: Option<tokio::time::Instant> = None;
@@ -379,7 +416,10 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
             };
             if !html.is_empty()
                 && sender
-                    .send(Ok(Event::default().event("log").data(html)))
+                    .send(Ok(Event::default()
+                        .event("log")
+                        .id(from.to_string())
+                        .data(html)))
                     .await
                     .is_err()
             {

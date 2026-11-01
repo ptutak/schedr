@@ -445,10 +445,7 @@ async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
         attrs(&html, "dialog form", "hx-post"),
         ["/d/etl/workers/w1/drain", "/d/etl/workers/w2/resume"]
     );
-    assert_eq!(
-        attrs(&html, "body", "sse-connect"),
-        ["/events?kinds=workers"]
-    );
+    assert_eq!(events_followed(&html), "/events?kinds=workers");
     // A warning row spans the table (one deployment: no Deployment column).
     assert_eq!(texts(&html, "table.workers thead th").len(), 8);
     assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["7"]);

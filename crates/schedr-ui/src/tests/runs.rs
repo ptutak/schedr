@@ -297,10 +297,7 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
         ]
     );
     // Live: it follows its run, and reads its live parts again (without the panel) on a change.
-    assert_eq!(
-        attrs(&html, "body", "sse-connect"),
-        ["/events?deployment=etl&run=r2"]
-    );
+    assert_eq!(events_followed(&html), "/events?deployment=etl&run=r2");
     assert_eq!(attrs(&html, "#live-head", "hx-get"), ["/d/etl/runs/r2"]);
     // Every change counts: a change during a read is read again after it.
     assert_eq!(
@@ -823,4 +820,35 @@ async fn without_import_errors_the_nav_and_dag_list_say_nothing() {
     )]);
     let (_, html) = get(&down, "/import-errors", &[]).await;
     assert!(texts(&html, ".banner.warning")[0].starts_with("Unavailable: etl"));
+}
+
+#[tokio::test]
+async fn a_log_that_grew_past_its_part_before_its_attempt_ended_is_followed_to_its_end() {
+    // B146: the size read first, then the part from there; the attempt wrote more and ended
+    // in between, so the part stops short of the log's end.
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| !path.contains("/log?"));
+    answers.push((
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=4",
+        200,
+        log(0, 200_000, "star"),
+    ));
+    let mut part = log(0, 300_000, "the first part\n");
+    part["next"] = json!(262_144);
+    answers.push((
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=262144",
+        200,
+        part,
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/load?tab=logs",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(
+        attrs(&html, "pre.log", "sse-connect"),
+        ["/d/etl/runs/r2/tasks/load/tail?try=2&from=262144"]
+    );
 }

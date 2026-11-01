@@ -127,6 +127,17 @@ fn texts(html: &str, selector: &str) -> Vec<String> {
         .collect()
 }
 
+/// The page's event stream, without when the page was made (checked to be there: a change
+/// after it is sent as the stream opens).
+fn events_followed(html: &str) -> String {
+    let url = attrs(html, "body", "sse-connect")
+        .pop()
+        .expect("a live page");
+    let (followed, since) = url.rsplit_once("since=").expect("its time");
+    since.parse::<i64>().expect("milliseconds");
+    followed.trim_end_matches(['&', '?']).to_owned()
+}
+
 fn attrs(html: &str, selector: &str, attr: &str) -> Vec<String> {
     let page = Html::parse_document(html);
     page.select(&Selector::parse(selector).unwrap())
@@ -165,6 +176,16 @@ async fn the_dags_are_listed_by_id_with_their_state_and_schedule() {
         ["/assets/style.css"]
     );
     assert!(html.contains("prefers-color-scheme: dark"));
+    // Live parts: a change during a read is read again after it (B141, B142), a failed read
+    // leaves the part, saying so (B143); a log tail moves its start past what it showed
+    // (B145). Shown in a browser (headless Chromium, the vendored htmx) when fixed.
+    for hook in [
+        "owed[read.name]",
+        "event.detail.shouldSwap = false;\n    stale(elt",
+        "\"sse-connect\", log.getAttribute(\"sse-connect\").replace(",
+    ] {
+        assert!(html.contains(hook), "{hook}");
+    }
 }
 
 #[tokio::test]

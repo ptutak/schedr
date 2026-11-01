@@ -50,7 +50,14 @@ impl Page {
     #[must_use]
     pub fn live(self, follow: &str, refresh: &str) -> Self {
         Self {
-            events: format!("{}/events?{follow}", self.base),
+            // When it was made: a change after it, which it may not show, is sent as soon
+            // as its stream opens (B144).
+            events: format!(
+                "{}/events?{follow}{}since={}",
+                self.base,
+                if follow.is_empty() { "" } else { "&" },
+                Timestamp::now().as_millisecond()
+            ),
             refresh: format!("{}{refresh}", self.base),
             ..self
         }

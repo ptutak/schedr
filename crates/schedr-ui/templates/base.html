@@ -128,6 +128,94 @@ document.addEventListener("close", function (event) {
     htmx.trigger(part, "sse:change");
   });
 }, true);
+// A live part read again. A change during that read is owed: read once the read is done (its
+// swap replaces the part, and htmx's queue with it, B141; the task panel drops it, B142). A
+// read that fails leaves the part as it was, saying so, and the next change reads it again
+// (an error page swapped in would have removed the part, B143).
+(function () {
+  var LIVE = '[hx-trigger^="sse:change"]';
+  var reading = {};
+  var owed = {};
+  // Each read by its request: once its swap has replaced the part, its events no longer
+  // name it.
+  var reads = new WeakMap();
+  function liveElt(event) {
+    var elt = event.detail && (event.detail.elt || (event.detail.requestConfig && event.detail.requestConfig.elt));
+    return elt && elt.matches && elt.matches(LIVE) ? elt : null;
+  }
+  function key(elt) {
+    var holder = elt.id ? elt : elt.closest("[id]");
+    return holder ? holder.id : "";
+  }
+  function part(name) {
+    var holder = document.getElementById(name);
+    if (!holder) return null;
+    return holder.matches(LIVE) ? holder : holder.querySelector(LIVE);
+  }
+  function stale(elt, why) {
+    var note = elt.querySelector(":scope > .live-stale");
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "banner warning live-stale";
+      elt.prepend(note);
+    }
+    note.textContent = "Not up to date: reading it again failed (" + why + "). It is read again with the next change.";
+  }
+  document.addEventListener("sse:change", function (event) {
+    var elt = event.target;
+    if (elt.matches && elt.matches(LIVE) && reading[key(elt)]) owed[key(elt)] = true;
+  }, true);
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var elt = liveElt(event);
+    if (!elt || !event.detail.xhr) return;
+    reading[key(elt)] = true;
+    reads.set(event.detail.xhr, { name: key(elt), elt: elt });
+  });
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var elt = liveElt(event);
+    var status = event.detail.xhr ? event.detail.xhr.status : 0;
+    if (!elt || status < 400) return;
+    event.detail.shouldSwap = false;
+    stale(elt, "HTTP " + status);
+  });
+  document.addEventListener("htmx:sendError", function (event) {
+    var elt = liveElt(event);
+    if (elt) stale(elt, "the UI didn't answer");
+  });
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var read = event.detail.xhr && reads.get(event.detail.xhr);
+    if (!read) return;
+    reads.delete(event.detail.xhr);
+    reading[read.name] = false;
+    if (!owed[read.name]) return;
+    owed[read.name] = false;
+    var now = part(read.name);
+    if (now === read.elt) {
+      // Not replaced (the read failed): read again at once.
+      setTimeout(function () { htmx.trigger(now, "sse:change"); }, 0);
+    } else {
+      // Replaced: once the new part is set up (htmx does that as it settles).
+      settling[read.name] = true;
+    }
+  });
+  var settling = {};
+  document.addEventListener("htmx:afterSettle", function () {
+    Object.keys(settling).forEach(function (name) {
+      var again = part(name);
+      delete settling[name];
+      if (again) setTimeout(function () { htmx.trigger(again, "sse:change"); }, 0);
+    });
+  });
+})();
+// A log tail moves its start past each part shown (the part's ID: where the log continues), so
+// a stream opened again after it closed doesn't append what is shown already (B145; a stream
+// that only dropped resumes by itself, sending the last ID).
+document.addEventListener("htmx:sseMessage", function (event) {
+  var log = event.target;
+  var next = event.detail && event.detail.lastEventId;
+  if (event.detail.type !== "log" || !next || !log.matches || !log.matches("pre.log[sse-connect]")) return;
+  log.setAttribute("sse-connect", log.getAttribute("sse-connect").replace(/([?&]from=)\d+/, "$1" + next));
+});
 function schedrTheme() {
   var root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";

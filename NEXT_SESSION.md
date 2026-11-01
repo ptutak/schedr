@@ -27,6 +27,12 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   it); a live refresh closed the open panel (`:target` set on the new one, proved in
   headless Chromium); masters' changes didn't refresh the page (`every 15s`); short IDs
   collided for masters started together (now the last 8 characters).
+- **M4.4b committed and pushed (`41a0200`, CI green); then bugs B141-B146 fixed** (the UI's
+  live parts: a change during a read read again after it, a failed read keeps the part
+  with a note, a page's stream sends a change it may have missed (`since`), a log tail
+  resumes after what it showed and follows a log that grew before its attempt ended).
+  The browser proofs ran in headless Chromium with the vendored htmx (harness kept out of
+  the repo: a Python server and a DevTools script); the Rust tests check the hooks.
 - **B149 found and fixed** (the graph's proptest: a free vertical strip left wide,
   `squeeze()`); **B150 logged** (a flaky test under the coverage run, not reproduced).
 
