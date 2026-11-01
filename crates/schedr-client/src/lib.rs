@@ -61,6 +61,8 @@ pub struct ApiRequest {
     pub path: String,
     /// The JSON body, if any.
     pub body: Option<serde_json::Value>,
+    /// A command's `Idempotency-Key` (see [`COMMAND_KEY`]).
+    pub key: Option<String>,
 }
 
 /// The API's answer.
@@ -97,6 +99,17 @@ pub enum ClientError {
     /// The master rejected the command.
     #[error("rejected: {0}")]
     Rejected(String),
+    /// A command was sent [`COMMAND_TRIES`] times and no answer came (or the server failed):
+    /// it may have been stored, so it is not "not sent" (B140).
+    #[error(
+        "no answer from the schedr server ({reason}): the command may have arrived. Look \
+         before sending it again (`schedr runs list`, `schedr dags list`, `schedr workers \
+         list`): sent again, it is a new command"
+    )]
+    Unanswered {
+        /// The last try's error.
+        reason: String,
+    },
     /// The master didn't decide in time.
     #[error(
         "the master hasn't applied the command yet (command {command_id}); is the master \
@@ -143,6 +156,27 @@ pub fn for_same_user<F: Future>(work: F) -> impl Future<Output = F::Output> {
             None => work.await,
         }
     }
+}
+
+tokio::task_local! {
+    /// The key of the command sent in this scope (B140): sent as `Idempotency-Key` with each
+    /// `POST`, so a command sent again with it after its answer was lost (the webserver may
+    /// have stored it) is the one stored then, not a second.
+    pub static COMMAND_KEY: String;
+}
+
+/// `send` made with `key` as its command's `Idempotency-Key` ([`COMMAND_KEY`]).
+pub async fn with_command_key<F: Future>(key: String, send: F) -> F::Output {
+    COMMAND_KEY.scope(key, send).await
+}
+
+/// How many times [`Client::submit`] sends a command whose answer doesn't come.
+pub const COMMAND_TRIES: u32 = 3;
+
+/// A new command key: unique, for one command (see [`Client::submit`]).
+#[must_use]
+pub fn new_command_key() -> String {
+    uuid::Uuid::now_v7().to_string()
 }
 
 /// The person the current request is made for, if [`USER`] is set.
@@ -315,6 +349,9 @@ impl Transport for HttpTransport {
         if let Some(body) = &request.body {
             builder = builder.json(body);
         }
+        if let Some(key) = &request.key {
+            builder = builder.header("idempotency-key", key);
+        }
         let response = builder.send().await.map_err(|e| ClientError::Connect {
             server: self.server.clone(),
             reason: e.to_string(),
@@ -437,14 +474,16 @@ impl Transport for RouterTransport {
         let body = request.body.map_or_else(axum::body::Body::empty, |b| {
             axum::body::Body::from(b.to_string())
         });
-        let http = in_process_request(
-            axum::http::Request::builder()
-                .method(method)
-                .uri(&request.path)
-                .header("content-type", "application/json"),
-        )
-        .body(body)
-        .map_err(|e| in_process(e.to_string()))?;
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(&request.path)
+            .header("content-type", "application/json");
+        if let Some(key) = &request.key {
+            builder = builder.header("idempotency-key", key);
+        }
+        let http = in_process_request(builder)
+            .body(body)
+            .map_err(|e| in_process(e.to_string()))?;
         let response = self
             .app
             .clone()
@@ -951,6 +990,63 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// [`Self::submit`] under a new key: one command, stored once however often it is sent
+    /// (boxed: its future stays small in the caller's). For one-shot callers (the CLI), whose
+    /// key is gone once they return.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`], but [`ClientError::Unanswered`] when no answer came: the command
+    /// may have arrived.
+    pub async fn send_command<F>(&self, request: impl Fn() -> F) -> Result<CommandView, ClientError>
+    where
+        F: Future<Output = Result<CommandView, ClientError>>,
+    {
+        match Box::pin(self.submit(new_command_key(), request)).await {
+            Err(
+                error @ (ClientError::Connect { .. } | ClientError::Server { status: 500.., .. }),
+            ) => Err(ClientError::Unanswered {
+                reason: error.to_string(),
+            }),
+            other => other,
+        }
+    }
+
+    /// Sends a command with `request`, stored once (B140): under `key` (the client's
+    /// `Idempotency-Key`; [`new_command_key`] for a new one), and sent again with the same key,
+    /// at most [`COMMAND_TRIES`] times in all, while no answer comes or the server fails (it may
+    /// have stored it): the webserver gives the command stored the first time.
+    ///
+    /// # Errors
+    ///
+    /// The last try's [`ClientError`], or the first that isn't worth another try (the server
+    /// refused the command).
+    pub async fn submit<F>(
+        &self,
+        key: String,
+        request: impl Fn() -> F,
+    ) -> Result<CommandView, ClientError>
+    where
+        F: Future<Output = Result<CommandView, ClientError>>,
+    {
+        let mut delay = self.poll;
+        let mut tries = 1;
+        loop {
+            let sent = with_command_key(key.clone(), request()).await;
+            let again = match &sent {
+                Err(ClientError::Connect { .. }) => true,
+                Err(ClientError::Server { status, .. }) => *status >= 500,
+                _ => false,
+            };
+            if !again || tries >= COMMAND_TRIES {
+                return sent;
+            }
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2);
+            tries += 1;
+        }
+    }
+
     /// Reads `command` back until the master decides it.
     ///
     /// # Errors
@@ -990,9 +1086,18 @@ impl<T: Transport> Client<T> {
         path: String,
         body: Option<serde_json::Value>,
     ) -> Result<R, ClientError> {
+        let key = match method {
+            Method::Post => COMMAND_KEY.try_with(Clone::clone).ok(),
+            Method::Get => None,
+        };
         let response = self
             .transport
-            .send(ApiRequest { method, path, body })
+            .send(ApiRequest {
+                method,
+                path,
+                body,
+                key,
+            })
             .await?;
         if !(200..300).contains(&response.status) {
             let message = response.body["error"].as_str().map_or_else(

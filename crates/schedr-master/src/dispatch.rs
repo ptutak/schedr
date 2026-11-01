@@ -23,13 +23,16 @@
 //! The dispatcher only builds messages; the gRPC server sends them (milestone 1.14).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
-use schedr_model::{AttemptStatus, Reference, SchedrVersion, TaskId, TaskInstanceState};
+use schedr_model::{
+    AttemptStatus, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
+};
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, reject_reaction, run_kind_to_proto,
 };
@@ -37,6 +40,7 @@ use schedr_proto::pb;
 
 use crate::core::Arrivals;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
+use crate::limits::Active;
 use crate::mapping::{self, InputsError};
 use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::quiet::Wakes;
@@ -214,6 +218,11 @@ pub struct Dispatcher {
     /// Attempts a reconnecting worker runs whose start the database refused to record (B128):
     /// not taken back as never started while a worker holds them.
     adopted_unrecorded: BTreeSet<String>,
+    /// The open attempts counted for the concurrency limits (decision 88A).
+    active: Active,
+    /// Each DAG's current version, read at each round with tasks ready: the limits across runs
+    /// are its (87A).
+    current_versions: BTreeMap<DagId, String>,
 }
 
 /// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
@@ -224,6 +233,7 @@ pub struct Memory {
     code_missing: BTreeMap<String, CodeMissing>,
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
+    active: Active,
 }
 
 /// What a step's assignments count as they go.
@@ -267,6 +277,8 @@ impl Dispatcher {
             read_back: ReadBack::default(),
             stops: Vec::new(),
             resolved: mapping::Resolved::new(),
+            active: Active::new(),
+            current_versions: BTreeMap::new(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -294,6 +306,7 @@ impl Dispatcher {
             rejections: self.rejections.clone(),
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
+            active: self.active.clone(),
         }
     }
 
@@ -303,6 +316,7 @@ impl Dispatcher {
         self.rejections = memory.rejections;
         self.code_missing = memory.code_missing;
         self.stops = memory.stops;
+        self.active = memory.active;
     }
 
     /// The attempts a `CancelAttempt` is queued for, sent at the next step (for the
@@ -354,6 +368,12 @@ impl Dispatcher {
     #[must_use]
     pub const fn workers(&self) -> &Workers {
         &self.workers
+    }
+
+    /// The open attempts counted for the concurrency limits.
+    #[must_use]
+    pub const fn active(&self) -> &Active {
+        &self.active
     }
 
     /// A worker registered. A new worker or a restarted one gives `unschedulable` tasks
@@ -528,10 +548,11 @@ impl Dispatcher {
             self.metrics.set_waiting(&[]);
             return Ok(());
         }
+        self.read_limits().await?;
         // The step's assignments are one transaction: stored together, with one lease check
         // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the
         // messages built for them go with a rollback.
-        let (workers, built) = (self.workers.clone(), outgoing.len());
+        let (workers, active, built) = (self.workers.clone(), self.active.clone(), outgoing.len());
         let db = self.db.clone();
         let together = Box::pin(db.atomically(self.assign_each(now, &ready, outgoing))).await;
         let Err(error) = together else {
@@ -549,6 +570,7 @@ impl Dispatcher {
             return Ok(());
         }
         self.workers = workers;
+        self.active = active;
         outgoing.truncate(built);
         if !task_specific(&error) {
             return Err(error);
@@ -557,6 +579,63 @@ impl Dispatcher {
         // a time, the others go on and it is set aside, instead of every round failing on it.
         tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
         self.assign_one_by_one(now, &ready, outgoing).await
+    }
+
+    /// Reads what the concurrency limits need: the open attempts, once (the master's first
+    /// round with tasks ready; then kept in memory), and each DAG's current version.
+    async fn read_limits(&mut self) -> Result<(), DispatchError> {
+        if !self.active.is_loaded() {
+            self.active.load(self.db.active_attempts().await?);
+        }
+        self.current_versions = self.db.active_dag_versions().await?.into_iter().collect();
+        Ok(())
+    }
+
+    /// The DAG version whose limits across runs hold for `ready`: its DAG's current one, or
+    /// its run's own if the DAG has none now (removed, in conflict) or it can't be read.
+    async fn current_dag(&self, ready: &ReadyInstance) -> Result<Arc<Dag>, DispatchError> {
+        let Some(current) = self.current_versions.get(&ready.dag.id) else {
+            return Ok(Arc::clone(&ready.dag));
+        };
+        if *current == ready.version_id {
+            return Ok(Arc::clone(&ready.dag));
+        }
+        match self.db.dag_version(current).await {
+            Ok(dag) => Ok(dag),
+            Err(error) if error.is_data_fault() => {
+                tracing::warn!(
+                    %error,
+                    dag_id = %ready.dag.id,
+                    "the DAG's current version doesn't read: its run's own limits hold"
+                );
+                Ok(Arc::clone(&ready.dag))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Whether one of `ready`'s concurrency limits is reached: then it waits, counted and its
+    /// reason written (at most so many a round, as for the other reasons).
+    async fn held_back(
+        &self,
+        ready: &ReadyInstance,
+        tally: &mut Tally,
+    ) -> Result<bool, DispatchError> {
+        let current = self.current_dag(ready).await?;
+        let Some(reached) =
+            self.active
+                .reached((&current, &ready.dag), &ready.run_id, &ready.task_id)
+        else {
+            return Ok(false);
+        };
+        *tally.waiting.entry(reached.name).or_default() += 1;
+        let reason = reached.reason();
+        if ready.queued_reason.as_deref() != Some(reason.as_str())
+            && tally.reasons.len() < REASONS_PER_ROUND
+        {
+            tally.reasons.push((ready.instance_id.clone(), reason));
+        }
+        Ok(true)
     }
 
     /// Counts `made` assignments, once stored.
@@ -592,7 +671,8 @@ impl Dispatcher {
         let mut tally = Tally::default();
         let (mut failed, mut made) = (Vec::new(), 0);
         for one in ready {
-            let (workers, built) = (self.workers.clone(), outgoing.len());
+            let (workers, active, built) =
+                (self.workers.clone(), self.active.clone(), outgoing.len());
             let db = self.db.clone();
             let assigned =
                 Box::pin(db.atomically(self.assign_one(now, one, outgoing, &mut tally))).await;
@@ -602,6 +682,7 @@ impl Dispatcher {
                 continue;
             };
             self.workers = workers;
+            self.active = active;
             outgoing.truncate(built);
             if !task_specific(&error) {
                 return Err(error);
@@ -665,6 +746,10 @@ impl Dispatcher {
         let Some(task) = ready.dag.task(&ready.task_id) else {
             return Ok(());
         };
+        // Its concurrency limits first: a task over one waits for it, whatever the workers.
+        if self.held_back(ready, tally).await? {
+            return Ok(());
+        }
         let excluded: BTreeSet<String> = self
             .rejections
             .get(&ready.instance_id)
@@ -741,6 +826,7 @@ impl Dispatcher {
             return Ok(());
         }
         self.workers.reserve(&worker_id, &attempt_id, now);
+        self.active.assigned(&attempt_id, ready);
         tally.assigned += 1;
         let message = self.assign_message(
             ready,
@@ -819,6 +905,7 @@ impl Dispatcher {
             .get_or_create(&ReasonLabels { reason })
             .inc();
         self.workers.release(&attempt.id);
+        self.active.remove(&attempt.id);
         let run = self.db.run_tasks(&attempt.run_id).await?;
         let cancelling = run.as_ref().is_some_and(|run| {
             run.cancel_requested
@@ -1152,6 +1239,7 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         self.workers.release(&attempt.id);
+        self.active.remove(&attempt.id);
         if self.db.end_attempt(&attempt.id, end, now).await? {
             self.metrics.attempt_ended(&end.status);
             let recorded = self
@@ -1199,6 +1287,7 @@ impl Dispatcher {
             output: None,
             outcome: None,
         };
+        self.active.remove(attempt_id);
         if self.db.end_attempt(attempt_id, &end, now).await? {
             self.metrics.attempt_ended(&end.status);
             let recorded = self
@@ -1421,7 +1510,7 @@ impl Dispatcher {
                 dag_id: ready.dag.id.to_string(),
             }),
             task_json: task
-                .and_then(|t| serde_json::to_vec(t).ok())
+                .and_then(|t| serde_json::to_vec(&as_sent(t)).ok())
                 .unwrap_or_default(),
             dag_file: Some(pb::DagFileRef {
                 root: ready.dag.location.root.clone(),
@@ -1448,6 +1537,20 @@ impl Dispatcher {
             setrlimit: false,
             upstream_outcomes: outcomes.into_iter().collect(),
         }
+    }
+}
+
+/// `task` as an assignment carries it: without what it maps over (B119: a literal list sent with
+/// each instance, its square in all); the instance's element comes in its inputs (`$expand`).
+fn as_sent(task: &schedr_model::Task) -> schedr_model::Task {
+    schedr_model::Task {
+        id: task.id.clone(),
+        kind: task.kind.clone(),
+        settings: task.settings.clone(),
+        output_type: task.output_type.clone(),
+        outcomes: task.outcomes.clone(),
+        group: task.group.clone(),
+        expand: None,
     }
 }
 

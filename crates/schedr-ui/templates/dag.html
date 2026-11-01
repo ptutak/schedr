@@ -34,6 +34,7 @@
   <dt>Schedule</dt><dd class="mono">{{ row.schedule }}</dd>
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>
   {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
+  {% if !limits.is_empty() %}<dt>Limits</dt><dd><ul class="limits">{% for limit in limits %}<li{% if limit.reached %} class="reached"{% endif %}><code>{{ limit.name }}</code> {{ limit.value }} on {{ limit.of }}: {{ limit.running }}{% if limit.reached %} (reached: the rest wait){% endif %}</li>{% endfor %}</ul></dd>{% endif %}
 </dl>
 <h2>Runs <a class="more" href="{{ runs_href }}">all runs of this DAG</a></h2>
 {% if runs.is_empty() %}

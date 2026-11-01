@@ -1843,3 +1843,200 @@ mod faults {
         assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
     }
 }
+
+/// `fetch`, mapped over 4 elements, its settings with `settings` and the DAG with `top`
+/// merged in.
+fn limited(settings: &Json, top: &Json) -> Dag {
+    let mut fetch = task("fetch", &json!({}), 0);
+    fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2, 3, 4]}}]});
+    for (key, value) in settings.as_object().unwrap() {
+        fetch["settings"][key] = value.clone();
+    }
+    let mut dag = json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 2, "tasks": [fetch], "edges": []
+    });
+    for (key, value) in top.as_object().unwrap() {
+        dag[key] = value.clone();
+    }
+    serde_json::from_value(dag).unwrap()
+}
+
+/// Another running run of the DAG's current version, planned a day after the first.
+async fn another_run(db: &Database) -> String {
+    let version_id = db.active_dags().await.unwrap()[0].version_id.clone();
+    db.insert_run(&NewRun {
+        dag_id: &DagId::new("sync").unwrap(),
+        dag_version_id: &version_id,
+        kind: RunKind::Scheduled,
+        state: RunState::Running,
+        planned_for: later(86_400),
+        since: ts(NOW),
+        triggered_at: ts(NOW),
+        triggered_by: "scheduler",
+    })
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+/// The waiting reasons of `task`'s instances in `run_id`, in order.
+async fn reasons_of(db: &Database, run_id: &str, task: &str) -> Vec<Option<String>> {
+    db.run_instances(run_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.task_id == id(task) && i.map_index >= 0)
+        .map(|i| i.queued_reason)
+        .collect()
+}
+
+/// Ends `attempt_id` on `w1` with success.
+async fn succeed(dispatcher: &mut Dispatcher, attempt_id: &str) {
+    dispatcher
+        .finished(
+            "w1",
+            &finished(attempt_id, pb::AttemptStatus::Success, &json!(null)),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+}
+
+fn assigned(out: &[Outgoing]) -> Vec<String> {
+    out.iter()
+        .map(|o| assignment(o).attempt_id.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn max_active_per_run_holds_a_mapped_tasks_instances_back() {
+    // M4.4: 4 instances, 2 at a time, on a worker with slots for all.
+    let (mut dispatcher, db, run_id) =
+        with_run(limited(&json!({"max_active_per_run": 2}), &json!({}))).await;
+    dispatcher
+        .register("w1", "i2", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    assert_eq!(first.len(), 2);
+    let waiting = Some("waiting: `max_active_per_run` (2) reached".to_owned());
+    assert_eq!(
+        reasons_of(&db, &run_id, "fetch").await,
+        [None, None, waiting.clone(), waiting]
+    );
+    // Nothing more while both run; one more once one ends.
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    succeed(&mut dispatcher, &first[0]).await;
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
+    // Another run has its own count.
+    let second = another_run(&db).await;
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 2);
+    assert_eq!(dispatcher.active().of_run_task(&second, &id("fetch")), 2);
+}
+
+#[tokio::test]
+async fn max_active_and_max_active_tasks_count_across_runs() {
+    for (settings, top, name) in [
+        (json!({"max_active": 3}), json!({}), "max_active"),
+        (
+            json!({}),
+            json!({"max_active_tasks": 3}),
+            "max_active_tasks",
+        ),
+    ] {
+        let (mut dispatcher, db, run_id) = with_run(limited(&settings, &top)).await;
+        dispatcher
+            .register("w1", "i2", &[], 10, ts(NOW))
+            .await
+            .unwrap();
+        let second = another_run(&db).await;
+        let out = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+        assert_eq!(out.len(), 3, "{name}");
+        // Oldest ready first: three of the first run's, none of the second's.
+        let reason = Some(format!("waiting: `{name}` (3) reached"));
+        assert_eq!(reasons_of(&db, &run_id, "fetch").await[3], reason, "{name}");
+        assert_eq!(
+            reasons_of(&db, &second, "fetch").await,
+            vec![reason; 4],
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn limits_across_runs_are_the_current_versions() {
+    // Decision 87A: raised in a new version, the limit across runs holds for older runs too;
+    // `max_active_per_run` stays the run's own.
+    let (mut dispatcher, db, _run_id) = with_run(limited(
+        &json!({"max_active": 1, "max_active_per_run": 1}),
+        &json!({}),
+    ))
+    .await;
+    dispatcher
+        .register("w1", "i2", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
+    redefine(&db, limited(&json!({"max_active": 10}), &json!({}))).await;
+    // The run's own `max_active_per_run` (1) still holds it back.
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    // A new run of the new version has no `max_active_per_run`: its 4 go, 5 open under
+    // `max_active` 10.
+    let _second = another_run(&db).await;
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 4);
+}
+
+#[tokio::test]
+async fn the_counts_are_read_back_after_a_restart() {
+    // Decision 88A: a new master counts what the old one left running.
+    let (mut dispatcher, db, run_id) =
+        with_run(limited(&json!({"max_active_per_run": 2}), &json!({}))).await;
+    dispatcher
+        .register("w1", "i2", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 2);
+    let mut restarted = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE);
+    restarted
+        .register("w2", "i1", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(restarted.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(restarted.active().of_run_task(&run_id, &id("fetch")), 2);
+}
+
+#[tokio::test]
+async fn a_rejected_or_expired_attempt_stops_counting() {
+    let (mut dispatcher, _db, _run_id) =
+        with_run(limited(&json!({"max_active_per_run": 1}), &json!({}))).await;
+    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    dispatcher
+        .rejected(
+            "w1",
+            &rejected(&first[0], pb::RejectReason::NoFreeSlot, ""),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let again = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    assert_eq!(again.len(), 1);
+    // Never started: taken back after the start timeout, and another goes.
+    let expiry = START_TIMEOUT.as_secs() + 1;
+    assert_eq!(dispatcher.expire(later(expiry)).await.unwrap(), 1);
+    assert_eq!(
+        assigned(&dispatcher.step(later(expiry)).await.unwrap()).len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_instance_is_sent_without_what_its_task_maps_over() {
+    // B119: a literal list travelled in every instance's task JSON (its square in all).
+    let (mut dispatcher, _db, _run_id) = with_run(limited(&json!({}), &json!({}))).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let task: Json = serde_json::from_slice(&assignment(&out[0]).task_json).unwrap();
+    assert_eq!(task["id"], "fetch");
+    assert_eq!(task.get("expand"), None, "{task}");
+}

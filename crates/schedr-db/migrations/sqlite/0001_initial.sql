@@ -194,10 +194,15 @@ CREATE TABLE commands (
     decided_at   TEXT,
     -- Set before the command's first write: one still pending with it was cut off partway
     -- (its round failed), so its next application may find its own work done (B7).
-    applying_at  TEXT
+    applying_at  TEXT,
+    -- The client's key for this request (the `Idempotency-Key` header): sent again with
+    -- the same key, by the same person, it is this command, not another (B140).
+    request_key  TEXT
 );
 
 CREATE INDEX commands_pending ON commands (requested_at) WHERE status = 'pending';
+CREATE UNIQUE INDEX commands_by_key ON commands (requested_by, request_key)
+    WHERE request_key IS NOT NULL;
 -- A run's commands: those naming it, the trigger that made it, the pauses that cancelled it.
 CREATE INDEX commands_by_run ON commands ((payload ->> 'run_id'));
 CREATE INDEX commands_by_result_run ON commands ((result ->> 'run_id'));

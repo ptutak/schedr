@@ -2973,6 +2973,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower",
+ "uuid",
 ]
 
 [[package]]

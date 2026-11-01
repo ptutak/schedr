@@ -740,7 +740,13 @@ async fn drive(
         Duration::from_secs(60),
     );
     let location = wait_for_dag(&client, dag).await?;
-    let command = client.wait(client.trigger(dag, planned_for).await?).await?;
+    let command = client
+        .wait(
+            client
+                .send_command(|| client.trigger(dag, planned_for))
+                .await?,
+        )
+        .await?;
     let run_id = command
         .result
         .as_ref()

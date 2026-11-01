@@ -1,0 +1,11 @@
+title = "a log stream reconnecting appends what it already showed"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a running task's log tail reconnects (EventSource) with its original `from`, so the chunks already shown are appended again"
+found = 2026-11-01
+suspected = false
+details = '''
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/live.rs:341` starts at `query.from`; log events carry no ID. Codex's proof: the same first chunk delivered again after a reconnect.
+- **A fix:** an event ID per chunk (its end offset), resumed from `Last-Event-ID`.
+'''

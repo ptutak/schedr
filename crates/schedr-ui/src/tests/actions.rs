@@ -177,8 +177,12 @@ async fn a_failed_send_says_why() {
         ..Scripted::default()
     };
     let app = ui(vec![deployment("etl", down)]);
+    // No answer: it may have arrived (B140), never "not sent".
     let (_, html) = post(&app, "/d/etl/workers/w1/drain", "", &[SAME]).await;
-    assert!(texts(&html, ".command")[0].starts_with("Drain worker w1: not sent: can't reach"));
+    assert!(
+        texts(&html, ".command.unknown")[0].starts_with("Drain worker w1: may have arrived"),
+        "{html}"
+    );
     let (_, html) = post(&app, "/d/nowhere/workers/w1/drain", "", &[SAME]).await;
     assert_eq!(
         texts(&html, ".command"),
@@ -236,11 +240,15 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
         ["innerHTML"]
     );
     for close in attrs(&html, ".actions dialog form", "hx-on::after-request") {
-        assert!(
-            close.starts_with("if (event.detail.elt === this)"),
-            "{close}"
-        );
+        assert_eq!(close, "schedrAnswered(this, event)");
     }
+    assert!(html.contains("if (event.detail.elt !== form) return;"));
+    // Each dialog opens with the action's key (B140), kept until an answer says whether the
+    // command arrived ("command unknown": no answer, kept).
+    for open in attrs(&html, ".actions button.action", "onclick") {
+        assert_eq!(open, "schedrOpen(this)");
+    }
+    assert!(html.contains(r#"answer.indexOf("command unknown") < 0"#));
     assert_eq!(
         attrs(&html, "dialog input[name=cancel_runs]", "type"),
         ["checkbox"]
@@ -427,5 +435,73 @@ async fn the_uis_pages_cant_be_framed_by_another_site() {
     assert_eq!(
         response.headers()["content-security-policy"],
         "frame-ancestors 'none'"
+    );
+}
+
+/// A webserver storing each command once per `Idempotency-Key`, whose first answer is lost
+/// after the command was stored (B140, as Codex's proof in F11).
+#[derive(Debug, Clone, Default)]
+struct LosesFirstAnswer {
+    /// The commands stored, by key (none: a command without a key, stored each time).
+    stored: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    /// The keys each POST came with.
+    keys: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl Transport for LosesFirstAnswer {
+    async fn send(&self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        tokio::task::yield_now().await;
+        self.keys.lock().unwrap().push(request.key.clone());
+        let first = {
+            let mut stored = self.stored.lock().unwrap();
+            let known = request.key.is_some() && stored.contains(&request.key);
+            if !known {
+                stored.push(request.key.clone());
+            }
+            stored.len() == 1 && self.keys.lock().unwrap().len() == 1
+        };
+        if first {
+            return Err(ClientError::Connect {
+                server: "http://etl-webserver:8080".to_owned(),
+                reason: "the answer was lost".to_owned(),
+            });
+        }
+        Ok(ApiResponse {
+            status: 202,
+            body: command("c1", "trigger_run", "pending", None, &json!(null)),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_command_whose_answer_was_lost_is_sent_again_under_its_key_never_twice() {
+    // B140: the webserver stored the trigger but its answer was lost. The UI said "not sent",
+    // inviting a second trigger (a second run).
+    let webserver = LosesFirstAnswer::default();
+    let app = router(Ui {
+        deployments: vec![Deployment {
+            name: "etl".to_owned(),
+            client: Client::new(
+                webserver.clone(),
+                Duration::from_millis(1),
+                Duration::from_secs(1),
+            ),
+        }],
+        docs_dir: None,
+        auth: schedr_api::auth::Auth::default(),
+    });
+    let (_, html) = post(
+        &app,
+        "/d/etl/dags/sync/trigger",
+        "",
+        &[SAME, ("idempotency-key", "k1")],
+    )
+    .await;
+    let shown = texts(&html, ".command");
+    assert!(shown[0].starts_with("Trigger sync: sent;"), "{shown:?}");
+    assert_eq!(webserver.stored.lock().unwrap().len(), 1);
+    assert_eq!(
+        *webserver.keys.lock().unwrap(),
+        [Some("k1".to_owned()), Some("k1".to_owned())]
     );
 }

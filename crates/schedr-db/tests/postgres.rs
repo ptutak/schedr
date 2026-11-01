@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use pretty_assertions::assert_eq;
 use schedr_db::attempts::AttemptEnd;
+use schedr_db::commands::Submitted;
 use schedr_db::dags::{DagChange, NewParse};
 use schedr_db::instances::InstanceUpdate;
 use schedr_db::reads::RunFilter;
@@ -1535,4 +1536,72 @@ async fn a_start_cancelled_before_begin_answers_leaves_no_open_transaction_behin
         connections.push(connection);
     }
     assert!(!connections.is_empty());
+}
+
+#[tokio::test]
+async fn a_command_sent_again_with_its_key_is_stored_once() {
+    // B140, on Postgres: the conflict target is the partial unique index.
+    let db = fresh().await;
+    let pause = Command::PauseDag {
+        dag_id: sync(),
+        cancel_runs: false,
+    };
+    let first = db
+        .submit_command(&pause, "anna", Some("k1"), ts(NOW))
+        .await
+        .unwrap();
+    let Submitted::New(id) = first else {
+        panic!("expected a new command")
+    };
+    assert_eq!(
+        db.submit_command(&pause, "anna", Some("k1"), ts(NOW))
+            .await
+            .unwrap(),
+        Submitted::Again(id)
+    );
+    let cancel = Command::CancelRun {
+        run_id: "r1".to_owned(),
+    };
+    assert_eq!(
+        db.submit_command(&cancel, "anna", Some("k1"), ts(NOW))
+            .await
+            .unwrap(),
+        Submitted::KeyTaken
+    );
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn open_attempts_are_read_with_their_dag_for_the_limits() {
+    // M4.4 (decision 88A): what the master counts when it starts.
+    let (db, run_id) = with_instances().await;
+    assert_eq!(db.active_attempts().await.unwrap(), []);
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    assert_eq!(
+        ready[0].version_id,
+        db.active_dags().await.unwrap()[0].version_id
+    );
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let active = db.active_attempts().await.unwrap();
+    assert_eq!(
+        active,
+        [schedr_db::attempts::ActiveAttempt {
+            attempt_id: attempt_id.clone(),
+            dag_id: sync(),
+            run_id,
+            task_id: id("extract"),
+        }]
+    );
+    db.end_attempt(
+        &attempt_id,
+        &AttemptEnd::by_master(schedr_model::AttemptStatus::Success),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.active_attempts().await.unwrap(), []);
 }

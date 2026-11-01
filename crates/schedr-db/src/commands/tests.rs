@@ -277,3 +277,48 @@ async fn a_runs_commands_are_those_naming_it_and_its_trigger() {
         []
     );
 }
+
+#[tokio::test]
+async fn a_command_sent_again_with_its_key_is_stored_once() {
+    // B140: a request whose answer was lost, sent again with its `Idempotency-Key`.
+    let db = migrated().await;
+    let now = ts("2026-10-21T08:00:00Z");
+    let Submitted::New(first) = db
+        .submit_command(&pause(), "anna", Some("k1"), now)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a new command")
+    };
+    assert_eq!(
+        db.submit_command(&pause(), "anna", Some("k1"), now)
+            .await
+            .unwrap(),
+        Submitted::Again(first.clone())
+    );
+    // Another person's key is theirs; the same person's key for another command is refused.
+    let theirs = db
+        .submit_command(&pause(), "piotr", Some("k1"), now)
+        .await
+        .unwrap();
+    assert!(matches!(theirs, Submitted::New(id) if id != first));
+    let cancel = Command::CancelRun {
+        run_id: "r1".to_owned(),
+    };
+    assert_eq!(
+        db.submit_command(&cancel, "anna", Some("k1"), now)
+            .await
+            .unwrap(),
+        Submitted::KeyTaken
+    );
+    // Without a key, each is new.
+    for _ in 0..2 {
+        assert!(matches!(
+            db.submit_command(&pause(), "anna", None, now)
+                .await
+                .unwrap(),
+            Submitted::New(_)
+        ));
+    }
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 4);
+}

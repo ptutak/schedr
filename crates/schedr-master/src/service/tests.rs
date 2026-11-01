@@ -408,9 +408,20 @@ async fn a_refresh_past_its_limit_is_abandoned_and_the_loop_goes_on() {
 }
 
 /// Seconds after [`fixed_now`] that [`moving_now`] reads: one clock for the whole test binary,
-/// so the tests that move it each set it before use (nextest runs each test in a process of
-/// its own; `cargo test` threads would share it).
+/// so a test that moves it holds it for its whole run ([`own_clock`]): nextest runs each test
+/// in a process of its own, but `cargo test` threads share it (one test's `move_to(0)` landed
+/// between another's `move_to(11)` and its tick).
 static MOVED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Held by the test moving [`MOVED`].
+static CLOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The moving clock, at 0, for this test alone until the guard is dropped.
+async fn own_clock() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = CLOCK.lock().await;
+    move_to(0);
+    guard
+}
 
 fn moving_now() -> Timestamp {
     let moved = MOVED.load(std::sync::atomic::Ordering::SeqCst);
@@ -426,7 +437,7 @@ async fn a_stalled_master_doesnt_declare_a_worker_lost_whose_heartbeats_kept_arr
     // B6: the lease counted from the last message the master *handled*, so heartbeats that
     // arrived while it was stuck in a slow write (its lock held) didn't count, and the round
     // waiting for the lock declared a live worker lost.
-    move_to(0);
+    let _clock = own_clock().await;
     let (hub, db, mut client) = connected_with(moving_now).await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -470,7 +481,7 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
     // B6, the reconnect: a worker whose connection dropped registers again within its lease
     // while the master is stuck; its `Register` waits for the lock behind a round, which must
     // count it as a sign of life rather than declare the worker lost.
-    move_to(0);
+    let _clock = own_clock().await;
     let (hub, db, mut client) = connected_with(moving_now).await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -1288,7 +1299,7 @@ async fn an_old_stream_of_a_worker_neither_changes_nor_disconnects_its_new_one()
 async fn a_reconnect_waiting_behind_a_round_keeps_its_running_attempts() {
     // B50, through a stall: the round that would take the attempt back as never started runs
     // before the registration reporting it running is handled.
-    move_to(0);
+    let _clock = own_clock().await;
     let (hub, db, mut client) = connected_with(moving_now).await;
     let (to_master, stream) = parsed_worker(&mut client).await;
     db.insert_command(&trigger_sync(), "anna", moving_now())
@@ -1349,7 +1360,7 @@ async fn a_reconnect_waiting_behind_a_round_keeps_its_running_attempts() {
 
 #[tokio::test]
 async fn an_open_stream_of_a_worker_taken_for_lost_changes_nothing_and_ends() {
-    move_to(0);
+    let _clock = own_clock().await;
     let (hub, db, client) = connected_with(moving_now).await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -1440,7 +1451,7 @@ async fn a_refused_registration_keeps_no_start_of_its_journal() {
 async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it() {
     // A `Started` that couldn't be stored keeps its attempt from expiring; once the worker
     // registers again (restarted: the process gone) without it in its journal, it expires.
-    move_to(0);
+    let _clock = own_clock().await;
     let (hub, db, mut client) = connected_with(moving_now).await;
     let (to_master, mut stream) = parsed_worker(&mut client).await;
     db.insert_command(&trigger_sync(), "anna", moving_now())

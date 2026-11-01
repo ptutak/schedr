@@ -259,6 +259,13 @@
               }
             ]
           },
+          "limits": {
+            "description": "The concurrency limits its current version sets, each with how many run now (decision\n96): only on one DAG's view (`GET /api/v1/dags/{dag_id}`), not in the list.",
+            "items": {
+              "$ref": "#/components/schemas/LimitView"
+            },
+            "type": "array"
+          },
           "location": {
             "oneOf": [
               {
@@ -404,6 +411,40 @@
           "exception",
           "message",
           "traceback"
+        ],
+        "type": "object"
+      },
+      "LimitView": {
+        "description": "A concurrency limit and how many of what it limits run now: open attempts (assigned, not\nyet started, running, cleaning up), as the master counts them.",
+        "properties": {
+          "limit": {
+            "description": "`max_active_tasks`, `max_active` or `max_active_per_run`.",
+            "type": "string"
+          },
+          "running": {
+            "description": "How many run now: the DAG's tasks, the task's instances across runs, or, for\n`max_active_per_run`, the most in any one run.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "task_id": {
+            "description": "The task it is set on; none for `max_active_tasks` (the DAG's).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "Its value.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "value",
+          "running"
         ],
         "type": "object"
       },
@@ -1010,6 +1051,18 @@
         "operationId": "pause_dag",
         "parameters": [
           {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "The DAG's ID",
             "in": "path",
             "name": "dag_id",
@@ -1120,6 +1173,18 @@
         "operationId": "trigger_run",
         "parameters": [
           {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "The DAG's ID",
             "in": "path",
             "name": "dag_id",
@@ -1170,6 +1235,18 @@
       "post": {
         "operationId": "unpause_dag",
         "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "The DAG's ID",
             "in": "path",
@@ -1366,6 +1443,18 @@
       "post": {
         "operationId": "cancel_run",
         "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "The run's ID",
             "in": "path",
@@ -1656,6 +1745,18 @@
         "operationId": "cancel_task",
         "parameters": [
           {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "The run's ID",
             "in": "path",
             "name": "run_id",
@@ -1792,6 +1893,18 @@
         "operationId": "retry_task",
         "parameters": [
           {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "The run's ID",
             "in": "path",
             "name": "run_id",
@@ -1880,6 +1993,18 @@
         "operationId": "drain_worker",
         "parameters": [
           {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "The worker's ID",
             "in": "path",
             "name": "worker_id",
@@ -1919,6 +2044,18 @@
       "post": {
         "operationId": "resume_worker",
         "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "The worker's ID",
             "in": "path",

@@ -5,12 +5,13 @@
     `base` is the pages' prefix). The dialog closes on its form's own answer only (a request
     from inside it, the moment's preview, bubbles up to the form too), and the preview swaps
     its own way (it would inherit the form's). The live parts around a dialog pass nothing on
-    (`hx-disinherit`), or their `hx-select` would empty its answers. One submit at a time: a second click while the
+    (`hx-disinherit`), or their `hx-select` would empty its answers. Each action has a key, sent
+    as `Idempotency-Key` (B140), kept per action until an answer says whether it arrived. One submit at a time: a second click while the
     first is on its way is dropped, and the button disabled meanwhile. -#}
 {% macro action(label, title, text, post, fields, base) %}
-<button type="button" class="action" onclick="this.nextElementSibling.showModal()">{{ label }}</button>
+<button type="button" class="action" onclick="schedrOpen(this)">{{ label }}</button>
 <dialog class="confirm">
-  <form hx-post="{{ post }}" hx-target="#action-results" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="find button[type=submit]" hx-on::after-request="if (event.detail.elt === this) this.closest('dialog').close()">
+  <form hx-post="{{ post }}" hx-target="#action-results" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="find button[type=submit]" hx-on::after-request="schedrAnswered(this, event)">
     <h3>{{ title }}</h3>
     <p>{{ text }}</p>
     {% if fields == "pause" %}

@@ -33,6 +33,35 @@
     {% endif %}
   }
 })();
+// An action's key (B140), sent as `Idempotency-Key`: made when its dialog first opens, and
+// kept for that action (its URL) in this tab until an answer says whether the command arrived.
+// Sent again (the dialog reopened, the page refreshed or reloaded) after no answer came, it is
+// the command stored then, if it was: never a second run.
+function schedrKeyName(form) { return "schedr-key:" + form.getAttribute("hx-post"); }
+function schedrOpen(button) {
+  var dialog = button.nextElementSibling;
+  var form = dialog.querySelector("form");
+  var key = form.dataset.key || null;
+  try { key = key || sessionStorage.getItem(schedrKeyName(form)); } catch (e) {}
+  if (!key) {
+    key = Array.from(crypto.getRandomValues(new Uint8Array(16)), function (b) {
+      return b.toString(16).padStart(2, "0");
+    }).join("");
+    try { sessionStorage.setItem(schedrKeyName(form), key); } catch (e) {}
+  }
+  form.dataset.key = key;
+  form.setAttribute("hx-headers", JSON.stringify({"Idempotency-Key": key}));
+  dialog.showModal();
+}
+function schedrAnswered(form, event) {
+  if (event.detail.elt !== form) return;
+  var answer = event.detail.xhr ? event.detail.xhr.responseText : "";
+  if (event.detail.successful && answer.indexOf("command unknown") < 0) {
+    delete form.dataset.key;
+    try { sessionStorage.removeItem(schedrKeyName(form)); } catch (e) {}
+  }
+  form.closest("dialog").close();
+}
 // A page hidden for a while closes its streams (B25): over plain HTTP/1.1 a browser opens at
 // most six connections to one host across its tabs, and a stream holds one for as long as it is
 // open, so tabs in the background would keep other pages from loading. Shown again, the page

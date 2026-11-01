@@ -66,6 +66,64 @@ pub struct DagView {
     /// 72): the scheduler creates no runs of it and manual triggers are refused until it
     /// imports again. Not set for a timeout or a runner that died (the file is parsed again).
     pub held: Option<HeldView>,
+    /// The concurrency limits its current version sets, each with how many run now (decision
+    /// 96): only on one DAG's view (`GET /api/v1/dags/{dag_id}`), not in the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<LimitView>,
+}
+
+/// A concurrency limit and how many of what it limits run now: open attempts (assigned, not
+/// yet started, running, cleaning up), as the master counts them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LimitView {
+    /// `max_active_tasks`, `max_active` or `max_active_per_run`.
+    pub limit: String,
+    /// The task it is set on; none for `max_active_tasks` (the DAG's).
+    pub task_id: Option<String>,
+    /// Its value.
+    pub value: u32,
+    /// How many run now: the DAG's tasks, the task's instances across runs, or, for
+    /// `max_active_per_run`, the most in any one run.
+    pub running: u32,
+}
+
+impl LimitView {
+    /// The limits `dag` sets, counted from `counts` (`(run, task, open attempts)` of its runs).
+    #[must_use]
+    pub fn of(
+        dag: &schedr_model::Dag,
+        counts: &[(String, schedr_model::TaskId, u32)],
+    ) -> Vec<Self> {
+        let mut limits = Vec::new();
+        if let Some(value) = dag.max_active_tasks {
+            limits.push(Self {
+                limit: "max_active_tasks".to_owned(),
+                task_id: None,
+                value,
+                running: counts.iter().map(|c| c.2).sum(),
+            });
+        }
+        for task in &dag.tasks {
+            let of_task = || counts.iter().filter(|c| c.1 == task.id).map(|c| c.2);
+            if let Some(value) = task.settings.max_active {
+                limits.push(Self {
+                    limit: "max_active".to_owned(),
+                    task_id: Some(task.id.to_string()),
+                    value,
+                    running: of_task().sum(),
+                });
+            }
+            if let Some(value) = task.settings.max_active_per_run {
+                limits.push(Self {
+                    limit: "max_active_per_run".to_owned(),
+                    task_id: Some(task.id.to_string()),
+                    value,
+                    running: of_task().max().unwrap_or(0),
+                });
+            }
+        }
+        limits
+    }
 }
 
 /// Why a DAG is held: its file's import error. The error is the **file's**, so every DAG of
@@ -106,6 +164,7 @@ impl DagView {
                 exception: h.exception,
                 message: h.message,
             }),
+            limits: Vec::new(),
         }
     }
 }

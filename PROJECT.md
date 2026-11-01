@@ -1115,8 +1115,18 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
     API itself only checks the request's form (IDs, body); everything else is the master's
     decision, so there is one place for the rules.
+  - **A command is stored once per key** (decision 126, the user's, 2026-11-01, B140): an
+    action may carry an `Idempotency-Key` header (1-128 visible ASCII characters); the
+    webserver stores one command per key and person, and the same request sent again gets
+    the command stored the first time (`422` for the key with another command). The CLI
+    makes a key per command and the UI one per action (made when its dialog first opens, kept
+    in the browser's tab until an answer says whether the command arrived); both send again
+    under the same key, up to 3 times in all, while no answer comes or the server fails, and
+    the UI then says the command **may have arrived**, never "not sent". Not chosen: only
+    telling "not sent" from "unknown" in the UI (a hurried second click still starts two
+    runs); the wording now and the key later.
   - **Errors are JSON**, `{"error": "…"}`: 400 for a malformed request, 404 for an unknown or
-    removed DAG, run or command, 503 for something the request needs that can't be reached now
+    removed DAG, run or command, 422 for a command key used before with another command, 503 for something the request needs that can't be reached now
     (a worker holding a log), 500 for a database failure (details only in the webserver's
     log). Times are UTC (RFC 3339); kinds and states are their model names.
   - The user recorded on commands is the `identity_header`'s value, or `anonymous`.

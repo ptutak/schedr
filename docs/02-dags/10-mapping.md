@@ -106,6 +106,13 @@ A gather sees every instance only if none of them is skipped, and none of them f
   uncaught exception is a real failure: it fails the step, cancels the other instances, and
   the gather doesn't run. That is on purpose: a failure means the step failed.
 
+## How many at once
+
+All of a mapped task's instances are ready together, and they take every free slot of the
+workers serving its queue. `@task(max_active_per_run=10)` runs at most 10 of them at once in
+a run, and `max_active` at most so many across runs ([Concurrency
+limits](05-defaults.md#concurrency-limits)).
+
 ## Following the instances
 
 - **Inside a task,** `task_ctx.map_index` is the instance's index (`None` for a task that

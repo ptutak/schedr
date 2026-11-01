@@ -1465,3 +1465,92 @@ impl Rounds {
             .map_or(0.0, |(le, _)| *le)
     }
 }
+
+/// Scenario 16: concurrency limits (M4.4, decision 92B): DAGs of two mapped tasks, two runs
+/// each at once, on far more slots than the limits allow. From the attempts afterwards, the
+/// most ever open at once (assigned to ended, as the master counts them) never goes over
+/// `max_active_per_run` (a run's task), `max_active` (a task across runs) or
+/// `max_active_tasks` (the DAG); every run succeeds. Written in M4.4, run with the suite.
+#[test]
+fn stress_16_concurrency_limits() {
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new("16_concurrency_limits");
+    let count = size.n(4, 20);
+    let width = size.n(12, 40);
+    let dags: Vec<String> = (1..=count)
+        .map(|i| {
+            let id = format!("lim{i:03}");
+            stress.write_dag(&id, &limited_dag(&id, width));
+            id
+        })
+        .collect();
+    stress.start_core("master", &[]);
+    stress.start_workers(size.n(2, 6), 8, &[]);
+    stress.wait_for_dags(count, 10 * MINUTE);
+    stress.trigger(&dags, 2);
+    stress.wait_for_runs(2 * count, size.time(20 * MINUTE, 60 * MINUTE), |_| {});
+    // For each attempt, how many of its group were open when it was assigned (itself
+    // included): the largest is the most ever open at once.
+    let most = |same: &str| {
+        stress.db.count(&format!(
+            "SELECT COALESCE(MAX(open), 0) FROM (SELECT (SELECT COUNT(*) FROM attempts b \
+             JOIN task_instances tb ON tb.id = b.task_instance_id \
+             JOIN runs rb ON rb.id = tb.run_id \
+             WHERE {same} AND b.assigned_at <= a.assigned_at \
+             AND (b.ended_at IS NULL OR b.ended_at > a.assigned_at)) AS open \
+             FROM attempts a JOIN task_instances ta ON ta.id = a.task_instance_id \
+             JOIN runs ra ON ra.id = ta.run_id) counted"
+        ))
+    };
+    let per_run = most("tb.run_id = ta.run_id AND tb.task_id = 'fetch' AND ta.task_id = 'fetch'");
+    let per_task = most("rb.dag_id = ra.dag_id AND tb.task_id = 'fetch' AND ta.task_id = 'fetch'");
+    let per_dag = most("rb.dag_id = ra.dag_id");
+    let mut over = Vec::new();
+    for (limit, most, value) in [
+        ("max_active_per_run", per_run, 3),
+        ("max_active", per_task, 5),
+        ("max_active_tasks", per_dag, 6),
+    ] {
+        report.set(
+            &format!("most_{limit}"),
+            f64::from(u32::try_from(most).unwrap_or(u32::MAX)),
+        );
+        if most > value {
+            over.push(format!("{most} open at once over `{limit}` ({value})"));
+        }
+    }
+    if !over.is_empty() {
+        report.broken(over);
+    }
+    // The DAG's limit was reached (else the load proved nothing).
+    let reached = f64::from(u32::try_from(per_dag).unwrap_or(u32::MAX));
+    report.at_least("most_max_active_tasks_reached", reached, 6.0);
+    stress.measure(&mut report, "master", 0.5);
+    finish(&stress, report, &["success"]);
+}
+
+/// A DAG of two mapped tasks over `width` elements, each instance a fifth of a second:
+/// `fetch` limited per run (3) and across runs (5), the DAG to 6 tasks at once.
+fn limited_dag(id: &str, width: usize) -> String {
+    format!(
+        r#"import time
+
+from schedr import Dag, task
+
+@task(max_active_per_run=3, max_active=5)
+def fetch(n: int) -> int:
+    time.sleep(0.2)
+    return n
+
+@task
+def push(n: int) -> int:
+    time.sleep(0.2)
+    return n
+
+with Dag("{id}", max_active_tasks=6, max_active_runs=2):
+    fetch.expand(n=list(range({width})))
+    push.expand(n=list(range({width})))
+"#
+    )
+}

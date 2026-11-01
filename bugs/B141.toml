@@ -1,0 +1,11 @@
+title = "a queued live refresh is lost when the refresh before it replaces its element"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "a change arriving while a live page's refresh is in flight is queued (`hx-sync=\"this:queue last\"`), but dropped when that refresh replaces the element (`hx-swap=\"outerHTML\"`): the page shows the older state until the next change"
+found = 2026-11-01
+suspected = false
+details = '''
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/templates/dag.html:7`; the same in `dags.html:6`, `runs.html:24`, `run.html:9`, `workers.html:7`. Codex's browser proof (Playwright, the vendored htmx): description changed during a held refresh, shown the old one.
+- **A fix:** sync on a stable parent (or the SSE source) rather than the replaced element, or re-trigger after the swap.
+'''

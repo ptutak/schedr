@@ -181,3 +181,49 @@ fn requests_default_and_refuse_unknown_fields() {
     );
     assert!(serde_json::from_value::<PauseRequest>(json!({"cancel": true})).is_err());
 }
+
+#[test]
+fn limits_are_counted_by_what_they_limit() {
+    // Decision 96: the DAG's limit counts all its tasks; `max_active` a task across runs;
+    // `max_active_per_run` the task's busiest run.
+    let settings = |extra: serde_json::Value| {
+        let mut s = json!({
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            s[k] = v.clone();
+        }
+        s
+    };
+    let dag: schedr_model::Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 2,
+        "max_active_tasks": 10,
+        "tasks": [
+            {"id": "a", "kind": "python", "output_type": {"type": "int"},
+             "settings": settings(json!({"max_active": 4, "max_active_per_run": 3}))},
+            {"id": "b", "kind": "python", "output_type": {"type": "int"}, "settings": settings(json!({}))}
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    let id = |t: &str| TaskId::new(t).unwrap();
+    let counts = [
+        ("r1".to_owned(), id("a"), 1),
+        ("r2".to_owned(), id("a"), 3),
+        ("r2".to_owned(), id("b"), 2),
+    ];
+    let shown: Vec<(String, Option<String>, u32, u32)> = LimitView::of(&dag, &counts)
+        .into_iter()
+        .map(|l| (l.limit, l.task_id, l.value, l.running))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("max_active_tasks".to_owned(), None, 10, 6),
+            ("max_active".to_owned(), Some("a".to_owned()), 4, 4),
+            ("max_active_per_run".to_owned(), Some("a".to_owned()), 3, 3),
+        ]
+    );
+}

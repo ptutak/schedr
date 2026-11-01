@@ -55,31 +55,79 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
 | 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B138: dropping a streamed response doesn't close it | 4 | medium | possible | reliability |
-| 4 | B137: per-task API reads parse the whole run DAG every time | 4 | medium | possible | performance |
-| 5 | B136: one DAG's API reads deserialize every stored DAG | 4 | medium | possible | performance |
-| 6 | B135: a truncated bcrypt hash replaces the working users on reload | 4 | medium | possible | reliability |
-| 7 | B119: a literal `.expand([...])` list travels in every instance's task JSON | 4 | medium | possible | performance |
-| 8 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 9 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 10 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
-| 11 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 12 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 13 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 14 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 15 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 16 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 17 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 18 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 19 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 20 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 21 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 22 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 23 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 24 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 25 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 26 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 27 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B147: each run refresh reads every chosen branch's output again, one at a time | 4 | medium | possible | performance |
+| 4 | B146: opening a log can leave out its end when the attempt finishes between two reads | 4 | medium | possible | correctness |
+| 5 | B145: a log stream reconnecting appends what it already showed | 4 | medium | possible | correctness |
+| 6 | B144: a browser reconnecting to the UI's change stream misses changes made meanwhile | 4 | medium | possible | correctness |
+| 7 | B143: a failed live refresh removes the live content or strands its panel | 4 | medium | possible | reliability |
+| 8 | B142: a task panel drops the last change while its refresh is in flight | 4 | medium | possible | correctness |
+| 9 | B141: a queued live refresh is lost when the refresh before it replaces its element | 4 | medium | possible | correctness |
+| 10 | B138: dropping a streamed response doesn't close it | 4 | medium | possible | reliability |
+| 11 | B137: per-task API reads parse the whole run DAG every time | 4 | medium | possible | performance |
+| 12 | B136: one DAG's API reads deserialize every stored DAG | 4 | medium | possible | performance |
+| 13 | B135: a truncated bcrypt hash replaces the working users on reload | 4 | medium | possible | reliability |
+| 14 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 15 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 16 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
+| 17 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 18 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 19 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 20 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 21 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 22 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 23 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 24 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 25 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 26 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 27 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 28 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 29 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 30 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 31 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 32 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 33 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B147: each run refresh reads every chosen branch's output again, one at a time
+
+- **Rating:** severity **medium**, probability **possible**, performance (score 4): the run page's graph reads each succeeded branch's output on every refresh, serially, so a run with many branches refreshes slowly (each refresh the sum of their latencies).
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/runs.rs:666` (`chosen_by_branches`). Codex's proof: 4 branches at 40 ms, 8 calls, at most one at a time, 340 ms.
+- **A fix:** concurrent reads (bounded), and a finished branch's choice cached.
+
+## B146: opening a log can leave out its end when the attempt finishes between two reads
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): the log tab reads the size, then up to 256 KiB from it; a task that writes more and finishes in between shows a cut log with no tail and no cut warning.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/runs.rs:1445`: tail only when `part.running`. Codex's proof: next 262144, size 300000, running false: the last 37856 bytes never asked for.
+- **A fix:** tail (or say it is cut) whenever `part.next < part.size`.
+
+## B145: a log stream reconnecting appends what it already showed
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a running task's log tail reconnects (EventSource) with its original `from`, so the chunks already shown are appended again.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/live.rs:341` starts at `query.from`; log events carry no ID. Codex's proof: the same first chunk delivered again after a reconnect.
+- **A fix:** an event ID per chunk (its end offset), resumed from `Last-Event-ID`.
+
+## B144: a browser reconnecting to the UI's change stream misses changes made meanwhile
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): the browser's SSE reconnection subscribes afresh, with no refresh at once, so a change made while it was away (a task finishing) is never shown; pings keep the polling fallback off.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/live.rs:234`: `relays.subscribe` per connection, no initial event. The upstream reconnect's refresh (`live.rs:146`) doesn't cover the browser's. Also the gap between a page's load and its subscription.
+- **A fix:** send one change at once on each (re)subscription.
+
+## B143: a failed live refresh removes the live content or strands its panel
+
+- **Rating:** severity **medium**, probability **possible**, reliability (score 4): an error page (a 502 while the deployment is briefly down) has no `#live` / `#live-head`, so the swap removes the live region and shows no error; a panel's error replaces its refreshing wrapper, so neither recovers when the deployment does.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/templates/dag.html:7`, `crates/schedr-ui/src/runs.rs:1174`, `base.html:9`; also the DAG list, runs list, run page and workers page. Codex's browser proof: live containers 0 after a 502, no requests after recovery.
+- **A fix:** keep the live element on an error (an error fragment inside it, or no swap on error with a warning).
+
+## B142: a task panel drops the last change while its refresh is in flight
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): the task panel's `hx-sync="#task-panel:drop"` drops a refresh asked for during another, so a task finishing during a read can stay shown `running`.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/templates/task_panel.html:2`. Codex's browser proof: state success, shown running. The confirmation form's `:drop` is intended and stays.
+- **A fix:** `queue last` for refreshes (navigation keeps replacing).
+
+## B141: a queued live refresh is lost when the refresh before it replaces its element
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): a change arriving while a live page's refresh is in flight is queued (`hx-sync="this:queue last"`), but dropped when that refresh replaces the element (`hx-swap="outerHTML"`): the page shows the older state until the next change.
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/templates/dag.html:7`; the same in `dags.html:6`, `runs.html:24`, `run.html:9`, `workers.html:7`. Codex's browser proof (Playwright, the vendored htmx): description changed during a held refresh, shown the old one.
+- **A fix:** sync on a stable parent (or the SSE source) rather than the replaced element, or re-trigger after the swap.
 
 ## B139: DAG IDs `.` and `..` can't be addressed over HTTP
 
@@ -109,12 +157,6 @@ step touches their code or the user schedules them.
 
 - **Rating:** severity **medium**, probability **possible**, reliability (score 4): a users file rotated with a malformed hash is accepted and locks the user out, though an unreadable update should keep the previous users.
 - **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/auth.rs:296` checks only `cost(hash)`, not the salt and hash body. Codex's proof: `anna:$2b$04$unfinished` accepted on reload, Anna's password no longer works.
-- **A fix:** to decide when it is scheduled.
-
-## B119: a literal `.expand([...])` list travels in every instance's task JSON
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): assignments grow with the square of the list's length; a task mapped over a long literal list.
-- **Found:** 2026-10-31, by Codex, 2026-10-31. Found by Codex's review of group 2 (B83): `crates/schedr-master/src/dispatch.rs:1397` serializes the whole task, `expand` included, into each `AssignTask` (16 × 4 KiB strings: 65 KB task JSON per instance). Decided (the user, 2026-10-31): fixed with the protocol work of M4.4.
 - **A fix:** to decide when it is scheduled.
 
 ## B103: `dags test` waits for ever when a DAG root can't be scanned

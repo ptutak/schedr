@@ -61,9 +61,17 @@ and holds up the workers' messages and the lease:
 | 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
 | 3 | **Scheduler** | Visits the [busy DAGs](#busy-and-quiet-dags) every round and the quiet ones woken this round (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), and starts queued runs while the DAG is under `max_active_runs`. |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
+| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than 10 minutes to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
+
+The limits are counted in the master's memory: the open attempts (assigned and not yet
+started, running, cleaning up) by DAG, by task and by a run's task. A new master reads them
+from the database before its first assignment, and keeps them as it assigns and as attempts
+end; a change that rolls back puts them back too, as it does the workers' slots. Nothing is
+counted per assignment in the database (one master holds the lease), so the check costs no
+query. `max_active_tasks` and `max_active` are the DAG's **current** version's (one value at
+a time across its runs), `max_active_per_run` the run's own version's.
 
 When the round ends, the master sends the messages it built (`AssignTask`, `CancelAttempt`,
 `AssignParse`) down the workers' streams. A message for a worker without a live stream is

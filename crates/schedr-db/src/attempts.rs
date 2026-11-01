@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use schedr_model::{AttemptStatus, Dag, RunKind, TaskId, TaskInstanceState};
+use schedr_model::{AttemptStatus, Dag, DagId, RunKind, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
@@ -40,6 +40,8 @@ pub struct ReadyInstance {
     pub since: Timestamp,
     /// The DAG version the run runs (shared: the cache's, see [`Database::dag_version`]).
     pub dag: Arc<Dag>,
+    /// That version's ID.
+    pub version_id: String,
     /// The content hash of the code that version was parsed from (the worker reports what it
     /// actually ran).
     pub content_hash: String,
@@ -50,6 +52,19 @@ pub struct ReadyInstance {
     pub parse_version: String,
     /// Its place among a mapped task's instances; -1 for an unmapped task.
     pub map_index: i32,
+}
+
+/// An open attempt, as the concurrency limits count it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveAttempt {
+    /// The attempt's ID.
+    pub attempt_id: String,
+    /// Its run's DAG.
+    pub dag_id: DagId,
+    /// Its run.
+    pub run_id: String,
+    /// Its task.
+    pub task_id: TaskId,
 }
 
 /// One instance of a mapped task, as its downstream tasks see it.
@@ -169,6 +184,9 @@ const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_
     t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
+const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.task_id \
+    FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL ORDER BY a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
@@ -327,6 +345,63 @@ impl Database {
                 .await?
         });
         rows.into_iter().map(stored_attempt).collect()
+    }
+
+    /// Every open attempt (no end recorded) with its DAG, run and task: what the concurrency
+    /// limits count (decision 88A), read when the master starts dispatching.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn active_attempts(&self) -> Result<Vec<ActiveAttempt>, DbError> {
+        let query = ACTIVE_ATTEMPTS;
+        let rows: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, query)).fetch_all(pool).await?
+        });
+        rows.into_iter()
+            .map(|(attempt_id, dag_id, run_id, task_id)| {
+                Ok(ActiveAttempt {
+                    attempt_id,
+                    dag_id: DagId::new(dag_id).map_err(|e| DbError::InvalidData {
+                        what: "runs.dag_id",
+                        reason: e.to_string(),
+                    })?,
+                    run_id,
+                    task_id: task_id_of(task_id)?,
+                })
+            })
+            .collect()
+    }
+
+    /// The open attempts of `dag_id`'s runs, counted by run and task: `(run, task, count)`
+    /// (the DAG page's limits with their counts, decision 96).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn active_counts(
+        &self,
+        dag_id: &DagId,
+    ) -> Result<Vec<(String, TaskId, u32)>, DbError> {
+        const COUNTS: &str = "SELECT t.run_id{text}, t.task_id, COUNT(*) \
+            FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+            JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL AND r.dag_id = $1 \
+            GROUP BY t.run_id, t.task_id ORDER BY t.run_id, t.task_id";
+        let rows: Vec<(String, String, i64)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, COUNTS))
+                .bind(dag_id.as_str())
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(run, task, count)| {
+                Ok((
+                    run,
+                    task_id_of(task)?,
+                    u32::try_from(count).unwrap_or(u32::MAX),
+                ))
+            })
+            .collect()
     }
 
     /// The oldest `limit` attempts assigned before `cutoff` that never reported `Started`,
@@ -641,7 +716,7 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         kind,
         planned_for,
         since,
-        _version_id,
+        version_id,
         content_hash,
         queued_reason,
         parse_version,
@@ -656,6 +731,7 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         planned_for: parse_time("runs.planned_for", &planned_for)?,
         since: parse_time("runs.since", &since)?,
         dag,
+        version_id,
         content_hash,
         queued_reason,
         parse_version,

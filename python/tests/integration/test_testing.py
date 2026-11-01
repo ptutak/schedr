@@ -377,3 +377,66 @@ def test_an_order_edge_narrowed_from_a_mapped_task_follows_the_rule(tmp_path: Pa
     assert result.state == "success", result
     assert result.tasks["any_rows"].state == "success"
     assert result.tasks["all_rows"].state == "skipped"
+
+
+LIMITED = """
+import time
+from pathlib import Path
+
+from schedr import Dag, task
+
+LOG = Path({log!r})
+
+
+def ran(name: str) -> None:
+    start = time.time()
+    time.sleep(0.4)
+    with LOG.open("a") as log:
+        log.write(f"{{name}} {{start}} {{time.time()}}\\n")
+
+
+with Dag("limited", max_active_tasks=3):
+
+    @task(max_active_per_run=2)
+    def fetch(n: int) -> int:
+        ran("fetch")
+        return n
+
+    @task(max_active=1)
+    def other(n: int) -> int:
+        ran("other")
+        return n
+
+    fetch.expand(n=[0, 1, 2, 3, 4, 5])
+    other.expand(n=[0, 1, 2, 3])
+"""
+
+
+def most_at_once(spans: list[tuple[float, float]]) -> int:
+    """The most of ``spans`` (start, end) that overlap at one moment."""
+    events = sorted([(start, 1) for start, _ in spans] + [(end, -1) for _, end in spans])
+    most = running = 0
+    for _, change in events:
+        running += change
+        most = max(most, running)
+    return most
+
+
+def test_concurrency_limits_hold_with_slots_to_spare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M4.4 (decision 92B): 6 slots, so without the limits 6 would run at once.
+    monkeypatch.setenv("SCHEDR_CONFIG__WORKER__SLOTS", "6")
+    log = tmp_path / "ran.log"
+    (tmp_path / "limited.py").write_text(LIMITED.format(log=str(log)))
+    result = run_dag(tmp_path / "limited.py", "limited", for_=FOR)
+    assert result.state == "success", result
+    spans: dict[str, list[tuple[float, float]]] = {"fetch": [], "other": []}
+    for line in log.read_text().splitlines():
+        name, start, end = line.split()
+        spans[name].append((float(start), float(end)))
+    assert [len(spans["fetch"]), len(spans["other"])] == [6, 4]
+    assert most_at_once(spans["fetch"]) <= 2  # max_active_per_run
+    assert most_at_once(spans["other"]) <= 1  # max_active
+    together = most_at_once(spans["fetch"] + spans["other"])
+    assert 2 <= together <= 3, together  # max_active_tasks, and tasks did run side by side

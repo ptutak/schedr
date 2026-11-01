@@ -40,6 +40,14 @@ sequenceDiagram
 scheduling. It stores a `trigger_run` command row and answers `202` with the command. On
 Postgres the insert also sends a notification on a channel the master listens to.
 
+The CLI sends the request with an `Idempotency-Key` header, a new key for each command. If
+no answer comes, or the webserver fails, it sends the request again under the same key, up
+to 3 times in all. The webserver stores one command per key and person. A request sent
+again gets the command stored the first time, so a lost answer never starts a second run.
+The same key sent with a different command is refused (`422`). When no answer comes after the third try, the CLI says the
+command **may have arrived** and to look (`schedr runs list`) before running it again: run
+again, it is a new command with a new key.
+
 The CLI then reads the command back every 0.5 s, for up to 30 s, until the master has decided.
 
 ## 2. The master wakes up

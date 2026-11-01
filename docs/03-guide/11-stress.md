@@ -48,6 +48,7 @@ are in the report.
 | 15 | Change signals, on Postgres: scenario 1's load four times, the triggers that announce changes off, on, on, off | how the rounds and the tasks a second compare |
 | 15b | The same, on SQLite through standalone (scenario 9's load) | the same comparison |
 | 15c | The same with scenario 13's load (Python tasks, spawned): bound by the CPU, where the triggers' work at commit competes with the tasks' starts instead of hiding behind the disk | the same comparison |
+| 16 | Concurrency limits: DAGs of two mapped Python tasks, two runs each at once, on many more slots than the limits allow | never more open at once than `max_active_per_run`, `max_active` or `max_active_tasks`; the DAG's limit reached; every run succeeds. Written in M4.4, its first result comes with the next run of the suite |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything

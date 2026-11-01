@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use schedr_api::views::CommandView;
 use schedr_client::times::parse_for;
-use schedr_client::{ClientError, TaskAction, Transport, WorkerAction, path_segment};
+use schedr_client::{Client, ClientError, TaskAction, Transport, WorkerAction, path_segment};
 use serde::Deserialize;
 
 use crate::page::Page;
@@ -32,7 +32,8 @@ pub const POLL_MS: u32 = 1_000;
 struct CommandFragment {
     /// What was asked, as people say it ("Pause sync").
     what: String,
-    /// `pending`, `applied` or `rejected`; `failed` when it couldn't be sent.
+    /// `pending`, `applied` or `rejected`; `failed` when it wasn't stored (refused, or not
+    /// sent); `unknown` when no answer said whether it was.
     status: String,
     /// The master's reason for a rejection, or why it couldn't be sent.
     reason: String,
@@ -96,10 +97,12 @@ pub async fn pause<T: Transport>(
     } else {
         format!("Pause {dag_id}")
     };
-    act(&ui, &headers, &deployment, what, async |d| {
-        d.client.set_paused(&dag_id, true, cancel_runs).await
-    })
-    .await
+    let pause = Action::Pause {
+        dag_id: &dag_id,
+        paused: true,
+        cancel_runs,
+    };
+    act(&ui, &headers, &deployment, what, pause).await
 }
 
 /// `POST /d/<deployment>/dags/<dag>/unpause`.
@@ -113,7 +116,11 @@ pub async fn unpause<T: Transport>(
         &headers,
         &deployment,
         format!("Unpause {dag_id}"),
-        async |d| d.client.set_paused(&dag_id, false, false).await,
+        Action::Pause {
+            dag_id: &dag_id,
+            paused: false,
+            cancel_runs: false,
+        },
     )
     .await
 }
@@ -139,7 +146,10 @@ pub async fn trigger<T: Transport>(
         &headers,
         &deployment,
         format!("Trigger {dag_id}"),
-        async |d| d.client.trigger(&dag_id, planned_for).await,
+        Action::Trigger {
+            dag_id: &dag_id,
+            planned_for,
+        },
     )
     .await
 }
@@ -155,7 +165,7 @@ pub async fn cancel_run<T: Transport>(
         &headers,
         &deployment,
         format!("Cancel run {run_id}"),
-        async |d| d.client.cancel(&run_id).await,
+        Action::CancelRun { run_id: &run_id },
     )
     .await
 }
@@ -188,10 +198,10 @@ pub async fn task<T: Transport>(
             Some(i) => format!("{verb} task {task_id}[{i}]"),
             None => format!("{verb} task {task_id}"),
         },
-        async |d| {
-            d.client
-                .task_action(&run_id, (&task_id, instance.map_index), action)
-                .await
+        Action::Task {
+            run_id: &run_id,
+            task: (&task_id, instance.map_index),
+            action,
         },
     )
     .await
@@ -213,7 +223,10 @@ pub async fn worker<T: Transport>(
         &headers,
         &deployment,
         format!("{verb} worker {worker_id}"),
-        async |d| d.client.worker_action(&worker_id, action).await,
+        Action::Worker {
+            worker_id: &worker_id,
+            action,
+        },
     )
     .await
 }
@@ -280,7 +293,7 @@ async fn act<T: Transport>(
     headers: &HeaderMap,
     deployment: &str,
     what: String,
-    send: impl AsyncFnOnce(&Deployment<T>) -> Result<CommandView, ClientError>,
+    action: Action<'_>,
 ) -> Response {
     let Some(deployment) = ui.deployments.iter().find(|d| d.name == deployment) else {
         return failed(
@@ -288,9 +301,85 @@ async fn act<T: Transport>(
             &format!("There is no deployment `{deployment}` here."),
         );
     };
-    match send(deployment).await {
+    // The browser's key for this action (kept until an answer says whether it arrived), or a
+    // new one: sent again under it while no answer comes, it is stored once (B140).
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|k| k.to_str().ok())
+        .filter(|k| !k.is_empty())
+        .map_or_else(schedr_client::new_command_key, str::to_owned);
+    match deployment
+        .client
+        .submit(key, || action.send(&deployment.client))
+        .await
+    {
         Ok(command) => shown(&Page::new(headers, false), deployment, what, &command),
-        Err(error) => failed(what, &error.to_string()),
+        // The webserver answered: it refused the command, nothing stored.
+        Err(error @ ClientError::Server { status, .. }) if status < 500 => {
+            failed(what, &error.to_string())
+        }
+        // No answer, or the server failed: it may have been stored (never "not sent", which
+        // would invite sending it twice). The browser keeps its key, so sending it again
+        // from this page gives the one stored, if it was.
+        Err(error) => fragment(&CommandFragment {
+            what,
+            status: "unknown".to_owned(),
+            reason: error.to_string(),
+            poll: String::new(),
+            link: None,
+            poll_ms: POLL_MS,
+            command_id: String::new(),
+        }),
+    }
+}
+
+/// A command an action sends.
+#[derive(Debug, Clone, Copy)]
+enum Action<'a> {
+    Pause {
+        dag_id: &'a str,
+        paused: bool,
+        cancel_runs: bool,
+    },
+    Trigger {
+        dag_id: &'a str,
+        planned_for: Option<jiff::Timestamp>,
+    },
+    CancelRun {
+        run_id: &'a str,
+    },
+    Task {
+        run_id: &'a str,
+        task: (&'a str, Option<u32>),
+        action: TaskAction,
+    },
+    Worker {
+        worker_id: &'a str,
+        action: WorkerAction,
+    },
+}
+
+impl Action<'_> {
+    /// Sends it with `client` (once: [`Client::submit`] sends it again under its key).
+    async fn send<T: Transport>(self, client: &Client<T>) -> Result<CommandView, ClientError> {
+        match self {
+            Self::Pause {
+                dag_id,
+                paused,
+                cancel_runs,
+            } => client.set_paused(dag_id, paused, cancel_runs).await,
+            Self::Trigger {
+                dag_id,
+                planned_for,
+            } => client.trigger(dag_id, planned_for).await,
+            Self::CancelRun { run_id } => client.cancel(run_id).await,
+            Self::Task {
+                run_id,
+                task,
+                action,
+            } => client.task_action(run_id, task, action).await,
+            Self::Worker { worker_id, action } => client.worker_action(worker_id, action).await,
+        }
     }
 }
 

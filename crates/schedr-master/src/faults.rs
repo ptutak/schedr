@@ -75,7 +75,8 @@ pub(crate) async fn fail_each_write<S: Scenario>() -> (u64, Vec<String>) {
 /// What is half-done in `run_id` and its workers: a task running (or cleaning up) without
 /// exactly one open attempt, or not running with one; a finished run with work left; an open
 /// attempt the master's memory doesn't hold a slot for, or a slot held for an ended attempt;
-/// a cancel queued with no reason stored for it.
+/// a cancel queued with no reason stored for it; the limits' counts other than the open
+/// attempts.
 pub(crate) async fn half_done(db: &Database, run_id: &str, dispatcher: &Dispatcher) -> Vec<String> {
     use TaskInstanceState as S;
     let mut found = Vec::new();
@@ -138,7 +139,30 @@ pub(crate) async fn half_done(db: &Database, run_id: &str, dispatcher: &Dispatch
     }
     cancel_problems(&run, &open, dispatcher, &mut found);
     slot_problems(db, run_id, &open, dispatcher, &mut found).await;
+    count_problems(db, dispatcher, &mut found).await;
     found
+}
+
+/// Once read, the concurrency limits' counts hold exactly the open attempts (decision 88A:
+/// a rolled-back change leaves them as stored).
+async fn count_problems(db: &Database, dispatcher: &Dispatcher, found: &mut Vec<String>) {
+    let active = dispatcher.active();
+    if !active.is_loaded() {
+        return;
+    }
+    let all_open = db.open_attempts(None).await.expect("the attempts read");
+    let open: BTreeSet<&str> = all_open.iter().map(|a| a.id.as_str()).collect();
+    let counted = active.attempt_ids();
+    for attempt in open.difference(&counted) {
+        found.push(format!(
+            "attempt `{attempt}` open, not counted for the limits"
+        ));
+    }
+    for attempt in counted.difference(&open) {
+        found.push(format!(
+            "attempt `{attempt}` counted for the limits, not open"
+        ));
+    }
 }
 
 /// A cancel queued for the next step must have its reason stored: the task or the run being

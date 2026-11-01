@@ -139,6 +139,17 @@ pub struct CommandRecord {
     pub decided_at: Option<Timestamp>,
 }
 
+/// What [`Database::submit_command`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Submitted {
+    /// Stored: the new command's ID.
+    New(String),
+    /// Sent before with this key: the command stored then, unchanged.
+    Again(String),
+    /// The key was used by the same person for another command: nothing stored.
+    KeyTaken,
+}
+
 type RecordRow = (
     String,
     String,
@@ -162,19 +173,70 @@ impl Database {
         requested_by: &str,
         now: Timestamp,
     ) -> Result<String, DbError> {
-        const INSERT: &str = "INSERT INTO commands (id, kind, payload, requested_by, requested_at) \
-            VALUES ($1{uuid}, $2, $3{json}, $4, $5{ts})";
+        match self
+            .submit_command(command, requested_by, None, now)
+            .await?
+        {
+            Submitted::New(id) | Submitted::Again(id) => Ok(id),
+            Submitted::KeyTaken => unreachable!("a command without a key is always new"),
+        }
+    }
+
+    /// Writes a command for the master, once per `key` (the client's `Idempotency-Key`, B140):
+    /// a request sent again after its answer was lost finds the command it stored, as long as
+    /// the same person sends the same command with it.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails or the stored command doesn't read.
+    pub async fn submit_command(
+        &self,
+        command: &Command,
+        requested_by: &str,
+        key: Option<&str>,
+        now: Timestamp,
+    ) -> Result<Submitted, DbError> {
+        const INSERT: &str = "INSERT INTO commands \
+            (id, kind, payload, requested_by, requested_at, request_key) \
+            VALUES ($1{uuid}, $2, $3{json}, $4, $5{ts}, $6) \
+            ON CONFLICT (requested_by, request_key) WHERE request_key IS NOT NULL DO NOTHING";
+        const BY_KEY: &str = "SELECT id{text}, payload{text} FROM commands \
+            WHERE requested_by = $1 AND request_key = $2";
         let id = Uuid::now_v7().to_string();
-        in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, INSERT))
+        let payload = to_json(command);
+        let earlier: Option<(String, String)> = in_tx!(self, |tx, backend| {
+            let inserted = sqlx::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(command.kind())
-                .bind(to_json(command))
+                .bind(&payload)
                 .bind(requested_by)
                 .bind(db_time(now))
+                .bind(key)
                 .execute(&mut *tx)
-                .await?;
+                .await?
+                .rows_affected();
+            if inserted == 1 {
+                None
+            } else {
+                Some(
+                    sqlx::query_as(sql(backend, BY_KEY))
+                        .bind(requested_by)
+                        .bind(key)
+                        .fetch_one(&mut *tx)
+                        .await?,
+                )
+            }
         });
+        if let Some((earlier, stored)) = earlier {
+            // The same command again (its payload names its kind), or another under its key.
+            let stored: serde_json::Value = from_json("commands.payload", &stored)?;
+            let sent: serde_json::Value = from_json("commands.payload", &payload)?;
+            return Ok(if stored == sent {
+                Submitted::Again(earlier)
+            } else {
+                Submitted::KeyTaken
+            });
+        }
         if let Pool::Postgres(pool) = self.pool()
             && self.notifications().on
         {
@@ -189,7 +251,7 @@ impl Database {
                 tracing::warn!(%error, command_id = %id, "command stored, notification failed");
             }
         }
-        Ok(id)
+        Ok(Submitted::New(id))
     }
 
     /// Listens for new commands: notifications on Postgres, through `notifications_url` if

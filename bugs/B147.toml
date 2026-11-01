@@ -1,0 +1,11 @@
+title = "each run refresh reads every chosen branch's output again, one at a time"
+severity = "medium"
+probability = "possible"
+kind = "performance"
+summary = "the run page's graph reads each succeeded branch's output on every refresh, serially, so a run with many branches refreshes slowly (each refresh the sum of their latencies)"
+found = 2026-11-01
+suspected = false
+details = '''
+- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/runs.rs:666` (`chosen_by_branches`). Codex's proof: 4 branches at 40 ms, 8 calls, at most one at a time, 340 ms.
+- **A fix:** concurrent reads (bounded), and a finished branch's choice cached.
+'''

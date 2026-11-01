@@ -21,6 +21,8 @@ timeout and no retries, and keeps the DAG's `retry_delay` and `max_output_size`.
 | `preload` | `True` | A Python task forks from the preloaded fork server. `False` forks only from the bare one, for code that misbehaves next to the preloaded libraries. |
 | `fresh_process` | `False` | A Python task is always a new process, never forked, for code that misbehaves after a fork. `True` wins when `preload` is also set. |
 | `run_if` | `RunIf.NONE_FAILED` | When the task runs, from its upstream edges. `RunIf.ALL_SUCCEEDED` runs only if every edge succeeded. [Routing by outcome](08-outcomes.md). |
+| `max_active` | none | At most this many of the task's instances run at once, across all the DAG's runs. [Concurrency limits](#concurrency-limits). |
+| `max_active_per_run` | none | At most this many of the task's instances run at once within one run: mainly a mapped task's fan-out. [Concurrency limits](#concurrency-limits). |
 
 A duration is a `timedelta` of whole milliseconds. `retry_delay` must not be negative.
 `timeout` must be positive. `retries` and `max_output_size` must not be negative, and
@@ -39,6 +41,49 @@ A task runs on a worker that serves its queue
 no queues configured, that is `default`. `schedr dags test` starts one worker from that
 configuration, and a task whose queue it does not serve waits until the command's hour
 limit.
+
+## Concurrency limits
+
+Worker slots and queues say how much can run. The limits say how much **should**, whatever
+the slots:
+
+- **`Dag(max_active_tasks=N)`**: at most `N` tasks of the DAG run at once, across all its
+  runs. It keeps one big DAG from filling every worker, or limits the load it puts on another
+  system.
+- **`@task(max_active=N)`**: at most `N` instances of the task at once, across all runs (a
+  task holding an external lock: `max_active=1`).
+- **`@task(max_active_per_run=N)`**: at most `N` instances of the task at once within one
+  run: a mapped task over 1,000 elements, 10 at a time.
+
+```python
+with Dag("sync", max_active_tasks=20):
+
+    @task(max_active_per_run=10)
+    def fetch(url: str) -> bytes: ...
+
+    fetch.expand(url=urls)
+```
+
+`max_active` and `max_active_per_run` exist on `@task`, `.override(...)`, `TaskDefaults` and
+`CommandOperator`. `None`, the default, means no limit, and a value below 1 is a
+`ValueError` (the master refuses it too). Each instance of a mapped task counts toward all
+three. A task counts while its attempt is open: assigned and not yet started, running, or
+cleaning up. A task waiting for its retry, an `EmptyOperator` and a task the master
+completes never count. `max_active_per_run` set on a task that isn't mapped limits nothing,
+since it has one instance a run: `schedr dags check` warns (a `DagHint`), except for a
+value from `TaskDefaults`, which is meant for the mapped ones.
+
+A ready task whose limit is reached stays `queued`, with the reason shown in the UI and the
+API: "waiting: `max_active_per_run` (10) reached". When a place frees, the oldest ready task
+the limits allow goes first. Lowering a limit lets what runs finish, and holds new ones
+until under it. The limits across runs (`max_active_tasks`, `max_active`) are always the
+DAG's current version's; `max_active_per_run` is the run's own version's. The DAG's page in
+the UI, and `GET /api/v1/dags/{dag_id}`, show each limit with how many run now. The metric
+`schedr_tasks_waiting`, with `reason` `max_active_tasks`, `max_active` or
+`max_active_per_run`, counts the waiting ones.
+
+Limits shared by several DAGs (Airflow's pools) don't exist: a queue with a dedicated
+worker group of fixed slots does that.
 
 ## What a failure does
 

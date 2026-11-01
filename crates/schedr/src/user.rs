@@ -60,13 +60,21 @@ pub async fn run_dags<T: Transport>(
         }
         DagsCommand::Pause { dag } => {
             let command = client
-                .wait(client.set_paused(dag, true, false).await?)
+                .wait(
+                    client
+                        .send_command(|| client.set_paused(dag, true, false))
+                        .await?,
+                )
                 .await?;
             done(out, output, &command, &format!("paused {dag}"))?;
         }
         DagsCommand::Unpause { dag } => {
             let command = client
-                .wait(client.set_paused(dag, false, false).await?)
+                .wait(
+                    client
+                        .send_command(|| client.set_paused(dag, false, false))
+                        .await?,
+                )
                 .await?;
             done(out, output, &command, &format!("unpaused {dag}"))?;
         }
@@ -123,7 +131,11 @@ pub async fn run_workers<T: Transport>(
         }
         WorkersCommand::Drain { worker } => {
             let command = client
-                .wait(client.worker_action(worker, WorkerAction::Drain).await?)
+                .wait(
+                    client
+                        .send_command(|| client.worker_action(worker, WorkerAction::Drain))
+                        .await?,
+                )
                 .await?;
             let running = command
                 .result
@@ -142,7 +154,11 @@ pub async fn run_workers<T: Transport>(
         }
         WorkersCommand::Resume { worker } => {
             let command = client
-                .wait(client.worker_action(worker, WorkerAction::Resume).await?)
+                .wait(
+                    client
+                        .send_command(|| client.worker_action(worker, WorkerAction::Resume))
+                        .await?,
+                )
                 .await?;
             done(out, output, &command, &format!("resumed {worker}"))
         }
@@ -188,7 +204,9 @@ pub async fn run_runs<T: Transport>(
                 return Err(not_yet("runs trigger -p / --params", "M4"));
             }
             let at = for_time(planned_for.as_deref(), err)?;
-            let command = client.wait(client.trigger(dag, at).await?).await?;
+            let command = client
+                .wait(client.send_command(|| client.trigger(dag, at)).await?)
+                .await?;
             let run_id = command
                 .result
                 .as_ref()
@@ -230,7 +248,9 @@ pub async fn run_runs<T: Transport>(
             let Some(run_id) = run_id.as_deref().filter(|_| backfill.is_none()) else {
                 return Err(not_yet("runs cancel --backfill", "M4"));
             };
-            let command = client.wait(client.cancel(run_id).await?).await?;
+            let command = client
+                .wait(client.send_command(|| client.cancel(run_id)).await?)
+                .await?;
             let stopping = command
                 .result
                 .as_ref()
@@ -296,7 +316,11 @@ pub async fn run_tasks<T: Transport>(
     let (run_id, task_id) = (&target.run_id, &target.task_id);
     let instance = (task_id.as_str(), target.map_index);
     let command = client
-        .wait(client.task_action(run_id, instance, action).await?)
+        .wait(
+            client
+                .send_command(|| client.task_action(run_id, instance, action))
+                .await?,
+        )
         .await?;
     let task_id = shown_task(task_id, target.map_index);
     let state = command

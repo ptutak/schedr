@@ -25,6 +25,9 @@ pub enum ApiError {
     /// Refused whoever asks (a write from another site's page).
     #[error("{0}")]
     Forbidden(String),
+    /// Well-formed, but not to be done: an `Idempotency-Key` sent before with another command.
+    #[error("{0}")]
+    Unprocessable(String),
     /// Something the request needs can't be reached now (a worker holding a log).
     #[error("{0}")]
     Unavailable(String),
@@ -42,6 +45,7 @@ impl ApiError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
+            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

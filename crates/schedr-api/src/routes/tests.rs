@@ -985,3 +985,80 @@ async fn map_index_minus_one_on_output_is_the_mapped_tasks_whole_output() {
     assert_eq!(whole.1["value"], json!([null, null]));
     assert_eq!(get(&app, &format!("{path}?map_index=-1")).await, whole);
 }
+
+/// `send` with an `Idempotency-Key`.
+async fn send_keyed(app: &axum::Router, uri: &str, body: &str, key: &str) -> (StatusCode, Json) {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("x-forwarded-user", "anna")
+        .header("content-type", "application/json")
+        .header("idempotency-key", key)
+        .body(Body::from(body.to_owned()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Json::Null))
+}
+
+#[tokio::test]
+async fn a_command_sent_again_with_its_key_is_the_same_command() {
+    // B140: an answer lost after the command was stored; the client sends it again.
+    let (app, db, _run) = api().await;
+    let trigger = "/api/v1/dags/sync/runs";
+    let (status, first) = send_keyed(&app, trigger, "", "0190a0a0-key").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, again) = send_keyed(&app, trigger, "", "0190a0a0-key").await;
+    assert_eq!((status, &again), (StatusCode::ACCEPTED, &first));
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 1);
+    // The same key for another command is refused; a bad key too.
+    let (status, body) = send_keyed(&app, "/api/v1/dags/sync/pause", "", "0190a0a0-key").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["error"].as_str().unwrap().contains("another command"),
+        "{body}"
+    );
+    for bad in ["a b", &"k".repeat(MAX_REQUEST_KEY + 1)] {
+        let (status, _) = send_keyed(&app, trigger, "", bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(db.pending_commands(100).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn one_dags_view_shows_its_limits_with_how_many_run() {
+    // M4.4, decision 96: each limit set, with its count of open attempts.
+    let fetch = json!({
+        "id": "fetch", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576,
+            "max_active": 5, "max_active_per_run": 2
+        },
+        "output_type": {"type": "int"},
+        "expand": {"product": [{"name": "n", "value": {"literal": [1, 2]}}]}
+    });
+    let instances = [
+        ("fetch", -1, TaskInstanceState::Running),
+        ("fetch", 0, TaskInstanceState::Queued),
+        ("fetch", 1, TaskInstanceState::Queued),
+    ];
+    let (app, db, _run) = api_with(fetch, &instances).await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    db.assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, body) = get(&app, "/api/v1/dags/sync").await;
+    assert_eq!(
+        body["limits"],
+        json!([
+            {"limit": "max_active", "task_id": "fetch", "value": 5, "running": 1},
+            {"limit": "max_active_per_run", "task_id": "fetch", "value": 2, "running": 1}
+        ])
+    );
+    // Not in the list: counting there would cost a query per DAG.
+    let (_, list) = get(&app, "/api/v1/dags").await;
+    assert_eq!(list["dags"][0].get("limits"), None);
+}

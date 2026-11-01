@@ -508,3 +508,32 @@ async fn the_ui_signs_people_in_and_passes_their_name_on() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(*recording.users.lock().unwrap(), [Some("anna".to_owned())]);
 }
+
+#[tokio::test]
+async fn a_dag_page_shows_its_limits_and_which_are_reached() {
+    // M4.4, decision 96.
+    let mut webserver = etl();
+    let mut sync = dag("sync", false);
+    sync["limits"] = json!([
+        {"limit": "max_active_tasks", "task_id": null, "value": 10, "running": 3},
+        {"limit": "max_active_per_run", "task_id": "fetch", "value": 2, "running": 2}
+    ]);
+    webserver
+        .answers
+        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
+    let app = ui(vec![deployment("etl", webserver)]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(
+        texts(&html, "ul.limits li"),
+        [
+            "max_active_tasks 10 on the DAG: 3 running",
+            "max_active_per_run 2 on task fetch, in each run: 2 running in its busiest run \
+             (reached: the rest wait)"
+        ]
+    );
+    assert_eq!(texts(&html, "ul.limits li.reached").len(), 1);
+    // None set: no limits shown.
+    let app = ui(vec![deployment("etl", etl())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(texts(&html, "ul.limits"), Vec::<String>::new());
+}

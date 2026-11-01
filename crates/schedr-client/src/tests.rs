@@ -271,6 +271,7 @@ async fn the_router_transport_calls_the_api_in_process() {
             method: Method::Post,
             path: "/api/v1/echo".to_owned(),
             body: Some(json!({"a": 1})),
+            key: None,
         })
         .await
         .unwrap();
@@ -286,6 +287,7 @@ async fn the_router_transport_calls_the_api_in_process() {
             method: Method::Get,
             path: "/api/v1/plain".to_owned(),
             body: None,
+            key: None,
         })
         .await
         .unwrap();
@@ -386,6 +388,7 @@ async fn the_api_in_process_takes_its_ui_as_proven() {
         method: Method::Get,
         path: "/api/v1/dags".to_owned(),
         body: None,
+        key: None,
     };
     let answer = USER
         .scope("anna".to_owned(), transport.send(request()))
@@ -448,4 +451,49 @@ async fn a_redirect_is_never_followed_with_the_uis_token() {
         message.contains(&format!("http://{other}/login")),
         "{message}"
     );
+}
+
+#[tokio::test]
+async fn a_command_carries_its_key_and_a_read_none() {
+    // B140: the key is sent with the command (a POST), never with a read.
+    let client = client(vec![
+        (202, command("pending")),
+        (200, command("pending")),
+        (202, command("pending")),
+    ]);
+    with_command_key("k1".to_owned(), async {
+        client.set_paused("sync", true, false).await.unwrap();
+        client
+            .command("0190a3e5-0000-7000-8000-000000000000")
+            .await
+            .unwrap();
+    })
+    .await;
+    client.set_paused("sync", false, false).await.unwrap();
+    let keys: Vec<Option<String>> = client
+        .transport()
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.key.clone())
+        .collect();
+    assert_eq!(keys, [Some("k1".to_owned()), None, None]);
+}
+
+#[tokio::test]
+async fn a_command_with_no_answer_may_have_arrived() {
+    // B140 (a side note): the CLI's last word after its tries isn't "can't reach", which
+    // invites running the command again under a new key.
+    let api = Client::new(
+        HttpTransport::new("http://127.0.0.1:1/", Auth::None),
+        Duration::from_millis(1),
+        Duration::from_millis(50),
+    );
+    let error = api
+        .send_command(|| api.set_paused("sync", true, false))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::Unanswered { .. }), "{error}");
+    assert!(error.to_string().contains("may have arrived"), "{error}");
 }

@@ -55,7 +55,8 @@ const TASKS_WAITING: MetricDoc = MetricDoc {
     kind: MetricKind::Gauge,
     labels: &["reason"],
     help: "Ready tasks not assigned at the last assignment pass, by reason (`next_round`: over \
-           the round's limit of assignments)",
+           the round's limit of assignments; `max_active_tasks`, `max_active`, \
+           `max_active_per_run`: a concurrency limit reached)",
 };
 const ASSIGNMENTS: MetricDoc = MetricDoc {
     name: "assignments",

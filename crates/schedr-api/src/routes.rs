@@ -15,6 +15,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
+use schedr_db::commands::Submitted;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
 use schedr_model::commands::Command;
@@ -27,8 +28,9 @@ use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody,
-    ImportErrorList, ImportErrorView, InstanceQuery, LogChunk, LogQuery, OutputView, PauseRequest,
-    RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerView,
+    ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery, OutputView,
+    PauseRequest, RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList,
+    WorkerView,
 };
 
 #[cfg(test)]
@@ -83,27 +85,31 @@ pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList
 /// finish; kept across restarts until resumed. Applied by the master; poll the command for
 /// the decision.
 #[utoipa::path(post, path = "/api/v1/workers/{worker_id}/drain", tag = "workers",
-    params(("worker_id" = String, Path, description = "The worker's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("worker_id" = String, Path, description = "The worker's ID")),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn drain_worker(
     State(state): State<ApiState>,
     Path(worker_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
-    submit(&state, &user, Command::DrainWorker { worker_id }).await
+    submit(&state, &user, key, Command::DrainWorker { worker_id }).await
 }
 
 /// Let a drained worker take tasks again (`schedr workers resume`). Applied by the master;
 /// poll the command for the decision.
 #[utoipa::path(post, path = "/api/v1/workers/{worker_id}/resume", tag = "workers",
-    params(("worker_id" = String, Path, description = "The worker's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("worker_id" = String, Path, description = "The worker's ID")),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn resume_worker(
     State(state): State<ApiState>,
     Path(worker_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
-    submit(&state, &user, Command::ResumeWorker { worker_id }).await
+    submit(&state, &user, key, Command::ResumeWorker { worker_id }).await
 }
 
 /// One DAG.
@@ -117,19 +123,32 @@ pub async fn get_dag(
     let dag_id = parse_dag_id(&dag_id)?;
     let dag = known_dag(&state, &dag_id).await?;
     let held = Held::by_file(&state.db.current_import_errors().await?);
-    Ok(Json(DagView::of(&dag, &held)))
+    let mut view = DagView::of(&dag, &held);
+    if let Some(current) = &dag.current {
+        let limited = current.dag.max_active_tasks.is_some()
+            || current.dag.tasks.iter().any(|t| {
+                t.settings.max_active.is_some() || t.settings.max_active_per_run.is_some()
+            });
+        if limited {
+            let counts = state.db.active_counts(&dag_id).await?;
+            view.limits = LimitView::of(&current.dag, &counts);
+        }
+    }
+    Ok(Json(view))
 }
 
 /// Pause a DAG: the scheduler creates no runs of it (optionally cancelling those in
 /// progress). Applied by the master; poll the command for the decision.
 #[utoipa::path(post, path = "/api/v1/dags/{dag_id}/pause", tag = "dags",
-    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
     request_body(content = PauseRequest, description = "Optional; `{}` by default"),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn pause_dag(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
     body: Bytes,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
@@ -137,6 +156,7 @@ pub async fn pause_dag(
     submit(
         &state,
         &user,
+        key,
         Command::PauseDag {
             dag_id,
             cancel_runs: request.cancel_runs,
@@ -147,15 +167,17 @@ pub async fn pause_dag(
 
 /// Unpause a DAG. Applied by the master; poll the command for the decision.
 #[utoipa::path(post, path = "/api/v1/dags/{dag_id}/unpause", tag = "dags",
-    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn unpause_dag(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
-    submit(&state, &user, Command::UnpauseDag { dag_id }).await
+    submit(&state, &user, key, Command::UnpauseDag { dag_id }).await
 }
 
 /// A DAG's runs, newest first.
@@ -186,13 +208,15 @@ pub async fn list_runs(
 /// Start a manual run (`schedr runs trigger`). Applied by the master; poll the command for the
 /// decision and the run's ID.
 #[utoipa::path(post, path = "/api/v1/dags/{dag_id}/runs", tag = "runs",
-    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
     request_body(content = TriggerRequest, description = "Optional; now by default"),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn trigger_run(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
     body: Bytes,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
@@ -200,6 +224,7 @@ pub async fn trigger_run(
     submit(
         &state,
         &user,
+        key,
         Command::TriggerRun {
             dag_id,
             planned_for: request.planned_for,
@@ -450,22 +475,24 @@ pub async fn get_run(
 /// Cancel a run (`schedr runs cancel`). Applied by the master; poll the command for the
 /// decision.
 #[utoipa::path(post, path = "/api/v1/runs/{run_id}/cancel", tag = "runs",
-    params(("run_id" = String, Path, description = "The run's ID")),
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("run_id" = String, Path, description = "The run's ID")),
     responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
 pub async fn cancel_run(
     State(state): State<ApiState>,
     Path(run_id): Path<String>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
-    submit(&state, &user, Command::CancelRun { run_id }).await
+    submit(&state, &user, key, Command::CancelRun { run_id }).await
 }
 
 /// Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at once if
 /// it hasn't started; the tasks downstream of it are cancelled. Applied by the master; poll
 /// the command for the decision.
 #[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/cancel", tag = "runs",
-    params(
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
         ("run_id" = String, Path, description = "The run's ID"),
         ("task_id" = String, Path, description = "The task's ID"),
         InstanceQuery
@@ -480,6 +507,7 @@ pub async fn cancel_task(
     Path((run_id, task_id)): Path<(String, String)>,
     query: Result<Query<InstanceQuery>, QueryRejection>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -496,13 +524,13 @@ pub async fn cancel_task(
         task_id,
         map_index,
     };
-    submit(&state, &user, command).await
+    submit(&state, &user, key, command).await
 }
 
 /// Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the
 /// master; poll the command for the decision.
 #[utoipa::path(post, path = "/api/v1/runs/{run_id}/tasks/{task_id}/retry", tag = "runs",
-    params(
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
         ("run_id" = String, Path, description = "The run's ID"),
         ("task_id" = String, Path, description = "The task's ID"),
         InstanceQuery
@@ -517,6 +545,7 @@ pub async fn retry_task(
     Path((run_id, task_id)): Path<(String, String)>,
     query: Result<Query<InstanceQuery>, QueryRejection>,
     Extension(user): Extension<User>,
+    key: RequestKey,
 ) -> Accepted {
     let run_id = parse_uuid(&run_id, "run")?;
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -533,7 +562,7 @@ pub async fn retry_task(
         task_id,
         map_index,
     };
-    submit(&state, &user, command).await
+    submit(&state, &user, key, command).await
 }
 
 /// The attempts of a run's task, oldest first.
@@ -696,17 +725,68 @@ pub async fn get_command(
     Ok(Json(CommandView::from(&command)))
 }
 
-async fn submit(state: &ApiState, user: &User, command: Command) -> Accepted {
-    let id = state
+async fn submit(state: &ApiState, user: &User, key: RequestKey, command: Command) -> Accepted {
+    let submitted = state
         .db
-        .insert_command(&command, &user.0, (state.clock)())
+        .submit_command(&command, &user.0, key.0.as_deref(), (state.clock)())
         .await?;
+    let id = match submitted {
+        Submitted::New(id) | Submitted::Again(id) => id,
+        Submitted::KeyTaken => {
+            return Err(ApiError::Unprocessable(
+                "this `Idempotency-Key` was sent before with another command: use a new key \
+                 for each command"
+                    .to_owned(),
+            ));
+        }
+    };
     let record = state
         .db
         .command(&id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no command `{id}`")))?;
     Ok((StatusCode::ACCEPTED, Json(CommandView::from(&record))))
+}
+
+/// The longest `Idempotency-Key` taken.
+pub const MAX_REQUEST_KEY: usize = 128;
+
+/// A command request's `Idempotency-Key` header, if sent (B140): the client's key for this
+/// request, so one sent again after its answer was lost is stored once. 1 to
+/// [`MAX_REQUEST_KEY`] visible ASCII characters (a UUID, say).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestKey(pub Option<String>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for RequestKey {
+    type Rejection = ApiError;
+
+    fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(Self::read(parts))
+    }
+}
+
+impl RequestKey {
+    /// The key in `parts`' headers, if any, or why it isn't one.
+    fn read(parts: &axum::http::request::Parts) -> Result<Self, ApiError> {
+        let Some(value) = parts.headers.get("idempotency-key") else {
+            return Ok(Self(None));
+        };
+        let key = value
+            .to_str()
+            .ok()
+            .filter(|k| {
+                (1..=MAX_REQUEST_KEY).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_graphic())
+            })
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "`Idempotency-Key` must be 1 to {MAX_REQUEST_KEY} visible ASCII characters"
+                ))
+            })?;
+        Ok(Self(Some(key.to_owned())))
+    }
 }
 
 async fn known_dag(

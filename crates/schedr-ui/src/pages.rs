@@ -65,6 +65,44 @@ struct DagPage {
     runs_href: String,
     /// Where its actions are posted (`.../pause`, `.../trigger`).
     actions: String,
+    /// Its concurrency limits, each with how many run now (decision 96).
+    limits: Vec<LimitRow>,
+}
+
+/// A concurrency limit as the DAG page shows it.
+struct LimitRow {
+    /// The limit's name.
+    name: String,
+    /// What it is on: "the DAG", "task `x`" (per run: "task `x`, in each run").
+    of: String,
+    value: u32,
+    /// How many run now, as said ("7 running", "7 running in its busiest run").
+    running: String,
+    /// Reached: what it limits waits.
+    reached: bool,
+}
+
+impl LimitRow {
+    fn of(limit: &schedr_api::views::LimitView) -> Self {
+        let per_run = limit.limit == "max_active_per_run";
+        let of = match (&limit.task_id, per_run) {
+            (None, _) => "the DAG".to_owned(),
+            (Some(task), false) => format!("task {task}, across its runs"),
+            (Some(task), true) => format!("task {task}, in each run"),
+        };
+        let running = if per_run {
+            format!("{} running in its busiest run", limit.running)
+        } else {
+            format!("{} running", limit.running)
+        };
+        Self {
+            name: limit.limit.clone(),
+            of,
+            value: limit.value,
+            running,
+            reached: limit.running >= limit.value,
+        }
+    }
 }
 
 /// An error page.
@@ -158,6 +196,7 @@ pub async fn dag<T: Transport>(
     let conflicts = dag.conflict.iter().flatten().map(location).collect();
     render(
         &DagPage {
+            limits: dag.limits.iter().map(LimitRow::of).collect(),
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),

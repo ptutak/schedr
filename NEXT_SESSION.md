@@ -4,6 +4,21 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-01, night)
+
+- **M4.4 done (concurrency limits), M4.4b next, then bugs** (the user, 2026-11-01 night:
+  "once you finish M4.4b in case there are no decisions to make commit and push, after that
+  go back to bugs, start fixing if no decisions to make, fix until I come back").
+  `limits.rs` in the master (open attempts counted by DAG, task and a run's task; read once
+  from the database; rolled back with memory), the DAG page's limits with counts, the
+  integration test, stress scenario 16 (written, not run), B119 fixed.
+- **F10 and F11 scanned** (Codex, weekly ~53%): F10's B133/B134 fixed, B135-B139 logged;
+  F11's B140 (critical, a lost answer shown "not sent" inviting a second run) fixed by
+  **decision 126** (the `Idempotency-Key`: one command per key and person, resent by the UI
+  and CLI up to 3 times, the browser keeping its key until an answer is definite),
+  B141-B147 logged (medium), the docs finding fixed. **F12-F14 still to scan.**
+- A test-only flake fixed: `service/tests.rs`'s shared moving clock (`own_clock`).
+
 ## State (2026-10-31, evening)
 
 - **M1–M3 done; M4 in progress.** M4.1–M4.3 done. **Now: M4.3e, the bug pause before
@@ -244,6 +259,3 @@ the morning, listed below.
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
-
-Resume this session with:
-claude --resume 8b1bd615-ec70-4343-ae4d-2552c481b4b4
