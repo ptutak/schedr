@@ -2,7 +2,7 @@
 //! fail, as a database error would, to check that what the caller does leaves nothing
 //! half-done. Compiled only for tests (this crate's, or the `testing` feature's).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::database::{Database, DbError};
 
@@ -12,6 +12,8 @@ pub(crate) struct Faults {
     writes: AtomicU64,
     /// The write to fail, counted from 1; 0 for none.
     fail_at: AtomicU64,
+    /// Whether the next commit's answer is lost (it stores).
+    lose_commit: AtomicBool,
 }
 
 impl Faults {
@@ -25,9 +27,20 @@ impl Faults {
         }
         Ok(())
     }
+
+    /// Whether this commit's answer is to be lost (once).
+    pub(crate) fn commit_answer_lost(&self) -> bool {
+        self.lose_commit.swap(false, Ordering::SeqCst)
+    }
 }
 
 impl Database {
+    /// Makes the next transaction's commit store it and then fail with
+    /// [`DbError::CommitUnknown`], as when the commit's answer is lost on the way back.
+    pub fn lose_commit_answer(&self) {
+        self.faults().lose_commit.store(true, Ordering::SeqCst);
+    }
+
     /// Counts the writes from now on, failing none (see [`Self::writes`]).
     pub fn count_writes(&self) {
         self.faults().fail_at.store(0, Ordering::SeqCst);

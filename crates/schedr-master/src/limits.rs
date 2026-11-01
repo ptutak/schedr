@@ -179,31 +179,36 @@ impl Active {
         task_id: &TaskId,
     ) -> Option<Reached> {
         let dag_id = &own.id;
+        let reached = |name, limit: Option<u32>, count: u32| {
+            limit
+                .filter(|&value| count >= value)
+                .map(|value| Reached { name, value })
+        };
+        // The DAG's cap first, without looking the task up: with it reached, every ready task
+        // of the DAG is held back at once (Codex's review of M4.4: two searches of the DAG's
+        // tasks for each of them, every round).
+        if let Some(cap) = reached(
+            "max_active_tasks",
+            current.max_active_tasks,
+            self.of_dag(dag_id),
+        ) {
+            return Some(cap);
+        }
         let task_limit = current
             .task(task_id)
             .or_else(|| own.task(task_id))
             .and_then(|t| t.settings.max_active);
+        if let Some(task) = reached("max_active", task_limit, self.of_task(dag_id, task_id)) {
+            return Some(task);
+        }
         let per_run = own
             .task(task_id)
             .and_then(|t| t.settings.max_active_per_run);
-        let checks = [
-            (
-                "max_active_tasks",
-                current.max_active_tasks,
-                self.of_dag(dag_id),
-            ),
-            ("max_active", task_limit, self.of_task(dag_id, task_id)),
-            (
-                "max_active_per_run",
-                per_run,
-                self.of_run_task(run_id, task_id),
-            ),
-        ];
-        checks.into_iter().find_map(|(name, limit, count)| {
-            limit
-                .filter(|&value| count >= value)
-                .map(|value| Reached { name, value })
-        })
+        reached(
+            "max_active_per_run",
+            per_run,
+            self.of_run_task(run_id, task_id),
+        )
     }
 }
 

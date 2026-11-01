@@ -68,24 +68,32 @@ step touches their code or the user schedules them.
 | 13 | B135: a truncated bcrypt hash replaces the working users on reload | 4 | medium | possible | reliability |
 | 14 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
 | 15 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 16 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
-| 17 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 18 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 19 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 20 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 21 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 22 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 23 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 24 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 25 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 26 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 27 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 28 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 29 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 30 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 31 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 32 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 33 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 16 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 17 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
+| 18 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 19 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 20 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 21 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 22 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 23 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 24 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 25 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 26 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 27 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 28 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 29 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 30 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 31 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 32 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 33 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 34 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B148: the limit check searches a DAG's task list for each ready task, every round
+
+- **Rating:** severity **medium**, probability **rare**, performance (score 2): with thousands of ready tasks in one DAG under a task limit, each round looks every one up twice in the DAG's task list (`Dag::task` is a linear search): quadratic work under the master's lock.
+- **Found:** 2026-11-01, by Codex's review of M4.4 (finding 3), measured in a debug build: limit checks alone took 25 ms for 1,000 ready tasks, 379 ms for 4,000, 2.1 s for 8,000. `crates/schedr-master/src/limits.rs` (`Active::reached`).
+- **Done meanwhile:** the DAG's `max_active_tasks` is checked first, with no lookup; once it is reached, every ready task of the DAG is held back without a search. What remains is a DAG under its cap with many ready tasks that have their own limits.
+- **A fix:** look the task up once (`assign_one` already has it) and pass its settings in, or index a DAG's tasks by ID when its version is read.
 
 ## B147: each run refresh reads every chosen branch's output again, one at a time
 

@@ -185,6 +185,14 @@ pub enum DispatchError {
     },
 }
 
+impl DispatchError {
+    /// Whether it is a commit whose answer was lost: it may have stored.
+    #[must_use]
+    pub const fn commit_unknown(&self) -> bool {
+        matches!(self, Self::Db(DbError::CommitUnknown))
+    }
+}
+
 /// Tasks given to workers and their reports handled.
 #[derive(Debug)]
 pub struct Dispatcher {
@@ -307,6 +315,24 @@ impl Dispatcher {
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
+        }
+    }
+
+    /// Drops the concurrency limits' counts, read again from the database at the next round
+    /// with tasks ready: after a commit whose answer was lost (it may have stored what the
+    /// counts were changed for, or not), where neither the counts before nor after can be
+    /// trusted. Put back as they were, an expiry stored would leave its attempt counted for
+    /// good, its DAG's limit holding tasks back until a restart (Codex's review of M4.4).
+    pub fn recount(&mut self) {
+        self.active = Active::new();
+    }
+
+    /// Puts back a copy taken by [`Self::memory`] after its transaction failed; for a commit
+    /// whose answer was lost the counts are read again instead ([`Self::recount`]).
+    pub fn undo(&mut self, memory: Memory, error: &DispatchError) {
+        self.restore(memory);
+        if error.commit_unknown() {
+            self.recount();
         }
     }
 
@@ -571,6 +597,10 @@ impl Dispatcher {
         }
         self.workers = workers;
         self.active = active;
+        if error.commit_unknown() {
+            // Read back as not stored, or not read back at all.
+            self.recount();
+        }
         outgoing.truncate(built);
         if !task_specific(&error) {
             return Err(error);
@@ -683,6 +713,11 @@ impl Dispatcher {
             };
             self.workers = workers;
             self.active = active;
+            if error.commit_unknown() {
+                // The rest of the round counts what is stored.
+                self.recount();
+                self.read_limits().await?;
+            }
             outgoing.truncate(built);
             if !task_specific(&error) {
                 return Err(error);
@@ -1146,8 +1181,8 @@ impl Dispatcher {
     ) -> Result<T, DispatchError> {
         let (db, memory) = (self.db.clone(), self.memory());
         let done = Box::pin(db.atomically(work(self))).await;
-        if done.is_err() {
-            self.restore(memory);
+        if let Err(error) = &done {
+            self.undo(memory, error);
         }
         done
     }

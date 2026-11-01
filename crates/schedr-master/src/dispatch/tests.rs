@@ -2032,6 +2032,28 @@ async fn a_rejected_or_expired_attempt_stops_counting() {
 }
 
 #[tokio::test]
+async fn an_expiry_whose_commit_answer_was_lost_leaves_no_count_behind() {
+    // Codex's review of M4.4: the expiry stored, its commit's answer lost; memory went back
+    // to counting the expired attempt, which no query showed again: the DAG's limit held its
+    // task back until the master restarted.
+    let (mut dispatcher, db, _run_id) =
+        with_run(limited(&json!({}), &json!({"max_active_tasks": 1}))).await;
+    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
+    let expiry = START_TIMEOUT.as_secs() + 1;
+    db.lose_commit_answer();
+    let expired = dispatcher.expire(later(expiry)).await;
+    assert!(
+        matches!(expired, Err(DispatchError::Db(DbError::CommitUnknown))),
+        "{expired:?}"
+    );
+    assert_eq!(
+        assigned(&dispatcher.step(later(expiry)).await.unwrap()).len(),
+        1,
+        "the expired attempt no longer counts"
+    );
+}
+
+#[tokio::test]
 async fn an_instance_is_sent_without_what_its_task_maps_over() {
     // B119: a literal list travelled in every instance's task JSON (its square in all).
     let (mut dispatcher, _db, _run_id) = with_run(limited(&json!({}), &json!({}))).await;

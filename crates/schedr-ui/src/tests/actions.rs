@@ -192,6 +192,66 @@ async fn a_failed_send_says_why() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// What a POST's answer says about its command: its `Schedr-Command-Answer` header.
+async fn answer_kind(app: &axum::Router, path: &str) -> Option<String> {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header(SAME.0, SAME.1)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    response
+        .headers()
+        .get("schedr-command-answer")
+        .map(|value| value.to_str().unwrap().to_owned())
+}
+
+#[tokio::test]
+async fn only_an_answer_from_the_ui_saying_whether_the_command_arrived_drops_the_key() {
+    // Codex's review of B140: the browser dropped its key on any answer htmx swapped in, a
+    // proxy's 502 too (the page swaps error answers in), though the command may have been
+    // stored; sent again, it was a second run. Only the UI's own definite answer, marked by
+    // its header, drops it.
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/dags/sync/runs".to_owned(),
+        (
+            202,
+            command("c3", "trigger_run", "pending", None, &json!(null)),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    assert_eq!(
+        answer_kind(&app, "/d/etl/dags/sync/trigger")
+            .await
+            .as_deref(),
+        Some("definite")
+    );
+    assert_eq!(
+        answer_kind(&app, "/d/nowhere/workers/w1/drain")
+            .await
+            .as_deref(),
+        Some("definite"),
+        "not sent: nothing stored"
+    );
+    let down = Scripted {
+        down: true,
+        ..Scripted::default()
+    };
+    let app = ui(vec![deployment("etl", down)]);
+    assert_eq!(
+        answer_kind(&app, "/d/etl/workers/w1/drain").await,
+        None,
+        "no answer from the webserver: may have arrived"
+    );
+    // The browser reads the header, not whether htmx took the answer as a success.
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert!(html.contains(r#"getResponseHeader("Schedr-Command-Answer") === "definite""#));
+    assert!(!html.contains("event.detail.successful"));
+}
+
 #[tokio::test]
 async fn the_trigger_dialog_shows_the_moment_in_both_zones() {
     let app = ui(vec![deployment("etl", etl())]);
@@ -244,11 +304,10 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
     }
     assert!(html.contains("if (event.detail.elt !== form) return;"));
     // Each dialog opens with the action's key (B140), kept until an answer says whether the
-    // command arrived ("command unknown": no answer, kept).
+    // command arrived (see `only_an_answer_from_the_ui_saying_whether_…`).
     for open in attrs(&html, ".actions button.action", "onclick") {
         assert_eq!(open, "schedrOpen(this)");
     }
-    assert!(html.contains(r#"answer.indexOf("command unknown") < 0"#));
     assert_eq!(
         attrs(&html, "dialog input[name=cancel_runs]", "type"),
         ["checkbox"]

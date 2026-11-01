@@ -395,7 +395,7 @@ def ran(name: str) -> None:
         log.write(f"{{name}} {{start}} {{time.time()}}\\n")
 
 
-with Dag("limited", max_active_tasks=3):
+with Dag("limited", max_active_tasks=2):
 
     @task(max_active_per_run=2)
     def fetch(n: int) -> int:
@@ -439,4 +439,6 @@ def test_concurrency_limits_hold_with_slots_to_spare(
     assert most_at_once(spans["fetch"]) <= 2  # max_active_per_run
     assert most_at_once(spans["other"]) <= 1  # max_active
     together = most_at_once(spans["fetch"] + spans["other"])
-    assert 2 <= together <= 3, together  # max_active_tasks, and tasks did run side by side
+    # max_active_tasks, binding on its own (the tasks' limits would let 3 run), and tasks did
+    # run side by side.
+    assert together == 2, together

@@ -53,10 +53,12 @@ function schedrOpen(button) {
   form.setAttribute("hx-headers", JSON.stringify({"Idempotency-Key": key}));
   dialog.showModal();
 }
+// Only the UI's own definite answer drops the key (its header): not "may have arrived", nor
+// a proxy's error page, which htmx swaps in like any answer.
 function schedrAnswered(form, event) {
   if (event.detail.elt !== form) return;
-  var answer = event.detail.xhr ? event.detail.xhr.responseText : "";
-  if (event.detail.successful && answer.indexOf("command unknown") < 0) {
+  var xhr = event.detail.xhr;
+  if (xhr && xhr.getResponseHeader("Schedr-Command-Answer") === "definite") {
     delete form.dataset.key;
     try { sessionStorage.removeItem(schedrKeyName(form)); } catch (e) {}
   }

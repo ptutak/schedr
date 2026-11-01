@@ -411,7 +411,7 @@ fn shown<T>(
                 format!("run {run_id}"),
             )
         });
-    fragment(&CommandFragment {
+    definite(fragment(&CommandFragment {
         what,
         status: command.status.clone(),
         reason: command.reason.clone().unwrap_or_default(),
@@ -419,7 +419,7 @@ fn shown<T>(
         link,
         poll_ms: POLL_MS,
         command_id: command.command_id.clone(),
-    })
+    }))
 }
 
 /// Where a pending command's fragment reads it again.
@@ -435,7 +435,7 @@ fn poll_url<T>(page: &Page, deployment: &Deployment<T>, command_id: &str, what: 
 
 /// A command that couldn't be sent.
 fn failed(what: String, reason: &str) -> Response {
-    fragment(&CommandFragment {
+    definite(fragment(&CommandFragment {
         what,
         status: "failed".to_owned(),
         reason: reason.to_owned(),
@@ -443,7 +443,25 @@ fn failed(what: String, reason: &str) -> Response {
         link: None,
         poll_ms: POLL_MS,
         command_id: String::new(),
-    })
+    }))
+}
+
+/// The header marking an action's answer as definite: the command was stored (its status
+/// shown), or surely not. Only this drops the browser's key for the action (`schedrAnswered`
+/// in `base.html`): any other answer (the UI's "may have arrived", a proxy's error page, a
+/// fragment the UI failed to render) keeps it, so sending the action again from the page gives
+/// the command stored, if it was (B140).
+pub const ANSWER_HEADER: &str = "schedr-command-answer";
+
+/// `response` marked as a definite answer ([`ANSWER_HEADER`]), if it is one the UI rendered.
+fn definite(mut response: Response) -> Response {
+    if response.status().is_success() {
+        response.headers_mut().insert(
+            header::HeaderName::from_static(ANSWER_HEADER),
+            header::HeaderValue::from_static("definite"),
+        );
+    }
+    response
 }
 
 fn fragment(template: &CommandFragment) -> Response {

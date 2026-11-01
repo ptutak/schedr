@@ -125,6 +125,11 @@ impl Database {
             })
             .await
             .map_err(DbError::from_commit)?;
+            // A test's commit stored, its answer lost (see `Database::lose_commit_answer`).
+            #[cfg(any(test, feature = "testing"))]
+            if self.faults().commit_answer_lost() {
+                return Err(DbError::CommitUnknown.into());
+            }
         } else {
             // Nothing of it is stored either way: a rollback that fails closes the connection.
             let _ = self

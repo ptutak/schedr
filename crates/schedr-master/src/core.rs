@@ -838,7 +838,7 @@ impl MasterCore {
                 Ok(None)
             }
             Err(error) => {
-                self.dispatcher.restore(memory);
+                self.dispatcher.undo(memory, &error);
                 Err(error.into())
             }
         }
@@ -1004,6 +1004,11 @@ impl MasterCore {
         .await;
         if let Err(error) = stored {
             self.dispatcher.restore(memory);
+            if matches!(error, CoreError::Db(DbError::CommitUnknown))
+                || matches!(&error, CoreError::Dispatch(e) if e.commit_unknown())
+            {
+                self.dispatcher.recount();
+            }
             return Err(error);
         }
         // Moved in memory: sent whatever fails after (B7).

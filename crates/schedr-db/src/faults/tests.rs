@@ -71,3 +71,14 @@ async fn a_failed_write_inside_a_transaction_rolls_back_the_writes_before_it() {
         "{handled:?}"
     );
 }
+
+#[tokio::test]
+async fn a_commit_whose_answer_is_lost_stores_and_says_it_may_have() {
+    let db = migrated().await;
+    db.lose_commit_answer();
+    let lost = Box::pin(db.atomically(register(&db, "w1"))).await;
+    assert!(matches!(lost, Err(DbError::CommitUnknown)), "{lost:?}");
+    assert_eq!(db.workers().await.unwrap().len(), 1, "stored");
+    // Once.
+    Box::pin(db.atomically(register(&db, "w2"))).await.unwrap();
+}
