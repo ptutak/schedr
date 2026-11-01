@@ -284,9 +284,27 @@ svg.deployment text.sub { fill: var(--dim); font: 11px system-ui, sans-serif; }
 svg.deployment .box { fill: var(--neutral-bg); stroke: var(--border); stroke-width: 1.5; }
 svg.deployment .node:hover .box { stroke: var(--link); stroke-width: 2.5; }
 svg.deployment .box.leader, svg.deployment .box.active { fill: var(--ok-bg); stroke: var(--ok); }
-svg.deployment .box.standby, svg.deployment .box.draining { fill: var(--waiting-bg); stroke: var(--waiting); }
-svg.deployment .box.lost { fill: var(--failed-bg); stroke: var(--failed); }
-svg.deployment .box.disconnected, svg.deployment .box.offline { fill: var(--bg); stroke: var(--dim); stroke-dasharray: 4 3; }
+svg.deployment .box.standby, svg.deployment .box.draining { stroke: var(--running); }
+svg.deployment .box.disconnected, svg.deployment .box.offline, svg.deployment .box.unreachable { stroke-dasharray: 4 3; }
+/* A node's problems colour it: yellow for a warning, red for an error. */
+svg.deployment .box.warning { fill: var(--waiting-bg); stroke: var(--waiting); }
+svg.deployment .box.error { fill: var(--failed-bg); stroke: var(--failed); }
+svg.deployment text.mark { font: 700 14px system-ui, sans-serif; text-anchor: middle; }
+svg.deployment text.mark.warning { fill: var(--waiting); }
+svg.deployment text.mark.error { fill: var(--failed); }
+svg.deployment .frame-box { fill: none; stroke: var(--edge); stroke-width: 1.2; stroke-dasharray: 6 4; }
+svg.deployment text.frame-label { fill: var(--text); font: 600 13px system-ui, sans-serif; }
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.6; }
+.edge.http { stroke: var(--link); }
+.edge.database { stroke-dasharray: 2 3; stroke-width: 2; }
+.edge.dashed { stroke-dasharray: 6 4; opacity: 0.7; }
+.legend svg { vertical-align: middle; }
+.legend .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; border: 1.5px solid; }
+.legend .swatch.warning { background: var(--waiting-bg); border-color: var(--waiting); }
+.legend .swatch.error { background: var(--failed-bg); border-color: var(--failed); }
+ul.problems { padding-left: 20px; }
+ul.problems li.warning { color: var(--waiting); }
+ul.problems li.error { color: var(--failed); }
 .node-config { display: none; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 12px 0; }
 .node-config:target { display: block; }
 pre.config { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow: auto; max-height: 60vh; }

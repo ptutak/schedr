@@ -521,3 +521,44 @@ async fn check_against_fails_when_no_worker_is_active_or_the_server_is_down() {
     );
     assert!(!err.contains("isn't implemented yet"), "{err}");
 }
+
+#[test]
+fn test_fails_at_once_when_its_root_cant_be_scanned() {
+    // B103: a root its agent can't scan or copy (a file it can't read here) made `dags test`
+    // retry for ever (macOS CI: two hours); it fails with the scan's error.
+    use std::os::unix::fs::PermissionsExt;
+    let local = Local::new(&[("sync.py", GOOD), ("rows.csv", "a,b\n")]);
+    let unreadable = local.root().join("rows.csv");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut child = Command::new(BINARY)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", local.dir.path())
+        .env("TZ", "UTC")
+        .arg("--config")
+        .arg(local.dir.path().join("config.toml"))
+        .args(["dags", "test", "sync", "--path", path_str(&local.root())])
+        .current_dir(local.dir.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(local.dir.path().join("stderr")).unwrap())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let err = std::fs::read_to_string(local.dir.path().join("stderr")).unwrap();
+    let status = status.unwrap_or_else(|| panic!("still running after 30 s: {err}"));
+    assert_eq!(status.code(), Some(1), "{err}");
+    assert!(err.contains("can't scan DAG root `etl`"), "{err}");
+    assert!(err.contains("rows.csv"), "{err}");
+}

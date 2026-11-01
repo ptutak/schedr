@@ -81,6 +81,8 @@ fn app(streams: Streams) -> axum::Router {
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     })
 }
 

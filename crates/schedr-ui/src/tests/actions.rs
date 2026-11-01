@@ -547,6 +547,8 @@ async fn a_command_whose_answer_was_lost_is_sent_again_under_its_key_never_twice
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     });
     let (_, html) = post(
         &app,

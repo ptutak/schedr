@@ -28,6 +28,7 @@ use schedr_config::{AuthMode, AuthSection, Config};
 use schedr_db::Database;
 use schedr_master::core::Settings;
 use schedr_master::metrics::MasterMetrics;
+use schedr_master::problems::Problems;
 use tokio::sync::watch;
 
 use crate::app::AppError;
@@ -229,7 +230,7 @@ pub async fn run(
     let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout)
         .await?
         .with_notifications(setup.notifications, setup.notifications_url.clone());
-    let (master_id, heartbeat) = heartbeat(&db, &setup.config, &stopped);
+    let (master_id, problems, heartbeat) = heartbeat(&db, &setup.config, &stopped);
     let leading = lead(
         &db,
         &setup.database_url,
@@ -243,6 +244,8 @@ pub async fn run(
     // The worker's stop requests: the signals', and the master's failure (two at once: its
     // tasks interrupted, nothing could record them).
     let (request, requests) = watch::channel(0);
+    // Once the master failed, the worker gets [`WORKER_STOP_AFTER_FAILURE`] to stop (B151).
+    let (master_failed, failed) = watch::channel(false);
     let forwarding = tokio::spawn(forward_requests(shutdown, request.clone()));
     // Boxed: the roles' futures are large.
     let master_db = db.clone();
@@ -250,7 +253,7 @@ pub async fn run(
         let served = Box::pin(serve_master(
             master_db,
             setup.master,
-            setup.tick,
+            (setup.tick, problems),
             grpc,
             None,
             leadership,
@@ -261,6 +264,7 @@ pub async fn run(
         if let Err(error) = &served {
             tracing::error!(%error, "the master failed: standalone stops");
             request.send_modify(|requests| *requests = (*requests).max(2));
+            let _ = master_failed.send(true);
         }
         served
     });
@@ -279,17 +283,14 @@ pub async fn run(
         log_listener: logs,
         retention: setup.retention,
     };
-    let worker = Box::pin(async move {
-        run_worker(
-            agent,
-            setup.parse_file_timeout,
-            links,
-            agent_observed,
-            requests,
-        )
-        .await;
-        let _ = stop.send(1);
-    });
+    let worker = Box::pin(run_worker(
+        agent,
+        setup.parse_file_timeout,
+        links,
+        agent_observed,
+        requests,
+    ));
+    let worker = worker_then_stop(worker, failed, stop);
     let (master, api, ()) = tokio::join!(master, api, worker);
     forwarding.abort();
     heartbeat.abort();
@@ -300,20 +301,62 @@ pub async fn run(
     api
 }
 
+/// Runs the worker (given [`WORKER_STOP_AFTER_FAILURE`] once `failed`), then stops the master
+/// and the API.
+async fn worker_then_stop(
+    worker: impl Future<Output = ()>,
+    failed: watch::Receiver<bool>,
+    stop: watch::Sender<u32>,
+) {
+    if !ended_within(worker, failed, WORKER_STOP_AFTER_FAILURE).await {
+        tracing::error!(
+            "the worker didn't stop within {}s of the master's failure: stopping anyway",
+            WORKER_STOP_AFTER_FAILURE.as_secs()
+        );
+    }
+    let _ = stop.send(1);
+}
+
+/// How long the worker gets to stop once the master failed: its tasks are interrupted at once
+/// (nothing could record them), so this is only for a worker stuck on its way out (B151).
+pub const WORKER_STOP_AFTER_FAILURE: Duration = Duration::from_secs(10);
+
+/// Runs `work` to its end, or until `bound` after `failed` turned true: whether it ended.
+/// `failed` closing without turning true bounds nothing.
+pub async fn ended_within(
+    work: impl Future<Output = ()>,
+    mut failed: watch::Receiver<bool>,
+    bound: Duration,
+) -> bool {
+    let cut_short = async {
+        if failed.wait_for(|failed| *failed).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(bound).await;
+    };
+    tokio::select! {
+        () = work => true,
+        () = cut_short => false,
+    }
+}
+
 /// Its master's row on the Deployments page, written from now on until `stopped`: the
-/// master's ID (to take the lease as) and the writing task.
+/// master's ID (to take the lease as), its problems (the master reports them there) and the
+/// writing task.
 fn heartbeat(
     db: &Database,
     config: &serde_json::Value,
     stopped: &watch::Receiver<u32>,
-) -> (String, tokio::task::JoinHandle<()>) {
+) -> (String, Problems, tokio::task::JoinHandle<()>) {
+    let problems = Problems::default();
     let identity = MasterIdentity {
         master_id: new_master_id(),
         config: config.clone(),
+        problems: problems.clone(),
     };
     let master_id = identity.master_id.clone();
     let task = tokio::spawn(heartbeat_master(db.clone(), identity, stopped.clone()));
-    (master_id, task)
+    (master_id, problems, task)
 }
 
 /// The ops port's registry with every part's metrics, and what each part reports to it.

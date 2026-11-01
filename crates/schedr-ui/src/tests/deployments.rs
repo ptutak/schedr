@@ -1,10 +1,12 @@
-//! The Deployments and Config pages (M4.4b), and the Workers page's Master column.
+//! The Deployments page (M4.4b, decisions 128-129), and the Workers page's Master column.
 
 use pretty_assertions::assert_eq;
-use schedr_api::views::DeploymentView;
 
 use super::*;
-use crate::deployments::layout;
+
+use std::time::Duration;
+
+use crate::deployments::{Asked, Level, UiSide, graph, pretty};
 
 const LEADER: &str = "0190a0a0-0000-7000-8000-00000000000a";
 const STANDBY: &str = "0190a0a0-0000-7000-8000-00000000000b";
@@ -46,46 +48,196 @@ fn with_deployment(view: Value) -> Scripted {
     etl
 }
 
-#[test]
-fn a_standalone_process_holds_its_master_and_worker_and_others_one_node_each() {
-    let standalone: DeploymentView = serde_json::from_value(json!({
+fn asked(name: &str, view: Value) -> Asked {
+    Asked {
+        name: name.to_owned(),
+        proof: "token",
+        answer: Ok(serde_json::from_value(view).unwrap()),
+        took: Duration::from_millis(3),
+    }
+}
+
+fn side(process_id: &str) -> UiSide {
+    UiSide {
+        process_id: process_id.to_owned(),
+        host: "ui-host".to_owned(),
+        version: "0.1.0".to_owned(),
+        user: "anna".to_owned(),
+        config: json!({"ui": {"port": 8082, "docs_dir": null}}),
+    }
+}
+
+fn standalone() -> Value {
+    json!({
         "webserver": {"process_id": "p", "host": "h", "schedr_version": "0.1.0", "config": {}},
         "masters": [master(LEADER, "leader", "p", &json!({}))],
         "workers": [worker("standalone", "active", Some(LEADER), Some("p"))],
         "user": "anonymous"
-    }))
-    .unwrap();
-    let processes = layout(&standalone);
-    assert_eq!(processes.len(), 1);
-    assert_eq!(
-        processes[0]
-            .nodes
-            .iter()
-            .map(|n| (n.kind, n.state.as_str()))
-            .collect::<Vec<_>>(),
-        [("master", "leader"), ("worker", "active")]
-    );
-    // Stacked inside their process's rectangle.
-    let (p, nodes) = (&processes[0], &processes[0].nodes);
-    assert!(nodes[1].y > nodes[0].y);
-    assert!(nodes.iter().all(|n| n.x > p.x && n.y > p.y));
-    assert!(nodes[1].y + crate::deployments::NODE_HEIGHT <= p.y + p.height);
-
-    let distributed: DeploymentView = serde_json::from_value(distributed()).unwrap();
-    let processes = layout(&distributed);
-    assert_eq!(
-        processes.iter().map(|p| p.nodes.len()).collect::<Vec<_>>(),
-        [1, 1, 1, 1]
-    );
-    assert_eq!(processes[0].title, "host-p-m1 · p-m1");
-    // Side by side, apart.
-    assert!(processes[1].x >= processes[0].x + crate::deployments::PROCESS_WIDTH);
+    })
 }
 
-#[tokio::test]
-async fn the_deployments_page_lists_each_with_its_leader_and_workers() {
-    let app = ui(vec![
-        deployment("etl", with_deployment(distributed())),
+#[test]
+fn in_standalone_the_ui_is_drawn_inside_the_one_process_with_no_lines_in_it() {
+    let (graph, panels) = graph(&side("p"), &[asked("default", standalone())]);
+    assert_eq!(graph.processes.len(), 1);
+    assert_eq!(graph.frames.len(), 1);
+    assert_eq!(graph.frames[0].title, "default");
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .map(|n| (n.kind, n.anchor.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("ui", "node.ui"),
+            ("webserver", "node.default.webserver"),
+            ("master", &*format!("node.default.master.{LEADER}")),
+            ("worker", "node.default.worker.standalone"),
+        ]
+    );
+    // Stacked inside their process's rectangle, inside the deployment's frame.
+    let (p, f) = (&graph.processes[0], &graph.frames[0]);
+    assert!(graph.nodes.windows(2).all(|n| n[1].y > n[0].y));
+    assert!(graph.nodes.iter().all(|n| n.x > p.x
+        && n.y > p.y
+        && n.y + crate::deployments::NODE_HEIGHT <= p.y + p.height));
+    assert!(p.x > f.x && p.y > f.y && p.y + p.height <= f.y + f.height);
+    // All in one process: no line.
+    assert_eq!(graph.edges, []);
+    assert_eq!(panels[0].anchor, "node.ui");
+}
+
+#[test]
+fn a_distributed_deployment_is_drawn_in_rows_linked_by_http_database_and_grpc() {
+    let mut view = distributed();
+    view["workers"]
+        .as_array_mut()
+        .unwrap()
+        .push(worker("w3", "lost", Some(STANDBY), Some("p-w3")));
+    let (graph, _) = graph(&side("p-ui"), &[asked("etl", view)]);
+    // The UI's own process on top, then the webserver's, the masters', the workers'.
+    assert_eq!(
+        graph
+            .processes
+            .iter()
+            .map(|p| p.title.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "ui-host · p-ui",
+            "web-0 · p-web",
+            "host-p-m1 · p-m1",
+            "host-p-m2 · p-m2",
+            "process · p-w1",
+            "process",
+            "process · p-w3"
+        ]
+    );
+    let y = |i: usize| graph.processes[i].y;
+    assert!(y(0) < graph.frames[0].y);
+    assert!(y(1) < y(2) && y(2) == y(3) && y(3) < y(4) && y(4) == y(5) && y(5) == y(6));
+    assert_eq!(
+        graph
+            .edges
+            .iter()
+            .map(|e| (e.kind, e.dashed))
+            .collect::<Vec<_>>(),
+        [
+            ("database", false),
+            ("database", false),
+            ("grpc", false),
+            ("grpc", true),
+            ("http", false)
+        ]
+    );
+    assert!(
+        graph.edges[3]
+            .title
+            .contains("w3 isn't connected to master 0000000b")
+    );
+    // Wide and tall enough for all of it.
+    assert!(
+        graph
+            .processes
+            .iter()
+            .all(|p| p.x + p.width <= graph.width && p.y + p.height <= graph.height)
+    );
+}
+
+#[test]
+fn an_unreachable_deployment_is_a_red_webserver_and_the_ui_says_so() {
+    let down = Asked {
+        name: "ml".to_owned(),
+        proof: "mTLS",
+        answer: Err("connection refused".to_owned()),
+        took: Duration::from_millis(5),
+    };
+    let mut newer = distributed();
+    newer["webserver"]["schedr_version"] = json!("9.9.9");
+    let (graph, panels) = graph(&side(""), &[asked("etl", newer), down]);
+    let ml = graph
+        .nodes
+        .iter()
+        .find(|n| n.anchor == "node.ml.webserver")
+        .unwrap();
+    assert_eq!(ml.classes(), "box unreachable error");
+    let ui = &graph.nodes[0];
+    assert_eq!((ui.kind, ui.level), ("ui", Level::Error));
+    assert_eq!(
+        panels[0]
+            .problems
+            .iter()
+            .map(|p| (p.error, p.message.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                false,
+                "`etl`'s webserver is version 9.9.9; this UI is 0.1.0"
+            ),
+            (true, "can't reach `ml`'s webserver: connection refused")
+        ]
+    );
+    let line = graph
+        .edges
+        .iter()
+        .find(|e| e.title.contains("`ml`"))
+        .unwrap();
+    assert!(line.dashed);
+    // Its frames side by side.
+    assert!(graph.frames[1].x >= graph.frames[0].x + graph.frames[0].width);
+}
+
+#[test]
+fn a_configuration_is_shown_as_toml_without_its_unset_values() {
+    let config = json!({
+        "ui": {"port": 8082, "docs_dir": null, "deployments": [{"name": "etl", "token_file": null}]},
+        "log_level": "info",
+        "database": {"url": "postgres://schedr:hunter2@db/schedr"}
+    });
+    let shown = pretty(&config);
+    assert!(
+        !shown.contains("null") && !shown.contains("docs_dir") && !shown.contains("token_file"),
+        "{shown}"
+    );
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(shown.contains("log_level = \"info\""), "{shown}");
+    assert!(shown.contains("[ui]\nport = 8082"), "{shown}");
+    assert!(
+        shown.contains("[[ui.deployments]]\nname = \"etl\""),
+        "{shown}"
+    );
+    // Not a table: JSON.
+    assert_eq!(pretty(&json!([1, null])), "[\n  1\n]");
+}
+
+/// A UI with `etl` (a distributed deployment whose nodes have problems) and `ml` (down).
+fn two_deployments() -> axum::Router {
+    let mut view = distributed();
+    view["workers"][0]["queues"] = json!(["default", "large"]);
+    view["workers"][1]["problems"] = json!([{"error": false, "message": "disconnected: lost unless it comes back within its lease"}]);
+    view["masters"][1]["problems"] =
+        json!([{"error": true, "message": "a round failed: the database is gone"}]);
+    ui(vec![
+        deployment("etl", with_deployment(view)),
         deployment(
             "ml",
             Scripted {
@@ -93,87 +245,134 @@ async fn the_deployments_page_lists_each_with_its_leader_and_workers() {
                 ..Scripted::default()
             },
         ),
-    ]);
-    let (status, html) = get(&app, "/deployments", &[]).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        attrs(&html, "table.deployments a", "href"),
-        ["/deployments/etl", "/deployments/ml"]
-    );
-    let etl: Vec<String> = texts(&html, "table.deployments tbody tr:first-child td");
-    assert_eq!(etl, ["etl", "host-p-m1", "2", "1 / 2", "0.1.0"]);
-    assert!(
-        texts(&html, "table.deployments .error")[0].starts_with("Unavailable: "),
-        "{html}"
-    );
-    // In the navigation, in its place.
-    assert_eq!(
-        texts(&html, "header nav a")[..6],
-        [
-            "DAGs",
-            "Runs",
-            "Deployments",
-            "Config",
-            "Workers",
-            "Import errors"
-        ]
-    );
+    ])
 }
 
 #[tokio::test]
-async fn a_deployments_page_draws_its_nodes_and_shows_each_ones_configuration() {
-    let app = ui(vec![deployment("etl", with_deployment(distributed()))]);
-    let (status, html) = get(&app, "/deployments/etl", &[]).await;
+async fn the_deployments_page_draws_everything_with_each_nodes_panel() {
+    let app = two_deployments();
+    let (status, html) = get(&app, "/deployments", &[]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(texts(&html, "svg.deployment .process").len(), 4);
     let anchors = attrs(&html, "svg.deployment a.node", "href");
     assert_eq!(
         anchors,
         [
-            format!("#node-master-{LEADER}"),
-            format!("#node-master-{STANDBY}"),
-            "#node-worker-w1".to_owned(),
-            "#node-worker-w2".to_owned(),
+            "#node.ui".to_owned(),
+            "#node.etl.webserver".to_owned(),
+            format!("#node.etl.master.{LEADER}"),
+            format!("#node.etl.master.{STANDBY}"),
+            "#node.etl.worker.w1".to_owned(),
+            "#node.etl.worker.w2".to_owned(),
+            "#node.ml.webserver".to_owned(),
         ]
     );
     assert_eq!(
         attrs(&html, "svg.deployment rect.box", "class"),
         [
+            "box error",
+            "box",
             "box leader",
-            "box standby",
+            "box standby error",
             "box active",
-            "box disconnected"
+            "box disconnected warning",
+            "box unreachable error",
         ]
     );
+    assert_eq!(
+        texts(&html, "svg.deployment text.mark"),
+        ["×", "×", "!", "×"]
+    );
+    assert_eq!(
+        texts(&html, "svg.deployment text.frame-label"),
+        ["etl", "ml"]
+    );
+    assert!(texts(&html, "svg.deployment text.sub").contains(&"queues: default, large".to_owned()));
     // Each node's panel, shown when its node is clicked (the URL's target).
     assert_eq!(
         attrs(&html, "section.node-config", "id"),
-        anchors
-            .iter()
-            .map(|a| a.trim_start_matches('#').to_owned())
-            .collect::<Vec<_>>()
+        [
+            "node.ui",
+            "node.etl.webserver",
+            &*format!("node.etl.master.{LEADER}"),
+            &*format!("node.etl.master.{STANDBY}"),
+            "node.etl.worker.w1",
+            "node.etl.worker.w2",
+            "node.ml.webserver",
+        ]
+    );
+    let problems = texts(&html, "section.node-config ul.problems li");
+    assert!(
+        problems.contains(&"Error: a round failed: the database is gone".to_owned()),
+        "{problems:?}"
+    );
+    assert!(
+        problems.contains(
+            &"Warning: disconnected: lost unless it comes back within its lease".to_owned()
+        )
     );
     let configs = texts(&html, "section.node-config pre.config");
-    assert!(configs[0].contains("postgres://schedr:****@db:5432/schedr"));
+    assert!(
+        configs
+            .iter()
+            .any(|c| c.contains("url = \"postgres://schedr:****@db:5432/schedr\"")),
+        "{configs:?}"
+    );
+    assert!(
+        configs
+            .iter()
+            .any(|c| c.contains("[webserver]\nport = 8080")),
+        "{configs:?}"
+    );
     assert_eq!(
         texts(&html, "section.node-config .empty"),
         ["It sent no configuration (an older agent)."]
     );
-    // The webserver's own, and who it took the requests as.
-    assert!(texts(&html, "details pre.config")[0].contains("\"port\": 8080"));
-    assert!(texts(&html, "p.dim span.mono").contains(&"anna".to_owned()));
+}
+
+#[tokio::test]
+async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
+    let app = two_deployments();
+    let (_, html) = get(&app, "/deployments", &[]).await;
+    // The UI's panel: who is signed in, its version, its connections.
+    let ui_facts = texts(&html, "section[id='node.ui'] dl.facts dd");
+    assert_eq!(ui_facts[..2], ["anonymous", env!("CARGO_PKG_VERSION")]);
+    let etl = texts(
+        &html,
+        "section[id='node.ui'] table.connections tbody tr:first-child td",
+    );
+    assert_eq!(etl[0], "etl");
+    assert_eq!(etl[3], "none");
+    assert_eq!(etl[4], "anna");
+    assert!(etl[2].ends_with(" ms"));
+    assert_eq!(
+        attrs(&html, "section[id='node.ui'] table.connections a", "href"),
+        ["#node.etl.webserver", "#node.ml.webserver"]
+    );
+    assert!(
+        texts(&html, "section[id='node.ui'] table.connections .error")[0]
+            .starts_with("Unreachable: ")
+    );
+    // The webserver's: who it took the UI's requests as.
+    let web: Vec<String> = texts(&html, "section[id='node.etl.webserver'] dl.facts dd");
+    assert!(web.contains(&"anna".to_owned()), "{web:?}");
     // Live with the workers, and read again every 15 s for the masters, whose heartbeats
-    // send no event (a takeover, a new or a gone master).
-    assert_eq!(attrs(&html, "#live", "hx-get"), ["/deployments/etl"]);
+    // send no event (a takeover, a new or a gone master, their problems).
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/deployments"]);
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
         ["sse:change, every 15s"]
     );
     // An open panel stays open across a refresh (`:target` set on the new one).
-    assert!(html.contains("location.replace(hash)"));
-
-    let (status, _) = get(&app, "/deployments/nowhere", &[]).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(html.contains("location.replace(\"#\" + hash)"));
+    // In the navigation, in its place; the Config page and each deployment's page are gone.
+    assert_eq!(
+        texts(&html, "header nav a")[..5],
+        ["DAGs", "Runs", "Deployments", "Workers", "Import errors"]
+    );
+    for gone in ["/config", "/deployments/etl"] {
+        let (status, _) = get(&app, gone, &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{gone}");
+    }
 }
 
 #[tokio::test]
@@ -185,68 +384,18 @@ async fn no_secret_a_node_sent_in_clear_is_shown() {
     view["masters"][0]["config"] = json!({"database": {"url": "postgres://schedr:hunter2@db:5432/schedr?sslpassword=hunter2"}});
     view["workers"][0]["config"] = json!({"worker": {"api_token": "hunter2"}});
     view["webserver"]["config"] = json!({"webserver": {"secret": "hunter2"}});
-    let mut app_ui = with_deployment(view);
-    app_ui
-        .answers
-        .insert("/api/v1/workers".to_owned(), (200, json!({"workers": []})));
     let app = router(Ui {
-        deployments: vec![deployment("etl", app_ui)],
+        deployments: vec![deployment("etl", with_deployment(view))],
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
         config: json!({"ui": {"deployments": [{"url": "https://u:hunter2@etl:8443"}]}}),
+        process_id: String::new(),
+        host: String::new(),
     });
-    for path in ["/deployments/etl", "/config", "/deployments"] {
-        let (status, html) = get(&app, path, &[]).await;
-        assert_eq!(status, StatusCode::OK, "{path}");
-        assert!(!html.contains("hunter2"), "{path}: {html}");
-    }
-    let (_, html) = get(&app, "/deployments/etl", &[]).await;
-    assert!(html.contains("postgres://schedr:****@db:5432/schedr"));
-}
-
-#[tokio::test]
-async fn the_config_page_shows_the_uis_side_and_each_connection() {
-    let mut newer = distributed();
-    newer["webserver"]["schedr_version"] = json!("9.9.9");
-    let app = router(Ui {
-        deployments: vec![
-            Deployment {
-                proof: "token and mTLS",
-                ..deployment("etl", with_deployment(distributed()))
-            },
-            deployment("ml", with_deployment(newer)),
-            deployment(
-                "down",
-                Scripted {
-                    down: true,
-                    ..Scripted::default()
-                },
-            ),
-        ],
-        docs_dir: None,
-        auth: schedr_api::auth::Auth::default(),
-        config: json!({"ui": {"port": 8082}}),
-    });
-    let (status, html) = get(&app, "/config", &[]).await;
+    let (status, html) = get(&app, "/deployments", &[]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        texts(&html, "dl.facts dd"),
-        ["anonymous", env!("CARGO_PKG_VERSION")]
-    );
-    let rows: Vec<String> = texts(&html, "table.connections tbody tr");
-    assert_eq!(rows.len(), 3);
-    let etl = texts(&html, "table.connections tbody tr:first-child td");
-    assert_eq!(etl[0], "etl");
-    assert_eq!(etl[3], "token and mTLS");
-    assert_eq!(etl[4], "anna");
-    assert!(etl[2].ends_with(" ms"));
-    // A version that differs from the UI's is marked.
-    assert_eq!(
-        texts(&html, "table.connections .badge.warning"),
-        ["differs"]
-    );
-    assert!(texts(&html, "table.connections .error")[0].starts_with("Unreachable: "));
-    assert!(texts(&html, "pre.config")[0].contains("8082"));
+    assert!(!html.contains("hunter2"), "{html}");
+    assert!(html.contains("postgres://schedr:****@db:5432/schedr"));
 }
 
 #[tokio::test]
@@ -266,8 +415,8 @@ async fn the_workers_page_shows_each_ones_master_and_the_dialogs_name_them() {
     assert_eq!(
         attrs(&html, "table.workers td a", "href"),
         [
-            format!("/deployments/etl#node-master-{LEADER}"),
-            format!("/deployments/etl#node-master-{STANDBY}"),
+            format!("/deployments#node.etl.master.{LEADER}"),
+            format!("/deployments#node.etl.master.{STANDBY}"),
         ]
     );
     assert_eq!(texts(&html, "table.workers td a"), ["0000000a", "0000000b"]);
@@ -294,4 +443,36 @@ fn masters_made_together_get_different_short_ids() {
     let a = uuid::Uuid::now_v7().to_string();
     let b = uuid::Uuid::now_v7().to_string();
     assert_ne!(crate::deployments::short(&a), crate::deployments::short(&b));
+}
+
+#[test]
+fn no_two_nodes_share_an_anchor_whatever_their_names() {
+    // Codex's review of the Deployments batch: `prod`'s worker `a-webserver` and
+    // `prod-worker-a`'s webserver were both `node-prod-worker-a-webserver`.
+    let mut prod = distributed();
+    prod["workers"][0]["worker_id"] = json!("a-webserver");
+    prod["workers"][1]["worker_id"] = json!("a.b/c");
+    let (graph, panels) = graph(
+        &side(""),
+        &[asked("prod", prod), asked("prod-worker-a", distributed())],
+    );
+    let anchors: std::collections::BTreeSet<&str> =
+        panels.iter().map(|p| p.anchor.as_str()).collect();
+    assert_eq!(anchors.len(), panels.len(), "{anchors:?}");
+    assert!(anchors.contains("node.prod.worker.a-webserver"));
+    assert!(anchors.contains("node.prod-worker-a.webserver"));
+    assert!(anchors.contains("node.prod.worker.a%2Eb%2Fc"));
+    // Each line found both of its ends: 2 HTTP, 4 database, 2 gRPC.
+    assert_eq!(graph.edges.len(), 8);
+}
+
+#[tokio::test]
+async fn a_problem_an_older_webserver_sent_in_clear_is_masked() {
+    let mut view = distributed();
+    view["masters"][0]["problems"] =
+        json!([{"error": true, "message": "a round failed: postgres://u:hunter2@db/s"}]);
+    let app = ui(vec![deployment("etl", with_deployment(view))]);
+    let (_, html) = get(&app, "/deployments", &[]).await;
+    assert!(!html.contains("hunter2"), "{html}");
+    assert!(html.contains("a round failed: postgres://u:****@db/s"));
 }

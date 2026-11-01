@@ -16,11 +16,19 @@ async fn a_master_heartbeats_its_row_until_stopped() {
     db.migrate().await.unwrap();
     let (stop, stopped) = watch::channel(0);
     let config = json!({"database": {"url": "postgres://schedr:****@db/s"}});
+    // Its problems go with its row.
+    let problems = schedr_master::problems::Problems::default();
+    problems.set(
+        schedr_master::problems::ProblemKind::Round,
+        true,
+        "a round failed",
+    );
     let beating = tokio::spawn(heartbeat_master(
         db.clone(),
         MasterIdentity {
             master_id: "m-1".to_owned(),
             config: config.clone(),
+            problems: problems.clone(),
         },
         stopped,
     ));
@@ -35,6 +43,7 @@ async fn a_master_heartbeats_its_row_until_stopped() {
     assert_eq!(read[0].process_id, process_id());
     assert_eq!(read[0].config, config);
     assert_eq!(read[0].host, host_name());
+    assert_eq!(read[0].problems, problems.now());
     stop.send(1).unwrap();
     beating.await.unwrap();
 }

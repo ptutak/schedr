@@ -16,6 +16,15 @@ mod tests;
 /// gone this long is long gone; the page shows only those heard from lately).
 pub const MASTER_ROW_KEPT: SignedDuration = SignedDuration::from_hours(1);
 
+/// A problem a node has now (decision 129): a warning, or an error, shown on its node.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NodeProblem {
+    /// An error (red); a warning (yellow) otherwise.
+    pub error: bool,
+    /// What it is, for people.
+    pub message: String,
+}
+
 /// A master as it heartbeats.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MasterNode<'a> {
@@ -31,6 +40,8 @@ pub struct MasterNode<'a> {
     pub config: &'a serde_json::Value,
     /// When it started.
     pub started_at: Timestamp,
+    /// Its problems now.
+    pub problems: &'a [NodeProblem],
 }
 
 /// A master as stored.
@@ -52,6 +63,8 @@ pub struct MasterRecord {
     pub heard_at: Timestamp,
     /// Whether it holds the lease now (the leader).
     pub leading: bool,
+    /// Its problems when it last wrote its row.
+    pub problems: Vec<NodeProblem>,
 }
 
 /// A worker's node: which master it registered with, its process and configuration.
@@ -81,12 +94,17 @@ impl Database {
         now: Timestamp,
     ) -> Result<(), DbError> {
         const UPSERT: &str = "INSERT INTO masters (master_id, process_id, host, schedr_version, \
-            config, started_at, heard_at) VALUES ($1, $2, $3, $4, $5{json}, $6{ts}, $7{ts}) \
+            config, started_at, heard_at, problems) \
+            VALUES ($1, $2, $3, $4, $5{json}, $6{ts}, $7{ts}, $8{json}) \
             ON CONFLICT (master_id) DO UPDATE SET process_id = excluded.process_id, \
             host = excluded.host, schedr_version = excluded.schedr_version, \
-            config = excluded.config, heard_at = excluded.heard_at";
+            config = excluded.config, heard_at = excluded.heard_at, \
+            problems = excluded.problems";
         const PRUNE: &str = "DELETE FROM masters WHERE heard_at < $1{ts}";
         let config = storable_json(master.config.to_string());
+        let problems = storable_json(
+            serde_json::to_string(master.problems).unwrap_or_else(|_| "[]".to_owned()),
+        );
         let gone = now
             .checked_sub(MASTER_ROW_KEPT)
             .unwrap_or(Timestamp::UNIX_EPOCH);
@@ -99,6 +117,7 @@ impl Database {
                 .bind(&config)
                 .bind(db_time(master.started_at))
                 .bind(db_time(now))
+                .bind(&problems)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query(sql(backend, PRUNE))
@@ -117,9 +136,18 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn masters(&self, since: Timestamp) -> Result<Vec<MasterRecord>, DbError> {
         const MASTERS: &str = "SELECT m.master_id, m.process_id, m.host, m.schedr_version, \
-            m.config{text}, {ts<}m.started_at{>ts}, {ts<}m.heard_at{>ts} \
+            m.config{text}, {ts<}m.started_at{>ts}, {ts<}m.heard_at{>ts}, m.problems{text} \
             FROM masters m WHERE m.heard_at >= $1{ts} ORDER BY m.master_id";
-        type Row = (String, String, String, String, String, String, String);
+        type Row = (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, MASTERS))
                 .bind(db_time(since))
@@ -130,7 +158,7 @@ impl Database {
         let mut masters = rows
             .into_iter()
             .map(
-                |(master_id, process_id, host, version, config, started, heard)| {
+                |(master_id, process_id, host, version, config, started, heard, problems)| {
                     Ok(MasterRecord {
                         leading: holder.as_deref() == Some(master_id.as_str()),
                         master_id,
@@ -140,6 +168,7 @@ impl Database {
                         config: from_json("masters.config", &config)?,
                         started_at: parse_time("masters.started_at", &started)?,
                         heard_at: parse_time("masters.heard_at", &heard)?,
+                        problems: from_json("masters.problems", &problems)?,
                     })
                 },
             )

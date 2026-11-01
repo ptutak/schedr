@@ -18,6 +18,7 @@ pub mod mapping;
 pub mod metrics;
 pub mod parse_jobs;
 pub mod planning;
+pub mod problems;
 pub mod progress;
 pub mod quiet;
 pub mod scheduler;

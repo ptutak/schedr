@@ -313,6 +313,31 @@ fn the_hour_field_decides_the_overlap_rule(#[case] expression: &str, #[case] fix
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
+    /// The quick lookup (one match, away from a change) gives what walking the margin gives,
+    /// near both 2026 changes in Warsaw and far from them.
+    #[test]
+    fn the_quick_lookup_agrees_with_the_walk(
+        expression in prop::sample::select(vec![
+            "30 2 * * *", "0 3 * * *", "*/15 * * * *", "*/20 2 * * *", "0 * * * *",
+            "45 1-3 * * *", "@daily", "0 0 2 * * *", "0 0 1 1 *", "30 2 29 2 *",
+        ]),
+        offset_minutes in 0i64..(8 * 24 * 60),
+        base in prop::sample::select(vec![
+            "2026-03-24T12:00:00Z", "2026-10-20T12:00:00Z", "2026-06-15T12:00:00Z",
+        ]),
+        seconds in 0i64..60,
+        millis in prop::sample::select(vec![0i64, 1, 500, 999]),
+    ) {
+        let FireTimes::Cron(times) = warsaw(expression) else { unreachable!() };
+        let t = ts(base)
+            .checked_add(SignedDuration::from_mins(offset_minutes)
+                + SignedDuration::from_secs(seconds)
+                + SignedDuration::from_millis(millis))
+            .unwrap();
+        prop_assert_eq!(times.next_after(t), times.walk_after(t));
+        prop_assert_eq!(times.previous_before(t), times.walk_before(t));
+    }
+
     /// Around both 2026 changes in Warsaw, fire times strictly increase and going back from
     /// each one gives the one before.
     #[test]
@@ -339,4 +364,26 @@ proptest! {
             t = next;
         }
     }
+}
+
+#[test]
+fn a_secondly_cron_is_looked_up_without_walking_hours_of_seconds() {
+    // B98: every lookup walked three hours either side of its answer (~43,000 matches of a
+    // secondly cron), in UTC too: 200 lookups took ~17 s in a debug build. Away from a time
+    // zone change one match is enough.
+    let started = std::time::Instant::now();
+    for expression_tz in [("* * * * * *", "UTC"), ("* * * * * *", "Europe/Warsaw")] {
+        let times = cron(expression_tz.0, expression_tz.1);
+        let mut t = ts("2026-06-15T12:00:00.5Z");
+        for i in 0..100 {
+            let next = times.next_after(t).unwrap();
+            if i > 0 {
+                assert_eq!(times.previous_before(next), Some(t));
+            }
+            t = next;
+        }
+        assert_eq!(t, ts("2026-06-15T12:01:40Z"));
+    }
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }

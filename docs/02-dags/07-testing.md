@@ -122,7 +122,9 @@ While the run goes, each task's state is printed as it changes, except `schedule
 - `run <id>: success` (or `failed`, or `cancelled`)
 
 Exit 0 means the run succeeded. Exit 1 means it did not, or the DAG is unknown (the
-error names the files that failed to import, when there are some). The command waits up
+error names the files that failed to import, when there are some), or a root can't be
+scanned and copied as a worker would (``can't scan DAG root `etl`: reading …/rows.csv:
+Permission denied``): every file of a root is copied, not only the `.py` files. The command waits up
 to an hour; a task's own `timeout` stops that task sooner.
 
 `--json` prints the run, the file that defined the DAG (`location`), and each task's

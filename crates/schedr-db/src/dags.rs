@@ -116,6 +116,8 @@ pub struct ImportErrorRecord {
     pub schedr_version: String,
     /// The worker that parsed it.
     pub worker_id: String,
+    /// The master that stored it; `None` if not known.
+    pub master_id: Option<String>,
     /// When the parse was stored.
     pub parsed_at: Timestamp,
     /// The file, relative to the root.
@@ -125,7 +127,16 @@ pub struct ImportErrorRecord {
 }
 
 /// A row of [`Database::current_import_errors`]'s query.
-type ImportErrorRow = (String, String, String, String, String, String, String);
+type ImportErrorRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+);
 
 /// A stored parse of a (root, content hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,8 +268,8 @@ impl Database {
             VALUES ($1{uuid}, $2, $3, $4, $5, $6{ts}) \
             ON CONFLICT (root, content_hash, schedr_version) DO NOTHING";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, parsed_at) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6{ts})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts})";
         let id = Uuid::now_v7().to_string();
         let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             let done = sqlx::query(sql(backend, INSERT))
@@ -279,6 +290,7 @@ impl Database {
                         .bind(to_json(&file.dags))
                         .bind(file.error.as_ref().map(to_json))
                         .bind(parse.worker_id)
+                        .bind(self.fenced_as())
                         .bind(db_time(parse.parsed_at))
                         .execute(&mut *tx)
                         .await?;
@@ -312,8 +324,8 @@ impl Database {
         const DELETE: &str =
             "DELETE FROM parse_files WHERE parse_result_id = $1{uuid} AND path = $2";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, parsed_at) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6{ts})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts})";
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for file in files {
                 sqlx::query(sql(backend, DELETE))
@@ -327,6 +339,7 @@ impl Database {
                     .bind(to_json(&file.dags))
                     .bind(file.error.as_ref().map(to_json))
                     .bind(worker_id)
+                    .bind(self.fenced_as())
                     .bind(db_time(parsed_at))
                     .execute(&mut *tx)
                     .await?;
@@ -435,7 +448,7 @@ impl Database {
     /// doesn't read back.
     pub async fn current_import_errors(&self) -> Result<Vec<ImportErrorRecord>, DbError> {
         const ERRORS: &str = "SELECT c.root, r.content_hash, r.schedr_version, f.worker_id, \
-            {ts<}f.parsed_at{>ts}, f.path, f.error{text} \
+            f.master_id, {ts<}f.parsed_at{>ts}, f.path, f.error{text} \
             FROM current_parses c \
             JOIN parse_results r ON r.id = c.parse_result_id \
             JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
@@ -445,12 +458,22 @@ impl Database {
         });
         rows.into_iter()
             .map(
-                |(root, content_hash, schedr_version, worker_id, parsed_at, path, error)| {
+                |(
+                    root,
+                    content_hash,
+                    schedr_version,
+                    worker_id,
+                    master_id,
+                    parsed_at,
+                    path,
+                    error,
+                )| {
                     Ok(ImportErrorRecord {
                         root,
                         content_hash,
                         schedr_version,
                         worker_id,
+                        master_id,
                         parsed_at: parse_time("parse_files.parsed_at", &parsed_at)?,
                         path,
                         error: from_json("parse_files.error", &error)?,

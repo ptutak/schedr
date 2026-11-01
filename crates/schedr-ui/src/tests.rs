@@ -102,6 +102,8 @@ fn ui(deployments: Vec<Deployment<Scripted>>) -> axum::Router {
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     })
 }
 
@@ -312,6 +314,8 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
         docs_dir: Some(site.path().to_path_buf()),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     });
     let (status, html) = get(&app, "/docs/", &[]).await;
     assert_eq!(
@@ -331,7 +335,6 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/",
             "/runs",
             "/deployments",
-            "/config",
             "/workers",
             "/import-errors",
             "/docs/"
@@ -341,14 +344,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        [
-            "/",
-            "/runs",
-            "/deployments",
-            "/config",
-            "/workers",
-            "/import-errors"
-        ]
+        ["/", "/runs", "/deployments", "/workers", "/import-errors"]
     );
 }
 
@@ -448,6 +444,8 @@ async fn every_deployment_is_asked_at_once() {
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     });
     let started = std::time::Instant::now();
     let (status, _) = get(&app, "/", &[]).await;
@@ -469,6 +467,8 @@ async fn every_answer_varies_with_the_prefix_and_docs_redirect_temporarily() {
         docs_dir: Some(site.path().to_path_buf()),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     });
     for path in ["/", "/assets/style.css", "/docs/", "/docs", "/no/such/page"] {
         let response = app
@@ -530,6 +530,8 @@ async fn the_ui_signs_people_in_and_passes_their_name_on() {
         docs_dir: None,
         auth: schedr_api::auth::Auth::from_config(&section, None).unwrap(),
         config: serde_json::json!({}),
+        process_id: String::new(),
+        host: String::new(),
     });
     // Not signed in: asked to, and nothing is asked of the webserver.
     let response = app

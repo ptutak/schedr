@@ -196,3 +196,33 @@ fn an_unwritable_data_directory_says_how_to_fix_it() {
         assert!(error.contains("give the pod an fsGroup"), "{error}");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_worker_stuck_after_the_masters_failure_is_given_up_after_the_bound() {
+    // B151: once the master failed, a worker that doesn't stop (stuck on its way out) no
+    // longer keeps standalone running with no master.
+    let (failed, watching) = watch::channel(false);
+    let started = tokio::time::Instant::now();
+    let stuck = async {
+        failed.send(true).unwrap();
+        std::future::pending::<()>().await;
+    };
+    assert!(!ended_within(stuck, watching, Duration::from_secs(10)).await);
+    assert_eq!(started.elapsed(), Duration::from_secs(10));
+
+    // Without a failure, nothing is cut short; a worker that stops in time ended.
+    let (_failed, watching) = watch::channel(false);
+    let slow = tokio::time::sleep(Duration::from_secs(3600));
+    assert!(ended_within(slow, watching, Duration::from_secs(10)).await);
+    let (failed, watching) = watch::channel(false);
+    let prompt = async {
+        failed.send(true).unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    assert!(ended_within(prompt, watching, Duration::from_secs(10)).await);
+    // The sender dropped without a failure: not a failure.
+    let (failed, watching) = watch::channel(false);
+    drop(failed);
+    let slow = tokio::time::sleep(Duration::from_secs(3600));
+    assert!(ended_within(slow, watching, Duration::from_secs(10)).await);
+}

@@ -24,6 +24,7 @@ use crate::core::{Arrivals, CoreError, MasterCore};
 use crate::dispatch::Outgoing;
 use crate::lease::{Leadership, Renewal};
 use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
+use crate::problems::{ProblemKind, Problems};
 
 #[cfg(test)]
 mod tests;
@@ -66,6 +67,8 @@ pub struct Hub {
     /// Told when a worker's `Finished` was recorded: a round runs at once instead of at the
     /// next tick, its downstream tasks ready (decision 42B; [`ROUND_GAP`] after the last).
     finished: Arc<tokio::sync::Notify>,
+    /// Its problems now, written with its row (decision 129).
+    problems: Problems,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
@@ -92,6 +95,7 @@ impl Hub {
             arrivals: core.arrivals(),
             leading: Arc::new(watch::Sender::new(true)),
             finished: Arc::new(tokio::sync::Notify::new()),
+            problems: Problems::default(),
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
@@ -106,6 +110,13 @@ impl Hub {
     #[must_use]
     pub const fn with_listen_retry(mut self, period: Duration) -> Self {
         self.listen_retry = Some(period);
+        self
+    }
+
+    /// The hub reporting its problems to `problems` (its heartbeat writes them).
+    #[must_use]
+    pub fn with_problems(mut self, problems: Problems) -> Self {
+        self.problems = problems;
         self
     }
 
@@ -135,8 +146,14 @@ impl Hub {
         self.metrics.leading.set(i64::from(leads));
         if changed && leads {
             tracing::info!("the master's lease is renewed: leading again");
+            self.problems.clear(ProblemKind::Lease);
         } else if changed {
             tracing::warn!("the master's lease isn't renewed in time: pausing until it is");
+            self.problems.set(
+                ProblemKind::Lease,
+                false,
+                "its lease isn't renewed in time: paused until it is",
+            );
         }
     }
 
@@ -233,6 +250,7 @@ impl Hub {
                 if started.is_some() {
                     tracing::info!("listening for commands now");
                 }
+                self.problems.clear(ProblemKind::Notifications);
                 Some(started)
             }
             Err(error) => {
@@ -244,6 +262,22 @@ impl Hub {
                 None
             }
         }
+    }
+
+    /// Command notifications failed with `error`: logged and reported as a problem; until
+    /// the moment returned, the master polls.
+    fn notifications_failed(&self, error: &DbError) -> tokio::time::Instant {
+        tracing::warn!(
+            %error,
+            "command notifications failed; polling, trying again in {}s",
+            NOTIFICATION_RETRY.as_secs()
+        );
+        self.problems.set(
+            ProblemKind::Notifications,
+            false,
+            format!("its command notifications failed ({error}): polling"),
+        );
+        tokio::time::Instant::now() + NOTIFICATION_RETRY
     }
 
     async fn run_with(
@@ -287,10 +321,12 @@ impl Hub {
                 () = &mut stop => Wake::Stop,
                 _ = ticks.tick() => Wake::Tick,
                 () = self.finished.notified() => Wake::Finished,
-                result = next_command(notifications.as_mut(), paused_until) => match result {
-                    Ok(()) => Wake::Command,
-                    Err(error) => Wake::NotificationsFailed(error),
-                },
+                listened = next_command(notifications.as_mut(), &mut paused_until, &self.problems) => {
+                    match listened {
+                        Listened::Command => Wake::Command,
+                        Listened::Failed(error) => Wake::NotificationsFailed(error),
+                    }
+                }
                 _ = alive.tick() => Wake::Alive,
                 _ = refresh.tick() => Wake::Refresh,
                 _ = async { keeper.as_mut().expect("guarded").await }, if keeper.is_some() => {
@@ -327,18 +363,14 @@ impl Hub {
                 }
                 Wake::Command => {
                     paused_until = None;
+                    self.problems.clear(ProblemKind::Notifications);
                     if let Some(notifications) = notifications.as_mut() {
                         notifications.skip_arrived().await;
                     }
                     ticks.reset();
                 }
                 Wake::NotificationsFailed(error) => {
-                    tracing::warn!(
-                        %error,
-                        "command notifications failed; polling, trying again in {}s",
-                        NOTIFICATION_RETRY.as_secs()
-                    );
-                    paused_until = Some(tokio::time::Instant::now() + NOTIFICATION_RETRY);
+                    paused_until = Some(self.notifications_failed(&error));
                     continue;
                 }
                 Wake::Finished => {
@@ -360,8 +392,13 @@ impl Hub {
     /// A round, its duration observed.
     async fn timed_tick(&self) {
         let started = std::time::Instant::now();
-        if let Err(error) = self.tick().await {
-            tracing::error!(%error, "master tick failed");
+        match self.tick().await {
+            Ok(()) => self.problems.clear(ProblemKind::Round),
+            Err(error) => {
+                tracing::error!(%error, "master tick failed");
+                self.problems
+                    .set(ProblemKind::Round, true, format!("a round failed: {error}"));
+            }
         }
         self.metrics
             .tick_duration
@@ -772,18 +809,34 @@ pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 << 20;
 /// How often the loop beats while it waits between ticks (liveness, see [`Hub::beat`]).
 pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// The next command notification, not before `paused_until`; never, without notifications.
+/// What waiting for command notifications gave.
+#[derive(Debug)]
+enum Listened {
+    /// A command was announced.
+    Command,
+    /// Listening failed.
+    Failed(DbError),
+}
+
+/// The next command notification, never without notifications. Paused after a failure
+/// until `paused_until`; once that passes, listening resumes and the failure's problem is
+/// cleared (set again if it fails again): a listener that reconnected by itself would
+/// otherwise report it for good.
 async fn next_command(
     notifications: Option<&mut CommandNotifications>,
-    paused_until: Option<tokio::time::Instant>,
-) -> Result<(), DbError> {
+    paused_until: &mut Option<tokio::time::Instant>,
+    problems: &Problems,
+) -> Listened {
+    if let Some(until) = *paused_until {
+        tokio::time::sleep_until(until).await;
+        *paused_until = None;
+        problems.clear(ProblemKind::Notifications);
+    }
     match notifications {
-        Some(notifications) => {
-            if let Some(until) = paused_until {
-                tokio::time::sleep_until(until).await;
-            }
-            notifications.next().await
-        }
+        Some(notifications) => match notifications.next().await {
+            Ok(()) => Listened::Command,
+            Err(error) => Listened::Failed(error),
+        },
         None => std::future::pending().await,
     }
 }

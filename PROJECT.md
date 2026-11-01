@@ -1457,16 +1457,23 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   - **A node's problems on the graph** (decision 129, the user's, 2026-11-01): a node with a
     warning is yellow, with an error red, and its panel lists them. The UI: a webserver it
     can't reach (error), a webserver of another version (warning). A webserver: unreachable
-    (error). A worker: lost or offline (error), its stored warnings and the import errors of
+    (error). A worker: lost or offline (error; offline changed by 130), its stored warnings and the import errors of
     its parses (warning). A master: new, its heartbeat row carries its current problems (its
     lease renewal late, the change notifications off, a write failing), each a warning or an
     error. Not chosen: only what was known already (a master never coloured); every log
     line at WARN or ERROR, kept and reported by each process (noisy, the most work).
   - **The Import errors page names the master and the worker** (the user's, 2026-11-01):
     a Master and a Worker column, each linking to its node on the graph; the master that
-    stored a parse is recorded with it (`parse_results.master_id`). The page stays a page
+    stored a parse is recorded with it (`parse_files.master_id`). The page stays a page
     of its own, in the navigation (the user's: what people look for most); the graph only
     marks a worker with import errors and links to the page.
+  - **An offline worker has no problem** (decision 130, the user's, 2026-11-01): grey and
+    dashed, not red. Offline is a clean deregistration (a restart, a scale-down), and worker
+    rows are never deleted: with pod-named workers each restart would leave another red box
+    for good, and a real error would be lost among them. Its stale warnings and import
+    errors don't colour it either. Lost stays an error, disconnected a warning. Not chosen:
+    hiding gone workers after a while (they stay on the graph and the Workers page); red as
+    129 had it.
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):

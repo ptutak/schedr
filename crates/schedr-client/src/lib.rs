@@ -1128,9 +1128,10 @@ impl<T: Transport> Client<T> {
             })
             .await?;
         if !(200..300).contains(&response.status) {
+            // Masked: an error may quote an address with its password (as `connect_error`).
             let message = response.body["error"].as_str().map_or_else(
                 || format!("the server answered {}", response.status),
-                str::to_owned,
+                schedr_config::masked::mask_text,
             );
             return Err(ClientError::Server {
                 status: response.status,

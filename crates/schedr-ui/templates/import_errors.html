@@ -11,7 +11,7 @@
 {% else %}
 <table class="list import-errors">
   <thead>
-    <tr>{% if several %}<th>Deployment</th>{% endif %}<th>Root</th><th>File</th><th>Error</th><th>Parsed</th></tr>
+    <tr>{% if several %}<th>Deployment</th>{% endif %}<th>Root</th><th>File</th><th>Error</th><th>Parsed</th><th>Master</th><th>Worker</th></tr>
   </thead>
   <tbody>
   {% for error in rows %}
@@ -20,7 +20,9 @@
       <td class="mono">{{ error.root }}</td>
       <td class="mono">{{ error.path }}</td>
       <td><span class="error-kind">{{ error.exception }}</span>: {{ error.message }}{% if !error.traceback.is_empty() %}<details><summary>Traceback</summary><pre class="traceback">{{ error.traceback }}</pre></details>{% endif %}</td>
-      <td class="time">{{ error.parsed_at }}<div class="sub mono">{{ error.hash }} · {{ error.worker_id }}</div></td>
+      <td class="time">{{ error.parsed_at }}<div class="sub mono">{{ error.hash }}</div></td>
+      <td class="mono">{% if error.master.is_empty() %}<span class="dim">-</span>{% else %}<a href="{{ error.master_href }}">{{ error.master }}</a>{% endif %}</td>
+      <td class="mono"><a href="{{ error.worker_href }}">{{ error.worker_id }}</a></td>
     </tr>
   {% endfor %}
   </tbody>

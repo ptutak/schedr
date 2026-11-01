@@ -148,7 +148,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
     let master = serve_master(
         db.clone(),
         master_settings(&config()),
-        Duration::from_millis(10),
+        (Duration::from_millis(10), Problems::default()),
         listen(loopback()).await.unwrap(),
         None,
         async { Ok(take_lease(db, Duration::from_secs(15), "master", new_master_id()).await) },

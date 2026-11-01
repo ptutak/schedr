@@ -641,6 +641,10 @@ async fn test_dag(
         std::process::id(),
         jiff::Timestamp::now().as_nanosecond()
     ));
+    if let Err(error) = scannable(&roots, &data.join("preflight")) {
+        let _ = std::fs::remove_dir_all(&data);
+        return Err(error);
+    }
     let mut local = config.clone();
     local.dag_roots = roots;
     local.database.url = Some(format!("sqlite://{}", data.join("schedr.db").display()));
@@ -688,6 +692,24 @@ async fn test_dag(
     }
     let _ = std::fs::remove_dir_all(&data);
     result
+}
+
+/// Fails at once if a root can't be scanned and copied as its agent will (B103): the agent
+/// would retry for ever, its worker never registering. Each is copied into `store`, then
+/// removed.
+fn scannable(roots: &[Root], store: &Path) -> Result<(), AppError> {
+    for root in roots {
+        let failed = |error: schedr_agent::scan::ScanError| {
+            AppError::Failed(format!("can't scan DAG root `{}`: {error}", root.name))
+        };
+        let snapshot = schedr_agent::scan::scan(&root.path).map_err(failed)?;
+        let captured =
+            schedr_agent::scan::capture(&snapshot, &store.join(&root.name)).map_err(failed)?;
+        if let Err(error) = schedr_agent::scan::remove_capture(&captured.dir) {
+            tracing::warn!(dir = %captured.dir.display(), %error, "can't remove a copy of DAG code");
+        }
+    }
+    Ok(())
 }
 
 /// Fails fast if no file in the roots defines `dag`, naming the files that didn't import.

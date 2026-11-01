@@ -382,12 +382,17 @@ fn a_standalones_deployment_is_one_process_holding_its_master_and_worker() {
     assert!(deployment["workers"][0]["config"]["worker"].is_object());
     assert!(deployment["masters"][0]["config"]["master"].is_object());
     let page = Command::new("curl")
-        .args(["-sf", &format!("{}/deployments/default", standalone.api)])
+        .args(["-sf", &format!("{}/deployments", standalone.api)])
         .output()
         .unwrap();
     let page = String::from_utf8_lossy(&page.stdout);
+    // One process: its UI, webserver, master and worker, with no line between them.
     assert_eq!(page.matches("<g class=\"process\">").count(), 1, "{page}");
-    assert_eq!(page.matches("<a class=\"node ").count(), 2, "{page}");
+    for kind in ["ui", "webserver", "master", "worker"] {
+        let node = format!("<a class=\"node {kind}\"");
+        assert_eq!(page.matches(&node).count(), 1, "{kind}: {page}");
+    }
+    assert_eq!(page.matches("<path class=\"edge ").count(), 0, "{page}");
 }
 
 #[test]

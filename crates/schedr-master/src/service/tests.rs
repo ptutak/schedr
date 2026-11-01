@@ -1646,3 +1646,35 @@ fn code_version(hash: &str) -> pb::WorkerMessage {
         },
     ))
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_pause_after_a_notifications_failure_ends_by_itself() {
+    // Codex's review of the Deployments batch: the failure's problem was cleared only by the
+    // next command notification, so a listener that reconnected by itself, with no command
+    // since, reported it for good. The pause's end clears it.
+    let problems = Problems::default();
+    problems.set(ProblemKind::Notifications, false, "failed".to_owned());
+    let started = tokio::time::Instant::now();
+    let mut paused_until = Some(started + NOTIFICATION_RETRY);
+    let waited = tokio::time::timeout(
+        NOTIFICATION_RETRY + Duration::from_secs(1),
+        next_command(None, &mut paused_until, &problems),
+    )
+    .await;
+    // Without notifications nothing comes; the pause ended meanwhile.
+    assert!(waited.is_err());
+    assert_eq!(paused_until, None);
+    assert_eq!(problems.now(), []);
+    // Cut short during the pause: still paused, still reported.
+    problems.set(ProblemKind::Notifications, false, "failed".to_owned());
+    let until = tokio::time::Instant::now() + NOTIFICATION_RETRY;
+    let mut paused_until = Some(until);
+    let cut = tokio::time::timeout(
+        Duration::from_secs(1),
+        next_command(None, &mut paused_until, &problems),
+    )
+    .await;
+    assert!(cut.is_err());
+    assert_eq!(paused_until, Some(until));
+    assert_eq!(problems.now().len(), 1);
+}

@@ -42,12 +42,24 @@ use super::*;
     "postgres://a:hunter2@h1,postgres://b:hunter2@h2/s",
     "postgres://a:****@h1,postgres://b:****@h2/s"
 )]
-#[case::two_without_schemes("a:hunter2@h1,b:hunter2@h2", "a:****@h1,b:****@h2")]
+// Without schemes, two are one user info to the last `@` (a password may hold `,`).
+#[case::two_without_schemes("a:hunter2@h1,b:hunter2@h2", "a:****@h2")]
 #[case::a_slash_in_the_password("postgres://u:hun/ter2@db/s", "postgres://u:****@db/s")]
 #[case::ipv6("postgres://u:hunter2@[::1]:5432/s", "postgres://u:****@[::1]:5432/s")]
 #[case::a_message("token: hunter2, retrying", "token: **** retrying")]
 #[case::json_text(r#"{"api_key":"hunter2"}"#, r#"{"api_key":"****"}"#)]
 #[case::an_email("mail ops@example.com", "mail ops@example.com")]
+// Codex's review of the Deployments batch: characters a password may hold (reqwest and SQLx
+// accept them) ended the part, and a value's escaped quote ended the value.
+#[case::an_apostrophe("http://u:abc'hunter2@127.0.0.1:0", "http://u:****@127.0.0.1:0")]
+#[case::parentheses("postgres://u:abc(hunter2)@db/s", "postgres://u:****@db/s")]
+#[case::quoted_with_parentheses("('postgres://u:abc(hunter2)@db/s')", "('postgres://u:****@db/s')")]
+#[case::an_at_and_a_colon("postgres://u:p@hunter2:z@db/s", "postgres://u:****@db/s")]
+#[case::query_parentheses("https://h/?token=abc(hunter2)&x=1", "https://h/?token=****&x=1")]
+#[case::an_escaped_quote(
+    r"host=db password='abc\'hunter2' dbname=s",
+    "host=db password='****' dbname=s"
+)]
 fn urls_keep_all_but_their_secrets(#[case] text: &str, #[case] shown: &str) {
     let mut value = json!({"url": text});
     mask(&mut value);
@@ -58,7 +70,7 @@ fn urls_keep_all_but_their_secrets(#[case] text: &str, #[case] shown: &str) {
 fn a_secret_named_setting_is_masked_whole_and_a_path_to_one_shown() {
     let mut value = json!({
         "password": "hunter2", "api_token": "t", "client_secret": ["a", "b"], "token_file":
-        "/run/secrets/token", "key": "/etc/tls/key.pem", "identity_header": "x-forwarded-user",
+        "/run/secrets/token", "tls": {"key": "/etc/tls/key.pem"}, "identity_header": "x-forwarded-user",
         "empty_password": "", "queue": "default"
     });
     mask(&mut value);
@@ -66,7 +78,7 @@ fn a_secret_named_setting_is_masked_whole_and_a_path_to_one_shown() {
         value,
         json!({
             "password": "****", "api_token": "****", "client_secret": "****",
-            "token_file": "/run/secrets/token", "key": "/etc/tls/key.pem",
+            "token_file": "/run/secrets/token", "tls": {"key": "/etc/tls/key.pem"},
             "identity_header": "x-forwarded-user", "empty_password": "", "queue": "default"
         })
     );
@@ -136,4 +148,38 @@ fn a_configuration_masks_its_database_url() {
     config.database.url = Some("postgres://schedr:hunter2@db/schedr".to_owned());
     let shown = masked(&config);
     assert_eq!(shown["database"]["url"], "postgres://schedr:****@db/schedr");
+}
+
+#[test]
+fn only_tls_keys_holding_a_path_are_shown() {
+    // Codex's review of the Deployments batch: any `key` holding a `/` was taken for a path,
+    // a Base64 secret too.
+    let mut value = json!({
+        "connection": {"key": "abc/hunter2AB"}, "key": "/etc/key.pem",
+        "tls": {"key": "/etc/tls/key.pem"}, "TLS": {"key": "hunter2"}
+    });
+    mask(&mut value);
+    assert_eq!(
+        value,
+        json!({
+            "connection": {"key": "****"}, "key": "****",
+            "tls": {"key": "/etc/tls/key.pem"}, "TLS": {"key": "****"}
+        })
+    );
+}
+
+#[test]
+fn masking_takes_time_in_proportion_to_the_text() {
+    // Codex's review: every `@` scanned back to the start (16,000 `@`s: 7 s in a debug
+    // build); every `=` after a secret's name scanned on to the end.
+    let started = std::time::Instant::now();
+    for text in [
+        "@".repeat(200_000),
+        "token=".repeat(50_000),
+        "a:".repeat(100_000) + "@x",
+    ] {
+        let _ = mask_text(&text);
+    }
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }

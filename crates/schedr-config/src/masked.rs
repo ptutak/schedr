@@ -8,11 +8,11 @@
 //!
 //! - **A value under a key naming a secret** is `****` whole, whatever it is (text, a number,
 //!   a list, an object). A name is compared without case and separators (`api_key`, `apiKey`
-//!   and `API-KEY` alike); a path to a secret file (`token_file`, `[tls] key`) is shown: it is
-//!   not the secret.
+//!   and `API-KEY` alike); a path to a secret file (`token_file`, `[tls] key` holding a path)
+//!   is shown: it is not the secret.
 //! - **In any text, a password before `@`** is `****`, the user, host, port and path kept
 //!   (`postgres://schedr:****@db:5432/schedr`): with a scheme or `//` or none (`u:p@db`),
-//!   several in one text, a password holding `@` or `/`.
+//!   several in one text, a password holding `@`, `:`, `/`, `'` or parentheses.
 //! - **In any text, a value after a name naming a secret** and `=` or `:` is `****`: a URL's
 //!   query (`?password=…`, the name percent-decoded: `%70assword`), a DSN
 //!   (`host=db password=…`), a message (`token: …`).
@@ -38,15 +38,20 @@ pub fn masked(config: &crate::Config) -> Value {
 
 /// Masks every secret in `value`, in place.
 pub fn mask(value: &mut Value) {
+    mask_under(value, "");
+}
+
+/// Masks `value`, the field of the table named `table` (`""`: none).
+fn mask_under(value: &mut Value, table: &str) {
     match value {
         Value::String(text) => *text = mask_text(text),
-        Value::Array(items) => items.iter_mut().for_each(mask),
+        Value::Array(items) => items.iter_mut().for_each(|item| mask_under(item, table)),
         Value::Object(fields) => {
             for (name, field) in fields.iter_mut() {
-                if holds_secret(name, field) {
+                if holds_secret(table, name, field) {
                     *field = Value::String(MASK.to_owned());
                 } else {
-                    mask(field);
+                    mask_under(field, name);
                 }
             }
         }
@@ -54,9 +59,9 @@ pub fn mask(value: &mut Value) {
     }
 }
 
-/// Whether the setting `name` holds a secret as `value` (not a file, path or header naming
-/// one; nothing to hide in an empty or unset one).
-fn holds_secret(name: &str, value: &Value) -> bool {
+/// Whether the setting `name` of the table `table` holds a secret as `value` (not a file,
+/// path or header naming one; nothing to hide in an empty or unset one).
+fn holds_secret(table: &str, name: &str, value: &Value) -> bool {
     let empty = match value {
         Value::Null => true,
         Value::String(text) => text.is_empty(),
@@ -72,9 +77,10 @@ fn holds_secret(name: &str, value: &Value) -> bool {
     if points_elsewhere {
         return false;
     }
-    // `[tls] key` and the like: a path to the key, shown.
+    // `[tls] key`: a path to the key (schedr's setting), shown. Elsewhere a `key` holding a
+    // `/` may be a secret (Base64).
     if name == "key" {
-        return !value.as_str().is_some_and(looks_like_path);
+        return !(table == "tls" && value.as_str().is_some_and(looks_like_path));
     }
     names_secret(&name)
 }
@@ -115,16 +121,17 @@ fn looks_like_path(text: &str) -> bool {
 }
 
 /// `text` with every secret in it masked: passwords before `@`, and values after a name
-/// naming a secret (see the module documentation).
+/// naming a secret (see the module documentation). Its time grows with the text's length,
+/// never faster.
 #[must_use]
 pub fn mask_text(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut hidden = vec![false; chars.len()];
-    for (at, &c) in chars.iter().enumerate() {
-        match c {
-            '@' => hide_password_before(&chars, at, &mut hidden),
-            '=' | ':' => hide_value_after(&chars, at, &mut hidden),
-            _ => {}
+    hide_passwords(&chars, &mut hidden);
+    for at in 0..chars.len() {
+        // A `=` inside a value already hidden is part of it.
+        if matches!(chars[at], '=' | ':') && !hidden[at] {
+            hide_value_after(&chars, at, &mut hidden);
         }
     }
     let mut out = String::with_capacity(text.len());
@@ -143,40 +150,63 @@ pub fn mask_text(text: &str) -> String {
     out
 }
 
-/// Where a text's parts end: what a password before `@` or a value never runs past.
-fn ends_part(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | '`')
+/// Where a token ends: no password or value runs past it. Not `'`, `(` or `)`, which a
+/// password may hold.
+fn ends_token(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '<' | '>' | '`')
 }
 
-/// Hides the password of the user info ending at `@` (`at`): from its first `:` on. The user
-/// info starts after `//`, the start or the end of a part; past an `@` before it only when
-/// no `:` came yet (a password holding `@`).
-fn hide_password_before(chars: &[char], at: usize, hidden: &mut [bool]) {
-    let mut start = at;
-    let mut colon_seen = false;
-    while start > 0 {
-        let c = chars[start - 1];
-        if ends_part(c) || (c == '/' && start >= 2 && chars[start - 2] == '/') {
-            break;
+/// Hides every password before `@`. A text's tokens are split at each `://` into user infos'
+/// segments; in a segment with an `@`, everything from its first `:` to its last `@` is
+/// hidden (a password may hold `@`, `:`, `/`, `,`; a segment holding two user infos without
+/// a scheme is hidden from the first one's password to the second one's host).
+fn hide_passwords(chars: &[char], hidden: &mut [bool]) {
+    let mut start = 0;
+    let mut colon: Option<usize> = None;
+    let mut last_at: Option<usize> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let scheme_end =
+            c == ':' && chars.get(i + 1) == Some(&'/') && chars.get(i + 2) == Some(&'/');
+        let network_path = c == '/' && chars.get(i + 1) == Some(&'/') && i == start;
+        if ends_token(c) || scheme_end || network_path {
+            end_segment(colon, last_at, hidden);
+            (colon, last_at) = (None, None);
+            i += if scheme_end {
+                3
+            } else if network_path {
+                2
+            } else {
+                1
+            };
+            start = i;
+            continue;
         }
-        if c == '@' && colon_seen {
-            break;
+        match c {
+            ':' if colon.is_none() => colon = Some(i),
+            '@' => last_at = Some(i),
+            _ => {}
         }
-        if c == ':' {
-            colon_seen = true;
-        }
-        start -= 1;
+        i += 1;
     }
-    let Some(colon) = (start..at).find(|&i| chars[i] == ':') else {
-        return;
-    };
-    for flag in &mut hidden[colon + 1..at] {
-        *flag = true;
+    end_segment(colon, last_at, hidden);
+}
+
+/// Hides a segment's password: from its first `:` to its last `@`.
+fn end_segment(colon: Option<usize>, last_at: Option<usize>, hidden: &mut [bool]) {
+    if let (Some(colon), Some(at)) = (colon, last_at)
+        && colon < at
+    {
+        hidden[colon + 1..at]
+            .iter_mut()
+            .for_each(|flag| *flag = true);
     }
 }
 
 /// Hides the value after `=` or `:` (`at`) when the name before it names a secret: to the
-/// end of the part, or its closing quote.
+/// end of its token (or `&`, `;`, `#` in a query), or its closing quote (a `\` escaping the
+/// next character).
 fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     // The name: letters, digits, `_ - . %` right before (a quote and spaces allowed between).
     let mut end = at;
@@ -215,17 +245,20 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     while to < chars.len() {
         let c = chars[to];
         let ends = match quote {
+            Some(_) if c == '\\' => {
+                to += 2;
+                continue;
+            }
             Some(q) => c == q,
-            None => ends_part(c) || matches!(c, '&' | ';' | '#'),
+            None => ends_token(c) || matches!(c, '&' | ';' | '#'),
         };
         if ends {
             break;
         }
         to += 1;
     }
-    for flag in &mut hidden[from..to] {
-        *flag = true;
-    }
+    let to = to.min(chars.len());
+    hidden[from..to].iter_mut().for_each(|flag| *flag = true);
 }
 
 /// `text` with its `%XX` escapes decoded (a bad one kept as it is).

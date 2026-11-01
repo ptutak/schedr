@@ -37,6 +37,13 @@ pub struct ImportErrorRow {
     pub parsed_at: String,
     /// The worker that parsed it.
     pub worker_id: String,
+    /// Its node on the Deployments page.
+    pub worker_href: String,
+    /// The master that stored the parse, shortened (empty: not known, stored before it was
+    /// kept).
+    pub master: String,
+    /// Its node on the Deployments page.
+    pub master_href: String,
 }
 
 #[derive(Template)]
@@ -179,10 +186,29 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, error: &ImportErrorView) -> I
         root: error.root.clone(),
         path: error.path.clone(),
         exception: error.exception.clone(),
-        message: error.message.clone(),
-        traceback: error.traceback.clone(),
+        // Masked again here, as a configuration is: an older webserver didn't.
+        message: schedr_config::masked::mask_text(&error.message),
+        traceback: schedr_config::masked::mask_text(&error.traceback),
         hash: short.chars().take(12).collect(),
         parsed_at: page.time(&error.parsed_at),
         worker_id: error.worker_id.clone(),
+        worker_href: format!(
+            "{}/deployments#{}",
+            page.base,
+            crate::deployments::worker_anchor(&deployment.name, &error.worker_id)
+        ),
+        master: error
+            .master_id
+            .as_deref()
+            .map(crate::deployments::short)
+            .unwrap_or_default()
+            .to_owned(),
+        master_href: error.master_id.as_deref().map_or_else(String::new, |id| {
+            format!(
+                "{}/deployments#{}",
+                page.base,
+                crate::deployments::master_anchor(&deployment.name, id)
+            )
+        }),
     }
 }

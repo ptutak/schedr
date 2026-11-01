@@ -251,8 +251,11 @@ counter).
   the lease expires.
 - **Its row on the Deployments page:** each master, standby or leading, writes a row of its
   own to the database every 10 s (the `masters` table): its ID (the holder it takes the
-  lease as), host, version, and its configuration, masked before it leaves the process.
-  The page shows those heard from in the last 30 s, the lease's holder as the leader (see
+  lease as), host, version, its configuration, masked before it leaves the process, and
+  its problems now: its lease renewed late (a warning; it pauses until it is renewed), its
+  last scheduling round failed (an error), its command notifications failing (a warning;
+  commands then wait for the next round). Each clears once it no longer holds. The page
+  colours the master by them and lists them in its panel. The page shows those heard from in the last 30 s, the lease's holder as the leader (see
   [Deployments](12-ui.md#deployments)). A row not written for an hour is removed. These
   writes don't go through the lease, so a standby writes too.
 

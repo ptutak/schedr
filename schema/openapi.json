@@ -405,6 +405,13 @@
             "description": "The exception's class name (`ParseTimeout`, `RunnerDied` or `ParseResultTooLarge` when\nthe worker stopped the file; `InvalidDag` when the master refused a DAG).",
             "type": "string"
           },
+          "master_id": {
+            "description": "The master that stored the parse; none when not known (stored before it was kept).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "message": {
             "description": "The message.",
             "type": "string"
@@ -573,6 +580,13 @@
                 "description": "Its ID: the lease holder it takes the lease as.",
                 "type": "string"
               },
+              "problems": {
+                "description": "Its problems as it last wrote them: its lease renewed late, a round failing, its\ncommand notifications failing.",
+                "items": {
+                  "$ref": "#/components/schemas/ProblemView"
+                },
+                "type": "array"
+              },
               "role": {
                 "description": "`leader` (it holds the lease) or `standby`.",
                 "type": "string"
@@ -648,6 +662,24 @@
             "type": "boolean"
           }
         },
+        "type": "object"
+      },
+      "ProblemView": {
+        "description": "A problem a node has now (decision 129): shown on its node, yellow for a warning, red for\nan error.",
+        "properties": {
+          "error": {
+            "description": "An error; a warning otherwise.",
+            "type": "boolean"
+          },
+          "message": {
+            "description": "What it is, for people.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
         "type": "object"
       },
       "RunDetail": {
@@ -947,12 +979,26 @@
               "null"
             ]
           },
+          "problems": {
+            "description": "Its problems now: lost or offline (errors), what it reports wrong, the import errors\nof files it parsed (warnings).",
+            "items": {
+              "$ref": "#/components/schemas/ProblemView"
+            },
+            "type": "array"
+          },
           "process_id": {
             "description": "The process it runs in; none from an older agent.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "queues": {
+            "description": "The queues it serves.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "schedr_version": {
             "description": "Its schedr version.",

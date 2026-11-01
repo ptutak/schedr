@@ -730,10 +730,13 @@ fn import_error(path: &str) -> Value {
 
 #[tokio::test]
 async fn import_errors_are_listed_counted_in_the_nav_and_noticed_on_the_dag_list() {
+    // One stored before its master was kept (none).
+    let mut stored = import_error("broken.py");
+    stored["master_id"] = json!("0190a0a0-0000-7000-8000-00000000000a");
     let etl = scripted(&[(
         "/api/v1/import-errors",
         200,
-        json!({"errors": [import_error("broken.py"), import_error("other.py")]}),
+        json!({"errors": [stored, import_error("other.py")]}),
     )]);
     let ml = scripted(&[("/api/v1/import-errors", 200, json!({"errors": []}))]);
     let app = ui(vec![deployment("etl", etl), deployment("ml", ml)]);
@@ -741,7 +744,25 @@ async fn import_errors_are_listed_counted_in_the_nav_and_noticed_on_the_dag_list
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         texts(&html, "table.import-errors td.mono"),
-        ["etl", "broken.py", "etl", "other.py"]
+        [
+            "etl",
+            "broken.py",
+            "0000000a",
+            "w1",
+            "etl",
+            "other.py",
+            "-",
+            "w1"
+        ]
+    );
+    // Each links to its node on the Deployments page.
+    assert_eq!(
+        attrs(&html, "table.import-errors td.mono a", "href"),
+        [
+            "/deployments#node.etl.master.0190a0a0-0000-7000-8000-00000000000a",
+            "/deployments#node.etl.worker.w1",
+            "/deployments#node.etl.worker.w1"
+        ]
     );
     assert_eq!(
         texts(&html, "table.import-errors .error-kind"),
@@ -749,7 +770,7 @@ async fn import_errors_are_listed_counted_in_the_nav_and_noticed_on_the_dag_list
     );
     assert_eq!(
         texts(&html, "table.import-errors .sub"),
-        ["9f1c2b3a4d5e · w1", "9f1c2b3a4d5e · w1"]
+        ["9f1c2b3a4d5e", "9f1c2b3a4d5e"]
     );
     assert_eq!(
         texts(&html, "pre.traceback")[0],

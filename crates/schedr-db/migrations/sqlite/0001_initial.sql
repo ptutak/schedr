@@ -41,7 +41,9 @@ CREATE TABLE masters (
     -- Its effective configuration, masked by the master before it was written.
     config         TEXT NOT NULL,
     started_at     TEXT NOT NULL,
-    heard_at       TEXT NOT NULL
+    heard_at       TEXT NOT NULL,
+    -- Its problems now, as it last wrote them: a JSON array of {"error": bool, "message"}.
+    problems       TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE parse_results (
@@ -75,6 +77,8 @@ CREATE TABLE parse_files (
     -- Who parsed this file and when: the parse's worker, or the one that parsed it again
     -- after it failed transiently (decisions 72.2, 93).
     worker_id       TEXT NOT NULL,
+    -- The master that stored it (its lease holder); none when no master did (a test's).
+    master_id       TEXT,
     parsed_at       TEXT NOT NULL,
     PRIMARY KEY (parse_result_id, path)
 );

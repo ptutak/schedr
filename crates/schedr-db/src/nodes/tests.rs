@@ -24,6 +24,7 @@ fn master<'a>(id: &'a str, config: &'a serde_json::Value) -> MasterNode<'a> {
         schedr_version: "0.1.0",
         config,
         started_at: ts("2026-11-01T08:00:00Z"),
+        problems: &[],
     }
 }
 
@@ -39,8 +40,14 @@ async fn masters_heartbeat_their_rows_and_the_leader_is_the_lease_holder() {
         .unwrap();
     // A later heartbeat brings the row up to date, keeping when it started.
     let newer = json!({"database": {"url": "postgres://schedr:****@db2/s"}});
+    // With its problems now (decision 129).
+    let problems = [NodeProblem {
+        error: false,
+        message: "its lease isn't renewed in time".to_owned(),
+    }];
     let again = MasterNode {
         started_at: ts("2026-11-01T09:00:00Z"),
+        problems: &problems,
         ..master("m-b", &newer)
     };
     db.heartbeat_master(&again, ts("2026-11-01T08:00:10Z"))
@@ -60,6 +67,8 @@ async fn masters_heartbeat_their_rows_and_the_leader_is_the_lease_holder() {
     assert_eq!(b.config, newer);
     assert_eq!(b.started_at, ts("2026-11-01T08:00:00Z"));
     assert_eq!(b.heard_at, ts("2026-11-01T08:00:10Z"));
+    assert_eq!(b.problems, problems);
+    assert_eq!(read[0].problems, []);
 
     db.take_lease("m-b", Duration::from_secs(30)).await.unwrap();
     let read = db.masters(since).await.unwrap();

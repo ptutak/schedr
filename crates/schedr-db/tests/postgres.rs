@@ -1630,6 +1630,11 @@ async fn a_deployments_nodes_are_recorded_and_read() {
 
     let db = fresh().await;
     let config = json!({"database": {"url": "postgres://schedr:****@db/s"}});
+    // Its problems go with its row (decision 129).
+    let problems = [schedr_db::nodes::NodeProblem {
+        error: true,
+        message: "a round failed".to_owned(),
+    }];
     let master = |id: &'static str, now: &str| {
         let master = MasterNode {
             master_id: id,
@@ -1638,6 +1643,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             schedr_version: "0.1.0",
             config: &config,
             started_at: ts("2026-11-01T08:00:00Z"),
+            problems: &problems,
         };
         let db = &db;
         let now = ts(now);
@@ -1658,6 +1664,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
     );
     assert_eq!(read[0].config, config);
     assert_eq!(read[0].heard_at, ts("2026-11-01T08:00:05Z"));
+    assert_eq!(read[0].problems, problems);
     assert_eq!(
         db.masters(Timestamp::UNIX_EPOCH).await.unwrap().len(),
         2,

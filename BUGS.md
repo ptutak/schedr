@@ -55,35 +55,39 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
 | 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 5 | B151: standalone once didn't exit after its master was taken over (Suspected) | 2 | medium | rare | reliability |
-| 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 7 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 8 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 9 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 10 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 15 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 16 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 17 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 18 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 19 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 20 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 21 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 22 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 23 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 24 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 8 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 10 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 11 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 12 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 13 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 22 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B151: standalone once didn't exit after its master was taken over (Suspected)
 
-- **Rating:** severity **medium**, probability **rare**, reliability (score 2): `standalone_ends_when_its_master_is_taken_over` failed once in `make check` (2026-11-01, check18): the master logged "the master failed: standalone stops", then nothing for 20 s, and the process didn't exit. A standalone left running so would serve its API and worker with no master, never restarted.
+- **Rating:** severity **low**, probability **rare**, reliability (score 1): `standalone_ends_when_its_master_is_taken_over` failed once in `make check` (2026-11-01, check18): the master logged "the master failed: standalone stops", then nothing for 20 s, and the process didn't exit. A standalone left running so would serve its API and worker with no master, never restarted.
 - **Found:** check18, during the bug batch B135-B138/B147 (`FAIL [41.139s]`). Passes alone (4 of 4, 15 s each).
 - **Where to look:** after the master fails, `request` 2 stops the worker, whose end sends `stop` to the API (`standalone.rs`); something there didn't end: the worker's interrupt, the API's open streams (the client's stream tasks changed for B138 in that batch), or the ops server.
-- **A fix:** to find; at least a bound on the stop after a master failure.
+- **Bounded (2026-11-01):** once the master failed, standalone gives its worker
+  `WORKER_STOP_AFTER_FAILURE` (10 s) to stop, then stops anyway, logging "the worker didn't
+  stop within 10s of the master's failure" (`standalone::ended_within`, unit-tested on paused
+  time). So the process exits; the cause is not found (not reproduced: the agent's awaits
+  outside its select (`hashes()` while a root settles, `client.control()` opening the stream)
+  are the candidates). Lowered to low: what is left is a slower exit, and the log line to
+  find the cause the next time it happens.
 
 ## B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected)
 
@@ -98,25 +102,6 @@ step touches their code or the user schedules them.
 - **Found:** 2026-11-01, by Codex's review of M4.4 (finding 3), measured in a debug build: limit checks alone took 25 ms for 1,000 ready tasks, 379 ms for 4,000, 2.1 s for 8,000. `crates/schedr-master/src/limits.rs` (`Active::reached`).
 - **Done meanwhile:** the DAG's `max_active_tasks` is checked first, with no lookup; once it is reached, every ready task of the DAG is held back without a search. What remains is a DAG under its cap with many ready tasks that have their own limits.
 - **A fix:** look the task up once (`assign_one` already has it) and pass its settings in, or index a DAG's tasks by ID when its version is read.
-
-## B103: `dags test` waits for ever when a DAG root can't be scanned
-
-- **Rating:** severity **medium**, probability **rare**, usability (score 2): `schedr dags test` hangs, logging a warning every 200 ms, instead of failing; a root its agent can't scan or copy (permissions, a full disk).
-- **Found:** 2026-10-31, by Claude, from CI: the macOS wheel's smoke test ran for over two
-  hours. Every scan of the root failed (copying the code: `Permission denied`, macOS refusing
-  to rename the read-only copy, fixed the same day), and `dags test` kept retrying ("can't
-  scan DAG root" every 200 ms), never ending. The smoke script's own waits are bounded, but
-  `dags test` itself has no deadline.
-- **A fix:** give `dags test` a deadline for its root to be parsed (failing with the last
-  scan error), or fail at the first scan error, its root being local.
-
-## B98: a frequent cron schedule enumerates hours of fire times on every lookup
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): the scheduler's rounds slow down, under the master's lock; secondly or many minutely schedules.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F5 (scheduling and
-  discovery), with a failing proof each; checked against the code by Claude.
-  `fire_times.rs:194`, `:215`: a lookup enumerates from three hours (`MARGIN`, for time zone changes) before to three hours after its answer, so a secondly cron walks ~43,000 times per lookup, in UTC too. Codex's measure (debug build): 10 lookups of `* * * * * *` 0.88 s, of `0 3 * * *` 0.45 ms.
-- **A fix:** enumerate only around the time zone's transitions, or no margin in a fixed-offset zone.
 
 ## B89: a run whose stored DAG no longer reads looks unmapped to the API
 

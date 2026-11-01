@@ -2,25 +2,95 @@
 {% block title %}Deployments · schedr{% endblock %}
 {% block content %}
 <h1>Deployments</h1>
-<p class="dim">The deployments this UI shows. Open one for its masters and workers, drawn by process, and each one's configuration.</p>
-<table class="list deployments">
-  <thead>
-    <tr><th>Deployment</th><th>Leader</th><th>Masters</th><th>Workers active</th><th>Version</th></tr>
-  </thead>
-  <tbody>
-  {% for row in rows %}
-    <tr>
-      <td><a href="{{ row.href }}">{{ row.name }}</a></td>
-      {% if let Some(error) = row.error %}
-      <td colspan="4"><span class="error">Unavailable: {{ error }}</span></td>
-      {% else %}
-      <td class="mono">{{ row.leader }}</td>
-      <td>{{ row.masters }}</td>
-      <td>{{ row.workers }}</td>
-      <td class="mono">{{ row.version }}</td>
-      {% endif %}
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change, every 15s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<p class="dim">Everything this UI shows. Each frame is a deployment, each rectangle around nodes a process (in standalone one for all of them). Click a node for its panel: its facts, its problems and its configuration. Secrets are never shown: each node masks its own configuration before it leaves its process.</p>
+<p class="legend dim">
+  <svg width="28" height="10" aria-hidden="true"><line class="edge http" x1="0" y1="5" x2="28" y2="5"></line></svg> HTTP
+  <svg width="28" height="10" aria-hidden="true"><line class="edge database" x1="0" y1="5" x2="28" y2="5"></line></svg> database
+  <svg width="28" height="10" aria-hidden="true"><line class="edge grpc" x1="0" y1="5" x2="28" y2="5"></line></svg> gRPC
+  <svg width="28" height="10" aria-hidden="true"><line class="edge grpc dashed" x1="0" y1="5" x2="28" y2="5"></line></svg> not connected
+  · <span class="swatch warning"></span> a warning <span class="swatch error"></span> an error
+</p>
+<div class="graph-scroll">
+<svg class="deployment" width="{{ graph.width }}" height="{{ graph.height }}" viewBox="0 0 {{ graph.width }} {{ graph.height }}" role="img" aria-label="The UI, and each deployment's processes and nodes">
+{% for frame in graph.frames %}
+  <g class="frame">
+    <rect class="frame-box" x="{{ frame.x }}" y="{{ frame.y }}" width="{{ frame.width }}" height="{{ frame.height }}" rx="10"></rect>
+    <text class="frame-label" x="{{ frame.x + 10 }}" y="{{ frame.y + 20 }}">{{ frame.title }}</text>
+  </g>
+{% endfor %}
+{% for process in graph.processes %}
+  <g class="process">
+    <rect class="process-box" x="{{ process.x }}" y="{{ process.y }}" width="{{ process.width }}" height="{{ process.height }}" rx="8"></rect>
+    <text class="process-label" x="{{ process.x + 10 }}" y="{{ process.y + 16 }}">{{ process.title }}</text>
+  </g>
+{% endfor %}
+{% for edge in graph.edges %}
+  <path class="edge {{ edge.kind }}{% if edge.dashed %} dashed{% endif %}" d="{{ edge.path }}"><title>{{ edge.title }}</title></path>
+{% endfor %}
+{% for node in graph.nodes %}
+  <a class="node {{ node.kind }}" href="#{{ node.anchor }}">
+    <title>{{ node.tooltip }}</title>
+    <rect class="{{ node.classes() }}" x="{{ node.x }}" y="{{ node.y }}" width="200" height="52" rx="6"></rect>
+    <text x="{{ node.x + 10 }}" y="{{ node.y + 17 }}">{{ node.label }}</text>
+    <text class="sub" x="{{ node.x + 10 }}" y="{{ node.y + 32 }}">{{ node.sub }}</text>
+    {% if !node.extra.is_empty() %}<text class="sub" x="{{ node.x + 10 }}" y="{{ node.y + 46 }}">{{ node.extra }}</text>{% endif %}
+    {% if !node.mark().is_empty() %}<text class="mark {{ node.level.class() }}" x="{{ node.x + 186 }}" y="{{ node.y + 17 }}">{{ node.mark() }}</text>{% endif %}
+  </a>
+{% endfor %}
+</svg>
+</div>
+{% for panel in panels %}
+<section class="node-config" id="{{ panel.anchor }}">
+  <div class="panel-head"><h2>{{ panel.title }}</h2><a class="close" href="#" aria-label="Close">×</a></div>
+  <dl class="facts">{% for (term, value) in panel.facts %}<dt>{{ term }}</dt><dd class="mono">{{ value }}</dd>{% endfor %}</dl>
+  {% if !panel.problems.is_empty() %}
+  <ul class="problems">
+  {% for problem in panel.problems %}<li class="{% if problem.error %}error{% else %}warning{% endif %}">{% if problem.error %}Error{% else %}Warning{% endif %}: {{ problem.message }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if !panel.connections.is_empty() %}
+  <h3>Connections</h3>
+  <table class="list connections">
+    <thead>
+      <tr><th>Deployment</th><th>Webserver version</th><th>Answered in</th><th>The UI proves itself by</th><th>Taken as</th></tr>
+    </thead>
+    <tbody>
+    {% for row in panel.connections %}
+      <tr>
+        <td><a href="{{ row.href }}">{{ row.name }}</a></td>
+        {% if let Some(error) = row.error %}
+        <td colspan="4"><span class="error">Unreachable: {{ error }}</span> <span class="dim">({{ row.latency }})</span></td>
+        {% else %}
+        <td class="mono">{{ row.version }}{% if row.mismatch %} <span class="badge warning">differs</span>{% endif %}</td>
+        <td>{{ row.latency }}</td>
+        <td>{{ row.proof }}</td>
+        <td class="mono">{{ row.user }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if panel.config.is_empty() %}{% if !panel.no_config.is_empty() %}<p class="empty">{{ panel.no_config }}</p>{% endif %}{% else %}<h3>Configuration</h3><pre class="config">{{ panel.config }}</pre>{% endif %}
+</section>
+{% endfor %}
+</div>
+<script>
+// A live refresh replaces the panels; the browser's :target stays on the replaced one, so the
+// open panel would close. Pointed at the new one again, in place, without a history entry.
+document.addEventListener("htmx:afterSettle", function () {
+  var hash = location.hash.slice(1);
+  if (!hash) return;
+  var panel = document.getElementById(hash);
+  if (!panel) {
+    try { panel = document.getElementById(decodeURIComponent(hash)); } catch (e) {}
+  }
+  if (panel && panel.classList.contains("node-config") && !panel.matches(":target")) {
+    var x = window.scrollX, y = window.scrollY;
+    location.replace("#" + hash);
+    window.scrollTo(x, y);
+  }
+});
+</script>
 {% endblock %}

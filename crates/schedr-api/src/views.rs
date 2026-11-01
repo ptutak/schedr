@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
+use schedr_config::masked::mask_text;
 use schedr_db::commands::CommandRecord;
 use schedr_db::dags::StoredDag;
 use schedr_db::reads::{AttemptRecord, InstanceRecord, RunRecord};
@@ -162,7 +163,7 @@ impl DagView {
                 reason: h.reason(dag.dag_id.as_str()),
                 path: h.path,
                 exception: h.exception,
-                message: h.message,
+                message: mask_text(&h.message),
             }),
             limits: Vec::new(),
         }
@@ -374,7 +375,11 @@ impl From<&AttemptRecord> for AttemptView {
             error_summary: attempt
                 .error_summary
                 .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok()),
+                .and_then(|s| serde_json::from_str(s).ok())
+                .map(|mut summary| {
+                    schedr_config::masked::mask(&mut summary);
+                    summary
+                }),
             assigned_at: attempt.assigned_at,
             started_at: attempt.started_at,
             ended_at: attempt.ended_at,
@@ -624,7 +629,7 @@ impl From<&WorkerRecord> for WorkerView {
                 .map(|w| WarningView {
                     kind: w.kind.clone(),
                     interpreter: w.interpreter.clone(),
-                    message: w.message.clone(),
+                    message: mask_text(&w.message),
                 })
                 .collect(),
             master_id: None,
@@ -662,6 +667,25 @@ pub struct NodeView {
     pub config: serde_json::Value,
 }
 
+/// A problem a node has now (decision 129): shown on its node, yellow for a warning, red for
+/// an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ProblemView {
+    /// An error; a warning otherwise.
+    pub error: bool,
+    /// What it is, for people.
+    pub message: String,
+}
+
+impl From<schedr_db::nodes::NodeProblem> for ProblemView {
+    fn from(problem: schedr_db::nodes::NodeProblem) -> Self {
+        Self {
+            error: problem.error,
+            message: mask_text(&problem.message),
+        }
+    }
+}
+
 /// A master, leading or standing by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct MasterView {
@@ -676,6 +700,10 @@ pub struct MasterView {
     pub started_at: Timestamp,
     /// When it was last heard from (it writes its row every 10 s).
     pub heard_at: Timestamp,
+    /// Its problems as it last wrote them: its lease renewed late, a round failing, its
+    /// command notifications failing.
+    #[serde(default)]
+    pub problems: Vec<ProblemView>,
 }
 
 /// A worker as a node of the deployment.
@@ -694,6 +722,13 @@ pub struct WorkerNodeView {
     /// Its effective configuration, masked; none from an older agent.
     #[schema(value_type = Option<Object>)]
     pub config: Option<serde_json::Value>,
+    /// The queues it serves.
+    #[serde(default)]
+    pub queues: Vec<String>,
+    /// Its problems now: lost or offline (errors), what it reports wrong, the import errors
+    /// of files it parsed (warnings).
+    #[serde(default)]
+    pub problems: Vec<ProblemView>,
 }
 
 impl From<schedr_db::nodes::MasterRecord> for MasterView {
@@ -709,6 +744,7 @@ impl From<schedr_db::nodes::MasterRecord> for MasterView {
             },
             started_at: master.started_at,
             heard_at: master.heard_at,
+            problems: master.problems.into_iter().map(ProblemView::from).collect(),
         }
     }
 }
@@ -726,6 +762,9 @@ pub struct ImportErrorView {
     pub parsed_at: Timestamp,
     /// The worker that parsed it.
     pub worker_id: String,
+    /// The master that stored the parse; none when not known (stored before it was kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_id: Option<String>,
     /// That worker's schedr version.
     pub schedr_version: String,
     /// The exception's class name (`ParseTimeout`, `RunnerDied` or `ParseResultTooLarge` when
@@ -745,10 +784,11 @@ impl From<&schedr_db::dags::ImportErrorRecord> for ImportErrorView {
             content_hash: record.content_hash.clone(),
             parsed_at: record.parsed_at,
             worker_id: record.worker_id.clone(),
+            master_id: record.master_id.clone(),
             schedr_version: record.schedr_version.clone(),
             exception: record.error.exception.clone(),
-            message: record.error.message.clone(),
-            traceback: record.error.traceback.clone(),
+            message: mask_text(&record.error.message),
+            traceback: mask_text(&record.error.traceback),
         }
     }
 }

@@ -547,10 +547,69 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
     );
 }
 
+/// The deployment's workers: w1 active (with its node and a warning), w2 lost, w3 offline
+/// (with an old warning). Returns w1's configuration.
+async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
+    let queues = ["default".to_owned(), "large".to_owned()];
+    for id in ["w1", "w2", "w3"] {
+        db.register_worker(
+            &schedr_db::workers::WorkerRegistration {
+                id,
+                incarnation: "0190a0a0-0000-7000-8000-000000000001",
+                protocol_version: "1.0",
+                schedr_version: "0.1.0",
+                queues: &queues,
+                slots: 2,
+                log_endpoint: "",
+            },
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    }
+    let worker = json!({"worker": {"slots": 2}});
+    db.set_worker_node("w1", Some("m-b"), Some("p-2"), Some(&worker))
+        .await
+        .unwrap();
+    db.set_worker_warnings(
+        "w1",
+        &[schedr_db::workers::WorkerWarning {
+            kind: "fork_server_disabled".to_owned(),
+            interpreter: String::new(),
+            message: "tasks start slower".to_owned(),
+        }],
+    )
+    .await
+    .unwrap();
+    db.set_worker_state("w2", schedr_model::WorkerState::Lost, ts(NOW))
+        .await
+        .unwrap();
+    // Offline: deregistered on purpose, kept for good; its old warning colours it no more
+    // (decision 130).
+    db.set_worker_warnings(
+        "w3",
+        &[schedr_db::workers::WorkerWarning {
+            kind: "fork_server_disabled".to_owned(),
+            interpreter: String::new(),
+            message: "tasks start slower".to_owned(),
+        }],
+    )
+    .await
+    .unwrap();
+    db.set_worker_state("w3", schedr_model::WorkerState::Offline, ts(NOW))
+        .await
+        .unwrap();
+    worker
+}
+
 #[tokio::test]
 async fn the_deployment_shows_its_nodes_with_their_configurations() {
     let (_, db, _) = api().await;
     let config = json!({"database": {"url": "postgres://schedr:****@db/s"}});
+    let late = [schedr_db::nodes::NodeProblem {
+        error: false,
+        message: "its lease isn't renewed in time (postgres://u:hunter2@db/s)".to_owned(),
+    }];
     for (id, heard) in [
         ("m-a", "2026-10-21T07:59:55Z"),
         ("m-b", "2026-10-21T07:59:55Z"),
@@ -564,6 +623,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
                 schedr_version: "0.1.0",
                 config: &config,
                 started_at: ts("2026-10-21T07:00:00Z"),
+                problems: if id == "m-a" { &late } else { &[] },
             },
             ts(heard),
         )
@@ -573,26 +633,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
     db.take_lease("m-b", std::time::Duration::from_secs(30))
         .await
         .unwrap();
-    for id in ["w1", "w2"] {
-        db.register_worker(
-            &schedr_db::workers::WorkerRegistration {
-                id,
-                incarnation: "0190a0a0-0000-7000-8000-000000000001",
-                protocol_version: "1.0",
-                schedr_version: "0.1.0",
-                queues: &[],
-                slots: 2,
-                log_endpoint: "",
-            },
-            ts(NOW),
-        )
-        .await
-        .unwrap();
-    }
-    let worker = json!({"worker": {"slots": 2}});
-    db.set_worker_node("w1", Some("m-b"), Some("p-2"), Some(&worker))
-        .await
-        .unwrap();
+    let worker = deployment_workers(&db).await;
     let mut state = ApiState::new(db.clone(), None).with_node(crate::views::NodeView {
         process_id: "p-3".to_owned(),
         host: "web".to_owned(),
@@ -615,19 +656,30 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
         json!([
             {"master_id": "m-b", "role": "leader", "process_id": "p-1", "host": "node-a",
              "schedr_version": "0.1.0", "config": config,
-             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z"},
+             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z",
+             "problems": []},
             {"master_id": "m-a", "role": "standby", "process_id": "p-1", "host": "node-a",
              "schedr_version": "0.1.0", "config": config,
-             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z"},
+             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z",
+             "problems": [{"error": false,
+                           "message": "its lease isn't renewed in time (postgres://u:****@db/s)"}]},
         ])
     );
     assert_eq!(
         body["workers"],
         json!([
             {"worker_id": "w1", "state": "active", "schedr_version": "0.1.0",
-             "master_id": "m-b", "process_id": "p-2", "config": worker},
-            {"worker_id": "w2", "state": "active", "schedr_version": "0.1.0",
-             "master_id": null, "process_id": null, "config": null},
+             "master_id": "m-b", "process_id": "p-2", "config": worker,
+             "queues": ["default", "large"],
+             "problems": [{"error": false, "message": "tasks start slower"}]},
+            {"worker_id": "w2", "state": "lost", "schedr_version": "0.1.0",
+             "master_id": null, "process_id": null, "config": null,
+             "queues": ["default", "large"],
+             "problems": [{"error": true,
+                           "message": "lost: it stopped answering, its attempts were given up"}]},
+            {"worker_id": "w3", "state": "offline", "schedr_version": "0.1.0",
+             "master_id": null, "process_id": null, "config": null,
+             "queues": ["default", "large"], "problems": []},
         ])
     );
     assert_eq!(body["user"], "anonymous");
@@ -893,8 +945,10 @@ async fn the_current_codes_import_errors_are_listed() {
         dags: vec![],
         error: Some(schedr_model::runner::ErrorSummary {
             exception: "ModuleNotFoundError".to_owned(),
-            message: "No module named 'pandas'".to_owned(),
-            traceback: "  File \"broken.py\", line 1".to_owned(),
+            // Codex's review of the Deployments batch: an error quoting an address showed its
+            // password.
+            message: "No module named 'pandas' (from postgres://u:hunter2@db/s)".to_owned(),
+            traceback: "  File \"broken.py\", line 1, password=hunter2".to_owned(),
         }),
         warnings: Vec::new(),
     }];
@@ -918,8 +972,9 @@ async fn the_current_codes_import_errors_are_listed() {
         json!({"errors": [{
             "root": "etl", "path": "broken.py", "content_hash": "h2",
             "parsed_at": NOW, "worker_id": "w2", "schedr_version": "0.1.0",
-            "exception": "ModuleNotFoundError", "message": "No module named 'pandas'",
-            "traceback": "  File \"broken.py\", line 1"
+            "exception": "ModuleNotFoundError",
+            "message": "No module named 'pandas' (from postgres://u:****@db/s)",
+            "traceback": "  File \"broken.py\", line 1, password=****"
         }]})
     );
 }

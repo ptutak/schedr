@@ -191,6 +191,52 @@ impl CronTimes {
     }
 
     fn next_after(&self, t: Timestamp) -> Option<Timestamp> {
+        self.quick_after(t).or_else(|| self.walk_after(t))
+    }
+
+    fn previous_before(&self, t: Timestamp) -> Option<Timestamp> {
+        self.quick_before(t).or_else(|| self.walk_before(t))
+    }
+
+    /// The first match after `t` when the zone doesn't change its offset from [`MARGIN`]
+    /// before `t` to [`MARGIN`] after it (B98): there wall-clock times and moments map one to
+    /// one, so no match on either side of a change needs comparing. `None`: walk.
+    fn quick_after(&self, t: Timestamp) -> Option<Timestamp> {
+        let found = self.cron.find_next_occurrence(&self.civil(t), false).ok()?;
+        let at = self.unambiguous(found).filter(|at| *at > t)?;
+        let (from, until) = (t.checked_sub(MARGIN).ok()?, at.checked_add(MARGIN).ok()?);
+        match self.tz.following(from).next() {
+            Some(change) if change.timestamp() <= until => None,
+            _ => Some(at),
+        }
+    }
+
+    /// The last match before `t`, as [`Self::quick_after`] does it.
+    fn quick_before(&self, t: Timestamp) -> Option<Timestamp> {
+        let found = self
+            .cron
+            .find_previous_occurrence(&self.civil(t), false)
+            .ok()?;
+        let at = self.unambiguous(found).filter(|at| *at < t)?;
+        let (from, until) = (at.checked_sub(MARGIN).ok()?, t.checked_add(MARGIN).ok()?);
+        match self.tz.preceding(until).next() {
+            Some(change) if change.timestamp() >= from => None,
+            _ => Some(at),
+        }
+    }
+
+    /// The moment of a wall-clock time that has exactly one.
+    fn unambiguous(&self, civil: DateTime) -> Option<Timestamp> {
+        match self.tz.to_ambiguous_timestamp(civil).offset() {
+            AmbiguousOffset::Unambiguous { offset } => offset.to_timestamp(civil).ok(),
+            AmbiguousOffset::Gap { .. } | AmbiguousOffset::Fold { .. } => None,
+        }
+    }
+
+    /// The first fire time after `t`, comparing every match from [`MARGIN`] before `t` to
+    /// [`MARGIN`] after the best one (a daylight-saving change can put a later wall-clock
+    /// time first).
+    fn walk_after(&self, t: Timestamp) -> Option<Timestamp> {
         let mut civil = self.civil(t).checked_sub(MARGIN).ok()?;
         let mut best: Option<Timestamp> = None;
         while let Ok(found) = self.cron.find_next_occurrence(&civil, false) {
@@ -211,7 +257,8 @@ impl CronTimes {
         best
     }
 
-    fn previous_before(&self, t: Timestamp) -> Option<Timestamp> {
+    /// The last fire time before `t`, as [`Self::walk_after`] does it.
+    fn walk_before(&self, t: Timestamp) -> Option<Timestamp> {
         let mut civil = self.civil(t).checked_add(MARGIN).ok()?;
         let mut best: Option<Timestamp> = None;
         while let Ok(found) = self.cron.find_previous_occurrence(&civil, false) {

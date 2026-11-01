@@ -4,6 +4,27 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-01, morning)
+
+- **Bugs B135-B139, B147 fixed (`9f4d89d`), the browser test fixed (`b5ba037`).** A worker
+  registering with no queues is stored serving `default`. B150, B151 logged (flaky,
+  not reproduced).
+- **The Deployments redesign (the user's notes on M4.4b; decisions 128-130):** one graph
+  on `/deployments` (`schedr-ui/src/deployments.rs`, pure `graph()` laid out by tiers):
+  the UI (inside the standalone process when it shares the webserver's process ID;
+  `Ui.process_id`/`host`), a frame per deployment, a rectangle per process, lines HTTP
+  (UI to webserver), database (webserver to masters), gRPC (master to its workers, dashed
+  when not connected); nodes yellow/red by their problems (masters report theirs in the
+  heartbeat row: `masters.problems`, `schedr-master/src/problems.rs`; workers' computed in
+  `routes.rs` `worker_problems`, offline none by decision 130); panels with facts, problems
+  and the configuration as TOML (nulls left out). The per-deployment pages and `/config`
+  removed (the UI's panel holds the Config page's content). The Import errors page has
+  Master and Worker columns (`parse_files.master_id`). Checked in headless Chromium and
+  by a Playwright test.
+- **Next:** Codex reviews this batch together with `masked.rs` and `connect_error`
+  (pushed in `41a0200` unreviewed); then back to bugs (B103, B98, B151, B150, B148, then
+  by score).
+
 ## State (2026-11-01, small hours)
 
 - **Codex reviewed the M4.4 batch** (weekly 53% → 56%): 4 findings, each with a failing

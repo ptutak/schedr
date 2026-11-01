@@ -7,6 +7,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use schedr_db::Database;
 use schedr_db::nodes::MasterNode;
+use schedr_master::problems::Problems;
 use tokio::sync::watch;
 
 use crate::roles::until;
@@ -60,6 +61,8 @@ pub struct MasterIdentity {
     pub master_id: String,
     /// Its effective configuration, masked.
     pub config: serde_json::Value,
+    /// Its problems now (decision 129), written with each beat.
+    pub problems: Problems,
 }
 
 /// Writes `master`'s row every [`MASTER_HEARTBEAT`] on `db` (not fenced: a standby writes too)
@@ -71,6 +74,7 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
     let mut failing = false;
     let beats = async {
         loop {
+            let problems = master.problems.now();
             let node = MasterNode {
                 master_id: &master.master_id,
                 process_id: process_id(),
@@ -78,6 +82,7 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
                 schedr_version: env!("CARGO_PKG_VERSION"),
                 config: &master.config,
                 started_at,
+                problems: &problems,
             };
             match db.heartbeat_master(&node, Timestamp::now()).await {
                 Ok(()) => failing = false,

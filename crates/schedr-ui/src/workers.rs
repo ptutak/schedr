@@ -143,7 +143,11 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> Worke
         load: format!("{} / {}", worker.running, worker.slots),
         version: worker.schedr_version.clone(),
         last_seen: page.time(&worker.last_heartbeat_at),
-        warnings: worker.warnings.iter().map(|w| w.message.clone()).collect(),
+        warnings: worker
+            .warnings
+            .iter()
+            .map(|w| schedr_config::masked::mask_text(&w.message))
+            .collect(),
         action: format!(
             "{}/d/{}/workers/{}/{verb}",
             page.base,
@@ -162,10 +166,9 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> Worke
             .to_owned(),
         master_href: worker.master_id.as_deref().map_or_else(String::new, |id| {
             format!(
-                "{}/deployments/{}#{}",
+                "{}/deployments#{}",
                 page.base,
-                path_segment(&deployment.name),
-                crate::deployments::master_anchor(id)
+                crate::deployments::master_anchor(&deployment.name, id)
             )
         }),
         master_now: matches!(worker.state.as_str(), "active" | "draining"),

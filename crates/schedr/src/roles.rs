@@ -41,6 +41,7 @@ use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::lease::{Leadership, Renewal};
 use schedr_master::metrics::MasterMetrics;
 use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
+use schedr_master::problems::{ProblemKind, Problems};
 use schedr_master::service::{Hub, LeaseLost};
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_tls::{Protocol, Tls, TlsFiles, incoming};
@@ -432,7 +433,7 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
 pub async fn serve_master(
     db: Database,
     settings: Settings,
-    tick: Duration,
+    (tick, problems): (Duration, Problems),
     listener: TcpListener,
     tls: Option<Tls>,
     leadership: impl Future<Output = Result<Leadership, AppError>>,
@@ -461,13 +462,19 @@ pub async fn serve_master(
                 "can't listen for commands; polling every tick, trying again in {} min",
                 listen_retry.as_secs() / 60
             );
+            problems.set(
+                ProblemKind::Notifications,
+                false,
+                format!("it can't listen for commands ({error}): polling"),
+            );
             (None, true)
         }
     };
     // Its writes through the lease: refused once another master took it over.
     let mut hub =
         Hub::new(MasterCore::new(leadership.fenced_db(), settings).with_metrics(observed.metrics))
-            .with_refresh_limit(observed.health.stall() / 2);
+            .with_refresh_limit(observed.health.stall() / 2)
+            .with_problems(problems);
     if retry {
         hub = hub.with_listen_retry(listen_retry);
     }
@@ -623,6 +630,8 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
         docs_dir: docs_dir(config),
         auth,
         config: masked(config),
+        process_id: crate::node::process_id().to_owned(),
+        host: crate::node::host_name(),
     });
     ready.ready();
     let server = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
@@ -667,6 +676,8 @@ pub async fn serve_api(
     // Its pages ask the person to sign in: the UI's token opens only the API.
     let ui_auth = auth.without_ui_token();
     let ui_config = node.config.clone();
+    // Its UI runs in this process: drawn inside it.
+    let (ui_process, ui_host) = (node.process_id.clone(), node.host.clone());
     let state = ApiState::new(db, None)
         .with_auth(auth)
         .with_refresh(refresh)
@@ -693,6 +704,8 @@ pub async fn serve_api(
                 docs_dir: local.docs_dir,
                 auth: ui_auth,
                 config: ui_config,
+                process_id: ui_process,
+                host: ui_host,
             }))
         }
         None => api.clone(),
@@ -1217,9 +1230,11 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
         config.database.change_notifications,
     );
     // Its row on the Deployments page, from now on: a standby's too.
+    let problems = Problems::default();
     let identity = MasterIdentity {
         master_id: new_master_id(),
         config: masked(config),
+        problems: problems.clone(),
     };
     let master_id = identity.master_id.clone();
     tokio::spawn(heartbeat_master(db.clone(), identity, stop.clone()));
@@ -1239,7 +1254,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     Box::pin(serve_master(
         db,
         master_settings(config),
-        config.master.tick_interval,
+        (config.master.tick_interval, problems),
         listener,
         tls,
         leadership,

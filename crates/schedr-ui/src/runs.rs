@@ -1543,11 +1543,13 @@ fn attempt_row(page: &Page, attempt: &AttemptView) -> AttemptRow {
             .started_at
             .map(|t| page.narrow_time(&t))
             .unwrap_or_default(),
-        error,
-        traceback: summary
-            .and_then(|s| s["traceback"].as_str())
-            .unwrap_or_default()
-            .to_owned(),
+        // Masked again here (an older webserver didn't): a message may quote an address.
+        error: schedr_config::masked::mask_text(&error),
+        traceback: schedr_config::masked::mask_text(
+            summary
+                .and_then(|s| s["traceback"].as_str())
+                .unwrap_or_default(),
+        ),
     }
 }
 

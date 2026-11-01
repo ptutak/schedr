@@ -390,24 +390,36 @@ async fn the_current_parses_import_errors_are_listed_and_replaced_by_the_next_cu
             content_hash: "h1".to_owned(),
             schedr_version: "0.1.0".to_owned(),
             worker_id: "w1".to_owned(),
+            master_id: None,
             parsed_at: now(),
             path: "bad.py".to_owned(),
             error: files()[1].error.clone().unwrap(),
         }]
     );
     // A retry of the file (decision 72.2), on another worker: its error is that worker's,
-    // when it parsed it (decision 93).
+    // when it parsed it (decision 93), stored by the master holding the lease (decision 129).
     let retried_at: Timestamp = "2026-10-21T08:05:00Z".parse().unwrap();
-    db.replace_parse_files(&broken, &files()[1..], "w2", retried_at)
+    let epoch = db
+        .take_lease("m-1", std::time::Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
+    db.fenced("m-1", epoch)
+        .replace_parse_files(&broken, &files()[1..], "w2", retried_at)
         .await
         .unwrap();
     let errors = db.current_import_errors().await.unwrap();
     assert_eq!(
         errors
             .iter()
-            .map(|e| (e.path.as_str(), e.worker_id.as_str(), e.parsed_at))
+            .map(|e| (
+                e.path.as_str(),
+                e.worker_id.as_str(),
+                e.master_id.as_deref(),
+                e.parsed_at
+            ))
             .collect::<Vec<_>>(),
-        [("bad.py", "w2", retried_at)]
+        [("bad.py", "w2", Some("m-1"), retried_at)]
     );
     // The fixed code's parse becomes current: its root has no errors any more.
     let fixed = store_parse(&db, "h2", &files()[..1]).await;

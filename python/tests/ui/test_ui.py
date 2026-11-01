@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 
 from playwright.sync_api import BrowserContext, Page, Route, expect
@@ -211,3 +212,56 @@ def test_a_live_read_answered_while_a_dialog_is_open_doesnt_replace_it(
     expect(dialog).to_be_visible()
     dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).to_be_hidden()
+
+
+def test_a_deployment_nodes_panel_opens_on_click_and_stays_open_across_a_refresh(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    page.goto(standalone["url"] + "/deployments")
+    # Standalone: one process holding the UI, the webserver, the master and the worker.
+    expect(page.locator("svg.deployment g.process")).to_have_count(1)
+    expect(page.locator("svg.deployment a.node")).to_have_count(4)
+    worker = page.locator("svg.deployment a.node.worker")
+    expect(worker.locator("text.sub").last).to_have_text("queues: default")
+    panel = page.locator("section.node-config:target")
+    expect(panel).to_have_count(0)
+    worker.click()
+    expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
+    # Its configuration as TOML.
+    expect(panel.locator("pre.config")).to_contain_text("[worker]")
+    # A live refresh replaces the panels: the open one is open again.
+    with page.expect_response(re.compile(r"/deployments$")):
+        page.evaluate("htmx.trigger(document.getElementById('live'), 'sse:change')")
+    expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
+    # The UI's panel: its connection to the webserver, in process.
+    page.locator("svg.deployment a.node.ui").click()
+    expect(panel.locator("table.connections tbody td").nth(3)).to_have_text("in process")
+
+
+def test_a_runs_tasks_show_their_ends_soon_after_them(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # B31: a finished task stayed `scheduled` on the run page for up to 15 s (a change during
+    # a read was dropped, B141, until the next refresh).
+    url, dag = standalone["url"], standalone["dag"]
+    command = page.request.post(
+        f"{url}/api/v1/dags/{dag}/runs", data={"planned_for": "2026-10-18T01:00:00Z"}
+    ).json()
+    deadline = time.monotonic() + 30
+    run = None
+    while run is None and time.monotonic() < deadline:
+        decided = page.request.get(f"{url}/api/v1/commands/{command['command_id']}").json()
+        run = (decided.get("result") or {}).get("run_id")
+        time.sleep(0.05)
+    assert run is not None
+    page.goto(f"{url}/d/default/runs/{run}")
+    while time.monotonic() < deadline:
+        state = page.request.get(f"{url}/api/v1/runs/{run}").json()["run"]["state"]
+        if state not in {"running", "queued"}:
+            break
+        time.sleep(0.05)
+    assert state == "success"
+    # Shown within a few seconds of the end (the database's changes are read every second),
+    # not at the next refresh.
+    expect(page.locator("svg.dag rect.box.success")).to_have_count(3, timeout=4_000)
+    expect(page.locator("h1 .state")).to_have_text("success", timeout=1_000)

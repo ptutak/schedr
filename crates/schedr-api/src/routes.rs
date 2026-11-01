@@ -21,7 +21,7 @@ use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
 use schedr_model::commands::Command;
 use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
-use schedr_model::{DagId, TaskId};
+use schedr_model::{DagId, TaskId, WorkerState};
 
 use crate::auth::User;
 use crate::error::ApiError;
@@ -30,8 +30,8 @@ use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
     ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery,
-    MasterView, NodeView, OutputView, PauseRequest, RunDetail, RunList, RunView, RunsQuery,
-    TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
+    MasterView, NodeView, OutputView, PauseRequest, ProblemView, RunDetail, RunList, RunView,
+    RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -108,6 +108,11 @@ pub async fn get_deployment(
         .checked_sub(MASTERS_HEARD_WITHIN)
         .unwrap_or(Timestamp::UNIX_EPOCH);
     let masters = state.db.masters(since).await?;
+    // The import errors of files each worker parsed: a warning on its node.
+    let mut import_errors: HashMap<String, usize> = HashMap::new();
+    for error in state.db.current_import_errors().await? {
+        *import_errors.entry(error.worker_id).or_default() += 1;
+    }
     let mut nodes: HashMap<String, schedr_db::nodes::WorkerNode> = state
         .db
         .worker_nodes()
@@ -122,7 +127,10 @@ pub async fn get_deployment(
         .into_iter()
         .map(|worker| {
             let node = nodes.remove(&worker.id);
+            let problems = worker_problems(&worker, import_errors.get(&worker.id).copied());
             WorkerNodeView {
+                problems,
+                queues: worker.queues.clone(),
                 state: worker.state.to_string(),
                 schedr_version: worker.schedr_version,
                 master_id: node.as_ref().and_then(|n| n.master_id.clone()),
@@ -138,6 +146,44 @@ pub async fn get_deployment(
         workers,
         user: user.0,
     }))
+}
+
+/// A worker's problems now (decision 129): lost (an error), disconnected, what it reports wrong
+/// and the import errors of the files it parsed (warnings). One offline deregistered on purpose
+/// (a restart, a scale-down) and has none: kept for good, it would stay coloured (decision 130).
+fn worker_problems(
+    worker: &schedr_db::workers::WorkerRecord,
+    import_errors: Option<usize>,
+) -> Vec<ProblemView> {
+    let mut problems = Vec::new();
+    if worker.state == WorkerState::Offline {
+        return problems;
+    }
+    match worker.state {
+        WorkerState::Lost => problems.push(ProblemView {
+            error: true,
+            message: "lost: it stopped answering, its attempts were given up".to_owned(),
+        }),
+        WorkerState::Disconnected => problems.push(ProblemView {
+            error: false,
+            message: "disconnected: lost unless it comes back within its lease".to_owned(),
+        }),
+        WorkerState::Active | WorkerState::Draining | WorkerState::Offline => {}
+    }
+    problems.extend(worker.warnings.iter().map(|warning| ProblemView {
+        error: false,
+        message: schedr_config::masked::mask_text(&warning.message),
+    }));
+    if let Some(count) = import_errors {
+        problems.push(ProblemView {
+            error: false,
+            message: format!(
+                "{count} file{} it parsed failed to import",
+                if count == 1 { "" } else { "s" }
+            ),
+        });
+    }
+    problems
 }
 
 /// How lately a master must have written its row to be shown (it writes it every 10 s).
