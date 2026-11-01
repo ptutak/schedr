@@ -108,6 +108,18 @@ pub struct AgentSettings {
     /// Where the webserver reaches this worker's log endpoint (e.g.
     /// `https://w-0.schedr-worker.etl.svc.cluster.local:8081`), sent in `Register`.
     pub log_endpoint: String,
+    /// The worker as a node of its deployment, sent in `Register` for the Deployments page.
+    pub node: NodeIdentity,
+}
+
+/// A worker as a node of its deployment (decisions 121-123).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeIdentity {
+    /// The process it runs in (shared with a master in standalone).
+    pub process_id: String,
+    /// Its effective configuration as JSON, masked (no secret in clear: it leaves the
+    /// process).
+    pub config_json: String,
 }
 
 /// Told the identity of an attempt's process once it is spawned, and whether it was forked
@@ -717,6 +729,8 @@ impl<E: Executor> Agent<E> {
             roots,
             secret_storages: Vec::new(),
             journal,
+            process_id: self.settings.node.process_id.clone(),
+            config_json: self.settings.node.config_json.clone(),
         };
         if to_master
             .send(wrap(worker_message::Message::Register(register)))

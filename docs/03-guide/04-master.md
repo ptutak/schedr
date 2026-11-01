@@ -199,7 +199,7 @@ reconnects), never an ended attempt with its run left behind.
 
 | Message | What the master does |
 |---|---|
-| `Register` | Checks the protocol version, takes over from a dead earlier stream, decides about each attempt the worker reports (continue, kill or acknowledge), and answers `Registered` with the timing settings. |
+| `Register` | Checks the protocol version, takes over from a dead earlier stream, records the worker's node for the Deployments page (this master, the worker's process, its configuration masked again), decides about each attempt the worker reports (continue, kill or acknowledge), and answers `Registered` with the timing settings. |
 | `Warnings` | Replaces the worker's stored warnings with this list. Each one has a kind (`fork_server_disabled`), an interpreter and a message (see [Workers](05-workers.md#the-fork-server)). If the write fails, the master logs it and leaves the stored list unchanged. The list stays while the worker is gone. |
 | `Heartbeat` | Nothing more: any message renews the lease when it arrives (below). The registry's "last seen" is written at most once per heartbeat interval. |
 | `CodeVersionChanged` | Records the root's new hash, which can make it the current code and create a parse job. |
@@ -249,6 +249,12 @@ counter).
   stale, so it exits; restarted, it waits as a standby.
 - **Stopping cleanly** gives the lease up, so a standby takes over at once instead of after
   the lease expires.
+- **Its row on the Deployments page:** each master, standby or leading, writes a row of its
+  own to the database every 10 s (the `masters` table): its ID (the holder it takes the
+  lease as), host, version, and its configuration, masked before it leaves the process.
+  The page shows those heard from in the last 30 s, the lease's holder as the leader (see
+  [Deployments](12-ui.md#deployments)). A row not written for an hour is removed. These
+  writes don't go through the lease, so a standby writes too.
 
 **What the database rules out.** The master's own clock can't tell when its writes arrive: a
 write sent while it led can be held up by the network or a connection pooler's queue until

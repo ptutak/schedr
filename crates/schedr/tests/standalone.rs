@@ -355,6 +355,42 @@ fn the_same_run_works_on_postgres() {
 }
 
 #[test]
+fn a_standalones_deployment_is_one_process_holding_its_master_and_worker() {
+    // M4.4b: one rectangle on the Deployments page, the process, holding both.
+    let standalone = Standalone::start(&[("chain.py", CHAIN)], None);
+    let mut deployment = None;
+    for _ in 0..200 {
+        deployment = standalone
+            .get("/api/v1/deployment")
+            .filter(|d| d["masters"].as_array().is_some_and(|m| !m.is_empty()))
+            .filter(|d| d["workers"][0]["process_id"].is_string());
+        if deployment.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let deployment = deployment.expect("the master's row and the worker's registration");
+    let process = &deployment["webserver"]["process_id"];
+    assert_eq!(deployment["masters"][0]["role"], "leader", "{deployment}");
+    assert_eq!(&deployment["masters"][0]["process_id"], process);
+    assert_eq!(&deployment["workers"][0]["process_id"], process);
+    assert_eq!(
+        deployment["workers"][0]["master_id"],
+        deployment["masters"][0]["master_id"]
+    );
+    // Each part's configuration: the process's.
+    assert!(deployment["workers"][0]["config"]["worker"].is_object());
+    assert!(deployment["masters"][0]["config"]["master"].is_object());
+    let page = Command::new("curl")
+        .args(["-sf", &format!("{}/deployments/default", standalone.api)])
+        .output()
+        .unwrap();
+    let page = String::from_utf8_lossy(&page.stdout);
+    assert_eq!(page.matches("<g class=\"process\">").count(), 1, "{page}");
+    assert_eq!(page.matches("<a class=\"node ").count(), 2, "{page}");
+}
+
+#[test]
 fn outcomes_route_a_run_from_python_and_from_exit_codes() {
     let dag = r#"
 from dataclasses import dataclass

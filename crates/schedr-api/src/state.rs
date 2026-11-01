@@ -35,6 +35,9 @@ pub struct ApiState {
     pub metrics: ApiMetrics,
     /// What changed, for `GET /api/v1/events`.
     pub feed: Feed,
+    /// This webserver as a node of its deployment (`GET /api/v1/deployment`), its
+    /// configuration masked.
+    pub node: Arc<crate::views::NodeView>,
 }
 
 impl ApiState {
@@ -52,6 +55,21 @@ impl ApiState {
             logs: Arc::new(HttpLogSource::new(None)),
             metrics: ApiMetrics::default(),
             feed,
+            node: Arc::new(crate::views::NodeView {
+                process_id: String::new(),
+                host: String::new(),
+                schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
+                config: serde_json::json!({}),
+            }),
+        }
+    }
+
+    /// This state's webserver shown as `node` (its configuration masked by the caller).
+    #[must_use]
+    pub fn with_node(self, node: crate::views::NodeView) -> Self {
+        Self {
+            node: Arc::new(node),
+            ..self
         }
     }
 

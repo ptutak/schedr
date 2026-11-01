@@ -233,6 +233,23 @@ async fn answers_that_dont_read_are_errors() {
 }
 
 #[tokio::test]
+async fn an_unreachable_servers_password_is_never_in_its_error() {
+    // Codex's review of M4.4b: the UI's Config and Deployments pages showed a deployment's
+    // URL with its password when it couldn't be reached.
+    let transport = HttpTransport::new("http://review:hunter2@127.0.0.1:1/", Auth::None);
+    let api = Client::new(transport, POLL_INTERVAL, WAIT_TIMEOUT);
+    let error = api.dags().await.unwrap_err();
+    let shown = format!("{error} {error:?}");
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("can't reach the schedr server at http://review:****@127.0.0.1:1: "),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn an_unreachable_server_is_a_connect_error() {
     let transport = HttpTransport::new("http://127.0.0.1:1/", Auth::None);
     assert_eq!(transport.server(), "http://127.0.0.1:1");

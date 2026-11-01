@@ -274,3 +274,24 @@ table.import-errors .sub { color: var(--dim); font-size: 12px; }
 /* The DAG page's concurrency limits (decision 96): a reached one in the waiting colour. */
 ul.limits { margin: 0; padding-left: 0; list-style: none; }
 ul.limits li.reached { color: var(--waiting); }
+
+/* The Deployments page (M4.4b): a rectangle per process, a box per master or worker; a node's
+   configuration shown when its box is clicked (its panel is the URL's target). */
+svg.deployment .process-box { fill: var(--surface); stroke: var(--border); stroke-width: 1.2; }
+svg.deployment text { fill: var(--text); font: 13px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+svg.deployment text.process-label { fill: var(--dim); font: 600 11px system-ui, sans-serif; }
+svg.deployment text.sub { fill: var(--dim); font: 11px system-ui, sans-serif; }
+svg.deployment .box { fill: var(--neutral-bg); stroke: var(--border); stroke-width: 1.5; }
+svg.deployment .node:hover .box { stroke: var(--link); stroke-width: 2.5; }
+svg.deployment .box.leader, svg.deployment .box.active { fill: var(--ok-bg); stroke: var(--ok); }
+svg.deployment .box.standby, svg.deployment .box.draining { fill: var(--waiting-bg); stroke: var(--waiting); }
+svg.deployment .box.lost { fill: var(--failed-bg); stroke: var(--failed); }
+svg.deployment .box.disconnected, svg.deployment .box.offline { fill: var(--bg); stroke: var(--dim); stroke-dasharray: 4 3; }
+.node-config { display: none; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 12px 0; }
+.node-config:target { display: block; }
+pre.config { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow: auto; max-height: 60vh; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0; }
+dl.facts dt { color: var(--dim); }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+.crumbs { margin: 0; color: var(--dim); }
+td .stale, .stale { color: var(--dim); }

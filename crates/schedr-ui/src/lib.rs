@@ -17,6 +17,7 @@ use schedr_client::{Client, Transport};
 mod actions;
 mod ansi;
 mod assets;
+pub mod deployments;
 mod docs;
 pub mod graph;
 mod imports;
@@ -36,6 +37,9 @@ pub struct Deployment<T> {
     pub name: String,
     /// Its webserver's API.
     pub client: Client<T>,
+    /// How the UI proves itself to that webserver, as the Config page says it: `none`,
+    /// `token`, `mTLS`, `token and mTLS`, or `in process` (standalone's own API).
+    pub proof: &'static str,
 }
 
 /// What the UI serves.
@@ -47,10 +51,13 @@ pub struct Ui<T> {
     pub docs_dir: Option<PathBuf>,
     /// Who the person using it is (`[ui.auth]`; standalone's: `[webserver.auth]`, one port).
     pub auth: schedr_api::auth::Auth,
+    /// Its own configuration, masked (the Config page; standalone's: the process's).
+    pub config: serde_json::Value,
 }
 
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
-/// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/workers`, the
+/// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/deployments`,
+/// `/deployments/<deployment>`, `/config`, `/workers`, the
 /// actions (POSTs, see `actions`), `/events`, `/time`, `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
@@ -69,6 +76,12 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             "/d/{deployment}/runs/{run}/tasks/{task}/output.json",
             get(runs::output_download::<T>),
         )
+        .route("/deployments", get(deployments::list::<T>))
+        .route(
+            "/deployments/{deployment}",
+            get(deployments::deployment::<T>),
+        )
+        .route("/config", get(deployments::config::<T>))
         .route("/workers", get(workers::list::<T>))
         .route("/import-errors", get(imports::list::<T>))
         .route("/import-errors/count", get(imports::nav_count::<T>))

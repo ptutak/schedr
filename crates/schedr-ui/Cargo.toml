@@ -16,6 +16,7 @@ schedr-client.workspace = true
 schedr-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schedr-config.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
@@ -28,8 +29,8 @@ rstest.workspace = true
 scraper.workspace = true
 tempfile.workspace = true
 bcrypt.workspace = true
-schedr-config.workspace = true
 tower.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

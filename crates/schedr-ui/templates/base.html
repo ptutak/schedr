@@ -141,6 +141,8 @@ function schedrTheme() {
   <nav>
     <a href="{{ page.base }}/">DAGs</a>
     <a href="{{ page.base }}/runs">Runs</a>
+    <a href="{{ page.base }}/deployments">Deployments</a>
+    <a href="{{ page.base }}/config">Config</a>
     <a href="{{ page.base }}/workers">Workers</a>
     <a href="{{ page.base }}/import-errors">Import errors <span hx-get="{{ page.base }}/import-errors/count" hx-trigger="load" hx-swap="outerHTML"></span></a>
     {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}

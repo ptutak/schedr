@@ -1215,6 +1215,76 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     assert!(metrics.contains("schedr_master_leading 1"), "{metrics}");
 }
 
+#[test]
+fn a_deployment_shows_its_leader_standby_and_workers_with_their_configurations_masked() {
+    // M4.4b (decisions 121-123): every master heartbeats its row, standbys too; each worker
+    // sends its configuration in `Register`; the webserver shows them all, each masked by its
+    // node: the database URL's password never in clear (the user's requirement).
+    let url = postgres_database();
+    let (_, rest) = url.split_once("://").unwrap();
+    let (credentials, _) = rest.split_once('@').unwrap();
+    let password = credentials.split_once(':').unwrap().1.to_owned();
+    let mut cluster = Cluster::new(Some(url), "100ms");
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    cluster.wait("the first master to lead", || {
+        cluster.ops_get("master", "/readyz") == (200, "ok\n".to_owned())
+    });
+    cluster.start_as(
+        "master-2",
+        "master",
+        &[("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0")],
+    );
+    cluster.start("worker");
+    cluster.start_as("worker-2", "worker", &[("SCHEDR_CONFIG__WORKER__ID", "w2")]);
+    let mut deployment = Value::Null;
+    cluster.wait("both masters and both workers on the deployment", || {
+        deployment = cluster.api_get("/api/v1/deployment").unwrap_or_default();
+        deployment["masters"]
+            .as_array()
+            .is_some_and(|m| m.len() == 2)
+            && deployment["workers"]
+                .as_array()
+                .is_some_and(|w| w.len() == 2 && w.iter().all(|w| w["config"].is_object()))
+    });
+    let roles: Vec<&str> = deployment["masters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["leader", "standby"], "{deployment}");
+    let leader = &deployment["masters"][0]["master_id"];
+    for worker in deployment["workers"].as_array().unwrap() {
+        assert_eq!(&worker["master_id"], leader, "{deployment}");
+    }
+    // A process each.
+    let mut processes: Vec<&str> = deployment["masters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(deployment["workers"].as_array().unwrap())
+        .chain([&deployment["webserver"]])
+        .map(|node| node["process_id"].as_str().unwrap())
+        .collect();
+    processes.sort_unstable();
+    processes.dedup();
+    assert_eq!(processes.len(), 5, "{deployment}");
+    // The masters' and the webserver's database URL, the password masked.
+    for url in [
+        &deployment["masters"][0]["config"]["database"]["url"],
+        &deployment["masters"][1]["config"]["database"]["url"],
+        &deployment["webserver"]["config"]["database"]["url"],
+    ] {
+        let url = url.as_str().unwrap();
+        assert!(url.contains(":****@"), "{url}");
+    }
+    let text = deployment.to_string();
+    assert!(!text.contains(&format!(":{password}@")), "{text}");
+}
+
 /// `curl` of the UI at `ui`: `POST` when `form` is given (an action from its own page, as
 /// `x-forwarded-user` names the person); the body.
 fn ui_call(ui: &str, path: &str, form: Option<&str>) -> String {

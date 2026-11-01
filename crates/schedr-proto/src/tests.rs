@@ -21,6 +21,8 @@ fn messages_encode_and_decode() {
             }],
             secret_storages: vec!["vault".into()],
             journal: vec![],
+            process_id: "0192c4e1-7a3b-7c00-8000-000000000001".into(),
+            config_json: r#"{"worker":{"slots":2}}"#.into(),
         })),
     };
     let bytes = message.encode_to_vec();

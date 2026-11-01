@@ -306,6 +306,13 @@ impl Database {
         &self.pool
     }
 
+    /// The lease holder this database is [fenced](Self::fenced) for (a master's ID): `None`
+    /// if it isn't.
+    #[must_use]
+    pub fn fenced_as(&self) -> Option<&str> {
+        self.fence.as_ref().map(|fence| fence.holder.as_str())
+    }
+
     /// This database for the master holding the lease as `holder` with takeover counter
     /// `epoch`: each of its writes checks, in its own transaction, that the lease is still
     /// that, and is refused ([`DbError::NotLeading`]) once another master took it over. On

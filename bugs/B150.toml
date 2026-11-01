@@ -1,0 +1,12 @@
+title = "A failed migration's lease stayed held once under the coverage run (flaky test)"
+severity = "low"  # critical, high, medium, low
+probability = "rare"  # likely, possible, rare
+kind = "tests"  # security, data, correctness, reliability, performance, usability, tests
+summary = "`roles::tests::a_failed_migration_gives_the_lease_back` failed once in `make check` (coverage, heavy load: neighbouring tests took 7 s instead of 0.1 s): the lease was still held after `schedr db migrate` failed. Likely the release query hit its 5 s limit (logged, the lease then expires by itself after its period)"
+found = 2026-11-01
+suspected = true
+details = '''
+- **Found:** check13 during M4.4b (`FAIL [7.503s]`, "the lease stayed held"). Not reproduced: 5 runs alone, 3 runs of the schedr lib tests, 48 copies at once all passed.
+- **Suspected cause:** `migrate_holding` releases on the query-limited database; the failed migration's connection is closed on drop in the background (`Starting::drop`, `close_on_drop`), so its SQLite write lock may outlive the error and the release waits on it, past the limit when the machine is loaded.
+- **A fix:** close the failed migration's connection (awaited) before giving the lease back; or retry the release once. The test could also capture the warning to tell the two apart.
+'''

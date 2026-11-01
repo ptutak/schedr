@@ -400,7 +400,7 @@ async fn a_run_and_its_tasks_offer_what_their_state_allows() {
     );
 }
 
-fn worker(id: &str, state: &str, drained: bool, warnings: &Value) -> Value {
+pub(super) fn worker(id: &str, state: &str, drained: bool, warnings: &Value) -> Value {
     json!({
         "worker_id": id, "state": state, "incarnation_id": "i1", "queues": ["default", "gpu"],
         "slots": 4, "running": 1, "schedr_version": "0.1.0", "protocol_version": "1.0",
@@ -450,8 +450,8 @@ async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
         ["/events?kinds=workers"]
     );
     // A warning row spans the table (one deployment: no Deployment column).
-    assert_eq!(texts(&html, "table.workers thead th").len(), 7);
-    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["6"]);
+    assert_eq!(texts(&html, "table.workers thead th").len(), 8);
+    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["7"]);
     // The dialogs wait out the live reloads.
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
@@ -545,9 +545,11 @@ async fn a_command_whose_answer_was_lost_is_sent_again_under_its_key_never_twice
                 Duration::from_millis(1),
                 Duration::from_secs(1),
             ),
+            proof: "none",
         }],
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     });
     let (_, html) = post(
         &app,

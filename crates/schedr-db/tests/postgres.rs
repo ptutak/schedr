@@ -1605,3 +1605,74 @@ async fn open_attempts_are_read_with_their_dag_for_the_limits() {
     .unwrap();
     assert_eq!(db.active_attempts().await.unwrap(), []);
 }
+
+#[tokio::test]
+async fn a_deployments_nodes_are_recorded_and_read() {
+    use schedr_db::nodes::{MasterNode, WorkerNode};
+    use schedr_db::workers::WorkerRegistration;
+
+    let db = fresh().await;
+    let config = json!({"database": {"url": "postgres://schedr:****@db/s"}});
+    let master = |id: &'static str, now: &str| {
+        let master = MasterNode {
+            master_id: id,
+            process_id: "p1",
+            host: "node-a",
+            schedr_version: "0.1.0",
+            config: &config,
+            started_at: ts("2026-11-01T08:00:00Z"),
+        };
+        let db = &db;
+        let now = ts(now);
+        async move { db.heartbeat_master(&master, now).await.unwrap() }
+    };
+    master("gone", "2026-11-01T06:00:00Z").await;
+    master("m-a", "2026-11-01T08:00:05Z").await;
+    master("m-b", "2026-11-01T08:00:05Z").await;
+    db.take_lease("m-b", std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
+    let read = db.masters(ts("2026-11-01T08:00:00Z")).await.unwrap();
+    assert_eq!(
+        read.iter()
+            .map(|m| (m.master_id.as_str(), m.leading))
+            .collect::<Vec<_>>(),
+        vec![("m-b", true), ("m-a", false)]
+    );
+    assert_eq!(read[0].config, config);
+    assert_eq!(read[0].heard_at, ts("2026-11-01T08:00:05Z"));
+    assert_eq!(
+        db.masters(Timestamp::UNIX_EPOCH).await.unwrap().len(),
+        2,
+        "the gone one removed"
+    );
+
+    let queues = vec!["default".to_owned()];
+    db.register_worker(
+        &WorkerRegistration {
+            id: "w1",
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "1.0",
+            schedr_version: "0.1.0",
+            queues: &queues,
+            slots: 2,
+            log_endpoint: "",
+        },
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let worker = json!({"worker": {"slots": 2}});
+    db.set_worker_node("w1", Some("m-b"), Some("p2"), Some(&worker))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.worker_nodes().await.unwrap(),
+        vec![WorkerNode {
+            worker_id: "w1".to_owned(),
+            master_id: Some("m-b".to_owned()),
+            process_id: Some("p2".to_owned()),
+            config: Some(worker),
+        }]
+    );
+}

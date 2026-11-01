@@ -76,9 +76,11 @@ fn app(streams: Streams) -> axum::Router {
         deployments: vec![Deployment {
             name: "etl".to_owned(),
             client: Client::new(streams, Duration::ZERO, Duration::ZERO),
+            proof: "none",
         }],
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     })
 }
 

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Deployments · schedr{% endblock %}
+{% block content %}
+<h1>Deployments</h1>
+<p class="dim">The deployments this UI shows. Open one for its masters and workers, drawn by process, and each one's configuration.</p>
+<table class="list deployments">
+  <thead>
+    <tr><th>Deployment</th><th>Leader</th><th>Masters</th><th>Workers active</th><th>Version</th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><a href="{{ row.href }}">{{ row.name }}</a></td>
+      {% if let Some(error) = row.error %}
+      <td colspan="4"><span class="error">Unavailable: {{ error }}</span></td>
+      {% else %}
+      <td class="mono">{{ row.leader }}</td>
+      <td>{{ row.masters }}</td>
+      <td>{{ row.workers }}</td>
+      <td class="mono">{{ row.version }}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

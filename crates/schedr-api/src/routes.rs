@@ -8,13 +8,14 @@
     reason = "handler docs become OpenAPI descriptions; errors are listed as responses"
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
+use jiff::Timestamp;
 use schedr_db::commands::Submitted;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
@@ -27,10 +28,10 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, text_of};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ErrorBody,
-    ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery, OutputView,
-    PauseRequest, RunDetail, RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList,
-    WorkerView,
+    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
+    ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery,
+    MasterView, NodeView, OutputView, PauseRequest, RunDetail, RunList, RunView, RunsQuery,
+    TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -76,10 +77,71 @@ pub async fn list_import_errors(State(state): State<ApiState>) -> ApiResult<Impo
     responses((status = 200, body = WorkerList)))]
 pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList> {
     let workers = state.db.workers().await?;
+    let mut masters: HashMap<String, Option<String>> = state
+        .db
+        .worker_nodes()
+        .await?
+        .into_iter()
+        .map(|node| (node.worker_id, node.master_id))
+        .collect();
     Ok(Json(WorkerList {
-        workers: workers.iter().map(WorkerView::from).collect(),
+        workers: workers
+            .iter()
+            .map(|worker| WorkerView {
+                master_id: masters.remove(&worker.id).flatten(),
+                ..WorkerView::from(worker)
+            })
+            .collect(),
     }))
 }
+
+/// The deployment this webserver serves, as nodes (decisions 121-123): this webserver, the
+/// masters heard from in the last 30 s (the leader first; standbys too), and every worker,
+/// each with its effective configuration as the node masked it (secrets never in clear).
+#[utoipa::path(get, path = "/api/v1/deployment", tag = "workers",
+    responses((status = 200, body = DeploymentView)))]
+pub async fn get_deployment(
+    State(state): State<ApiState>,
+    Extension(user): Extension<User>,
+) -> ApiResult<DeploymentView> {
+    let since = (state.clock)()
+        .checked_sub(MASTERS_HEARD_WITHIN)
+        .unwrap_or(Timestamp::UNIX_EPOCH);
+    let masters = state.db.masters(since).await?;
+    let mut nodes: HashMap<String, schedr_db::nodes::WorkerNode> = state
+        .db
+        .worker_nodes()
+        .await?
+        .into_iter()
+        .map(|node| (node.worker_id.clone(), node))
+        .collect();
+    let workers = state
+        .db
+        .workers()
+        .await?
+        .into_iter()
+        .map(|worker| {
+            let node = nodes.remove(&worker.id);
+            WorkerNodeView {
+                state: worker.state.to_string(),
+                schedr_version: worker.schedr_version,
+                master_id: node.as_ref().and_then(|n| n.master_id.clone()),
+                process_id: node.as_ref().and_then(|n| n.process_id.clone()),
+                config: node.and_then(|n| n.config),
+                worker_id: worker.id,
+            }
+        })
+        .collect();
+    Ok(Json(DeploymentView {
+        webserver: NodeView::clone(&state.node),
+        masters: masters.into_iter().map(MasterView::from).collect(),
+        workers,
+        user: user.0,
+    }))
+}
+
+/// How lately a master must have written its row to be shown (it writes it every 10 s).
+pub const MASTERS_HEARD_WITHIN: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
 
 /// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones
 /// finish; kept across restarts until resumed. Applied by the master; poll the command for

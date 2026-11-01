@@ -13,6 +13,7 @@ use tower::ServiceExt;
 use super::*;
 
 mod actions;
+mod deployments;
 mod runs;
 
 /// A webserver's API answering from a script: path -> (status, body); anything else 404.
@@ -91,6 +92,7 @@ fn deployment(name: &str, transport: Scripted) -> Deployment<Scripted> {
     Deployment {
         name: name.to_owned(),
         client: Client::new(transport, Duration::from_millis(1), Duration::from_secs(1)),
+        proof: "none",
     }
 }
 
@@ -99,6 +101,7 @@ fn ui(deployments: Vec<Deployment<Scripted>>) -> axum::Router {
         deployments,
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     })
 }
 
@@ -287,6 +290,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     });
     let (status, html) = get(&app, "/docs/", &[]).await;
     assert_eq!(
@@ -302,13 +306,28 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (_, page) = get(&app, "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/workers", "/import-errors", "/docs/"]
+        [
+            "/",
+            "/runs",
+            "/deployments",
+            "/config",
+            "/workers",
+            "/import-errors",
+            "/docs/"
+        ]
     );
     // Without a directory: no link, no pages.
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/workers", "/import-errors"]
+        [
+            "/",
+            "/runs",
+            "/deployments",
+            "/config",
+            "/workers",
+            "/import-errors"
+        ]
     );
 }
 
@@ -401,11 +420,13 @@ async fn every_deployment_is_asked_at_once() {
             Duration::from_millis(1),
             Duration::from_secs(1),
         ),
+        proof: "none",
     };
     let app = router(Ui {
         deployments: vec![slow("a"), slow("b"), slow("c")],
         docs_dir: None,
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     });
     let started = std::time::Instant::now();
     let (status, _) = get(&app, "/", &[]).await;
@@ -426,6 +447,7 @@ async fn every_answer_varies_with_the_prefix_and_docs_redirect_temporarily() {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
         auth: schedr_api::auth::Auth::default(),
+        config: serde_json::json!({}),
     });
     for path in ["/", "/assets/style.css", "/docs/", "/docs", "/no/such/page"] {
         let response = app
@@ -482,9 +504,11 @@ async fn the_ui_signs_people_in_and_passes_their_name_on() {
         deployments: vec![Deployment {
             name: "etl".to_owned(),
             client: Client::new(recording.clone(), Duration::ZERO, Duration::ZERO),
+            proof: "none",
         }],
         docs_dir: None,
         auth: schedr_api::auth::Auth::from_config(&section, None).unwrap(),
+        config: serde_json::json!({}),
     });
     // Not signed in: asked to, and nothing is asked of the webserver.
     let response = app

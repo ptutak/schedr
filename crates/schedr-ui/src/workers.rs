@@ -1,6 +1,7 @@
 //! The workers page (M3.4): every deployment's workers, their state, slots and warnings, with
 //! drain and resume.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use askama::Template;
@@ -39,6 +40,51 @@ pub struct WorkerRow {
     pub action: String,
     /// Whether it can be drained or resumed now (not when it is gone).
     pub actionable: bool,
+    /// The master it registered with last, shortened (empty: not known, an older agent).
+    pub master: String,
+    /// That master's node on its deployment's page.
+    pub master_href: String,
+    /// Whether that is the master it is connected to now (else it is the last one, greyed).
+    pub master_now: bool,
+}
+
+impl WorkerRow {
+    /// A drain or resume dialog's title: `Drain worker w1 of etl?`.
+    #[must_use]
+    pub fn title(&self, verb: &str) -> String {
+        format!("{verb} worker {} of {}?", self.worker_id, self.deployment)
+    }
+
+    /// Who applies the command: the deployment's leading master (and the one the worker is
+    /// registered with, if known).
+    fn applied_by(&self) -> String {
+        let mut text = format!("Deployment {}'s leading master applies it", self.deployment);
+        if !self.master.is_empty() {
+            let _ = write!(
+                text,
+                " (the worker is registered with master {})",
+                self.master
+            );
+        }
+        text
+    }
+
+    /// The drain dialog's text.
+    #[must_use]
+    pub fn drain_text(&self) -> String {
+        format!(
+            "It takes no new tasks; the ones it runs finish. {}. The drained state is kept in \
+             the database: across the worker's restarts and a takeover by another master, \
+             until it is resumed.",
+            self.applied_by()
+        )
+    }
+
+    /// The resume dialog's text.
+    #[must_use]
+    pub fn resume_text(&self) -> String {
+        format!("It takes tasks again. {}.", self.applied_by())
+    }
 }
 
 #[derive(Template)]
@@ -108,5 +154,20 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> Worke
             worker.state.as_str(),
             "active" | "draining" | "disconnected"
         ),
+        master: worker
+            .master_id
+            .as_deref()
+            .map(crate::deployments::short)
+            .unwrap_or_default()
+            .to_owned(),
+        master_href: worker.master_id.as_deref().map_or_else(String::new, |id| {
+            format!(
+                "{}/deployments/{}#{}",
+                page.base,
+                path_segment(&deployment.name),
+                crate::deployments::master_anchor(id)
+            )
+        }),
+        master_now: matches!(worker.state.as_str(), "active" | "draining"),
     }
 }

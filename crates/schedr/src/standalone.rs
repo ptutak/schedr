@@ -31,12 +31,14 @@ use schedr_master::metrics::MasterMetrics;
 use tokio::sync::watch;
 
 use crate::app::AppError;
+use crate::node::{MasterIdentity, heartbeat_master, new_master_id, webserver_node};
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
     LocalUi, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, docs_dir, lead,
     listen, lock_journal, log_retention, master_settings, memory_text, no_auth_warning, role_auth,
     run_worker, serve_api, serve_master, stop_on_signal,
 };
+use schedr_config::masked::masked;
 
 #[cfg(test)]
 mod tests;
@@ -90,6 +92,8 @@ pub struct Standalone {
     pub ui: Option<LocalUi>,
     /// Whether to migrate the database at start (`--migrate`).
     pub migrate: bool,
+    /// Its configuration, masked: shown on the Deployments page for its master and worker.
+    pub config: serde_json::Value,
 }
 
 /// The addresses standalone listens on, once it does.
@@ -144,6 +148,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
             docs_dir: docs_dir(config),
         }),
         migrate: false,
+        config: masked(config),
         database_url,
         data_dir,
     })
@@ -224,12 +229,13 @@ pub async fn run(
     let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout)
         .await?
         .with_notifications(setup.notifications, setup.notifications_url.clone());
+    let (master_id, heartbeat) = heartbeat(&db, &setup.config, &stopped);
     let leading = lead(
         &db,
         &setup.database_url,
         lease,
         shutdown.clone(),
-        "standalone",
+        ("standalone", master_id),
     );
     let Some(leadership) = leading.await? else {
         return Ok(());
@@ -260,7 +266,7 @@ pub async fn run(
     });
     let api = Box::pin(serve_api(
         db,
-        (auth, setup.refresh),
+        (auth, setup.refresh, webserver_node(setup.config.clone())),
         (http, None),
         None,
         setup.ui.clone(),
@@ -286,11 +292,28 @@ pub async fn run(
     });
     let (master, api, ()) = tokio::join!(master, api, worker);
     forwarding.abort();
+    heartbeat.abort();
     if let Ok(Err(error)) = ops_server.await {
         tracing::warn!(%error, "the ops port failed");
     }
     master?;
     api
+}
+
+/// Its master's row on the Deployments page, written from now on until `stopped`: the
+/// master's ID (to take the lease as) and the writing task.
+fn heartbeat(
+    db: &Database,
+    config: &serde_json::Value,
+    stopped: &watch::Receiver<u32>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let identity = MasterIdentity {
+        master_id: new_master_id(),
+        config: config.clone(),
+    };
+    let master_id = identity.master_id.clone();
+    let task = tokio::spawn(heartbeat_master(db.clone(), identity, stopped.clone()));
+    (master_id, task)
 }
 
 /// The ops port's registry with every part's metrics, and what each part reports to it.

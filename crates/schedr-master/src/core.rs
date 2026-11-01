@@ -410,6 +410,40 @@ impl MasterCore {
         accepted
     }
 
+    /// Records the registering worker's node for the Deployments page: this master (the lease's
+    /// holder it writes as), the worker's process and its configuration, masked again here
+    /// (it came from the worker; one that isn't JSON isn't kept).
+    async fn record_node(&self, register: &pb::Register) -> Result<(), CoreError> {
+        let config = if register.config_json.is_empty() {
+            None
+        } else {
+            match serde_json::from_str::<serde_json::Value>(&register.config_json) {
+                Ok(mut config) => {
+                    schedr_config::masked::mask(&mut config);
+                    Some(config)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        worker_id = register.worker_id,
+                        %error,
+                        "the worker's configuration isn't JSON; not shown"
+                    );
+                    None
+                }
+            }
+        };
+        let process_id = Some(register.process_id.as_str()).filter(|id| !id.is_empty());
+        self.db
+            .set_worker_node(
+                &register.worker_id,
+                self.db.fenced_as(),
+                process_id,
+                config.as_ref(),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Accepts a registration that passed the checks: reconciles a replaced incarnation,
     /// records the worker, and decides on its journal.
     async fn accept(
@@ -468,6 +502,7 @@ impl MasterCore {
                 now,
             )
             .await?;
+        self.record_node(register).await?;
         self.dispatcher
             .register(
                 worker_id,

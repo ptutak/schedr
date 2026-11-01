@@ -2965,6 +2965,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "schedr-api",
+ "schedr-config",
  "schedr-model",
  "schedr-tls",
  "serde",
@@ -3019,6 +3020,7 @@ dependencies = [
  "proptest",
  "prost-types",
  "rstest",
+ "schedr-config",
  "schedr-db",
  "schedr-model",
  "schedr-proto",
@@ -3110,6 +3112,7 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

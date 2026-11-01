@@ -78,15 +78,23 @@ step touches their code or the user schedules them.
 | 23 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 24 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
 | 25 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 26 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 27 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 28 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 29 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 30 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 31 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 32 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 33 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 34 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 26 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 27 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 28 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 29 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 30 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 31 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 32 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 33 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 34 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 35 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, tests (score 1): `roles::tests::a_failed_migration_gives_the_lease_back` failed once in `make check` (coverage, heavy load: neighbouring tests took 7 s instead of 0.1 s): the lease was still held after `schedr db migrate` failed. Likely the release query hit its 5 s limit (logged, the lease then expires by itself after its period).
+- **Found:** check13 during M4.4b (`FAIL [7.503s]`, "the lease stayed held"). Not reproduced: 5 runs alone, 3 runs of the schedr lib tests, 48 copies at once all passed.
+- **Suspected cause:** `migrate_holding` releases on the query-limited database; the failed migration's connection is closed on drop in the background (`Starting::drop`, `close_on_drop`), so its SQLite write lock may outlive the error and the release waits on it, past the limit when the machine is loaded.
+- **A fix:** close the failed migration's connection (awaited) before giving the lease back; or retry the release once. The test could also capture the warning to tell the two apart.
 
 ## B148: the limit check searches a DAG's task list for each ready task, every round
 

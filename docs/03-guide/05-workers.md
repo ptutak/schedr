@@ -26,7 +26,9 @@ that beat.
 
 On start the agent recovers its journal (below), waits for each root's first hash, then
 connects and sends `Register`. That message carries its worker ID and incarnation, versions,
-queues, slots, log endpoint address, the hash of each root, and what its journal holds. It
+queues, slots, log endpoint address, the hash of each root, and what its journal holds,
+and, for the [Deployments](12-ui.md#deployments) page, its process ID and its configuration,
+masked before it is sent (no secret leaves the process in clear). It
 then sends `Warnings`, the whole list of its warnings, and sends that list again whenever
 the warnings change (see [The fork server](#the-fork-server)).
 

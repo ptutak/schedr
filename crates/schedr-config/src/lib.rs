@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod loader;
+pub mod masked;
 pub mod roots;
 pub mod sources;
 pub mod units;

@@ -303,6 +303,40 @@
         ],
         "type": "object"
       },
+      "DeploymentView": {
+        "description": "The deployment this webserver serves, as nodes (decisions 121-123): its own, its masters\n(leader and standbys) and its workers, each with its effective configuration, masked by the\nnode itself before it left its process (no secret in clear).",
+        "properties": {
+          "masters": {
+            "description": "The masters heard from lately: the leader (the lease's holder) first.",
+            "items": {
+              "$ref": "#/components/schemas/MasterView"
+            },
+            "type": "array"
+          },
+          "user": {
+            "description": "Who this request was made as, as the webserver sees it (`anonymous` without\nauthentication; the person the web UI passed on, from the UI).",
+            "type": "string"
+          },
+          "webserver": {
+            "$ref": "#/components/schemas/NodeView",
+            "description": "The webserver answering (one of the deployment's, if it has several)."
+          },
+          "workers": {
+            "description": "Every worker the master has seen, gone ones included.",
+            "items": {
+              "$ref": "#/components/schemas/WorkerNodeView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "webserver",
+          "masters",
+          "workers",
+          "user"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "description": "An error.",
         "properties": {
@@ -519,6 +553,72 @@
           "size",
           "running",
           "content"
+        ],
+        "type": "object"
+      },
+      "MasterView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NodeView",
+            "description": "Where it runs, and its configuration."
+          },
+          {
+            "properties": {
+              "heard_at": {
+                "description": "When it was last heard from (it writes its row every 10 s).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "master_id": {
+                "description": "Its ID: the lease holder it takes the lease as.",
+                "type": "string"
+              },
+              "role": {
+                "description": "`leader` (it holds the lease) or `standby`.",
+                "type": "string"
+              },
+              "started_at": {
+                "description": "When it started.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "master_id",
+              "role",
+              "started_at",
+              "heard_at"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "A master, leading or standing by."
+      },
+      "NodeView": {
+        "description": "A process of the deployment.",
+        "properties": {
+          "config": {
+            "description": "Its effective configuration, masked.",
+            "type": "object"
+          },
+          "host": {
+            "description": "Its host.",
+            "type": "string"
+          },
+          "process_id": {
+            "description": "The process (shared by a master and a worker in standalone).",
+            "type": "string"
+          },
+          "schedr_version": {
+            "description": "Its schedr version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "process_id",
+          "host",
+          "schedr_version",
+          "config"
         ],
         "type": "object"
       },
@@ -830,6 +930,50 @@
         ],
         "type": "object"
       },
+      "WorkerNodeView": {
+        "description": "A worker as a node of the deployment.",
+        "properties": {
+          "config": {
+            "description": "Its effective configuration, masked; none from an older agent.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "master_id": {
+            "description": "The master it registered with last; none from an older agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_id": {
+            "description": "The process it runs in; none from an older agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedr_version": {
+            "description": "Its schedr version.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`active`, `draining`, `disconnected`, `offline` or `lost`.",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "Its ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "worker_id",
+          "state",
+          "schedr_version"
+        ],
+        "type": "object"
+      },
       "WorkerView": {
         "description": "A worker in the registry (kept after it is gone, so its logs can be found).",
         "properties": {
@@ -849,6 +993,13 @@
           "log_endpoint": {
             "description": "Where its log endpoint listens (where a gone worker's logs were served).",
             "type": "string"
+          },
+          "master_id": {
+            "description": "The master it registered with last (a master's ID, as on `GET /api/v1/deployment`):\nkept while it is disconnected; none from an older agent's registration.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "offline_at": {
             "description": "When it went offline or was lost.",
@@ -1280,6 +1431,26 @@
         "summary": "Unpause a DAG. Applied by the master; poll the command for the decision.",
         "tags": [
           "dags"
+        ]
+      }
+    },
+    "/api/v1/deployment": {
+      "get": {
+        "operationId": "get_deployment",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The deployment this webserver serves, as nodes (decisions 121-123): this webserver, the\nmasters heard from in the last 30 s (the leader first; standbys too), and every worker,\neach with its effective configuration as the node masked it (secrets never in clear).",
+        "tags": [
+          "workers"
         ]
       }
     },

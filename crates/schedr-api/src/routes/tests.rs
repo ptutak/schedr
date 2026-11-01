@@ -547,6 +547,96 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
     );
 }
 
+#[tokio::test]
+async fn the_deployment_shows_its_nodes_with_their_configurations() {
+    let (_, db, _) = api().await;
+    let config = json!({"database": {"url": "postgres://schedr:****@db/s"}});
+    for (id, heard) in [
+        ("m-a", "2026-10-21T07:59:55Z"),
+        ("m-b", "2026-10-21T07:59:55Z"),
+        ("m-gone", "2026-10-21T07:59:00Z"),
+    ] {
+        db.heartbeat_master(
+            &schedr_db::nodes::MasterNode {
+                master_id: id,
+                process_id: "p-1",
+                host: "node-a",
+                schedr_version: "0.1.0",
+                config: &config,
+                started_at: ts("2026-10-21T07:00:00Z"),
+            },
+            ts(heard),
+        )
+        .await
+        .unwrap();
+    }
+    db.take_lease("m-b", std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
+    for id in ["w1", "w2"] {
+        db.register_worker(
+            &schedr_db::workers::WorkerRegistration {
+                id,
+                incarnation: "0190a0a0-0000-7000-8000-000000000001",
+                protocol_version: "1.0",
+                schedr_version: "0.1.0",
+                queues: &[],
+                slots: 2,
+                log_endpoint: "",
+            },
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    }
+    let worker = json!({"worker": {"slots": 2}});
+    db.set_worker_node("w1", Some("m-b"), Some("p-2"), Some(&worker))
+        .await
+        .unwrap();
+    let mut state = ApiState::new(db.clone(), None).with_node(crate::views::NodeView {
+        process_id: "p-3".to_owned(),
+        host: "web".to_owned(),
+        schedr_version: "0.1.0".to_owned(),
+        config: json!({"webserver": {"port": 8080}}),
+    });
+    state.clock = fixed_now;
+    let app = router(state);
+
+    let (status, body) = get(&app, "/api/v1/deployment").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["webserver"],
+        json!({"process_id": "p-3", "host": "web", "schedr_version": "0.1.0",
+               "config": {"webserver": {"port": 8080}}})
+    );
+    // Heard from in the last 30 s, the leader first.
+    assert_eq!(
+        body["masters"],
+        json!([
+            {"master_id": "m-b", "role": "leader", "process_id": "p-1", "host": "node-a",
+             "schedr_version": "0.1.0", "config": config,
+             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z"},
+            {"master_id": "m-a", "role": "standby", "process_id": "p-1", "host": "node-a",
+             "schedr_version": "0.1.0", "config": config,
+             "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z"},
+        ])
+    );
+    assert_eq!(
+        body["workers"],
+        json!([
+            {"worker_id": "w1", "state": "active", "schedr_version": "0.1.0",
+             "master_id": "m-b", "process_id": "p-2", "config": worker},
+            {"worker_id": "w2", "state": "active", "schedr_version": "0.1.0",
+             "master_id": null, "process_id": null, "config": null},
+        ])
+    );
+    assert_eq!(body["user"], "anonymous");
+    // The Workers page's Master column.
+    let (_, body) = get(&app, "/api/v1/workers").await;
+    assert_eq!(body["workers"][0]["master_id"], "m-b");
+    assert_eq!(body["workers"][1].get("master_id"), None);
+}
+
 /// A worker that answers what it is told, and remembers what it was asked.
 #[derive(Debug, Default)]
 struct FakeLogs {

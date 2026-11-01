@@ -4,6 +4,32 @@ Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJE
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-01, small hours)
+
+- **Codex reviewed the M4.4 batch** (weekly 53% → 56%): 4 findings, each with a failing
+  proof; the critical one (a proxy's 502 dropped the browser's action key: a second run
+  when sent again) and the high one (an expiry whose commit answer was lost left its
+  attempt counted for good, the DAG held back until a restart) fixed in `7ccb426`, with the
+  low one (the integration test's DAG cap didn't bind on its own); the medium one partly
+  (the DAG cap checked first), the rest logged as B148.
+- **M4.4b built** (the Deployments and Config pages): `masters` table and heartbeat
+  (`schedr::node`), `workers.master_id/process_id/config` written at `Register`
+  (`process_id` and `config_json` in the proto), `GET /api/v1/deployment`, the UI's
+  `/deployments`, `/deployments/<name>` (an SVG rectangle per process, `:target` panels
+  for each node's configuration), `/config`, the Workers page's Master column and dialog
+  text, the navigation; every configuration masked at its node, again by the master (a
+  worker's) and again by the UI. Small choices recorded in PROJECT.md (the Deployments
+  page, "Claude's, as built").
+- **Codex reviewed M4.4b** (weekly 56% → 59%): 6 findings, all fixed with tests: the
+  masking missed DSNs (`password=…`), URLs without a scheme, encoded and quoted names, and
+  secrets held as numbers, lists or tables (`masked.rs` rewritten; 3 critical); a webserver
+  unreachable showed its URL's password in the error (`connect_error` in the client masks
+  it); a live refresh closed the open panel (`:target` set on the new one, proved in
+  headless Chromium); masters' changes didn't refresh the page (`every 15s`); short IDs
+  collided for masters started together (now the last 8 characters).
+- **B149 found and fixed** (the graph's proptest: a free vertical strip left wide,
+  `squeeze()`); **B150 logged** (a flaky test under the coverage run, not reproduced).
+
 ## State (2026-11-01, night)
 
 - **M4.4 done (concurrency limits), M4.4b next, then bugs** (the user, 2026-11-01 night:

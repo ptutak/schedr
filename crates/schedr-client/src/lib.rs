@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, ImportErrorList,
-    LogChunk, OutputView, PauseRequest, RunDetail, RunList, TriggerRequest, WorkerList,
+    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
+    ImportErrorList, LogChunk, OutputView, PauseRequest, RunDetail, RunList, TriggerRequest,
+    WorkerList,
 };
 use serde::de::DeserializeOwned;
 
@@ -180,7 +181,8 @@ pub fn new_command_key() -> String {
 }
 
 /// The person the current request is made for, if [`USER`] is set.
-fn current_user() -> Option<String> {
+#[must_use]
+pub fn current_user() -> Option<String> {
     USER.try_with(Clone::clone).ok()
 }
 
@@ -352,16 +354,16 @@ impl Transport for HttpTransport {
         if let Some(key) = &request.key {
             builder = builder.header("idempotency-key", key);
         }
-        let response = builder.send().await.map_err(|e| ClientError::Connect {
-            server: self.server.clone(),
-            reason: e.to_string(),
-        })?;
+        let response = builder
+            .send()
+            .await
+            .map_err(|e| connect_error(&self.server, e))?;
         refuse_redirect(&self.server, &response)?;
         let status = response.status().as_u16();
-        let bytes = response.bytes().await.map_err(|e| ClientError::Connect {
-            server: self.server.clone(),
-            reason: e.to_string(),
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| connect_error(&self.server, e))?;
         Ok(ApiResponse {
             status,
             body: serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
@@ -376,10 +378,7 @@ impl Transport for HttpTransport {
                 .header("accept", "text/event-stream")
                 .timeout(STREAM_TIMEOUT),
         );
-        let connect = |e: reqwest::Error| ClientError::Connect {
-            server: self.server.clone(),
-            reason: e.to_string(),
-        };
+        let connect = |e: reqwest::Error| connect_error(&self.server, e);
         let mut response = builder.send().await.map_err(connect)?;
         refuse_redirect(&self.server, &response)?;
         if !response.status().is_success() {
@@ -395,10 +394,7 @@ impl Transport for HttpTransport {
                 let chunk = match response.chunk().await {
                     Ok(Some(chunk)) => Ok(chunk.to_vec()),
                     Ok(None) => return,
-                    Err(e) => Err(ClientError::Connect {
-                        server: server.clone(),
-                        reason: e.to_string(),
-                    }),
+                    Err(e) => Err(connect_error(&server, e)),
                 };
                 let failed = chunk.is_err();
                 // The reader went away, or the stream failed: done either way.
@@ -414,6 +410,16 @@ impl Transport for HttpTransport {
 /// A redirect is an error: it is never followed (B133), since the request carries
 /// credentials (the UI's token, a password, the person's name) that would go wherever it
 /// points. The message names that address, to be configured instead.
+/// The server couldn't be reached: with its URL and the reason shown masked, so a password
+/// in the URL (`[ui] deployments`, `--server`) or in what the HTTP library says never shows
+/// (Codex's review of M4.4b).
+fn connect_error(server: &str, reason: impl std::fmt::Display) -> ClientError {
+    ClientError::Connect {
+        server: schedr_config::masked::mask_text(server),
+        reason: schedr_config::masked::mask_text(&reason.to_string()),
+    }
+}
+
 fn refuse_redirect(server: &str, response: &reqwest::Response) -> Result<(), ClientError> {
     if !response.status().is_redirection() {
         return Ok(());
@@ -423,14 +429,14 @@ fn refuse_redirect(server: &str, response: &reqwest::Response) -> Result<(), Cli
         .get(reqwest::header::LOCATION)
         .and_then(|l| l.to_str().ok())
         .unwrap_or("an address it didn't give");
-    Err(ClientError::Connect {
-        server: server.to_owned(),
-        reason: format!(
+    Err(connect_error(
+        server,
+        format!(
             "it answered {} redirecting to {to}; schedr follows no redirect (the request's \
              credentials would go there too): configure the address it should reach",
             response.status()
         ),
-    })
+    ))
 }
 
 /// An HTTP client presenting `tls`'s certificate (its `api_client` configuration).
@@ -598,6 +604,16 @@ impl<T: Transport> Client<T> {
     /// [`ClientError`] if the request fails or the answer doesn't read.
     pub async fn workers(&self) -> Result<WorkerList, ClientError> {
         self.call(Method::Get, "/api/v1/workers".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/deployment`: the deployment's nodes and their configurations (masked).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn deployment(&self) -> Result<DeploymentView, ClientError> {
+        self.call(Method::Get, "/api/v1/deployment".to_owned(), None)
             .await
     }
 

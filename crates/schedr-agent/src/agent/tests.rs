@@ -179,6 +179,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
             ..DrainPeriods::default()
         },
         log_endpoint: String::new(),
+        node: NodeIdentity::default(),
     };
     let fake = Fake::default();
     let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
@@ -584,6 +585,10 @@ async fn against_master(
             ..DrainPeriods::default()
         },
         log_endpoint: "http://w1:8081".to_owned(),
+        node: NodeIdentity {
+            process_id: "p-1".to_owned(),
+            config_json: r#"{"worker":{"slots":2}}"#.to_owned(),
+        },
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
@@ -668,6 +673,8 @@ async fn without_a_free_slot_an_assignment_is_rejected() {
     };
     assert_eq!((register.worker_id.as_str(), register.slots), ("w1", 0));
     assert_eq!(register.log_endpoint, "http://w1:8081");
+    assert_eq!(register.process_id, "p-1");
+    assert_eq!(register.config_json, r#"{"worker":{"slots":2}}"#);
     assert_eq!(register.roots[0].root, "etl");
     assert!(register.roots[0].content_hash.starts_with("sha256:"));
 }
@@ -1049,6 +1056,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             ..DrainPeriods::default()
         },
         log_endpoint: String::new(),
+        node: NodeIdentity::default(),
     };
     let journal = Journal::new(settings.journal_dir.clone());
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -1257,6 +1265,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             ..DrainPeriods::default()
         },
         log_endpoint: String::new(),
+        node: NodeIdentity::default(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert!(!agent.on_shutdown(0));
@@ -1301,6 +1310,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             ..DrainPeriods::default()
         },
         log_endpoint: String::new(),
+        node: NodeIdentity::default(),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     let (stop, mut stopped) = Stops::new();

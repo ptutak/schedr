@@ -22,7 +22,26 @@ CREATE TABLE workers (
     -- restarts of the worker and the master.
     drained           INTEGER NOT NULL DEFAULT 0 CHECK (drained IN (0, 1)),
     -- What is wrong with it now ([{kind, interpreter, message}]), replaced by each report.
-    warnings          TEXT NOT NULL DEFAULT '[]'
+    warnings          TEXT NOT NULL DEFAULT '[]',
+    -- The Deployments page (decision 122): the master it registered with last, the process it
+    -- runs in (standalone: the master's too), and its effective configuration, masked by the
+    -- worker before it was sent.
+    master_id         TEXT,
+    process_id        TEXT,
+    config            TEXT
+);
+
+-- Every master, leader or standby, heartbeating its row (decision 123): which leads is the
+-- lease's holder. One not heard from ages out of the Deployments page.
+CREATE TABLE masters (
+    master_id      TEXT PRIMARY KEY,
+    process_id     TEXT NOT NULL,
+    host           TEXT NOT NULL,
+    schedr_version TEXT NOT NULL,
+    -- Its effective configuration, masked by the master before it was written.
+    config         TEXT NOT NULL,
+    started_at     TEXT NOT NULL,
+    heard_at       TEXT NOT NULL
 );
 
 CREATE TABLE parse_results (

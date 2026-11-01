@@ -151,7 +151,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
         Duration::from_millis(10),
         listen(loopback()).await.unwrap(),
         None,
-        async { Ok(take_lease(db, Duration::from_secs(15), "master").await) },
+        async { Ok(take_lease(db, Duration::from_secs(15), "master", new_master_id()).await) },
         Observed {
             metrics: MasterMetrics::default(),
             health: &health,
@@ -161,7 +161,11 @@ async fn the_master_and_the_api_serve_until_stopped() {
     );
     let api = serve_api(
         memory_db().await,
-        (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+        (
+            schedr_api::auth::Auth::default(),
+            Duration::from_secs(15),
+            webserver_node(serde_json::json!({})),
+        ),
         (listen(loopback()).await.unwrap(), None),
         None,
         None,
@@ -265,7 +269,15 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
     let db = Database::connect(&url).await.unwrap();
     let (_stop, stopped) = watch::channel(0);
     let period = Duration::from_secs(30);
-    let Err(error) = lead(&db, &url, (period, false, true), stopped.clone(), "master").await else {
+    let Err(error) = lead(
+        &db,
+        &url,
+        (period, false, true),
+        stopped.clone(),
+        ("master", new_master_id()),
+    )
+    .await
+    else {
         panic!("a schema not migrated was accepted");
     };
     assert_eq!(
@@ -274,18 +286,30 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
          `--migrate`"
     );
     // Migrated with `[database] change_notifications = false`: the switch applied with it.
-    let leading = lead(&db, &url, (period, true, false), stopped.clone(), "master")
-        .await
-        .unwrap();
+    let leading = lead(
+        &db,
+        &url,
+        (period, true, false),
+        stopped.clone(),
+        ("master", new_master_id()),
+    )
+    .await
+    .unwrap();
     let leadership = leading.expect("not stopped").await.unwrap();
     assert!(db.schema_status().await.unwrap().is_usable());
     assert!(leadership.epoch() > 0);
     assert!(!db.change_notifications().await.unwrap());
     leadership.release().await;
     // `--migrate` again on the schema as it is, the setting back on: applied once leading.
-    let leading = lead(&db, &url, (period, true, true), stopped, "master")
-        .await
-        .unwrap();
+    let leading = lead(
+        &db,
+        &url,
+        (period, true, true),
+        stopped,
+        ("master", new_master_id()),
+    )
+    .await
+    .unwrap();
     let _leadership = leading.expect("not stopped").await.unwrap();
     assert!(db.change_notifications().await.unwrap());
 }
@@ -748,7 +772,11 @@ async fn standalones_pages_want_a_sign_in_and_its_api_no_other_sites_writes() {
         let health = Health::new(Duration::from_secs(120));
         serve_api(
             memory_db().await,
-            (auth, Duration::from_secs(15)),
+            (
+                auth,
+                Duration::from_secs(15),
+                webserver_node(serde_json::json!({})),
+            ),
             (listener, None),
             None,
             Some(LocalUi { docs_dir: None }),
@@ -813,10 +841,16 @@ async fn migrate_fails_when_the_switch_cant_be_applied_to_an_up_to_date_schema()
         .unwrap();
     let (_stop, stopped) = watch::channel(0);
     let period = Duration::from_secs(30);
-    let leading = lead(&db, &url, (period, true, false), stopped, "master")
-        .await
-        .unwrap()
-        .expect("not stopped");
+    let leading = lead(
+        &db,
+        &url,
+        (period, true, false),
+        stopped,
+        ("master", new_master_id()),
+    )
+    .await
+    .unwrap()
+    .expect("not stopped");
     assert!(
         leading.await.is_err(),
         "a master led on a switch not applied"
@@ -824,7 +858,7 @@ async fn migrate_fails_when_the_switch_cant_be_applied_to_an_up_to_date_schema()
     // The lease was given back: another takes it at once.
     let other = tokio::time::timeout(
         Duration::from_secs(5),
-        take_lease(db.clone(), period, "master"),
+        take_lease(db.clone(), period, "master", new_master_id()),
     )
     .await
     .expect("the lease was released");
@@ -866,7 +900,11 @@ async fn in_mesh_mode_the_ui_port_takes_the_uis_name_and_the_api_port_doesnt() {
         let health = Health::new(Duration::from_secs(120));
         serve_api(
             memory_db().await,
-            (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+            (
+                schedr_api::auth::Auth::default(),
+                Duration::from_secs(15),
+                webserver_node(serde_json::json!({})),
+            ),
             (listener, Some(ui_listener)),
             None,
             None,
@@ -921,7 +959,11 @@ async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
         let health = Health::new(Duration::from_secs(120));
         serve_api(
             memory_db().await,
-            (schedr_api::auth::Auth::default(), Duration::from_secs(15)),
+            (
+                schedr_api::auth::Auth::default(),
+                Duration::from_secs(15),
+                webserver_node(serde_json::json!({})),
+            ),
             (listener, None),
             None,
             Some(LocalUi { docs_dir: None }),

@@ -44,6 +44,8 @@ fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> 
         roots: vec![root("h1")],
         secret_storages: vec![],
         journal,
+        process_id: "p-1".to_owned(),
+        config_json: r#"{"worker":{"slots":2}}"#.to_owned(),
     }
 }
 

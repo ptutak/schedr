@@ -17,6 +17,7 @@ pub use schedr_client as client;
 pub mod interpreter;
 pub mod local;
 pub mod logging;
+pub mod node;
 pub mod ops;
 pub mod roles;
 pub mod standalone;

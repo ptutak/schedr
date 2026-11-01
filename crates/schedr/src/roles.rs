@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use crate::ops::{Health, Ops, Starting, ops_line, serve_ops};
 use prometheus_client::registry::Registry;
-use schedr_agent::agent::{Agent, AgentSettings, ProcessExecutor};
+use schedr_agent::agent::{Agent, AgentSettings, NodeIdentity, ProcessExecutor};
 use schedr_agent::attempt::WorkerSetup;
 use schedr_agent::drain::DrainPeriods;
 use schedr_agent::fork::{ForkConfig, ForkServers};
@@ -48,6 +48,9 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::app::{AppError, describe_status, role_config};
+use crate::node::{MasterIdentity, heartbeat_master, new_master_id, webserver_node};
+use schedr_api::views::NodeView;
+use schedr_config::masked::masked;
 
 #[cfg(test)]
 mod tests;
@@ -233,6 +236,10 @@ pub fn agent_settings(
         },
         // Known once the log endpoint listens (see [`log_endpoint`]).
         log_endpoint: String::new(),
+        node: NodeIdentity {
+            process_id: crate::node::process_id().to_owned(),
+            config_json: masked(config).to_string(),
+        },
         worker_id,
     })
 }
@@ -556,6 +563,12 @@ pub fn ui_deployments(
                 })?;
                 transport = transport.with_tls(tls.clone());
             }
+            let proof = match (d.token_file.is_some(), d.url.starts_with("https://")) {
+                (false, false) => "none",
+                (true, false) => "token",
+                (false, true) => "mTLS",
+                (true, true) => "token and mTLS",
+            };
             Ok(schedr_ui::Deployment {
                 name: d.name.clone(),
                 client: schedr_client::Client::new(
@@ -563,6 +576,7 @@ pub fn ui_deployments(
                     schedr_client::POLL_INTERVAL,
                     schedr_client::WAIT_TIMEOUT,
                 ),
+                proof,
             })
         })
         .collect()
@@ -608,6 +622,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
         deployments,
         docs_dir: docs_dir(config),
         auth,
+        config: masked(config),
     });
     ready.ready();
     let server = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
@@ -634,14 +649,15 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
 }
 
 /// Serves the REST API on `listener` until `stop`, reading task logs from workers (over mTLS
-/// with `tls`); with `ui`, the web UI too, at `/`, calling this API in process.
+/// with `tls`), showing this webserver as `node` (`GET /api/v1/deployment`); with `ui`, the
+/// web UI too, at `/`, calling this API in process.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] if the HTTP server fails.
 pub async fn serve_api(
     db: Database,
-    (auth, refresh): (Auth, Duration),
+    (auth, refresh, node): (Auth, Duration, NodeView),
     (listener, ui_port): (TcpListener, Option<TcpListener>),
     tls: Option<Tls>,
     ui: Option<LocalUi>,
@@ -650,9 +666,11 @@ pub async fn serve_api(
 ) -> Result<(), AppError> {
     // Its pages ask the person to sign in: the UI's token opens only the API.
     let ui_auth = auth.without_ui_token();
+    let ui_config = node.config.clone();
     let state = ApiState::new(db, None)
         .with_auth(auth)
         .with_refresh(refresh)
+        .with_node(node)
         .with_logs(std::sync::Arc::new(HttpLogSource::new(tls.clone())))
         .with_metrics(observed.metrics);
     observed.ready.ready();
@@ -667,12 +685,14 @@ pub async fn serve_api(
             let deployments = vec![schedr_ui::Deployment {
                 name: LOCAL_DEPLOYMENT.to_owned(),
                 client,
+                proof: "in process",
             }];
             // One port: its pages sign in as its API does (`[webserver.auth]`).
             api.clone().merge(schedr_ui::router(schedr_ui::Ui {
                 deployments,
                 docs_dir: local.docs_dir,
                 auth: ui_auth,
+                config: ui_config,
             }))
         }
         None => api.clone(),
@@ -992,10 +1012,15 @@ pub fn stop_on_signal() -> watch::Receiver<u32> {
     stopped
 }
 
-/// Waits for the master's lease (see [`Leadership::take`]) as a new incarnation of the master
-/// of `role`, logging once that it waits as a standby.
-pub async fn take_lease(db: Database, period: Duration, role: &'static str) -> Leadership {
-    let holder = uuid::Uuid::now_v7().to_string();
+/// Waits for the master's lease (see [`Leadership::take`]) as `holder` (a new incarnation of
+/// the master of `role`: [`crate::node::new_master_id`]), logging once that it waits as a
+/// standby.
+pub async fn take_lease(
+    db: Database,
+    period: Duration,
+    role: &'static str,
+    holder: String,
+) -> Leadership {
     Leadership::take(db, holder, period, move || {
         tracing::info!("schedr {role}: another master holds the lease; waiting as a standby");
     })
@@ -1007,8 +1032,8 @@ pub type LeaseFuture = std::pin::Pin<Box<dyn Future<Output = Result<Leadership, 
 
 /// The master's lease for `role` (`master` or `standalone`), being taken while the role's
 /// other parts start when the schema is usable; else, with `--migrate`, taken now (a standby
-/// waits) and the schema migrated by its holder. `None` when a shutdown is asked for while
-/// waiting. With `--migrate`, `[database] change_notifications` is applied by the holder.
+/// waits) and the schema migrated by its holder; taken as `holder` (the master's ID). `None`
+/// when a shutdown is asked for while waiting. With `--migrate`, `[database] change_notifications` is applied by the holder.
 ///
 /// # Errors
 ///
@@ -1020,13 +1045,13 @@ pub async fn lead(
     url: &str,
     (period, migrate, change_notifications): (Duration, bool, bool),
     shutdown: watch::Receiver<u32>,
-    role: &'static str,
+    (role, holder): (&'static str, String),
 ) -> Result<Option<LeaseFuture>, AppError> {
     let status = db.schema_status().await?;
     if status.is_usable() {
         let db = db.clone();
         return Ok(Some(Box::pin(async move {
-            let lead = take_lease(db.clone(), period, role).await;
+            let lead = take_lease(db.clone(), period, role, holder).await;
             // `--migrate` on an up-to-date schema: the switch only, holding the lease; failing
             // as a migration does.
             if migrate
@@ -1044,7 +1069,7 @@ pub async fn lead(
             describe_status(&status)
         )));
     }
-    let lease = take_lease(db.clone(), period, role);
+    let lease = take_lease(db.clone(), period, role, holder);
     let Some(lead) = until_stopped(lease, shutdown).await else {
         return Ok(None);
     };
@@ -1191,7 +1216,15 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
         migrate,
         config.database.change_notifications,
     );
-    let Some(leadership) = lead(&db, url, period, stop.clone(), "master").await? else {
+    // Its row on the Deployments page, from now on: a standby's too.
+    let identity = MasterIdentity {
+        master_id: new_master_id(),
+        config: masked(config),
+    };
+    let master_id = identity.master_id.clone();
+    tokio::spawn(heartbeat_master(db.clone(), identity, stop.clone()));
+    let Some(leadership) = lead(&db, url, period, stop.clone(), ("master", master_id)).await?
+    else {
         return Ok(());
     };
     let address = SocketAddr::new(config.master.bind, config.master.grpc_port);
@@ -1364,7 +1397,11 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     };
     serve_api(
         db,
-        (auth, config.webserver.refresh_interval),
+        (
+            auth,
+            config.webserver.refresh_interval,
+            webserver_node(masked(config)),
+        ),
         (listener, ui_port),
         tls,
         None,

@@ -82,6 +82,12 @@ message Register {
   repeated RootHash roots = 8;
   repeated string secret_storages = 9;
   repeated JournalEntry journal = 10;
+  // The process the worker runs in (shared with a master in standalone), for the Deployments
+  // page; empty from an older agent.
+  string process_id = 11;
+  // The worker's effective configuration as JSON, masked by the worker (no secret in clear);
+  // empty from an older agent.
+  string config_json = 12;
 }
 
 message Heartbeat {

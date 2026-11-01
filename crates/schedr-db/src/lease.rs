@@ -70,6 +70,13 @@ const RENEW_POSTGRES: &str = "UPDATE master_lease
     WHERE holder = $1 AND epoch = $2
     RETURNING epoch";
 
+/// Who holds the lease now (it hasn't expired), by the database's clock.
+const HOLDER_SQLITE: &str = "SELECT holder FROM master_lease
+    WHERE expires_at > strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000Z'";
+
+const HOLDER_POSTGRES: &str =
+    "SELECT holder FROM master_lease WHERE expires_at > clock_timestamp()";
+
 const RELEASE_SQLITE: &str = "UPDATE master_lease
     SET expires_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1 seconds') || '000Z'
     WHERE holder = $1";
@@ -194,6 +201,30 @@ impl Database {
             })
             .await?;
         Ok(renewed.is_some())
+    }
+
+    /// The master holding the lease now, by the database's clock: `None` if none does (no
+    /// master took it, or its lease expired).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails, [`DbError::QueryTimeout`] past the limit.
+    pub async fn lease_holder(&self) -> Result<Option<String>, DbError> {
+        self.limited(self.query_timeout(), async {
+            Ok(match self.pool() {
+                Pool::Sqlite(pool) => {
+                    sqlx::query_scalar(HOLDER_SQLITE)
+                        .fetch_optional(pool)
+                        .await?
+                }
+                Pool::Postgres(pool) => {
+                    sqlx::query_scalar(HOLDER_POSTGRES)
+                        .fetch_optional(pool)
+                        .await?
+                }
+            })
+        })
+        .await
     }
 
     /// Gives the lease up if `holder` has it (a clean shutdown), so a standby takes over at

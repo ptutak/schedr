@@ -585,6 +585,10 @@ pub struct WorkerView {
     /// What is wrong with it now, as it last reported (e.g. a disabled fork server).
     #[serde(default)]
     pub warnings: Vec<WarningView>,
+    /// The master it registered with last (a master's ID, as on `GET /api/v1/deployment`):
+    /// kept while it is disconnected; none from an older agent's registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_id: Option<String>,
 }
 
 /// Something wrong with a worker.
@@ -623,6 +627,88 @@ impl From<&WorkerRecord> for WorkerView {
                     message: w.message.clone(),
                 })
                 .collect(),
+            master_id: None,
+        }
+    }
+}
+
+/// The deployment this webserver serves, as nodes (decisions 121-123): its own, its masters
+/// (leader and standbys) and its workers, each with its effective configuration, masked by the
+/// node itself before it left its process (no secret in clear).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DeploymentView {
+    /// The webserver answering (one of the deployment's, if it has several).
+    pub webserver: NodeView,
+    /// The masters heard from lately: the leader (the lease's holder) first.
+    pub masters: Vec<MasterView>,
+    /// Every worker the master has seen, gone ones included.
+    pub workers: Vec<WorkerNodeView>,
+    /// Who this request was made as, as the webserver sees it (`anonymous` without
+    /// authentication; the person the web UI passed on, from the UI).
+    pub user: String,
+}
+
+/// A process of the deployment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct NodeView {
+    /// The process (shared by a master and a worker in standalone).
+    pub process_id: String,
+    /// Its host.
+    pub host: String,
+    /// Its schedr version.
+    pub schedr_version: String,
+    /// Its effective configuration, masked.
+    #[schema(value_type = Object)]
+    pub config: serde_json::Value,
+}
+
+/// A master, leading or standing by.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MasterView {
+    /// Its ID: the lease holder it takes the lease as.
+    pub master_id: String,
+    /// `leader` (it holds the lease) or `standby`.
+    pub role: String,
+    /// Where it runs, and its configuration.
+    #[serde(flatten)]
+    pub node: NodeView,
+    /// When it started.
+    pub started_at: Timestamp,
+    /// When it was last heard from (it writes its row every 10 s).
+    pub heard_at: Timestamp,
+}
+
+/// A worker as a node of the deployment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerNodeView {
+    /// Its ID.
+    pub worker_id: String,
+    /// `active`, `draining`, `disconnected`, `offline` or `lost`.
+    pub state: String,
+    /// Its schedr version.
+    pub schedr_version: String,
+    /// The master it registered with last; none from an older agent.
+    pub master_id: Option<String>,
+    /// The process it runs in; none from an older agent.
+    pub process_id: Option<String>,
+    /// Its effective configuration, masked; none from an older agent.
+    #[schema(value_type = Option<Object>)]
+    pub config: Option<serde_json::Value>,
+}
+
+impl From<schedr_db::nodes::MasterRecord> for MasterView {
+    fn from(master: schedr_db::nodes::MasterRecord) -> Self {
+        Self {
+            master_id: master.master_id,
+            role: if master.leading { "leader" } else { "standby" }.to_owned(),
+            node: NodeView {
+                process_id: master.process_id,
+                host: master.host,
+                schedr_version: master.schedr_version,
+                config: master.config,
+            },
+            started_at: master.started_at,
+            heard_at: master.heard_at,
         }
     }
 }

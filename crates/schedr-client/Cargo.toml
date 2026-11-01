@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+schedr-config.workspace = true
 axum.workspace = true
 http-body-util.workspace = true
 tower.workspace = true

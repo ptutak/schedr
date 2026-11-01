@@ -178,6 +178,7 @@ pub fn layout_grouped(
     separate(&graph, groups, &mut x);
     let y = |l: usize| top + NODE_HEIGHT / 2.0 + to_f64(l) * (NODE_HEIGHT + layer_gap);
     let mut boxes = group_boxes(&graph, groups, &x, &y);
+    squeeze(&graph, &mut x, &mut boxes);
     // Everything shifted so the leftmost box or node starts at the margin.
     let left = boxes
         .iter()
@@ -653,6 +654,52 @@ fn clear(graph: &Layered, g: usize, path: &[usize], x: &mut [f64]) -> bool {
         }
     }
     moved
+}
+
+/// Cuts every vertical strip that holds no item (a node or an edge's bend) and no box edge
+/// down to [`GAP`] (B149): [`separate`] only moves things right, and a push that cascades
+/// through nested groups can leave a wide empty strip behind. Order is kept and nothing
+/// crosses a strip that is cut, so every box still holds exactly what it held.
+fn squeeze(graph: &Layered, x: &mut [f64], boxes: &mut [GroupBox]) {
+    // Occupied intervals: the items; a box's edges as points.
+    let mut taken: Vec<(f64, f64)> = graph
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (x[i] - item.width() / 2.0, x[i] + item.width() / 2.0))
+        .chain(boxes.iter().flat_map(|b| {
+            let right = b.left + b.width;
+            [(b.left, b.left), (right, right)]
+        }))
+        .collect();
+    taken.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // (where a cut starts, how much it removes)
+    let mut cuts: Vec<(f64, f64)> = Vec::new();
+    let mut reach = f64::NEG_INFINITY;
+    for (start, end) in taken {
+        if reach.is_finite() && start - reach > GAP + 1e-9 {
+            cuts.push((reach, start - reach - GAP));
+        }
+        reach = reach.max(end);
+    }
+    if cuts.is_empty() {
+        return;
+    }
+    let moved = |at: f64| {
+        at - cuts
+            .iter()
+            .filter(|&&(from, _)| from < at - 1e-9)
+            .map(|&(_, by)| by)
+            .sum::<f64>()
+    };
+    for value in x.iter_mut() {
+        *value = moved(*value);
+    }
+    for group_box in boxes.iter_mut() {
+        let right = moved(group_box.left + group_box.width);
+        group_box.left = moved(group_box.left);
+        group_box.width = right - group_box.left;
+    }
 }
 
 /// Moves the items of `layer` from position `k` on right by `by`.

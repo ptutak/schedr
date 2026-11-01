@@ -1404,6 +1404,18 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     protocol still edited in place). Not chosen: before M4.4; at the end of M4.
   - Claude's: the page and the configuration endpoints are reads, under the same access as
     the other reads; the graph's node states update live, as the Workers page does.
+  - Claude's, as built (M4.4b): a master's ID is the holder it takes the lease as (a UUID
+    per incarnation), so its role is read from the lease (the holder whose lease hasn't
+    expired by the database's clock is the leader); a process's ID is a UUID made once per
+    process, which standalone's master, worker and webserver share (one rectangle). A
+    master writes its row every 10 s, unfenced (a standby writes too); the page shows those
+    heard from in the last 30 s; a row not written for an hour is removed. A worker's node
+    (`workers.master_id`, `process_id`, `config`) is written at `Register` by the master
+    it registers with. Masking happens at each node and again downstream, as defense in
+    depth: the master masks a worker's configuration again before storing it, and the UI
+    masks every configuration again before showing it, so an older or altered node can't
+    show a secret. `GET /api/v1/deployment` also says who the request was taken as, which
+    the Config page shows per connection.
   - **The Workers page stays, with a Master column** (the user's, 2026-10-31): the master
     each worker is registered with (`workers.master_id`, written at `Register`, so a
     re-registration after a takeover shows the new leader; a disconnected worker keeps the
