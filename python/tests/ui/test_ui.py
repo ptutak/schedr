@@ -217,21 +217,46 @@ def test_a_live_read_answered_while_a_dialog_is_open_doesnt_replace_it(
 def test_a_deployment_nodes_panel_opens_on_click_and_stays_open_across_a_refresh(
     page: Page, standalone: dict[str, str]
 ) -> None:
+    # Its master and worker known first (run alone, the page could be made before they were).
+    deadline = time.monotonic() + 30
+    while True:
+        known = page.request.get(standalone["url"] + "/api/v1/deployment").json()
+        if known["masters"] and known["workers"]:
+            break
+        assert time.monotonic() < deadline, f"no master or worker: {known}"
+        page.wait_for_timeout(200)
     page.goto(standalone["url"] + "/deployments")
     # Standalone: one process holding the UI, the webserver, the master and the worker.
     expect(page.locator("svg.deployment g.process")).to_have_count(1)
     expect(page.locator("svg.deployment a.node")).to_have_count(4)
     worker = page.locator("svg.deployment a.node.worker")
     expect(worker.locator("text.sub").last).to_have_text("queues: default")
-    panel = page.locator("section.node-config:target")
+    panel = page.locator("section.node-config.open")
     expect(panel).to_have_count(0)
     worker.click()
     expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
+    # Beside the graph, the clicked node marked, its address in the URL.
+    graph = page.locator(".graph-scroll").bounding_box()
+    beside = panel.bounding_box()
+    assert graph is not None
+    assert beside is not None
+    assert beside["x"] >= graph["x"] + graph["width"]
+    expect(worker).to_have_class(re.compile(r"\bselected\b"))
+    assert page.url.endswith("#node.default.worker.localhost")
     # Its configuration as TOML.
     expect(panel.locator("pre.config")).to_contain_text("[worker]")
     # A live refresh replaces the panels: the open one is open again.
     with page.expect_response(re.compile(r"/deployments$")):
         page.evaluate("htmx.trigger(document.getElementById('live'), 'sse:change')")
+    expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
+    # A refresh leaves where the page is scrolled to alone (it jumped to the open panel).
+    page.set_viewport_size({"width": 1200, "height": 300})
+    page.evaluate("window.scrollTo(0, 0)")
+    with page.expect_response(re.compile(r"/deployments$")):
+        page.evaluate("htmx.trigger(document.getElementById('live'), 'sse:change')")
+    page.wait_for_function("() => document.querySelector('#live.htmx-request') === null")
+    page.wait_for_timeout(300)
+    assert page.evaluate("window.scrollY") == 0
     expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
     # The UI's panel: its connection to the webserver, in process.
     page.locator("svg.deployment a.node.ui").click()

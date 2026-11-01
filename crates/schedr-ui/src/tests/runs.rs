@@ -221,16 +221,14 @@ fn failed_run() -> Vec<(&'static str, u16, Value)> {
         (
             "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=4",
             200,
-            log(0, 300_000, "star"),
+            log(0, 2_000_000, "star"),
         ),
         (
-            "/api/v1/runs/r2/tasks/load/attempts/2/log?from=37856&limit=262144",
+            // The last 1 MiB (2_000_000 - 1_048_576).
+            "/api/v1/runs/r2/tasks/load/attempts/2/log?from=951424&limit=1048576",
             200,
-            log(
-                37_856,
-                300_000,
-                "cut line\n\u{1b}[31mERROR\u{1b}[0m <boom>\n",
-            ),
+            // The API starts a cut part at a line (after "cut line\n").
+            log(951_433, 2_000_000, "\u{1b}[31mERROR\u{1b}[0m <boom>\n"),
         ),
     ]
 }
@@ -444,7 +442,7 @@ async fn the_log_tab_shows_the_end_of_the_last_try_in_colour() {
     let fragment = [("hx-request", "true")];
     let (status, html) = get(&app, "/d/etl/runs/r2/tasks/load?tab=logs", &fragment).await;
     assert_eq!(status, StatusCode::OK);
-    // The last try's, from its first whole line, colours as spans, text escaped.
+    // The last try's end, colours as spans, text escaped.
     assert_eq!(texts(&html, ".tries .try.open"), ["2"]);
     assert_eq!(texts(&html, "pre.log"), ["ERROR <boom>"]);
     assert_eq!(texts(&html, "pre.log .fg-1"), ["ERROR"]);
@@ -504,11 +502,11 @@ async fn the_dag_page_links_its_runs() {
 async fn a_log_tail_that_is_one_long_line_is_shown_from_the_cut() {
     for content in ["the end of one long line", "the end of one long line\n"] {
         let mut answers = failed_run();
-        answers.retain(|(path, _, _)| !path.contains("from=37856"));
+        answers.retain(|(path, _, _)| !path.contains("from=951424"));
         answers.push((
-            "/api/v1/runs/r2/tasks/load/attempts/2/log?from=37856&limit=262144",
+            "/api/v1/runs/r2/tasks/load/attempts/2/log?from=951424&limit=1048576",
             200,
-            log(37_856, 300_000, content),
+            log(951_424, 2_000_000, content),
         ));
         let app = ui(vec![deployment("etl", scripted(&answers))]);
         let (_, html) = get(
@@ -857,7 +855,7 @@ async fn a_log_that_grew_past_its_part_before_its_attempt_ended_is_followed_to_i
     let mut part = log(0, 300_000, "the first part\n");
     part["next"] = json!(262_144);
     answers.push((
-        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=262144",
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=1048576",
         200,
         part,
     ));
@@ -928,4 +926,49 @@ async fn a_runs_branches_are_read_together() {
         .most
         .load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(most, ids.len(), "reads at once");
+}
+
+#[test]
+fn a_logs_end_is_its_last_256_kib_from_a_line_or_its_last_line_whole() {
+    use crate::runs::{LOG_TAIL, log_end};
+    assert_eq!(log_end("a\nb\n"), ("a\nb\n", false));
+    // Many short lines: from the first line starting in the last 256 KiB.
+    let line = "x".repeat(99) + "\n";
+    let many = line.repeat(3000);
+    let (end, cut) = log_end(&many);
+    assert!(cut && end.len() <= LOG_TAIL && end.len() > LOG_TAIL - 100);
+    assert!(end.starts_with('x') && many.ends_with(end));
+    // A last line longer than 256 KiB: shown whole (B: it was dropped).
+    let long = format!("first\n{}\n", "a".repeat(300 * 1024));
+    assert_eq!(log_end(&long), (&long[6..], true));
+    // One line only, longer: all of it.
+    let one = format!("{}\n", "a".repeat(300 * 1024));
+    assert_eq!(log_end(&one), (one.as_str(), false));
+}
+
+#[tokio::test]
+async fn a_last_line_longer_than_a_part_is_said_not_shown() {
+    // The API shows no line from inside it, and the panel can't know where it starts.
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| !path.contains("from=951424"));
+    answers.push((
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=951424&limit=1048576",
+        200,
+        {
+            let mut part = log(2_000_000, 2_000_000, "");
+            part["running"] = json!(false);
+            part
+        },
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/load?tab=logs",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(
+        texts(&html, "pre.log"),
+        ["… (its last line is longer than 1 MiB: not shown here)"]
+    );
 }

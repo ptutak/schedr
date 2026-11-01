@@ -46,8 +46,9 @@ pub const TAIL_INTERVAL: Duration = Duration::from_secs(1);
 /// How long the log tail keeps trying a log out of reach before it says so and stops.
 pub const TAIL_GIVE_UP: Duration = Duration::from_secs(30);
 
-/// At most this much of a log a read.
-const TAIL_PART: u64 = 64 * 1024;
+/// At most this much of a log a read: the API's longest part, so a line is cut only past it
+/// (the API passes whole lines only, a longer one cut; decision 131).
+const TAIL_PART: u64 = schedr_model::logs::MAX_CHUNK;
 
 /// The first wait before a relay opens its stream again; it doubles up to [`RETRY_MAX`].
 const RETRY_FIRST: Duration = Duration::from_secs(1);
@@ -393,8 +394,10 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
             let (html, done) = match part {
                 Ok(part) => {
                     failing = None;
-                    // A full part: more is waiting, read it at once.
-                    more_now = part.next - part.from >= TAIL_PART;
+                    // Most of a part read (whole lines only: rarely all of it), and more
+                    // past it: read on at once.
+                    more_now =
+                        part.next.saturating_sub(from) >= TAIL_PART / 2 && part.next < part.size;
                     from = part.next;
                     let html = colours.push(&part.content);
                     (html, !part.running && part.next >= part.size)

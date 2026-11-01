@@ -9,6 +9,7 @@
 //! `[tls] worker_name`.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::pin::Pin;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -186,6 +187,83 @@ impl LogSource for HttpLogSource {
         limit: u64,
     ) -> LogFuture<'a> {
         Box::pin(self.get(endpoint, attempt_id, from, limit))
+    }
+}
+
+/// A part of a log as shown: masked, whole lines only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedPart {
+    /// The bytes skipped at its start (the rest of a line begun before it).
+    pub skipped: usize,
+    /// Its text, masked.
+    pub content: String,
+    /// The bytes it covers after the skipped ones.
+    pub used: usize,
+}
+
+/// `bytes`, a part of a log, as shown: masked (a task may print an address with its
+/// password), whole lines only, so no secret is shown in pieces (a reader picks where a part
+/// starts and how long it is). Not starting a line (`at_line` false), it starts after its
+/// first newline, all of it skipped when it has none. With `more` to come, it ends after its
+/// last newline, the rest left for the next part. With none in it, it waits for its line's
+/// end, unless it is `full` (as long as asked) and starts a line: then it is shown to its
+/// last whitespace (its last token may go on), ending with a note that it is cut, and the
+/// rest of that line is skipped, as a part not starting a line is. A short part shows a
+/// line's start at most, never its pieces. `before`, the bytes just before the part, is
+/// masked with it, not shown: a value begun there (a quoted one going on over lines) is
+/// hidden in the part too.
+#[must_use]
+pub fn masked_lines(
+    before: &[u8],
+    bytes: &[u8],
+    at_line: bool,
+    more: bool,
+    full: bool,
+) -> MaskedPart {
+    let newline = |b: &u8| *b == b'\n';
+    let skipped = if at_line {
+        0
+    } else {
+        bytes
+            .iter()
+            .position(newline)
+            .map_or(bytes.len(), |at| at + 1)
+    };
+    let rest = &bytes[skipped..];
+    let (lines, used) = if more {
+        match rest.iter().rposition(newline) {
+            Some(at) => (at + 1, at + 1),
+            // Its last token may go on in the next part: not shown. Nothing to show
+            // (no whitespace in a whole part): the line is passed over.
+            None if full && at_line => (
+                rest.iter()
+                    .rposition(u8::is_ascii_whitespace)
+                    .map_or(0, |at| at + 1),
+                rest.len(),
+            ),
+            None => (0, 0),
+        }
+    } else {
+        (rest.len(), rest.len())
+    };
+    let (text, whole) = text_of(&rest[..lines], more && lines == rest.len());
+    // What precedes the text shown: the bytes before the part, and those skipped in it.
+    let mut preceding = before.to_vec();
+    preceding.extend_from_slice(&bytes[..skipped]);
+    let mut content =
+        schedr_config::masked::mask_text_after(&String::from_utf8_lossy(&preceding), &text);
+    let cut = lines != used;
+    if cut {
+        let _ = writeln!(
+            content,
+            "… (the rest of this line is not shown: it is over {} bytes)",
+            rest.len()
+        );
+    }
+    MaskedPart {
+        skipped,
+        content,
+        used: if cut { used } else { whole },
     }
 }
 

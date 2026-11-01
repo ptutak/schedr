@@ -330,3 +330,21 @@ fn a_big_file_is_hashed_and_copied_without_reading_it_whole() {
         SIZE
     );
 }
+
+#[test]
+fn the_examples_root_holds_no_test_files() {
+    // `make standalone` runs `examples/`: its pytest files aren't DAG files, and a worker
+    // importing its copy of `test_docs.py` failed (it reads `../schema`, outside the root).
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let snapshot = scan(&examples).unwrap();
+    let tests: Vec<&String> = snapshot
+        .files()
+        .keys()
+        .filter(|path| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            name.starts_with("test_") || name == "conftest.py"
+        })
+        .collect();
+    assert!(tests.is_empty(), "{tests:?}");
+    assert!(snapshot.files().contains_key("sync.py"));
+}

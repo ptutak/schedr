@@ -1314,6 +1314,29 @@ fn command_id(fragment: &str) -> String {
         .to_owned()
 }
 
+/// `/deployments` of the federation's UI: each standalone one process (its webserver, master
+/// and worker in it), the distributed one a process per role, the one down a placeholder.
+fn one_graph_of_them_all(ui: &str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let graph = loop {
+        let page = ui_call(ui, "/deployments", None);
+        let complete = ["lite", "pg", "dist"].iter().all(|d| {
+            ["webserver\"", "master.", "worker."]
+                .iter()
+                .all(|kind| page.contains(&format!("id=\"node.{d}.{kind}")))
+        });
+        if complete {
+            break page;
+        }
+        assert!(Instant::now() < deadline, "not every node: {page}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(graph.contains("id=\"node.gone.webserver\""), "{graph}");
+    // The UI's own, a standalone's each, the distributed one's three or more.
+    let processes = graph.matches("<g class=\"process\">").count();
+    assert!(processes >= 6, "{processes} processes: {graph}");
+}
+
 #[test]
 fn one_ui_shows_a_federation_of_standalones_and_a_distributed_deployment() {
     // Standalones on SQLite and on Postgres: their APIs only, trusting the UI's token.
@@ -1407,6 +1430,7 @@ fn one_ui_shows_a_federation_of_standalones_and_a_distributed_deployment() {
     let paused = ui_call(&ui, "/d/dist/dags/chain/pause", Some(""));
     let command = distributed.api_get(&format!("/api/v1/commands/{}", command_id(&paused)));
     assert_eq!(command.unwrap()["requested_by"], "anonymous", "{paused}");
+    one_graph_of_them_all(&ui);
     ui_process.kill().unwrap();
     ui_process.wait().unwrap();
     drop((lite, pg, distributed));

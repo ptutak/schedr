@@ -55,26 +55,40 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
 | 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 8 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 10 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 11 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 12 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 13 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 22 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 12 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 13 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 14 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 23 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store
+
+- **Rating:** severity **low**, probability **likely**, usability (score 3): the worker's code copies are read-only directories: `rm -rf` can't delete their files.
+- **Found:** 2026-11-01, by Claude, deleting a `make standalone-separate-ui` data directory:
+  `rm: cannot remove '…/code/localhost/examples-c590b3c9/sha256-…/sync.py': Permission
+  denied`, for every file of every copy.
+- **Cause:** the code store makes each copy's directories read-only (`dr-xr-xr-x`), so a task
+  can't change the code it runs (decision 101). Deleting a file needs its directory writable.
+- **Affected:** the guide's "`rm -rf .schedr` starts afresh" (`make standalone`, Deployment),
+  and anyone deleting a worker's `data_dir` by hand.
+- **A fix:** say `chmod -R u+w .schedr && rm -rf .schedr` (or a `make standalone-clean`
+  target doing it), or find what the store could do instead.
 
 ## B151: standalone once didn't exit after its master was taken over (Suspected)
 
@@ -186,7 +200,7 @@ step touches their code or the user schedules them.
 - **Found:** 2026-10-30, by Codex's whole-repository review, section F1 (the master's core
   loop and the worker link), with a failing proof each; checked against the code by Claude.
   `Started`, `Rejected` and `Finished` each take `Dispatcher::memory` (the D1 snapshot: `workers`, `rejections`, `code_missing` cloned, `crates/schedr-master/src/core.rs:499`, `dispatch.rs:280`) under the core lock, so each message costs in proportion to the whole registry and its outstanding attempts; Codex measured 10 vs 1,000 workers (4 attempts each), 500 snapshots each, unrelated attempts included.
-- **A fix:** a snapshot of what the message can change (its attempt and worker) instead of everything; measure first with M4.5.1's per-turn timings.
+- **A fix:** a snapshot of what the message can change (its attempt and worker) instead of everything; measure first with M4B.1's per-turn timings.
 
 ## B40: a lease test times out its 2 s query limit under load
 

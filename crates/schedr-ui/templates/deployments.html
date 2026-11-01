@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Deployments</h1>
 <div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change, every 15s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
-<p class="dim">Everything this UI shows. Each frame is a deployment, each rectangle around nodes a process (in standalone one for all of them). Click a node for its panel: its facts, its problems and its configuration. Secrets are never shown: each node masks its own configuration before it leaves its process.</p>
+<p class="dim">Everything this UI shows. Each frame is a deployment, each rectangle around nodes a process (in standalone one for all of them). Click a node for its panel beside the graph: its facts, its problems and its configuration. Secrets are never shown: each node masks its own configuration before it leaves its process.</p>
 <p class="legend dim">
   <svg width="28" height="10" aria-hidden="true"><line class="edge http" x1="0" y1="5" x2="28" y2="5"></line></svg> HTTP
   <svg width="28" height="10" aria-hidden="true"><line class="edge database" x1="0" y1="5" x2="28" y2="5"></line></svg> database
@@ -11,6 +11,7 @@
   <svg width="28" height="10" aria-hidden="true"><line class="edge grpc dashed" x1="0" y1="5" x2="28" y2="5"></line></svg> not connected
   · <span class="swatch warning"></span> a warning <span class="swatch error"></span> an error
 </p>
+<div class="deploy-view">
 <div class="graph-scroll">
 <svg class="deployment" width="{{ graph.width }}" height="{{ graph.height }}" viewBox="0 0 {{ graph.width }} {{ graph.height }}" role="img" aria-label="The UI, and each deployment's processes and nodes">
 {% for frame in graph.frames %}
@@ -40,6 +41,7 @@
 {% endfor %}
 </svg>
 </div>
+<aside class="node-panels">
 {% for panel in panels %}
 <section class="node-config" id="{{ panel.anchor }}">
   <div class="panel-head"><h2>{{ panel.title }}</h2><a class="close" href="#" aria-label="Close">×</a></div>
@@ -75,22 +77,47 @@
   {% if panel.config.is_empty() %}{% if !panel.no_config.is_empty() %}<p class="empty">{{ panel.no_config }}</p>{% endif %}{% else %}<h3>Configuration</h3><pre class="config">{{ panel.config }}</pre>{% endif %}
 </section>
 {% endfor %}
+</aside>
+</div>
 </div>
 <script>
-// A live refresh replaces the panels; the browser's :target stays on the replaced one, so the
-// open panel would close. Pointed at the new one again, in place, without a history entry.
-document.addEventListener("htmx:afterSettle", function () {
-  var hash = location.hash.slice(1);
-  if (!hash) return;
-  var panel = document.getElementById(hash);
-  if (!panel) {
-    try { panel = document.getElementById(decodeURIComponent(hash)); } catch (e) {}
+// A node's panel opens beside the graph without moving the page: a click sets the address's
+// fragment (so the panel can be linked to and comes back with Back) without navigating to it,
+// and a class shows the panel. A live refresh replaces the panels: the open one is marked
+// again, the page left where it was scrolled to.
+(function () {
+  function wanted() {
+    var hash = location.hash.slice(1);
+    if (!hash) return null;
+    var panel = document.getElementById(hash);
+    if (!panel) {
+      try { panel = document.getElementById(decodeURIComponent(hash)); } catch (e) {}
+    }
+    return panel && panel.classList.contains("node-config") ? panel : null;
   }
-  if (panel && panel.classList.contains("node-config") && !panel.matches(":target")) {
-    var x = window.scrollX, y = window.scrollY;
-    location.replace("#" + hash);
-    window.scrollTo(x, y);
+  function show() {
+    var panel = wanted();
+    document.querySelectorAll(".node-config.open").forEach(function (p) { p.classList.remove("open"); });
+    document.querySelectorAll("svg.deployment a.node.selected").forEach(function (n) { n.classList.remove("selected"); });
+    if (!panel) return;
+    panel.classList.add("open");
+    document.querySelectorAll("svg.deployment a.node").forEach(function (n) {
+      if (n.getAttribute("href") === location.hash) n.classList.add("selected");
+    });
   }
-});
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("a");
+    if (!link || !link.closest(".deploy-view")) return;
+    var href = link.getAttribute("href") || "";
+    if (href.charAt(0) !== "#") return;
+    event.preventDefault();
+    history.pushState(null, "", href === "#" ? location.pathname + location.search : href);
+    show();
+  });
+  window.addEventListener("popstate", show);
+  window.addEventListener("hashchange", show);
+  document.addEventListener("htmx:afterSettle", show);
+  show();
+})();
 </script>
 {% endblock %}

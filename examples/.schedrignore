@@ -1,0 +1,4 @@
+# The examples' own pytest files: not DAG files, so not copied or parsed (a worker parsing
+# its copy of test_docs.py fails: it reads ../schema, outside this root).
+test_*.py
+conftest.py

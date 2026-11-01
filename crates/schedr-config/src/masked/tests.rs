@@ -183,3 +183,91 @@ fn masking_takes_time_in_proportion_to_the_text() {
     let took = started.elapsed();
     assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }
+
+#[test]
+fn a_tasks_data_is_masked_by_its_texts_and_by_secret_words_in_names() {
+    let mut value = serde_json::json!({
+        "password": "hunter2",
+        "api_key": "abc",
+        "apiKey": "abc",
+        "API-KEY": "abc",
+        "APIToken": "abc",
+        "APISecret": "abc",
+        "AWSAccessKeyId": "abc",
+        "DBPassword": "abc",
+        "HTTPPassword": "abc",
+        "clientSecret": "abc",
+        "access_token": 7,
+        "credentials": {"user": "u"},
+        "partition_key": "2026-11-01",
+        "sort_key": "id",
+        "cache_key": "k",
+        "keyboard": "qwerty",
+        "tokenizer": "bpe",
+        "password_hint": "",
+        "rows": [{"url": "postgres://u:hunter2@db/s", "note": "password=hunter2"}]
+    });
+    super::mask_data(&mut value);
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "password": "****",
+            "api_key": "****",
+            "apiKey": "****",
+            "API-KEY": "****",
+            "APIToken": "****",
+            "APISecret": "****",
+            "AWSAccessKeyId": "****",
+            "DBPassword": "****",
+            "HTTPPassword": "****",
+            "clientSecret": "****",
+            "access_token": "****",
+            "credentials": "****",
+            "partition_key": "2026-11-01",
+            "sort_key": "id",
+            "cache_key": "k",
+            "keyboard": "qwerty",
+            "tokenizer": "bpe",
+            "password_hint": "",
+            "rows": [{"url": "postgres://u:****@db/s", "note": "password=****"}]
+        })
+    );
+}
+
+#[test]
+fn a_text_is_masked_after_what_precedes_it() {
+    // A quoted value going on over lines: its rest is hidden in a text read after its start.
+    assert_eq!(
+        super::mask_text_after("password='hunter2\n", "stillsecret'\nok\n"),
+        "****'\nok\n"
+    );
+    assert_eq!(super::mask_text_after("x = 1\n", "ok\n"), "ok\n");
+}
+
+#[test]
+fn a_key_is_masked_as_a_text_too() {
+    // Codex: a task's output keyed by a connection URL kept the password in the key.
+    let mut value = serde_json::json!({
+        "postgres://u:hunter2@db/s": {"rows": 3},
+        "postgres://u:other@db/s": {"rows": 4},
+        "password=hunter3": 1,
+        "plain": 2
+    });
+    super::mask_data(&mut value);
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "postgres://u:****@db/s": {"rows": 3},
+            "postgres://u:****@db/s (2)": {"rows": 4},
+            // Its name has the word `password`: its value is hidden too.
+            "password=****": "****",
+            "plain": 2
+        })
+    );
+    let mut config = serde_json::json!({"hosts": {"postgres://u:hunter2@db/s": "a"}});
+    super::mask(&mut config);
+    assert_eq!(
+        config,
+        serde_json::json!({"hosts": {"postgres://u:****@db/s": "a"}})
+    );
+}

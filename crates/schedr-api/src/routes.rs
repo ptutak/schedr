@@ -20,12 +20,12 @@ use schedr_db::commands::Submitted;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
 use schedr_model::commands::Command;
-use schedr_model::logs::{MAX_CHUNK, MIN_CHUNK};
+use schedr_model::logs::{MASK_CONTEXT, MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, TaskId, WorkerState};
 
 use crate::auth::User;
 use crate::error::ApiError;
-use crate::logs::{LogFetchError, text_of};
+use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
@@ -441,7 +441,7 @@ pub async fn get_output(
             .collect();
         return Ok(Json(OutputView {
             outcome: whole.outcome.unwrap_or_else(|| "SUCCESS".to_owned()),
-            value: serde_json::Value::Array(list),
+            value: shown(serde_json::Value::Array(list)),
         }));
     }
     let map_index = instance_of(mapped, &task_id, query.map_index, false)?;
@@ -450,7 +450,18 @@ pub async fn get_output(
         .instance_output(&run_id, &task_id, map_index)
         .await?
         .ok_or_else(none)?;
-    Ok(Json(OutputView { outcome, value }))
+    Ok(Json(OutputView {
+        outcome,
+        value: shown(value),
+    }))
+}
+
+/// A task's output as shown: masked as a task's own data is (decision 131: its texts, and a
+/// field whose name has a word naming a secret, `partition_key` shown). Downstream tasks get
+/// it as stored.
+fn shown(mut value: serde_json::Value) -> serde_json::Value {
+    schedr_config::masked::mask_data(&mut value);
+    value
 }
 
 /// How many instances `task_id` has in the run when it is mapped (decision 80); `None` for
@@ -781,7 +792,15 @@ pub async fn get_log(
         }),
         _ => Ok(()),
     };
-    let log = match state.logs.fetch(&endpoint, &attempt_id, from, limit).await {
+    // One byte before `from` too: whether the part starts at a line (see `masked_lines`).
+    // Some bytes before `from` too, masked with the part (see `shown_part`).
+    let asked = from.saturating_sub(MASK_CONTEXT);
+    let fetched = limit + (from - asked);
+    let log = match state
+        .logs
+        .fetch(&endpoint, &attempt_id, asked, fetched)
+        .await
+    {
         Ok(log) => log,
         Err(LogFetchError::Missing { worker_id: other }) => {
             answered(other.as_ref())?;
@@ -798,19 +817,42 @@ pub async fn get_log(
         }
     };
     answered(log.worker_id.as_ref())?;
-    let from = from.min(log.size);
-    let read = u64::try_from(log.bytes.len()).unwrap_or(u64::MAX);
-    let (content, used) = text_of(&log.bytes, log.running || from + read < log.size);
+    let (from, content, next) = shown_part(&log, asked, from, fetched);
     Ok(Json(LogChunk {
         attempt_id,
         try_number,
         worker_id,
         from,
-        next: from + u64::try_from(used).unwrap_or(u64::MAX),
+        content,
+        next,
         size: log.size,
         running: log.running,
-        content,
     }))
+}
+
+/// The part of `log` (read from `asked`, `fetched` bytes asked for) shown from `from`: where
+/// its content starts, its masked content, and where the next part starts.
+fn shown_part(
+    log: &crate::logs::WorkerLog,
+    asked: u64,
+    from: u64,
+    fetched: u64,
+) -> (u64, String, u64) {
+    let from = from.min(log.size);
+    let before = usize::try_from(from.saturating_sub(asked))
+        .unwrap_or(usize::MAX)
+        .min(log.bytes.len());
+    let (context, bytes) = log.bytes.split_at(before);
+    // `from` starts a line: the log's start, or a newline before it.
+    let at_line = from == 0 || context.last() == Some(&b'\n');
+    let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let more = log.running || from + read < log.size;
+    // As long as asked: a line with no end in it would never end in a part this long.
+    let full = u64::try_from(log.bytes.len()).unwrap_or(u64::MAX) >= fetched;
+    let part = masked_lines(context, bytes, at_line, more, full);
+    let from = from + u64::try_from(part.skipped).unwrap_or(u64::MAX);
+    let next = from + u64::try_from(part.used).unwrap_or(u64::MAX);
+    (from, part.content, next)
 }
 
 /// A command and the master's decision about it.

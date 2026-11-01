@@ -305,9 +305,22 @@ svg.deployment text.frame-label { fill: var(--text); font: 600 13px system-ui, s
 ul.problems { padding-left: 20px; }
 ul.problems li.warning { color: var(--waiting); }
 ul.problems li.error { color: var(--failed); }
-.node-config { display: none; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 12px 0; }
-.node-config:target { display: block; }
+/* Deployments: the graph, and beside it the open node's panel, kept in view while scrolling. */
+.deploy-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.deploy-view:has(.node-config.open) { grid-template-columns: minmax(0, 1fr) minmax(320px, max-content); }
+.node-panels { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; max-width: 560px; }
+.node-panels:not(:has(.node-config.open)) { display: none; }
+@media (max-width: 900px) {
+  .deploy-view:has(.node-config.open) { grid-template-columns: 1fr; }
+  .node-panels { position: static; max-height: none; max-width: none; }
+}
+.node-config { display: none; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 13px; }
+.node-config.open { display: block; }
+.node-config h2 { font-size: 17px; }
+.node-config h3 { font-size: 14px; margin: 12px 0 6px; }
 pre.config { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow: auto; max-height: 60vh; }
+.node-config pre.config { font-size: 11.5px; line-height: 1.35; max-height: none; }
+svg.deployment .node.selected .box { stroke: var(--link); stroke-width: 2.5; }
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0; }
 dl.facts dt { color: var(--dim); }
 dl.facts dd { margin: 0; overflow-wrap: anywhere; }

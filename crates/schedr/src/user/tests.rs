@@ -712,16 +712,17 @@ fn logs_of(run_id: &str, try_number: Option<u32>, follow: bool) -> TasksCommand 
 async fn a_log_is_printed_as_it_is_and_followed_until_the_task_ends() {
     let (client, run_id, logs) = running_task(vec![
         part(6, true, "part1\n"),
-        part(12, true, "part2\n"),
-        part(12, true, ""),
-        part(18, false, "part3\n"),
+        // With the bytes before the next part (masked with it, not shown).
+        part(12, true, "part1\npart2\n"),
+        part(12, true, "part1\npart2\n"),
+        part(18, false, "part1\npart2\npart3\n"),
     ])
     .await;
     assert_eq!(
         tasks(&client, logs_of(&run_id, None, true)).await.unwrap(),
         "part1\npart2\npart3\n"
     );
-    assert_eq!(logs.asked_from.lock().unwrap().clone(), [0, 6, 12, 12]);
+    assert_eq!(logs.asked_from.lock().unwrap().clone(), [0, 0, 0, 0]);
 }
 
 #[tokio::test]

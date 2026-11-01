@@ -28,8 +28,43 @@ pub const PAGE_SIZE: u32 = 50;
 /// How much of an output the panel shows: its end.
 pub const OUTPUT_TAIL: usize = 64 * 1024;
 
-/// How much of a log the panel shows: its end.
-pub const LOG_TAIL: u64 = 256 * 1024;
+/// How much of a log the panel shows: its end, from a line's start (more when its last line
+/// is longer).
+pub const LOG_TAIL: usize = 256 * 1024;
+
+/// What the panel shows of a log whose last line is longer than the most it reads.
+const LONG_LAST_LINE: &str =
+    "<span class=\"dim\">… (its last line is longer than 1 MiB: not shown here)</span>";
+
+/// The most of a log read at once (the API's longest part).
+const MAX_CHUNK: u64 = schedr_model::logs::MAX_CHUNK;
+
+/// `text`, whole lines of a log's end, kept to its last [`LOG_TAIL`] bytes from a line's
+/// start, or to its last line when that one is longer; and whether anything was left out.
+pub(crate) fn log_end(text: &str) -> (&str, bool) {
+    if text.len() <= LOG_TAIL {
+        return (text, false);
+    }
+    let bytes = text.as_bytes();
+    let tail_from = text.len() - LOG_TAIL;
+    // The first line starting in the tail, or the last line's start (a newline is one byte:
+    // the byte after it starts a character).
+    let line_start = bytes[tail_from - 1..]
+        .iter()
+        .position(|b| *b == b'\n')
+        .map(|at| tail_from + at)
+        .filter(|at| *at < text.len())
+        .or_else(|| {
+            bytes[..text.len() - 1]
+                .iter()
+                .rposition(|b| *b == b'\n')
+                .map(|at| at + 1)
+        });
+    match line_start {
+        Some(at) if at > 0 => (&text[at..], true),
+        _ => (text, false),
+    }
+}
 
 /// The run states, as the filter offers them.
 const RUN_STATES: [&str; 5] = ["queued", "running", "success", "failed", "cancelled"];
@@ -1425,28 +1460,29 @@ async fn log_tab<T: Transport>(
         Err(ClientError::Server { message, .. }) => return Ok(TabBody::NoLog(message)),
         Err(error) => return Err(Failure::unavailable(&deployment.name, &error)),
     };
-    let from = head.size.saturating_sub(LOG_TAIL);
+    // The last part the API gives (whole lines, so a line up to it is shown), kept to its
+    // last LOG_TAIL from a line's start, or its last line when that one is longer.
+    let from = head.size.saturating_sub(MAX_CHUNK);
     let part = match client
-        .instance_log_part(run_id, (task_id, at.map_index), shown, from, LOG_TAIL)
+        .instance_log_part(run_id, (task_id, at.map_index), shown, from, MAX_CHUNK)
         .await
     {
         Ok(part) => part,
         Err(ClientError::Server { message, .. }) => return Ok(TabBody::NoLog(message)),
         Err(error) => return Err(Failure::unavailable(&deployment.name, &error)),
     };
-    let mut text = part.content.as_str();
-    if part.from > 0 {
-        // Cut: from the first whole line, when there is one after the cut (a line longer than
-        // the tail is shown from the cut).
-        if let Some((_, rest)) = text.split_once('\n')
-            && !rest.is_empty()
-        {
-            text = rest;
-        }
-    }
+    // Cut or not, it starts at a line: the API starts a part after a cut line's end.
+    let (text, trimmed) = log_end(&part.content);
+    // Nothing from inside the log: its last line began before the last 1 MiB (where, the
+    // panel can't know; the API shows no line from inside it).
+    let html = if text.is_empty() && part.from > 0 && part.next >= part.size {
+        LONG_LAST_LINE.to_owned()
+    } else {
+        ansi::to_html(text)
+    };
     Ok(TabBody::Log {
-        html: ansi::to_html(text),
-        cut: part.from > 0,
+        html,
+        cut: part.from > 0 || trimmed,
         size: bytes(part.size),
         running: part.running,
         tries,

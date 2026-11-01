@@ -74,6 +74,25 @@ async fn a_log_is_read_in_parts_from_an_offset() {
 }
 
 #[tokio::test]
+async fn a_whole_part_and_the_bytes_before_it_come_in_one_read() {
+    // The webserver masks a part with the 64 KiB before it (decision 131): up to 1 MiB and
+    // those come at once, no more.
+    use schedr_model::logs::{MAX_CHUNK, MAX_READ};
+    let (_dir, endpoint) = endpoint();
+    let size = usize::try_from(MAX_READ).unwrap() + 10;
+    std::fs::write(
+        endpoint.log_dir.join(format!("{ATTEMPT}.log")),
+        "x".repeat(size),
+    )
+    .unwrap();
+    let asked = MAX_READ + 5;
+    let (_, _, body) = get(&endpoint, &format!("/logs/{ATTEMPT}?limit={asked}")).await;
+    assert_eq!(u64::try_from(body.len()).unwrap(), MAX_READ);
+    let (_, _, body) = get(&endpoint, &format!("/logs/{ATTEMPT}")).await;
+    assert_eq!(u64::try_from(body.len()).unwrap(), MAX_CHUNK);
+}
+
+#[tokio::test]
 async fn a_running_attempt_says_so() {
     let (_dir, endpoint) = endpoint();
     std::fs::write(endpoint.log_dir.join(format!("{ATTEMPT}.log")), "working").unwrap();

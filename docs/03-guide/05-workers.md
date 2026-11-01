@@ -386,12 +386,19 @@ master and the worker.
 ## Logs
 
 The agent serves its task logs on its **log endpoint** (`[worker] log_port`, 8081):
-`GET /logs/{attempt_id}?from=&limit=`, at most 1 MiB per request. Response headers give the
+`GET /logs/{attempt_id}?from=&limit=`, at most 1 MiB and 64 KiB per request (a part and the
+bytes before it, see below). Response headers give the
 current size, whether the attempt still runs, and which worker answered. The webserver is
 the only client. It finds the worker that ran the attempt and that worker's current address in
 the database, and passes the log on (`GET …/attempts/{try}/log`). If another worker answers at
 that address (a stale address after a restart), the webserver says so, instead of claiming
-the log is gone.
+the log is gone. The webserver passes whole lines only, masked (a task may print an address
+with its password; see [Secrets](12-ui.md#secrets)). A part asked from inside a line starts
+at the next one, and a running attempt's last line waits until it ends. A line longer than
+the part is shown to its last whitespace, then a note that the rest of the line is not
+shown, and that rest is passed over. Each part is masked together with the 64 KiB before it,
+which is not shown, so a value that began there (a quoted one continuing over lines) is
+hidden in the part too.
 
 Logs older than `[worker] log_retention` (30 days) are deleted, and beyond
 `[worker] log_max_size` the oldest go first. The sweep runs at start and every hour; a log

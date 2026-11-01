@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -141,6 +141,64 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 	$(if $(wildcard site/index.html),SCHEDR_CONFIG__UI__DOCS_DIR="$(abspath site)") \
 	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
+
+# A federation for trying the UI over many deployments by hand: two standalones without a UI
+# (`--no-ui`), `main` with the DAGs of DAGS and `second` with those of DAGS2, and a `schedr ui`
+# over both in a process of its own, as one UI over many deployments is run. Each has its
+# data in .schedr/federation/<name>/ and the UI's configuration is .schedr/federation/ui.toml.
+# The UI on LISTEN:8082; `main` with its API on 8080, gRPC 8070, log endpoint 8081, ops 8090;
+# `second` the same plus 100; the UI's ops on 8092. `main` also has a standby master in a
+# process of its own (gRPC 8071, ops 8091), started once `main` has migrated its database: it
+# takes over when `main` stops leading. Its gRPC is plain (`[tls] mode = "mesh"`), as a
+# standalone's own links are: everything is on this machine. `second` also has a root `broken`
+# (written to .schedr/federation/broken/) of two DAG files failing to import on purpose, for
+# the import errors and the warnings they give. PORT_OFFSET is added to all of them, to run
+# it next to a `make standalone` (PORT_OFFSET=10000). Ctrl-C, or any of them stopping,
+# stops them all.
+DAGS2 ?= examples/docs
+PORT_OFFSET ?= 0
+
+standalone-separate-ui: SHELL := /bin/bash
+standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the first with a standby master) and one `schedr ui` over both, on 8082
+	cargo build -p schedr
+	dir="$(abspath $(STANDALONE_DIR))/federation"; \
+	python="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')"; \
+	ui=$$((8082 + $(PORT_OFFSET))); ui_ops=$$((8092 + $(PORT_OFFSET))); \
+	run() { \
+		mkdir -p "$$dir/$$1"; \
+		SCHEDR_DAG_PATH="$$2" \
+		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/$$1/schedr.db" \
+		SCHEDR_CONFIG__WORKER__DATA_DIR="$$dir/$$1" \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+		SCHEDR_CONFIG__WEBSERVER__PORT=$$(($$3 + 80)) \
+		SCHEDR_CONFIG__MASTER__GRPC_PORT=$$(($$3 + 70)) \
+		SCHEDR_CONFIG__WORKER__LOG_PORT=$$(($$3 + 81)) \
+		SCHEDR_CONFIG__OPS__PORT=$$(($$3 + 90)) \
+		uv run --no-sync target/debug/schedr standalone --migrate --no-ui --listen $(LISTEN) & \
+		printf '[[ui.deployments]]\nname = "%s"\nurl = "http://127.0.0.1:%s"\n\n' "$$1" $$(($$3 + 80)) >> "$$dir/ui.toml"; \
+	}; \
+	mkdir -p "$$dir"; \
+	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n' \
+		"$(LISTEN)" $$ui "$(if $(wildcard site/index.html),$(abspath site))" $$ui_ops > "$$dir/ui.toml"; \
+	trap 'kill $$(jobs -p) 2>/dev/null; wait' EXIT INT TERM; \
+	run main "$(abspath $(DAGS))" $$((8000 + $(PORT_OFFSET))); \
+	main=$$((8000 + $(PORT_OFFSET))); \
+	( until curl -sf -o /dev/null "http://127.0.0.1:$$((main + 80))/api/v1/dags"; do sleep 0.5; done; \
+	  SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/main/schedr.db" \
+	  SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 71)) \
+	  SCHEDR_CONFIG__OPS__PORT=$$((main + 91)) \
+	  SCHEDR_CONFIG__TLS__MODE=mesh \
+	  exec target/debug/schedr master ) & \
+	broken="$$dir/broken"; mkdir -p "$$broken"; \
+	printf '%s\n' '"""Fails to import on purpose: a module not installed."""' '' \
+		'import not_installed_module  # noqa: F401' > "$$broken/missing_module.py"; \
+	printf '%s\n' '"""Fails to import on purpose, its password masked where it is shown."""' '' \
+		'raise RuntimeError("cannot reach postgres://etl:hunter2@warehouse:5432/dw")' \
+		> "$$broken/bad_connection.py"; \
+	run second "$(abspath $(DAGS2)):$$broken" $$((8100 + $(PORT_OFFSET))); \
+	target/debug/schedr --config "$$dir/ui.toml" ui & \
+	wait -n
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
 # transaction pooling in front of it (any database name passed through), on a network of their

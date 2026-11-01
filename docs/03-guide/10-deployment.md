@@ -347,7 +347,8 @@ In this repository, **`make standalone`** does the same for trying things by han
 only): the debug binary just built, the Python environment of `uv sync` for DAG files and
 tasks, and everything in `.schedr/` in the repository (git-ignored): the SQLite database
 (`.schedr/schedr.db`, to open in an IDE), task logs and the journal. It runs the DAGs in
-`examples/` unless `DAGS=<directory>` says otherwise, with the API and the web UI on
+`examples/` unless `DAGS=<directory>` says otherwise. `examples/.schedrignore` leaves out
+`test_*.py` and `conftest.py`: the examples' own tests, not DAG files. The API and the web UI are on
 `0.0.0.0:8080` (`LISTEN`, all addresses by default, so it can be reached from outside WSL:
 the UI at `http://<address>:8080/`, Swagger UI at `http://<address>:8080/api/v1/docs/`;
 `schedr dags list` needs no `--server` with `0.0.0.0` or `127.0.0.1`) and the ops port on
@@ -358,6 +359,32 @@ server, as in the chart's pods (see [The fork server](05-workers.md#the-fork-ser
 (auth mode `none`): on a network you don't trust, run `make standalone LISTEN=127.0.0.1`.
 Ctrl-C stops it, after cutting the pages' open event streams about 3 seconds after the stop;
 `rm -rf .schedr` starts afresh.
+
+**`make standalone-separate-ui`** runs a small federation the same way, to see one UI over
+several deployments. Two standalones are started with `--no-ui`: `main` on the DAGs of
+`DAGS`, and `second` on those of `DAGS2` (`examples/docs` by default). A folder's
+subfolders are scanned too, so `main`, on `examples/`, has the DAGs under `examples/docs`
+as well. A `schedr ui` in a process of its own serves both, at `http://<address>:8082/`.
+
+`main` also runs a standby master, `schedr master` in a process of its own on `main`'s
+database, started once `main`'s API answers (after that database is migrated). Its gRPC is
+on 8071 and its ops port on 8091, plain (`[tls] mode = "mesh"`), as the links on this
+machine are.
+
+`second` also has a root named `broken`, written to `.schedr/federation/broken/`. It holds
+two DAG files that fail to import on purpose: one imports a module that is not installed,
+and one raises an error that names an address with its password. `second`'s worker shows a
+warning, and the Import errors page lists the two files, with the password masked. The
+Deployments page shows the UI in a process of its own, each standalone as one process
+holding its webserver, master and worker, and `main`'s standby in a process beside that
+one.
+
+`main` has its API on 8080, gRPC on 8070, its log endpoint on 8081 and ops on 8090.
+`second` has each of those 100 higher. The UI's ops port is 8092. `PORT_OFFSET` is added
+to every one of these ports, so `PORT_OFFSET=10000` runs this next to a `make standalone`.
+Each standalone keeps its data in `.schedr/federation/<name>/`, and the UI's configuration
+is written to `.schedr/federation/ui.toml`. Ctrl-C stops them all, and so does any one of
+them stopping.
 
 ## Running `schedr ui`
 

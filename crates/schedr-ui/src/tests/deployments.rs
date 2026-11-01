@@ -362,8 +362,10 @@ async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
         attrs(&html, "#live", "hx-trigger"),
         ["sse:change, every 15s"]
     );
-    // An open panel stays open across a refresh (`:target` set on the new one).
-    assert!(html.contains("location.replace(\"#\" + hash)"));
+    // An open panel stays open across a refresh, the page not moved (marked again, not
+    // navigated to; the browser test checks it).
+    assert!(html.contains("document.addEventListener(\"htmx:afterSettle\", show)"));
+    assert!(!html.contains("location.replace"));
     // In the navigation, in its place; the Config page and each deployment's page are gone.
     assert_eq!(
         texts(&html, "header nav a")[..5],

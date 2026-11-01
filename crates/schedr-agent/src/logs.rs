@@ -25,7 +25,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use schedr_model::logs::{LOG_SIZE_HEADER, MAX_CHUNK, MIN_CHUNK, RUNNING_HEADER, WORKER_ID_HEADER};
+use schedr_model::logs::{
+    LOG_SIZE_HEADER, MAX_CHUNK, MAX_READ, MIN_CHUNK, RUNNING_HEADER, WORKER_ID_HEADER,
+};
 
 use crate::journal::{Journal, JournalRecord};
 
@@ -49,7 +51,7 @@ pub struct LogEndpoint {
 pub struct LogQuery {
     /// The first byte wanted (0 by default).
     pub from: Option<u64>,
-    /// How many bytes at most ([`MAX_CHUNK`] by default; between [`MIN_CHUNK`] and that).
+    /// How many bytes at most ([`MAX_CHUNK`] by default; between [`MIN_CHUNK`] and [`MAX_READ`]).
     pub limit: Option<u64>,
 }
 
@@ -147,7 +149,7 @@ async fn get_log(
     (StatusCode::OK, headers, bytes).into_response()
 }
 
-/// The file's size and up to `limit` (between [`MIN_CHUNK`] and [`MAX_CHUNK`]) bytes from
+/// The file's size and up to `limit` (between [`MIN_CHUNK`] and [`MAX_READ`]) bytes from
 /// `from`.
 async fn read_part(
     path: &std::path::Path,
@@ -161,7 +163,7 @@ async fn read_part(
     let from = from.min(size);
     file.seek(SeekFrom::Start(from)).await?;
     let mut bytes = Vec::new();
-    file.take(limit.clamp(MIN_CHUNK, MAX_CHUNK).min(size - from))
+    file.take(limit.clamp(MIN_CHUNK, MAX_READ).min(size - from))
         .read_to_end(&mut bytes)
         .await?;
     Ok((size, bytes))

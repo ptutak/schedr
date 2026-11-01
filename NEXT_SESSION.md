@@ -1,6 +1,6 @@
 # Next session: where things stand
 
-Read this file, then `PLAN.md` (M4 and M4.5), `BUGS.md`, and the parts of `PROJECT.md` a step
+Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJECT.md` a step
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
@@ -230,7 +230,7 @@ the morning, listed below.
   `curl https://crates.io/api/v1/crates/<name>/versions` (or PyPI), and add them to the
   "Libraries" table in PROJECT.md.
 - `0001_initial.sql` (both `postgres/` and `sqlite/`) and the protocol (`PROTOCOL_VERSION`
-  0.1) are edited in place until the first release: **1.0.0, after M4.5** (the user,
+  0.1) are edited in place until the first release: **1.0.0, after M4B** (the user,
   2026-10-29; PLAN.md, Release 1.0.0). From then on, migrations and additive protocol changes.
 - Match the surrounding code: comment density, naming, and the error message style (backticks
   around names, lower case, what to do next).

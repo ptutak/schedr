@@ -370,14 +370,14 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
       `Finished`, `CodeVersionChanged`; heartbeats write at most once): stored whole or not
       at all, one lease check and one commit per message instead of one per write. Before, a
       failure partway left part stored (B7's rules then repaired it).
-    - **T1b (planned, M4.5): a turn of messages is one transaction** (decision 54, the
+    - **T1b (planned, M4B): a turn of messages is one transaction** (decision 54, the
       user's, 2026-10-28): a worker's messages handled in one turn of the core lock share one
       transaction, each behind a `SAVEPOINT` with its memory snapshot (a failed message is
       rolled back to its savepoint and its memory restored; the others stay), one commit for
       the turn. When the commit fails, the turn's memory is restored and its messages are
       redone one by one as in T1. Metrics, wakes and replies come after the commit;
       heartbeats and warnings are written outside it; `CodeVersionChanged`, `Draining` and
-      `Deregister` end the batch and are handled alone (PLAN.md, M4.5, has the table per
+      `Deregister` end the batch and are handled alone (PLAN.md, M4B, has the table per
       message). Not chosen: rolling the whole turn back on any message's failure and redoing
       it one by one (a bad message costs N+1 transactions); per-task-ID transactions (a
       turn's messages rarely share a task).
@@ -1474,6 +1474,32 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     errors don't colour it either. Lost stays an error, disconnected a warning. Not chosen:
     hiding gone workers after a while (they stay on the graph and the Workers page); red as
     129 had it.
+  - **A task's log and output are masked when shown** (decision 131, the user's "go on" on
+    option A, 2026-11-01; details Claude's): the webserver masks them by their text, as error
+    texts are (an address's password, a value after `password=`), so the API shows them
+    masked too; downstream tasks get an output as returned. An output's field is also
+    hidden when a whole word of its name names a secret (`password`, `api_key`, `apiKey`,
+    `clientSecret`, `access_token`), so `partition_key`, `sort_key`, `cache_key` are shown
+    (the user's, 2026-11-01, raised by side notes). Not chosen: the configuration's rule (any
+    name ending in `key` hidden: a task names its own fields as it likes); texts only (a
+    secret returned as a plain field would show). A log is passed in whole lines,
+    so no part shows half an address: a part asked from inside a line starts at the next
+    one, a running attempt's last line waits for its end, a line longer than the part asked
+    for is shown to its last whitespace with a note that it is cut, the rest of it passed
+    over (so a short `limit` or a `from` inside a secret reads nothing of it). Each part is
+    masked with the 64 KiB before it, read but not shown, so a quoted value going on over
+    lines is hidden in a part starting inside it (Grok's review; 64 KiB the user's, after
+    Codex showed a value begun 5000 bytes back leaking past a 4 KiB context: a PEM key is
+    about 3 KiB; a value open longer before a part is the documented limit; not chosen: 16
+    KiB, cheaper for the live tail; a quoted value ending at a newline everywhere, parts and
+    whole agreeing but a PEM body never masked). A worker serves up to 1 MiB and 64 KiB at
+    once. A field name's words split at acronyms too (`HTTPPassword`, `AWSAccessKeyId`), and
+    names are masked as texts (Codex: an output keyed by an address), in configurations too. The UI reads
+    1 MiB parts as the CLI does, so only a line over 1 MiB is cut (the user's, 2026-11-01;
+    raised by a side note). Not chosen: a long line passed in pieces, each masked with the
+    4 KiB before it (nothing dropped, but a secret named further back would show); cutting
+    at 64 KiB in the UI silently. Not chosen yet: B, masking the values of the secrets a
+    task was given (Airflow's way), with task secrets in M4.
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):
@@ -7432,7 +7458,7 @@ gRPC, journal) come before breadth of features.
 | **M2.5. Fork server and quiet DAGs** | the fork server as designed (How Python tasks are started), built on M2's watchdog and metrics; its value and preload list confirmed by M2's start-time metrics. **Quiet DAGs** (see Components and roles, "Found by the stress suite"): busy DAGs polled every round, quiet DAGs woken by their timer or a change, with stress scenario 14 (many quiet DAGs) deciding the classification and measuring it | Python tasks start from the fork server on Linux workers, with fallback to spawn; scenario 14's rounds no longer grow with the quiet DAGs |
 | **M3. Web UI** | htmx pages, SVG graph, SSE, log proxy and live tail; command rows; auth modes; times in UTC and local; **federated from the start**: one UI over a list of deployments (one the common case; each its own master, standby, workers, webserver and database), talking only to their webservers (see Components and roles, "Found by the stress suite") | — |
 | **M4. Native API complete** | async task functions; sensors and triggers with the watcher host (see Sensors and triggers); outcomes and `.on(...)`, `AllSucceeded`, `@branch`, groups, mapping; `schedr.toml` and `ScriptOperator`; cleanup and resources; secrets (Vault, the `db` storage for standalone, `schedr secrets`) and connections; params and `dag_ctx`; the in-task CLI and `schedr.script` (plain Python scripts); notifications; `TriggerDagOperator`; concurrency limits; per-task memory budgets and `setrlimit`; backfill; retention; upgrade rules (`Once` was built in M1) | — |
-| **M4.5. Batched worker messages** | a worker's turn of messages in one transaction, a savepoint per message, the turn redone one by one when its commit fails (decision 54, T1b); measured first (per-turn lock and commit times) | one lease check and one commit per turn; a failed message undone alone; lock and commit time per turn lower than M4's |
+| **M4B. Batched worker messages** (a milestone after M4) | a worker's turn of messages in one transaction, a savepoint per message, the turn redone one by one when its commit fails (decision 54, T1b); measured first (per-turn lock and commit times) | one lease check and one commit per turn; a failed message undone alone; lock and commit time per turn lower than M4's |
 | **M5. Airflow layer** | thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation, `xcom_pull`; the placeholder and macro design (deferred until the first version works); the migration tool | — |
 | **M6. Sign-in against LDAP** | `[*.auth] mode = "ldap"`: HTTP Basic credentials checked against the organisation's directory (a bind), for deployments without Istio and Keycloak; users stay in the directory, schedr keeps none (decision 39); the chart's values for it, the bind password from a Secret. Decisions laid out for it (2026-10-28, the user's: postponed to M6): 45 how the person's entry is found (search then bind; a DN template; both), 46 who may sign in (an optional group; a required one; none), 47 the connection's encryption (TLS required; plain allowed with a flag) | a person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests |
 | **Several masters on one database (superseded, not a milestone)** | superseded by M3's federated view over several deployments (2026-10-24); the shared-database design stays recorded (Components and roles, "Found by the stress suite"), revisited only if one deployment can't carry a load that can't be split by DAG | — |

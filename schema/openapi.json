@@ -515,17 +515,17 @@
             "type": "string"
           },
           "content": {
-            "description": "The log's text (invalid UTF-8 replaced by `U+FFFD`).",
+            "description": "The log's text, whole lines only (a running attempt's last line once it ends), with\nits secrets masked: a password in an address, a value after a name like `password=`\n(invalid UTF-8 replaced by `U+FFFD`). A line longer than the part asked for is shown\nto its last whitespace in it, then `… (the rest of this line is not shown: it is over\nN bytes)`, its rest passed over.",
             "type": "string"
           },
           "from": {
-            "description": "The first byte of `content`.",
+            "description": "The first byte of `content`: the one asked for, or past it, at the start of the next\nline, when that one is inside a line.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
           "next": {
-            "description": "The byte after `content`: where the next part starts.",
+            "description": "Where the next part starts: the byte after `content`, or past it, after the part of\na line longer than a part that isn't shown.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -644,7 +644,7 @@
             "type": "string"
           },
           "value": {
-            "description": "The value it returned, as stored."
+            "description": "The value it returned, masked (decision 131: its texts' secrets, and a field whose\nname has a word naming a secret); downstream tasks get it as stored."
           }
         },
         "required": [

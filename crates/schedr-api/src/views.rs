@@ -510,7 +510,8 @@ pub struct AllRunsQuery {
 pub struct OutputView {
     /// The outcome the task finished with.
     pub outcome: String,
-    /// The value it returned, as stored.
+    /// The value it returned, masked (decision 131: its texts' secrets, and a field whose
+    /// name has a word naming a secret); downstream tasks get it as stored.
     pub value: serde_json::Value,
 }
 
@@ -546,15 +547,21 @@ pub struct LogChunk {
     pub try_number: u32,
     /// The worker it ran on (and that answered).
     pub worker_id: String,
-    /// The first byte of `content`.
+    /// The first byte of `content`: the one asked for, or past it, at the start of the next
+    /// line, when that one is inside a line.
     pub from: u64,
-    /// The byte after `content`: where the next part starts.
+    /// Where the next part starts: the byte after `content`, or past it, after the part of
+    /// a line longer than a part that isn't shown.
     pub next: u64,
     /// The log's size when it was read.
     pub size: u64,
     /// Whether the attempt still runs (its log may grow).
     pub running: bool,
-    /// The log's text (invalid UTF-8 replaced by `U+FFFD`).
+    /// The log's text, whole lines only (a running attempt's last line once it ends), with
+    /// its secrets masked: a password in an address, a value after a name like `password=`
+    /// (invalid UTF-8 replaced by `U+FFFD`). A line longer than the part asked for is shown
+    /// to its last whitespace in it, then `… (the rest of this line is not shown: it is over
+    /// N bytes)`, its rest passed over.
     pub content: String,
 }
 

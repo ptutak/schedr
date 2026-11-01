@@ -55,7 +55,7 @@
   <p class="empty">No output (yet).</p>
 {% when TabBody::Log with { html, cut, size, running, tries, tail } %}
   <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
-  {% if cut %}<p class="dim">Only its end is shown (the last 256 KiB).</p>{% endif %}
+  {% if cut %}<p class="dim">Only its end is shown (its last lines, about 256 KiB).</p>{% endif %}
   <pre class="log"{% if let Some(tail) = tail %} sse-connect="{{ tail }}" sse-swap="log" hx-swap="beforeend" sse-close="end"{% endif %}>{{ html|safe }}</pre>
 {% when TabBody::NoLog(why) %}
   <p class="empty">No log to show: {{ why }}</p>

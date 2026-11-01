@@ -694,11 +694,17 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
 struct FakeLogs {
     answer: std::sync::Mutex<Option<Result<crate::logs::WorkerLog, LogFetchError>>>,
     asked: std::sync::Mutex<Vec<(String, String, u64, u64)>>,
+    /// A whole log served as a worker does: the bytes asked for, the size, not running.
+    whole: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 impl FakeLogs {
     fn answer(&self, answer: Result<crate::logs::WorkerLog, LogFetchError>) {
         *self.answer.lock().unwrap() = Some(answer);
+    }
+
+    fn serve(&self, whole: &[u8]) {
+        *self.whole.lock().unwrap() = Some(whole.to_vec());
     }
 }
 
@@ -714,6 +720,13 @@ impl crate::logs::LogSource for FakeLogs {
             .lock()
             .unwrap()
             .push((endpoint.to_owned(), attempt_id.to_owned(), from, limit));
+        if let Some(whole) = self.whole.lock().unwrap().as_ref() {
+            let start = usize::try_from(from).unwrap().min(whole.len());
+            let most = limit.min(schedr_model::logs::MAX_READ);
+            let end = (start + usize::try_from(most).unwrap()).min(whole.len());
+            let served = log("w1", whole.len() as u64, false, &whole[start..end]);
+            return Box::pin(async move { Ok(served) });
+        }
         let answer = self.answer.lock().unwrap().clone().expect("an answer");
         Box::pin(async move { answer })
     }
@@ -782,8 +795,11 @@ async fn a_log_is_read_from_the_worker_that_ran_the_attempt() {
             "from": 0, "next": 6, "size": 20, "running": true, "content": "hello\n"
         })
     );
+    // From 6 the bytes before are read too (masked with the part, not shown).
+    fake.answer(Ok(log("w1", 20, true, b"hello\nworld\n")));
     let (_, body) = get(&app, &format!("{uri}?from=6&limit=99999999")).await;
     assert_eq!((&body["from"], &body["next"]), (&json!(6), &json!(12)));
+    assert_eq!(body["content"], "world\n");
     assert_eq!(
         fake.asked.lock().unwrap().clone(),
         [
@@ -796,27 +812,131 @@ async fn a_log_is_read_from_the_worker_that_ran_the_attempt() {
             (
                 "http://w1:8081".to_owned(),
                 attempt_id,
-                6,
-                schedr_model::logs::MAX_CHUNK
+                0,
+                // The part asked for, and the 6 bytes before it.
+                schedr_model::logs::MAX_CHUNK + 6
             ),
         ]
     );
 }
 
 #[tokio::test]
-async fn a_character_cut_by_the_limit_waits_for_the_next_part() {
+async fn a_logs_secrets_are_masked_and_never_split_between_parts() {
+    // A task may print an address with its password: shown masked, whole lines only, so
+    // neither part shows half of it.
     let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
     db.mark_started(&attempt_id, "spawn", ts(NOW))
         .await
         .unwrap();
-    // "zażółć": `ż` is two bytes, cut after its first.
-    fake.answer(Ok(log("w1", 10, false, &"zaż".as_bytes()[..3])));
-    let (_, body) = get(
-        &app,
-        &format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log?limit=3"),
-    )
-    .await;
-    assert_eq!((&body["content"], &body["next"]), (&json!("za"), &json!(2)));
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    // Running, a line not ended yet: it waits for its end.
+    fake.answer(Ok(log("w1", 40, true, b"connecting\npostgres://u:hun")));
+    let (_, body) = get(&app, &uri).await;
+    assert_eq!(
+        (&body["content"], &body["next"]),
+        (&json!("connecting\n"), &json!(11))
+    );
+    fake.answer(Ok(log(
+        "w1",
+        40,
+        true,
+        b"connecting\npostgres://u:hunter2@db/s\n",
+    )));
+    let (_, body) = get(&app, &format!("{uri}?from=11")).await;
+    assert_eq!(body["content"], "postgres://u:****@db/s\n");
+    assert_eq!((&body["from"], &body["next"]), (&json!(11), &json!(37)));
+    // Read from the middle of a line (the UI's last 256 KiB): from the next line on.
+    fake.answer(Ok(log(
+        "w1",
+        57,
+        false,
+        b"connecting\npostgres://u:hunter2@db/s\nok password=hunter2\n",
+    )));
+    let (_, body) = get(&app, &format!("{uri}?from=20")).await;
+    assert_eq!(body["content"], "ok password=****\n");
+    assert_eq!((&body["from"], &body["next"]), (&json!(37), &json!(57)));
+}
+
+#[tokio::test]
+async fn a_tasks_output_is_shown_masked_by_its_texts_and_secret_words() {
+    let (app, db, run_id) = api().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let value = json!({
+        "url": "postgres://u:hunter2@db/s",
+        "lines": ["ok", "password=hunter2"],
+        "partition_key": "2026-11-01",
+        "api_key": "abc",
+        "rows": 3
+    });
+    db.store_output(&ready[0].instance_id, "SUCCESS", &value)
+        .await
+        .unwrap();
+    let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}/tasks/extract/output")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["value"],
+        json!({
+            "url": "postgres://u:****@db/s",
+            "lines": ["ok", "password=****"],
+            "partition_key": "2026-11-01",
+            "api_key": "****",
+            "rows": 3
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_secret_isnt_read_in_pieces_by_a_short_limit_or_a_start_inside_its_line() {
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    // "postgres://u:hunter2@db/s\n", the attempt over: 4 bytes from inside the password
+    // (and the byte before them) show nothing, and pass over the rest of its line.
+    // (The bytes before `from` are read too.)
+    fake.answer(Ok(log("w1", 26, false, b"postgres://u:hunt")));
+    let (_, body) = get(&app, &format!("{uri}?from=13&limit=4")).await;
+    assert_eq!(body["content"], "");
+    assert_eq!((&body["from"], &body["next"]), (&json!(17), &json!(17)));
+    // From its line's start: to the last whitespace in it (none), the line passed over.
+    fake.answer(Ok(log("w1", 26, false, b"post")));
+    let (_, body) = get(&app, &format!("{uri}?limit=4")).await;
+    assert_eq!(
+        (&body["content"], &body["next"]),
+        (
+            &json!("… (the rest of this line is not shown: it is over 4 bytes)\n"),
+            &json!(4)
+        )
+    );
+    // The rest of a line whose start was passed over: skipped too.
+    fake.answer(Ok(log("w1", 26, false, b"postgres")));
+    let (_, body) = get(&app, &format!("{uri}?from=4&limit=4")).await;
+    assert_eq!((&body["content"], &body["from"]), (&json!(""), &json!(8)));
+}
+
+#[tokio::test]
+async fn a_line_longer_than_a_part_is_shown_to_its_last_whitespace_and_says_it_is_cut() {
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    let max = usize::try_from(schedr_model::logs::MAX_CHUNK).unwrap();
+    let mut line = "ab ".repeat(max / 3).into_bytes();
+    line.resize(max - 6, b'a');
+    line.extend_from_slice(b" u:hun");
+    fake.answer(Ok(log("w1", 3 * 1024 * 1024, true, &line)));
+    let (_, body) = get(&app, &uri).await;
+    let content = body["content"].as_str().unwrap();
+    let note = format!("a … (the rest of this line is not shown: it is over {max} bytes)\n");
+    assert!(
+        content.ends_with(&note),
+        "…{}",
+        &content[content.len() - 80..]
+    );
+    assert!(!content.contains("hun"));
+    assert_eq!(body["next"], json!(max));
 }
 
 #[tokio::test]
@@ -1257,4 +1377,37 @@ async fn one_dags_reads_dont_read_the_other_dags() {
     }
     let (status, _) = get(&app, "/api/v1/dags/nowhere").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_quoted_secret_going_on_over_lines_is_masked_in_each_part() {
+    // A quoted value with a newline in it (a PEM key, a shell assignment): a part starting
+    // at its second line is masked too, as the whole log is.
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    let log_text = b"password='hunter2\nstillsecret'\n";
+    fake.answer(Ok(log("w1", 31, false, log_text)));
+    let (_, body) = get(&app, &format!("{uri}?from=18")).await;
+    let content = body["content"].as_str().unwrap();
+    assert!(!content.contains("stillsecret"), "{content}");
+}
+
+#[tokio::test]
+async fn a_quoted_secret_begun_far_before_a_part_is_masked_in_it() {
+    // Codex: a quoted value open 5000 bytes before the part (more than a 4 KiB context).
+    let (app, db, run_id, attempt_id, fake) = with_log("http://w1:8081").await;
+    db.mark_started(&attempt_id, "spawn", ts(NOW))
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/runs/{run_id}/tasks/extract/attempts/1/log");
+    let text = format!("password='{}\nHUNTER2'\nok\n", "A".repeat(5000));
+    fake.serve(text.as_bytes());
+    let (_, body) = get(&app, &format!("{uri}?from=5011")).await;
+    assert_eq!(
+        (&body["from"], &body["content"]),
+        (&json!(5011), &json!("****'\nok\n"))
+    );
 }

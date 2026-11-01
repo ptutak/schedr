@@ -212,6 +212,25 @@ async fn a_pages_changes_are_relayed_and_a_lost_stream_is_a_refresh() {
 }
 
 #[tokio::test]
+async fn a_tail_asked_from_past_the_logs_end_ends() {
+    // Codex: the API puts `next` at the end, before `from`; the tail panicked.
+    let (mut streams, _) = Streams::new(0);
+    *streams.answers.get_mut().unwrap() = vec![(
+        "/api/v1/runs/r1/tasks/load/attempts/2/log?from=100&limit=1048576".to_owned(),
+        200,
+        json!({"attempt_id": "a1", "try_number": 2, "worker_id": "w1", "from": 5,
+               "next": 5, "size": 5, "running": false, "content": ""}),
+    )];
+    let app = app(streams);
+    let mut body = open(&app, "/d/etl/runs/r1/tasks/load/tail?try=2&from=100").await;
+    let mut pending = String::new();
+    assert_eq!(
+        next_event(&mut body, &mut pending).await,
+        ("end".to_owned(), String::new())
+    );
+}
+
+#[tokio::test]
 async fn a_running_log_is_tailed_until_it_ends() {
     let (mut streams, _) = Streams::new(0);
     let log = |from: u64, next: u64, running: bool, content: &str| {
@@ -219,7 +238,7 @@ async fn a_running_log_is_tailed_until_it_ends() {
                "next": next, "size": next, "running": running, "content": content})
     };
     let path =
-        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=65536");
+        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=1048576");
     *streams.answers.get_mut().unwrap() = vec![
         (
             path(10),
@@ -314,7 +333,7 @@ async fn the_tail_rides_out_a_worker_out_of_reach_and_says_why_it_stops() {
                "next": next, "size": next, "running": running, "content": content})
     };
     let path =
-        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=65536");
+        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=1048576");
     *streams.answers.lock().unwrap() = vec![
         (
             path(0),
@@ -370,7 +389,7 @@ async fn a_reconnecting_log_tail_resumes_after_what_it_showed() {
                "next": next, "size": next, "running": running, "content": content})
     };
     let path =
-        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=65536");
+        |from: u64| format!("/api/v1/runs/r1/tasks/load/attempts/2/log?from={from}&limit=1048576");
     *streams.answers.get_mut().unwrap() = vec![
         (path(10), 200, log(10, 30, false, "shown before\n")),
         (path(30), 200, log(30, 42, false, "all done\n")),

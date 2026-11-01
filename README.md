@@ -82,11 +82,14 @@ http://localhost:8765). Its sections:
 
 ```sh
 make standalone   # schedr standalone on the DAGs of examples/, SQLite in .schedr/, API on :8080
+make standalone-separate-ui   # two standalones without a UI (the first with a standby master) and one `schedr ui` over both, on :8082
 ```
 
 Then, from another shell: `schedr dags list`, `schedr dags unpause sync_customers`,
 `schedr runs trigger sync_customers`, `schedr runs list sync_customers` (the CLI talks to
-`http://localhost:8080` unless `--server` or `SCHEDR_SERVER` says otherwise). `DAGS=<directory>` runs other DAGs;
+`http://localhost:8080` unless `--server` or `SCHEDR_SERVER` says otherwise). After
+`make standalone-separate-ui` the pages are on port 8082; the CLI still uses `main`'s API
+on 8080. `DAGS=<directory>` runs other DAGs;
 `LISTEN=127.0.0.1` keeps the API off the network (it has no authentication yet).
 
 ## Layout
