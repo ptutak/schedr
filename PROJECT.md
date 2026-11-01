@@ -1125,6 +1125,12 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     the UI then says the command **may have arrived**, never "not sent". Not chosen: only
     telling "not sent" from "unknown" in the UI (a hurried second click still starts two
     runs); the wording now and the key later.
+  - **A DAG ID is never `.` or `..`** (decision 127, the user's, 2026-11-01, B139): such an
+    ID is a URL path segment the client's and browsers' URL parsing removes (`%2E` too, by
+    the URL standard), so the API couldn't be asked about that DAG. Refused where every DAG
+    ID is checked; a file defining one gets an import error saying why. Not chosen: an escape
+    of schedr's own in URLs (every client, the UI's links and the API carrying it, for two
+    names); leaving it, documented (the UI would list a DAG it can't open).
   - **Errors are JSON**, `{"error": "…"}`: 400 for a malformed request, 404 for an unknown or
     removed DAG, run or command, 422 for a command key used before with another command, 503 for something the request needs that can't be reached now
     (a worker holding a log), 500 for a database failure (details only in the webserver's
@@ -1432,6 +1438,35 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     `[ui.auth]` sees it, and as passed on to the webservers). In standalone, the process's
     configuration. Not chosen: B a "This UI" section on the Deployments list; C the
     configuration and version only.
+  - **One graph for everything** (decision 128, the user's, 2026-11-01, reviewing M4.4b):
+    `/deployments` is one graph: one block for the UI (its configuration, version, who is
+    signed in, each connection's state: the Config page's content, so the Config page and
+    its navigation entry go), linked by HTTP to each deployment's webserver, and in
+    standalone a node inside the standalone process (the same process ID); each
+    deployment a frame holding its webserver (a process of its own, or a node of the
+    standalone process), its masters and its workers; the webserver linked to the masters
+    by the database (what the link is), each worker to the master it registered with
+    (gRPC; dashed while it isn't connected). Each worker shows its queues. A node's
+    configuration is shown as TOML, the format of schedr's configuration files (a value not
+    set is left out). Clicking any node opens its panel on the same page. Not chosen: a
+    page per deployment besides it (removed, its routes too: the UI's own links point at the
+    node on the graph, so no redirect is needed);
+    the Config page kept as a side page (it didn't read as part of the deployments); no
+    worker-to-master link. Supersedes 125's page (its content kept) and the navigation:
+    DAGs, Runs, Deployments, Workers, Import errors.
+  - **A node's problems on the graph** (decision 129, the user's, 2026-11-01): a node with a
+    warning is yellow, with an error red, and its panel lists them. The UI: a webserver it
+    can't reach (error), a webserver of another version (warning). A webserver: unreachable
+    (error). A worker: lost or offline (error), its stored warnings and the import errors of
+    its parses (warning). A master: new, its heartbeat row carries its current problems (its
+    lease renewal late, the change notifications off, a write failing), each a warning or an
+    error. Not chosen: only what was known already (a master never coloured); every log
+    line at WARN or ERROR, kept and reported by each process (noisy, the most work).
+  - **The Import errors page names the master and the worker** (the user's, 2026-11-01):
+    a Master and a Worker column, each linking to its node on the graph; the master that
+    stored a parse is recorded with it (`parse_results.master_id`). The page stays a page
+    of its own, in the navigation (the user's: what people look for most); the graph only
+    marks a worker with import errors and links to the page.
 - **Authentication: as little as possible in schedr.** Access is normally decided in front of
   schedr (e.g. Istio with Keycloak at the ingress, namespace policies inside); schedr doesn't
   repeat it. Modes (`[webserver.auth] mode`):

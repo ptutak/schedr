@@ -488,6 +488,12 @@ impl MasterCore {
             .as_ref()
             .map(|p| format!("{}.{}", p.major, p.minor))
             .unwrap_or_default();
+        // The queues it serves, as stored and shown: none configured is `default`.
+        let queues = if register.queues.is_empty() {
+            vec![crate::workers::DEFAULT_QUEUE.to_owned()]
+        } else {
+            register.queues.clone()
+        };
         self.db
             .register_worker(
                 &WorkerRegistration {
@@ -495,7 +501,7 @@ impl MasterCore {
                     incarnation: &register.incarnation_id,
                     protocol_version: &protocol,
                     schedr_version: &register.schedr_version,
-                    queues: &register.queues,
+                    queues: &queues,
                     slots: register.slots,
                     log_endpoint: &register.log_endpoint,
                 },

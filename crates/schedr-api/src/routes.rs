@@ -425,12 +425,8 @@ async fn mapped_count(
     if !mapped.contains(task_id) {
         return Ok(None);
     }
-    let rows = state.db.run_instances(run_id).await?;
-    Ok(Some(
-        rows.iter()
-            .filter(|i| &i.task_id == task_id && i.map_index >= 0)
-            .count(),
-    ))
+    // Counted, not every instance of the run read (B137).
+    Ok(Some(state.db.mapped_instances(run_id, task_id).await?))
 }
 
 /// The run's tasks and, of those, its mapped ones, from the DAG version it runs (`None` when
@@ -439,11 +435,12 @@ async fn run_tasks(
     state: &ApiState,
     run_id: &str,
 ) -> Result<Option<(BTreeSet<TaskId>, BTreeSet<TaskId>)>, ApiError> {
-    let dag: Option<schedr_model::Dag> = state
-        .db
-        .run_dag_json(run_id)
-        .await?
-        .and_then(|json| serde_json::from_value(json).ok());
+    // Parsed once per version (B137); one that doesn't read is `None`, as before.
+    let dag = match state.db.run_dag(run_id).await {
+        Ok(dag) => dag,
+        Err(schedr_db::DbError::InvalidData { .. }) => None,
+        Err(error) => return Err(error.into()),
+    };
     Ok(dag.map(|dag| {
         let mapped = dag
             .tasks
@@ -451,7 +448,7 @@ async fn run_tasks(
             .filter(|t| t.expand.is_some())
             .map(|t| t.id.clone())
             .collect();
-        (dag.tasks.into_iter().map(|t| t.id).collect(), mapped)
+        (dag.tasks.iter().map(|t| t.id.clone()).collect(), mapped)
     }))
 }
 
@@ -857,10 +854,9 @@ async fn known_dag(
 ) -> Result<schedr_db::dags::StoredDag, ApiError> {
     state
         .db
-        .stored_dags()
+        .stored_dag(dag_id)
         .await?
-        .into_iter()
-        .find(|d| &d.dag_id == dag_id && !d.removed)
+        .filter(|d| !d.removed)
         .ok_or_else(|| ApiError::NotFound(format!("no DAG `{dag_id}`")))
 }
 

@@ -221,6 +221,47 @@ impl Database {
             .transpose()
     }
 
+    /// The DAG a run runs, parsed once per version (the cache's, see
+    /// [`Database::dag_version`]); `None` for no such run (B137: each task read parsed it).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored DAG doesn't read.
+    pub async fn run_dag(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<std::sync::Arc<schedr_model::Dag>>, DbError> {
+        const VERSION: &str = "SELECT dag_version_id{text} FROM runs WHERE id = $1{uuid}";
+        let version: Option<String> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, VERSION))
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        match version {
+            Some(version) => Ok(Some(self.dag_version(&version).await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// How many instances mapped task `task_id` has in a run (its whole row not counted).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn mapped_instances(&self, run_id: &str, task_id: &TaskId) -> Result<usize, DbError> {
+        const COUNT: &str = "SELECT COUNT(*) FROM task_instances \
+            WHERE run_id = $1{uuid} AND task_id = $2 AND map_index >= 0";
+        let count: i64 = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, COUNT))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .fetch_one(pool)
+                .await?
+        });
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
     /// A task's stored output in a run, with its outcome; `None` when it has none (yet).
     ///
     /// # Errors

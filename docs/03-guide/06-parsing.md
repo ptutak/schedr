@@ -172,6 +172,12 @@ older parse gets a parse job. Until that parse is stored, the old one is used. A
 to workers whose schedr version is at least the version of the parse in use, so a rolling
 upgrade needs no downtime.
 
+## DAG IDs
+
+A DAG ID is ASCII letters, digits and `_ . - : / #`, at most 250 bytes. It can't be `.` or
+`..`: in a URL those mean the current and the parent path, so the API and the UI couldn't
+name that DAG. A file defining such a DAG fails to import, and the error says why.
+
 ## Conflicts
 
 A DAG ID defined in two places within the current code (two files, or two roots) is in

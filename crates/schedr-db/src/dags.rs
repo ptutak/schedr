@@ -477,6 +477,26 @@ impl Database {
         rows.into_iter().map(stored_dag).collect()
     }
 
+    /// DAG `dag_id` as [`Self::stored_dags`] lists it, read alone (B136: one DAG's reads
+    /// read every DAG); `None` if it was never stored.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or its stored DAG doesn't read.
+    pub async fn stored_dag(&self, dag_id: &DagId) -> Result<Option<StoredDag>, DbError> {
+        const DAG: &str = "SELECT d.dag_id, d.paused, d.removed_at IS NOT NULL, \
+            d.conflict{text}, v.id{text}, v.parse_result_id{text}, v.dag_json{text} \
+            FROM dags d LEFT JOIN dag_versions v ON v.id = d.current_version_id \
+            WHERE d.dag_id = $1";
+        let row: Option<DagRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, DAG))
+                .bind(dag_id.as_str())
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(stored_dag).transpose()
+    }
+
     /// Pauses or unpauses a DAG. Returns whether it exists.
     ///
     /// # Errors

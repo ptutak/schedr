@@ -211,6 +211,16 @@ async fn parses_and_the_dag_list_are_stored() {
     let stored = db.stored_dags().await.unwrap();
     assert!(stored[0].paused);
     assert_eq!(stored[0].current.as_ref().unwrap().dag, dag());
+    // Read alone, the same (B136).
+    let alone = db.stored_dag(&sync()).await.unwrap().unwrap();
+    assert_eq!(alone.current.as_ref().unwrap().dag, dag());
+    assert!(alone.paused);
+    assert!(
+        db.stored_dag(&DagId::new("nowhere").unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(db.set_paused(&sync(), false).await.unwrap());
     let places = vec![
         DagLocation {
@@ -438,6 +448,13 @@ async fn a_runs_graph_output_and_commands_are_read() {
     assert_eq!(graph, serde_json::to_value(dag()).unwrap());
     let unknown = "0190a3e5-0000-7000-8000-000000000000";
     assert_eq!(db.run_dag_json(unknown).await.unwrap(), None);
+    // Parsed, from the cache (B137); its mapped instances counted (none here).
+    assert_eq!(*db.run_dag(&run_id).await.unwrap().unwrap(), dag());
+    assert!(db.run_dag(unknown).await.unwrap().is_none());
+    assert_eq!(
+        db.mapped_instances(&run_id, &id("extract")).await.unwrap(),
+        0
+    );
 
     assert_eq!(
         db.run_task_output(&run_id, &id("extract")).await.unwrap(),

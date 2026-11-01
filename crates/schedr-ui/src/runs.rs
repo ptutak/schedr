@@ -2,6 +2,7 @@
 //! its tasks and its command history, and a task's panel beside the graph (31A): attempts,
 //! output (its last 64 KiB, 33), log, and cleanup (a shell until M4).
 
+use futures_util::StreamExt as _;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -643,7 +644,7 @@ async fn run_graph<T: Transport>(
 /// What each `@branch` task that succeeded chose (its stored output, the IDs of its targets;
 /// anything else chose nothing, as the master reads it); a branch whose output can't be read
 /// is left out, its edges drawn as taken.
-async fn chosen_by_branches<T: Transport>(
+pub(crate) async fn chosen_by_branches<T: Transport>(
     deployment: &Deployment<T>,
     run_id: &str,
     dag: &serde_json::Value,
@@ -654,26 +655,33 @@ async fn chosen_by_branches<T: Transport>(
             .iter()
             .any(|t| t.task_id == id && t.state == "success")
     };
-    let branches: Vec<&str> = dag["tasks"]
+    // Owned: a stream of borrowed IDs isn't `Send` for every lifetime the router asks.
+    let branches: Vec<String> = dag["tasks"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|t| t["branch"].as_bool() == Some(true))
         .filter_map(|t| t["id"].as_str())
         .filter(|id| succeeded(id))
+        .map(str::to_owned)
         .collect();
-    let mut chosen = BTreeMap::new();
-    for id in branches {
-        let Ok(output) = deployment.client.output(run_id, id).await else {
-            continue;
-        };
-        // As the master reads it: anything but a list of IDs chose nothing.
-        let targets = output.value.as_array().into_iter().flatten();
-        let targets = targets.filter_map(|v| v.as_str().map(str::to_owned));
-        chosen.insert(id.to_owned(), targets.collect());
-    }
-    chosen
+    // Read together, a few at once (B147): one at a time, a refresh took their sum.
+    futures_util::stream::iter(branches)
+        .map(|id| async move {
+            let output = deployment.client.output(run_id, &id).await.ok()?;
+            // As the master reads it: anything but a list of IDs chose nothing.
+            let targets = output.value.as_array().into_iter().flatten();
+            let targets = targets.filter_map(|v| v.as_str().map(str::to_owned));
+            Some((id, targets.collect()))
+        })
+        .buffer_unordered(BRANCH_READS)
+        .filter_map(std::future::ready)
+        .collect()
+        .await
 }
+
+/// How many branches' outputs a run's page reads at once.
+const BRANCH_READS: usize = 8;
 
 /// The graph of the DAG version the run ran with, its tasks coloured by their state; `chosen`
 /// is what its branches chose (see [`chosen_by_branches`]).

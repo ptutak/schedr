@@ -129,6 +129,10 @@ async fn registering_answers_with_the_timing_and_parse_jobs_for_new_roots() {
     );
     assert!(core.is_live("w1"));
     assert_eq!(core.dispatcher().workers().get("w1").unwrap().slots, 2);
+    // No queues configured: it serves `default`, and is stored so (the Workers page showed
+    // none).
+    let stored = core.db.workers().await.unwrap();
+    assert_eq!(stored[0].queues, ["default"]);
     assert_eq!(outgoing.len(), 1);
     assert_eq!(outgoing[0].worker_id, "w1");
     let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {

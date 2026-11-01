@@ -150,3 +150,18 @@ fn schemas_describe_strings_with_the_validation_pattern() {
     assert_eq!(task["pattern"], r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$");
     assert_eq!(dag["title"], "DagId");
 }
+
+#[rstest]
+#[case(".")]
+#[case("..")]
+fn dag_id_rejects_a_url_dot_segment(#[case] id: &str) {
+    // Decision 127 (B139): URL parsing removes `.` and `..` segments (`%2E` too), so the API
+    // couldn't be asked about such a DAG.
+    assert_eq!(
+        DagId::new(id),
+        Err(IdError::DotSegment { id: id.to_owned() })
+    );
+    // Dots within an ID are fine.
+    assert!(DagId::new("...").is_ok());
+    assert!(DagId::new("a/..").is_ok());
+}

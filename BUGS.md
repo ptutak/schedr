@@ -55,33 +55,35 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
 | 2 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
-| 3 | B147: each run refresh reads every chosen branch's output again, one at a time | 4 | medium | possible | performance |
-| 4 | B138: dropping a streamed response doesn't close it | 4 | medium | possible | reliability |
-| 5 | B137: per-task API reads parse the whole run DAG every time | 4 | medium | possible | performance |
-| 6 | B136: one DAG's API reads deserialize every stored DAG | 4 | medium | possible | performance |
-| 7 | B135: a truncated bcrypt hash replaces the working users on reload | 4 | medium | possible | reliability |
-| 8 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
-| 9 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 10 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 11 | B139: DAG IDs `.` and `..` can't be addressed over HTTP | 2 | medium | rare | usability |
-| 12 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
-| 13 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 14 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 15 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 16 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 17 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 18 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 19 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 20 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 21 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 22 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 23 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 24 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 25 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 26 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 27 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 28 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 29 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B98: a frequent cron schedule enumerates hours of fire times on every lookup | 4 | medium | possible | performance |
+| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 5 | B151: standalone once didn't exit after its master was taken over (Suspected) | 2 | medium | rare | reliability |
+| 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 7 | B103: `dags test` waits for ever when a DAG root can't be scanned | 2 | medium | rare | usability |
+| 8 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 9 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 10 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 15 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 16 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 17 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 18 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 19 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 20 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 21 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 22 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 23 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 24 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B151: standalone once didn't exit after its master was taken over (Suspected)
+
+- **Rating:** severity **medium**, probability **rare**, reliability (score 2): `standalone_ends_when_its_master_is_taken_over` failed once in `make check` (2026-11-01, check18): the master logged "the master failed: standalone stops", then nothing for 20 s, and the process didn't exit. A standalone left running so would serve its API and worker with no master, never restarted.
+- **Found:** check18, during the bug batch B135-B138/B147 (`FAIL [41.139s]`). Passes alone (4 of 4, 15 s each).
+- **Where to look:** after the master fails, `request` 2 stops the worker, whose end sends `stop` to the API (`standalone.rs`); something there didn't end: the worker's interrupt, the API's open streams (the client's stream tasks changed for B138 in that batch), or the ops server.
+- **A fix:** to find; at least a bound on the stop after a master failure.
 
 ## B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected)
 
@@ -96,42 +98,6 @@ step touches their code or the user schedules them.
 - **Found:** 2026-11-01, by Codex's review of M4.4 (finding 3), measured in a debug build: limit checks alone took 25 ms for 1,000 ready tasks, 379 ms for 4,000, 2.1 s for 8,000. `crates/schedr-master/src/limits.rs` (`Active::reached`).
 - **Done meanwhile:** the DAG's `max_active_tasks` is checked first, with no lookup; once it is reached, every ready task of the DAG is held back without a search. What remains is a DAG under its cap with many ready tasks that have their own limits.
 - **A fix:** look the task up once (`assign_one` already has it) and pass its settings in, or index a DAG's tasks by ID when its version is read.
-
-## B147: each run refresh reads every chosen branch's output again, one at a time
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): the run page's graph reads each succeeded branch's output on every refresh, serially, so a run with many branches refreshes slowly (each refresh the sum of their latencies).
-- **Found:** 2026-11-01, by Codex's whole-repository review, section F11 (the web UI), with a failing proof; checked by Claude against the code. `crates/schedr-ui/src/runs.rs:666` (`chosen_by_branches`). Codex's proof: 4 branches at 40 ms, 8 calls, at most one at a time, 340 ms.
-- **A fix:** concurrent reads (bounded), and a finished branch's choice cached.
-
-## B139: DAG IDs `.` and `..` can't be addressed over HTTP
-
-- **Rating:** severity **medium**, probability **rare**, usability (score 2): a DAG named `..` (accepted by validation) is reachable in process but 404 through the HTTP client and the UI's links.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-client/src/lib.rs:999` leaves dots unescaped, and URL parsing normalizes `.`/`..` segments away; the UI's `path_segment()` too. Either refuse such IDs at validation or encode them.
-- **A fix:** to decide when it is scheduled.
-
-## B138: dropping a streamed response doesn't close it
-
-- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a stalled SSE stream whose reader is dropped keeps its task and socket open up to the 24 h stream timeout.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-client/src/lib.rs:355`: the spawned task awaits `response.chunk()` and notices the dropped consumer only at `send`; the same in `RouterTransport::open` (`lib.rs:470`). The API's own event producer uses `sender.closed()`. Codex's proof: no EOF within 250 ms after the consumer dropped.
-- **A fix:** to decide when it is scheduled.
-
-## B137: per-task API reads parse the whole run DAG every time
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): polling one task's log or attempts in a big DAG parses every task's definition each time, bypassing the DAG version cache.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:355`: `run_dag_json` then `serde_json::from_value` per request; `mapped_count()` reads every instance. Codex's proof: 10 attempt reads 27 ms for a 1-task DAG, 1.52 s for 5,000 tasks. Output, attempts, logs, cancel and retry share the path.
-- **A fix:** to decide when it is scheduled.
-
-## B136: one DAG's API reads deserialize every stored DAG
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): `GET /dags/{id}` and a DAG's runs list read every DAG's JSON; an unrelated big or unreadable DAG slows or breaks them.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/routes.rs:718`: `stored_dags().await?.into_iter().find(...)`. Codex's proof: 10 run-list requests 21 ms alone, 830 ms with an unrelated 5,000-task DAG; a corrupt unrelated definition gives 500.
-- **A fix:** to decide when it is scheduled.
-
-## B135: a truncated bcrypt hash replaces the working users on reload
-
-- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a users file rotated with a malformed hash is accepted and locks the user out, though an unreadable update should keep the previous users.
-- **Found:** 2026-10-31, by Codex's whole-repository review, section F10 (API, auth and TLS), with a failing proof; not yet re-checked by Claude. `crates/schedr-api/src/auth.rs:296` checks only `cost(hash)`, not the salt and hash body. Codex's proof: `anna:$2b$04$unfinished` accepted on reload, Anna's password no longer works.
-- **A fix:** to decide when it is scheduled.
 
 ## B103: `dags test` waits for ever when a DAG root can't be scanned
 

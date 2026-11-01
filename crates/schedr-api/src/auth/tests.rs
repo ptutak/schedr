@@ -59,11 +59,22 @@ async fn users_are_read_and_checked() {
     assert!(users.verify("anna", "secret").await);
     assert!(!users.verify("anna", "other").await);
     assert!(!users.verify("nobody", "secret").await);
+    let whole = bcrypt::hash("secret", 4).unwrap();
+    // B135: a hash cut short, or with characters bcrypt doesn't write, isn't one; read at a
+    // reload, it would have replaced the working users and locked them out.
+    let cut = format!("anna:{}", &whole[..whole.len() - 1]);
+    let longer = format!("anna:{whole}x");
+    let foreign = format!("anna:{}!", &whole[..whole.len() - 1]);
+    let twice = format!("anna:{whole}\nanna:{whole}");
     for (text, why) in [
         ("anna", "isn't `name:bcrypt-hash`"),
         (":$2b$04$x", "the name isn't usable"),
         ("anna:plain", "hash isn't bcrypt's"),
-        ("anna:$2b$04$x\nanna:$2b$04$y", "is there twice"),
+        ("anna:$2b$04$unfinished", "hash isn't bcrypt's"),
+        (cut.as_str(), "hash isn't bcrypt's"),
+        (longer.as_str(), "hash isn't bcrypt's"),
+        (foreign.as_str(), "hash isn't bcrypt's"),
+        (twice.as_str(), "is there twice"),
     ] {
         let error = Users::parse(text).unwrap_err();
         assert!(error.contains(why), "{text:?}: {error}");

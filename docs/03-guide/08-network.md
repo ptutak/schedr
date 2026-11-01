@@ -115,7 +115,8 @@ A running schedr looks at the file every 5 seconds and reads it again when it ha
 A changed password or a removed user then takes effect, and checks remembered from the old
 file are forgotten. A Secret's mounted file is updated by Kubernetes within about a minute.
 A file that can't be read or doesn't parse leaves the users as they were and is logged as an
-error, and it is tried again 5 seconds later. An empty file signs no one in.
+error, and it is tried again 5 seconds later. A hash that isn't a whole bcrypt hash (its
+`$2b$` and cost, then 53 characters, as bcrypt writes them) doesn't parse. An empty file signs no one in.
 
 bcrypt is slow on purpose (about 0.25 s at cost 12), and every request carries the password,
 since there are no sessions. So a check that passed is remembered for 5 minutes, by a keyed

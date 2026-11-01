@@ -51,6 +51,15 @@ pub enum IdError {
         /// A description of the allowed characters.
         allowed: &'static str,
     },
+    /// A DAG ID that is `.` or `..`: a URL path segment URL parsing removes, so the API
+    /// couldn't be asked about it (decision 127).
+    #[error(
+        "DAG ID `{id}` can't be addressed: `.` and `..` mean the current and parent paths in a URL"
+    )]
+    DotSegment {
+        /// The rejected identifier.
+        id: String,
+    },
     /// A task ID has an empty part around a `.` (group separator).
     #[error("task ID `{id}` has an empty group or task name around `.`")]
     EmptyPart {
@@ -97,13 +106,16 @@ impl DagId {
     ///
     /// # Errors
     ///
-    /// Returns an [`IdError`] if `id` is empty, too long or contains a character that isn't
-    /// allowed.
+    /// Returns an [`IdError`] if `id` is empty, too long, contains a character that isn't
+    /// allowed, or is `.` or `..` (a URL couldn't name it).
     pub fn new(id: impl Into<String>) -> Result<Self, IdError> {
         let id = id.into();
         check_chars("DAG ID", &id, DAG_ID_ALLOWED, |c| {
             c.is_ascii_alphanumeric() || "_.-:/#".contains(c)
         })?;
+        if id == "." || id == ".." {
+            return Err(IdError::DotSegment { id });
+        }
         Ok(Self(id))
     }
 

@@ -56,3 +56,11 @@ def test_empty_task_id_is_rejected() -> None:
 
 def test_id_error_is_a_value_error() -> None:
     assert issubclass(IdError, ValueError)
+
+
+@pytest.mark.parametrize("value", [".", ".."])
+def test_a_dag_id_isnt_a_url_dot_segment(value: str) -> None:
+    # Decision 127 (B139): URL parsing removes such a segment, so the API couldn't name it.
+    with pytest.raises(IdError, match="can't be addressed"):
+        validate_dag_id(value)
+    assert validate_dag_id("...") == "..."

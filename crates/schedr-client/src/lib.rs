@@ -391,7 +391,13 @@ impl Transport for HttpTransport {
         let server = self.server.clone();
         tokio::spawn(async move {
             loop {
-                let chunk = match response.chunk().await {
+                // A reader gone is noticed at once, not at the next chunk: a stalled stream
+                // would otherwise stay open (its socket too) until its timeout (B138).
+                let next = tokio::select! {
+                    () = sender.closed() => return,
+                    next = response.chunk() => next,
+                };
+                let chunk = match next {
                     Ok(Some(chunk)) => Ok(chunk.to_vec()),
                     Ok(None) => return,
                     Err(e) => Err(connect_error(&server, e)),
@@ -407,9 +413,6 @@ impl Transport for HttpTransport {
     }
 }
 
-/// A redirect is an error: it is never followed (B133), since the request carries
-/// credentials (the UI's token, a password, the person's name) that would go wherever it
-/// points. The message names that address, to be configured instead.
 /// The server couldn't be reached: with its URL and the reason shown masked, so a password
 /// in the URL (`[ui] deployments`, `--server`) or in what the HTTP library says never shows
 /// (Codex's review of M4.4b).
@@ -420,6 +423,9 @@ fn connect_error(server: &str, reason: impl std::fmt::Display) -> ClientError {
     }
 }
 
+/// A redirect is an error: it is never followed (B133), since the request carries
+/// credentials (the UI's token, a password, the person's name) that would go wherever it
+/// points. The message names that address, to be configured instead.
 fn refuse_redirect(server: &str, response: &reqwest::Response) -> Result<(), ClientError> {
     if !response.status().is_redirection() {
         return Ok(());
@@ -538,7 +544,13 @@ impl Transport for RouterTransport {
         let mut body = response.into_body();
         let (sender, chunks) = Chunks::channel();
         tokio::spawn(async move {
-            while let Some(frame) = body.frame().await {
+            loop {
+                // As over HTTP: a reader gone is noticed at once (B138).
+                let frame = tokio::select! {
+                    () = sender.closed() => return,
+                    frame = body.frame() => frame,
+                };
+                let Some(frame) = frame else { return };
                 let chunk = match frame {
                     Ok(frame) => match frame.into_data() {
                         Ok(data) => Ok(data.to_vec()),

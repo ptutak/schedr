@@ -36,9 +36,15 @@ def validate_dag_id(value: str) -> str:
         The same string, so the call can be used inline.
 
     Raises:
-        IdError: If it is empty, too long, or contains a character that isn't allowed.
+        IdError: If it is empty, too long, contains a character that isn't allowed, or is
+            ``.`` or ``..`` (a URL couldn't name it).
     """
     _check("DAG ID", value, _DAG_ID_CHARS, _DAG_ID_ALLOWED)
+    if value in (".", ".."):
+        raise IdError(
+            f"DAG ID `{value}` can't be addressed: `.` and `..` mean the current and parent "
+            "paths in a URL"
+        )
     return value
 
 

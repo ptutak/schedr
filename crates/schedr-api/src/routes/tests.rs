@@ -1152,3 +1152,54 @@ async fn one_dags_view_shows_its_limits_with_how_many_run() {
     let (_, list) = get(&app, "/api/v1/dags").await;
     assert_eq!(list["dags"][0].get("limits"), None);
 }
+
+#[tokio::test]
+async fn a_runs_dag_is_parsed_once_for_its_task_reads() {
+    // B137: each task read (attempts, output, log, cancel, retry) parsed the run's whole DAG
+    // again. A version never changes: once read, it comes from the cache, so the stored
+    // JSON isn't read again (shown by spoiling it after the first read).
+    let (app, db, run_id) = api().await;
+    let ghost = format!("/api/v1/runs/{run_id}/tasks/ghost/attempts");
+    let (status, _) = get(&app, &ghost).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite in memory")
+    };
+    sqlx::query("UPDATE dag_versions SET dag_json = '{'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = get(&app, &ghost).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], format!("no task `ghost` in run `{run_id}`"));
+}
+
+#[tokio::test]
+async fn one_dags_reads_dont_read_the_other_dags() {
+    // B136: a DAG's page and its runs read every DAG's definition, so another DAG's, big or
+    // unreadable, slowed or broke them.
+    let (app, db, _) = api().await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite in memory")
+    };
+    sqlx::query(
+        "INSERT INTO dags (dag_id, paused, current_version_id, first_seen_at) \
+         VALUES ('other', 1, 'v-other', '2026-10-15T00:00:00.000000Z')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO dag_versions (id, dag_id, parse_result_id, dag_json, created_at) \
+         SELECT 'v-other', 'other', parse_result_id, '{', created_at FROM dag_versions LIMIT 1",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    for path in ["/api/v1/dags/sync", "/api/v1/dags/sync/runs"] {
+        let (status, body) = get(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+    let (status, _) = get(&app, "/api/v1/dags/nowhere").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

@@ -293,7 +293,7 @@ fn parse_users(text: &str) -> Result<Loaded, String> {
         if name.is_empty() || name.len() > MAX_NAME || !printable(name) {
             return Err(format!("line {at}: the name isn't usable"));
         }
-        if cost(hash).is_none() {
+        if !is_bcrypt(hash) {
             return Err(format!("line {at}: `{name}`'s hash isn't bcrypt's"));
         }
         if hashes.insert(name.to_owned(), hash.to_owned()).is_some() {
@@ -301,6 +301,20 @@ fn parse_users(text: &str) -> Result<Loaded, String> {
         }
     }
     Ok(Loaded::new(hashes))
+}
+
+/// Whether `hash` is a whole bcrypt hash: its version and cost, then 53 characters of
+/// bcrypt's base64 (the 22 of its salt, the 31 of its hash). One cut short or altered would
+/// be read, and no password would match it (B135: a users file reloaded with one replaced
+/// the working users).
+fn is_bcrypt(hash: &str) -> bool {
+    cost(hash).is_some()
+        && hash.rsplit_once('$').is_some_and(|(_, body)| {
+            body.len() == 53
+                && body
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'/')
+        })
 }
 
 /// A bcrypt hash's cost (`$2b$12$...`: 12; bcrypt takes 4 to 31), if it is one.

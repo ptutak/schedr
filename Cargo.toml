@@ -48,6 +48,7 @@ sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "macros"] }
 thiserror = "2.0.21"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "signal", "test-util"] }
 tonic = "0.14.6"

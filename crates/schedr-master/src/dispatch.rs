@@ -1416,10 +1416,10 @@ impl Dispatcher {
         };
         let ran = &run.dag;
         let place = |l: &schedr_model::DagLocation| format!("{}:{}", l.root, l.path);
-        let stored = self.db.stored_dags().await?;
+        // This DAG alone (B136: every DAG was read, an unrelated one that doesn't read too).
+        let stored = self.db.stored_dag(&ran.id).await?;
         let now = stored
-            .iter()
-            .find(|d| d.dag_id == ran.id)
+            .as_ref()
             .filter(|d| !d.removed)
             .and_then(|d| d.current.as_ref());
         let task = &attempt.task_id;

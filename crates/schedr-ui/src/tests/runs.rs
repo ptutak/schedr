@@ -852,3 +852,59 @@ async fn a_log_that_grew_past_its_part_before_its_attempt_ended_is_followed_to_i
         ["/d/etl/runs/r2/tasks/load/tail?try=2&from=262144"]
     );
 }
+
+/// Answers each branch's output after `DELAY`, counting the reads in flight at once.
+#[derive(Default)]
+struct SlowOutputs {
+    in_flight: std::sync::atomic::AtomicUsize,
+    most: std::sync::atomic::AtomicUsize,
+}
+
+impl Transport for SlowOutputs {
+    async fn send(&self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+        self.most.fetch_max(now, SeqCst);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        self.in_flight.fetch_sub(1, SeqCst);
+        let branch = request
+            .path
+            .split('/')
+            .nth(6)
+            .unwrap_or_default()
+            .to_owned();
+        Ok(ApiResponse {
+            status: 200,
+            body: json!({"outcome": "SUCCESS", "value": [format!("{branch}-target")]}),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_runs_branches_are_read_together() {
+    // B147: four branches read one at a time made each refresh their latencies' sum.
+    let ids = ["b1", "b2", "b3", "b4"];
+    let dag = json!({"tasks": ids.iter().map(|id| json!({"id": id, "branch": true})).collect::<Vec<_>>()});
+    let tasks: Vec<schedr_api::views::TaskView> = ids
+        .iter()
+        .map(|id| serde_json::from_value(task(id, "success", Some("SUCCESS"), None)).unwrap())
+        .collect();
+    let deployment = Deployment {
+        name: "etl".to_owned(),
+        client: Client::new(
+            SlowOutputs::default(),
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+        ),
+        proof: "none",
+    };
+    let chosen = crate::runs::chosen_by_branches(&deployment, "r2", &dag, &tasks).await;
+    assert_eq!(chosen.keys().map(String::as_str).collect::<Vec<_>>(), ids);
+    assert_eq!(chosen["b3"], ["b3-target"]);
+    let most = deployment
+        .client
+        .transport()
+        .most
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(most, ids.len(), "reads at once");
+}

@@ -514,3 +514,59 @@ async fn a_command_with_no_answer_may_have_arrived() {
     assert!(matches!(error, ClientError::Unanswered { .. }), "{error}");
     assert!(error.to_string().contains("may have arrived"), "{error}");
 }
+
+#[tokio::test]
+async fn a_stalled_stream_dropped_by_its_reader_is_closed_at_once() {
+    // B138: the task reading the body noticed its reader gone only at its next chunk, so a
+    // stalled stream stayed open (its task and socket) up to the stream's 24 h timeout.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                  transfer-encoding: chunked\r\n\r\n5\r\nhello\r\n",
+            )
+            .await
+            .unwrap();
+        // Stalled: nothing more. The client closing shows as the end of what it sends.
+        let mut rest = [0; 64];
+        tokio::time::timeout(Duration::from_secs(2), socket.read(&mut rest)).await
+    });
+    let transport = HttpTransport::new(&format!("http://{address}"), Auth::None);
+    let mut chunks = transport.open("/api/v1/events".to_owned()).await.unwrap();
+    assert_eq!(chunks.next().await.unwrap().unwrap(), b"hello");
+    drop(chunks);
+    let closed = server.await.unwrap();
+    assert!(matches!(closed, Ok(Ok(0))), "{closed:?}");
+}
+
+#[tokio::test]
+async fn a_stalled_in_process_stream_dropped_by_its_reader_is_closed_at_once() {
+    // B138, in process: the API's stream is dropped as soon as its reader is.
+    use axum::response::sse::{Event, Sse};
+    let (feed, held) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(4);
+    let receiver = std::sync::Arc::new(std::sync::Mutex::new(Some(held)));
+    let app = axum::Router::new().route(
+        "/api/v1/events",
+        axum::routing::get(move || {
+            let receiver = receiver.lock().unwrap().take().unwrap();
+            async move { Sse::new(tokio_stream::wrappers::ReceiverStream::new(receiver)) }
+        }),
+    );
+    let transport = RouterTransport::new(app);
+    let mut chunks = transport.open("/api/v1/events".to_owned()).await.unwrap();
+    feed.send(Ok(Event::default().event("run").data("{}")))
+        .await
+        .unwrap();
+    assert!(chunks.next().await.unwrap().is_ok());
+    drop(chunks);
+    // Stalled: nothing more is sent; the stream's end shows as its feed closed.
+    tokio::time::timeout(Duration::from_secs(2), feed.closed())
+        .await
+        .expect("the stream dropped with its reader");
+}

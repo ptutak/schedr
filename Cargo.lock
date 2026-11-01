@@ -3095,6 +3095,7 @@ dependencies = [
  "askama",
  "axum",
  "bcrypt",
+ "futures-util",
  "http-body-util",
  "jiff",
  "pretty_assertions",
