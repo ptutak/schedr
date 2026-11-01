@@ -81,8 +81,9 @@ def test_a_new_run_appears_on_its_dags_page_without_a_reload(
     before = rows.count()
     page.evaluate("window.notReloaded = true")
     # Live: the page follows its DAG's changes.
+    # (Its stream also says when the page was made: a change after it is sent at once, B144.)
     expect(page.locator("body")).to_have_attribute(
-        "sse-connect", f"/events?deployment=default&dag={dag}"
+        "sse-connect", re.compile(rf"^/events\?deployment=default&dag={dag}&since=\d+$")
     )
     trigger("2026-10-16T01:00:00Z")
     new_row = page.locator("table.runs tbody td", has_text="2026-10-16 01:00 UTC").first
