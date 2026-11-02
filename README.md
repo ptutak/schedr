@@ -37,11 +37,13 @@ with Dag(
 
 ## Status
 
-Under development; nothing is released yet. **M1** (standalone runs a native DAG) and most of
-**M2** (distributed) are done; next are the fork server and quiet DAGs (M2.5), the
-web UI (M3) and the rest of the native API (M4: secrets and connections, sensors, branching,
-`ScriptOperator`, ...). The Airflow layer is M5. See `PLAN.md` and the roadmap in
-`PROJECT.md`.
+**0.1.0 is a preview** (`pip install schedr`; `CHANGELOG.md`). Until 1.0.0 the
+database schema and the protocol between schedr's processes change in place: a new 0.x
+version needs a fresh database, with no upgrade path. Done: M1 to M4.5 of `PLAN.md`
+(standalone and distributed, the fork server, the web UI, the native API up to run
+parameters). Next: the rest of the native API (M4: secrets and connections, cleanup and
+resources, sensors and triggers, ...), batched worker messages (M4B), then 1.0.0. The Airflow
+layer is M5. See `PLAN.md` and the roadmap in `PROJECT.md`.
 
 What works today:
 
@@ -63,7 +65,8 @@ What works today:
   without Python for the master and webserver) and a Helm chart (`charts/schedr`: standalone
   or distributed, git-sync or DAGs from values, Istio, Vault), tested on kind.
 
-There is no web UI yet (M3); the API and the CLI cover what it will show.
+- **Web UI:** `schedr ui` (in standalone too): DAGs, runs and their graphs, logs and outputs
+  live, actions with confirmations, several deployments in one UI.
 
 ## Documentation
 
@@ -77,6 +80,20 @@ http://localhost:8765). Its sections:
 5. **Design**: `PROJECT.md`, the decision log, one page per chapter.
 6. **Plan**: `PLAN.md`.
 7. **API**: Python (from docstrings) and Rust (rustdoc).
+
+## Installing
+
+```sh
+pip install schedr            # Python 3.14; add [pydantic] for Pydantic models
+```
+
+Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each carries the
+`schedr` binary, so there is nothing to compile. 0.x is a preview: a new 0.x version needs a
+fresh database (`CHANGELOG.md`). The images, x86_64:
+`ghcr.io/ptutak/schedr-worker` (Python and the package: workers and standalone, the base for
+your own image) and `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and
+UI), tagged with the version (`0.1.0`) and its series (`0.1`); there is no `latest`, since
+0.2 won't read 0.1's database.
 
 ## Trying it
 

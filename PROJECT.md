@@ -7168,6 +7168,27 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   - **158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
     `testpypi`, its own trusted publisher), and the wheel installed from there is
     smoke-tested; only a final tag goes to PyPI. Not chosen: straight to PyPI.
+  - **160. A release runs all of CI on its tag** (`ci.yml` called as a reusable workflow),
+    then publishes CI's own wheels (the user, 2026-11-02). One definition of the build; a
+    release takes as long as CI. Not chosen: a copy of the wheel jobs in `release.yml` (two
+    builds to keep in step; the tag not tested again).
+  - **161. A rehearsal does every step, marked rc:** TestPyPI, a GitHub pre-release, images
+    tagged only `X.Y.ZrcN` (the user, 2026-11-02). Not chosen: TestPyPI only (the Release
+    and the image push first tried for real).
+  - **162. Image tags `X.Y.Z` and `X.Y`, no `latest`** (the user, 2026-11-02): in the preview
+    a new minor needs a fresh database (decision 156), and a floating `latest` would move a
+    deployment onto it. Not chosen: `latest` too; only `X.Y.Z`.
+  - **163. The tree holds the version a tag names:** `0.1.0-rc1` in `Cargo.toml` for
+    `v0.1.0rc1` (maturin writes `0.1.0rc1`; the agent compares a runner's version in that
+    form; no dot after `rc`, which `SchedrVersion` would refuse), committed and tagged; the workflow only checks
+    (`scripts/release.py check`) (the user, 2026-11-02). Not chosen: the workflow setting the
+    version from the tag (what is built differs from the tagged commit).
+  - **How a release runs** (Claude's, as built): the tag checked first; CI; the four wheels
+    checked (one per platform, of the tag's version), summed (`SHA256SUMS`) and attested;
+    published (one job, its environment `testpypi` or `pypi` by the tag); the published wheel
+    downloaded from its index and smoke-tested; the images built from it again, smoke-tested
+    and pushed (`org.opencontainers.image.source` names the repository); the GitHub Release
+    last, once all it announces exists.
 - **Version pairing:** the binary and the Python package always share **one version number** and
   are released together. The runner reports its version when it connects to the agent; the
   agent **rejects a mismatched runner** with a clear error.

@@ -1,7 +1,8 @@
 # A first DAG
 
 `examples/sync.py` is a complete DAG: two Python tasks and a shell command, scheduled for
-03:00 in Warsaw. Python 3.14 or newer is required (a command can use a t-string, `t"..."`).
+03:00 in Warsaw. Python 3.14 or newer is required (a command can use a t-string, `t"..."`);
+`pip install schedr` installs the package and the `schedr` binary.
 
 ```{literalinclude} ../../examples/sync.py
 :language: python

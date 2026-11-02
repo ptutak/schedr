@@ -348,12 +348,15 @@ pub enum AgentMessage {
 }
 
 /// Whether the agent accepts a runner: the versions must be equal (the binary and the
-/// Python package are released together, see PROJECT.md, Packaging and releases).
+/// Python package are released together, see PROJECT.md, Packaging and releases). The
+/// agent's Cargo version is compared as the Python package writes it: a release candidate
+/// `0.1.0-rc1` is the package's `0.1.0rc1` (decision 163).
 ///
 /// # Errors
 ///
 /// Returns the reason to send in [`AgentMessage::Refused`].
 pub fn check_runner_version(agent_version: &str, runner_version: &str) -> Result<(), String> {
+    let agent_version = python_version(agent_version);
     if agent_version == runner_version {
         Ok(())
     } else {
@@ -361,5 +364,20 @@ pub fn check_runner_version(agent_version: &str, runner_version: &str) -> Result
             "the runner's schedr package is {runner_version}, the agent is {agent_version}: \
              install schedr=={agent_version} in the interpreter's environment"
         ))
+    }
+}
+
+/// A Cargo version as the Python package's metadata writes it (PEP 440, as maturin
+/// normalizes it): `X.Y.Z-rcN` is `X.Y.ZrcN`; a release is unchanged. The release workflow
+/// allows no other pre-release form (`scripts/release.py`).
+#[must_use]
+pub fn python_version(cargo_version: &str) -> String {
+    match cargo_version.split_once("-rc") {
+        Some((release, number))
+            if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            format!("{release}rc{number}")
+        }
+        _ => cargo_version.to_owned(),
     }
 }

@@ -218,6 +218,23 @@ Separate jobs. The ones that run on this machine each have a make target:
   `wheel-linux-aarch64` and `wheel-macos-arm64`. The same script and smoke test on native
   runners. No local make target (this machine is x86_64, and there is no Mac). See
   `PROJECT.md`, Packaging and releases.
+- **Releases** (`.github/workflows/release.yml`, decisions 153-163): a pushed tag runs all of
+  CI (`ci.yml` is also a `workflow_call`), then checks and attests the four wheels, publishes
+  them with Trusted Publishing, installs the published one from the index and smoke-tests
+  it, pushes the images to ghcr.io and creates the GitHub Release. `scripts/release.py`
+  checks the tag against the tree, finds the wheels and reads the notes (its tests in
+  `python/tests/unit/test_release.py`). To release `X.Y.Z`:
+  1. Write `CHANGELOG.md`'s `## X.Y.Z` section.
+  2. A rehearsal: set `version = "X.Y.Z-rc1"` in `Cargo.toml`'s `[workspace.package]`
+     (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`), run
+     `cargo update -w` so `Cargo.lock` follows (the wheels build `--locked`), commit, tag
+     `vX.Y.Zrc1`, push the tag. It goes to TestPyPI, a GitHub pre-release and images
+     tagged `X.Y.Zrc1`.
+  3. The release: `version = "X.Y.Z"`, `cargo update -w` again, commit, tag `vX.Y.Z`, push
+     the tag; approve the `pypi` environment's deployment when GitHub asks. PyPI, the GitHub
+     Release, the images tagged `X.Y.Z` and `X.Y`.
+  A failed release after the upload can't reuse the version (PyPI refuses a file twice):
+  fix and release `X.Y.Z+1`, or another rc.
 - **Supply-chain pins** (see `PROJECT.md`, CI supply-chain pins): every `uses:` is a
   40-character commit SHA (a local `./` action and `docker://image@sha256:<64 hex>` are
   allowed), with the version in a comment; `dtolnay/rust-toolchain` sets `toolchain:`;

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs all of CI on its tag, then publishes CI's wheels (decision 160).
+  workflow_call:
 
 jobs:
   rust:

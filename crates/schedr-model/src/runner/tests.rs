@@ -120,6 +120,20 @@ fn the_runner_version_must_match_exactly() {
 }
 
 #[test]
+fn a_release_candidate_is_compared_as_python_writes_it() {
+    // Cargo's `0.1.0-rc1` is the wheel's `0.1.0rc1` (decision 163).
+    assert_eq!(check_runner_version("0.1.0-rc1", "0.1.0rc1"), Ok(()));
+    let err = check_runner_version("0.1.0-rc2", "0.1.0rc1").unwrap_err();
+    assert!(err.contains("install schedr==0.1.0rc2 "), "{err}");
+    assert!(check_runner_version("0.1.0-rc1", "0.1.0").is_err());
+    assert_eq!(python_version("0.1.0"), "0.1.0");
+    assert_eq!(python_version("12.3.40-rc10"), "12.3.40rc10");
+    // Not a form the release workflow allows: left as it is.
+    assert_eq!(python_version("0.1.0-rc.1"), "0.1.0-rc.1");
+    assert_eq!(python_version("0.1.0-rc"), "0.1.0-rc");
+}
+
+#[test]
 fn the_message_size_cap_is_64_mib() {
     assert_eq!(MAX_MESSAGE_SIZE, 67_108_864);
 }

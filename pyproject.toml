@@ -9,6 +9,8 @@ requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Piotr Tutak", email = "piotr.tutak@amartus.com" }]
 classifiers = [
+    # A preview until 1.0.0 (decision 156): no upgrade path between 0.x versions.
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Operating System :: POSIX :: Linux",

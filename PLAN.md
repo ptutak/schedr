@@ -395,7 +395,7 @@ message's attempt answers for all.
 
 ## Release 0.1.0: after M4.5
 
-Decided by the user (2026-11-02, decisions 153-158 in PROJECT.md, Packaging and releases):
+Decided by the user (2026-11-02, decisions 153-163 in PROJECT.md, Packaging and releases):
 **the first release, 0.1.0, comes after M4.5**, a preview: until 1.0.0 the schema and the
 protocol are still edited in place (below), so 0.1 to 0.2 means a fresh database; the README
 and the release notes say so, and the classifier is `Development Status :: 3 - Alpha`.

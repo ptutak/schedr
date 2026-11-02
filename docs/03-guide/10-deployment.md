@@ -144,6 +144,13 @@ worker without a drain is a separate check, below.
 Production starts with **standalone in one pod**: first on SQLite, then on Postgres, and the
 separate roles only if the load needs them (a full switch: the history stays in Postgres).
 
+**The images.** Each release pushes two, for x86_64, built from its musllinux wheel:
+`ghcr.io/ptutak/schedr-worker` (this section's base image) and
+`ghcr.io/ptutak/schedr-server` (the binary alone, for the master and the webserver; below).
+Their tags are the version (`0.1.0`) and its series (`0.1`); a release candidate has only
+its own (`0.1.0rc1`). There is no `latest`: until 1.0.0 a new minor version needs a fresh
+database, and a moving tag would take a deployment there unasked.
+
 **The image.** `images/schedr/Dockerfile` builds the base image (`make image`): Alpine with
 Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
 for OpenShift's arbitrary UID, and **libraries for tasks** (about 410 MB in all, `polars` the
