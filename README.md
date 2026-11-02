@@ -89,11 +89,11 @@ pip install schedr            # Python 3.14; add [pydantic] for Pydantic models
 
 Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each carries the
 `schedr` binary, so there is nothing to compile. 0.x is a preview: a new 0.x version needs a
-fresh database (`CHANGELOG.md`). The images, x86_64:
-`ghcr.io/ptutak/schedr-worker` (Python and the package: workers and standalone, the base for
-your own image) and `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and
-UI), tagged with the version (`0.1.0`) and its series (`0.1`); there is no `latest`, since
-0.2 won't read 0.1's database.
+fresh database (`CHANGELOG.md`). The images, x86_64: `ghcr.io/ptutak/schedr` (Python and
+the package: standalone and workers, the base for your own image) and
+`ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), tagged with the
+version (`0.1.0`) and its series (`0.1`); there is no `latest`, since 0.2 won't read 0.1's
+database.
 
 ## Trying it
 

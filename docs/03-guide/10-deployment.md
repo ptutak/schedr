@@ -145,8 +145,9 @@ Production starts with **standalone in one pod**: first on SQLite, then on Postg
 separate roles only if the load needs them (a full switch: the history stays in Postgres).
 
 **The images.** Each release pushes two, for x86_64, built from its musllinux wheel:
-`ghcr.io/ptutak/schedr-worker` (this section's base image) and
-`ghcr.io/ptutak/schedr-server` (the binary alone, for the master and the webserver; below).
+`ghcr.io/ptutak/schedr` (this section's base image, for standalone and workers) and
+`ghcr.io/ptutak/schedr-server` (the binary alone, for the master, the webserver and
+`schedr ui`; below).
 Their tags are the version (`0.1.0`) and its series (`0.1`); a release candidate has only
 its own (`0.1.0rc1`). There is no `latest`: until 1.0.0 a new minor version needs a fresh
 database, and a moving tag would take a deployment there unasked. The chart uses them by

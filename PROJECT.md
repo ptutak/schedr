@@ -7162,11 +7162,18 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     place until 1.0.0, so 0.1 to 0.2 means a fresh database; the README and release notes say
     so. Not chosen: migrations from 0.1.0 on.
   - **157. The images are pushed with a release, the chart is not:** the server and worker
-    base images to `ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr-worker`
+    base images to `ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr` (decision 164)
     (x86_64, from the musllinux wheel; pushed with the workflow's `GITHUB_TOKEN`); the Helm
     chart stays in the repository. Not chosen: an OCI chart; multi-arch images (later).
     The chart's default images are these two, tagged with its `appVersion`, which a release
     sets to its version (`scripts/release.py check` refuses another; the user, 2026-11-02).
+  - **164. The image with Python is `ghcr.io/ptutak/schedr`, the one without
+    `schedr-server`** (the user, 2026-11-02, after the rc pushed `schedr-worker`): one binary
+    runs every role, so the image for anything that runs tasks (standalone, workers) is
+    `schedr`, as it is locally and in the chart's `image`, and `schedr-server` runs the
+    master, the webserver and `schedr ui`. Not chosen: keeping `schedr-worker` (a standalone
+    user wouldn't look for it); also pushing `schedr-standalone` and `schedr-ui` (the same
+    two images under more names: more packages to link and tag, and the question which one).
   - **158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
     `testpypi`, its own trusted publisher), and the wheel installed from there is
     smoke-tested; only a final tag goes to PyPI. Not chosen: straight to PyPI.

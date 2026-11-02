@@ -143,10 +143,10 @@ jobs:
       - run: |
           source=org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY
           docker build -f images/schedr/Dockerfile --label "$source" \
-            --label org.opencontainers.image.version="$VERSION" -t schedr-worker:release .
+            --label org.opencontainers.image.version="$VERSION" -t schedr:release .
           docker build -f images/schedr-server/Dockerfile --label "$source" \
             --label org.opencontainers.image.version="$VERSION" -t schedr-server:release .
-      - run: scripts/smoke-image.sh docker schedr-worker:release
+      - run: scripts/smoke-image.sh docker schedr:release
       - run: scripts/smoke-server-image.sh docker schedr-server:release
       - run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
         env:
@@ -154,7 +154,7 @@ jobs:
       - run: |
           tags=("$VERSION")
           [[ $PRERELEASE == true ]] || tags+=("$SERIES")
-          for image in schedr-worker schedr-server; do
+          for image in schedr schedr-server; do
             for tag in "${tags[@]}"; do
               docker tag "$image:release" "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag"
               docker push "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag"

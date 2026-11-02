@@ -15,20 +15,17 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   `schema/openapi.json` regenerated) done; Grok wrote the docs (`docs/02-dags/12-params.md`
   "The Trigger dialog", `docs/03-guide/12-ui.md` shortened to a summary by Claude). A flaky
   M4.5b test (`ctx::tests::a_task_that_ended_is_said_so`) fixed in the test.
-- **M4.5c committed (`8722b5f`).** **R0.1 (the release workflow, decisions 153-163) built,
-  awaiting acceptance:** `.github/workflows/release.yml` (a tag runs all of CI through
-  `workflow_call`, then checks, attests and publishes the wheels, smoke-tests the one on the
-  index, pushes the images, creates the GitHub Release), `scripts/release.py` with its tests,
-  `CHANGELOG.md`, the README's status and install section, the Alpha classifier, the
-  runner handshake comparing `X.Y.Z-rcN` as Python's `X.Y.ZrcN`. Codex reviewed it (4
-  findings, all fixed); Grok's second review skipped by the user. The release steps are in
-  AI_SETUP.md, "CI (GitHub Actions)".
-- **Before the rc tag (the user):** environments `testpypi` and `pypi` (a required reviewer)
-  in the repository's settings; pending publishers on test.pypi.org and pypi.org (project
-  `schedr`, owner `ptutak`, repository `schedr`, workflow `release.yml`, the environment);
-  after the rc's images, both ghcr packages set public. Open: the chart's default images
-  (locally built names) pointing at ghcr.
-- **Then R0.2** (`0.1.0-rc1`, tag `v0.1.0rc1`) and **R0.3** (`v0.1.0`).
+- **R0.1 committed (`2e4bb05`), the chart on ghcr (`0fbc8a1`), stress scenario 16's check
+  fixed (`d1dd8c7`), R0.2 done:** `v0.1.0rc1` (`a629ec0`) on TestPyPI, a GitHub
+  pre-release, `ghcr.io/ptutak/schedr-worker` and `schedr-server` `:0.1.0rc1` (public),
+  every wheel attested. Each image's first push was denied until ghcr linked its package
+  (re-run with `gh run rerun <id> --failed`). Then decision 164: the image with Python is
+  `ghcr.io/ptutak/schedr` (the rc's `schedr-worker` package is an orphan).
+- **Now R0.3:** the 0.1.0 commit (version, chart appVersion, lockfile, schema, the rename),
+  then the tag `v0.1.0`, the user approving the `pypi` deployment; the new `schedr` package's
+  first push will be denied once: the user checks its "Inherited access" and sets it
+  public, then re-run the failed jobs. Then check it as a user (pip, anonymous pulls,
+  `gh attestation verify`) and mark R0.3 done.
 - **The disk:** WSL's ext4.vhdx is on Windows C: and not sparse; stale worktrees' `target/`
   filled it (WSL died, 2026-11-02). Remove a step's worktrees, branches and pyenv envs once
   it is committed; check C: with `powershell.exe -NoProfile -Command "(Get-PSDrive C).Free/1GB"`.

@@ -17,7 +17,7 @@ image:
   # The image running tasks (standalone's pod, distributed's workers): the schedr base image
   # each release pushes (x86_64), or yours built FROM it with more libraries
   # (examples/kubernetes/Dockerfile).
-  repository: ghcr.io/ptutak/schedr-worker
+  repository: ghcr.io/ptutak/schedr
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent

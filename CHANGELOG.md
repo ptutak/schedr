@@ -11,9 +11,9 @@ The first release, a preview (`Development Status :: 3 - Alpha`). **No upgrade p
 will need a fresh database; the schema and the protocol change in place until 1.0.0.
 
 Install with `pip install schedr` (Python 3.14; wheels for Linux x86_64 with glibc or musl,
-Linux aarch64 and macOS arm64). The images are `ghcr.io/ptutak/schedr-server` (master,
-webserver and UI, no Python) and `ghcr.io/ptutak/schedr-worker` (with Python, the base for
-your own worker image), x86_64.
+Linux aarch64 and macOS arm64). The images, x86_64: `ghcr.io/ptutak/schedr` (with Python:
+standalone and workers, the base for your own image) and `ghcr.io/ptutak/schedr-server`
+(master, webserver and UI, no Python).
 
 What it has (milestones M1 to M4.5 in PLAN.md):
 

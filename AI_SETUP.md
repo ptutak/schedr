@@ -238,7 +238,12 @@ Separate jobs. The ones that run on this machine each have a make target:
      environment's deployment when GitHub asks. PyPI, the GitHub Release, the images tagged
      `X.Y.Z` and `X.Y`.
   A failed release after the upload can't reuse the version (PyPI refuses a file twice):
-  fix and release `X.Y.Z+1`, or another rc.
+  fix and release `X.Y.Z+1`, or another rc. A job failing after the upload is re-run alone
+  (`gh run rerun <id> --failed`): the published jobs aren't run again. On ghcr, an image's
+  very first push creates its package and is then refused (`error from registry: denied`)
+  until the package is linked to the repository (its settings show "Inherited access");
+  re-run then (it happened to both images with 0.1.0rc1, 2026-11-02). A new package is
+  private: set it public.
 - **Supply-chain pins** (see `PROJECT.md`, CI supply-chain pins): every `uses:` is a
   40-character commit SHA (a local `./` action and `docker://image@sha256:<64 hex>` are
   allowed), with the version in a comment; `dtolnay/rust-toolchain` sets `toolchain:`;
