@@ -212,7 +212,10 @@ impl Db {
             ),
             (
                 "successful tasks without a successful attempt".to_owned(),
-                "SELECT COUNT(*) FROM task_instances ti WHERE ti.state = 'success' AND NOT \
+                // A mapped task as a whole (`map_sizes` set once expanded) succeeds through
+                // its instances' attempts, never one of its own.
+                "SELECT COUNT(*) FROM task_instances ti WHERE ti.state = 'success' \
+                 AND ti.map_sizes IS NULL AND NOT \
                  EXISTS (SELECT 1 FROM attempts a WHERE a.task_instance_id = ti.id \
                  AND a.status = 'success')"
                     .to_owned(),
