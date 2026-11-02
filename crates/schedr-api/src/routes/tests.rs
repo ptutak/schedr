@@ -1472,6 +1472,46 @@ async fn a_runs_dag_shows_its_params_defaults_masked() {
 }
 
 #[tokio::test]
+async fn a_dags_view_describes_its_params_form_without_secrets() {
+    let params = json!({
+        "type": {"type": "dataclass", "name": "P", "fields": [
+            {"name": "db_password", "type": {"type": "str"}, "required": false},
+            {"name": "rows", "type": {"type": "int"}, "required": false},
+        ]},
+        "schema": {"type": "object", "properties": {
+            "db_password": {"type": "string", "default": "hunter2"},
+            "rows": {"type": "integer", "default": 10},
+        }},
+        "defaults": {"db_password": "hunter2", "rows": 10},
+    });
+    let (app, _db, _run) = api_over(
+        Some(params),
+        json!({
+            "id": "extract", "kind": "python",
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }),
+        &[],
+    )
+    .await;
+    let (status, dag) = get(&app, "/api/v1/dags/sync").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!dag.to_string().contains("hunter2"), "{dag}");
+    assert_eq!(
+        dag["params"],
+        json!([
+            {"name": "db_password", "kind": "text", "required": false, "nullable": false, "secret": true},
+            {"name": "rows", "kind": "int", "required": false, "nullable": false, "secret": false, "default": 10},
+        ])
+    );
+    let (_, list) = get(&app, "/api/v1/dags").await;
+    assert_eq!(list["dags"][0].get("params"), None);
+}
+
+#[tokio::test]
 async fn a_bad_body_doesnt_quote_its_text() {
     let (app, _db, _run) = api().await;
     let (status, body) = send(

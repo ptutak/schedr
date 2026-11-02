@@ -4,6 +4,26 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-02)
+
+- **M4.5a (`ab6ffb9`) and M4.5b (`8515b29`) committed and pushed.** **M4.5c (the UI's
+  trigger form, decisions 149-152, 159) built, reviewed and gated, awaiting the user's
+  acceptance:** `GET /api/v1/dags/{id}` gets `params` (`schedr-api/src/views/form.rs`), the
+  Trigger dialog an input per field (`schedr-ui/src/params_form.rs`,
+  `templates/trigger_params.html`), a fingerprint refusing a stale page. Codex's review (8
+  findings: 6 fixed, 1 rejected, 1 docs) and Grok's security review (2 low: docs, and
+  `schema/openapi.json` regenerated) done; Grok wrote the docs (`docs/02-dags/12-params.md`
+  "The Trigger dialog", `docs/03-guide/12-ui.md` shortened to a summary by Claude). A flaky
+  M4.5b test (`ctx::tests::a_task_that_ended_is_said_so`) fixed in the test.
+- **Next: release 0.1.0** (PLAN.md, "Release 0.1.0", R0.1-R0.3; decisions 153-158).
+- **The disk:** WSL's ext4.vhdx is on Windows C: and not sparse; stale worktrees' `target/`
+  filled it (WSL died, 2026-11-02). Remove a step's worktrees, branches and pyenv envs once
+  it is committed; check C: with `powershell.exe -NoProfile -Command "(Get-PSDrive C).Free/1GB"`.
+- **Test Postgres:** `make` uses podman; Docker's published 127.0.0.1 ports hang in
+  mirrored mode. After a crash, a corrupt incremental cache: `rm -rf target/debug/incremental`.
+- **The sandboxes** name the worktree's own pyenv env to uv (`UV_PROJECT_ENVIRONMENT`), since
+  the user's `.bashrc` no longer does.
+
 ## State (2026-11-01, morning)
 
 - **Bugs B135-B139, B147 fixed (`9f4d89d`), the browser test fixed (`b5ba037`).** A worker
@@ -312,3 +332,6 @@ the morning, listed below.
   socket in `SCHEDR_AGENT_FD`; modes `parse` and `task`), `testing.py`.
 - `examples/`: example DAGs and their tests, `examples/kubernetes/` (Dockerfile, standalone
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
+
+Resume this session with:
+claude --resume ec69d40f-647d-4828-9fde-d55c783202ee

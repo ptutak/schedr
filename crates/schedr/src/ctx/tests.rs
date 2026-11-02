@@ -129,11 +129,15 @@ async fn a_task_that_ended_is_said_so() {
     drop(serve(ours, info("1.0.0")));
     let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
     let error = tokio::task::spawn_blocking(move || {
-        // The aborted server drops the agent's end at its next poll.
+        // The aborted server drops the agent's end at its next poll. A call queued just
+        // before that is dropped unread ("closed the connection"): the next one is refused.
         let mut last = Ok(());
         for _ in 0..100 {
             last = run_dag_ctx(&params(None), &env, "1.0.0", &mut Vec::new());
-            if last.is_err() {
+            if last
+                .as_ref()
+                .is_err_and(|e| !e.contains("closed the connection"))
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));

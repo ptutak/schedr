@@ -277,6 +277,13 @@
               }
             ]
           },
+          "params": {
+            "description": "The run parameters its current version takes, as the UI's trigger form shows them\n(decision 149): only on one DAG's view, not in the list; none when it takes none.",
+            "items": {
+              "$ref": "#/components/schemas/ParamFieldView"
+            },
+            "type": "array"
+          },
           "paused": {
             "description": "Whether the scheduler is stopped for it.",
             "type": "boolean"
@@ -652,6 +659,68 @@
           "value"
         ],
         "type": "object"
+      },
+      "ParamFieldView": {
+        "description": "One field of a DAG's run parameters, as a form shows it.",
+        "properties": {
+          "choices": {
+            "description": "A `choice`'s values, as JSON (strings, numbers, booleans; `null` is `nullable`).",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "default": {
+            "description": "Its default as JSON, the form's starting value (`null` is a default); absent when it\nhas none or it is withheld.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ParamKind",
+            "description": "How it is entered."
+          },
+          "name": {
+            "description": "The field's name, as a trigger's values name it.",
+            "type": "string"
+          },
+          "nullable": {
+            "description": "Whether it may be `null` (`T | None`): the form has a \"none\" box beside it.",
+            "type": "boolean"
+          },
+          "required": {
+            "description": "Whether a trigger must give it (it has no default).",
+            "type": "boolean"
+          },
+          "secret": {
+            "description": "Whether its default and choices are withheld (decision 150): its name has a word naming\na secret, or its default or a choice holds one. The form gives it an empty password\ninput; left empty, the master uses the default.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "required",
+          "nullable",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "ParamKind": {
+        "description": "How a parameter is entered.",
+        "enum": [
+          "bool",
+          "int",
+          "float",
+          "text",
+          "date",
+          "datetime",
+          "duration",
+          "choice",
+          "json"
+        ],
+        "type": "string"
       },
       "PauseRequest": {
         "additionalProperties": false,

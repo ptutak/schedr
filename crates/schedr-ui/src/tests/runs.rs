@@ -21,7 +21,7 @@ fn scripted(answers: &[(&str, u16, Value)]) -> Scripted {
             .iter()
             .map(|(path, status, body)| ((*path).to_owned(), (*status, body.clone())))
             .collect(),
-        down: false,
+        ..Scripted::default()
     }
 }
 
@@ -857,8 +857,8 @@ async fn without_import_errors_the_nav_and_dag_list_say_nothing() {
     let down = ui(vec![deployment(
         "etl",
         Scripted {
-            answers: BTreeMap::new(),
             down: true,
+            ..Scripted::default()
         },
     )]);
     let (_, html) = get(&down, "/import-errors", &[]).await;

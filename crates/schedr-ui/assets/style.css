@@ -255,6 +255,14 @@ dialog.confirm::backdrop { background: rgb(0 0 0 / 0.4); }
 dialog.confirm h3 { margin: 0 0 8px; font-size: 17px; }
 dialog.confirm .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 dialog.confirm label.field, dialog.confirm label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+/* The trigger dialog's run parameters (M4.5c): a row per field, its "none" box beside it. */
+dialog.confirm fieldset.params { border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px 8px; margin: 12px 0 0; max-height: 50vh; overflow-y: auto; }
+dialog.confirm fieldset.params legend { padding: 0 4px; color: var(--dim); }
+dialog.confirm .param { display: flex; align-items: center; gap: 12px; }
+dialog.confirm .param label.field { flex: 1; min-width: 0; }
+dialog.confirm .param label.field > .mono { min-width: 8em; }
+dialog.confirm .param label.field > input:not([type=checkbox]), dialog.confirm .param label.field > select, dialog.confirm .param label.field > textarea { flex: 1; min-width: 0; font: inherit; }
+dialog.confirm .param label.none { margin: 0; white-space: nowrap; }
 .results:empty { display: none; }
 .results { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
 .command { border-radius: 8px; padding: 8px 12px; border: 1px solid var(--border); background: var(--surface); }

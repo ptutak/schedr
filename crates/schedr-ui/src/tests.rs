@@ -21,13 +21,22 @@ mod runs;
 struct Scripted {
     answers: BTreeMap<String, (u16, Value)>,
     down: bool,
+    /// The bodies of the requests sent, by path, in order (shared by its clones).
+    sent: Sent,
 }
+
+/// The requests a [`Scripted`] was sent: each one's path and body.
+type Sent = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<Value>)>>>;
 
 impl Transport for Scripted {
     fn send(
         &self,
         request: ApiRequest,
     ) -> impl Future<Output = Result<ApiResponse, ClientError>> + Send {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((request.path.clone(), request.body.clone()));
         let answer = if self.down {
             Err(ClientError::Connect {
                 server: "http://etl-webserver:8080".to_owned(),
@@ -84,7 +93,7 @@ fn etl() -> Scripted {
     );
     Scripted {
         answers,
-        down: false,
+        ..Scripted::default()
     }
 }
 

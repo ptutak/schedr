@@ -4946,6 +4946,40 @@ dataclass default that doesn't fit is refused without its value or type, and a m
 are dumped without Pydantic's warnings (which quote the value). Not chosen: masking the
 `jsonschema` crate's messages (each fix left another way around).
 
+**The UI's trigger form** (decisions 149-152, the user's, 2026-11-02, M4.5c):
+
+- **149. The webserver describes the form; the UI doesn't read JSON Schema.** A single DAG's
+  view (`GET /api/v1/dags/{dag_id}`) gets `params`: the form's fields, built by the webserver
+  from the DAG's schema and defaults, each with its name, kind, whether it is required, its
+  default (withheld under a secret name, decision 150) and a `Literal`'s choices. Not chosen:
+  the raw JSON Schema for the UI to interpret (a second schema reader, and defaults under
+  secret names reaching the browser unless masked separately); the UI reading the DAG JSON
+  (couples the UI to its format).
+- **150. A field named by a secret word is an empty password input** ("leave empty for the
+  default"): its default never reaches the browser; left empty, the master fills the default
+  in. Not chosen: pre-filled with `****` meaning "keep the default" (a real `****` can't be
+  given); the default in clear as DAG code (decision 142 would allow it, but the form is not
+  where code is shown).
+- **151. An optional field (`date | None`) has a "none" checkbox** beside its input. Not chosen:
+  an empty input meaning `None` (ambiguous for `str | None`, where an empty string is a value).
+- **152. A field that isn't a simple value** (a nested dataclass or model, a list, a dict) is a
+  JSON text box pre-filled with its default as JSON (the form `--params` takes); the master
+  checks it. Not chosen: nested sub-forms (much more UI for little gain); leaving such fields
+  out of the form (the CLI or API only).
+
+The form sends only the fields changed; the master fills in the defaults and checks the
+values as for any trigger, and a refusal shows the master's reason in the dialog (Claude's).
+
+- **159. A page whose fields or defaults changed since it loaded is refused** ("reload it and
+  trigger again", not sent; the user, 2026-11-02). The page carries a fingerprint of the
+  fields it showed (names, kinds, `null`, secrecy, whether required, choices and the
+  defaults); the trigger compares it with the DAG's current fields. A box left showing a
+  replaced default would otherwise send it as if chosen (`rows` 10 shown, the DAG now 20: a
+  run with 10). A secret's default is not in it: it never reaches the page (decision 150),
+  and its empty box sends nothing, so the master fills in the current one. Not chosen:
+  sending what the page showed (a run with a value no one chose); a hash of a secret
+  default in the fingerprint (on the page, open to guessing).
+
 **Airflow** (see Airflow compatibility):
 
 | Airflow | Becomes |
@@ -7110,6 +7144,30 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     worker image on top of it, adding their libraries.
   - Both run under an **arbitrary UID**.
 - **Helm chart** for deploying.
+- **Releases** (decisions 153-158, the user's, 2026-11-02; PLAN.md, Release 0.1.0):
+  - **153. Trusted Publishing to PyPI** from `.github/workflows/release.yml`
+    (`pypa/gh-action-pypi-publish`, pinned by commit SHA), in an environment `pypi` that needs
+    the user's approval for each release. Not chosen: a PyPI API token as a repository secret
+    (long-lived); uploading CI's wheels by hand.
+  - **154. A pushed tag starts a release:** `vX.Y.Z` (checked against the versions in
+    `Cargo.toml` and `pyproject.toml`) builds and smoke-tests the four wheels, publishes them,
+    then creates the GitHub Release. Not chosen: a manually dispatched workflow tagging the
+    commit itself; a GitHub Release published by hand starting the upload.
+  - **155. What a release carries:** release notes from a hand-kept `CHANGELOG.md` (the
+    version's section); the wheels and a `SHA256SUMS` attached to the GitHub Release; build
+    provenance attestations for each wheel (`actions/attest-build-provenance`, pinned by SHA).
+    No sdist: installing one would build the Rust binary on the user's machine; a platform
+    without a wheel can't install. Not chosen: GitHub's generated notes; an sdist.
+  - **156. 0.x is a preview:** the schema (`0001_initial.sql`) and the protocol are edited in
+    place until 1.0.0, so 0.1 to 0.2 means a fresh database; the README and release notes say
+    so. Not chosen: migrations from 0.1.0 on.
+  - **157. The images are pushed with a release, the chart is not:** the server and worker
+    base images to `ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr-worker`
+    (x86_64, from the musllinux wheel; pushed with the workflow's `GITHUB_TOKEN`); the Helm
+    chart stays in the repository. Not chosen: an OCI chart; multi-arch images (later).
+  - **158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
+    `testpypi`, its own trusted publisher), and the wheel installed from there is
+    smoke-tested; only a final tag goes to PyPI. Not chosen: straight to PyPI.
 - **Version pairing:** the binary and the Python package always share **one version number** and
   are released together. The runner reports its version when it connects to the agent; the
   agent **rejects a mismatched runner** with a clear error.

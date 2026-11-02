@@ -30,8 +30,8 @@ use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
     ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery,
-    MasterView, NodeView, OutputView, PauseRequest, ProblemView, RunDetail, RunList, RunView,
-    RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
+    MasterView, NodeView, OutputView, ParamFieldView, PauseRequest, ProblemView, RunDetail,
+    RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -233,6 +233,9 @@ pub async fn get_dag(
     let held = Held::by_file(&state.db.current_import_errors().await?);
     let mut view = DagView::of(&dag, &held);
     if let Some(current) = &dag.current {
+        if let Some(params) = &current.dag.params {
+            view.params = ParamFieldView::of(params);
+        }
         let limited = current.dag.max_active_tasks.is_some()
             || current.dag.tasks.iter().any(|t| {
                 t.settings.max_active.is_some() || t.settings.max_active_per_run.is_some()

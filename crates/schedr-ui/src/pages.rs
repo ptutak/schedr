@@ -11,6 +11,7 @@ use schedr_client::times::trigger_text;
 use schedr_client::{ClientError, Transport, path_segment};
 
 use crate::page::Page;
+use crate::params_form::TriggerParams;
 use crate::runs::{RunRow, run_row};
 use crate::{Deployment, Ui};
 
@@ -67,6 +68,8 @@ struct DagPage {
     actions: String,
     /// Its concurrency limits, each with how many run now (decision 96).
     limits: Vec<LimitRow>,
+    /// The trigger dialog's run parameters, rendered (empty: it takes none).
+    params_html: String,
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -194,8 +197,20 @@ pub async fn dag<T: Transport>(
         Err(error) => return unavailable_page(&page, &deployment.name, &error),
     };
     let conflicts = dag.conflict.iter().flatten().map(location).collect();
+    let params_html = match TriggerParams::of(&dag.params).render() {
+        Ok(html) => html,
+        Err(error) => {
+            return error_page(
+                &page,
+                "Error",
+                &error.to_string(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+        }
+    };
     render(
         &DagPage {
+            params_html,
             limits: dag.limits.iter().map(LimitRow::of).collect(),
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),

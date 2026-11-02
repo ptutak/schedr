@@ -565,3 +565,184 @@ async fn a_command_whose_answer_was_lost_is_sent_again_under_its_key_never_twice
         [Some("k1".to_owned()), Some("k1".to_owned())]
     );
 }
+
+/// DAG `sync` taking run parameters: one of each input, a secret one among them.
+fn with_params() -> Scripted {
+    let mut etl = etl();
+    let mut view = dag("sync", false);
+    view["params"] = json!([
+        {"name": "region", "kind": "text", "required": true, "nullable": false, "secret": false},
+        {"name": "rows", "kind": "int", "required": false, "nullable": false, "secret": false, "default": 10},
+        {"name": "full", "kind": "bool", "required": false, "nullable": false, "secret": true},
+        {"name": "day", "kind": "date", "required": false, "nullable": true, "secret": false, "default": null},
+        {"name": "mode", "kind": "choice", "required": false, "nullable": false, "secret": false, "default": "fast", "choices": ["fast", 2]},
+        {"name": "tags", "kind": "json", "required": false, "nullable": false, "secret": false, "default": ["a"]},
+        {"name": "api_token", "kind": "text", "required": false, "nullable": false, "secret": true},
+    ]);
+    etl.answers
+        .insert("/api/v1/dags/sync".to_owned(), (200, view));
+    etl
+}
+
+/// The fingerprint of [`with_params`]'s fields, as its page posts it.
+fn fingerprint() -> String {
+    let view = &with_params().answers["/api/v1/dags/sync"].1;
+    let fields: Vec<schedr_api::views::ParamFieldView> =
+        serde_json::from_value(view["params"].clone()).unwrap();
+    crate::params_form::fingerprint(&fields)
+}
+
+#[tokio::test]
+async fn the_trigger_dialog_has_an_input_per_param_with_its_default() {
+    let app = ui(vec![deployment("etl", with_params())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(attrs(&html, "input[name=params]", "value"), [fingerprint()]);
+    let names = attrs(&html, "dialog fieldset.params [name]", "name");
+    assert_eq!(
+        names,
+        [
+            "params",
+            "p:region",
+            "p:rows",
+            "p:full",
+            "p:day",
+            "none:day",
+            "p:mode",
+            "p:tags",
+            "p:api_token"
+        ]
+    );
+    assert_eq!(attrs(&html, "input[name='p:region']", "required"), [""]);
+    assert_eq!(attrs(&html, "input[name='p:rows']", "value"), ["10"]);
+    assert_eq!(attrs(&html, "input[name='p:rows']", "type"), ["number"]);
+    assert_eq!(attrs(&html, "input[name='p:day']", "type"), ["date"]);
+    assert_eq!(attrs(&html, "input[name='none:day']", "checked"), [""]);
+    assert_eq!(
+        attrs(&html, "select[name='p:mode'] option", "value"),
+        ["\"fast\"", "2"]
+    );
+    assert_eq!(
+        attrs(&html, "select[name='p:mode'] option[selected]", "value"),
+        ["\"fast\""]
+    );
+    assert_eq!(texts(&html, "textarea[name='p:tags']"), ["[\n  \"a\"\n]"]);
+    // A secret one: an empty password input (decision 150).
+    assert_eq!(
+        attrs(&html, "input[name='p:api_token']", "type"),
+        ["password"]
+    );
+    assert_eq!(attrs(&html, "input[name='p:api_token']", "value"), [""]);
+    assert_eq!(
+        attrs(&html, "input[name='p:api_token']", "placeholder"),
+        ["leave empty for the default"]
+    );
+    assert_eq!(attrs(&html, "input[name='p:full']", "type"), ["password"]);
+    // A DAG without params has none.
+    let app = ui(vec![deployment("etl", etl())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(
+        attrs(&html, "dialog fieldset.params", "class"),
+        Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
+async fn a_trigger_sends_only_the_params_changed() {
+    let mut etl = with_params();
+    etl.answers.insert(
+        "/api/v1/dags/sync/runs".to_owned(),
+        (
+            202,
+            command(
+                "c3",
+                "trigger_run",
+                "applied",
+                None,
+                &json!({"run_id": "r9"}),
+            ),
+        ),
+    );
+    let sent = etl.sent.clone();
+    let app = ui(vec![deployment("etl", etl)]);
+    // `rows` and `mode` as they were, `day`'s box left checked, `api_token` left empty.
+    let form = format!(
+        "for=&params={}&p%3Aregion=eu&p%3Arows=10&p%3Aday=&none%3Aday=on\
+         &p%3Amode=%22fast%22&p%3Atags=%5B%22a%22%2C%22b%22%5D&p%3Aapi_token=",
+        fingerprint()
+    );
+    let (_, html) = post(&app, "/d/etl/dags/sync/trigger", &form, &[SAME]).await;
+    assert_eq!(attrs(&html, ".command a", "href"), ["/d/etl/runs/r9"]);
+    let body = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(path, body)| path == "/api/v1/dags/sync/runs" && body.is_some())
+        .and_then(|(_, body)| body.clone())
+        .unwrap();
+    assert_eq!(body["params"], json!({"region": "eu", "tags": ["a", "b"]}));
+}
+
+#[tokio::test]
+async fn a_param_that_doesnt_read_is_never_sent_nor_quoted() {
+    let app = ui(vec![deployment("etl", with_params())]);
+    let cases = [
+        (
+            "p%3Arows=ten%20thousand",
+            "Trigger sync: not sent: `rows` isn't a whole number",
+        ),
+        (
+            "p%3Atags=%5Bhunter2",
+            "Trigger sync: not sent: `tags` isn't JSON (line 1, column 2)",
+        ),
+        (
+            "p%3Amode=%22slow%22",
+            "Trigger sync: not sent: `mode` isn't one of its choices",
+        ),
+    ];
+    for (field, said) in cases {
+        let form = format!("for=&params={}&p%3Aregion=eu&{field}", fingerprint());
+        let (_, html) = post(&app, "/d/etl/dags/sync/trigger", &form, &[SAME]).await;
+        assert_eq!(texts(&html, ".command"), [said]);
+        assert!(
+            !html.contains("hunter2") && !html.contains("ten thousand"),
+            "{html}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_trigger_whose_params_cant_be_read_keeps_its_key() {
+    // Codex's review of M4.5c: a retry after a lost answer reads the DAG's params first; that
+    // failing, or the params having changed, must leave the browser its key (B140), or the
+    // next try would be a second run.
+    let mut etl = with_params();
+    etl.answers.remove("/api/v1/dags/sync");
+    let app = ui(vec![deployment("etl", etl)]);
+    let form = format!("for=&params={}&p%3Aregion=eu", fingerprint());
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/d/etl/dags/sync/trigger")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header(SAME.0, SAME.1)
+        .body(Body::from(form))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers().get("schedr-command-answer"), None);
+    let app = ui(vec![deployment("etl", with_params())]);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/d/etl/dags/sync/trigger")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header(SAME.0, SAME.1)
+        .body(Body::from("for=&params=0000000000000000&p%3Aregion=eu"))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers().get("schedr-command-answer"), None);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("parameters changed since this page was loaded"),
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+}

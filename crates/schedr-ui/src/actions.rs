@@ -21,7 +21,7 @@ use schedr_client::{Client, ClientError, TaskAction, Transport, WorkerAction, pa
 use serde::Deserialize;
 
 use crate::page::Page;
-use crate::{Deployment, Ui};
+use crate::{Deployment, Ui, params_form};
 
 /// How often a pending command's fragment reads it again, in milliseconds.
 pub const POLL_MS: u32 = 1_000;
@@ -68,7 +68,7 @@ pub async fn guard(request: axum::extract::Request, next: axum::middleware::Next
     next.run(request).await
 }
 
-/// The trigger dialog's form.
+/// The trigger dialog's moment, as its preview (`/time`) reads it.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TriggerForm {
     /// The moment the run is for (`--for`'s forms); empty: now.
@@ -125,30 +125,53 @@ pub async fn unpause<T: Transport>(
     .await
 }
 
-/// `POST /d/<deployment>/dags/<dag>/trigger`.
+/// `POST /d/<deployment>/dags/<dag>/trigger`: the form's `for` (the moment the run is for,
+/// `--for`'s forms; empty: now) and its run parameters (see [`crate::params_form`]), read
+/// against the DAG's current fields.
 pub async fn trigger<T: Transport>(
     State(ui): State<Arc<Ui<T>>>,
     Path((deployment, dag_id)): Path<(String, String)>,
     headers: HeaderMap,
-    Form(form): Form<TriggerForm>,
+    Form(form): Form<Vec<(String, String)>>,
 ) -> Response {
-    let text = form.planned_for.trim();
+    let what = format!("Trigger {dag_id}");
+    let text = form
+        .iter()
+        .find(|(k, _)| k == "for")
+        .map_or("", |(_, v)| v.trim());
     let planned_for = if text.is_empty() {
         None
     } else {
         match parse_for(text) {
             Ok(at) => Some(at.at),
-            Err(message) => return failed(format!("Trigger {dag_id}"), &message),
+            Err(message) => return failed(what, &message),
         }
     };
+    // Not sent, but not definite either: an earlier send under this action's key may have
+    // been stored (its answer lost), and the browser must keep the key for the next try, or
+    // that try would trigger a second run (B140).
+    let mut params = None;
+    if form.iter().any(|(k, _)| k == "params")
+        && let Some(at) = ui.deployments.iter().find(|d| d.name == deployment)
+    {
+        let fields = match at.client.dag(&dag_id).await {
+            Ok(dag) => dag.params,
+            Err(error) => return not_sent(what, &error.to_string()),
+        };
+        params = match params_form::values(&fields, &form) {
+            Ok(values) => values,
+            Err(message) => return not_sent(what, &message),
+        };
+    }
     act(
         &ui,
         &headers,
         &deployment,
-        format!("Trigger {dag_id}"),
+        what,
         Action::Trigger {
             dag_id: &dag_id,
             planned_for,
+            params: params.as_ref(),
         },
     )
     .await
@@ -344,6 +367,7 @@ enum Action<'a> {
     Trigger {
         dag_id: &'a str,
         planned_for: Option<jiff::Timestamp>,
+        params: Option<&'a serde_json::Map<String, serde_json::Value>>,
     },
     CancelRun {
         run_id: &'a str,
@@ -371,7 +395,8 @@ impl Action<'_> {
             Self::Trigger {
                 dag_id,
                 planned_for,
-            } => client.trigger(dag_id, planned_for, None).await,
+                params,
+            } => client.trigger(dag_id, planned_for, params).await,
             Self::CancelRun { run_id } => client.cancel(run_id).await,
             Self::Task {
                 run_id,
@@ -431,6 +456,19 @@ fn poll_url<T>(page: &Page, deployment: &Deployment<T>, command_id: &str, what: 
         path_segment(command_id),
         path_segment(what)
     )
+}
+
+/// A command not sent this time, its key kept by the browser (see [`trigger`]).
+fn not_sent(what: String, reason: &str) -> Response {
+    fragment(&CommandFragment {
+        what,
+        status: "failed".to_owned(),
+        reason: reason.to_owned(),
+        poll: String::new(),
+        link: None,
+        poll_ms: POLL_MS,
+        command_id: String::new(),
+    })
 }
 
 /// A command that couldn't be sent.

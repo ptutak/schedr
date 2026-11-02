@@ -9,7 +9,7 @@
   {% if let Some(why) = row.held %}
   <button type="button" class="action" disabled title="{{ why }}">Trigger</button>
   {% else %}
-  {% call confirm::action("Trigger", "Trigger a run of " ~ row.dag_id ~ "?", "A manual run, for the moment given (now if none).", actions ~ "/trigger", "trigger", page.base) %}{% endcall %}
+  {% call confirm::action("Trigger", "Trigger a run of " ~ row.dag_id ~ "?", "A manual run, for the moment given (now if none).", actions ~ "/trigger", "trigger", page.base, params_html) %}{% endcall %}
   {% endif %}
   {% if row.paused %}
   {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "The scheduler creates its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}

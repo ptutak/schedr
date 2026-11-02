@@ -1,0 +1,28 @@
+{#- The trigger dialog's run parameters (decisions 149-152): an input per field, named `p:<field>`;
+    a field that may be `null` has a "none" box (`none:<field>`); `params` marks the form as
+    having them (an unchecked box sends nothing). A secret field is an empty password input. -#}
+{% if !inputs.is_empty() %}
+<fieldset class="params">
+  <legend>Parameters</legend>
+  <input type="hidden" name="params" value="{{ fingerprint }}">
+  {% for input in inputs %}
+  <div class="param">
+    <label class="field"><span class="mono">{{ input.name }}</span>
+    {% if input.control == "checkbox" %}
+      <input type="checkbox" name="p:{{ input.name }}"{% if input.checked %} checked{% endif %}>
+    {% else if input.control == "select" %}
+      <select name="p:{{ input.name }}"{% if input.required %} required{% endif %}>
+        {% for (value, label, selected) in input.options %}<option value="{{ value }}"{% if *selected %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    {% else if input.control == "textarea" %}
+      <textarea name="p:{{ input.name }}" rows="3" placeholder="{{ input.placeholder }}"{% if input.required %} required{% endif %}>{{ input.value }}</textarea>
+    {% else %}
+      <input type="{{ input.input_type }}" name="p:{{ input.name }}" value="{{ input.value }}"{% if !input.step.is_empty() %} step="{{ input.step }}"{% endif %} placeholder="{{ input.placeholder }}" autocomplete="off"{% if input.required %} required{% endif %}>
+    {% endif %}
+    </label>
+    {% if let Some(checked) = input.none %}<label class="check none"><input type="checkbox" name="none:{{ input.name }}"{% if checked %} checked{% endif %}> none</label>{% endif %}
+  </div>
+  {% endfor %}
+  <p class="dim">Fields left as they are keep their defaults.</p>
+</fieldset>
+{% endif %}

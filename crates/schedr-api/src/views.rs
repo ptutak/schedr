@@ -17,8 +17,11 @@ use schedr_model::{DagId, DagLocation, RunState};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+mod form;
 #[cfg(test)]
 mod tests;
+
+pub use form::{ParamFieldView, ParamKind};
 
 /// An error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -71,6 +74,10 @@ pub struct DagView {
     /// 96): only on one DAG's view (`GET /api/v1/dags/{dag_id}`), not in the list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limits: Vec<LimitView>,
+    /// The run parameters its current version takes, as the UI's trigger form shows them
+    /// (decision 149): only on one DAG's view, not in the list; none when it takes none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<ParamFieldView>,
 }
 
 /// A concurrency limit and how many of what it limits run now: open attempts (assigned, not
@@ -166,6 +173,7 @@ impl DagView {
                 message: mask_text(&h.message),
             }),
             limits: Vec::new(),
+            params: Vec::new(),
         }
     }
 }

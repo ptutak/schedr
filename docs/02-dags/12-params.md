@@ -183,9 +183,93 @@ Masking covers the values a run is given. Text written in the DAG's code (a defa
 such as a task's output type, an import error or `schedr dags check`. Don't write a secret
 in a DAG file; give it when the run is triggered.
 
-The UI's Trigger dialog sends the moment only, so the run takes the defaults. A field with
-no default is rejected, and the result says why. A form for other values is
-[Run parameters and the DAG context](../_generated/05-design/07-python-api-structure.md#run-parameters-and-the-dag-context).
+### The Trigger dialog
+
+The [Trigger dialog](../03-guide/12-ui.md#actions) on the DAG's page has an input for each
+field, filled in with its default. A DAG that takes none has no inputs there, and the run
+uses the defaults. The inputs sit under **Parameters**. Under them the dialog says "Fields
+left as they are keep their defaults." A dataclass's fields are in the order they are
+declared. A model's are by name.
+
+| Field | The input |
+|---|---|
+| `bool` | A check box. Unchecked is false. |
+| `int` | A number. A fraction is refused, `1.5` and `1.0` alike: `` `name` isn't a whole number ``. The CLI and the API may send `1.0` (`count:=1.0`); the master stores it as `1`. |
+| `float` | A number. Text that is not a number is refused: `` `name` isn't a number ``. |
+| `str` | Text. |
+| `date` | A date. |
+| `datetime` | Text with an offset (`2026-10-15T03:00:00+02:00`). |
+| `timedelta` | Text, an ISO 8601 duration (`PT1H30M`). |
+| `Literal`, or a model's `enum` or `const` | A list of the choices. When a choice mixes text with a number or a bool, each is labelled as JSON, so `1` and `"1"` stay apart. With no default the list starts on "choose". A value that is not one of them is refused: `` `name` isn't one of its choices ``. |
+| a nested dataclass or model, a list, a tuple, a dict, or a union such as `int \| str` | A JSON box, filled in with the default as JSON, the form `--params` takes. JSON that does not parse is refused. The reason names the line and the column: `` `name` isn't JSON (line N, column N) ``. |
+
+`date | None` has that field's input and a box labelled "none" beside it, and the same for
+`bool`, `int`, `float`, `str`, `datetime`, `timedelta` and `Literal`. The box starts
+checked when the default is `null`. Checked, the value is `null` and the input beside it
+is ignored. A `Literal` that includes `None` works this way: `null` is not one of the
+choices. A JSON field that may be `null` (`list[int] | None`, a nested model or `None`)
+keeps the JSON box and has no "none" box. A `null` default leaves the box empty, and
+leaving it empty keeps that default. To send `null`, write `null` in the box.
+
+A secret field is an empty password box, in place of the input in the table. A field is
+secret when a word of its name names a secret, or when its default or a choice holds one
+(a password in an address, or a nested field with such a name). The words are the ones a
+task output uses ([Secrets](../03-guide/12-ui.md#secrets)): `password`, `api_key`,
+`apiKey`, `clientSecret` and `access_token` are secret, and `partition_key` is shown. The
+default and the choices never reach the page. An optional box says "leave empty for the
+default"; left empty, the master uses the default. An empty required one is left out, and
+the master says the field is required. Text in the box is sent. For a secret `int`,
+`float`, `bool`, choice or JSON value, text that reads as JSON is that JSON (`5432` a
+number, `true` a bool); other text is sent as text and the master checks it. A secret
+`str`, `date`, `datetime` or duration is the text as typed. When the field has a "none"
+box, the secret one does too. It starts unchecked: the default is not on the page.
+Checking it sends `null`.
+
+Confirm sends a field only when its value differs from the default the page was given. The
+page has no default for a secret, so any text in that box is sent. An empty number, date,
+datetime, duration, choice or JSON box is left out. The master fills in the rest and
+checks the values as it checks any trigger, earlier in this section. Its refusal is the
+result at the top of the page: **rejected**, with the master's reason
+([Actions](../03-guide/12-ui.md#actions)). A value the form refuses is not sent. The result
+says "not sent", and why. The reason names the field and what is wrong, and never quotes
+what was typed.
+
+The browser asks for a required field that is not a `bool` and has no "none" box. A
+required check box can stay unchecked: that is false. Checking "none" answers a field that
+has that box.
+
+A required text can't be given as empty. It has no default, so an empty box is left out
+and the master says the field is required. An empty text box on a field that has a default
+is the empty string, when "none" is unchecked. The CLI (`-p name=`) and the API
+(`"name": ""`) can send an empty string for a required text.
+
+A page that showed parameters, loaded before those fields changed, is refused. The result
+says "not sent", with this reason:
+
+```
+the DAG's parameters changed since this page was loaded: reload it and trigger again
+```
+
+The fields have changed when one was added or dropped, or its kind changed, or whether it
+is required, whether it may be `null`, whether it is secret, its choices, or its default:
+a box still showing the old default would otherwise send it as if it were chosen. A secret
+field's default isn't on the page, so a change of it alone doesn't refuse the page: its
+empty box sends nothing, and the master uses the current default. A page that showed no
+parameters sends none. The master fills in the defaults, and refuses a field that is now
+required.
+
+`GET /api/v1/dags/{dag_id}` carries these fields as `params`. `GET /api/v1/dags` leaves
+`params` out. The key is absent when the DAG takes none. Each field has:
+
+| Key | What it is |
+|---|---|
+| `name` | The field's name, as a trigger's values name it. |
+| `kind` | `bool`, `int`, `float`, `text`, `date`, `datetime`, `duration`, `choice` or `json`. |
+| `required` | Whether a trigger must give it: it has no default, and the schema lists it as required. |
+| `nullable` | Whether it may be `null` (the "none" box). False for a JSON field, even when the type allows `null`. |
+| `secret` | Whether the default and the choices are withheld. |
+| `default` | The default as JSON. Present as `null` when `null` is the default. Absent when there is no default, and when `secret` is true. |
+| `choices` | A `choice`'s values, as JSON. Absent when there are none, and when `secret` is true. `null` is not an entry: the field is `nullable`. |
 
 The values that were accepted stay with the run. A queued run keeps the ones stored when
 it was created. A later version of the DAG does not replace them. Every task of the run is

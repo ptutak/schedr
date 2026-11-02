@@ -113,6 +113,47 @@ def test_a_run_is_triggered_from_its_dags_page_and_shown_until_applied(
     expect(page.locator("dl.facts dd").first).to_contain_text("2026-10-17 01:00 UTC")
 
 
+def test_a_run_is_triggered_with_params_from_the_form(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    page.goto(f"{standalone['url']}/d/default/dags/form_params")
+    page.get_by_role("button", name="Trigger").first.click()
+    dialog = page.locator("dialog.confirm[open]")
+    expect(dialog).to_be_visible()
+    # Pre-filled with the defaults; the secret one's default never reaches the page.
+    expect(dialog.locator("input[name='p:rows']")).to_have_value("10")
+    expect(dialog.locator("select[name='p:mode']")).to_have_value('"fast"')
+    expect(dialog.locator("input[name='p:api_token']")).to_have_attribute("type", "password")
+    expect(dialog.locator("input[name='p:api_token']")).to_have_value("")
+    assert "hunter2" not in page.content()
+    dialog.locator("input[name='p:region']").fill("us")
+    dialog.locator("input[name='p:rows']").fill("25")
+    dialog.locator("input[name='none:day']").uncheck()
+    dialog.locator("input[name='p:day']").fill("2026-10-20")
+    dialog.locator("select[name='p:mode']").select_option('"slow"')
+    dialog.get_by_role("button", name="Trigger").click()
+    expect(dialog).to_be_hidden()
+    result = page.locator("#action-results .command").first
+    expect(result).to_have_class(re.compile(r"\bapplied\b"), timeout=15_000)
+    result.locator("a").click()
+    shown = page.locator("dd.params")
+    expect(shown).to_contain_text("region = us")
+    expect(shown).to_contain_text("rows = 25")
+    expect(shown).to_contain_text("mode = slow")
+    expect(shown).to_contain_text("day = 2026-10-20")
+
+
+def test_a_refused_param_shows_the_masters_reason(page: Page, standalone: dict[str, str]) -> None:
+    page.goto(f"{standalone['url']}/d/default/dags/form_params")
+    page.get_by_role("button", name="Trigger").first.click()
+    dialog = page.locator("dialog.confirm[open]")
+    dialog.locator("textarea[name='p:tags']").fill("[1, 2]")
+    dialog.get_by_role("button", name="Trigger").click()
+    result = page.locator("#action-results .command").first
+    expect(result).to_have_class(re.compile(r"\brejected\b"), timeout=15_000)
+    expect(result).to_contain_text("tags")
+
+
 def test_an_open_dialog_survives_a_live_update(
     page: Page, standalone: dict[str, str], trigger: Callable[[str], None]
 ) -> None:
