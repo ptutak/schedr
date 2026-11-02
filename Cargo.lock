@@ -3096,7 +3096,7 @@ dependencies = [
 
 [[package]]
 name = "schedr"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "axum",
  "bcrypt",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-agent"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "axum",
  "http-body-util",
@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-api"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -3197,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-client"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "axum",
  "http-body-util",
@@ -3220,7 +3220,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-config"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "figment",
  "pretty_assertions",
@@ -3233,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-db"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "jiff",
  "pretty_assertions",
@@ -3251,7 +3251,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-fd"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "pretty_assertions",
  "rustix",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-master"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "croner",
  "hyper-util",
@@ -3289,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-model"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "jiff",
  "pretty_assertions",
@@ -3302,7 +3302,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-proto"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "pretty_assertions",
  "prost",
@@ -3319,7 +3319,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-tls"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "axum",
  "hyper-util",
@@ -3341,7 +3341,7 @@ dependencies = [
 
 [[package]]
 name = "schedr-ui"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "askama",
  "axum",
@@ -4962,7 +4962,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.0-rc1"
 dependencies = [
  "clap",
  "pretty_assertions",
