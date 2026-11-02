@@ -12,6 +12,12 @@ trap cleanup EXIT
 "$tool" run --rm --entrypoint test "$image" -f /usr/share/schedr/docs/index.html || {
     echo "the image has no documentation for the UI's /docs"; exit 1
 }
+# schedr's licence and its crates', installed from the wheel with the package.
+"$tool" run --rm --entrypoint python "$image" -c 'from importlib.metadata import distribution
+files = [str(f) for f in distribution("schedr").files or []]
+assert any(f.endswith("licenses/LICENSE-THIRD-PARTY") for f in files), "no LICENSE-THIRD-PARTY"' || {
+    echo "the base image has no LICENSE-THIRD-PARTY"; exit 1
+}
 # Without --migrate (as the chart runs it), a fresh database is refused...
 if "$tool" run --rm --user 54321:0 "$image" >/dev/null 2>&1; then
     echo "a database not migrated wasn't refused"; exit 1

@@ -6,8 +6,10 @@ dynamic = ["version"]
 description = "schedr scheduler: Python DAG API (native and Airflow look-alike) plus the schedr binary."
 readme = "README.md"
 requires-python = ">=3.14"
-license = { text = "MIT" }
-authors = [{ name = "Piotr Tutak", email = "piotr.tutak@amartus.com" }]
+license = "MIT"
+# The binary's crates' licences beside schedr's own (scripts/third_party.py writes it).
+license-files = ["LICENSE", "LICENSE-THIRD-PARTY"]
+authors = [{ name = "Piotr Tutak", email = "p.tutak@outlook.com" }]
 classifiers = [
     # A preview until 1.0.0 (decision 156): no upgrade path between 0.x versions.
     "Development Status :: 3 - Alpha",

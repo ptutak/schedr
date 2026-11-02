@@ -16,6 +16,9 @@ fi
 "$tool" run --rm --entrypoint test "$image" -f /usr/share/schedr/docs/index.html || {
     echo "the server image has no documentation for the UI's /docs"; exit 1
 }
+"$tool" run --rm --entrypoint test "$image" -s /usr/share/licenses/schedr/LICENSE-THIRD-PARTY || {
+    echo "the server image has no LICENSE-THIRD-PARTY"; exit 1
+}
 # The roles on one SQLite file in one container (one host, as SQLite needs), in mesh mode
 # (no certificates).
 "$tool" run -d --name "$name" --user 54321:0 -p 127.0.0.1::8090 \

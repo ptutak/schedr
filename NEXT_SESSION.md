@@ -21,11 +21,16 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   every wheel attested. Each image's first push was denied until ghcr linked its package
   (re-run with `gh run rerun <id> --failed`). Then decision 164: the image with Python is
   `ghcr.io/ptutak/schedr` (the rc's `schedr-worker` package is an orphan).
-- **Now R0.3:** the 0.1.0 commit (version, chart appVersion, lockfile, schema, the rename),
-  then the tag `v0.1.0`, the user approving the `pypi` deployment; the new `schedr` package's
-  first push will be denied once: the user checks its "Inherited access" and sets it
-  public, then re-run the failed jobs. Then check it as a user (pip, anonymous pulls,
-  `gh attestation verify`) and mark R0.3 done.
+- **R0.3 in progress.** The first `v0.1.0` (on `77073b1`) was cancelled before PyPI and its
+  tag deleted: the author became `p.tutak@outlook.com` (Cargo.toml, pyproject.toml, the
+  OpenAPI document; this repository's `git config user.email` too), `LICENSE-THIRD-PARTY`
+  was added (`scripts/third_party.py`, `make third-party(-check)`, in the wheels, both
+  images and their smoke tests; PEP 639 `license-files`), and the release deploys the docs
+  to GitHub Pages (decisions 165, 166; the user enabled Pages and let `github-pages` deploy
+  from `v*` tags). TestPyPI's `0.1.0rc1` and the `schedr-worker` package deleted by the user.
+  Next: that commit accepted, CI green, tag `v0.1.0` again, the user approves `pypi`; the new
+  `schedr` package's first push is likely denied once (link, public, re-run). Then check it
+  as a user and mark R0.3 done.
 - **The disk:** WSL's ext4.vhdx is on Windows C: and not sparse; stale worktrees' `target/`
   filled it (WSL died, 2026-11-02). Remove a step's worktrees, branches and pyenv envs once
   it is committed; check C: with `powershell.exe -NoProfile -Command "(Get-PSDrive C).Free/1GB"`.

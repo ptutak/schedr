@@ -2,7 +2,7 @@ name: Release
 
 # A pushed tag releases (decisions 153-163, PROJECT.md: Packaging and releases):
 #   vX.Y.Z     PyPI (environment `pypi`, approved by the maintainer), a GitHub Release, the
-#              images tagged X.Y.Z and X.Y
+#              images tagged X.Y.Z and X.Y, the docs on GitHub Pages
 #   vX.Y.ZrcN  the rehearsal: TestPyPI (environment `testpypi`), a GitHub pre-release, the
 #              images tagged X.Y.ZrcN only
 # The tag must name the version in Cargo.toml (`X.Y.Z` or `X.Y.Z-rcN`) and have a
@@ -186,3 +186,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
+
+  # The documentation CI built from the tag, on GitHub Pages (decisions 165, 166): the site
+  # shows the latest release; a rehearsal doesn't replace it.
+  pages:
+    needs: [version, github-release]
+    if: needs.version.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: docs-site
+          path: site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

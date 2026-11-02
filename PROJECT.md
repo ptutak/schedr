@@ -7167,6 +7167,25 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     chart stays in the repository. Not chosen: an OCI chart; multi-arch images (later).
     The chart's default images are these two, tagged with its `appVersion`, which a release
     sets to its version (`scripts/release.py check` refuses another; the user, 2026-11-02).
+  - **The licences a release carries** (the user, 2026-11-02, before 0.1.0): `LICENSE`
+    (schedr, MIT) and `LICENSE-THIRD-PARTY`, the licences of the crates the binary links
+    (normal dependencies, no proc macros, on the wheels' four platforms) with their own
+    licence files, each text once, and the UI's vendored htmx (0BSD). Written from
+    `Cargo.lock` by `scripts/third_party.py` (`make third-party`), checked by
+    `make third-party-check` in `make check` and CI; the wheels carry both
+    (`license-files`, PEP 639: `license = "MIT"`), the base image through the package, the
+    server image in `/usr/share/licenses/schedr`; each smoke test checks they are there.
+    Not chosen: `cargo about` (a tool to install and pin, for what `cargo metadata` gives);
+    nothing until 0.1.1 (the MIT and Apache-2.0 notices go with every binary copy). The author
+    on PyPI and in the crates is `p.tutak@outlook.com` (the user, the same day).
+  - **165. The docs on GitHub Pages** (https://ptutak.github.io/schedr/; the user,
+    2026-11-02): the site CI builds (`docs-site`, what `make docs` makes), deployed by the
+    release workflow's last job (`actions/deploy-pages`, environment `github-pages`). Not
+    chosen: Read the Docs (an account, and its build would have to reproduce ours: Rust for
+    rustdoc and the generated pages).
+  - **166. The site shows the latest release** (the user, 2026-11-02): a final tag deploys
+    its docs; a rehearsal and main don't. Not chosen: main on every push (ahead of what
+    users installed); both, main under `/dev/` (two builds to keep apart).
   - **164. The image with Python is `ghcr.io/ptutak/schedr`, the one without
     `schedr-server`** (the user, 2026-11-02, after the rc pushed `schedr-worker`): one binary
     runs every role, so the image for anything that runs tasks (standalone, workers) is

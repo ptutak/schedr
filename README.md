@@ -70,6 +70,8 @@ What works today:
 
 ## Documentation
 
+Online at https://ptutak.github.io/schedr/ (the latest release).
+
 `make docs` builds the site into `site/` (`make docs-serve` serves it at
 http://localhost:8765). Its sections:
 

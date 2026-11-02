@@ -7,7 +7,7 @@ export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
 
-.PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -70,6 +70,14 @@ bugs:            ## Regenerate BUGS.md from bugs/
 
 bugs-check:      ## Fail if a bug's file is invalid or BUGS.md is out of date
 	python3 scripts/bugs.py check
+
+third-party:     ## Write LICENSE-THIRD-PARTY (the binary's crates' licences) from Cargo.lock
+	cargo fetch --locked
+	python3 scripts/third_party.py
+
+third-party-check: ## Fail if LICENSE-THIRD-PARTY is out of date
+	cargo fetch --locked
+	python3 scripts/third_party.py --check
 
 docs:            ## Build the documentation site into site/ (from scratch; fails on any warning)
 	cargo xtask docs-sources
@@ -375,7 +383,7 @@ pin-check:       ## Fail if a workflow, tool, image or requirements pin is missi
 
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
-	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check bugs-check chart-check test test-integration
+	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check bugs-check third-party-check chart-check test test-integration
 
 target-size:     ## Clean target/ when it holds more than TARGET_MAX_GIB (default 50)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \

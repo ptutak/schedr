@@ -10,13 +10,17 @@
 FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS wheel
 COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
 RUN cd /tmp && unzip -q schedr-*.whl 'schedr-*.data/scripts/schedr' \
-    && mv schedr-*.data/scripts/schedr /schedr
+        'schedr-*.dist-info/licenses/*' \
+    && mv schedr-*.data/scripts/schedr /schedr \
+    && mv schedr-*.dist-info/licenses /licenses
 
 # Same digest as the wheel stage.
 FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 # tini as PID 1 forwards signals and reaps; CA certificates for Postgres over TLS and the like.
 RUN apk add --no-cache tini ca-certificates
 COPY --from=wheel /schedr /usr/local/bin/schedr
+# schedr's licence and its crates' (LICENSE-THIRD-PARTY), as the wheel carries them.
+COPY --from=wheel /licenses /usr/share/licenses/schedr
 # The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
 COPY dist/docs /usr/share/schedr/docs
 # OpenShift runs containers under an arbitrary UID in group 0: HOME writable by group 0.

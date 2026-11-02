@@ -229,12 +229,13 @@ Separate jobs. The ones that run on this machine each have a make target:
      (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`) and
      `appVersion: "X.Y.Zrc1"` in `charts/schedr/Chart.yaml` (the chart's images default to
      that tag; `release.py check` refuses another), run
-     `cargo update -w` so `Cargo.lock` follows (the wheels build `--locked`) and `make schema`
-     (the OpenAPI document carries the version), commit, tag
+     `cargo update -w` so `Cargo.lock` follows (the wheels build `--locked`), `make schema`
+     (the OpenAPI document carries the version) and `make third-party` (the crates' licences),
+     commit, tag
      `vX.Y.Zrc1`, push the tag. It goes to TestPyPI, a GitHub pre-release and images
      tagged `X.Y.Zrc1`.
-  3. The release: `version = "X.Y.Z"`, `appVersion: "X.Y.Z"`, `cargo update -w` and
-     `make schema` again, commit, tag `vX.Y.Z`, push the tag; approve the `pypi`
+  3. The release: `version = "X.Y.Z"`, `appVersion: "X.Y.Z"`, `cargo update -w`,
+     `make schema` and `make third-party` again, commit, tag `vX.Y.Z`, push the tag; approve the `pypi`
      environment's deployment when GitHub asks. PyPI, the GitHub Release, the images tagged
      `X.Y.Z` and `X.Y`.
   A failed release after the upload can't reuse the version (PyPI refuses a file twice):
@@ -262,6 +263,9 @@ Separate jobs. The ones that run on this machine each have a make target:
   exists, otherwise back to the newest earlier one that meets it and isn't yanked.
 - Each dependency is listed in `PROJECT.md` (a "Libraries" table: need, choice, why, and what
   wasn't chosen).
+- **A change to `Cargo.lock`** (a crate added, removed or bumped) changes the binary's
+  licences: `make third-party` writes `LICENSE-THIRD-PARTY` again (`make check` and CI fail
+  until it is current).
 - **GitHub Actions and the tools they download** follow the same age rule. The pins, and
   how to bump one (the age check, the changelog, the commit SHA), are in `PROJECT.md`,
   CI supply-chain pins.

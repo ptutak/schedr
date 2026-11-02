@@ -40,6 +40,12 @@ fail() {
 
 step() { echo "== $*"; }
 
+step "the wheel carries schedr's licence and its crates' (LICENSE-THIRD-PARTY)"
+listing=$("$python" -m zipfile -l "$wheel")
+for name in LICENSE LICENSE-THIRD-PARTY; do
+    grep -q "dist-info/licenses/$name " <<<"$listing" || fail "no $name in the wheel"
+done
+
 step "installing $(basename "$wheel") into a fresh venv"
 "$python" -m venv "$work/venv"
 "$work/venv/bin/pip" install --quiet --disable-pip-version-check "$wheel"
