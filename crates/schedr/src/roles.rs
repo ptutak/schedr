@@ -242,7 +242,7 @@ pub fn agent_settings(
             config_json: masked(config).to_string(),
         },
         worker_id,
-        // The storages from `[secret_storage]` come with M4.6c (`db`) and M4.6d (Vault).
+        // Made by the role, which knows whether it has a database (`SecretPlan::stores`).
         secrets: std::sync::Arc::new(schedr_agent::secrets::SecretStores::none()),
     })
 }
@@ -1479,6 +1479,10 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
+    // No database here: never the `db` storage.
+    agent.secrets = std::sync::Arc::new(
+        crate::secret_storage::SecretPlan::new(&config.secret_storage, env).stores(None)?,
+    );
     let _lock = lock_journal(&agent)?;
     let address = SocketAddr::new(config.worker.log_bind, config.worker.log_port);
     let log_listener = listen(address).await?;

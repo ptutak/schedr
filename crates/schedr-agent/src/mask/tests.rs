@@ -136,6 +136,31 @@ fn pythons_escaped_forms_are_masked() {
 }
 
 #[test]
+fn a_repr_of_unprintable_characters_is_masked() {
+    // CPython's `repr` escapes what `str.isprintable` refuses: `\xHH` up to U+00FF (a
+    // no-break space, a soft hyphen), `\uXXXX`, `\UXXXXXXXX`; it keeps the printable ones
+    // (from Grok's security review of M4.6b; the forms below are CPython's).
+    let cases = [
+        ("pass\u{a0}word", r"pass\xa0word"),
+        ("soft\u{ad}hy", r"soft\xadhy"),
+        ("zw\u{200b}sp", r"zw\u200bsp"),
+        ("pua\u{e000}x", r"pua\ue000x"),
+        ("line\u{2028}x", r"line\u2028x"),
+        ("nonbmp\u{e0001}x", r"nonbmp\U000e0001x"),
+        ("emoji\u{1f600}x", "emoji\u{1f600}x"),
+        ("tab\tq\u{7f}", r"tab\tq\x7f"),
+    ];
+    for (value, repr) in cases {
+        let set = set(&[("v", value)]);
+        assert_eq!(
+            set.mask_text(&format!("KeyError('{repr}')")),
+            "KeyError('****')",
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
 fn a_number_equal_to_a_value_is_masked() {
     let set = set(&[("n", "83912746")]);
     assert_eq!(

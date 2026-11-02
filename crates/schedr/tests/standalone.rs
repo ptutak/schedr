@@ -89,6 +89,7 @@ impl Standalone {
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
             .env("SCHEDR_DAG_PATH", &root)
+            .env("SCHEDR_SECRET_KEY", SECRET_KEY)
             .stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log))
             .spawn()
@@ -123,6 +124,30 @@ impl Standalone {
             .args(["--server", &self.api])
             .args(rest)
             .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
+    /// `schedr secrets ...` on this standalone's database (its SQLite file, or the URL
+    /// given): exit code, stdout, stderr.
+    fn secrets(&self, database_url: Option<&str>, args: &[&str]) -> (i32, String, String) {
+        let mut command = Command::new(BINARY);
+        command.env_clear();
+        if let Some(url) = database_url {
+            command.env("SCHEDR_CONFIG__DATABASE__URL", url);
+        }
+        let output = command
+            .arg("--config")
+            .arg(self.dir.path().join("config.toml"))
+            .arg("secrets")
+            .args(args)
+            .env("HOME", self.dir.path())
+            .env("SCHEDR_SECRET_KEY", SECRET_KEY)
             .output()
             .unwrap();
         (
@@ -273,6 +298,70 @@ with Dag("chain"):
     CommandOperator("report", ["echo", t"report {done}"])
 "#;
 
+/// Standalone's `SCHEDR_SECRET_KEY` (the `db` secret storage's).
+const SECRET_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+
+/// Reads a secret of the `db` storage, set with `schedr secrets set`.
+const SECRETS: &str = r#"
+from schedr import CommandOperator, Dag, secrets, task, task_ctx
+
+@task(secrets=["etl/db#user"])
+def check(password: str) -> int:
+    assert password == "hunter22-pw", "the password"
+    assert task_ctx.secret("etl/db#user") == "etl-user"
+    print("password is", password)
+    return len(password)
+
+with Dag("secrets"):
+    n = check(secrets["etl/db#password"])
+    CommandOperator("cmd", ["sh", "-c", 'echo "env $PW"; echo "len $0"', t"{n}"],
+        env={"PW": secrets["etl/db#password"]})
+"#;
+
+/// A task reads secrets set with the CLI, masked in its log; the table holds no value.
+fn secrets_set_with_the_cli_reach_a_task(standalone: &Standalone, database_url: Option<&str>) {
+    let (code, out, err) = standalone.secrets(
+        database_url,
+        &["set", "etl/db", "password=hunter22-pw", "user=etl-user"],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = standalone.secrets(database_url, &["list"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("etl/db\tpassword,user\t"), "{out}");
+    standalone.wait("DAG `secrets`", || standalone.dag_ids() == ["secrets"]);
+    let run_id = standalone.trigger("secrets");
+    standalone.wait_for_state(&run_id, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("password is ****") && logs.contains("env ****") && logs.contains("len 11"),
+        "{logs}"
+    );
+    assert!(!logs.contains("hunter22-pw"), "{logs}");
+}
+
+#[test]
+fn a_task_reads_secrets_set_with_the_cli() {
+    let standalone = Standalone::start(&[("secrets.py", SECRETS)], None);
+    secrets_set_with_the_cli_reach_a_task(&standalone, None);
+    // Encrypted at rest: no value in the SQLite files.
+    for entry in std::fs::read_dir(standalone.dir.path().join("data")).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("schedr.db")
+        {
+            let bytes = std::fs::read(&path).unwrap();
+            assert!(
+                !bytes.windows(11).any(|w| w == b"hunter22-pw"),
+                "{} holds the value",
+                path.display()
+            );
+        }
+    }
+}
+
 /// Every task log, of every worker (`data/logs/<worker ID>/`).
 fn logs(dir: &Path) -> String {
     let mut text = String::new();
@@ -330,8 +419,8 @@ fn a_chain_with_data_flow_into_a_command_runs_end_to_end() {
     a_chain_runs_end_to_end(&standalone);
 }
 
-#[test]
-fn the_same_run_works_on_postgres() {
+/// A new database on the test Postgres (`SCHEDR_TEST_POSTGRES_URL`): its URL.
+fn postgres_database() -> String {
     let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect(
         "SCHEDR_TEST_POSTGRES_URL: an administrative Postgres URL (`make test-integration` sets it)",
     );
@@ -350,8 +439,27 @@ fn the_same_run_works_on_postgres() {
         String::from_utf8_lossy(&created.stderr)
     );
     let (server, _) = admin.rsplit_once('/').unwrap();
-    let standalone = Standalone::start(&[("chain.py", CHAIN)], Some(&format!("{server}/{name}")));
+    format!("{server}/{name}")
+}
+
+#[test]
+fn the_same_run_works_on_postgres() {
+    let standalone = Standalone::start(&[("chain.py", CHAIN)], Some(&postgres_database()));
     a_chain_runs_end_to_end(&standalone);
+}
+
+#[test]
+fn a_task_reads_secrets_set_with_the_cli_on_postgres() {
+    let url = postgres_database();
+    let standalone = Standalone::start(&[("secrets.py", SECRETS)], Some(&url));
+    secrets_set_with_the_cli_reach_a_task(&standalone, Some(&url));
+    let stored = Command::new("psql")
+        .args([url.as_str(), "-tAc", "SELECT data FROM secrets"])
+        .output()
+        .unwrap();
+    let stored = String::from_utf8_lossy(&stored.stdout);
+    assert!(stored.contains("\"password\": \"v1:"), "{stored}");
+    assert!(!stored.contains("hunter22-pw"), "{stored}");
 }
 
 #[test]

@@ -76,6 +76,23 @@ fn help_succeeds_and_lists_the_commands() {
 }
 
 #[test]
+fn a_secrets_usage_error_doesnt_show_the_arguments() {
+    // Grok's finding in M4.6c's security review: clap quoted `password=...` on stderr.
+    let result = schedr(&["secrets", "get", "etl/db", "password=hunter22"], &[], &[]);
+    assert_eq!(result.code, 2);
+    assert!(!result.err.contains("hunter22"), "{}", result.err);
+    assert!(
+        result.err.contains("schedr secrets --help"),
+        "{}",
+        result.err
+    );
+    // Help still prints.
+    let help = schedr(&["secrets", "--help"], &[], &[]);
+    assert_eq!(help.code, 0);
+    assert!(help.out.contains("export"), "{}", help.out);
+}
+
+#[test]
 fn wrong_usage_exits_with_2() {
     let result = schedr(&["frobnicate"], &[], &[]);
     assert_eq!(result.code, EXIT_USAGE);

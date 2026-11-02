@@ -3987,6 +3987,17 @@ list) and likewise has no Python.
     `vault kv put secret/<path> @DIR/<path>.json`. Nothing is printed to the terminal. Not
     chosen: one JSON object on stdout (values through the terminal or a pipe, and a loop per
     path to load them); both forms (more to test and document).
+  - **171. A Vault value that isn't a string** (KV v2 holds any JSON) is read as its JSON
+    text: `5432` is `"5432"`, `true` is `"true"`, `["a", "b"]` is `'["a","b"]'`, as `vault kv
+    get -field=` prints it; masked as that text. Not chosen: refusing it (a secret another
+    tool wrote with numbers couldn't be used); typed values in Python tasks and text elsewhere
+    (two behaviours to document and mask).
+  - **172. Several storages without `default`** are refused at startup ("set [secret_storage]
+    default"); with one configured it is the default, with none standalone's `db` is. Which
+    storage `secrets['...']` means is said once there is a choice: adding a second storage
+    never moves unnamed secrets elsewhere. Not chosen: standalone falling back to `db` (a
+    second Vault would quietly switch them to the table); always naming the default, even for
+    a single Vault (more configuration for the common case).
   - **Claude's choices in M4.6b** (after the reviews by Grok and Codex; the user told):
     - **Masked forms** besides the value and its JSON form: JSON with every non-ASCII
       character as `\uXXXX` (Python's `json.dumps`), and Python's `repr` (an exception's
@@ -4012,6 +4023,41 @@ list) and likewise has no Python.
     - **Names are written as Python writes them**, `secrets['path#key']` (`repr`'s quotes),
       in Rust as in Python; a storage that can't be an attribute (not a Python name, a
       keyword, `_` first, `storage` itself) is `secrets.storage('name')[...]`.
+    - **Grok's second (security) review of M4.6b**, all three fixed: Python's `repr` escapes
+      what `str.isprintable` refuses (`\xa0` for a no-break space, `\u200b`, `\U000e0001`),
+      not only the controls, so that form is masked too; a cached secret is dropped when its
+      `cache_ttl` ends, not at the next fetch; the log's masking note is masked itself (a value
+      can be a word of it, or its own path or key).
+  - **Claude's choices in M4.6c** (the user told):
+    - **`schedr secrets set` merges:** the keys given are written, the secret's others kept
+      (as `vault kv patch`; `delete` and `set` again replace a whole secret).
+      `key=@FILE` is the file exactly; `key=-` is standard input with one trailing newline
+      dropped (a value typed or `echo`ed); a value starting with `@` is given with `-`.
+      Paths are those a DAG names, and no part is `.` or `..` (export makes files of them).
+    - **The CLI reaches the database as `schedr db` does**, `[database] url`, else
+      standalone's own SQLite file in the data directory; its schema must be up to date. It
+      reads `SCHEDR_SECRET_KEY`; `list` and `delete` work without it.
+    - **`get path`** (no `#key`) prints the whole secret as a JSON object.
+    - **Standalone starts without a key:** a read of the `db` storage then fails as
+      `secret_denied`, naming the missing `SCHEDR_SECRET_KEY` (a deployment with no secrets
+      needs none). A value written under another key fails alike, never decrypts to garbage.
+    - **The default storage**, without `default`: the only one configured, else standalone's
+      `db`; the implicit `db` caches for the default 60 s.
+    - **Export** makes DIR (mode 0700) if missing, its directories 0700, and each file with
+      `O_EXCL` (0600), so nothing existing is overwritten or followed.
+    - **Codex's review of M4.6c**, both fixed: `set` merges in one statement (Postgres's
+      `||`, SQLite's `json_patch`), as two writes to one secret at once lost keys on Postgres;
+      export reads every secret and checks every path before writing anything, and refuses
+      `a` with `a.json/b` (`a.json` would be a file and a directory).
+    - **Grok's security review of M4.6c:** fixed: `unmasked_prefixes` must end with `/` (`etl`
+      also matched `etl-other/`, `""` every path); a `secrets` usage error doesn't quote the
+      arguments (clap echoed `get etl/db password=...`); the CLI refuses control characters
+      in paths and keys (`list` writes one per line); export refuses a symbolic link as DIR
+      and removes what it wrote when a write fails. Rejected: putting back an older
+      ciphertext of the same `path#key` decrypts (a rollback): encryption under the key hides
+      and binds each value, it can't stop someone who can write the database from restoring
+      an older state, as restoring a backup does. Also found: a test run (`dags test`) got
+      standalone's configured storages instead of its `--secret` values; now only those.
 
 ## State storage
 

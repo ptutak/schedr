@@ -1675,7 +1675,8 @@ fn masked_lines(secrets: &AttemptSecrets) -> String {
              every text equal to its value is masked, also where it isn't the secret"
         );
     }
-    lines
+    // A value can be a word of the note, or its own path or key: masked here too.
+    secrets.mask.mask_text(&lines)
 }
 
 /// Appends the agent's own lines to a task's log (never through a link, as the log is

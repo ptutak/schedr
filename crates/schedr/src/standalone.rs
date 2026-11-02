@@ -47,6 +47,8 @@ mod tests;
 /// Everything `schedr standalone` runs, read from the configuration.
 #[derive(Debug, Clone)]
 pub struct Standalone {
+    /// The secret storages, made once the database is connected (`db` among them).
+    pub secret_storage: crate::secret_storage::SecretPlan,
     /// Where logs, the worker's journal and the SQLite database go.
     pub data_dir: PathBuf,
     /// The database (`[database] url`, else SQLite in the data directory).
@@ -110,6 +112,12 @@ pub struct Listening {
     pub ops: SocketAddr,
 }
 
+/// Standalone's SQLite file in the data directory, without `[database] url`.
+#[must_use]
+pub fn sqlite_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("schedr.db")
+}
+
 /// Reads the standalone setup from the configuration and the environment (`env` gives the
 /// data directory's default, the host name and what tasks may inherit).
 ///
@@ -124,7 +132,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         .database
         .url
         .clone()
-        .unwrap_or_else(|| format!("sqlite://{}", data_dir.join("schedr.db").display()));
+        .unwrap_or_else(|| format!("sqlite://{}", sqlite_file(&data_dir).display()));
     let localhost = |port| SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     Ok(Standalone {
         grpc: localhost(config.master.grpc_port),
@@ -140,6 +148,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         master: master_settings(config),
         tick: config.master.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
+        secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env),
         parse_file_timeout: config.dags.parse_file_timeout,
         auth: config.webserver.auth.clone(),
         ui_token_file: config.webserver.ui_token_file.clone(),
@@ -230,6 +239,7 @@ pub async fn run(
     let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout)
         .await?
         .with_notifications(setup.notifications, setup.notifications_url.clone());
+    agent.secrets = setup.secret_storage.for_role(Some(&db))?;
     let (master_id, problems, heartbeat) = heartbeat(&db, &setup.config, &stopped);
     let leading = lead(
         &db,

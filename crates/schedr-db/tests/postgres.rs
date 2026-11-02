@@ -1704,3 +1704,67 @@ async fn a_deployments_nodes_are_recorded_and_read() {
         }]
     );
 }
+
+#[tokio::test]
+async fn secrets_are_set_merged_listed_read_and_deleted() {
+    use schedr_db::secrets::SecretKey;
+    let db = fresh().await;
+    let key = SecretKey::generate().unwrap();
+    let values = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    };
+    db.set_secret(
+        &key,
+        "etl/db",
+        &values(&[("user", "etl"), ("password", "pw-1")]),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    db.set_secret(&key, "etl/db", &values(&[("password", "pw-2")]), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.secret(&key, "etl/db").await.unwrap(),
+        Some(values(&[("password", "pw-2"), ("user", "etl")]))
+    );
+    let listed = db.secret_entries("etl/").await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].keys, ["password", "user"]);
+    assert!(
+        listed[0].updated_at.starts_with("2026-10-21T08:00:00"),
+        "{listed:?}"
+    );
+    assert!(db.delete_secret("etl/db").await.unwrap());
+    assert_eq!(db.secret(&key, "etl/db").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn writes_to_one_secret_at_once_keep_every_key() {
+    // Codex's finding in M4.6c's review: a read, a merge and a write lost keys.
+    use schedr_db::secrets::SecretKey;
+    let db = fresh().await;
+    let key = SecretKey::generate().unwrap();
+    for path in ["new", "existing"] {
+        if path == "existing" {
+            let seed = BTreeMap::from([("seed".to_owned(), "s".to_owned())]);
+            db.set_secret(&key, path, &seed, ts(NOW)).await.unwrap();
+        }
+        let writes = (0..16).map(|i| {
+            let (db, key) = (db.clone(), key.clone());
+            tokio::spawn(async move {
+                let values = BTreeMap::from([(format!("k{i:02}"), format!("v{i}"))]);
+                db.set_secret(&key, path, &values, ts(NOW)).await.unwrap();
+            })
+        });
+        for write in writes.collect::<Vec<_>>() {
+            write.await.unwrap();
+        }
+        let stored = db.secret(&key, path).await.unwrap().unwrap();
+        let expected = 16 + usize::from(path == "existing");
+        assert_eq!(stored.len(), expected, "{path}: {:?}", stored.keys());
+    }
+}

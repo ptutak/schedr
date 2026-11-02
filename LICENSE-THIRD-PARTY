@@ -8,6 +8,7 @@ scripts/third_party.py from Cargo.lock: don't edit it by hand.
 Crates
 ------
 
+- aead 0.6.1: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
 - ahash 0.8.12: MIT OR Apache-2.0 (https://github.com/tkaitchuck/ahash)
 - aho-corasick 1.1.5: Unlicense OR MIT (https://github.com/BurntSushi/aho-corasick)
 - allocator-api2 0.2.21: MIT OR Apache-2.0 (https://github.com/zakarumych/allocator-api2)
@@ -45,6 +46,7 @@ Crates
 - bytes 1.12.1: MIT (https://github.com/tokio-rs/bytes)
 - cfg-if 1.0.5: MIT OR Apache-2.0 (https://github.com/rust-lang/cfg-if)
 - chacha20 0.10.2: MIT OR Apache-2.0 (https://github.com/RustCrypto/stream-ciphers)
+- chacha20poly1305 0.11.0: Apache-2.0 OR MIT (https://github.com/RustCrypto/AEADs)
 - cipher 0.5.2: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
 - clap 4.6.7: MIT OR Apache-2.0 (https://github.com/clap-rs/clap)
 - clap_builder 4.6.7: MIT OR Apache-2.0 (https://github.com/clap-rs/clap)
@@ -190,6 +192,7 @@ Crates
 - percent-encoding 2.3.2: MIT OR Apache-2.0 (https://github.com/servo/rust-url/)
 - pin-project 1.1.13: Apache-2.0 OR MIT (https://github.com/taiki-e/pin-project)
 - pin-project-lite 0.2.17: Apache-2.0 OR MIT (https://github.com/taiki-e/pin-project-lite)
+- poly1305 0.9.1: Apache-2.0 OR MIT (https://github.com/RustCrypto/universal-hashes)
 - potential_utf 0.1.6: Unicode-3.0 (https://github.com/unicode-org/icu4x)
 - powerfmt 0.2.1: MIT OR Apache-2.0 (https://github.com/jhpratt/powerfmt)
 - proc-macro2 1.0.107: MIT OR Apache-2.0 (https://github.com/dtolnay/proc-macro2)
@@ -295,6 +298,7 @@ Crates
 - unicode-ident 1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0 (https://github.com/dtolnay/unicode-ident)
 - unicode-normalization 0.1.26: (MIT OR Apache-2.0) AND Unicode-3.0 (https://github.com/unicode-rs/unicode-normalization)
 - unicode-properties 0.1.4: MIT/Apache-2.0 (https://github.com/unicode-rs/unicode-properties)
+- universal-hash 0.6.1: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
 - untrusted 0.7.1: ISC (https://github.com/briansmith/untrusted)
 - untrusted 0.9.0: ISC (https://github.com/briansmith/untrusted)
 - url 2.5.8: MIT OR Apache-2.0 (https://github.com/servo/rust-url)
@@ -348,6 +352,7 @@ Licence texts
 ==============================================================================
 
 Used by:
+  aead 0.6.1 (LICENSE-APACHE)
   ahash 0.8.12 (LICENSE-APACHE)
   asn1-rs 0.7.2 (LICENSE-APACHE)
   atomic-waker 1.1.2 (LICENSE-APACHE)
@@ -364,6 +369,7 @@ Used by:
   bstr 1.13.1 (LICENSE-APACHE)
   cfg-if 1.0.5 (LICENSE-APACHE)
   chacha20 0.10.2 (LICENSE-APACHE)
+  chacha20poly1305 0.11.0 (LICENSE-APACHE)
   cipher 0.5.2 (LICENSE-APACHE)
   cmov 0.5.4 (LICENSE-APACHE)
   const-oid 0.10.2 (LICENSE-APACHE)
@@ -432,6 +438,7 @@ Used by:
   parking_lot 0.12.5 (LICENSE-APACHE)
   parking_lot_core 0.9.12 (LICENSE-APACHE)
   percent-encoding 2.3.2 (LICENSE-APACHE)
+  poly1305 0.9.1 (LICENSE-APACHE)
   prometheus-client 0.25.1 (LICENSE-APACHE)
   prost 0.14.4 (LICENSE)
   prost-types 0.14.4 (LICENSE)
@@ -464,6 +471,7 @@ Used by:
   unicode-bidi 0.3.18 (LICENSE-APACHE)
   unicode-normalization 0.1.26 (LICENSE-APACHE)
   unicode-properties 0.1.4 (LICENSE-APACHE)
+  universal-hash 0.6.1 (LICENSE-APACHE)
   url 2.5.8 (LICENSE-APACHE)
   utf8_iter 1.0.4 (LICENSE-APACHE)
   utoipa 6.0.0 (LICENSE-APACHE)
@@ -667,13 +675,45 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-	http://www.apache.org/licenses/LICENSE-2.0
+   http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+==============================================================================
+
+Used by:
+  aead 0.6.1 (LICENSE-MIT)
+
+Copyright (c) 2019-2026 The RustCrypto Project Developers
+Copyright (c) 2019 MobileCoin, LLC
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 
@@ -2694,6 +2734,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
   chacha20 0.10.2 (LICENSE-MIT)
+  chacha20poly1305 0.11.0 (LICENSE-MIT)
 
 Copyright (c) 2019-2026 The RustCrypto Project Developers
 
@@ -7366,6 +7407,37 @@ SOFTWARE.
 ==============================================================================
 
 Used by:
+  poly1305 0.9.1 (LICENSE-MIT)
+
+Copyright (c) 2015-2026 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+==============================================================================
+
+Used by:
   powerfmt 0.2.1 (LICENSE-Apache)
 
 Apache License
@@ -10826,6 +10898,37 @@ license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
 at your option. All files in the project carrying such
 notice may not be copied, modified, or distributed except
 according to those terms.
+
+==============================================================================
+
+Used by:
+  universal-hash 0.6.1 (LICENSE-MIT)
+
+Copyright (c) 2019-2025 RustCrypto Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 

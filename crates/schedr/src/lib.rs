@@ -21,6 +21,8 @@ pub mod logging;
 pub mod node;
 pub mod ops;
 pub mod roles;
+pub mod secret_storage;
+pub mod secrets;
 pub mod standalone;
 pub use schedr_client::times;
 pub mod user;
@@ -48,10 +50,21 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let cli = match cli::Cli::try_parse_from(args) {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let cli = match cli::Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(e) if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
             return report(out, &e.to_string(), 0);
+        }
+        // clap quotes what it refused, and a `secrets` argument may be a value (`get etl/db
+        // password=...`): only the kind of mistake (Grok's finding in M4.6c's review).
+        Err(e) if args.iter().skip(1).any(|a| a == "secrets") => {
+            let message = format!(
+                "error: {}\n\nRun `schedr secrets --help` (the arguments aren't shown: one may \
+                 be a secret's value)\n",
+                e.kind()
+            );
+            return report(err, &message, EXIT_USAGE);
         }
         Err(e) => return report(err, &e.to_string(), EXIT_USAGE),
     };

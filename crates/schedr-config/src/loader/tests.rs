@@ -426,3 +426,82 @@ fn mapping_max_instances_is_read_and_must_be_positive() {
     .unwrap_err();
     assert_eq!(zero, ConfigError::NoInstances);
 }
+
+#[test]
+fn secret_storages_are_tables_by_name() {
+    let toml = r#"
+[secret_storage]
+default = "main"
+min_mask_length = 8
+
+[secret_storage.main]
+type = "db"
+cache_ttl = "5s"
+unmasked_prefixes = ["variables/"]
+
+[secret_storage.other-db]
+type = "db"
+"#;
+    let config = load(
+        Some(file(toml)),
+        &env(&[("SCHEDR_CONFIG__SECRET_STORAGE__MAIN__CACHE_TTL", "0s")]),
+        &[],
+    )
+    .unwrap();
+    let section = &config.secret_storage;
+    assert_eq!(section.default.as_deref(), Some("main"));
+    assert_eq!(section.min_mask_length, 8);
+    assert_eq!(section.storages["main"].cache_ttl, Duration::ZERO);
+    assert_eq!(section.storages["main"].unmasked_prefixes, ["variables/"]);
+    assert_eq!(
+        section.storages["other-db"].cache_ttl,
+        Duration::from_secs(60)
+    );
+    let defaults = load(None, &env(&[]), &[]).unwrap().secret_storage;
+    assert_eq!((defaults.default, defaults.min_mask_length), (None, 5));
+    // `db` is standalone's own: a default without configuring it.
+    let db = load(
+        Some(file("[secret_storage]\ndefault = \"db\"\n")),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(db.secret_storage.default.as_deref(), Some("db"));
+}
+
+#[rstest::rstest]
+#[case(
+    "[secret_storage]\ndefault = \"vault\"\n",
+    "default `vault` isn't a configured storage (configured: none"
+)]
+#[case("[secret_storage.\"a b\"]\ntype = \"db\"\n", "storage name `a b`")]
+#[case(
+    "[secret_storage.default]\ntype = \"db\"\n",
+    "expected a string for key \"default.secret_storage.default\""
+)]
+#[case(
+    "[secret_storage.x]\ntype = \"file\"\n",
+    "unknown variant: found `file`, expected ``db``"
+)]
+#[case(
+    "[secret_storage.x]\ntype = \"db\"\naddress = \"h\"\n",
+    "unknown field: found `address`"
+)]
+#[case(
+    "[secret_storage.x]\ntype = \"db\"\nunmasked_prefixes = [\"etl\"]\n",
+    "unmasked_prefixes: `etl` isn't a path prefix ending with `/`"
+)]
+#[case(
+    "[secret_storage.x]\ntype = \"db\"\nunmasked_prefixes = [\"\"]\n",
+    "unmasked_prefixes: `` isn't a path prefix"
+)]
+#[case(
+    "[secret_storage.a]\ntype = \"db\"\n[secret_storage.b]\ntype = \"db\"\n",
+    "several storages (a, b) and no `default`"
+)]
+fn a_bad_secret_storage_is_refused(#[case] toml: &str, #[case] message: &str) {
+    let error = load(Some(file(toml)), &env(&[]), &[])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(message), "{error}");
+}

@@ -134,6 +134,18 @@ async fn fetched_secrets_are_cached_for_the_ttl() {
 }
 
 #[tokio::test]
+async fn a_cached_secret_is_dropped_when_it_expires_without_another_read() {
+    // From Grok's security review of M4.6b: kept until the next fetch, it stayed in memory.
+    let mut storage = Storage::new(Arc::new(Counting::default()));
+    storage.cache_ttl = Duration::from_millis(50);
+    let stores = stores(storage);
+    stores.fetch(&name(None, "a", Some("k"))).await.unwrap();
+    assert_eq!(stores.cache.lock().unwrap().len(), 1);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(stores.cache.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_storage_error_keeps_its_kind_and_names_the_secret() {
     for (error, kind) in [
         (
@@ -266,4 +278,55 @@ async fn a_short_value_is_noted_once() {
         .await
         .unwrap();
     assert_eq!(*secrets.too_short.lock().unwrap(), [name(None, "a", None)]);
+}
+
+#[tokio::test]
+async fn the_db_storage_reads_the_table_under_the_key() {
+    use schedr_db::secrets::{SECRET_KEY_ENV, SecretKey};
+    let db = schedr_db::Database::connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let key = SecretKey::generate().unwrap();
+    let values = BTreeMap::from([("password".to_owned(), "hunter22".to_owned())]);
+    db.set_secret(
+        &key,
+        "etl/db",
+        &values,
+        "2026-11-02T20:00:00Z".parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let env = |key: &SecretKey| BTreeMap::from([(SECRET_KEY_ENV.to_owned(), key.to_base64())]);
+    let read = |storage: DbStorage| {
+        let stores = stores(Storage::new(Arc::new(storage)));
+        async move { stores.fetch(&name(None, "etl/db", Some("password"))).await }
+    };
+    assert_eq!(
+        read(DbStorage::new(db.clone(), &env(&key))).await,
+        Ok(json!("hunter22"))
+    );
+    let missing = DbStorage::new(db.clone(), &env(&key));
+    let stores_missing = stores(Storage::new(Arc::new(missing)));
+    let gone = stores_missing.fetch(&name(None, "nope", Some("k"))).await;
+    assert_eq!(gone.unwrap_err().kind(), "secret_not_found");
+    // No key, or another one: a configuration problem, not retried.
+    let keyless = DbStorage::new(db.clone(), &BTreeMap::new());
+    assert!(
+        keyless
+            .key_problem()
+            .is_some_and(|p| p.contains("isn't set"))
+    );
+    let error = read(keyless).await.unwrap_err();
+    assert_eq!(error.kind(), "secret_denied");
+    assert!(
+        error.to_string().contains("`SCHEDR_SECRET_KEY` isn't set"),
+        "{error}"
+    );
+    let other = SecretKey::generate().unwrap();
+    let error = read(DbStorage::new(db.clone(), &env(&other)))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), "secret_denied");
+    assert!(!error.to_string().contains("hunter22"), "{error}");
 }

@@ -15,6 +15,7 @@ jiff.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 rustix.workspace = true
+schedr-db.workspace = true
 schedr-model.workspace = true
 schedr-proto.workspace = true
 serde.workspace = true
@@ -25,6 +26,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
 tracing.workspace = true
+unicode-general-category.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
@@ -32,7 +34,6 @@ hyper-util.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
 rstest.workspace = true
-schedr-db.workspace = true
 schedr-master.workspace = true
 tempfile.workspace = true
 tower.workspace = true

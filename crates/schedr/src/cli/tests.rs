@@ -19,6 +19,7 @@ fn the_command_tree_is_consistent() {
 #[case(&["webserver"], "webserver")]
 #[case(&["standalone"], "standalone")]
 #[case(&["db", "migrate"], "db")]
+#[case(&["secrets", "set", "etl/db", "password=-"], "secrets")]
 #[case(&["dags", "list"], "dags")]
 #[case(&["runs", "list", "sync"], "runs")]
 #[case(&["tasks", "retry", "r1", "load"], "tasks")]

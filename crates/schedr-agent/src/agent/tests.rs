@@ -1689,6 +1689,34 @@ async fn an_ended_attempt_is_masked_and_takes_a_failed_reads_kind() {
     assert!(super::masked_lines(&secrets).contains("`secrets['etl/db#password']` was masked once"));
 }
 
+#[tokio::test]
+async fn the_masking_note_masks_a_value_it_would_repeat() {
+    // From Grok's security review of M4.6b: a value that is a word of the note, or its own
+    // path or key, was written in the clear by the note itself.
+    use crate::secrets::{AttemptSecrets, MemoryStorage, SecretStores};
+    use schedr_model::{SecretDecl, SecretName};
+    let word = SecretName {
+        storage: None,
+        path: "etl/db".into(),
+        key: Some("k".into()),
+    };
+    let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
+        word.clone(),
+        "masked".to_owned(),
+    )])));
+    let declared = vec![SecretDecl::Secret(word.clone())];
+    let secrets = AttemptSecrets::fetch(stores, std::slice::from_ref(&word), declared)
+        .await
+        .unwrap();
+    assert_eq!(secrets.mask.mask_text("x masked"), "x ****");
+    let note = super::masked_lines(&secrets);
+    assert!(
+        note.contains("`secrets['etl/db#k']` was **** once"),
+        "{note}"
+    );
+    assert!(!note.contains("masked"), "{note}");
+}
+
 /// Never answers in time: a storage that is down without saying so.
 #[derive(Debug)]
 struct Hanging;

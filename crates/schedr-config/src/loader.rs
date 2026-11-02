@@ -73,6 +73,9 @@ pub enum ConfigError {
         /// The size, as written.
         size: String,
     },
+    /// `[secret_storage]` can't be used: a bad storage name, or a `default` not configured.
+    #[error("[secret_storage] {0}")]
+    SecretStorage(String),
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
     NoInstances,
@@ -168,6 +171,7 @@ pub fn load(
     if config.mapping.max_instances == 0 {
         return Err(ConfigError::NoInstances);
     }
+    check_secret_storage(&config.secret_storage)?;
     if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {
         config.interpreters.insert(
             DEFAULT_DAG_INTERPRETER.to_owned(),
@@ -195,4 +199,64 @@ pub fn load(
         &config.scripts.roots,
     )?;
     Ok(config)
+}
+
+/// The secret storage name every standalone has (`[secret_storage]`'s `db`).
+pub const DB_STORAGE: &str = "db";
+
+/// `[secret_storage]`'s names and `default`. Which storages a role may have (`db` in
+/// standalone only) is the role's to check.
+fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result<(), ConfigError> {
+    for name in section.storages.keys() {
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !valid || name == "default" {
+            return Err(ConfigError::SecretStorage(format!(
+                "storage name `{name}`: letters, digits, `_` and `-` only, and not `default` \
+                 (DAGs write it `secrets.{name}[...]`)"
+            )));
+        }
+    }
+    for (name, storage) in &section.storages {
+        // A prefix matches the start of a path: `etl` would also be `etl-other/...`, and an
+        // empty one every path (Grok's finding in M4.6c's security review).
+        if let Some(bad) = storage
+            .unmasked_prefixes
+            .iter()
+            .find(|p| p.len() < 2 || !p.ends_with('/') || p.starts_with('/'))
+        {
+            return Err(ConfigError::SecretStorage(format!(
+                "[secret_storage.{name}] unmasked_prefixes: `{bad}` isn't a path prefix ending \
+                 with `/`, e.g. `variables/`"
+            )));
+        }
+    }
+    // Decision 172: which one `secrets['...']` means is said, never guessed, once there is a
+    // choice (adding a second storage mustn't move unnamed secrets elsewhere).
+    if section.default.is_none() && section.storages.len() > 1 {
+        let configured: Vec<&str> = section.storages.keys().map(String::as_str).collect();
+        return Err(ConfigError::SecretStorage(format!(
+            "several storages ({}) and no `default`: set [secret_storage] default to the one \
+             `secrets['...']` means",
+            configured.join(", ")
+        )));
+    }
+    if let Some(default) = &section.default
+        && default != DB_STORAGE
+        && !section.storages.contains_key(default)
+    {
+        let configured: Vec<&str> = section.storages.keys().map(String::as_str).collect();
+        return Err(ConfigError::SecretStorage(format!(
+            "default `{default}` isn't a configured storage (configured: {}; `db` in \
+             standalone)",
+            if configured.is_empty() {
+                "none".to_owned()
+            } else {
+                configured.join(", ")
+            }
+        )));
+    }
+    Ok(())
 }

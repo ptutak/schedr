@@ -56,6 +56,8 @@ pub struct Config {
     pub worker: WorkerSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
+    /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
+    pub secret_storage: SecretStorageSection,
     /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
     #[serde(skip)]
     pub dag_roots: Vec<Root>,
@@ -845,4 +847,68 @@ impl Default for TlsSection {
             reload_interval: Duration::from_secs(30),
         }
     }
+}
+
+/// `[secret_storage]`: where a worker's tasks get their secrets (only workers fetch them; see
+/// PROJECT.md, Secret storage). Each storage is a table of its own, named by its key
+/// (`[secret_storage.vault]`); standalone always has the `db` storage besides them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default)]
+pub struct SecretStorageSection {
+    /// The storage `secrets['...']` means: one configured below, or `db` in standalone. Unset:
+    /// the only storage configured, else `db` in standalone (none on a worker).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Values shorter than this many characters aren't masked in logs and outputs (masking
+    /// `1` would mangle them); the task's log says which.
+    pub min_mask_length: usize,
+    /// The storages, by name.
+    #[serde(flatten)]
+    pub storages: BTreeMap<String, SecretStorageConfig>,
+}
+
+impl Default for SecretStorageSection {
+    /// No storages, values from 5 characters masked.
+    fn default() -> Self {
+        Self {
+            default: None,
+            min_mask_length: 5,
+            storages: BTreeMap::new(),
+        }
+    }
+}
+
+/// A secret storage's kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretStorageType {
+    /// The `secrets` table of schedr's database, encrypted under `SCHEDR_SECRET_KEY`
+    /// (standalone only).
+    Db,
+}
+
+/// `[secret_storage.<name>]`: one secret storage.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretStorageConfig {
+    /// Its kind: `db`.
+    #[serde(rename = "type")]
+    pub kind: SecretStorageType,
+    /// How long a fetched value is kept in the agent's memory (never on disk); `0s` fetches
+    /// every time.
+    #[serde(
+        default = "default_cache_ttl",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub cache_ttl: Duration,
+    /// Path prefixes whose values aren't masked (e.g. `["variables/"]`: settings, not
+    /// credentials).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmasked_prefixes: Vec<String>,
+}
+
+const fn default_cache_ttl() -> Duration {
+    Duration::from_secs(60)
 }

@@ -326,11 +326,35 @@ fn python_repr_escaped(value: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if c.is_control() => {
-                let _ = write!(out, "\\x{:02x}", u32::from(c));
+            c if python_printable(c) => out.push(c),
+            c => {
+                let code = u32::from(c);
+                let _ = match code {
+                    ..=0xff => write!(out, "\\x{code:02x}"),
+                    0x100..=0xffff => write!(out, "\\u{code:04x}"),
+                    _ => write!(out, "\\U{code:08x}"),
+                };
             }
-            c => out.push(c),
         }
     }
     out
+}
+
+/// Python's `str.isprintable` for one character, which decides what its `repr` escapes:
+/// every category but the controls, formats, surrogates, private use, unassigned, and the
+/// separators other than the ASCII space.
+fn python_printable(c: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    c == ' '
+        || !matches!(
+            get_general_category(c),
+            G::Control
+                | G::Format
+                | G::Surrogate
+                | G::PrivateUse
+                | G::Unassigned
+                | G::LineSeparator
+                | G::ParagraphSeparator
+                | G::SpaceSeparator
+        )
 }

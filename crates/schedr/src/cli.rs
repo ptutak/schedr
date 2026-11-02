@@ -64,6 +64,13 @@ pub enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
+    /// Set, list, read and export the secrets of standalone's `db` storage (straight in the
+    /// database, as `db` is; values encrypted under `SCHEDR_SECRET_KEY`).
+    Secrets {
+        /// The secrets command.
+        #[command(subcommand)]
+        command: SecretsCommand,
+    },
     /// List, pause, check and test DAGs.
     Dags {
         /// How to reach the server.
@@ -127,6 +134,45 @@ pub enum DbCommand {
     },
     /// Show whether the schema fits this version of schedr.
     Status,
+}
+
+/// `schedr secrets ...`: the `db` secret storage (see PROJECT.md, Secret storage). Only
+/// `get` prints a value.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum SecretsCommand {
+    /// Set keys of the secret at PATH (made if there is none); its other keys are kept.
+    Set {
+        /// The secret's path, e.g. `etl/db`.
+        path: String,
+        /// `key=value`; `key=@FILE` for a file's content (exactly), `key=-` for standard input
+        /// (one trailing newline dropped). A value starting with `@` is set with `-`.
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        values: Vec<String>,
+    },
+    /// List the secrets' paths and key names (never the values).
+    List {
+        /// Only the paths starting with it, e.g. `etl/`.
+        prefix: Option<String>,
+    },
+    /// Print one value (`path#key`), or a whole secret as a JSON object (`path`).
+    Get {
+        /// `path#key` or `path`.
+        secret: String,
+    },
+    /// Delete the secret at PATH, all its keys.
+    Delete {
+        /// The secret's path.
+        path: String,
+    },
+    /// Write every secret for Vault: `DIR/<path>.json` each (mode 0600), loaded with `vault
+    /// kv put secret/<path> @DIR/<path>.json`. DIR must be empty or missing.
+    Export {
+        /// The directory to write (made if missing).
+        #[arg(long, value_name = "DIR")]
+        to: PathBuf,
+    },
+    /// Print a new random key for `SCHEDR_SECRET_KEY`.
+    NewKey,
 }
 
 /// How the user CLI reaches the webserver (credentials are only sent, never validated here).
@@ -439,6 +485,7 @@ impl Command {
     pub const fn milestone(&self) -> Option<&'static str> {
         match self {
             Self::Db { .. }
+            | Self::Secrets { .. }
             | Self::Dags { .. }
             | Self::Runs { .. }
             | Self::Standalone { .. }
@@ -466,6 +513,7 @@ impl Command {
             Self::Ui => "ui",
             Self::Standalone { .. } => "standalone",
             Self::Db { .. } => "db",
+            Self::Secrets { .. } => "secrets",
             Self::Dags { .. } => "dags",
             Self::Runs { .. } => "runs",
             Self::Tasks { .. } => "tasks",

@@ -18,6 +18,7 @@ mod query;
 pub mod reads;
 pub mod runs;
 mod scope;
+pub mod secrets;
 pub mod status;
 pub mod workers;
 

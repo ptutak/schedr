@@ -673,11 +673,13 @@ async fn test_dag(
     let mut setup = plan(&local, env)?;
     // A database of its own, created here.
     setup.migrate = true;
-    if !test.secrets.is_empty() {
-        let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
-        setup.agent.secrets =
-            std::sync::Arc::new(schedr_agent::secrets::SecretStores::for_test(values));
-    }
+    // A test run's secrets are only its `--secret` values (none: every read is "not found"),
+    // never the configured storages standalone would otherwise put in their place.
+    let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
+    setup.secret_storage = setup
+        .secret_storage
+        .clone()
+        .given(schedr_agent::secrets::SecretStores::for_test(values));
     let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();

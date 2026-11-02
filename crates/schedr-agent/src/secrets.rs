@@ -132,6 +132,60 @@ impl SecretStorage for MemoryStorage {
     }
 }
 
+/// The `db` storage (standalone): the `secrets` table of schedr's own database, each value
+/// decrypted under `SCHEDR_SECRET_KEY` (see `schedr_db::secrets`).
+#[derive(Debug, Clone)]
+pub struct DbStorage {
+    db: schedr_db::Database,
+    /// The key, or why there is none (every read then fails, saying so).
+    key: Result<schedr_db::secrets::SecretKey, String>,
+}
+
+impl DbStorage {
+    /// The storage on `db`, with the key from `env`: without one it still starts (a
+    /// deployment that reads no secret needs none), and each read says what is missing.
+    #[must_use]
+    pub fn new(db: schedr_db::Database, env: &BTreeMap<String, String>) -> Self {
+        let key = schedr_db::secrets::SecretKey::from_env(env).map_err(|e| e.to_string());
+        Self { db, key }
+    }
+
+    /// The storage on `db` with `key`, or why there is none.
+    #[must_use]
+    pub const fn with_key(
+        db: schedr_db::Database,
+        key: Result<schedr_db::secrets::SecretKey, String>,
+    ) -> Self {
+        Self { db, key }
+    }
+
+    /// Whether the key is there (for a warning at startup when it isn't).
+    #[must_use]
+    pub fn key_problem(&self) -> Option<&str> {
+        self.key.as_ref().err().map(String::as_str)
+    }
+}
+
+impl SecretStorage for DbStorage {
+    fn read<'a>(&'a self, path: &'a str) -> ReadFuture<'a> {
+        Box::pin(async move {
+            // A configuration problem: retrying won't help.
+            let key = self
+                .key
+                .as_ref()
+                .map_err(|e| SecretError::Denied(e.clone()))?;
+            match self.db.secret(key, path).await {
+                Ok(Some(data)) => Ok(data),
+                Ok(None) => Err(SecretError::NotFound("no such secret".to_owned())),
+                Err(error @ schedr_db::secrets::SecretsError::Decrypt(_)) => {
+                    Err(SecretError::Denied(error.to_string()))
+                }
+                Err(error) => Err(SecretError::Unavailable(format!("the database: {error}"))),
+            }
+        })
+    }
+}
+
 /// One configured storage, with what is said about it.
 #[derive(Debug, Clone)]
 pub struct Storage {
@@ -166,8 +220,13 @@ pub struct SecretStores {
     any_name: bool,
     /// `[secret_storage] min_mask_length`.
     pub min_mask_length: usize,
-    cache: Mutex<BTreeMap<(String, String), (Instant, SecretData)>>,
+    /// What was fetched, by storage and path, with when it expires; an entry is dropped when
+    /// it expires, whether or not anything reads again.
+    cache: Arc<Mutex<Cache>>,
 }
+
+/// The fetched secrets by storage and path, each with when it expires.
+type Cache = BTreeMap<(String, String), (Instant, SecretData)>;
 
 impl SecretStores {
     /// No storages: every secret is "not found".
@@ -201,7 +260,7 @@ impl SecretStores {
             default,
             any_name: false,
             min_mask_length,
-            cache: Mutex::default(),
+            cache: Arc::default(),
         })
     }
 
@@ -215,7 +274,7 @@ impl SecretStores {
             default: Some("test".to_owned()),
             any_name: true,
             min_mask_length: DEFAULT_MIN_MASK_LENGTH,
-            cache: Mutex::default(),
+            cache: Arc::default(),
         }
     }
 
@@ -286,17 +345,28 @@ impl SecretStores {
         let ttl = storage.cache_ttl;
         if !ttl.is_zero() {
             let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some((at, data)) = cache.get(&key)
-                && at.elapsed() < ttl
+            if let Some((expires, data)) = cache.get(&key)
+                && Instant::now() < *expires
             {
                 return Ok(data.clone());
             }
         }
         let data = storage.storage.read(&name.path).await?;
         if !ttl.is_zero() {
+            let expires = Instant::now() + ttl;
             let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            cache.retain(|_, (at, _)| at.elapsed() < ttl);
-            cache.insert(key, (Instant::now(), data.clone()));
+            cache.retain(|_, (at, _)| Instant::now() < *at);
+            cache.insert(key, (expires, data.clone()));
+            // Dropped when it expires, not at the next fetch: a value isn't kept in memory
+            // longer than `cache_ttl` (a weak handle: the stores may be gone by then).
+            let cache = Arc::downgrade(&self.cache);
+            tokio::spawn(async move {
+                tokio::time::sleep_until(expires.into()).await;
+                if let Some(cache) = cache.upgrade() {
+                    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+                    cache.retain(|_, (at, _)| Instant::now() < *at);
+                }
+            });
         }
         Ok(data)
     }

@@ -168,6 +168,11 @@ pub async fn execute(
 ) -> Result<(), AppError> {
     match (command, command.milestone()) {
         (Command::Db { command }, _) => run_db(*command, config, out).await,
+        // Boxed, as the roles are: it would make every command's future large.
+        (Command::Secrets { command }, _) => {
+            let mut stdin = io::stdin().lock();
+            Box::pin(crate::secrets::run(command, config, env, &mut stdin, out)).await
+        }
         // Boxed: the roles' futures are large, and only one of them ever runs.
         (
             Command::Standalone {
@@ -199,7 +204,7 @@ pub async fn execute(
             None,
         ) => {
             let config = local_config(config, env)?;
-            crate::local::run_local(command, &config, env, client, out).await
+            Box::pin(crate::local::run_local(command, &config, env, client, out)).await
         }
         (Command::Dags { client, command }, None) => {
             let (api, output) = connect(client, env);

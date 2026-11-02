@@ -307,3 +307,13 @@ CREATE TRIGGER workers_updated AFTER UPDATE ON workers REFERENCING NEW TABLE AS 
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();
 CREATE TRIGGER workers_deleted AFTER DELETE ON workers REFERENCING OLD TABLE AS changed
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();
+
+-- The `db` secret storage (standalone; PROJECT.md, Secret storage): one row per path, like a
+-- Vault KV v2 secret; `data` maps each key to its value encrypted for `path#key` (`v1:` and
+-- base64), so the key names stay readable and no value is.
+CREATE TABLE secrets (
+    path       TEXT PRIMARY KEY,
+    data       JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);

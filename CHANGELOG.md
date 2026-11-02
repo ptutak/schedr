@@ -14,7 +14,12 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
   log and stored output; the error kinds `secret_unavailable` (retried), `secret_denied` and
   `secret_not_found`; workers report their storages and the master refuses a DAG naming
   another. Test values with `schedr dags test --secret`, `run_dag(secrets=)` and
-  `task_context(secrets=)`; the `db` and Vault storages follow.
+  `task_context(secrets=)`. **The `db` storage** (standalone): values encrypted in the
+  database under `SCHEDR_SECRET_KEY` (XChaCha20-Poly1305, each bound to its `path#key`),
+  always there and the default; `schedr secrets set/list/get/delete`, `schedr secrets
+  export --to DIR` (one file per path, for `vault kv put`) and `schedr secrets new-key`;
+  `[secret_storage]` in the configuration (`default`, `min_mask_length`, a storage's
+  `cache_ttl` and `unmasked_prefixes`; several storages need `default`). Vault follows.
 
 ## 0.1.0
 

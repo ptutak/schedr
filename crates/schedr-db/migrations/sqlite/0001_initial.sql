@@ -305,3 +305,13 @@ CREATE TRIGGER workers_updated AFTER UPDATE ON workers WHEN (SELECT notify FROM 
 BEGIN
     INSERT INTO changes (change) VALUES ('workers');
 END;
+
+-- The `db` secret storage (standalone; PROJECT.md, Secret storage): one row per path, like a
+-- Vault KV v2 secret; `data` maps each key to its value encrypted for `path#key` (`v1:` and
+-- base64), so the key names stay readable and no value is.
+CREATE TABLE secrets (
+    path       TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
