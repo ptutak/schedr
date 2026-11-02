@@ -11,16 +11,18 @@ from datetime import timedelta
 from string.templatelib import Template as TString
 from typing import Any, Self
 
-from schedr import _build
+from schedr import _build, _secrets
 from schedr._model import (
     ArgvCommand,
     CommandKind,
     EdgeKind,
     EmptyKind,
     ScalarType,
+    SecretRef,
     ShellCommand,
     Template,
 )
+from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
 from schedr.tasks import Output
@@ -139,6 +141,10 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_active: At most this many running at once, across all runs (``None``: no limit).
         max_active_per_run: Accepted for symmetry with ``@task``; an operator isn't mapped,
             so it limits nothing (a ``DagHint`` says so).
+        secrets: The secrets the command reads on demand, with ``schedr task-ctx secret get``
+            (never in its environment): ``secrets['path#key']``, ``'path#key'``, ``'path'``
+            (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
+            declaring; one in the command line is refused (the process list shows it).
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -161,6 +167,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         run_if: RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        secrets: SecretsArg = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
@@ -183,6 +190,14 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             )
         else:
             raise TypeError(f"{where}: command must be a string, a t-string or a list")
+        for template in line.templates():
+            for reference in template.references():
+                if isinstance(reference, SecretRef):
+                    raise TypeError(
+                        f"{where}: `{reference.label()}` in the command line (anyone on the "
+                        "machine could read it in the process list): pass it in `env=`, or "
+                        "declare it in `secrets=` and read it with `schedr task-ctx secret get`"
+                    )
         variables: dict[str, Template] = {}
         for name, value in (env or {}).items():
             if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
@@ -199,6 +214,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             run_if=run_if,
             max_active=max_active,
             max_active_per_run=max_active_per_run,
+            secrets=_secrets.declared(secrets, where),
         )
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)

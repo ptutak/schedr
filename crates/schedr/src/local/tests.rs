@@ -61,7 +61,6 @@ fn a_missing_path_is_a_bad_argument() {
 }
 
 #[rstest]
-#[case(test_command(|c| if let DagsCommand::Test { secrets, .. } = c { secrets.push("p#k=v".to_owned()); }), "dags test --secret", "M4")]
 #[case(test_command(|c| if let DagsCommand::Test { task, .. } = c { *task = Some("load".to_owned()); }), "dags test --task", "M4")]
 #[tokio::test]
 async fn later_features_say_when_they_come(

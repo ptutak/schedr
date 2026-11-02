@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::TaskId;
+use crate::secret::{SecretDecl, SecretName};
 use crate::types::TypeDesc;
 use crate::value::{Reference, Template, Value};
 
@@ -228,6 +229,9 @@ pub struct Task {
     /// then the fixed ones (`.partial(...)`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expand: Option<Expand>,
+    /// The secrets it declares (`secrets=`): read on demand, never put in its environment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretDecl>,
 }
 
 impl Task {
@@ -253,6 +257,20 @@ impl Task {
             }
             Some(Expand::Kwargs(over)) => found.extend(over.references()),
             None => {}
+        }
+        found
+    }
+
+    /// The secrets its references name, in order (each once).
+    #[must_use]
+    pub fn secret_references(&self) -> Vec<&SecretName> {
+        let mut found: Vec<&SecretName> = Vec::new();
+        for reference in self.references() {
+            if let Reference::Secret(name) = reference
+                && !found.contains(&name)
+            {
+                found.push(name);
+            }
         }
         found
     }

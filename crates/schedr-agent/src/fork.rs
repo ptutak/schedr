@@ -338,6 +338,7 @@ impl ForkServers {
             working_dir: setup.log_dir.clone(),
             log_file: setup.log_dir.join("fork-server.log"),
             max_output_size: 64 * 1024,
+            mask: crate::mask::Mask::default(),
         };
         let setup = ForkSetup {
             interpreter: config.interpreter.clone(),
@@ -695,8 +696,13 @@ async fn fork_on(
             status: Some(status.into()),
             ended: None,
             usage: Ended::default(),
-            stdout: Some(tokio::spawn(collect(stdout, Arc::clone(&log), limit))),
-            stderr: Some(tokio::spawn(collect(stderr, log, limit))),
+            stdout: Some(tokio::spawn(collect(
+                stdout,
+                Arc::clone(&log),
+                limit,
+                spec.mask.clone(),
+            ))),
+            stderr: Some(tokio::spawn(collect(stderr, log, limit, spec.mask.clone()))),
         },
         stream: tokio_stream(ours).map_err(io)?,
         hold,

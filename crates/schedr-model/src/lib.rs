@@ -14,6 +14,7 @@ pub mod metric_doc;
 pub mod params;
 pub mod runner;
 pub mod schema;
+pub mod secret;
 pub mod states;
 pub mod task;
 pub mod trigger;
@@ -23,6 +24,7 @@ pub mod version;
 
 pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params};
 pub use ids::{DagId, IdError, TaskId};
+pub use secret::{SecretDecl, SecretName};
 pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
 pub use task::{
     CommandLine, DEFAULT_OUTCOME, Expand, Mapped, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,

@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
 
-from schedr import _build
+from schedr import _build, _secrets
 from schedr import outcomes as _outcomes
 from schedr._model import (
     DagCtxRef,
@@ -32,8 +32,10 @@ from schedr._model import (
     Reference,
     RefValue,
     ScalarType,
+    SecretRef,
     Value,
 )
+from schedr._secrets import SecretsArg
 from schedr._serialization import (
     CodecError,
     TypeModelError,
@@ -44,6 +46,7 @@ from schedr._serialization import (
     type_name,
 )
 from schedr._serialization.annotations import label, type_hints
+from schedr.context import declaring
 from schedr.outcomes import Done, Outcome
 
 _VALUE_IN_DAG_BODY = (
@@ -481,7 +484,9 @@ class TaskFunction[**P, R]:
         """
         builder = _build.active()
         if builder is None:
-            return self._fn(*args, **kwargs)
+            # In a test's `task_context`, a read it doesn't declare is refused, as on a worker.
+            with declaring(self._options.secrets or ()):
+                return self._fn(*args, **kwargs)
         task_id = builder.qualified(self._task_id)
         try:
             bound = self._signature.bind(*args, **kwargs)
@@ -533,6 +538,25 @@ class TaskFunction[**P, R]:
         """
         return PartialTask(self, {}).expand_kwargs(values)
 
+    def _with_secret_defaults(
+        self, fixed: dict[str, object], expand: tuple[str, object] | None
+    ) -> dict[str, object]:
+        """``fixed`` with each parameter defaulting to a secret that no call gives.
+
+        The runner calls the function with the recorded arguments only: a default left out
+        would reach it as the placeholder, never fetched.
+        """
+        mapped = expand[1] if expand is not None and expand[0] == "product" else {}
+        given = dict(fixed)
+        for name, parameter in self._signature.parameters.items():
+            if (
+                isinstance(parameter.default, _secrets.Secret)
+                and name not in given
+                and not (isinstance(mapped, Mapping) and name in mapped)
+            ):
+                given[name] = parameter.default
+        return given
+
     def _record(
         self,
         builder: _build.DagBuilder,
@@ -578,6 +602,7 @@ class TaskFunction[**P, R]:
         except TypeModelError as e:
             raise TypeModelError(f"{where}: return type `{label(hints['return'])}`: {e}") from None
         upstream: list[_build.Upstream] = []
+        fixed = self._with_secret_defaults(fixed, expand)
         # The None checks its arguments queue are its own: dropped if it isn't added (an ID
         # already taken would otherwise give them to the task that has it).
         checks = len(builder.none_checks)
@@ -741,6 +766,7 @@ class TaskFunction[**P, R]:
         run_if: _outcomes.RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        secrets: SecretsArg = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -756,6 +782,7 @@ class TaskFunction[**P, R]:
             run_if: Overrides its trigger rule.
             max_active: Overrides its limit across runs.
             max_active_per_run: Overrides its limit within a run.
+            secrets: Overrides the secrets it declares.
 
         Returns:
             A new task function; this one is unchanged.
@@ -771,6 +798,9 @@ class TaskFunction[**P, R]:
             run_if,
             max_active=max_active,
             max_active_per_run=max_active_per_run,
+            secrets=None
+            if secrets is None
+            else _secrets.declared(secrets, f"task `{task_id or self._task_id}`"),
         )
         return TaskFunction(
             self._fn, task_id or self._task_id, changes.over(self._options), self._branch
@@ -896,7 +926,10 @@ def _refuse_whole_mapped(
     """
     for name, value in arguments.items():
         for reference in value.references():
-            if isinstance(reference, DagCtxRef | ParamRef) or reference.task not in builder.mapped:
+            if (
+                isinstance(reference, DagCtxRef | ParamRef | SecretRef)
+                or reference.task not in builder.mapped
+            ):
                 continue
             if isinstance(reference, OutcomeRef) or reference.on:
                 what = "`.outcome`" if isinstance(reference, OutcomeRef) else "`.on(...)`"
@@ -959,6 +992,7 @@ def task(
     run_if: _outcomes.RunIf | None = None,
     max_active: int | None = None,
     max_active_per_run: int | None = None,
+    secrets: SecretsArg = None,
 ) -> TaskDecorator: ...
 
 
@@ -977,6 +1011,7 @@ def task[**P, R](
     run_if: _outcomes.RunIf | None = None,
     max_active: int | None = None,
     max_active_per_run: int | None = None,
+    secrets: SecretsArg = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -1004,6 +1039,10 @@ def task[**P, R](
         max_active_per_run: At most this many of its instances running at once within one
             run (``None``: no limit), for a mapped task: ``.expand()`` over 1,000 files, 10 at
             a time.
+        secrets: The secrets it reads on demand, with ``task_ctx.secret(...)``:
+            ``secrets['path#key']``, ``'path#key'``, ``'path'`` (every key) or
+            ``SecretPrefix(...)`` (every secret under it, fetched when read). Secrets in its
+            arguments need no declaring.
 
     Returns:
         The task function, or a decorator making one.
@@ -1022,6 +1061,9 @@ def task[**P, R](
         run_if,
         max_active=max_active,
         max_active_per_run=max_active_per_run,
+        secrets=None
+        if secrets is None
+        else _secrets.declared(secrets, f"task `{task_id}`" if task_id else "`@task(...)`"),
     )
 
     decorator = TaskDecorator(task_id, options)

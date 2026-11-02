@@ -3908,7 +3908,7 @@ list) and likewise has no Python.
     placeholder rule in Templating requires.
 - **Unmasked prefixes:** `[secret_storage.<name>] unmasked_prefixes = ["variables/"]` in the
   server configuration marks parts of a storage as **non-secret configuration**, whose values
-  are not masked in logs (otherwise e.g. a bucket name would become `***` on every log line).
+  are not masked in logs (otherwise e.g. a bucket name would become `****` on every log line).
   Everything else stays masked. Documented: keep only non-secret values under such prefixes.
   Not chosen: always masking (unreadable logs wherever Variables are used); Airflow's key-name
   heuristic (masks only keys that look sensitive: guesswork, `db_pass` would slip through).
@@ -3953,6 +3953,65 @@ list) and likewise has no Python.
   - Not chosen: requiring Airflow tasks to declare their connections (a schedr-only argument in
     Airflow code, a manual change in every DAG, awkward with computed IDs); on-demand reads only
     in the Airflow layer (breaks the principle in Thin translating classes).
+- **Built in M4.6** (planned with the user, 2026-11-02; sub-steps in PLAN.md):
+  - **167. Outputs are masked when stored:** the agent replaces each secret value in an
+    attempt's output (and its error summary) before it leaves the worker, so no secret
+    reaches the database and a downstream task receives `****`; a task that needs the secret
+    declares it itself. Not chosen: outputs stored as they are (only logs masked; the master
+    and the webserver never know the values, so nothing could mask them later).
+    Masking matches text, so a secret whose value is common (`admin`) also changes unrelated
+    output that contains it: whenever an output is masked, the agent writes a warning in the
+    task's log naming the secret (never the value) and how many times it was replaced, and the
+    guide asks for long, unique secret values (a side agent's point, 2026-11-02; Claude's
+    addition).
+  - **168. A secret read on demand that fails** (under a `SecretPrefix`): `schedr task-ctx
+    secret get` exits non-zero and `task_ctx.secret()` raises; the agent remembers the
+    failure, and if the attempt then fails its error kind is the secret's (so the retry rules
+    above apply). A task that handles the error and succeeds stays succeeded. Not chosen:
+    ending the attempt at once, whatever the task does with the error.
+  - **169. `schedr secrets new-key`** prints a new `SCHEDR_SECRET_KEY` (32 random bytes,
+    base64). Rotation (re-encrypting under a new key) not now. Not chosen: only documenting
+    `openssl rand -base64 32`.
+  - **Claude's choices** (small, the user told): a masked value is written `****`, as in the
+    effective configuration; the masked forms are the value, its JSON-escaped form, and each
+    line of a multi-line value (each at least `min_mask_length`), across the chunks a stream
+    is read in; `secrets['path']` without `#key` is a whole secret, allowed as an argument (a
+    dictionary) and refused in text; a bare `secrets['a#b']` as an argument is its string;
+    the Vault client is our own over `reqwest` (KV v2 reads and two logins); Kubernetes auth is
+    tested against a fake Kubernetes API the dev-mode Vault calls, token auth and KV v2
+    against the real Vault; the chart takes `SCHEDR_SECRET_KEY` only from an existing Secret
+    (as for TLS: no generated Secrets). TOML's forms come with M4.9, Airflow's Variables and
+    Connections with their own steps.
+  - **170. `schedr secrets export --to DIR`** writes one file per secret, `DIR/<path>.json`
+    (its keys and values, mode 0600), refusing a `DIR` that isn't empty; each loads as it is,
+    `vault kv put secret/<path> @DIR/<path>.json`. Nothing is printed to the terminal. Not
+    chosen: one JSON object on stdout (values through the terminal or a pipe, and a loop per
+    path to load them); both forms (more to test and document).
+  - **Claude's choices in M4.6b** (after the reviews by Grok and Codex; the user told):
+    - **Masked forms** besides the value and its JSON form: JSON with every non-ASCII
+      character as `\uXXXX` (Python's `json.dumps`), and Python's `repr` (an exception's
+      message, `KeyError('...')`). In a stored output a **number** equal to a value is masked
+      too, becoming the text `"****"`; two object keys masked alike stay apart, the second
+      `**** (2)` (as in the effective configuration). Masking guards against a value shown by
+      accident, not against the task itself: a value split between stdout and stderr, or
+      encoded, isn't masked (Codex's finding, rejected for that reason).
+    - **Decision 168's kind** fills an attempt that fails with **no kind of its own**; one
+      that fails with its own (a timeout, `output_not_serializable` after catching the
+      secret's error) keeps it, the nearer cause (Codex's finding, rejected).
+    - **Fetching gives way** to a cancel, a drain's interrupt and the timeout: an attempt
+      waiting for a slow storage ends as stopped before its process started; an on-demand
+      read still waiting when the process has ended is dropped after a moment.
+    - **Test values** (`dags test --secret`, `run_dag(secrets=)`, `task_context(secrets=)`)
+      answer for **every storage name**, so a DAG naming `secrets.vault[...]` runs locally
+      without configuring one. `task_context(secrets=)` refuses a read a `@task` function
+      called in it doesn't declare, as a worker does (a side agent's point); a plain or
+      `async` function's reads aren't checked.
+    - **A secret as a parameter's default** (`def load(pw: str = secrets['db#pw'])`) is
+      recorded as the argument when a call leaves it out (Grok's finding: the runner would
+      have passed the placeholder).
+    - **Names are written as Python writes them**, `secrets['path#key']` (`repr`'s quotes),
+      in Rust as in Python; a storage that can't be an attribute (not a Python name, a
+      keyword, `_` first, `storage` itself) is `secrets.storage('name')[...]`.
 
 ## State storage
 

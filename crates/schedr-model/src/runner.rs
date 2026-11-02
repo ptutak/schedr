@@ -147,6 +147,13 @@ pub enum RunnerMessage {
         /// The outcome's name: `SUCCESS`, an outcome union member's class name, or an `Outcome` member's name.
         outcome: String,
     },
+    /// A running task reads a secret it didn't get with the request: one under a declared
+    /// prefix (`task_ctx.secret(...)`); the agent answers [`AgentMessage::Secret`] or
+    /// [`AgentMessage::SecretFailed`].
+    SecretGet {
+        /// Which secret.
+        secret: crate::secret::SecretName,
+    },
     /// The task failed: an exception, or an output that can't be stored.
     TaskFailed {
         /// What went wrong.
@@ -297,6 +304,20 @@ pub struct TaskRequest {
     pub run: RunInfo,
     /// Directories put first on `sys.path` (every DAG root).
     pub sys_path: Vec<String>,
+    /// The secrets fetched for the attempt (those its arguments name and those it declares,
+    /// prefixes aside): filled into its arguments and read by `task_ctx.secret(...)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretValue>,
+}
+
+/// A secret's value, fetched by the agent for an attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretValue {
+    /// Which secret.
+    pub name: crate::secret::SecretName,
+    /// A key's value as a string; a whole secret as an object of key to value.
+    pub value: serde_json::Value,
 }
 
 /// What the fork server preloads.
@@ -345,6 +366,18 @@ pub enum AgentMessage {
     ForkServer(ForkServerRequest),
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
+    /// The value of the secret a [`RunnerMessage::SecretGet`] asked for.
+    Secret {
+        /// A key's value as a string; a whole secret as an object of key to value.
+        value: serde_json::Value,
+    },
+    /// Why the secret a [`RunnerMessage::SecretGet`] asked for can't be read.
+    SecretFailed {
+        /// The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).
+        kind: String,
+        /// What went wrong, naming the secret (never a value).
+        message: String,
+    },
 }
 
 /// Whether the agent accepts a runner: the versions must be equal (the binary and the

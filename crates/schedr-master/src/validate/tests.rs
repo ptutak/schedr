@@ -269,8 +269,7 @@ fn files_with_invalid_dags_become_import_errors() {
     let files = validate_files(
         "etl",
         vec![file("sync.py", vec![dag_with(&json!({})), bad])],
-        MASTER,
-        LIMIT,
+        &Checks::new(MASTER, LIMIT),
     );
     assert_eq!(files[0].dags, []);
     let error = files[0].error.as_ref().unwrap();
@@ -296,7 +295,11 @@ fn valid_files_and_import_errors_are_kept() {
         warnings: Vec::new(),
     };
     let good = file("sync.py", vec![dag_with(&json!({}))]);
-    let files = validate_files("etl", vec![good.clone(), failed], MASTER, LIMIT);
+    let files = validate_files(
+        "etl",
+        vec![good.clone(), failed],
+        &Checks::new(MASTER, LIMIT),
+    );
     assert_eq!(files[0], good);
     assert_eq!(files[1].dags, []);
     assert_eq!(files[1].error, Some(error));
@@ -305,7 +308,7 @@ fn valid_files_and_import_errors_are_kept() {
 #[test]
 fn paths_must_stay_inside_the_root() {
     for path in ["", "/etc/x.py", "../x.py", "a/../x.py", "./x.py", "a\\x.py"] {
-        let files = validate_files("etl", vec![file(path, vec![])], MASTER, LIMIT);
+        let files = validate_files("etl", vec![file(path, vec![])], &Checks::new(MASTER, LIMIT));
         let error = files[0].error.as_ref().unwrap();
         assert_eq!(error.exception, INVALID_PATH_EXCEPTION, "{path}");
         assert_eq!(
@@ -313,7 +316,11 @@ fn paths_must_stay_inside_the_root() {
             format!("`{path}` isn't a relative path inside the root")
         );
     }
-    let files = validate_files("etl", vec![file("team/a.py", vec![])], MASTER, LIMIT);
+    let files = validate_files(
+        "etl",
+        vec![file("team/a.py", vec![])],
+        &Checks::new(MASTER, LIMIT),
+    );
     assert_eq!(files[0].error, None);
 }
 
@@ -337,7 +344,11 @@ fn a_task_whose_output_cant_reach_the_master_is_refused() {
     );
     assert_eq!(output_problems(&dag, 128 << 20), Vec::<String>::new());
     // Through the file check: the DAG is refused as an import error.
-    let files = validate_files("etl", vec![file("sync.py", vec![dag])], MASTER, LIMIT);
+    let files = validate_files(
+        "etl",
+        vec![file("sync.py", vec![dag])],
+        &Checks::new(MASTER, LIMIT),
+    );
     let error = files[0].error.as_ref().unwrap();
     assert!(
         error
@@ -530,4 +541,148 @@ fn a_dags_params_are_checked_with_it() {
         problems(&scheduled),
         ["params: `region` has no default, but the DAG has a schedule (its runs use the defaults)"]
     );
+}
+
+fn secret(storage: Option<&str>, path: &str, key: Option<&str>) -> Json {
+    let mut reference = json!({"kind": "secret", "path": path});
+    if let Some(storage) = storage {
+        reference["storage"] = json!(storage);
+    }
+    if let Some(key) = key {
+        reference["key"] = json!(key);
+    }
+    reference
+}
+
+fn command(id: &str, argv: &Json, env: &Json) -> Json {
+    let mut command = task(id, &json!({}));
+    command["kind"] = json!("command");
+    command["command"] = json!({"argv": argv});
+    command["env"] = env.clone();
+    command["output_type"] = json!({"type": "process_result"});
+    command
+}
+
+#[test]
+fn secrets_where_they_belong_pass() {
+    let password = secret(None, "etl/db", Some("password"));
+    let mut python = task(
+        "load",
+        &json!({
+            "conn": {"ref": secret(Some("other"), "connections/db", None)},
+            "dsn": {"template": [{"text": "postgres://u:"}, {"ref": password}]},
+        }),
+    );
+    python["secrets"] = json!([
+        {"kind": "secret", "path": "etl/api", "key": "token"},
+        {"kind": "prefix", "storage": "other", "prefix": "tenants/"},
+    ]);
+    let shell = command(
+        "dump",
+        &json!([[{"text": "pg_dump"}]]),
+        &json!({"PGPASSWORD": [{"ref": password}]}),
+    );
+    let dag = dag_with(&json!({"tasks": [python, shell], "edges": []}));
+    assert_eq!(
+        dag_problems(&dag, "etl", "sync.py", MASTER),
+        Vec::<String>::new()
+    );
+    let storages = BTreeSet::from(["other".to_owned()]);
+    assert_eq!(storage_problems(&dag, &storages), Vec::<String>::new());
+}
+
+#[test]
+fn secrets_where_they_dont_belong_are_refused() {
+    let password = secret(None, "etl/db", Some("password"));
+    let in_argv = command(
+        "dump",
+        &json!([[{"text": "pg_dump"}], [{"text": "--password="}, {"ref": password}]]),
+        &json!({"WHOLE": [{"ref": secret(None, "etl/db", None)}]}),
+    );
+    let mut bad = task(
+        "load",
+        &json!({"x": {"ref": secret(None, "etl//db", Some("k"))}}),
+    );
+    bad["secrets"] = json!([{"kind": "prefix", "prefix": "tenants"}]);
+    let mut mapped = task("each", &json!({}));
+    mapped["expand"] = json!({"product": [{"name": "x", "value": {"ref": password}}]});
+    // A whole secret written into what instances get, as a product or as kwargs.
+    let whole = json!({"template": [{"text": "u:"}, {"ref": secret(None, "etl/db", None)}]});
+    let mut in_product = task("each_product", &json!({}));
+    in_product["expand"] = json!({"product": [{"name": "x", "value": {"list": [whole]}}]});
+    let mut in_kwargs = task("each_kwargs", &json!({}));
+    in_kwargs["expand"] = json!({"kwargs": {"list": [{"map": {"x": whole}}]}});
+    let found = problems(&json!({
+        "tasks": [in_argv, bad, mapped, in_product, in_kwargs],
+        "edges": []
+    }));
+    let expected = [
+        "task `dump`: `secrets['etl/db#password']` in the command line",
+        "task `dump`: `secrets['etl/db']` is a whole secret",
+        "task `load`: `secrets['etl//db#k']`: a path has no empty part",
+        "task `load`: secrets=: `SecretPrefix('tenants')`: a prefix ends with `/`",
+        "task `each` is mapped over a secret",
+        "task `each_product`: `secrets['etl/db']` is a whole secret",
+        "task `each_kwargs`: `secrets['etl/db']` is a whole secret",
+    ];
+    for start in expected {
+        assert!(
+            found.iter().any(|p| p.starts_with(start)),
+            "{start} not in {found:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_storage_the_worker_lacks_is_refused_once_per_task() {
+    let mut load = task(
+        "load",
+        &json!({"a": {"ref": secret(Some("vault"), "a", Some("k"))},
+                "b": {"ref": secret(Some("vault"), "b", Some("k"))},
+                "c": {"ref": secret(None, "c", Some("k"))}}),
+    );
+    load["secrets"] = json!([{"kind": "prefix", "storage": "old", "prefix": "x/"}]);
+    let dag = dag_with(&json!({"tasks": [load], "edges": []}));
+    assert_eq!(
+        storage_problems(&dag, &BTreeSet::from(["db".to_owned()])),
+        [
+            "task `load`: no secret storage `vault` on the worker that parsed it (configured: \
+             `db`; `[secret_storage.vault]` in the workers' configuration)",
+            "task `load`: no secret storage `old` on the worker that parsed it (configured: \
+             `db`; `[secret_storage.old]` in the workers' configuration)",
+        ]
+    );
+    let none = storage_problems(&dag, &BTreeSet::new());
+    assert!(none[0].contains("(configured: none;"), "{none:?}");
+}
+
+#[test]
+fn a_parse_is_checked_against_the_workers_storages() {
+    let load = task(
+        "load",
+        &json!({"a": {"ref": secret(Some("vault"), "a", Some("k"))}}),
+    );
+    let dag = dag_with(&json!({"tasks": [load], "edges": []}));
+    let storages = BTreeSet::new();
+    let checks = Checks {
+        secret_storages: Some(&storages),
+        ..Checks::new(MASTER, LIMIT)
+    };
+    let files = validate_files("etl", vec![file("sync.py", vec![dag.clone()])], &checks);
+    assert_eq!(files[0].dags, []);
+    assert!(
+        files[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("no secret storage `vault`")
+    );
+    // Unknown storages (a worker restored from the database): not checked.
+    let files = validate_files(
+        "etl",
+        vec![file("sync.py", vec![dag])],
+        &Checks::new(MASTER, LIMIT),
+    );
+    assert_eq!(files[0].error, None);
 }

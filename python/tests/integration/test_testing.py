@@ -442,3 +442,37 @@ def test_concurrency_limits_hold_with_slots_to_spare(
     # max_active_tasks, binding on its own (the tasks' limits would let 3 run), and tasks did
     # run side by side.
     assert together == 2, together
+
+
+SECRETS = """
+from schedr import Dag, SecretError, task, task_ctx, secrets
+
+@task
+def connect(password: str) -> str:
+    print("connecting with", password)
+    return f"u:{password}@db"
+
+@task(secrets=["etl/db#user"])
+def who() -> str:
+    try:
+        task_ctx.secret("etl/db#port")
+    except SecretError as e:
+        return f"{e.kind}: {task_ctx.secret('etl/db#user')}"
+    return "read an undeclared secret"
+
+with Dag("secrets"):
+    connect(secrets["etl/db#password"])
+    who()
+"""
+
+
+def test_secrets_are_given_and_masked(tmp_path: Path) -> None:
+    (tmp_path / "s.py").write_text(SECRETS)
+    given = {"etl/db#password": "hunter22-pw", "etl/db#user": "etl-user"}
+    result = run_dag(tmp_path / "s.py", "secrets", for_=FOR, secrets=given)
+    assert result.state == "success", result
+    connect = result.tasks["connect"]
+    assert connect.output == "u:****@db"
+    assert "connecting with ****" in connect.log
+    assert "hunter22-pw" not in connect.log
+    assert result.tasks["who"].output == "secret_denied: ****"

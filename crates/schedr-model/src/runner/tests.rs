@@ -167,6 +167,7 @@ fn request() -> TaskRequest {
             map_index: None,
         },
         sys_path: vec!["/git/dags/etl".into()],
+        secrets: Vec::new(),
     }
 }
 

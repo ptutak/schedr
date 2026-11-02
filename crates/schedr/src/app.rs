@@ -220,6 +220,13 @@ pub async fn execute(
         (Command::DagCtx { command }, None) => {
             crate::ctx::run_dag_ctx(command, env, crate::VERSION, out).map_err(AppError::Failed)
         }
+        (
+            Command::TaskCtx {
+                command: crate::cli::TaskCtxCommand::Secret { command },
+            },
+            None,
+        ) => crate::ctx::run_task_ctx_secret(command, env, crate::VERSION, out)
+            .map_err(AppError::Failed),
         (other, milestone) => Err(AppError::NotImplemented {
             command: other.name(),
             milestone: milestone.unwrap_or("unknown"),

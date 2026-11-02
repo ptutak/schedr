@@ -18,7 +18,9 @@ use schedr_fd::{Inherited, inherited_datagram};
 use schedr_model::ctx::{CTX_FD_ENV, CTX_PROTOCOL, CtxAnswer, CtxRequest, MAX_CTX_MESSAGE_SIZE};
 use serde_json::Value;
 
-use crate::cli::{DagCtxCommand, GetCommand};
+use schedr_model::SecretName;
+
+use crate::cli::{DagCtxCommand, GetCommand, SecretCommand};
 
 #[cfg(test)]
 mod tests;
@@ -42,10 +44,57 @@ pub fn run_dag_ctx(
         DagCtxCommand::Params { command } => (CtxRequest::ParamsGet, command),
         DagCtxCommand::Run { command } => (CtxRequest::RunGet, command),
     };
-    let mut stream = connect(env)?;
+    let mut stream = connect(env, Ctx::Dag)?;
     let answer = call(&mut stream, version, &request)?;
     let values = values(answer)?;
     let text = printed(&values, field.field.as_deref())?;
+    out.write_all(text.as_bytes())
+        .map_err(|e| format!("can't write output: {e}"))
+}
+
+/// Which command connects, for the message outside a task.
+#[derive(Debug, Clone, Copy)]
+enum Ctx {
+    Dag,
+    Task,
+}
+
+/// Runs `schedr task-ctx secret get`: prints a secret the task declares (a key's value as
+/// it is, with no newline; a whole secret as one line of JSON); the error is the message for
+/// stderr, with the error kind.
+///
+/// # Errors
+///
+/// Outside a task, when the channel is gone, or when the secret can't be read (not declared,
+/// not found, its storage down).
+pub fn run_task_ctx_secret(
+    command: &SecretCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    let SecretCommand::Get { secret, storage } = command;
+    let (path, key) = match secret.split_once('#') {
+        Some((path, key)) => (path, Some(key)),
+        None => (secret.as_str(), None),
+    };
+    let name = SecretName {
+        storage: storage.clone(),
+        path: path.to_owned(),
+        key: key.map(str::to_owned),
+    };
+    name.check()?;
+    let mut stream = connect(env, Ctx::Task)?;
+    let request = CtxRequest::SecretGet { secret: name };
+    let text = match call(&mut stream, version, &request)? {
+        CtxAnswer::Secret {
+            value: Value::String(text),
+        } => text,
+        CtxAnswer::Secret { value } => value.to_string(),
+        CtxAnswer::SecretFailed { kind, reason } => return Err(format!("{reason} ({kind})")),
+        CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => return Err(reason),
+        _ => return Err("the agent answered with something else than the secret".to_owned()),
+    };
     out.write_all(text.as_bytes())
         .map_err(|e| format!("can't write output: {e}"))
 }
@@ -57,6 +106,10 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         CtxAnswer::Run(run) => serde_json::to_value(run).map_err(|e| e.to_string()),
         CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => Err(reason),
         CtxAnswer::Welcome => Err("the agent answered `welcome` to a request".to_owned()),
+        // Never printed in a message: it may hold a value.
+        CtxAnswer::Secret { .. } | CtxAnswer::SecretFailed { .. } => {
+            Err("the agent answered with a secret to another request".to_owned())
+        }
     }
 }
 
@@ -75,11 +128,15 @@ fn printed(values: &Value, field: Option<&str>) -> Result<String, String> {
 
 /// A connection of this call's own: a fresh stream pair, one end sent to the agent over the
 /// task's channel.
-fn connect(env: &BTreeMap<String, String>) -> Result<UnixStream, String> {
+fn connect(env: &BTreeMap<String, String>, what: Ctx) -> Result<UnixStream, String> {
     let Some(text) = env.get(CTX_FD_ENV) else {
+        let (command, python) = match what {
+            Ctx::Dag => ("dag-ctx", "reads `dag_ctx`"),
+            Ctx::Task => ("task-ctx", "reads `task_ctx`"),
+        };
         return Err(format!(
-            "`schedr dag-ctx` must be run inside a schedr task: a command task's processes \
-             can use it ({CTX_FD_ENV} isn't set here); a Python task reads `dag_ctx`"
+            "`schedr {command}` must be run inside a schedr task: a command task's processes \
+             can use it ({CTX_FD_ENV} isn't set here); a Python task {python}"
         ));
     };
     let fd: i32 = text
@@ -184,6 +241,9 @@ fn call(
     match answer {
         CtxAnswer::Welcome => {}
         CtxAnswer::Refused { reason } | CtxAnswer::Error { reason } => return Err(reason),
+        CtxAnswer::Secret { .. } => {
+            return Err("the agent answered hello with a secret".to_owned());
+        }
         other => return Err(format!("the agent answered hello with {other:?}")),
     }
     write_message(stream, request)?;

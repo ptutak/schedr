@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::TaskId;
+use crate::secret::SecretName;
 
 #[cfg(test)]
 mod tests;
@@ -75,6 +76,9 @@ pub enum Reference {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         path: Vec<PathElem>,
     },
+    /// A secret from a secret storage (`secrets['etl/db#password']`), fetched by the agent
+    /// that runs the task, never by the master (see PROJECT.md, Secret storage).
+    Secret(SecretName),
 }
 
 impl Reference {
@@ -83,7 +87,7 @@ impl Reference {
     pub fn upstream_task(&self) -> Option<&TaskId> {
         match self {
             Self::Output { task, .. } | Self::Outcome { task } => Some(task),
-            Self::DagCtx { .. } | Self::Param { .. } => None,
+            Self::DagCtx { .. } | Self::Param { .. } | Self::Secret { .. } => None,
         }
     }
 }

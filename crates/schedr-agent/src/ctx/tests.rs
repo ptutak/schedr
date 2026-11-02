@@ -19,6 +19,7 @@ fn info() -> CtxInfo {
         },
         params: json!({"region": "eu", "day": {"$date": "2026-10-01"}}),
         version: "1.2.3".into(),
+        secrets: None,
     }
 }
 
@@ -41,6 +42,13 @@ fn answers(mut bytes: &[u8]) -> Vec<serde_json::Value> {
 
 /// The answers to `requests`, sent at once, then the end of the stream.
 async fn conversation(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    conversation_with(requests, &info()).await
+}
+
+async fn conversation_with(
+    requests: &[serde_json::Value],
+    info: &CtxInfo,
+) -> Vec<serde_json::Value> {
     let (mut ours, mut theirs) = tokio::io::duplex(1 << 20);
     let mut input = Vec::new();
     for request in requests {
@@ -48,7 +56,7 @@ async fn conversation(requests: &[serde_json::Value]) -> Vec<serde_json::Value> 
     }
     ours.write_all(&input).await.unwrap();
     ours.shutdown().await.unwrap();
-    converse(&mut theirs, &info()).await.unwrap();
+    converse(&mut theirs, info).await.unwrap();
     drop(theirs);
     let mut output = Vec::new();
     ours.read_to_end(&mut output).await.unwrap();
@@ -383,4 +391,47 @@ async fn a_task_clearing_o_nonblock_on_its_end_blocks_no_runtime_thread() {
     .unwrap();
     assert_eq!(answered[1]["id"], "r1");
     drop(held);
+}
+
+#[tokio::test]
+async fn reads_a_declared_secret_and_refuses_the_others() {
+    use crate::secrets::{AttemptSecrets, MemoryStorage, SecretStores};
+    use schedr_model::{SecretDecl, SecretName};
+    let name = |path: &str, key: &str| SecretName {
+        storage: None,
+        path: path.into(),
+        key: Some(key.into()),
+    };
+    let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
+        name("etl/db", "password"),
+        "hunter22".to_owned(),
+    )])));
+    let declared = vec![SecretDecl::Secret(name("etl/db", "password"))];
+    let secrets = AttemptSecrets::fetch(stores, &[name("etl/db", "password")], declared)
+        .await
+        .unwrap();
+    let mut info = info();
+    info.secrets = Some(Arc::new(secrets));
+    let hello = json!({"type": "hello", "protocol": 1, "schedr_version": "1.2.3"});
+    let get =
+        |path: &str, key: &str| json!({"type": "secret_get", "secret": {"path": path, "key": key}});
+    let got = conversation_with(
+        &[
+            hello.clone(),
+            get("etl/db", "password"),
+            get("etl/db", "user"),
+        ],
+        &info,
+    )
+    .await;
+    assert_eq!(got[1], json!({"type": "secret", "value": "hunter22"}));
+    assert_eq!(got[2]["type"], "secret_failed");
+    assert_eq!(got[2]["kind"], "secret_denied");
+    assert_eq!(
+        info.secrets.as_ref().unwrap().failed_kind(),
+        Some("secret_denied")
+    );
+    // Without the attempt's secrets (a parse, a test's context), every read is refused.
+    let got = conversation(&[hello, get("etl/db", "password")]).await;
+    assert_eq!(got[1]["kind"], "secret_denied");
 }

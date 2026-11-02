@@ -1,5 +1,7 @@
 """References, templates and task arguments in DAG JSON (``schedr-model``, ``value.rs``)."""
 
+import keyword
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -130,7 +132,211 @@ class ParamRef:
         return result
 
 
-type Reference = OutputRef | OutcomeRef | DagCtxRef | ParamRef
+_STORAGE_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def check_storage_name(name: str) -> str | None:
+    """Why ``name`` can't be a secret storage's name (its ``[secret_storage.<name>]`` key).
+
+    Args:
+        name: The name.
+
+    Returns:
+        The reason, or ``None`` for a good name.
+    """
+    if not name:
+        return "the storage's name is empty"
+    if not _STORAGE_NAME.fullmatch(name):
+        return f"storage `{name}`: a name has only letters, digits, `_` and `-`"
+    if name == "default":
+        return "`default` names the default storage's setting, not a storage"
+    return None
+
+
+def storage_label(storage: str | None) -> str:
+    """A storage as written in Python.
+
+    ``secrets``, ``secrets.other``, or ``secrets.storage('vault-2')`` for a name that can't
+    be an attribute: not a Python name, a keyword, ``_`` first, or ``storage`` itself.
+
+    Args:
+        storage: Its name; ``None`` for the default one.
+
+    Returns:
+        The label.
+    """
+    if storage is None:
+        return "secrets"
+    dotted = (
+        storage.isidentifier()
+        and not keyword.iskeyword(storage)
+        and not storage.startswith("_")
+        and storage != "storage"
+    )
+    return f"secrets.{storage}" if dotted else f"secrets.storage({storage!r})"
+
+
+def check_secret_path(path: str, what: str) -> str | None:
+    """Why ``path`` can't be a secret's path (or a prefix without its last ``/``).
+
+    Args:
+        path: The path.
+        what: ``path`` or ``prefix``, for the message.
+
+    Returns:
+        The reason, or ``None`` for a good path.
+    """
+    if not path:
+        return f"the {what} is empty"
+    if "#" in path:
+        return f"a {what} contains no `#` (it separates the key)"
+    if "\0" in path:
+        return f"a {what} contains no NUL"
+    if any(not part for part in path.split("/")):
+        return f"a {what} has no empty part (no leading `/`, no `//`)"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class SecretRef:
+    """A secret in a secret storage: ``path#key``, or ``path`` for the whole secret.
+
+    Attributes:
+        path: The secret's path in the storage (``etl/db``).
+        key: The key in it (``password``); ``None`` for the whole secret.
+        storage: The storage; ``None`` for the default one.
+    """
+
+    path: str
+    key: str | None = None
+    storage: str | None = None
+
+    def spec(self) -> str:
+        """``path#key``, or ``path`` for the whole secret.
+
+        Returns:
+            The spec.
+        """
+        return self.path if self.key is None else f"{self.path}#{self.key}"
+
+    def label(self) -> str:
+        """As written in Python: ``secrets['etl/db#password']``, ``secrets.other['etl/db']``.
+
+        Returns:
+            The label.
+        """
+        return f"{storage_label(self.storage)}[{self.spec()!r}]"
+
+    def __post_init__(self) -> None:
+        """Validates the storage name, the path and the key (as the master does).
+
+        Raises:
+            ValueError: For a bad name, path or key.
+        """
+        reason: str | None = None
+        if self.storage is not None:
+            reason = check_storage_name(self.storage)
+        if reason is None and len(self.path) > 1 and self.path.endswith("/"):
+            reason = "a path doesn't end with `/` (a prefix is `SecretPrefix(...)`)"
+        if reason is None:
+            reason = check_secret_path(self.path, "path")
+        if reason is None and self.key is not None:
+            if not self.key:
+                reason = "the key after `#` is empty"
+            elif "#" in self.key or "\0" in self.key:
+                reason = "a key contains neither `#` nor NUL"
+        if reason is not None:
+            raise ValueError(f"`{self.label()}`: {reason}")
+
+    def to_json(self) -> dict[str, Any]:
+        """The reference as DAG JSON.
+
+        Returns:
+            ``{"kind": "secret", "path": ..., "key": ..., "storage": ...}`` (``key`` and
+            ``storage`` only if set).
+        """
+        result: dict[str, Any] = {"kind": "secret", "path": self.path}
+        if self.key is not None:
+            result["key"] = self.key
+        if self.storage is not None:
+            result["storage"] = self.storage
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class SecretPrefixDecl:
+    """Every secret under a prefix, declared in ``secrets=`` (``SecretPrefix(...)``).
+
+    Attributes:
+        prefix: The prefix, ending in ``/``.
+        storage: The storage; ``None`` for the default one.
+    """
+
+    prefix: str
+    storage: str | None = None
+
+    def label(self) -> str:
+        """As written in Python.
+
+        Returns:
+            ``SecretPrefix('connections/')``, with ``storage=`` when it names one.
+        """
+        if self.storage is None:
+            return f"SecretPrefix({self.prefix!r})"
+        return f"SecretPrefix({self.prefix!r}, storage={self.storage!r})"
+
+    def __post_init__(self) -> None:
+        """Validates the storage name and the prefix.
+
+        Raises:
+            ValueError: For a bad name or prefix.
+        """
+        reason: str | None = None
+        if self.storage is not None:
+            reason = check_storage_name(self.storage)
+        if reason is None:
+            if not self.prefix.endswith("/"):
+                reason = "a prefix ends with `/`"
+            else:
+                reason = check_secret_path(self.prefix[:-1], "prefix")
+        if reason is not None:
+            raise ValueError(f"`{self.label()}`: {reason}")
+
+    def to_json(self) -> dict[str, Any]:
+        """The declaration as DAG JSON.
+
+        Returns:
+            ``{"kind": "prefix", "prefix": ..., "storage": ...}`` (``storage`` only if set).
+        """
+        result: dict[str, Any] = {"kind": "prefix", "prefix": self.prefix}
+        if self.storage is not None:
+            result["storage"] = self.storage
+        return result
+
+
+def covers(declared: SecretDecl, ref: SecretRef) -> bool:
+    """Whether a declaration in ``secrets=`` lets a task read ``ref`` (as the agent decides).
+
+    Args:
+        declared: The declaration.
+        ref: The secret read.
+
+    Returns:
+        ``True`` for the same secret (or a key of a whole one declared), or one under a
+        declared prefix, in the same storage.
+    """
+    if declared.storage != ref.storage:
+        return False
+    if isinstance(declared, SecretPrefixDecl):
+        return ref.path.startswith(declared.prefix)
+    return declared.path == ref.path and declared.key in {None, ref.key}
+
+
+type SecretDecl = SecretRef | SecretPrefixDecl
+"""A secret a task declares in ``secrets=``: one (or a whole one), or a prefix."""
+
+
+type Reference = OutputRef | OutcomeRef | DagCtxRef | ParamRef | SecretRef
 """Any reference."""
 
 

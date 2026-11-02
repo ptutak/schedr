@@ -4,8 +4,8 @@ Outside ``with Dag(...)`` a ``@task`` function is the plain function: calling it
 ``task_context(...)`` gives ``dag_ctx`` values to such calls, with no processes.
 ``run_dag(...)`` runs ``schedr dags test`` (one real run, every task its own process) and
 returns its result, every task inspectable on its own (see PROJECT.md, Testing DAGs).
-Both take run parameters (``params=``); secrets, handles, ``step=`` and ``replace=`` come with
-milestone M4.
+Both take run parameters (``params=``) and secret values (``secrets=``); handles, ``step=``
+and ``replace=`` come with milestone M4.
 """
 
 import contextlib
@@ -23,12 +23,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from schedr._model import CommandKind, PythonKind, registry
+from schedr._model import CommandKind, PythonKind, SecretRef, registry
+from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
 from schedr._serialization.codec import encode, json_form
 from schedr._serialization.models import is_model
-from schedr.context import RunValues, TaskValues, running
+from schedr.context import (
+    RunValues,
+    SecretError,
+    SecretReader,
+    TaskValues,
+    declared_secrets,
+    running,
+)
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
 from schedr.types import Json, ProcessResult
@@ -83,7 +91,10 @@ def task_context(
         kind: ``dag_ctx.run.kind``: ``manual`` by default.
         params: ``dag_ctx.params``: an instance of the DAG's params class (a dataclass or a
             Pydantic model); ``dag_ctx.params(Cls)`` then takes that class.
-        secrets: Declared secrets (milestone M4).
+        secrets: Secret values for ``task_ctx.secret``, by ``"path#key"`` (any storage);
+            a whole secret (``"path"``) is its keys'. A ``@task`` function called in the
+            block reads only what its ``secrets=`` declares, as on a worker (a plain or
+            ``async`` function's reads aren't checked).
         task_id: ``task_ctx.task_id``.
         try_number: ``task_ctx.try_number``.
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
@@ -94,10 +105,8 @@ def task_context(
     Raises:
         TypeError: For a time that isn't a ``datetime``.
         ValueError: For a naive time, ``since`` after ``planned_for``, or an unknown kind.
-        NotImplementedError: For ``secrets``.
     """
-    if secrets is not None:
-        raise _milestone_m4("task_context(secrets=...)", "secrets")
+    reader = _local_secrets(secrets) if secrets is not None else None
     if kind not in RUN_KINDS:
         raise ValueError(f"unknown run kind `{kind}` (known: {', '.join(sorted(RUN_KINDS))})")
     planned = _aware(planned_for, "planned_for") if planned_for is not None else _now()
@@ -108,8 +117,35 @@ def task_context(
     values = RunValues(
         dag_id, run_id or str(uuid.uuid7()), kind, planned, start, stored, params_class
     )
-    with running(values, TaskValues(task_id, try_number, map_index)):
+    with running(values, TaskValues(task_id, try_number, map_index, reader)):
         yield values
+
+
+def _local_secrets(secrets: Mapping[str, str]) -> SecretReader:
+    """Reads secrets from ``task_context(secrets=...)``'s values."""
+    values: dict[tuple[str, str], str] = {}
+    for name, value in secrets.items():
+        path, sep, key = name.partition("#")
+        if not sep or not key or not isinstance(value, str):
+            raise ValueError(f'secrets= takes `"path#key": "value"` strings, got {name!r}')
+        values[path, key] = value
+
+    def read(ref: SecretRef) -> str | dict[str, str]:
+        declared = declared_secrets()
+        if declared is not None and not any(covers(d, ref) for d in declared):
+            raise SecretError(
+                "secret_denied", f"`{ref.label()}` isn't declared in the task's `secrets=`"
+            )
+        if ref.key is not None:
+            if (ref.path, ref.key) in values:
+                return values[ref.path, ref.key]
+        else:
+            whole = {key: value for (path, key), value in values.items() if path == ref.path}
+            if whole:
+                return whole
+        raise SecretError("secret_not_found", f"`{ref.label()}`: no such secret in secrets=")
+
+    return read
 
 
 def _given_params(params: object) -> tuple[dict[str, Any], type | None]:
@@ -377,7 +413,8 @@ def run_dag(
         for_: The run's ``planned_for`` (aware); now by default.
         params: Values for the run's parameters: an instance of the DAG's params class, or a
             mapping of field names to JSON values (``{"region": "us"}``), over its defaults.
-        secrets: Secret values (milestone M4).
+        secrets: Secret values, by ``"path#key"``, for every storage (``--secret``); masked
+            in the logs and outputs as usual.
         step: Yield each task as it ends (milestone M4).
         replace: Results replacing tasks (milestone M4).
 
@@ -389,10 +426,9 @@ def run_dag(
             DAG, or a file that doesn't import).
         TypeError: If ``for_`` isn't a ``datetime``.
         ValueError: If ``for_`` is naive.
-        NotImplementedError: For ``secrets``, ``step`` or ``replace``.
+        NotImplementedError: For ``step`` or ``replace``.
     """
     for given, what, feature in (
-        (secrets is not None, "secrets", "secrets"),
         (step, "step", "step-by-step runs"),
         (replace is not None, "replace", "replaced task results"),
     ):
@@ -404,6 +440,8 @@ def run_dag(
         command += ["--for", _aware(for_, "for_").isoformat()]
     if params is not None:
         command += ["--params", json.dumps(_params_json(params))]
+    for name, value in (secrets or {}).items():
+        command += ["--secret", f"{name}={value}"]
     env = dict(os.environ)
     env.setdefault("SCHEDR_CONFIG__INTERPRETERS__PYTHON", sys.executable)
     done = subprocess.run(command, capture_output=True, text=True, env=env, check=False)

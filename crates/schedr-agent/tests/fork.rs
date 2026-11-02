@@ -69,6 +69,7 @@ fn spec(program: PathBuf, args: &[&str], dir: &Path, log: &str) -> ProcessSpec {
         working_dir: dir.to_path_buf(),
         log_file: dir.join(log),
         max_output_size: 64 * 1024,
+        mask: schedr_agent::mask::Mask::default(),
     }
 }
 
@@ -196,6 +197,7 @@ fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
             map_index: None,
         },
         sys_path: vec![dir.to_string_lossy().into_owned()],
+        secrets: Vec::new(),
     }
 }
 

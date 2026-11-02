@@ -35,6 +35,8 @@ from schedr._model import (
     Reference,
     RefValue,
     ScalarType,
+    SecretDecl,
+    SecretRef,
     Task,
     TaskKind,
     TaskSettings,
@@ -70,7 +72,7 @@ from schedr._serialization.annotations import (
     unwrap,
 )
 from schedr._serialization.models import is_model
-from schedr._templates import is_tstring
+from schedr._templates import check_in_text, is_tstring
 from schedr._templates import to_template as tstring_to_template
 from schedr.outcomes import DEFAULT, DagHint, OutcomeSpec, RunIf
 
@@ -113,6 +115,7 @@ class TaskOptions:
         run_if: Its trigger rule.
         max_active: At most this many instances running at once, across all runs.
         max_active_per_run: The same within one run.
+        secrets: The secrets it declares (``secrets=``); a task's own, never inherited.
     """
 
     retries: int | None = None
@@ -125,6 +128,7 @@ class TaskOptions:
     run_if: RunIf | None = None
     max_active: int | None = None
     max_active_per_run: int | None = None
+    secrets: tuple[SecretDecl, ...] | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -152,6 +156,7 @@ class TaskOptions:
                 if self.max_active_per_run is None
                 else self.max_active_per_run
             ),
+            secrets=base.secrets if self.secrets is None else self.secrets,
         )
 
     def settings(self) -> TaskSettings:
@@ -475,6 +480,7 @@ class DagBuilder:
             outcomes.declared(),
             group=scope.id if scope is not None else None,
             expand=expand,
+            secrets=options.secrets or (),
         )
         if expand is not None:
             self.mapped.add(task_id)
@@ -1138,6 +1144,7 @@ def to_template(value: object, where: str, upstream: list[Upstream]) -> Template
         return Template([value])
     if is_reference(value):
         reference: Reference = value._schedr_reference()  # type: ignore[attr-defined]
+        check_in_text(reference, where)
         note_upstream(reference, upstream)
         return Template([TemplateRef(reference)])
     if is_tstring(value):
@@ -1315,6 +1322,8 @@ def reference_label(reference: Reference) -> str:
     Returns:
         E.g. ``extract.rows[0]`` or ``dag_ctx.run.planned_for``.
     """
+    if isinstance(reference, SecretRef):
+        return reference.label()
     if isinstance(reference, ParamRef):
         return "dag_ctx.params" + "".join(
             f"[{p}]" if isinstance(p, int) else f".{p}" for p in reference.path
@@ -1350,6 +1359,10 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
     """
     if isinstance(reference, DagCtxRef):
         return _DAG_CTX_TYPES[reference.field]
+    if isinstance(reference, SecretRef):
+        # A key's value is text; a whole secret is its keys' values by key.
+        text = ScalarType("str")
+        return text if reference.key is not None else DictType(text)
     if isinstance(reference, ParamRef):
         return params_type(builder, reference.path, where)
     if reference.task not in builder.tasks:

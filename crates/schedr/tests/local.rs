@@ -562,3 +562,111 @@ fn test_fails_at_once_when_its_root_cant_be_scanned() {
     assert!(err.contains("can't scan DAG root `etl`"), "{err}");
     assert!(err.contains("rows.csv"), "{err}");
 }
+
+/// M4.6b: a command and a Python task read secrets given with `--secret`; their values are
+/// masked in the logs and the stored output.
+fn secrets_dag() -> String {
+    let bin = BINARY;
+    format!(
+        r#"
+from schedr import CommandOperator, Dag, SecretPrefix, secrets, task, task_ctx
+
+@task(secrets=[SecretPrefix("tenants/")])
+def py(password: str) -> str:
+    print("password is", password)
+    token = task_ctx.secret("tenants/a#token")
+    print("token is", token)
+    return f"{{password}}/{{token}}"
+
+@task
+def undeclared() -> str:
+    return task_ctx.secret("etl/db#user")
+
+@task(secrets=["tenants/b#token"])
+def missing() -> str:
+    return task_ctx.secret("tenants/b#token")
+
+with Dag("ok"):
+    CommandOperator(
+        "cmd",
+        ["sh", "-c", '{bin} task-ctx secret get "etl/db#password"; echo; echo "env $PW"'],
+        env={{"PW": secrets["etl/db#password"]}},
+        secrets=["etl/db#password"],
+    )
+    py(secrets["etl/db#password"])
+
+with Dag("denied"):
+    undeclared()
+
+with Dag("not_found"):
+    missing()
+
+with Dag("cmd_denied"):
+    CommandOperator("read", ["{bin}", "task-ctx", "secret", "get", "etl/db#password"])
+
+with Dag("cmd_ignored"):
+    # A failed read the command gets past: the attempt succeeds (decision 168).
+    CommandOperator("read", ["sh", "-c", '{bin} task-ctx secret get "etl/db#x" || true'])
+"#
+    )
+}
+
+const SECRET_ARGS: [&str; 4] = [
+    "--secret",
+    "etl/db#password=hunter22-pw",
+    "--secret",
+    "tenants/a#token=token-of-a",
+];
+
+#[test]
+fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
+    let dag = secrets_dag();
+    let local = Local::new(&[("secrets.py", dag.as_str())]);
+    let mut args = vec!["--json"];
+    args.extend(SECRET_ARGS);
+    let (code, out, err) = local.test("ok", &args);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(
+        !out.contains("hunter22-pw") && !out.contains("token-of-a"),
+        "{out}"
+    );
+    let report: Value = serde_json::from_str(&out).unwrap();
+    let tasks = report["tasks"].as_array().unwrap();
+    let cmd = &tasks[0];
+    assert_eq!(cmd["state"], "success");
+    let log = cmd["log"].as_str().unwrap();
+    assert!(log.contains("****\nenv ****"), "{log}");
+    assert!(
+        log.contains("secrets['etl/db#password']") && log.contains("masked"),
+        "{log}"
+    );
+    let py = &tasks[1];
+    assert_eq!(py["output"], "****/****");
+    let log = py["log"].as_str().unwrap();
+    assert!(
+        log.contains("password is ****") && log.contains("token is ****"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_secret_read_that_fails_fails_the_task_with_its_kind() {
+    let dag = secrets_dag();
+    let local = Local::new(&[("secrets.py", dag.as_str())]);
+    for (dag, kind) in [
+        ("denied", "secret_denied"),
+        ("not_found", "secret_not_found"),
+        ("cmd_denied", "secret_denied"),
+    ] {
+        let mut args = vec!["--json"];
+        args.extend(SECRET_ARGS);
+        let (code, out, err) = local.test(dag, &args);
+        assert_eq!(code, 1, "{out}\n{err}");
+        let report: Value = serde_json::from_str(&out).unwrap();
+        let attempt = &report["tasks"][0]["attempts"][0];
+        assert_eq!(attempt["error_kind"], kind, "{attempt}");
+    }
+    let (code, out, err) = local.test("cmd_ignored", &SECRET_ARGS);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("isn't declared"), "{out}");
+}

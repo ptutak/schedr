@@ -6,6 +6,9 @@ export UV_PROJECT_ENVIRONMENT := $(PYENV_PREFIX)
 export UV_PYTHON := $(PYENV_PREFIX)/bin/python
 unexport VIRTUAL_ENV
 endif
+# make syncs as CI does, also under a shell's UV_NO_SYNC (set for quick `uv run`s by hand):
+# the integration tests run the binary installed in the environment, rebuilt by the sync.
+unexport UV_NO_SYNC
 
 .PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 

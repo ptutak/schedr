@@ -24,6 +24,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Re
 use tokio::net::{UnixDatagram, UnixStream};
 use tokio::task::JoinSet;
 
+use crate::secrets::{AttemptSecrets, SecretError};
+
 #[cfg(test)]
 mod tests;
 
@@ -37,7 +39,7 @@ pub const MAX_CONNECTIONS: usize = 64;
 const MAX_FDS_PER_DATAGRAM: usize = 253;
 
 /// What a task's processes can read over the channel.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CtxInfo {
     /// The run information.
     pub run: CtxRun,
@@ -46,6 +48,8 @@ pub struct CtxInfo {
     /// The agent's schedr version (for a refusal's message; callers are accepted by their
     /// protocol, decision 148).
     pub version: String,
+    /// The attempt's secrets (`schedr task-ctx secret get`); none for a task without any.
+    pub secrets: Option<Arc<AttemptSecrets>>,
 }
 
 impl CtxInfo {
@@ -62,6 +66,7 @@ impl CtxInfo {
             },
             params: run.params.clone(),
             version: version.to_owned(),
+            secrets: None,
         }
     }
 }
@@ -321,6 +326,19 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                 params: info.params.clone(),
             },
             Some(Ok(CtxRequest::RunGet)) => CtxAnswer::Run(info.run.clone()),
+            Some(Ok(CtxRequest::SecretGet { secret })) => match &info.secrets {
+                Some(secrets) => match secrets.read(&secret).await {
+                    Ok(value) => CtxAnswer::Secret { value },
+                    Err(error) => CtxAnswer::SecretFailed {
+                        kind: error.kind().to_owned(),
+                        reason: error.to_string(),
+                    },
+                },
+                None => CtxAnswer::SecretFailed {
+                    kind: SecretError::Denied(String::new()).kind().to_owned(),
+                    reason: format!("`{secret}` isn't declared in the task's `secrets=`"),
+                },
+            },
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }

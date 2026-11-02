@@ -190,12 +190,15 @@ fn an_invalid_log_level_is_reported() {
 }
 
 #[test]
-fn commands_of_later_milestones_say_when_they_arrive() {
-    let result = schedr(&["task-ctx", "secret", "get", "x"], &[], &[]);
+fn task_ctx_outside_a_task_says_where_it_works() {
+    let result = schedr(&["task-ctx", "secret", "get", "x#k"], &[], &[]);
     assert_eq!(result.code, 1);
-    assert_eq!(
-        result.err,
-        "error: `schedr task-ctx` isn't implemented yet (milestone M4)\n"
+    assert!(
+        result
+            .err
+            .starts_with("error: `schedr task-ctx` must be run inside a schedr task"),
+        "{}",
+        result.err
     );
 }
 

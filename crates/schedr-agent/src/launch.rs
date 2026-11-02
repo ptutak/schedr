@@ -10,10 +10,11 @@
 //! [`crate::attempt`], [`crate::parse`] and [`crate::supervise`].
 
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::PoisonError;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use prometheus_client::metrics::counter::Counter;
+use schedr_model::SecretName;
 use schedr_model::ctx::CTX_FD_ENV;
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
 use tokio::net::UnixStream;
@@ -26,6 +27,7 @@ use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, wa
 use crate::output::TailBuffer;
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
+use crate::secrets::{AttemptSecrets, SecretError};
 use crate::status::{StopReason, Termination};
 use crate::supervise::{Limits, Process, Signal, Stops, Supervised, supervise};
 use crate::usage::Ended;
@@ -325,6 +327,58 @@ async fn start_task_runner(
     Err(error)
 }
 
+/// A Python task to run: the runner's request, and the attempt's secrets (it may read one
+/// under a declared prefix while it runs).
+#[derive(Debug)]
+pub struct PythonTask {
+    /// The request.
+    pub request: TaskRequest,
+    /// The attempt's secrets; none for a task without any.
+    pub secrets: Option<Arc<AttemptSecrets>>,
+}
+
+impl From<TaskRequest> for PythonTask {
+    fn from(request: TaskRequest) -> Self {
+        Self {
+            request,
+            secrets: None,
+        }
+    }
+}
+
+/// Sends the task request and serves the runner until its result: its import time, and the
+/// secrets it reads (`task_ctx.secret`). Returns the result (`None` if the channel broke)
+/// and how long the import took, if it said.
+async fn task_conversation(
+    stream: &mut UnixStream,
+    request: TaskRequest,
+    secrets: Option<&AttemptSecrets>,
+) -> (Option<RunnerMessage>, Option<Duration>) {
+    let request = AgentMessage::Task(Box::new(request));
+    if write_message(stream, &request).await.is_err() {
+        return (None, None);
+    }
+    let sent = Instant::now();
+    let mut import = None;
+    loop {
+        let message: Result<RunnerMessage, ChannelError> = read_message(stream).await;
+        match message {
+            // The first one counts; a repeat isn't the result.
+            Ok(RunnerMessage::TaskImported) => {
+                import.get_or_insert_with(|| sent.elapsed());
+            }
+            // Served in turn: the runner waits for each answer.
+            Ok(RunnerMessage::SecretGet { secret }) => {
+                let answer = secret_answer(secrets, &secret).await;
+                if write_message(stream, &answer).await.is_err() {
+                    return (None, import);
+                }
+            }
+            message => return (message.ok(), import),
+        }
+    }
+}
+
 /// Runs a Python task: starts the runner (forked by `forks` when there are any and they can,
 /// unless the task asks for a fresh process; only by the bare server with `preload` off),
 /// sends the request, and waits for its result while supervising the process; `spawned` gets
@@ -337,13 +391,14 @@ async fn start_task_runner(
 /// nothing still gives a [`Ran`] (without a result).
 pub async fn run_python(
     process: &ProcessSpec,
-    request: TaskRequest,
+    task: impl Into<PythonTask>,
     limits: Limits,
     mut stop: Stops,
     forks: Option<&ForkServers>,
     hold: &mut Option<GroupHold>,
     spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
+    let PythonTask { request, secrets } = task.into();
     let started = Instant::now();
     // The timeout counts from here: the runner's start is part of the attempt (B56).
     let deadline = limits
@@ -409,26 +464,23 @@ pub async fn run_python(
     };
     let forked = matches!(process, TaskProcess::Forked(_));
     // Sent while supervised: a runner that doesn't read is stopped on time all the same (B56).
-    let result = async {
-        let request = AgentMessage::Task(Box::new(request));
-        if write_message(&mut stream, &request).await.is_err() {
-            return (None, None);
-        }
-        let sent = Instant::now();
-        let mut import = None;
-        loop {
-            let message: Result<RunnerMessage, ChannelError> = read_message(&mut stream).await;
-            match message {
-                // The first one counts; a repeat isn't the result.
-                Ok(RunnerMessage::TaskImported) => {
-                    import.get_or_insert_with(|| sent.elapsed());
-                }
-                message => return (message.ok(), import),
+    let result = task_conversation(&mut stream, request, secrets.as_deref());
+    let ((runner_result, import), supervised) = {
+        // Boxed: the attempt's future stays small.
+        let mut result = Box::pin(result);
+        let mut supervised = Box::pin(supervise(&mut process, limits, stop));
+        // Once the process has ended, its result is in the socket already: a conversation still
+        // waiting (on a slow secret storage) is given up after a moment, not awaited.
+        tokio::select! {
+            conversation = &mut result => (conversation, supervised.await),
+            supervised = &mut supervised => {
+                let conversation = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, result)
+                    .await
+                    .unwrap_or((None, None));
+                (conversation, supervised)
             }
         }
     };
-    let ((runner_result, import), supervised) =
-        tokio::join!(result, supervise(&mut process, limits, stop));
     let supervised = supervised.map_err(LaunchError::Supervise)?;
     let ended = process.ended();
     let _ = process.output().await;
@@ -613,5 +665,22 @@ impl ParseRunner for ProcessParseRunner {
             return Err(error);
         }
         Ok(session)
+    }
+}
+
+/// The answer to a running Python task's `SecretGet`.
+async fn secret_answer(secrets: Option<&AttemptSecrets>, secret: &SecretName) -> AgentMessage {
+    let read = match secrets {
+        Some(secrets) => secrets.read(secret).await,
+        None => Err(SecretError::Denied(format!(
+            "`{secret}` isn't declared in the task's `secrets=`"
+        ))),
+    };
+    match read {
+        Ok(value) => AgentMessage::Secret { value },
+        Err(error) => AgentMessage::SecretFailed {
+            kind: error.kind().to_owned(),
+            message: error.to_string(),
+        },
     }
 }

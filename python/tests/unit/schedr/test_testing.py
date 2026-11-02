@@ -70,7 +70,8 @@ def test_task_context_keeps_given_values() -> None:
         ),
         ({"kind": "daily"}, ValueError, "unknown run kind `daily`"),
         ({"params": {"region": "eu"}}, TypeError, "an instance of the DAG's params class"),
-        ({"secrets": {"a#b": "x"}}, NotImplementedError, "secrets \\(milestone M4\\)"),
+        ({"secrets": {"a/b": "x"}}, ValueError, "secrets= takes"),
+        ({"secrets": {"a#": "x"}}, ValueError, "secrets= takes"),
     ],
 )
 def test_task_context_rejects_bad_arguments(
@@ -299,6 +300,14 @@ def test_run_dag_passes_params_as_json(dags: Path, monkeypatch: pytest.MonkeyPat
     assert json.loads(list(run.command)[-1]) == {"day": "2026-10-01", "region": "eu"}
 
 
+def test_run_dag_passes_secret_values(dags: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = fake(monkeypatch, json.dumps(report()))
+    run_dag(dags, "sync", secrets={"etl/db#password": "a=b", "etl/db#user": "etl"})
+    assert list(run.command)[-4:] == [
+        "--secret", "etl/db#password=a=b", "--secret", "etl/db#user=etl",
+    ]  # fmt: skip
+
+
 def test_the_environments_interpreter_setting_wins(
     dags: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -312,7 +321,6 @@ def test_the_environments_interpreter_setting_wins(
     ("arguments", "error", "message"),
     [
         ({"for_": datetime(2026, 10, 15)}, ValueError, "for_ must have a time zone"),
-        ({"secrets": {"a#b": "x"}}, NotImplementedError, "run_dag\\(secrets=...\\)"),
         ({"step": True}, NotImplementedError, "step-by-step runs \\(milestone M4\\)"),
         ({"replace": {"a": 1}}, NotImplementedError, "replaced task results"),
     ],

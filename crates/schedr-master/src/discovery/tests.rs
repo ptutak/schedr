@@ -42,6 +42,7 @@ fn upload(hash: &str, files: Vec<(&str, Vec<Dag>)>) -> ParseUpload {
     ParseUpload {
         worker_id: "w1".to_owned(),
         key: key(hash),
+        secret_storages: None,
         files: files
             .into_iter()
             .map(|(path, dags)| ParsedFile {
@@ -867,7 +868,11 @@ async fn a_retry_stored_whose_acknowledgement_was_lost_still_updates_the_catalog
     let mut retry = upload("h1", vec![("b.py", vec![dag("b", "b.py", 1)])]);
     retry.worker_id = "w2".to_owned();
     // What the lost acknowledgement left: the retry's file stored, nothing else done.
-    let stored = validate_files("etl", retry.files.clone(), discovery.master, 1 << 20);
+    let stored = validate_files(
+        "etl",
+        retry.files.clone(),
+        &Checks::new(discovery.master, 1 << 20),
+    );
     discovery
         .db
         .replace_parse_files(&parse_id, &stored, "w2", later(31))

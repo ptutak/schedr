@@ -11,8 +11,8 @@ use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{
-    CommandLine, Dag, EdgeKind, Expand, Reference, SchedrVersion, TaskId, TaskKind, TemplatePart,
-    Value,
+    CommandLine, Dag, EdgeKind, Expand, Reference, SchedrVersion, SecretDecl, TaskId, TaskKind,
+    Template, TemplatePart, Value,
 };
 
 use crate::fire_times::FireTimes;
@@ -80,6 +80,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     expand_problems(dag, &mut problems);
     param_problems(dag, &mut problems);
     shell_problems(dag, &mut problems);
+    secret_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
@@ -109,6 +110,121 @@ fn shell_problems(dag: &Dag, problems: &mut Vec<String>) {
             ));
         }
     }
+}
+
+/// Secrets (see PROJECT.md, Secret storage): each name well formed, none in a command line
+/// (it would show in the process list) nor mapped over, a whole secret only where a value
+/// goes (an argument), not in text.
+fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        let id = &task.id;
+        for name in task.secret_references() {
+            if let Err(error) = name.check() {
+                problems.push(format!("task `{id}`: {error}"));
+            }
+        }
+        for declared in &task.secrets {
+            if let Err(error) = declared.check() {
+                problems.push(format!("task `{id}`: secrets=: {error}"));
+            }
+        }
+        let mut in_text: Vec<&Template> = Vec::new();
+        match &task.kind {
+            TaskKind::Command { command, env } => {
+                for template in command.templates() {
+                    for reference in template.references() {
+                        if let Reference::Secret(name) = reference {
+                            problems.push(format!(
+                                "task `{id}`: `{name}` in the command line (anyone on the \
+                                 machine could read it in the process list): pass it in `env`, \
+                                 or declare it in `secrets=` and read it with `schedr task-ctx \
+                                 secret get`"
+                            ));
+                        }
+                    }
+                }
+                in_text.extend(env.values());
+            }
+            TaskKind::Python { arguments, .. } => {
+                for value in arguments.values() {
+                    in_text.extend(value_templates(value));
+                }
+            }
+            TaskKind::Empty => {}
+        }
+        let mapped: Vec<&Value> = match &task.expand {
+            Some(Expand::Product(over)) => over.iter().map(|m| &m.value).collect(),
+            Some(Expand::Kwargs(over)) => vec![over],
+            None => Vec::new(),
+        };
+        // What it maps over is written into its instances' arguments too.
+        in_text.extend(mapped.iter().flat_map(|value| value_templates(value)));
+        for template in in_text {
+            for reference in template.references() {
+                if let Reference::Secret(name) = reference
+                    && name.key.is_none()
+                {
+                    problems.push(format!(
+                        "task `{id}`: `{name}` is a whole secret (every key), which can't be \
+                         written into text: name its key, `path#key`"
+                    ));
+                }
+            }
+        }
+        if mapped
+            .iter()
+            .any(|v| matches!(v, Value::Ref(Reference::Secret(_))))
+        {
+            problems.push(format!(
+                "task `{id}` is mapped over a secret: the number of instances can't depend on it"
+            ));
+        }
+    }
+}
+
+/// The templates inside a value, at any depth.
+fn value_templates(value: &Value) -> Vec<&Template> {
+    match value {
+        Value::Template(template) => vec![template],
+        Value::List(items) => items.iter().flat_map(value_templates).collect(),
+        Value::Map(entries) => entries.values().flat_map(value_templates).collect(),
+        Value::Literal(_) | Value::Ref(_) => Vec::new(),
+    }
+}
+
+/// The secret storages a DAG names that the worker that parsed it hasn't configured (the
+/// default one, unnamed, isn't checked).
+#[must_use]
+pub fn storage_problems(dag: &Dag, storages: &BTreeSet<String>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for task in &dag.tasks {
+        let named = task
+            .secret_references()
+            .into_iter()
+            .filter_map(|name| name.storage.as_deref())
+            .chain(task.secrets.iter().filter_map(SecretDecl::storage));
+        let mut seen = BTreeSet::new();
+        for storage in named {
+            if !storages.contains(storage) && seen.insert(storage) {
+                let known = if storages.is_empty() {
+                    "none".to_owned()
+                } else {
+                    storages
+                        .iter()
+                        .map(|s| format!("`{s}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                problems.push(format!(
+                    "task `{}`: no secret storage `{storage}` on the worker that parsed it \
+                     (configured: {known}; `[secret_storage.{storage}]` in the workers' \
+                     configuration)",
+                    task.id
+                ));
+            }
+        }
+    }
+    problems
 }
 
 /// Mapped tasks (decision 69): a Python task only, not a `@branch`, with something to vary
@@ -423,18 +539,37 @@ fn cycle<'a>(dag: &'a Dag, tasks: &BTreeSet<&'a TaskId>) -> Option<Vec<&'a TaskI
     (!incoming.is_empty()).then(|| incoming.into_keys().collect())
 }
 
+/// What a parse's files are checked against.
+#[derive(Debug, Clone, Copy)]
+pub struct Checks<'a> {
+    /// The master's schedr version: it must read the DAGs' JSON.
+    pub master: SchedrVersion,
+    /// The master's message limit: a task whose output can't fit it is refused (B33).
+    pub max_message_size: usize,
+    /// The secret storages of the worker that parsed them: a DAG naming another is refused;
+    /// none when unknown (not checked).
+    pub secret_storages: Option<&'a BTreeSet<String>>,
+}
+
+impl Checks<'_> {
+    /// Checks without secret storages.
+    #[must_use]
+    pub const fn new(master: SchedrVersion, max_message_size: usize) -> Self {
+        Self {
+            master,
+            max_message_size,
+            secret_storages: None,
+        }
+    }
+}
+
 /// Checks the files of a parse of `root`: a file whose path isn't inside the root, or that
 /// defines an invalid DAG, gets an import error listing the problems and no DAGs.
 #[must_use]
-pub fn validate_files(
-    root: &str,
-    files: Vec<ParsedFile>,
-    master: SchedrVersion,
-    max_message_size: usize,
-) -> Vec<ParsedFile> {
+pub fn validate_files(root: &str, files: Vec<ParsedFile>, checks: &Checks<'_>) -> Vec<ParsedFile> {
     files
         .into_iter()
-        .map(|file| validate_file(root, file, master, max_message_size))
+        .map(|file| validate_file(root, file, checks))
         .collect()
 }
 
@@ -489,12 +624,7 @@ fn shown_size(bytes: u64) -> String {
     }
 }
 
-fn validate_file(
-    root: &str,
-    mut file: ParsedFile,
-    master: SchedrVersion,
-    max_message_size: usize,
-) -> ParsedFile {
+fn validate_file(root: &str, mut file: ParsedFile, checks: &Checks<'_>) -> ParsedFile {
     if !inside_root(&file.path) {
         file.dags.clear();
         file.error = Some(ErrorSummary {
@@ -512,8 +642,11 @@ fn validate_file(
         .dags
         .iter()
         .flat_map(|dag| {
-            let mut problems = dag_problems(dag, root, &file.path, master);
-            problems.extend(output_problems(dag, max_message_size));
+            let mut problems = dag_problems(dag, root, &file.path, checks.master);
+            problems.extend(output_problems(dag, checks.max_message_size));
+            if let Some(storages) = checks.secret_storages {
+                problems.extend(storage_problems(dag, storages));
+            }
             problems
                 .into_iter()
                 .map(move |p| format!("DAG `{}`: {p}", dag.id))

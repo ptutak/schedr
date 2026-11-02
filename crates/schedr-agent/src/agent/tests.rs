@@ -180,6 +180,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         },
         log_endpoint: String::new(),
         node: NodeIdentity::default(),
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let fake = Fake::default();
     let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
@@ -591,6 +592,7 @@ async fn against_master(
             process_id: "p-1".to_owned(),
             config_json: r#"{"worker":{"slots":2}}"#.to_owned(),
         },
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
@@ -1059,6 +1061,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         },
         log_endpoint: String::new(),
         node: NodeIdentity::default(),
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let journal = Journal::new(settings.journal_dir.clone());
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
@@ -1268,6 +1271,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         },
         log_endpoint: String::new(),
         node: NodeIdentity::default(),
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert!(!agent.on_shutdown(0));
@@ -1313,6 +1317,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         },
         log_endpoint: String::new(),
         node: NodeIdentity::default(),
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     let (stop, mut stopped) = Stops::new();
@@ -1641,4 +1646,158 @@ fn a_result_sent_again_too_often_gives_the_session_up() {
     assert_eq!(sends, usize::try_from(MAX_RESENDS).unwrap());
     // Due a ninth time at the 160th heartbeat (sent at 2, 4, 8, ... 96, 128).
     assert_eq!(beat + 1, 160);
+}
+
+#[tokio::test]
+async fn an_ended_attempt_is_masked_and_takes_a_failed_reads_kind() {
+    use crate::secrets::{AttemptSecrets, MemoryStorage, SecretStores};
+    use schedr_model::{SecretDecl, SecretName};
+    let password = SecretName {
+        storage: None,
+        path: "etl/db".into(),
+        key: Some("password".into()),
+    };
+    let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
+        password.clone(),
+        "hunter22".to_owned(),
+    )])));
+    let declared = vec![SecretDecl::Secret(password.clone())];
+    let secrets = AttemptSecrets::fetch(stores, std::slice::from_ref(&password), declared)
+        .await
+        .unwrap();
+    let mut finished = pb::Finished {
+        status: pb::AttemptStatus::Success.into(),
+        output_json: br#"{"dsn": "u:hunter22@h"}"#.to_vec(),
+        ..pb::Finished::default()
+    };
+    // A read refused, then the task succeeded anyway: no kind (decision 168).
+    let undeclared = SecretName {
+        key: Some("user".into()),
+        ..password.clone()
+    };
+    assert!(secrets.read(&undeclared).await.is_err());
+    super::ended_with_secrets(&mut finished, &secrets, true);
+    assert_eq!(finished.output_json, br#"{"dsn":"u:****@h"}"#);
+    assert_eq!(finished.error_kind, "");
+    finished.status = pb::AttemptStatus::Failed.into();
+    super::ended_with_secrets(&mut finished, &secrets, false);
+    assert_eq!(finished.error_kind, "secret_denied");
+    // A kind of its own is kept.
+    "timeout".clone_into(&mut finished.error_kind);
+    super::ended_with_secrets(&mut finished, &secrets, false);
+    assert_eq!(finished.error_kind, "timeout");
+    assert!(super::masked_lines(&secrets).contains("`secrets['etl/db#password']` was masked once"));
+}
+
+/// Never answers in time: a storage that is down without saying so.
+#[derive(Debug)]
+struct Hanging;
+
+impl crate::secrets::SecretStorage for Hanging {
+    fn read<'a>(&'a self, _path: &'a str) -> crate::secrets::ReadFuture<'a> {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Err(crate::secrets::SecretError::Unavailable("too late".into()))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
+    use crate::secrets::{SecretStores, Storage};
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("etl")).unwrap();
+    std::fs::write(dir.path().join("etl/sync.py"), "").unwrap();
+    let setup = WorkerSetup {
+        roots: std::collections::BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
+        parse_only: std::collections::BTreeMap::new(),
+        python: std::path::PathBuf::from("/usr/bin/python3"),
+        agent_env: std::collections::BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
+        pass_env: vec![],
+        log_dir: dir.path().join("logs"),
+        memory: crate::memory::MemoryWatch::default(),
+        fork_server: None,
+    };
+    let stores = SecretStores::new(
+        std::collections::BTreeMap::from([("main".to_owned(), Storage::new(Arc::new(Hanging)))]),
+        Some("main".to_owned()),
+        5,
+    )
+    .unwrap();
+    let executor = ProcessExecutor {
+        setup: setup.clone(),
+        parse_file_timeout: std::time::Duration::from_secs(5),
+        metrics: AgentMetrics::default(),
+        drain_terminate_period: std::time::Duration::from_secs(1),
+        forks: None,
+        secrets: Arc::new(stores),
+    };
+    let task = |timeout_ms: serde_json::Value| {
+        json!({
+            "id": "load",
+            "kind": "command",
+            "command": {"argv": [[{"text": "true"}]]},
+            "env": {"PW": [{"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}]},
+            "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": timeout_ms,
+                         "queue": "default", "max_output_size": 1024, "preload": true,
+                         "fresh_process": false},
+            "output_type": {"type": "process_result"},
+        })
+    };
+    let assign = |task: &serde_json::Value| pb::AssignTask {
+        attempt_id: "a1".to_owned(),
+        task_id: "load".to_owned(),
+        map_index: -1,
+        try_number: 1,
+        run: Some(pb::RunInfo {
+            params_json: Vec::new(),
+            run_id: "r1".to_owned(),
+            kind: "manual".to_owned(),
+            planned_for: Some(prost_types::Timestamp {
+                seconds: 1_792_036_800,
+                nanos: 0,
+            }),
+            since: Some(prost_types::Timestamp {
+                seconds: 1_791_950_400,
+                nanos: 0,
+            }),
+            dag_id: "sync".to_owned(),
+        }),
+        task_json: serde_json::to_vec(task).unwrap(),
+        dag_file: Some(pb::DagFileRef {
+            root: "etl".to_owned(),
+            path: "sync.py".to_owned(),
+        }),
+        expected_code_hash: String::new(),
+        inputs_json: b"{}".to_vec(),
+        inputs_external: false,
+        cancel_grace_ms: 1_000,
+        memory_budget_bytes: 0,
+        setrlimit: false,
+        upstream_outcomes: std::collections::HashMap::new(),
+    };
+    for (timeout_ms, cancel, status) in [
+        (json!(null), true, pb::AttemptStatus::Cancelled),
+        (json!(200), false, pb::AttemptStatus::TimedOut),
+    ] {
+        let mut spec =
+            crate::attempt::AttemptSpec::from_assign(&assign(&task(timeout_ms)), None).unwrap();
+        spec.stand_in_secrets();
+        let plan = crate::attempt::plan(&spec, &setup).unwrap();
+        let (sender, stops) = Stops::new();
+        if cancel {
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let _ = sender.send(StopReason::Cancelled);
+            });
+        }
+        let started = std::time::Instant::now();
+        let finished = executor.run(spec, plan, stops, Box::new(|_, _| {})).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(finished.status, i32::from(status), "{finished:?}");
+    }
 }

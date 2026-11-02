@@ -242,6 +242,8 @@ pub fn agent_settings(
             config_json: masked(config).to_string(),
         },
         worker_id,
+        // The storages from `[secret_storage]` come with M4.6c (`db`) and M4.6d (Vault).
+        secrets: std::sync::Arc::new(schedr_agent::secrets::SecretStores::none()),
     })
 }
 
@@ -807,6 +809,7 @@ pub async fn run_worker(
         metrics: observed.metrics.clone(),
         drain_terminate_period: agent.drain.terminate_period,
         forks: ForkServers::for_worker(&agent.setup, &observed.metrics.fork),
+        secrets: std::sync::Arc::clone(&agent.secrets),
     };
     let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string())
         .with_metrics(observed.metrics);

@@ -4,6 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-02, evening): M4.6 under way
+
+- **M4.6a+b committed** (secrets: the model, the Python API, the master's checks, and the
+  agent: fetching, masking, `task_ctx.secret`, `task-ctx secret get`, test values). Reviews:
+  Grok on M4.6a (4 findings, fixed), Codex on M4.6b (10: 8 fixed, 2 rejected, PROJECT.md says
+  why). Decisions 167-170 and Claude's choices are in PROJECT.md's "Built in M4.6" block.
+- **Running at the commit:** Grok's second security review of M4.6b (fresh session, worktree
+  `../schedr-grok-4.6a`, branch `grok/4.6a`, pyenv env `schedr-grok-4.6a`); its fixes are a
+  commit of their own. Then the guide pages for M4.6 by Grok (also the stale lines in
+  `docs/02-dags/07-testing.md` and `docs/03-guide/12-ui.md` that Codex found).
+- **Next:** M4.6c (the `db` storage, `schedr secrets set/list/get/delete/export --to DIR/
+  new-key`, `[secret_storage]` config), then M4.6d (Vault). The user said: develop to the
+  end of M4.6, commit and push each sub-step after its review and `make check`.
+- **Rust coverage is at 85.09%**, just over the floor: new code brings its tests.
+- **uv:** `.claude/settings.local.json` sets `UV_PROJECT_ENVIRONMENT` and `UV_NO_SYNC=1`;
+  the Makefile unexports `UV_NO_SYNC` so `make` syncs as CI does.
+
 ## State (2026-11-02)
 
 - **Committed:** M4.5a (`ab6ffb9`), M4.5b (`8515b29`), M4.5c, the UI's trigger form

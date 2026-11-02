@@ -8,12 +8,14 @@ Rust/Python integration).
 """
 
 import dataclasses
+import threading
 import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, is_typeddict
 
+from schedr._model import SecretRef
 from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
 from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
@@ -26,8 +28,9 @@ from schedr._serialization.annotations import (
     type_hints,
     unwrap,
 )
+from schedr._serialization.codec import escaped
 from schedr._templates import as_text
-from schedr.context import RunValues, TaskValues, running
+from schedr.context import RunValues, SecretError, SecretReader, TaskValues, running
 from schedr.outcomes import from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
 from schedr.runner.protocol import Channel
@@ -70,6 +73,13 @@ def resolve(
         TaskInputError: For a missing input or path, or a truncated stream.
     """
     outcomes = outcomes or {}
+    if reference["kind"] == "secret":
+        name = secret_key(reference)
+        secrets = run.get(SECRETS, {})
+        if name not in secrets:
+            raise TaskInputError(f"the secret `{_label(reference)}` wasn't fetched")
+        value = secrets[name]
+        return escaped(value) if isinstance(value, dict) else value
     if reference["kind"] == "param":
         return _follow("dag_ctx.params", run.get("params", {}), reference.get("path", []))
     if reference["kind"] == "dag_ctx":
@@ -96,6 +106,52 @@ def resolve(
     if task not in inputs:
         raise TaskInputError(f"the output of `{task}` isn't among the task's inputs")
     return _follow(task, inputs[task], reference.get("path", []))
+
+
+SECRETS = "$secrets"
+"""Where :func:`execute` puts the request's fetched secrets in the run mapping."""
+
+
+def secret_key(name: Mapping[str, Any]) -> tuple[str | None, str, str | None]:
+    """A secret's name as stored (``{"storage": ..., "path": ..., "key": ...}``), as a key.
+
+    Args:
+        name: The stored name (or a secret reference).
+
+    Returns:
+        ``(storage, path, key)``.
+    """
+    return (name.get("storage"), name["path"], name.get("key"))
+
+
+def _label(name: Mapping[str, Any]) -> str:
+    return SecretRef(name["path"], name.get("key"), name.get("storage")).label()
+
+
+def secret_reader(channel: Channel) -> SecretReader:
+    """Reads a secret through the agent (``secret_get``), one request at a time.
+
+    Args:
+        channel: The channel to the agent.
+
+    Returns:
+        The reader ``task_ctx.secret`` calls.
+    """
+    lock = threading.Lock()
+
+    def read(ref: SecretRef) -> str | dict[str, str]:
+        with lock:
+            name = {k: v for k, v in ref.to_json().items() if k != "kind"}
+            channel.send({"type": "secret_get", "secret": name})
+            answer = channel.receive()
+        if answer.get("type") == "secret":
+            value: str | dict[str, str] = answer["value"]
+            return value
+        if answer.get("type") == "secret_failed":
+            raise SecretError(str(answer["kind"]), str(answer["message"]))
+        raise SecretError("secret_unavailable", f"unexpected answer {answer.get('type')!r}")
+
+    return read
 
 
 PROCESS_RESULT = frozenset(
@@ -500,7 +556,9 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
 
 
 def execute(  # noqa: PLR0911 (a result for each way a task ends)
-    request: Mapping[str, Any], imported: Callable[[], None] = lambda: None
+    request: Mapping[str, Any],
+    imported: Callable[[], None] = lambda: None,
+    secrets: SecretReader | None = None,
 ) -> dict[str, Any]:
     """Runs a task request and returns the message to send.
 
@@ -508,11 +566,16 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
         request: The ``task`` message.
         imported: Called once the DAG file is imported and the arguments are built, just
             before the task's function (not when that fails).
+        secrets: Reads a secret for ``task_ctx.secret`` (through the agent); ``None``: the
+            task reads none.
 
     Returns:
         ``task_succeeded`` with the encoded output, or ``task_failed``.
     """
     task, inputs, run = request["task"], request["inputs"], request["run"]
+    if request.get("secrets"):
+        fetched = {secret_key(s["name"]): s["value"] for s in request["secrets"]}
+        run = {**run, SECRETS: fetched}
     outcomes = request.get("outcomes", {})
     task_id = task["id"]
     try:
@@ -531,9 +594,11 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
         return failure(e, "import_failed")
     imported()
     try:
-        own = TaskValues(task_id, int(run.get("try_number", 1)), run.get("map_index"))
+        own = TaskValues(task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets)
         with running(run_values(run, params_class), own):
             result = function(**arguments)
+    except SecretError as e:
+        return failure(e, e.kind)
     except (Exception, SystemExit) as e:
         return failure(e, None)
     if not task.get("branch"):
@@ -610,6 +675,8 @@ def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
     """
     extend_sys_path(request["sys_path"])
     # The agent times the start from it: the interpreter's, then the DAG file's import.
-    result = execute(request, lambda: channel.send({"type": "task_imported"}))
+    result = execute(
+        request, lambda: channel.send({"type": "task_imported"}), secret_reader(channel)
+    )
     channel.send(result)
     return 0 if result["type"] == "task_succeeded" else 1

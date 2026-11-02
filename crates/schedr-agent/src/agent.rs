@@ -26,8 +26,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::PoisonError;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use schedr_model::beat::Beat;
@@ -50,11 +50,13 @@ use crate::fork::ForkServers;
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
-use crate::launch::{AGENT_VERSION, ProcessParseRunner, run_command, run_python};
+use crate::launch::{AGENT_VERSION, ProcessParseRunner, PythonTask, run_command, run_python};
+use crate::mask::Mask;
 use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::metrics::AgentMetrics;
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
+use crate::secrets::{AttemptSecrets, SecretStores};
 use crate::status::StopReason;
 use crate::supervise::{Limits, StopSender, Stops};
 use crate::watch::{Poll, RootWatcher};
@@ -111,6 +113,8 @@ pub struct AgentSettings {
     pub log_endpoint: String,
     /// The worker as a node of its deployment, sent in `Register` for the Deployments page.
     pub node: NodeIdentity,
+    /// Its secret storages (names sent in `Register`).
+    pub secrets: Arc<SecretStores>,
 }
 
 /// A worker as a node of its deployment (decisions 121-123).
@@ -211,6 +215,8 @@ pub struct ProcessExecutor {
     pub drain_terminate_period: Duration,
     /// The DAG interpreter's fork servers, when it has them (`fork_server = true`, Linux).
     pub forks: Option<ForkServers>,
+    /// The worker's secret storages.
+    pub secrets: Arc<SecretStores>,
 }
 
 impl Executor for ProcessExecutor {
@@ -222,10 +228,94 @@ impl Executor for ProcessExecutor {
 
     async fn run(
         &self,
-        spec: AttemptSpec,
+        mut spec: AttemptSpec,
+        mut plan: Plan,
+        stop: Stops,
+        spawned: Spawned,
+    ) -> pb::Finished {
+        let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
+        let fetching = Instant::now();
+        let timeout = spec.timeout();
+        let mut stop = stop;
+        // A slow storage gives way to a cancel, a drain's interrupt or the timeout: nothing
+        // has started, so nothing needs stopping.
+        let fetched = tokio::select! {
+            fetched = self.fetch_secrets(&mut spec, &mut plan) => Ok(fetched),
+            reason = stop.next_reason() => Err(reason),
+            () = sleep_for(timeout) => Err(StopReason::TimedOut),
+        };
+        let secrets = match fetched {
+            Ok(Ok(secrets)) => secrets,
+            Ok(Err(finished)) => return *finished,
+            Err(reason) => return stopped_before_start(&spec, reason, fetching.elapsed()),
+        };
+        let python = matches!(plan, Plan::Python { .. });
+        let mut finished = self.run_planned(&spec, plan, stop, spawned, &secrets).await;
+        ended_with_secrets(&mut finished, &secrets, python);
+        let log = self.setup.log_file(&spec.attempt_id);
+        // Read on demand while it ran: too short to mask, warned now.
+        let short = too_short_lines(&secrets, self.secrets.min_mask_length);
+        append_log(&log, &(short + &masked_lines(&secrets))).await;
+        finished
+    }
+
+    async fn parse(
+        &self,
+        root: String,
+        dir: PathBuf,
+        files: Vec<String>,
+    ) -> Result<Vec<ParsedFile>, String> {
+        self.parse_files(root, dir, files).await
+    }
+}
+
+impl ProcessExecutor {
+    /// Fetches the secrets the attempt needs, then plans it again with their values (it was
+    /// planned with stand-ins). A failure ends it: nothing runs with a missing secret.
+    async fn fetch_secrets(
+        &self,
+        spec: &mut AttemptSpec,
+        plan: &mut Plan,
+    ) -> Result<Arc<AttemptSecrets>, Box<pb::Finished>> {
+        let needed = spec.needed_secrets();
+        let fail = |kind: &str, message: &str| {
+            Box::new(failed_before_start(&spec.attempt_id, kind, message))
+        };
+        let secrets = AttemptSecrets::fetch(
+            Arc::clone(&self.secrets),
+            &needed,
+            spec.task.secrets.clone(),
+        )
+        .await
+        .map_err(|e| fail(e.kind(), &e.to_string()))?;
+        if needed.is_empty() && spec.task.secrets.is_empty() {
+            // Nothing to fetch or mask; kept to remember a read refused as undeclared, the
+            // attempt's error kind if it then fails (decision 168).
+            return Ok(Arc::new(secrets));
+        }
+        spec.secrets = secrets.fetched();
+        spec.mask = Mask(Some(Arc::clone(&secrets.mask)));
+        let planned = match &spec.code_dir {
+            Some(dir) => plan_at(spec, &self.setup, dir),
+            None => crate::attempt::plan(spec, &self.setup),
+        };
+        *plan = planned.map_err(|not_run| match not_run {
+            NotRun::Failed { kind, message } => fail(&kind, &message),
+            // Started already: what can't run now fails.
+            NotRun::Rejected { detail, .. } => fail(DAG_FILE_MISSING, &detail),
+        })?;
+        let short = too_short_lines(&secrets, self.secrets.min_mask_length);
+        append_log(&self.setup.log_file(&spec.attempt_id), &short).await;
+        Ok(Arc::new(secrets))
+    }
+
+    async fn run_planned(
+        &self,
+        spec: &AttemptSpec,
         plan: Plan,
         stop: Stops,
         spawned: Spawned,
+        secrets: &Arc<AttemptSecrets>,
     ) -> pb::Finished {
         let limits = Limits {
             timeout: spec.timeout(),
@@ -235,7 +325,6 @@ impl Executor for ProcessExecutor {
         let seen = SharedSeen::default();
         // The watchdog's kill is one more reason to stop, in the same channel.
         let oom = stop.sender();
-        let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         // Declared before the watch, so it is dropped after it on any path (locals go in
         // reverse order), a dropped attempt included.
         let mut hold = None;
@@ -258,10 +347,15 @@ impl Executor for ProcessExecutor {
         let ran = match plan {
             Plan::Python { process, request } => {
                 let forks = self.forks.as_ref();
-                run_python(&process, *request, limits, stop, forks, &mut hold, spawned).await
+                let task = PythonTask {
+                    request: *request,
+                    secrets: Some(Arc::clone(secrets)),
+                };
+                run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
-                let ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
+                let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
+                ctx.secrets = Some(Arc::clone(secrets));
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
@@ -287,7 +381,7 @@ impl Executor for ProcessExecutor {
         finished
     }
 
-    async fn parse(
+    async fn parse_files(
         &self,
         root: String,
         dir: PathBuf,
@@ -312,6 +406,7 @@ impl Executor for ProcessExecutor {
                 working_dir: dir.clone(),
                 log_file: self.setup.log_dir.join(format!("parse-{root}.log")),
                 max_output_size: 64 * 1024,
+                mask: crate::mask::Mask::default(),
             },
             memory: self.setup.memory.clone(),
             kills: self.metrics.watchdog_kills.clone(),
@@ -729,7 +824,7 @@ impl<E: Executor> Agent<E> {
             slots: self.settings.slots,
             log_endpoint: self.settings.log_endpoint.clone(),
             roots,
-            secret_storages: Vec::new(),
+            secret_storages: self.settings.secrets.names(),
             journal,
             process_id: self.settings.node.process_id.clone(),
             config_json: self.settings.node.config_json.clone(),
@@ -955,7 +1050,7 @@ impl<E: Executor> Agent<E> {
         } else {
             None
         };
-        let spec = match AttemptSpec::from_assign(&assign, external.as_deref()) {
+        let mut spec = match AttemptSpec::from_assign(&assign, external.as_deref()) {
             Ok(spec) => spec,
             Err(error) => {
                 let _ = to_master.send(reject(
@@ -969,7 +1064,10 @@ impl<E: Executor> Agent<E> {
             let _ = to_master.send(reject(pb::RejectReason::CodeMismatch, detail));
             return;
         }
-        let planned = self.plan(&spec, &assign);
+        // Planned with stand-ins for its secrets (fetched once it is started, so a slow
+        // storage never holds up the agent): whether it runs here doesn't depend on them.
+        spec.stand_in_secrets();
+        let planned = self.plan(&mut spec, &assign);
         if !matches!(planned, Err(NotRun::Rejected { .. }))
             && let Err(error) = self
                 .record(&spec.attempt_id, JournalRecord::Running(None))
@@ -1051,13 +1149,14 @@ impl<E: Executor> Agent<E> {
 
     /// Plans an attempt here; a DAG file missing from the code the master expects fails it
     /// (the file is gone) instead of rejecting it as "code not there yet".
-    fn plan(&self, spec: &AttemptSpec, assign: &pb::AssignTask) -> Result<Plan, NotRun> {
+    fn plan(&self, spec: &mut AttemptSpec, assign: &pb::AssignTask) -> Result<Plan, NotRun> {
         // The copy of the code the root's reported hash is of (decision 102); the configured
         // path until the root's first scan.
         let code = self
             .watchers
             .get(&spec.dag_root)
             .and_then(RootWatcher::code_dir);
+        spec.code_dir = code.map(Path::to_path_buf);
         let planned = match code {
             Some(dir) => plan_at(spec, &self.settings.setup, dir),
             None => plan(spec, &self.settings.setup),
@@ -1512,4 +1611,118 @@ const fn wrap(message: worker_message::Message) -> pb::WorkerMessage {
     pb::WorkerMessage {
         message: Some(message),
     }
+}
+
+/// The result of an attempt that had secrets: its Python output and error summary masked
+/// (a command's are its masked streams already), and a failure after a failed on-demand read
+/// given that read's error kind (decision 168).
+fn ended_with_secrets(finished: &mut pb::Finished, secrets: &AttemptSecrets, python: bool) {
+    if python && !secrets.mask.is_empty() {
+        for field in [&mut finished.output_json, &mut finished.error_summary_json] {
+            if field.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(field) {
+                *field = serde_json::to_vec(&secrets.mask.mask_json(&value)).unwrap_or_default();
+            } else {
+                *field = secrets.mask.mask(field);
+            }
+        }
+    }
+    let failed = finished.status == i32::from(pb::AttemptStatus::Failed);
+    if failed
+        && finished.error_kind.is_empty()
+        && let Some(kind) = secrets.failed_kind()
+    {
+        kind.clone_into(&mut finished.error_kind);
+    }
+}
+
+/// The log's warning for each secret too short to be masked (never its value), once: those
+/// noted since the last call.
+fn too_short_lines(secrets: &AttemptSecrets, min: usize) -> String {
+    use std::fmt::Write as _;
+    let short = std::mem::take(
+        &mut *secrets
+            .too_short
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
+    let mut lines = String::new();
+    for name in &short {
+        let _ = writeln!(
+            lines,
+            "schedr: `{name}` is too short to be masked (under {min} characters, \
+             [secret_storage] min_mask_length): it shows in this log as it is"
+        );
+    }
+    lines
+}
+
+/// The log's note of each secret masked (decision 167: an output may have changed).
+fn masked_lines(secrets: &AttemptSecrets) -> String {
+    use std::fmt::Write as _;
+    let mut lines = String::new();
+    for (label, count) in secrets.mask.counts() {
+        let times = if count == 1 {
+            "once".to_owned()
+        } else {
+            format!("{count} times")
+        };
+        let _ = writeln!(
+            lines,
+            "schedr: `{label}` was masked {times} in this task's log and output (`****`): \
+             every text equal to its value is masked, also where it isn't the secret"
+        );
+    }
+    lines
+}
+
+/// Appends the agent's own lines to a task's log (never through a link, as the log is
+/// opened for the task).
+async fn append_log(path: &Path, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create(true).append(true);
+    match crate::process::open_regular(options, path).await {
+        Ok(mut file) => {
+            use tokio::io::AsyncWriteExt as _;
+            let _ = file.write_all(text.as_bytes()).await;
+            let _ = file.flush().await;
+        }
+        Err(error) => tracing::warn!(%error, path = %path.display(), "can't write to a task log"),
+    }
+}
+
+/// Sleeps for `timeout`; forever without one.
+async fn sleep_for(timeout: Option<Duration>) {
+    match timeout {
+        Some(timeout) => tokio::time::sleep(timeout).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// An attempt stopped while its secrets were fetched: ended as a stop before its process
+/// started is (cancelled, interrupted or timed out).
+fn stopped_before_start(
+    spec: &AttemptSpec,
+    reason: StopReason,
+    duration: Duration,
+) -> pb::Finished {
+    let ran = Ran {
+        supervised: crate::supervise::Supervised {
+            termination: crate::status::Termination::Unknown,
+            stopped: Some(reason),
+            killed: false,
+        },
+        runner_result: None,
+        output: None,
+        duration,
+        start: None,
+        forked: false,
+        ended: crate::usage::Ended::default(),
+    };
+    finished(&spec.attempt_id, &spec.task, &ran)
 }

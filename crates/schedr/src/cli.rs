@@ -393,9 +393,10 @@ pub enum ResourceCommand {
 /// `schedr task-ctx secret ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum SecretCommand {
-    /// Print a declared secret (no trailing newline).
+    /// Print a declared secret: a key's value as it is, with no trailing newline; a whole
+    /// secret (`path` without `#key`) as one line of JSON.
     Get {
-        /// `path#key`.
+        /// `path#key`, or `path` for the whole secret.
         secret: String,
         /// The secret storage, if not the default one.
         #[arg(long, value_name = "NAME")]
@@ -447,7 +448,10 @@ impl Command {
             | Self::Ui
             | Self::Tasks { .. }
             | Self::Workers { .. }
-            | Self::DagCtx { .. } => None,
+            | Self::DagCtx { .. }
+            | Self::TaskCtx {
+                command: TaskCtxCommand::Secret { .. },
+            } => None,
             Self::TaskCtx { .. } => Some("M4"),
         }
     }

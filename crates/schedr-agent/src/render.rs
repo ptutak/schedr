@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 use jiff::civil::Time;
 use jiff::fmt::temporal::Pieces;
 use jiff::tz::TimeZone;
-use schedr_model::{CommandLine, DagCtxField, PathElem, Reference, Template, TemplatePart};
+use schedr_model::{
+    CommandLine, DagCtxField, PathElem, Reference, SecretName, Template, TemplatePart,
+};
 use serde_json::{Value, json};
 
 #[cfg(test)]
@@ -49,6 +51,9 @@ pub enum RenderError {
         /// Why.
         reason: String,
     },
+    /// A secret that wasn't fetched for the attempt.
+    #[error("`{0}` wasn't fetched for this attempt")]
+    MissingSecret(String),
     /// A shell command with a reference: refused, as the master and the Python API refuse it.
     #[error(
         "`{0}` in a shell command: the shell would read the value as code (pass values as \
@@ -70,6 +75,9 @@ pub struct RenderContext {
     /// that was skipped (each of its edges counts as not taken). A task missing here is
     /// neither: its reference fails as a missing input.
     pub outcomes: BTreeMap<String, Value>,
+    /// The secrets fetched for the attempt, by name: a key's value as a string, a whole
+    /// secret as an object of key to value.
+    pub secrets: BTreeMap<SecretName, Value>,
 }
 
 /// What a reference stands for when its edge wasn't taken (the data rule: `None`).
@@ -90,6 +98,7 @@ impl RenderContext {
             params: json!({}),
             inputs: BTreeMap::new(),
             outcomes: BTreeMap::new(),
+            secrets: BTreeMap::new(),
         }
     }
 }
@@ -109,6 +118,7 @@ pub fn reference_label(reference: &Reference) -> String {
         Reference::Outcome { task } => format!("{task}.outcome"),
         Reference::Param { path } => with_path("dag_ctx.params".to_owned(), path),
         Reference::Output { task, path, .. } => with_path(task.to_string(), path),
+        Reference::Secret(name) => name.to_string(),
     }
 }
 
@@ -142,6 +152,10 @@ pub fn resolve<'a>(
             .get(field)
             .ok_or_else(|| RenderError::MissingInput(reference_label(reference))),
         Reference::Param { path } => follow(&ctx.params, path, reference),
+        Reference::Secret(name) => ctx
+            .secrets
+            .get(name)
+            .ok_or_else(|| RenderError::MissingSecret(name.to_string())),
         Reference::Outcome { task } => match ctx.outcomes.get(task.as_str()) {
             Some(Value::Null) => Ok(&NOT_TAKEN),
             Some(outcome) => Ok(outcome),

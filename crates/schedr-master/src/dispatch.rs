@@ -1602,6 +1602,7 @@ fn as_sent(task: &schedr_model::Task) -> schedr_model::Task {
         outcomes: task.outcomes.clone(),
         group: task.group.clone(),
         expand: None,
+        secrets: task.secrets.clone(),
     }
 }
 

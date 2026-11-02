@@ -5,6 +5,17 @@ Each release's section is its release notes on GitHub (`scripts/release.py notes
 changed in place, so moving from one 0.x version to the next means a fresh database
 (PROJECT.md, decision 156).
 
+## Unreleased
+
+- **Secrets** (M4.6, in progress): `secrets['path#key']`, `secrets.<storage>[...]` and a
+  whole secret `secrets['path']` as task arguments, in `env=` and in t-strings; `secrets=`
+  declarations with `SecretPrefix` for reads on demand (`task_ctx.secret(...)` in a Python
+  task, `schedr task-ctx secret get` in a command); every fetched value masked in the task's
+  log and stored output; the error kinds `secret_unavailable` (retried), `secret_denied` and
+  `secret_not_found`; workers report their storages and the master refuses a DAG naming
+  another. Test values with `schedr dags test --secret`, `run_dag(secrets=)` and
+  `task_context(secrets=)`; the `db` and Vault storages follow.
+
 ## 0.1.0
 
 The first release, a preview (`Development Status :: 3 - Alpha`). **No upgrade path:** 0.2

@@ -30,7 +30,7 @@ use crate::catalog::{self, Source};
 use crate::metrics::MasterMetrics;
 use crate::parse_jobs::{ParseAssignment, ParseJobs, ParseKey};
 use crate::quiet::{WakeReason, Wakes};
-use crate::validate::validate_files;
+use crate::validate::{Checks, validate_files};
 
 #[cfg(test)]
 mod tests;
@@ -44,6 +44,8 @@ pub struct ParseUpload {
     pub key: ParseKey,
     /// Its files.
     pub files: Vec<ParsedFile>,
+    /// The secret storages the worker has configured; none when unknown (nothing checked).
+    pub secret_storages: Option<BTreeSet<String>>,
 }
 
 /// The master's view of DAG discovery.
@@ -446,8 +448,11 @@ impl Discovery {
         let files = validate_files(
             &upload.key.root,
             upload.files,
-            self.master,
-            self.max_message_size,
+            &Checks {
+                master: self.master,
+                max_message_size: self.max_message_size,
+                secret_storages: upload.secret_storages.as_ref(),
+            },
         );
         let key = &upload.key;
         let stored = self

@@ -103,6 +103,13 @@
               "$ref": "#/$defs/RunInfo",
               "description": "The run information."
             },
+            "secrets": {
+              "description": "The secrets fetched for the attempt (those its arguments name and those it declares,\nprefixes aside): filled into its arguments and read by `task_ctx.secret(...)`.",
+              "items": {
+                "$ref": "#/$defs/SecretValue"
+              },
+              "type": "array"
+            },
             "sys_path": {
               "description": "Directories put first on `sys.path` (every DAG root).",
               "items": {
@@ -188,6 +195,48 @@
             "mode",
             "env",
             "cwd"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The value of the secret a [`RunnerMessage::SecretGet`] asked for.",
+          "properties": {
+            "type": {
+              "const": "secret",
+              "type": "string"
+            },
+            "value": {
+              "description": "A key's value as a string; a whole secret as an object of key to value."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the secret a [`RunnerMessage::SecretGet`] asked for can't be read.",
+          "properties": {
+            "kind": {
+              "description": "The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).",
+              "type": "string"
+            },
+            "message": {
+              "description": "What went wrong, naming the secret (never a value).",
+              "type": "string"
+            },
+            "type": {
+              "const": "secret_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "message"
           ],
           "type": "object"
         }
@@ -791,6 +840,39 @@
             "kind"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A secret from a secret storage (`secrets['etl/db#password']`), fetched by the agent\nthat runs the task, never by the master (see PROJECT.md, Secret storage).",
+          "properties": {
+            "key": {
+              "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "secret",
+              "type": "string"
+            },
+            "path": {
+              "description": "The secret's path in the storage (`etl/db`).",
+              "type": "string"
+            },
+            "storage": {
+              "description": "The storage it comes from; none for the default one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1041,6 +1123,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "A running task reads a secret it didn't get with the request: one under a declared\nprefix (`task_ctx.secret(...)`); the agent answers [`AgentMessage::Secret`] or\n[`AgentMessage::SecretFailed`].",
+          "properties": {
+            "secret": {
+              "$ref": "#/$defs/SecretName",
+              "description": "Which secret."
+            },
+            "type": {
+              "const": "secret_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The task failed: an exception, or an output that can't be stored.",
           "properties": {
             "error": {
@@ -1246,6 +1347,115 @@
       "pattern": "^[0-9]+\\.[0-9]+$",
       "type": "string"
     },
+    "SecretDecl": {
+      "description": "A secret a task declares in `secrets=`: one it may read on demand (`schedr task-ctx\nsecret get`, `task_ctx.secret(...)`), fetched before its process starts, or a prefix\ncovering every secret under it, fetched when read.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One secret, or a whole one (every key).",
+          "properties": {
+            "key": {
+              "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "secret",
+              "type": "string"
+            },
+            "path": {
+              "description": "The secret's path in the storage (`etl/db`).",
+              "type": "string"
+            },
+            "storage": {
+              "description": "The storage it comes from; none for the default one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every secret under a prefix (`SecretPrefix('connections/')`), at any depth.",
+          "properties": {
+            "kind": {
+              "const": "prefix",
+              "type": "string"
+            },
+            "prefix": {
+              "description": "The prefix, ending in `/`.",
+              "type": "string"
+            },
+            "storage": {
+              "description": "The storage; none for the default one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "prefix"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SecretName": {
+      "additionalProperties": false,
+      "description": "A secret in a storage: `path#key`, or `path` for the whole secret.",
+      "properties": {
+        "key": {
+          "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The secret's path in the storage (`etl/db`).",
+          "type": "string"
+        },
+        "storage": {
+          "description": "The storage it comes from; none for the default one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "SecretValue": {
+      "additionalProperties": false,
+      "description": "A secret's value, fetched by the agent for an attempt.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/SecretName",
+          "description": "Which secret."
+        },
+        "value": {
+          "description": "A key's value as a string; a whole secret as an object of key to value."
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
     "Task": {
       "description": "A task of a DAG.",
       "oneOf": [
@@ -1346,6 +1556,13 @@
         "output_type": {
           "$ref": "#/$defs/TypeDesc",
           "description": "The type of its output (`process_result` for commands, `none` for empty tasks)."
+        },
+        "secrets": {
+          "description": "The secrets it declares (`secrets=`): read on demand, never put in its environment.",
+          "items": {
+            "$ref": "#/$defs/SecretDecl"
+          },
+          "type": "array"
         },
         "settings": {
           "$ref": "#/$defs/TaskSettings",
@@ -1567,6 +1784,38 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A secret from a secret storage (`secrets['etl/db#password']`), fetched by the agent\nthat runs the task, never by the master (see PROJECT.md, Secret storage).",
+          "properties": {
+            "key": {
+              "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "secret",
+              "type": "string"
+            },
+            "path": {
+              "description": "The secret's path in the storage (`etl/db`).",
+              "type": "string"
+            },
+            "storage": {
+              "description": "The storage it comes from; none for the default one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
           ],
           "type": "object"
         }

@@ -24,7 +24,7 @@ use schedr_agent::scan::scan;
 use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
 use schedr_config::{Config, Root};
 use schedr_db::Database;
-use schedr_master::validate::validate_files;
+use schedr_master::validate::{Checks, validate_files};
 use schedr_model::runner::{ParseRequest, ParsedFile};
 use schedr_model::{SchedrVersion, WorkerState};
 use serde::Serialize;
@@ -111,9 +111,11 @@ pub async fn run_local(
             path,
         } => {
             let params = crate::user::given_params(params, params_json.as_deref())?;
-            if !secrets.is_empty() {
-                return Err(not_yet("dags test --secret", "M4"));
-            }
+            let secrets = secrets
+                .iter()
+                .map(|spec| schedr_agent::secrets::MemoryStorage::parse(spec))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::BadArgument(format!("--secret {e}")))?;
             if task.is_some() {
                 return Err(not_yet("dags test --task", "M4"));
             }
@@ -126,6 +128,7 @@ pub async fn run_local(
             let run = TestRun {
                 planned_for: at,
                 params,
+                secrets,
             };
             test_dag(dag, &run, path.as_deref(), config, env, client.json, out).await
         }
@@ -193,6 +196,7 @@ pub async fn check_root(
             working_dir: root.dir.clone(),
             log_file: log_file.clone(),
             max_output_size: 64 * 1024,
+            mask: schedr_agent::mask::Mask::default(),
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),
@@ -220,8 +224,7 @@ pub async fn check_root(
     Ok(validate_files(
         &root.name,
         parsed,
-        SchedrVersion::current(),
-        limit,
+        &Checks::new(SchedrVersion::current(), limit),
     ))
 }
 
@@ -612,6 +615,8 @@ fn write_text(
 struct TestRun {
     planned_for: Option<jiff::Timestamp>,
     params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// `--secret` values: in memory, standing for every storage the DAG reads.
+    secrets: Vec<(schedr_model::SecretName, String)>,
 }
 
 async fn test_dag(
@@ -668,6 +673,11 @@ async fn test_dag(
     let mut setup = plan(&local, env)?;
     // A database of its own, created here.
     setup.migrate = true;
+    if !test.secrets.is_empty() {
+        let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
+        setup.agent.secrets =
+            std::sync::Arc::new(schedr_agent::secrets::SecretStores::for_test(values));
+    }
     let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();

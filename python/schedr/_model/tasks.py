@@ -6,7 +6,7 @@ from typing import Any
 
 from schedr._model.ids import validate_task_id
 from schedr._model.types import TypeDesc
-from schedr._model.values import Reference, Template, Value
+from schedr._model.values import Reference, SecretDecl, Template, Value
 
 DEFAULT_QUEUE = "default"
 """The queue a task goes to when it names none."""
@@ -333,6 +333,7 @@ class Task:
         outcomes: Its outcomes, each a name and, for a command, the exit code meaning it.
         group: The group it belongs to (the innermost), if any.
         expand: What its instances vary over, for a mapped task.
+        secrets: The secrets it declares (``secrets=``), read on demand.
     """
 
     id: str
@@ -342,6 +343,7 @@ class Task:
     outcomes: tuple[tuple[str, int | None], ...] = DEFAULT_OUTCOMES
     group: str | None = None
     expand: Expand | None = None
+    secrets: tuple[SecretDecl, ...] = ()
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -383,4 +385,6 @@ class Task:
             result["group"] = self.group
         if self.expand is not None:
             result["expand"] = self.expand.to_json()
+        if self.secrets:
+            result["secrets"] = [declared.to_json() for declared in self.secrets]
         return result

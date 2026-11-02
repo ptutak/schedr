@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from string.templatelib import Interpolation
 from string.templatelib import Template as TString
 
-from schedr._model import Reference, Template, TemplatePart, TemplateRef
+from schedr._model import Reference, SecretRef, Template, TemplatePart, TemplateRef
 
 _LITERAL_TYPES = (str, int, float, bool, datetime, date, timedelta)
 
@@ -67,6 +67,16 @@ def shell_text(tstring: TString, where: str) -> str:
     """
     for item in tstring:
         if isinstance(item, Interpolation):
+            reference = getattr(item.value, "_schedr_reference", None)
+            secret = reference() if callable(reference) else None
+            if isinstance(secret, SecretRef):
+                raise TypeError(
+                    f"{where}: `{secret.label()}` in a shell command: the shell would read the "
+                    "value as code, and the process list would show it. Pass it in the "
+                    """environment, command='psql "$PGPASSWORD"', env={"PGPASSWORD": """
+                    f"{secret.label()}}}, or declare it in `secrets=` and read it with "
+                    "`schedr task-ctx secret get`"
+                )
             conversion = f"!{item.conversion}" if item.conversion else ""
             spec = f":{item.format_spec}" if item.format_spec else ""
             raise TypeError(
@@ -117,6 +127,23 @@ def _format_literal(item: Interpolation[object], where: str) -> str:
     return as_text(value) if not spec else format(value, spec)
 
 
+def check_in_text(reference: Reference, where: str) -> None:
+    """Refuses a whole secret (every key) written into text.
+
+    Args:
+        reference: A reference placed in a template.
+        where: Where it is used, for messages.
+
+    Raises:
+        TypeError: For a whole secret.
+    """
+    if isinstance(reference, SecretRef) and reference.key is None:
+        raise TypeError(
+            f"{where}: `{reference.label()}` is a whole secret (every key), which can't be "
+            "written into text: name its key, `'path#key'`"
+        )
+
+
 def to_template(tstring: TString, where: str) -> Template:
     """Converts a t-string to a DAG JSON template.
 
@@ -155,6 +182,7 @@ def to_template(tstring: TString, where: str) -> Template:
                 )
             check_spec(item.format_spec, where=where)
             reference: Reference = value._schedr_reference()
+            check_in_text(reference, where)
             parts.append(TemplateRef(reference, item.format_spec or None))
         elif is_tstring(value):
             raise TypeError(

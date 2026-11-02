@@ -6,7 +6,8 @@ operators; pass outputs between tasks as arguments (see PROJECT.md, Native API).
 
 from importlib.metadata import version
 
-from schedr.context import dag_ctx, task_ctx
+from schedr._secrets import SecretPrefix, secrets
+from schedr.context import SecretError, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator
@@ -39,6 +40,8 @@ __all__ = [
     "Outcome",
     "Output",
     "RunIf",
+    "SecretError",
+    "SecretPrefix",
     "Task",
     "TaskDefaults",
     "Trigger",
@@ -48,6 +51,7 @@ __all__ = [
     "dag_ctx",
     "group",
     "on",
+    "secrets",
     "task",
     "task_ctx",
 ]

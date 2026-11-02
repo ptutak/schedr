@@ -11,13 +11,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use schedr_model::runner::{DagFile, ErrorSummary, RunInfo, RunnerMessage, TaskRequest};
-use schedr_model::{AttemptStatus, Task, TaskKind};
+use schedr_model::runner::{
+    DagFile, ErrorSummary, RunInfo, RunnerMessage, SecretValue, TaskRequest,
+};
+use schedr_model::{AttemptStatus, SecretDecl, SecretName, Task, TaskKind};
 use schedr_proto::convert::{attempt_status_to_proto, run_kind_from_proto};
 use schedr_proto::pb;
 use serde_json::Value;
 
 use crate::env::{RunVars, task_environment};
+use crate::mask::Mask;
 use crate::output::{TailBuffer, process_result};
 use crate::process::ProcessSpec;
 use crate::render::{RenderContext, command_line, render};
@@ -56,6 +59,14 @@ pub struct AttemptSpec {
     pub outcomes: BTreeMap<String, Value>,
     /// The time between SIGTERM and SIGKILL when it is stopped.
     pub cancel_grace: Duration,
+    /// The secrets fetched for it, by name ([`AttemptSpec::needed_secrets`]): filled into its
+    /// templates and sent to its runner. Empty until fetched.
+    pub secrets: BTreeMap<SecretName, Value>,
+    /// The values masked in its output.
+    pub mask: Mask,
+    /// The copy of its root's code it was planned against (decision 102); `None`: the
+    /// configured root.
+    pub code_dir: Option<PathBuf>,
 }
 
 /// Why an assignment can't be read.
@@ -131,7 +142,43 @@ impl AttemptSpec {
                 })
                 .collect(),
             cancel_grace: Duration::from_millis(assign.cancel_grace_ms),
+            secrets: BTreeMap::new(),
+            mask: Mask::default(),
+            code_dir: None,
         })
+    }
+
+    /// The secrets fetched before it starts: those its references name, and those it
+    /// declares (prefixes aside, read when the task asks), each once.
+    #[must_use]
+    pub fn needed_secrets(&self) -> Vec<SecretName> {
+        let mut needed: Vec<SecretName> =
+            self.task.secret_references().into_iter().cloned().collect();
+        for declared in &self.task.secrets {
+            if let SecretDecl::Secret(name) = declared
+                && !needed.contains(name)
+            {
+                needed.push(name.clone());
+            }
+        }
+        needed
+    }
+
+    /// Stand-ins for the secrets it needs (a key's `""`, a whole secret's `{}`): planning it
+    /// before they are fetched shows whether it can run here at all.
+    pub fn stand_in_secrets(&mut self) {
+        self.secrets = self
+            .needed_secrets()
+            .into_iter()
+            .map(|name| {
+                let value = if name.key.is_some() {
+                    Value::String(String::new())
+                } else {
+                    Value::Object(serde_json::Map::new())
+                };
+                (name, value)
+            })
+            .collect();
     }
 
     /// The task's timeout, if any.
@@ -277,6 +324,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     working_dir: root_dir.to_path_buf(),
                     log_file,
                     max_output_size,
+                    mask: spec.mask.clone(),
                 },
                 request: Box::new(TaskRequest {
                     dag_file: DagFile {
@@ -290,6 +338,14 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     outcomes: spec.outcomes.clone(),
                     run: spec.run.clone(),
                     sys_path: setup.sys_path_with(&spec.dag_root, root_dir),
+                    secrets: spec
+                        .secrets
+                        .iter()
+                        .map(|(name, value)| SecretValue {
+                            name: name.clone(),
+                            value: value.clone(),
+                        })
+                        .collect(),
                 }),
             })
         }
@@ -304,6 +360,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             ctx.inputs.clone_from(&spec.inputs);
             ctx.outcomes.clone_from(&spec.outcomes);
             ctx.params.clone_from(&spec.run.params);
+            ctx.secrets.clone_from(&spec.secrets);
             let (program, args) =
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
             let task_env = env
@@ -322,6 +379,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     .map_or_else(|| root_dir.to_path_buf(), Path::to_path_buf),
                 log_file,
                 max_output_size,
+                mask: spec.mask.clone(),
             }))
         }
         TaskKind::Empty => Err(NotRun::Rejected {

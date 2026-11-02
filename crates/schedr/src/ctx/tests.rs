@@ -26,6 +26,7 @@ fn info(version: &str) -> CtxInfo {
             "note": "two\nlines",
         }),
         version: version.into(),
+        secrets: None,
     }
 }
 

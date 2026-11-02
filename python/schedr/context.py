@@ -19,7 +19,8 @@ from datetime import datetime
 from typing import Any
 
 from schedr import _build
-from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference
+from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference, SecretDecl, SecretRef
+from schedr._secrets import parse_secret
 from schedr._serialization.codec import CodecError, decode, decode_any
 
 _VALUE_IN_DAG_BODY = (
@@ -109,6 +110,30 @@ class RunValues:
     from_script: bool = False
 
 
+class SecretError(Exception):
+    """A secret the task reads can't be read: not declared, not found, or its storage down.
+
+    Attributes:
+        kind: ``secret_denied``, ``secret_not_found`` or ``secret_unavailable``. Raised out
+            of the task, the attempt fails with this kind (only ``secret_unavailable`` is
+            retried).
+    """
+
+    def __init__(self, kind: str, message: str) -> None:
+        """An error of ``kind``.
+
+        Args:
+            kind: The error kind.
+            message: What went wrong, naming the secret (never a value).
+        """
+        super().__init__(message)
+        self.kind = kind
+
+
+type SecretReader = Callable[[SecretRef], str | dict[str, str]]
+"""Reads one secret: a key's value, or a whole secret's keys and values."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskValues:
     """The running task's own context (decision 84).
@@ -117,15 +142,50 @@ class TaskValues:
         task_id: The task's ID.
         try_number: The attempt's try number, from 1.
         map_index: Which instance of a mapped task, from 0; ``None`` for an unmapped task.
+        secrets: Reads a secret the task declares (``task_ctx.secret(...)``); ``None``: it
+            can read none.
     """
 
     task_id: str
     try_number: int
     map_index: int | None
+    secrets: SecretReader | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
 _TASK: ContextVar[TaskValues | None] = ContextVar("schedr_running_task_own", default=None)
+
+_DECLARED: ContextVar[tuple[SecretDecl, ...] | None] = ContextVar(
+    "schedr_declared_secrets", default=None
+)
+"""The ``secrets=`` of a ``@task`` function called outside a DAG, while it runs (tests)."""
+
+
+@contextlib.contextmanager
+def declaring(declared: tuple[SecretDecl, ...]) -> Iterator[None]:
+    """Makes ``declared`` the secrets a test's ``task_ctx.secret`` may read, in the block.
+
+    Args:
+        declared: The ``@task`` function's ``secrets=``.
+
+    Yields:
+        Nothing.
+    """
+    token = _DECLARED.set(declared)
+    try:
+        yield
+    finally:
+        _DECLARED.reset(token)
+
+
+def declared_secrets() -> tuple[SecretDecl, ...] | None:
+    """The ``secrets=`` of the ``@task`` function a test is calling; ``None`` outside one.
+
+    Returns:
+        The declarations, or ``None``.
+    """
+    return _DECLARED.get()
+
 
 _script_values: Callable[[], RunValues] | None = None
 """Loads the run's context in a plain script; set by importing ``schedr.script``."""
@@ -484,6 +544,32 @@ class TaskContext:
     def map_index(self) -> int | None:
         """Which instance of a mapped task this is, from 0; ``None`` for an unmapped task."""
         return _task().map_index
+
+    def secret(self, name: str, *, storage: str | None = None) -> Any:
+        """A secret the task declares in ``secrets=``, read now.
+
+        One declared by name was fetched before the task started; one under a declared
+        ``SecretPrefix`` is fetched now. Its value is masked in the task's log and output.
+
+        Args:
+            name: ``path#key``, or ``path`` for the whole secret.
+            storage: The storage; ``None`` for the default one.
+
+        Returns:
+            A key's value (``str``), or a whole secret's keys and values
+            (``dict[str, str]``).
+
+        Raises:
+            SecretError: When it can't be read (not declared, not found, the storage down).
+            ValueError: For a bad name.
+        """
+        ref = parse_secret(name, storage)
+        reader = _task().secrets
+        if reader is None:
+            raise SecretError(
+                "secret_denied", f"`{ref.label()}` isn't declared in the task's `secrets=`"
+            )
+        return reader(ref)
 
 
 task_ctx = TaskContext()

@@ -36,6 +36,7 @@ fn runner(mode: &str, root: &Path, log: &Path) -> ProcessSpec {
         working_dir: root.to_path_buf(),
         log_file: log.to_path_buf(),
         max_output_size: 64 * 1024,
+        mask: schedr_agent::mask::Mask::default(),
     }
 }
 
@@ -197,6 +198,7 @@ fn request(dir: &Path, dag: &Dag, task: &str, inputs: serde_json::Value) -> Task
             map_index: None,
         },
         sys_path: vec![dir.to_string_lossy().into_owned()],
+        secrets: Vec::new(),
     }
 }
 
@@ -406,6 +408,7 @@ async fn a_cancel_or_timeout_during_the_runners_start_stops_it() {
         working_dir: dir.path().to_path_buf(),
         log_file: dir.path().join("silent.log"),
         max_output_size: 1024,
+        mask: schedr_agent::mask::Mask::default(),
     };
     let limits = |timeout| Limits {
         timeout,
@@ -462,6 +465,7 @@ async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
         working_dir: dir.path().to_path_buf(),
         log_file: dir.path().join("start.log"),
         max_output_size: 1024,
+        mask: schedr_agent::mask::Mask::default(),
     };
     let limits = |timeout| Limits {
         timeout,

@@ -19,6 +19,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::mask::{Mask, MaskSet};
 use crate::output::TailBuffer;
 use crate::status::Termination;
 use crate::supervise::{Process, Signal};
@@ -42,6 +43,8 @@ pub struct ProcessSpec {
     pub log_file: PathBuf,
     /// The output size limit per stream, in bytes.
     pub max_output_size: usize,
+    /// The secret values masked in its output, on their way to the log and the tail.
+    pub mask: Mask,
 }
 
 /// A started task process.
@@ -115,8 +118,18 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
         read: false,
         child,
         group,
-        stdout: tokio::spawn(collect(stdout, Arc::clone(&log), spec.max_output_size)),
-        stderr: tokio::spawn(collect(stderr, log, spec.max_output_size)),
+        stdout: tokio::spawn(collect(
+            stdout,
+            Arc::clone(&log),
+            spec.max_output_size,
+            spec.mask.clone(),
+        )),
+        stderr: tokio::spawn(collect(
+            stderr,
+            log,
+            spec.max_output_size,
+            spec.mask.clone(),
+        )),
     })
 }
 
@@ -167,24 +180,39 @@ pub(crate) async fn open_regular(
 /// A log file written by a process's two output collectors.
 pub(crate) type SharedLog = Arc<Mutex<tokio::fs::File>>;
 
-/// Copies a pipe into the log file, keeping its tail.
+/// Copies a pipe into the log file, keeping its tail; secret values are masked on the way.
 pub(crate) async fn collect(
     mut pipe: impl AsyncRead + Unpin,
     log: SharedLog,
     limit: usize,
+    mask: Mask,
 ) -> io::Result<TailBuffer> {
     let mut tail = TailBuffer::new(limit);
     let mut chunk = vec![0; 64 * 1024];
+    let mut stream = mask.0.as_deref().map(MaskSet::stream);
     loop {
         let n = pipe.read(&mut chunk).await?;
         if n == 0 {
+            if let Some(stream) = &mut stream {
+                let rest = stream.finish();
+                tail.push(&rest);
+                log.lock().await.write_all(&rest).await?;
+            }
             // A tokio file write may still be in flight when `write_all` returns: the log is
             // complete only once flushed.
             log.lock().await.flush().await?;
             return Ok(tail);
         }
-        tail.push(&chunk[..n]);
-        log.lock().await.write_all(&chunk[..n]).await?;
+        let masked;
+        let bytes = match &mut stream {
+            Some(stream) => {
+                masked = stream.push(&chunk[..n]);
+                masked.as_slice()
+            }
+            None => &chunk[..n],
+        };
+        tail.push(bytes);
+        log.lock().await.write_all(bytes).await?;
     }
 }
 

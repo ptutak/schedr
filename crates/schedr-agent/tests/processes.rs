@@ -23,6 +23,7 @@ fn shell(dir: &Path, script: &str, max_output_size: usize) -> ProcessSpec {
         working_dir: dir.to_path_buf(),
         log_file: dir.join("task.log"),
         max_output_size,
+        mask: schedr_agent::mask::Mask::default(),
     }
 }
 

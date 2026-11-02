@@ -68,6 +68,46 @@
           "type": "object"
         },
         {
+          "description": "The value of the secret asked for: a key's value as a string, a whole secret as an\nobject of key to value.",
+          "properties": {
+            "type": {
+              "const": "secret",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the secret asked for can't be read; the connection stays open.",
+          "properties": {
+            "kind": {
+              "description": "The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).",
+              "type": "string"
+            },
+            "reason": {
+              "description": "What went wrong, naming the secret (never a value).",
+              "type": "string"
+            },
+            "type": {
+              "const": "secret_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A request the agent can't answer (one it doesn't know, out of order); the connection\nis closed after it.",
           "properties": {
             "reason": {
@@ -140,6 +180,24 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "description": "A secret the task declares (`secrets=`), or one under a declared prefix.",
+          "properties": {
+            "secret": {
+              "$ref": "#/$defs/SecretName",
+              "description": "Which secret."
+            },
+            "type": {
+              "const": "secret_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "secret"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -207,6 +265,34 @@
           "type": "string"
         }
       ]
+    },
+    "SecretName": {
+      "additionalProperties": false,
+      "description": "A secret in a storage: `path#key`, or `path` for the whole secret.",
+      "properties": {
+        "key": {
+          "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The secret's path in the storage (`etl/db`).",
+          "type": "string"
+        },
+        "storage": {
+          "description": "The storage it comes from; none for the default one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

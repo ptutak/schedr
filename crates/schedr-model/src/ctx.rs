@@ -48,6 +48,11 @@ pub enum CtxRequest {
     ParamsGet,
     /// The run information.
     RunGet,
+    /// A secret the task declares (`secrets=`), or one under a declared prefix.
+    SecretGet {
+        /// Which secret.
+        secret: crate::secret::SecretName,
+    },
 }
 
 /// The agent's answer to a [`CtxRequest`].
@@ -69,6 +74,19 @@ pub enum CtxAnswer {
     },
     /// The run information.
     Run(CtxRun),
+    /// The value of the secret asked for: a key's value as a string, a whole secret as an
+    /// object of key to value.
+    Secret {
+        /// The value.
+        value: serde_json::Value,
+    },
+    /// Why the secret asked for can't be read; the connection stays open.
+    SecretFailed {
+        /// The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).
+        kind: String,
+        /// What went wrong, naming the secret (never a value).
+        reason: String,
+    },
     /// A request the agent can't answer (one it doesn't know, out of order); the connection
     /// is closed after it.
     Error {

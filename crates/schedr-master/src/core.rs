@@ -157,6 +157,9 @@ struct Connection {
     /// interval).
     persisted: Timestamp,
     live: bool,
+    /// The secret storages it has configured (`Register`): a DAG it parses that names another
+    /// is refused. None until it registers with this master (restored from the database).
+    secret_storages: Option<BTreeSet<String>>,
 }
 
 /// What has arrived from workers before the master handled it (cheap to clone; clones share
@@ -361,6 +364,7 @@ impl MasterCore {
                     last_seen: now,
                     persisted: now,
                     live: false,
+                    secret_storages: None,
                 },
             );
             restored += 1;
@@ -481,6 +485,7 @@ impl MasterCore {
                 last_seen: now,
                 persisted: now,
                 live: true,
+                secret_storages: Some(register.secret_storages.iter().cloned().collect()),
             },
         );
         let protocol = register
@@ -818,6 +823,10 @@ impl MasterCore {
                         schedr_version: result.schedr_version.clone(),
                     },
                     files,
+                    secret_storages: self
+                        .connections
+                        .get(&result.worker_id)
+                        .and_then(|c| c.secret_storages.clone()),
                 },
                 now,
             )
