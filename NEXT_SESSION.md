@@ -6,31 +6,19 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 
 ## State (2026-11-02)
 
-- **M4.5a (`ab6ffb9`) and M4.5b (`8515b29`) committed and pushed.** **M4.5c (the UI's
-  trigger form, decisions 149-152, 159) built, reviewed and gated, awaiting the user's
-  acceptance:** `GET /api/v1/dags/{id}` gets `params` (`schedr-api/src/views/form.rs`), the
-  Trigger dialog an input per field (`schedr-ui/src/params_form.rs`,
-  `templates/trigger_params.html`), a fingerprint refusing a stale page. Codex's review (8
-  findings: 6 fixed, 1 rejected, 1 docs) and Grok's security review (2 low: docs, and
-  `schema/openapi.json` regenerated) done; Grok wrote the docs (`docs/02-dags/12-params.md`
-  "The Trigger dialog", `docs/03-guide/12-ui.md` shortened to a summary by Claude). A flaky
-  M4.5b test (`ctx::tests::a_task_that_ended_is_said_so`) fixed in the test.
-- **R0.1 committed (`2e4bb05`), the chart on ghcr (`0fbc8a1`), stress scenario 16's check
-  fixed (`d1dd8c7`), R0.2 done:** `v0.1.0rc1` (`a629ec0`) on TestPyPI, a GitHub
-  pre-release, `ghcr.io/ptutak/schedr-worker` and `schedr-server` `:0.1.0rc1` (public),
-  every wheel attested. Each image's first push was denied until ghcr linked its package
-  (re-run with `gh run rerun <id> --failed`). Then decision 164: the image with Python is
-  `ghcr.io/ptutak/schedr` (the rc's `schedr-worker` package is an orphan).
-- **R0.3 in progress.** The first `v0.1.0` (on `77073b1`) was cancelled before PyPI and its
-  tag deleted: the author became `p.tutak@outlook.com` (Cargo.toml, pyproject.toml, the
-  OpenAPI document; this repository's `git config user.email` too), `LICENSE-THIRD-PARTY`
-  was added (`scripts/third_party.py`, `make third-party(-check)`, in the wheels, both
-  images and their smoke tests; PEP 639 `license-files`), and the release deploys the docs
-  to GitHub Pages (decisions 165, 166; the user enabled Pages and let `github-pages` deploy
-  from `v*` tags). TestPyPI's `0.1.0rc1` and the `schedr-worker` package deleted by the user.
-  Next: that commit accepted, CI green, tag `v0.1.0` again, the user approves `pypi`; the new
-  `schedr` package's first push is likely denied once (link, public, re-run). Then check it
-  as a user and mark R0.3 done.
+- **Committed:** M4.5a (`ab6ffb9`), M4.5b (`8515b29`), M4.5c, the UI's trigger form
+  (`8722b5f`, decisions 149-152, 159), R0.1 (`2e4bb05`), the chart on ghcr (`0fbc8a1`),
+  stress scenario 16's check (`d1dd8c7`: a mapped task's whole-task row has no attempt;
+  tonight's scheduled Stress run confirms it on GitHub).
+- **0.1.0 released (R0.3, 2026-11-02):** tag `v0.1.0` on `fd2da59`, run 41483839551, all
+  jobs green. On PyPI (four wheels, Python >=3.14, `License-Expression: MIT`, author
+  `p.tutak@outlook.com`), the GitHub Release (the wheels, `SHA256SUMS`, attested),
+  `ghcr.io/ptutak/schedr` and `schedr-server` `:0.1.0` and `:0.1` (public), the docs on
+  https://ptutak.github.io/schedr/. Checked as a user. The rehearsal `v0.1.0rc1` (R0.2)
+  went to TestPyPI; its pre-release, TestPyPI's copy and the orphan `schedr-worker`
+  package were deleted. The steps for the next release are in AI_SETUP.md; a new ghcr
+  package's first push is denied until ghcr links it (re-run the failed jobs).
+- **Next:** the user's choice: M4.6 (secrets) or the open bugs (`BUGS.md`).
 - **The disk:** WSL's ext4.vhdx is on Windows C: and not sparse; stale worktrees' `target/`
   filled it (WSL died, 2026-11-02). Remove a step's worktrees, branches and pyenv envs once
   it is committed; check C: with `powershell.exe -NoProfile -Command "(Get-PSDrive C).Free/1GB"`.
