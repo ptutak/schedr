@@ -33,6 +33,7 @@ schedr-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schedr-config.workspace = true
+schedr-fd.workspace = true
 schedr-db.workspace = true
 schedr-tls.workspace = true
 thiserror.workspace = true

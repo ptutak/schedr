@@ -1,0 +1,230 @@
+//! `schedr dag-ctx`: a command task's processes reading the run's parameters and information
+//! from the agent, over the task's context channel (decisions 143-147, see
+//! `schedr_model::ctx`).
+//!
+//! Blocking and without the configuration: it runs inside a task, which may have none, and
+//! is one request and one answer.
+
+use std::collections::BTreeMap;
+use std::io::{self, IoSlice, Read, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::net::UnixStream;
+use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags};
+use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
+use schedr_fd::{Inherited, inherited_datagram};
+use schedr_model::ctx::{CTX_FD_ENV, CTX_PROTOCOL, CtxAnswer, CtxRequest, MAX_CTX_MESSAGE_SIZE};
+use serde_json::Value;
+
+use crate::cli::{DagCtxCommand, GetCommand};
+
+#[cfg(test)]
+mod tests;
+
+/// How long the agent has to answer.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Runs a `schedr dag-ctx` command; the error is the message for stderr.
+///
+/// # Errors
+///
+/// Outside a task, when the channel is gone, or when the agent refuses the call or the field
+/// asked for isn't there.
+pub fn run_dag_ctx(
+    command: &DagCtxCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    let (request, GetCommand::Get { field }) = match command {
+        DagCtxCommand::Params { command } => (CtxRequest::ParamsGet, command),
+        DagCtxCommand::Run { command } => (CtxRequest::RunGet, command),
+    };
+    let mut stream = connect(env)?;
+    let answer = call(&mut stream, version, &request)?;
+    let values = values(answer)?;
+    let text = printed(&values, field.field.as_deref())?;
+    out.write_all(text.as_bytes())
+        .map_err(|e| format!("can't write output: {e}"))
+}
+
+/// The values an answer holds, as printed: params in the JSON form `--params` takes.
+fn values(answer: CtxAnswer) -> Result<Value, String> {
+    match answer {
+        CtxAnswer::Params { params } => Ok(schedr_model::params::shown(&params)),
+        CtxAnswer::Run(run) => serde_json::to_value(run).map_err(|e| e.to_string()),
+        CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => Err(reason),
+        CtxAnswer::Welcome => Err("the agent answered `welcome` to a request".to_owned()),
+    }
+}
+
+/// The output: the values as one line of JSON, or one field's raw value (text as it is,
+/// anything else as JSON), each with a newline.
+fn printed(values: &Value, field: Option<&str>) -> Result<String, String> {
+    let Some(name) = field else {
+        return Ok(format!("{values}\n"));
+    };
+    match values.get(name) {
+        Some(Value::String(text)) => Ok(format!("{text}\n")),
+        Some(value) => Ok(format!("{value}\n")),
+        None => Err(format!("there is no field `{name}`")),
+    }
+}
+
+/// A connection of this call's own: a fresh stream pair, one end sent to the agent over the
+/// task's channel.
+fn connect(env: &BTreeMap<String, String>) -> Result<UnixStream, String> {
+    let Some(text) = env.get(CTX_FD_ENV) else {
+        return Err(format!(
+            "`schedr dag-ctx` must be run inside a schedr task: a command task's processes \
+             can use it ({CTX_FD_ENV} isn't set here); a Python task reads `dag_ctx`"
+        ));
+    };
+    let fd: i32 = text
+        .parse()
+        .map_err(|_| format!("{CTX_FD_ENV}=`{text}` isn't a descriptor number"))?;
+    let channel = inherited_datagram(fd).map_err(|e| channel_lost(fd, e))?;
+    let (mine, theirs) = UnixStream::pair().map_err(|e| format!("can't make a connection: {e}"))?;
+    send_end(&channel, &OwnedFd::from(theirs), ANSWER_TIMEOUT).map_err(|e| {
+        match e.raw_os_error() {
+            _ if e.kind() == io::ErrorKind::TimedOut => format!(
+                "the task's agent didn't take the call within {}s",
+                ANSWER_TIMEOUT.as_secs()
+            ),
+            Some(code) if code == rustix::io::Errno::CONNREFUSED.raw_os_error() => {
+                "the task's agent no longer serves its context: the task has ended (a process it \
+             left running can't read it)"
+                    .to_owned()
+            }
+            _ => format!("can't reach the task's agent: {e}"),
+        }
+    })?;
+    mine.set_read_timeout(Some(ANSWER_TIMEOUT))
+        .and_then(|()| mine.set_write_timeout(Some(ANSWER_TIMEOUT)))
+        .map_err(|e| format!("can't set up the connection: {e}"))?;
+    Ok(mine)
+}
+
+/// Why the inherited channel can't be used, for the message.
+fn channel_lost(fd: i32, error: Inherited) -> String {
+    let closed = format!(
+        "a parent process closed it (Python's `subprocess` closes inherited descriptors unless \
+         given `pass_fds=[{fd}]`; in a Python script, `from schedr.script import dag_ctx` reads \
+         the same values)"
+    );
+    match error {
+        Inherited::Closed(_) => {
+            format!("the task's context channel ({CTX_FD_ENV}={fd}) isn't open here: {closed}")
+        }
+        Inherited::NotChannel(_) => format!(
+            "descriptor {fd} ({CTX_FD_ENV}) isn't the task's context channel any more: {closed}, \
+             and the number was reused"
+        ),
+        other => format!("the task's context channel ({CTX_FD_ENV}={fd}): {other}"),
+    }
+}
+
+/// Sends `end` over the channel in one datagram (`SCM_RIGHTS`), waiting for room in it until
+/// `wait` ([`ANSWER_TIMEOUT`]): never blocking on the send itself (the inherited socket is shared with
+/// every process of the task, and may block).
+fn send_end(channel: &OwnedFd, end: &OwnedFd, wait: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + wait;
+    let ends = [end.as_fd()];
+    loop {
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+        if !control.push(SendAncillaryMessage::ScmRights(&ends)) {
+            return Err(io::Error::other("no room for the descriptor"));
+        }
+        match rustix::net::sendmsg(channel, &[IoSlice::new(b"c")], &mut control, SEND_FLAGS) {
+            Ok(_) => return Ok(()),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let left = rustix::event::Timespec::try_from(left).map_err(io::Error::other)?;
+        let mut room = [PollFd::new(channel, PollFlags::OUT)];
+        match rustix::event::poll(&mut room, Some(&left)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+    }
+}
+
+/// The send doesn't wait (`MSG_DONTWAIT`), nor raise `SIGPIPE` (Linux's flag; elsewhere
+/// Rust's runtime ignores it already).
+#[cfg(target_os = "linux")]
+const SEND_FLAGS: SendFlags = SendFlags::DONTWAIT.union(SendFlags::NOSIGNAL);
+#[cfg(not(target_os = "linux"))]
+const SEND_FLAGS: SendFlags = SendFlags::DONTWAIT;
+
+/// The handshake, then `request`'s answer.
+fn call(
+    stream: &mut (impl Read + Write),
+    version: &str,
+    request: &CtxRequest,
+) -> Result<CtxAnswer, String> {
+    let hello = CtxRequest::Hello {
+        protocol: CTX_PROTOCOL,
+        schedr_version: version.to_owned(),
+    };
+    // An agent refusing the connection (too many open) says why before closing it, maybe
+    // before the hello arrives: its answer is read even when the hello can't be written.
+    let said = write_message(stream, &hello);
+    let answer = match (read_answer(stream), said) {
+        (Ok(answer), _) => answer,
+        (Err(_), Err(not_said)) => return Err(not_said),
+        (Err(not_read), Ok(())) => return Err(not_read),
+    };
+    match answer {
+        CtxAnswer::Welcome => {}
+        CtxAnswer::Refused { reason } | CtxAnswer::Error { reason } => return Err(reason),
+        other => return Err(format!("the agent answered hello with {other:?}")),
+    }
+    write_message(stream, request)?;
+    read_answer(stream)
+}
+
+fn lost(e: &io::Error) -> String {
+    match e.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => format!(
+            "the task's agent didn't answer within {}s",
+            ANSWER_TIMEOUT.as_secs()
+        ),
+        io::ErrorKind::UnexpectedEof
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe => {
+            "the task's agent closed the connection without an answer (the task may have ended)"
+                .to_owned()
+        }
+        _ => format!("talking to the task's agent: {e}"),
+    }
+}
+
+fn write_message(stream: &mut impl Write, request: &CtxRequest) -> Result<(), String> {
+    let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let size = u32::try_from(body.len()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(&size.to_be_bytes())
+        .and_then(|()| stream.write_all(&body))
+        .map_err(|e| lost(&e))
+}
+
+fn read_answer(stream: &mut impl Read) -> Result<CtxAnswer, String> {
+    let mut header = [0; 4];
+    stream.read_exact(&mut header).map_err(|e| lost(&e))?;
+    let size = u32::from_be_bytes(header);
+    if size > MAX_CTX_MESSAGE_SIZE {
+        return Err(format!(
+            "the agent's answer of {size} bytes is over the limit of {MAX_CTX_MESSAGE_SIZE}"
+        ));
+    }
+    let mut body = vec![0; size as usize];
+    stream.read_exact(&mut body).map_err(|e| lost(&e))?;
+    serde_json::from_slice(&body).map_err(|e| format!("the agent's answer doesn't read: {e}"))
+}

@@ -44,6 +44,7 @@ use tonic::transport::Channel;
 use crate::attempt::{
     AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan, plan_at,
 };
+use crate::ctx::CtxInfo;
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
 use crate::journal::{
@@ -260,7 +261,8 @@ impl Executor for ProcessExecutor {
                 run_python(&process, *request, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
-                run_command(&process, limits, stop, |pid| spawned(pid, false)).await
+                let ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
+                run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
         // The watchdog stops first; then a forked process's hold goes, and its shim reaps it:

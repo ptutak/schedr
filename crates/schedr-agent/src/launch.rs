@@ -14,11 +14,13 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use prometheus_client::metrics::counter::Counter;
+use schedr_model::ctx::CTX_FD_ENV;
 use schedr_model::runner::{AgentMessage, ParseRequest, RunnerMessage, RunnerMode, TaskRequest};
 use tokio::net::UnixStream;
 
 use crate::attempt::{Ran, StartTimes};
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
+use crate::ctx::CtxInfo;
 use crate::fork::{ForkServers, Forked, ForkedProcess, GroupHold};
 use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
 use crate::output::TailBuffer;
@@ -445,22 +447,36 @@ pub async fn run_python(
 }
 
 /// Runs a command process under supervision, keeping the tails of its output; `spawned` gets
-/// its process ID as soon as it runs.
+/// its process ID as soon as it runs. With `ctx`, the process (and every process it starts)
+/// gets a context channel (`SCHEDR_CTX_FD`, see [`crate::ctx`]), served until it ends.
 ///
 /// # Errors
 ///
 /// [`LaunchError`] if it can't be started or supervised.
 pub async fn run_command(
     spec: &ProcessSpec,
+    ctx: Option<CtxInfo>,
     limits: Limits,
     stop: Stops,
     spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let started = Instant::now();
-    let mut process = spawn(spec).await.map_err(|source| LaunchError::Start {
+    let start = |source| LaunchError::Start {
         what: spec.program.display().to_string(),
         source,
-    })?;
+    };
+    let (mut process, _serving) = match ctx {
+        Some(info) => {
+            let (ours, theirs) = crate::ctx::channel().map_err(start)?;
+            let mut spec = spec.clone();
+            spec.env
+                .insert(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string());
+            let serving = crate::ctx::serve(ours, info);
+            let process = spawn_passing(&spec, Some(theirs)).await.map_err(start)?;
+            (process, Some(serving))
+        }
+        None => (spawn(spec).await.map_err(start)?, None),
+    };
     spawned(process.id());
     let supervised = supervise(&mut process, limits, stop)
         .await

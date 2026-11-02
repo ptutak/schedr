@@ -1164,3 +1164,126 @@ with Dag("report", params=ReportParams):
     assert_eq!(code, 1);
     assert!(err.contains("give `name=text` or `name:=json`"), "{err}");
 }
+
+/// A DAG whose command, script and Python task read the run's context (`@SCHEDR@`: the
+/// binary's path, quoted).
+const CTX_DAG: &str = r#"
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import date, timedelta
+from schedr import CommandOperator, Dag, task
+
+SCHEDR = @SCHEDR@
+
+@dataclass
+class P:
+    name: str
+    day: date = date(2026, 1, 1)
+    window: timedelta = timedelta(hours=1, minutes=30)
+    pair: tuple[int, str] = (1, "a")
+
+SCRIPT = (
+    "from dataclasses import dataclass\n"
+    "from datetime import date, timedelta\n"
+    "from schedr.script import dag_ctx\n"
+    "@dataclass\n"
+    "class P:\n"
+    "    name: str\n"
+    "    day: date\n"
+    "    window: timedelta\n"
+    "    pair: tuple[int, str]\n"
+    "p = dag_ctx.params\n"
+    "print(type(p.day).__name__, p.day, type(p.window).__name__, p.window, p.pair, p.name)\n"
+    "print(dag_ctx.run.id, dag_ctx.run.kind, dag_ctx.run.planned_for.isoformat(), dag_ctx.dag_id)\n"
+    "print(dag_ctx.params(P).day.year)\n"
+)
+CHILD = (
+    "import subprocess, sys\n"
+    "r = subprocess.run([sys.argv[1], 'dag-ctx', 'params', 'get'], capture_output=True, text=True)\n"
+    "print(r.returncode, r.stderr.strip())\n"
+)
+
+@task
+def python_child() -> str:
+    r = subprocess.run([SCHEDR, "dag-ctx", "run", "get"], capture_output=True, text=True)
+    return f"{r.returncode} {r.stderr.strip()}"
+
+with Dag("ctx", params=P):
+    CommandOperator("cli", ["sh", "-c",
+        f"{SCHEDR} dag-ctx params get && {SCHEDR} dag-ctx run get"
+        f" && {SCHEDR} dag-ctx run get --field id && {SCHEDR} dag-ctx params get --field day"])
+    CommandOperator("script", [sys.executable, "-c", SCRIPT])
+    CommandOperator("child", [sys.executable, "-c", CHILD, SCHEDR])
+    python_child()
+"#;
+
+#[test]
+fn a_command_and_a_plain_script_read_the_same_params_and_run() {
+    // A command (`schedr dag-ctx`), a Python script it runs (`schedr.script`), a Python script
+    // starting `schedr dag-ctx` without `pass_fds`, and a Python task's subprocess (no channel).
+    let dag = CTX_DAG.replace("@SCHEDR@", &format!("{BINARY:?}"));
+    let standalone = Standalone::start(&[("ctx.py", &dag)], None);
+    standalone.wait("DAG `ctx`", || standalone.dag_ids() == ["ctx"]);
+    let command = standalone.cli_json(&[
+        "runs",
+        "trigger",
+        "ctx",
+        "-p",
+        "name=q3",
+        "-p",
+        "day=2026-10-01",
+    ]);
+    let run_id = command["result"]["run_id"].as_str().unwrap().to_owned();
+    let run = standalone.wait_for_state(&run_id, "success");
+    let planned_for = run["run"]["planned_for"].as_str().unwrap().to_owned();
+    let stdout = |task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap()["value"]["stdout"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let cli = stdout("cli");
+    let lines: Vec<&str> = cli.lines().collect();
+    assert_eq!(lines.len(), 4, "{cli}");
+    assert_eq!(
+        serde_json::from_str::<Value>(lines[0]).unwrap(),
+        json!({"name": "q3", "day": "2026-10-01", "window": "P0DT5400.000000S",
+               "pair": [1, "a"]})
+    );
+    let run_info: Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(run_info["id"], run_id.as_str());
+    assert_eq!(run_info["dag_id"], "ctx");
+    assert_eq!(run_info["kind"], "manual");
+    assert_eq!(lines[2], run_id);
+    assert_eq!(lines[3], "2026-10-01");
+    // The script reads the same values, decoded as in a task.
+    let script = stdout("script");
+    let script: Vec<&str> = script.lines().collect();
+    assert_eq!(script[0], "date 2026-10-01 timedelta 1:30:00 (1, 'a') q3");
+    let planned: jiff::Timestamp = planned_for.parse().unwrap();
+    let said: jiff::Timestamp = script[1].split(' ').nth(2).unwrap().parse().unwrap();
+    assert_eq!(said, planned);
+    assert_eq!(
+        script[1].split(' ').collect::<Vec<_>>()[..2],
+        [run_id.as_str(), "manual"]
+    );
+    assert!(script[1].ends_with(" ctx"), "{}", script[1]);
+    assert_eq!(script[2], "2026");
+    // Python's subprocess closes the descriptor: the message says how to pass it.
+    let child = stdout("child");
+    assert!(child.starts_with("1 error: "), "{child}");
+    assert!(child.contains("pass_fds=["), "{child}");
+    // A Python task's processes have no channel.
+    let output = standalone
+        .get(&format!("/api/v1/runs/{run_id}/tasks/python_child/output"))
+        .unwrap()["value"]
+        .clone();
+    let output = output.as_str().unwrap();
+    assert!(
+        output.starts_with("1 error: `schedr dag-ctx` must be run inside a schedr task"),
+        "{output}"
+    );
+}

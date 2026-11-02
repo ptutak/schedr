@@ -58,7 +58,7 @@ pub struct OsProcess {
 
 /// Processes are started one at a time: a descriptor made inheritable for one child (see
 /// [`spawn_passing`]) must not leak into another started at the same moment.
-static SPAWNING: Mutex<()> = Mutex::const_new(());
+pub(crate) static SPAWNING: Mutex<()> = Mutex::const_new(());
 
 /// Starts a task process.
 ///

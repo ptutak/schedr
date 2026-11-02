@@ -1,0 +1,225 @@
+{
+  "$defs": {
+    "CtxAnswer": {
+      "description": "The agent's answer to a [`CtxRequest`].",
+      "oneOf": [
+        {
+          "description": "The handshake succeeded.",
+          "properties": {
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The handshake failed (another protocol); the agent closes the connection.",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The run's parameters, as stored (tagged, decision 138); `{}` when the DAG takes none.",
+          "properties": {
+            "params": {
+              "additionalProperties": true,
+              "description": "The values.",
+              "type": "object"
+            },
+            "type": {
+              "const": "params",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CtxRun",
+          "description": "The run information.",
+          "properties": {
+            "type": {
+              "const": "run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A request the agent can't answer (one it doesn't know, out of order); the connection\nis closed after it.",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CtxRequest": {
+      "description": "A request from a process of the task to the agent.",
+      "oneOf": [
+        {
+          "description": "The first message: the protocol the caller speaks ([`CTX_PROTOCOL`]), which must be\nthe agent's, and its schedr version (for the messages).",
+          "properties": {
+            "protocol": {
+              "description": "The protocol.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schedr_version": {
+              "description": "The `schedr` binary's or Python package's version.",
+              "type": "string"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "protocol",
+            "schedr_version"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The run's parameters.",
+          "properties": {
+            "type": {
+              "const": "params_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The run information.",
+          "properties": {
+            "type": {
+              "const": "run_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CtxRun": {
+      "description": "The run information a task's processes can read (`schedr dag-ctx run get`).",
+      "properties": {
+        "dag_id": {
+          "description": "The DAG's ID.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The run's ID (a `UUIDv7`).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RunKind",
+          "description": "The run's kind."
+        },
+        "planned_for": {
+          "description": "The moment the run is for.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "since": {
+          "description": "The start of the run's window.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dag_id",
+        "id",
+        "kind",
+        "planned_for",
+        "since"
+      ],
+      "type": "object"
+    },
+    "RunKind": {
+      "description": "Who or what created a run.",
+      "oneOf": [
+        {
+          "const": "scheduled",
+          "description": "Created by the scheduler for a fire time.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Started by a person (UI, CLI, API).",
+          "type": "string"
+        },
+        {
+          "const": "backfill",
+          "description": "One of the runs of a backfill.",
+          "type": "string"
+        },
+        {
+          "const": "chained",
+          "description": "Created by another DAG's run (`TriggerDagOperator`).",
+          "type": "string"
+        },
+        {
+          "const": "event",
+          "description": "Created by an event from the DAG's trigger (an event trigger).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/CtxRequest",
+      "description": "From the task's process."
+    },
+    {
+      "$ref": "#/$defs/CtxAnswer",
+      "description": "From the agent."
+    }
+  ],
+  "description": "Any message on a context connection (only used to generate one schema for both).",
+  "title": "CtxChannelMessage"
+}

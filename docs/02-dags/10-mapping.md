@@ -121,7 +121,9 @@ limits](05-defaults.md#concurrency-limits)).
 - **Inside a task,** `task_ctx.map_index` is the instance's index (`None` for a task that
   isn't mapped), and `task_ctx.try_number` its attempt
   ([The DAG context](06-context.md#the-running-tasks-own-context-task_ctx)). A command gets
-  `SCHEDR_MAP_INDEX`.
+  `SCHEDR_MAP_INDEX`. The run's parameters and run information are read with
+  `schedr dag-ctx`
+  ([Reading the run from a command](06-context.md#reading-the-run-from-a-command)).
 - **In the UI,** a mapped task is one node, labelled with its instance count (`fetch ×3`)
   and how many are done and how many failed. Its panel opens on the Instances tab; each
   instance's own panel has that instance's attempts, log and output. The whole task's

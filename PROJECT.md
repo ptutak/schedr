@@ -2777,10 +2777,10 @@ permission to create pods.
   - **Processes are started one at a time** (a lock in the agent): the runner's descriptor is
     made inheritable only while its own process starts, so it can't leak into a task started
     at the same moment. A start takes milliseconds.
-  - **More connections later (M4):** the in-task CLI (`schedr task-ctx` from a `command`
-    task, several calls at once) and the fork server's children need connections of their
-    own; a process asks for one over its channel and the agent sends a new socket-pair end as
-    a descriptor (`SCM_RIGHTS`). Still no path.
+  - **More connections (M4.5b, decision 143):** a `command` task's processes (`schedr
+    dag-ctx`, `schedr.script`, several calls at once) get a context channel of their own, a
+    datagram socket (`SCHEDR_CTX_FD`); each call makes a fresh socket pair and sends one end
+    to the agent over it (`SCM_RIGHTS`), so it gets a connection of its own. Still no path.
   - Not chosen: a socket file in a short directory (`$XDG_RUNTIME_DIR` / `/tmp`, mode
     `0700`): a file to clean up, a writable `/tmp` needed, and any process of the same user
     could connect while it exists; an abstract socket (Linux): no file, but no permissions
@@ -3083,21 +3083,82 @@ permission to create pods.
 ### In-task CLI: `schedr task-ctx` and `schedr dag-ctx`
 
 Commands that only work **inside a running task** (they talk to the agent over the task's
-channel, `SCHEDR_AGENT_FD`, each call on a connection of its own; see Rust/Python
-integration), for `command` / `script` tasks, their cleanups and resource setups.
+context channel, `SCHEDR_CTX_FD`, each call on a connection of its own; see below), for
+`command` / `script` tasks, their cleanups and resource setups.
 Python tasks use the Python API instead, and plain Python scripts the same objects through
 `schedr.script` (below).
 
-**Milestone M4, all of it,** `dag-ctx run get` included: it needs the per-call connections
-(a channel for command tasks, new socket-pair ends over `SCM_RIGHTS`) that `task-ctx` and
-`dag-ctx params` need. Until then a command task reads its run information from the
-`SCHEDR_*` variables, which hold the same values. Not chosen: `dag-ctx run get` earlier,
-reading those variables itself (two ways to the same data, and its behaviour would change
-when the agent serves it); building the connections earlier for it alone. (It was labelled
-M1 since the M0 command skeleton, before the channel was designed; M1 never included it.)
+**Milestone M4:** `schedr dag-ctx` and `schedr.script`'s `dag_ctx` came with M4.5b; `schedr
+task-ctx` (secrets, cleanup handles, resource values) comes later in M4, on the same channel.
+(It was labelled M1 since the M0 command skeleton, before the channel was designed; M1 never
+included it.)
 
-- **Plain Python scripts: `schedr.script`** (decided 2026-10-23, M4): `from schedr.script
-  import dag_ctx, task_ctx` gives a plain script (a `script` task, a command running
+**How M4.5b builds it** (decisions 143-148, the user's, 2026-11-01):
+
+- **143. The caller sends its own end.** A `command` task inherits one end of a datagram
+  socket pair (`SCHEDR_CTX_FD`, a descriptor number), and so does every process it starts.
+  Each call makes a fresh stream socket pair, sends one end to the agent over the datagram
+  socket (`SCM_RIGHTS`, one datagram) and talks on its own end: the length-prefixed JSON of
+  the runner channel, `hello` with its protocol (decision 148), then `params_get` /
+  `run_get` (`schema/ctx.schema.json`). The agent never answers on the shared
+  socket, so concurrent callers can't take each other's answers; only the task's processes
+  hold the descriptor, so no other process can call (the property the runner's channel has).
+  The agent serves a task's connections until the attempt ends (at most 64 at once; a
+  datagram not carrying exactly one Unix stream socket is dropped and its descriptors
+  closed); a call after that is told the task has ended. Linux and macOS. Not chosen: the
+  agent sending ends on request (callers racing for answers on the shared socket).
+- **144. Scope: `dag-ctx` only.** `schedr dag-ctx params get [--field F]` and `schedr dag-ctx
+  run get [--field F]` (`dag_id`, `id`, `kind`, `planned_for`, `since`); `params get` prints
+  the JSON form `--params` takes (dates as text, a duration as ISO 8601, a tuple as a list).
+  `task-ctx` comes later on the same channel.
+- **145. `schedr.script` decodes, as in a task:** `from schedr.script import dag_ctx` loads the
+  run's context from the channel the first time it is read (one connection, two requests); a
+  date is a `date`, a duration a `timedelta`, a tuple a tuple. A script doesn't know the
+  declared class: `dag_ctx.params.x` is the field decoded by its stored form (an object is a
+  `dict`), and `dag_ctx.params(Cls)` decodes strictly into `Cls`. Inside a Python task the
+  task's own values are used.
+- **146. Command tasks only.** A `command` task and every process it starts get the channel; a
+  Python task's processes don't (a Python task has `dag_ctx` itself), so `schedr dag-ctx` there
+  fails with "must be run inside a schedr task". A process whose parent closed the descriptor
+  (Python's `subprocess` does, unless given `pass_fds`) is told so, with the number to pass.
+- **147. The one `unsafe` block is in a crate of its own, `schedr-fd`** (the user's,
+  2026-11-01): Rust can only refer to an inherited descriptor known by number with `unsafe`
+  code (`BorrowedFd::borrow_raw`), and the workspace forbids it. `schedr-fd` (its lints:
+  the workspace's, with `unsafe_code` denied instead of forbidden, and allowed by an `#[expect]`
+  at the one site) borrows the number only to check it (open, a Unix datagram socket) and
+  duplicate it close-on-exec; it never owns or closes the inherited descriptor. Every other
+  crate keeps `forbid`. Not chosen: `forbid` relaxed to `deny` workspace-wide (any crate could
+  opt in); `pidfd_getfd` on itself, safe in rustix (Linux 5.6+ only, and refused under the
+  `RuntimeDefault` seccomp profile without `CAP_SYS_PTRACE`: checked in a kind cluster,
+  2026-11-01; OpenShift's `restricted-v2` sets that profile); a third-party crate doing the
+  same (the same `unsafe`, outside our review); a socket file in a private directory (any
+  process of the user could connect, needs a peer check); `schedr dag-ctx` delegating to
+  Python (a Python environment in every command task).
+- **148. A caller is accepted by the protocol it speaks, not its schedr version** (the
+  user's, 2026-11-01, after a review note): `hello { protocol, schedr_version }`; the agent
+  accepts protocol 1 from any schedr, and refuses another naming both versions. A command
+  task's `schedr` (another on `PATH`) or a script's own environment (a pinned schedr) can
+  differ from the worker's, unlike the runner, which is the worker's own install; an exact
+  match would break them at every worker upgrade. Within a protocol, changes are only
+  additions (a request, a field; either side ignores fields it doesn't know, and a request
+  the agent doesn't know is answered `error`); anything else, a new value of an enumerated
+  field included, is a new protocol. Not chosen: the exact version (as the runner); no check
+  (errors that say nothing about versions).
+
+How the channel holds against its own task (after Grok's review and Codex's, 2026-11-02): the
+agent reads and writes a received end with `MSG_DONTWAIT` on each call, never relying on its
+`O_NONBLOCK` flag (the sender shares the open file description and could clear it, holding one
+of the runtime's threads in a blocking read); it reads up to 253 descriptors from a datagram
+(Linux's limit per message), so none is left unread, and rustix 1.1.6 clamps a truncated
+control message's length (macOS leaves it unshortened); at its limit of 64 connections it says
+so on the new connection before closing it, and callers read that answer even when their hello
+couldn't be sent. `schedr-fd` duplicates the inherited number before checking anything, so what
+it checks is what it returns. Callers send their end with `MSG_DONTWAIT`, waiting for room in
+the shared datagram queue only until their 30 s deadline (Python's `socket.send_fds` drops its
+flags, so `schedr.script` calls `sendmsg` itself).
+
+- **Plain Python scripts: `schedr.script`** (decided 2026-10-23, M4; `dag_ctx` since M4.5b,
+  `task_ctx` with `schedr task-ctx`): `from schedr.script import dag_ctx, task_ctx` gives a plain script (a `script` task, a command running
   `python …`) **the same objects as a Python task**, holding values: `task_ctx.secret(...)`,
   `dag_ctx.params`, `dag_ctx.run`, cleanup and resource calls. Not a second mechanism: the
   same agent channel and requests as `schedr task-ctx` / `schedr dag-ctx` and the Python

@@ -13,6 +13,7 @@ use clap::error::ErrorKind;
 
 pub mod app;
 pub mod cli;
+pub mod ctx;
 pub use schedr_client as client;
 pub mod interpreter;
 pub mod local;
@@ -54,6 +55,15 @@ where
         }
         Err(e) => return report(err, &e.to_string(), EXIT_USAGE),
     };
+    // Inside a task, before the configuration: a task may have none, and the call is one
+    // request on the task's channel (decision 147: the descriptor is adopted before any
+    // thread starts).
+    if let cli::Command::DagCtx { command } = &cli.command {
+        return match ctx::run_dag_ctx(command, env, VERSION, out) {
+            Ok(()) => 0,
+            Err(message) => report(err, &format!("error: {message}\n"), 1),
+        };
+    }
     let config = match app::load_config(cli.config.as_deref(), env, read_file) {
         Ok(config) => config,
         Err(e) => return report(err, &format!("error: {e}\n"), e.exit_code()),

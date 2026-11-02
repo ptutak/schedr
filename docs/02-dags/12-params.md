@@ -103,9 +103,11 @@ pass it to a task, or declare the field `str`. A dataclass date or datetime take
 spec (`t"{dag_ctx.params.start:%Y-%m-%d}"`). A dataclass duration renders as seconds
 (`3600` for one hour), and a format spec does not apply to it. `None`, a list and an
 object can't be rendered. A date a Pydantic model holds is text, so a format spec does not
-apply to it ([Pydantic models](03-data-flow.md#pydantic-models)). From a
-command, a t-string is how the parameters are read. Reading them with `schedr dag-ctx` is
-[In-task CLI](../_generated/05-design/03-architecture.md#in-task-cli-schedr-task-ctx-and-schedr-dag-ctx).
+apply to it ([Pydantic models](03-data-flow.md#pydantic-models)). A t-string fills the
+command before it starts. While the command runs, `schedr dag-ctx params get` prints
+these values in the JSON form `--params` takes, and `from schedr.script import dag_ctx`
+decodes them in a Python script the command starts
+([Reading the run from a command](06-context.md#reading-the-run-from-a-command)).
 
 The list `.expand()` maps over cannot be a parameter. The number of instances would depend
 on the run:

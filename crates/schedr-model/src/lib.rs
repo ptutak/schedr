@@ -6,6 +6,7 @@
 
 pub mod beat;
 pub mod commands;
+pub mod ctx;
 pub mod dag;
 pub mod ids;
 pub mod logs;

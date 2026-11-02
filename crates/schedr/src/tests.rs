@@ -191,11 +191,29 @@ fn an_invalid_log_level_is_reported() {
 
 #[test]
 fn commands_of_later_milestones_say_when_they_arrive() {
-    let result = schedr(&["dag-ctx", "run", "get"], &[], &[]);
+    let result = schedr(&["task-ctx", "secret", "get", "x"], &[], &[]);
     assert_eq!(result.code, 1);
     assert_eq!(
         result.err,
-        "error: `schedr dag-ctx` isn't implemented yet (milestone M4)\n"
+        "error: `schedr task-ctx` isn't implemented yet (milestone M4)\n"
+    );
+}
+
+#[test]
+fn dag_ctx_outside_a_task_says_where_it_works() {
+    // Even with a configuration that doesn't load: inside a task, none is read.
+    let result = schedr(
+        &["dag-ctx", "params", "get"],
+        &[("SCHEDR_CONFIG__LOG__LEVEL", "a=b=c")],
+        &[],
+    );
+    assert_eq!(result.code, 1);
+    assert!(
+        result
+            .err
+            .starts_with("error: `schedr dag-ctx` must be run inside a schedr task"),
+        "{}",
+        result.err
     );
 }
 

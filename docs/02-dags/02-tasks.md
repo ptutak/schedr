@@ -52,7 +52,10 @@ and `TaskDefaults(...)`, and the task's own argument wins. What the worker does 
 An element, and a value in `env`, may be a string, a t-string or a reference such as
 `names[0]`. A name in `env` matches `[A-Za-z_][A-Za-z0-9_]*`. To pass a value, use a list,
 `["./notify.sh", out.report_url]`, or `env` read by the shell:
-`command='./notify.sh "$URL"', env={"URL": out.report_url}`.
+`command='./notify.sh "$URL"', env={"URL": out.report_url}`. While the command runs, it
+reads the run's parameters and run information with `schedr dag-ctx`. A Python script it
+starts reads them with `from schedr.script import dag_ctx`
+([Reading the run from a command](06-context.md#reading-the-run-from-a-command)).
 
 Without `outcomes=`, exit code 0 is success (`DefaultOutcome.SUCCESS`). With
 `outcomes=`, a declared exit code is success with that outcome; any other code, or a

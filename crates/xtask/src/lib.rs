@@ -54,6 +54,7 @@ pub fn schema_files() -> Vec<GeneratedFile> {
     vec![
         file("dag.schema.json", schedr_model::schema::dag_schema()),
         file("runner.schema.json", schedr_model::schema::runner_schema()),
+        file("ctx.schema.json", schedr_model::schema::ctx_schema()),
         GeneratedFile {
             path: Path::new(SCHEMA_DIR).join("openapi.json"),
             contents: render_json(&schedr_api::openapi_json()),

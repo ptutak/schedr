@@ -269,7 +269,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[case(&["standalone", "--listen", "0.0.0.0"], None)]
 #[case(&["dags", "list"], None)]
 #[case(&["runs", "list", "sync"], None)]
-#[case(&["dag-ctx", "run", "get"], Some("M4"))]
+#[case(&["dag-ctx", "run", "get"], None)]
 #[case(&["master"], None)]
 #[case(&["worker"], None)]
 #[case(&["webserver"], None)]
@@ -277,7 +277,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[case(&["workers", "resume", "w"], None)]
 #[case(&["workers", "list"], None)]
 #[case(&["task-ctx", "resource", "get"], Some("M4"))]
-#[case(&["dag-ctx", "params", "get", "--field", "region"], Some("M4"))]
+#[case(&["dag-ctx", "params", "get", "--field", "region"], None)]
 fn milestones_say_when_a_command_starts_working(
     #[case] args: &[&str],
     #[case] expected: Option<&str>,

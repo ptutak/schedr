@@ -43,6 +43,14 @@ def validate_runner_message() -> Callable[[Any], None]:
     return validator.validate
 
 
+@pytest.fixture(scope="session")
+def validate_ctx_message() -> Callable[[Any], None]:
+    """Validates one message of a context connection against ``schema/ctx.schema.json``."""
+    schema = json.loads((SCHEMA_DIR / "ctx.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    return validator.validate
+
+
 @pytest.fixture(autouse=True)
 def clean_registry() -> Iterator[None]:
     """Forgets the DAGs a test defined, so tests don't see each other's DAGs."""

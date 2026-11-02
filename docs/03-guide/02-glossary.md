@@ -57,6 +57,13 @@ The names used across the documentation, the API and the logs.
   process is `spawn`. Once the result is stored, the attempts API also shows `usage` and
   `core_dumped` (see [Workers](05-workers.md#the-fork-server)).
 
+**Context channel**
+: The Unix datagram socket one command attempt inherits (`SCHEDR_CTX_FD`). The command's
+  processes each open a connection of their own and read the run's parameters and run
+  information over it, until the attempt ends. See
+  [Workers](05-workers.md#a-commands-context-channel) and
+  [Reading the run from a command](../02-dags/06-context.md#reading-the-run-from-a-command).
+
 **Fork server**
 : A runner started as `python -m schedr.runner fork_server`. It imports libraries once and
   then starts a process per request. That process runs `task` or `parse` as a spawned runner

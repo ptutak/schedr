@@ -1,0 +1,93 @@
+//! Messages on a command task's context channel: `schedr dag-ctx` and `schedr.script` asking
+//! the agent for the run's parameters and information (decisions 143-148).
+//!
+//! A command task inherits one end of a datagram socket pair (`SCHEDR_CTX_FD`). Each call
+//! makes a fresh stream socket pair, sends one end to the agent over it (`SCM_RIGHTS`, one
+//! datagram) and talks on the other: a connection of its own, which no other process can
+//! join. On that connection the framing is the runner channel's (a 4-byte big-endian length,
+//! then UTF-8 JSON tagged by `type`), capped at [`MAX_CTX_MESSAGE_SIZE`]. The caller says
+//! [`CtxRequest::Hello`] first, with its protocol ([`CTX_PROTOCOL`]); the agent answers
+//! [`CtxAnswer::Welcome`] or [`CtxAnswer::Refused`], then one answer per request until the
+//! caller closes it.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::states::RunKind;
+
+#[cfg(test)]
+mod tests;
+
+/// The environment variable with a command task's descriptor of its context channel.
+pub const CTX_FD_ENV: &str = "SCHEDR_CTX_FD";
+
+/// The context channel's protocol (decision 148): the agent accepts a caller speaking the same
+/// one, whatever its schedr version. Within a protocol, changes are only additions (a new
+/// request, a new field), and either side ignores fields it doesn't know; anything else is a
+/// new protocol, a new value of an enumerated field included (a run kind: an older caller
+/// can't read it). `hello`'s shape never changes, so a refusal can always be told.
+pub const CTX_PROTOCOL: u32 = 1;
+
+/// The largest message on a context connection, in bytes (params are at most 64 KiB as JSON,
+/// decision 135; tags and escaping can grow them).
+pub const MAX_CTX_MESSAGE_SIZE: u32 = 1024 * 1024;
+
+/// A request from a process of the task to the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CtxRequest {
+    /// The first message: the protocol the caller speaks ([`CTX_PROTOCOL`]), which must be
+    /// the agent's, and its schedr version (for the messages).
+    Hello {
+        /// The protocol.
+        protocol: u32,
+        /// The `schedr` binary's or Python package's version.
+        schedr_version: String,
+    },
+    /// The run's parameters.
+    ParamsGet,
+    /// The run information.
+    RunGet,
+}
+
+/// The agent's answer to a [`CtxRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CtxAnswer {
+    /// The handshake succeeded.
+    Welcome,
+    /// The handshake failed (another protocol); the agent closes the connection.
+    Refused {
+        /// Why.
+        reason: String,
+    },
+    /// The run's parameters, as stored (tagged, decision 138); `{}` when the DAG takes none.
+    Params {
+        /// The values.
+        #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+        params: serde_json::Value,
+    },
+    /// The run information.
+    Run(CtxRun),
+    /// A request the agent can't answer (one it doesn't know, out of order); the connection
+    /// is closed after it.
+    Error {
+        /// Why.
+        reason: String,
+    },
+}
+
+/// The run information a task's processes can read (`schedr dag-ctx run get`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CtxRun {
+    /// The DAG's ID.
+    pub dag_id: String,
+    /// The run's ID (a `UUIDv7`).
+    pub id: String,
+    /// The run's kind.
+    pub kind: RunKind,
+    /// The moment the run is for.
+    pub planned_for: jiff::Timestamp,
+    /// The start of the run's window.
+    pub since: jiff::Timestamp,
+}

@@ -20,7 +20,7 @@ from typing import Any
 
 from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference
-from schedr._serialization.codec import CodecError, decode
+from schedr._serialization.codec import CodecError, decode, decode_any
 
 _VALUE_IN_DAG_BODY = (
     "a reference can't be used as a value in the DAG file (it is known only at run time); "
@@ -94,6 +94,9 @@ class RunValues:
         since: The start of the run's window.
         params: The run's parameters, as stored (decision 138).
         params_class: The class the DAG declared them with; ``None``: it takes none.
+        from_script: Read by a plain script (``schedr.script``), which doesn't know the
+            declared class: a field is decoded by its stored form, and ``dag_ctx.params(Cls)``
+            decodes into ``Cls`` strictly without comparing it with the declaration.
     """
 
     dag_id: str
@@ -103,6 +106,7 @@ class RunValues:
     since: datetime
     params: Mapping[str, Any] = field(default_factory=dict)
     params_class: type | None = None
+    from_script: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +126,29 @@ class TaskValues:
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
 _TASK: ContextVar[TaskValues | None] = ContextVar("schedr_running_task_own", default=None)
+
+_script_values: Callable[[], RunValues] | None = None
+"""Loads the run's context in a plain script; set by importing ``schedr.script``."""
+
+
+def use_script_values(load: Callable[[], RunValues] | None) -> None:
+    """Makes ``dag_ctx`` give ``load()``'s values outside a running task and a DAG body.
+
+    ``schedr.script`` calls it when imported; ``None`` stops it (tests).
+
+    Args:
+        load: Gives the run's context (loaded once, on first use), or raises
+            ``RuntimeError`` outside a task.
+    """
+    global _script_values  # noqa: PLW0603 - one switch, set by importing schedr.script
+    _script_values = load
+
+
+def _outside() -> RunValues:
+    """The script's values, or the error of being outside a task."""
+    if _script_values is None:
+        raise RuntimeError(_OUTSIDE)
+    return _script_values()
 
 
 @contextlib.contextmanager
@@ -155,7 +182,7 @@ def _current[V](field: DagCtxField, value: Callable[[RunValues], V]) -> V:
     if values is not None:
         return value(values)
     if _build.active() is None:
-        raise RuntimeError(_OUTSIDE)
+        return value(_outside())
     return DagCtxReference(field)  # type: ignore[return-value]
 
 
@@ -217,7 +244,7 @@ class DagContext:
             return ParamsValues(values)
         builder = _build.active()
         if builder is None:
-            raise RuntimeError(_OUTSIDE)
+            return ParamsValues(_outside())
         _build.params_type(builder, (), f"DAG `{builder.dag_id}`")
         return ParamsReference(builder, ())
 
@@ -365,7 +392,10 @@ class ParamsValues(Params):
 
     def _instance(self) -> object:
         if self._decoded is None:
-            self._decoded = self(_declared(self._values))
+            if self._values.from_script:
+                self._decoded = decode_any(self._values.params, "dag_ctx.params")
+            else:
+                self._decoded = self(_declared(self._values))
         return self._decoded
 
     def __getattr__(self, name: str) -> Any:
@@ -376,7 +406,12 @@ class ParamsValues(Params):
         """
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._instance(), name)
+        instance = self._instance()
+        if isinstance(instance, dict):  # a script's: decoded by the stored form
+            if name not in instance:
+                raise AttributeError(f"the run's params have no field `{name}`")
+            return instance[name]
+        return getattr(instance, name)
 
     def __getitem__(self, key: str | int) -> Any:
         """A field's value by name.
@@ -386,6 +421,8 @@ class ParamsValues(Params):
         """
         if not isinstance(key, str):
             raise TypeError("dag_ctx.params is indexed by field name")
+        if self._values.from_script:
+            return self.__getattr__(key)
         return getattr(self._instance(), key)
 
     def __call__[P](self, cls: type[P]) -> P:
@@ -395,7 +432,8 @@ class ParamsValues(Params):
             TypeError: For another class than the declared one, or values that don't fit
                 it.
         """
-        _check_class(self._values.params_class, cls)
+        if not self._values.from_script:
+            _check_class(self._values.params_class, cls)
         try:
             decoded: P = decode(self._values.params, cls, "dag_ctx.params")
         except CodecError as e:

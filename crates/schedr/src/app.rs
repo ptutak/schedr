@@ -217,6 +217,9 @@ pub async fn execute(
             let (api, output) = connect(client, env);
             run_tasks(command, &api, &output, out).await
         }
+        (Command::DagCtx { command }, None) => {
+            crate::ctx::run_dag_ctx(command, env, crate::VERSION, out).map_err(AppError::Failed)
+        }
         (other, milestone) => Err(AppError::NotImplemented {
             command: other.name(),
             milestone: milestone.unwrap_or("unknown"),

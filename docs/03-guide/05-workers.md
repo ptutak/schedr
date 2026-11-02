@@ -53,7 +53,9 @@ was registered, the backoff starts from 200 ms again.
    `spawn`.
 3. **The process.** A Python task runs `python -m schedr.runner task`, forked from a fork
    server when the task allows it and a server can, otherwise in a new process. A command runs through
-   the shell when it is a string, or directly when it is a list of arguments. Each starts in
+   the shell when it is a string, or directly when it is a list of arguments. It inherits
+   the attempt's context channel, `SCHEDR_CTX_FD`
+   ([A command's context channel](#a-commands-context-channel)). Each starts in
    its own process group, so cancelling or killing reaches the whole
    task, and runs in its root's directory (Python) or its DAG file's directory (commands).
    stdout and stderr go to `<data_dir>/logs/<worker ID>/<attempt ID>.log`.
@@ -72,6 +74,27 @@ was registered, the backoff starts from 200 ms again.
    (the master may have failed to store it) after one heartbeat interval, then ever less often
    (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's
    answer to its journal settles the result. `Finished` includes `usage` and `core_dumped` (below).
+
+### A command's context channel
+
+A command attempt gets one Unix datagram socket. The command inherits one end, and so
+does every process it starts. The descriptor's number is `SCHEDR_CTX_FD`. There is no
+socket file, so only a process that holds the descriptor can reach the channel. The
+agent serves it until the attempt ends. A call after that is told the task has ended. A
+Python task has `dag_ctx` in its function, and programs it starts find `SCHEDR_CTX_FD`
+unset.
+
+Each call opens a connection of its own. The caller makes a fresh stream socket pair,
+sends one end over the datagram socket, and talks on the other end. The agent answers
+on that connection, so concurrent calls keep their own answers.
+It serves at most 64 of those connections at once and tells the next caller so. A call
+waits up to 30 s to be taken, and 30 s to be answered.
+
+The agent accepts a caller by the protocol it speaks (protocol 1), whatever schedr
+version sent it. Within that protocol a change is a new request or a new field. Either
+side ignores a field it does not know, and a request the agent does not know is answered
+with an error. A new value of `kind` is a new protocol: an older caller cannot read it. What the commands print, and the messages when a call cannot be done, is
+[Reading the run from a command](../02-dags/06-context.md#reading-the-run-from-a-command).
 
 ## The fork server
 

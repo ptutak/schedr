@@ -446,8 +446,9 @@ impl Command {
             | Self::Webserver
             | Self::Ui
             | Self::Tasks { .. }
-            | Self::Workers { .. } => None,
-            Self::TaskCtx { .. } | Self::DagCtx { .. } => Some("M4"),
+            | Self::Workers { .. }
+            | Self::DagCtx { .. } => None,
+            Self::TaskCtx { .. } => Some("M4"),
         }
     }
 
