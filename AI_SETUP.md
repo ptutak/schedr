@@ -226,11 +226,13 @@ Separate jobs. The ones that run on this machine each have a make target:
   `python/tests/unit/test_release.py`). To release `X.Y.Z`:
   1. Write `CHANGELOG.md`'s `## X.Y.Z` section.
   2. A rehearsal: set `version = "X.Y.Z-rc1"` in `Cargo.toml`'s `[workspace.package]`
-     (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`), run
+     (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`) and
+     `appVersion: "X.Y.Zrc1"` in `charts/schedr/Chart.yaml` (the chart's images default to
+     that tag; `release.py check` refuses another), run
      `cargo update -w` so `Cargo.lock` follows (the wheels build `--locked`), commit, tag
      `vX.Y.Zrc1`, push the tag. It goes to TestPyPI, a GitHub pre-release and images
      tagged `X.Y.Zrc1`.
-  3. The release: `version = "X.Y.Z"`, `cargo update -w` again, commit, tag `vX.Y.Z`, push
+  3. The release: `version = "X.Y.Z"`, `appVersion: "X.Y.Z"`, `cargo update -w` again, commit, tag `vX.Y.Z`, push
      the tag; approve the `pypi` environment's deployment when GitHub asks. PyPI, the GitHub
      Release, the images tagged `X.Y.Z` and `X.Y`.
   A failed release after the upload can't reuse the version (PyPI refuses a file twice):

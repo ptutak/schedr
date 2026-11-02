@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """What the release workflow checks and reads (decisions 153-158, 160-163).
 
-    release.py check TAG          the tag against the version; prints the workflow's outputs
+    release.py check TAG          the tag against the versions; prints the workflow's outputs
     release.py notes TAG          the release notes: the version's CHANGELOG.md section
     release.py wheels TAG DIR     DIR holds exactly the four wheels of that version
 
 A tag is ``vX.Y.Z`` or, for a rehearsal on TestPyPI, ``vX.Y.ZrcN``. It must name the version in
 the tree: the Cargo workspace's ``X.Y.Z`` or ``X.Y.Z-rcN`` (the Python package takes its
-version from there, written ``X.Y.ZrcN`` by maturin). Standard library only: the workflow runs
+version from there, written ``X.Y.ZrcN`` by maturin), and the chart's ``appVersion`` must be
+the Python form, the tag its images default to. Standard library only: the workflow runs
 it before anything is installed.
 """
 
@@ -83,6 +84,14 @@ def check(tag: str, root: Path | None = None) -> Release:
         raise ReleaseError(
             'pyproject.toml must take its version from Cargo (`dynamic = ["version"]`), '
             "so the wheels carry the tag's version"
+        )
+    chart = (root / "charts" / "schedr" / "Chart.yaml").read_text()
+    app = re.search(r'^appVersion:\s*"?([^"\s]+)"?\s*$', chart, re.MULTILINE)
+    app_version = app[1] if app else None
+    if app_version != release.version:
+        raise ReleaseError(
+            f'`{tag}` needs appVersion: "{release.version}" in charts/schedr/Chart.yaml, '
+            f"which has {app_version!r}: the chart's images default to that tag"
         )
     notes(release, root)
     return release

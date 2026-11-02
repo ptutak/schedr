@@ -7165,6 +7165,8 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     base images to `ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr-worker`
     (x86_64, from the musllinux wheel; pushed with the workflow's `GITHUB_TOKEN`); the Helm
     chart stays in the repository. Not chosen: an OCI chart; multi-arch images (later).
+    The chart's default images are these two, tagged with its `appVersion`, which a release
+    sets to its version (`scripts/release.py check` refuses another; the user, 2026-11-02).
   - **158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
     `testpypi`, its own trusted publisher), and the wheel installed from there is
     smoke-tested; only a final tag goes to PyPI. Not chosen: straight to PyPI.

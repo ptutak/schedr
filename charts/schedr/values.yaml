@@ -14,9 +14,10 @@ standalone:
   ui: true
 
 image:
-  # The image running tasks (standalone's pod, distributed's workers): the schedr base image,
-  # or yours built FROM it with more libraries (examples/kubernetes/Dockerfile).
-  repository: schedr
+  # The image running tasks (standalone's pod, distributed's workers): the schedr base image
+  # each release pushes (x86_64), or yours built FROM it with more libraries
+  # (examples/kubernetes/Dockerfile).
+  repository: ghcr.io/ptutak/schedr-worker
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -282,7 +283,7 @@ clusterDomain: cluster.local
 master:
   # Without Python: the schedr server image (images/schedr-server). Tag: the chart's appVersion.
   image:
-    repository: schedr-server
+    repository: ghcr.io/ptutak/schedr-server
     tag: ""
     pullPolicy: IfNotPresent
   resources:
@@ -321,7 +322,7 @@ webserver:
   # Holds no state: more replicas just share the requests.
   replicas: 1
   image:
-    repository: schedr-server
+    repository: ghcr.io/ptutak/schedr-server
     tag: ""
     pullPolicy: IfNotPresent
   resources:
@@ -414,7 +415,7 @@ ui:
   replicas: 1
   # Without Python: the schedr server image, with the documentation at /docs.
   image:
-    repository: schedr-server
+    repository: ghcr.io/ptutak/schedr-server
     tag: ""
     pullPolicy: IfNotPresent
   resources:

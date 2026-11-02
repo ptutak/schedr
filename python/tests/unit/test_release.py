@@ -41,12 +41,24 @@ The first preview.
 """
 
 
-def tree(tmp_path: Path, version: str, *, dynamic: bool = True, changelog: str = CHANGELOG) -> Path:
+def tree(
+    tmp_path: Path,
+    version: str,
+    *,
+    dynamic: bool = True,
+    changelog: str = CHANGELOG,
+    app_version: str | None = None,
+) -> Path:
     (tmp_path / "Cargo.toml").write_text(f'[workspace.package]\nversion = "{version}"\n')
     pyproject = '[project]\nname = "schedr"\n'
     pyproject += 'dynamic = ["version"]\n' if dynamic else 'version = "0.1.0"\n'
     (tmp_path / "pyproject.toml").write_text(pyproject)
     (tmp_path / "CHANGELOG.md").write_text(changelog)
+    (tmp_path / "charts" / "schedr").mkdir(parents=True, exist_ok=True)
+    app = version.replace("-rc", "rc") if app_version is None else app_version
+    (tmp_path / "charts" / "schedr" / "Chart.yaml").write_text(
+        f'apiVersion: v2\nname: schedr\nversion: 0.1.0\nappVersion: "{app}"\n'
+    )
     return tmp_path
 
 
@@ -87,6 +99,10 @@ def test_the_tag_must_match_the_tree(tmp_path: Path) -> None:
         release().check("v0.1.0", root)
     with pytest.raises(release().ReleaseError, match="dynamic"):
         release().check("v0.1.0", tree(tmp_path, "0.1.0", dynamic=False))
+    with pytest.raises(
+        release().ReleaseError, match=r'appVersion: "0\.1\.0rc1" .* has \'0\.1\.0\''
+    ):
+        release().check("v0.1.0rc1", tree(tmp_path, "0.1.0-rc1", app_version="0.1.0"))
     with pytest.raises(release().ReleaseError, match=r"no `## 0\.3\.0` section"):
         release().check("v0.3.0", tree(tmp_path, "0.3.0"))
 

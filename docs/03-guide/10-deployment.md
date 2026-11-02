@@ -149,7 +149,9 @@ separate roles only if the load needs them (a full switch: the history stays in 
 `ghcr.io/ptutak/schedr-server` (the binary alone, for the master and the webserver; below).
 Their tags are the version (`0.1.0`) and its series (`0.1`); a release candidate has only
 its own (`0.1.0rc1`). There is no `latest`: until 1.0.0 a new minor version needs a fresh
-database, and a moving tag would take a deployment there unasked.
+database, and a moving tag would take a deployment there unasked. The chart uses them by
+default, tagged with its `appVersion` (`image`, and `master.image`, `webserver.image` and
+`ui.image` for the server roles).
 
 **The image.** `images/schedr/Dockerfile` builds the base image (`make image`): Alpine with
 Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
