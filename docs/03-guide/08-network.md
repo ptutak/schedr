@@ -295,12 +295,15 @@ hands each change to every open stream. When the changes can't be followed, each
 `refresh` instead of the ones it skipped.
 
 The UI opens one of these streams per deployment. If it drops, the UI opens it again after
-1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Each open
-page holds another stream, to the UI: `GET /events` on the UI's port (the API's port in
-standalone). While a running try's Logs tab is open, the browser holds one more,
-`GET /d/<deployment>/runs/<run>/tasks/<task>/tail`. Those two are server-sent events as well,
-with the same cache and buffering headers and a comment every 15 s. The page's stream sends
-a ping every 15 s. What the pages do with them is [Live updates](12-ui.md#live-updates).
+1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Each
+browser holds one stream to the UI, shared by its pages: `GET /events` on the UI's port (the
+API's port in standalone). It is server-sent events as well, with the same cache and
+buffering headers and a comment every 15 s. It starts with `hello` (the UI's time), then
+sends each change as `change` (`{"deployment", "kind", "run", "dag", "at"}`, `kind` one of
+`run`, `dag`, `workers` and `refresh`), the same change at most once a second, and a ping
+every 15 s. A running try's log is polled, not streamed:
+`GET /d/<deployment>/runs/<run>/tasks/<task>/tail` answers the next part. What the pages do
+with them is [Live updates](12-ui.md#live-updates).
 
 A proxy in front of the webserver, and a proxy in front of the UI, has to leave these
 responses open and send each byte on as it is written. Buffering holds the updates until the

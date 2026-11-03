@@ -1,5 +1,5 @@
 {% import "confirm.html" as confirm %}
-<div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
+<div class="panel-live"{% if !refresh.is_empty() %} hx-get="{{ refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="#task-panel:drop" hx-target="#task-panel"{% endif %}>
 <div class="panel-head" data-task="{{ node }}">
   <h2 class="mono">{{ task_id }}</h2>
   {% if !back.is_empty() %}<a class="back" href="{{ back_href }}" hx-get="{{ back }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ back_href }}">all instances</a>{% endif %}
@@ -56,7 +56,7 @@
 {% when TabBody::Log with { html, cut, size, running, tries, tail } %}
   <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
   {% if cut %}<p class="dim">Only its end is shown (its last lines, about 256 KiB).</p>{% endif %}
-  <pre class="log"{% if let Some(tail) = tail %} sse-connect="{{ tail }}" sse-swap="log" hx-swap="beforeend" sse-close="end"{% endif %}>{{ html|safe }}</pre>
+  <pre class="log">{{ html|safe }}{% if let Some(tail) = tail %}{{ tail|safe }}{% endif %}</pre>
 {% when TabBody::NoLog(why) %}
   <p class="empty">No log to show: {{ why }}</p>
 {% when TabBody::Instances(rows) %}

@@ -53,31 +53,43 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending | 6 | medium | likely | usability |
-| 2 | B31: a finished task stays `scheduled` on the UI long after it ended | 6 | medium | likely | usability |
-| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 16 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 17 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 18 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 19 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 20 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 21 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 22 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 25 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 3 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 4 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 5 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 6 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 7 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 8 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 12 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 13 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 14 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 15 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 16 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 17 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 18 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 19 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 20 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 21 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 22 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 23 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 24 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B156: An action's status stops being followed after an error answer
+
+- **Rating:** severity **low**, probability **possible**, usability (score 2): the UI's pending-command note replaces itself with whatever its poll gets: an HTTP error (a proxy's 502 while the UI restarts, a lapsed sign-in's 401) ends the following, the note showing the error page.
+- **Found:** 2026-11-03, by Grok reviewing M4.6f (the log tail had the same shape, fixed
+  there); confirmed by Claude reading `crates/schedr-ui/templates/command.html`: the note polls
+  itself (`hx-trigger="load delay:…"`, `hx-swap="outerHTML"`), htmx swaps every status but 204
+  (`templates/base.html`'s `responseHandling`), and neither the live parts' guard nor the log
+  tail's retry covers it.
+- **When:** possible: an action is sent while the UI restarts behind a proxy, or as a sign-in
+  lapses; the master still decides the command, only the page stops saying so.
+- **A fix:** as the log tail's: an error answer isn't swapped in; the poll is asked again a
+  second later (a `retry` trigger on the note).
 
 ## B154: The scheduler's skipped DAGs are never logged
 
@@ -294,53 +306,6 @@ step touches their code or the user schedules them.
   `A = {A0, A1}`, `B = {B0, B1}`: `U` lands right of `B`, its edges cross `B`'s box.
 - **Cosmetic:** every task is in the right box. **A fix:** route such edges around boxes,
   or order layers so that it can't happen; with B39.
-
-## B32: the UI briefly freezes on Trigger and other links, the request left pending
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): UI clicks hang for a moment; seen by the user (the browser's six connections, held by live pages' streams).
-- **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other
-  links, the page hangs for a moment with nothing happening; the browser's Inspect shows the
-  request `Pending`; then it goes through and the DAG is triggered properly.
-- **Suspect:** the browser's limit of six HTTP/1.1 connections per host: the run and log
-  pages hold SSE streams (live changes, the log tail), and other tabs on the same UI hold
-  theirs, so a new request waits for a free connection (B25 and B26 reduced this, not to
-  zero). Not checked.
-- **To confirm:** a browser test with several live pages open on one UI, timing a click
-  until its request is sent. **A fix** depends on the cause (one shared stream per browser,
-  HTTP/2, fewer streams per page).
-- **Cause (2026-11-03, reproduced by Codex, checked by Claude):** as suspected, the browser's
-  limit of six HTTP/1.1 connections per host: five hidden live pages within their 10 s grace
-  (`schedrHiddenClose`, B25) and a sixth page's stream held the pool, so the Trigger POST left
-  the browser 9.9 s after the click; the UI answered it in 19 ms once it arrived. Visible
-  pages hold their streams for as long as they are open, so the same happens with six visible
-  live pages.
-- **The fix** (a decision for the user): one stream per browser shared by its tabs (a Web
-  Lock picks the tab holding it, a BroadcastChannel hands its changes to the others), hidden
-  pages closing theirs at once (each tab switch then reloads the page), or HTTP/2 to the UI
-  (TLS needed: through an ingress, or the UI's own).
-
-## B31: a finished task stays `scheduled` on the UI long after it ended
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): a finished task shown `scheduled` for up to ~15 s; seen by the user (the browser's six connections, held by live pages' streams).
-- **Found:** 2026-10-28, by the user (dev notes): during a run a task stays `scheduled` on
-  the run page for quite a long time before it shows `success`, while its times say it
-  finished a second after its upstream task.
-- **Suspect:** the run page isn't told of the change and waits for the webserver's fallback
-  `refresh`, every 15 s (`REFRESH_INTERVAL`, `crates/schedr-api/src/events.rs`), e.g. when
-  the database's changes can't be followed (SQLite, standalone) or a change of that kind isn't
-  announced. Not checked.
-- **To confirm:** a test running a two-task DAG in standalone with a run page's live stream
-  open, timing each task's state change against when the page hears of it.
-- **Cause (2026-11-03, reproduced by Codex, checked by Claude):** the browser's limit of six
-  HTTP/1.1 connections per host. Every live page holds one for its stream
-  (`crates/schedr-ui/templates/base.html`, `sse-connect`), and a hidden page gives its back
-  only after 10 s (`schedrHiddenClose`, B25). With six streams open, the run page's reload
-  waits in the browser's queue: the change was announced 0.6 s after the database's write,
-  the page showed it 7.2 s after (Playwright, standalone on SQLite, a proxy timing arrivals).
-  Without the contention, write to page took 0.07-0.19 s. A second, conditional cause: with
-  `[database] change_notifications = false`, pages refresh only every 15 s (12.2 s measured).
-- **The fix** shares B32's (a decision for the user): one stream per browser shared by its
-  tabs, hidden pages closing theirs at once, or HTTP/2 to the UI.
 
 ## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
 

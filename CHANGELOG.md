@@ -7,6 +7,11 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Live pages share one stream per browser** (decision 175, B31 and B32): a SharedWorker
+  holds the UI's `/events` stream for all of a browser's schedr pages, so six live tabs no
+  longer leave clicks and page loads waiting for one of the browser's six connections; a
+  running try's log is polled instead of streamed. `/events` now carries every change as JSON
+  (each page decides which concern it). htmx's SSE extension is no longer shipped.
 - **Secrets** (M4.6): `secrets['path']['key']` (or `secrets.value('path#key')`),
   `secrets.<storage>[...]` and a whole secret `secrets['path']`, typed as the values they
   become (`str`, `dict[str, str]`), as task arguments, in `env=` and in t-strings

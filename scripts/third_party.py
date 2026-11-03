@@ -34,11 +34,7 @@ TARGETS = (
 )
 LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING|NOTICE|COPYRIGHT|UNLICENSE)", re.IGNORECASE)
 # Vendored into crates/schedr-ui/assets (PROJECT.md, Libraries); 0BSD asks for no notice.
-VENDORED = (
-    "htmx 2.0.11 (https://htmx.org), `crates/schedr-ui/assets/htmx.min.js`: 0BSD",
-    "htmx-ext-sse 2.2.4 (https://htmx.org/extensions/sse/), "
-    "`crates/schedr-ui/assets/htmx-ext-sse.js`: 0BSD",
-)
+VENDORED = ("htmx 2.0.11 (https://htmx.org), `crates/schedr-ui/assets/htmx.min.js`: 0BSD",)
 
 
 @dataclass(frozen=True)

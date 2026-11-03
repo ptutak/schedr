@@ -44,6 +44,35 @@ impl Style {
         classes.join(" ")
     }
 
+    /// The SGR parameters setting this style from the default (`1;31`; empty: the default).
+    fn sgr(self) -> String {
+        let mut codes = Vec::new();
+        for (attribute, code) in [(BOLD, 1), (DIM, 2), (ITALIC, 3), (UNDERLINE, 4)] {
+            if self.attributes & attribute != 0 {
+                codes.push(code);
+            }
+        }
+        let colour = |index: u8, normal: u16, bright: u16| {
+            let index = u16::from(index);
+            if index < 8 {
+                normal + index
+            } else {
+                bright + index - 8
+            }
+        };
+        if let Some(fg) = self.fg {
+            codes.push(colour(fg, 30, 90));
+        }
+        if let Some(bg) = self.bg {
+            codes.push(colour(bg, 40, 100));
+        }
+        codes
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
     /// Applies one SGR sequence's parameters.
     fn apply(&mut self, params: &str) {
         let codes: Vec<u16> = if params.is_empty() {
@@ -106,10 +135,31 @@ pub struct Converter {
 }
 
 impl Converter {
-    /// A converter at the start of a log.
+    /// A converter going on where another left off: in the style its [`Self::sgr`] gave
+    /// (anything but digits and `;` reads as the default).
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn resume(sgr: &str) -> Self {
+        let mut style = Style::default();
+        if !sgr.is_empty() && sgr.chars().all(|c| c.is_ascii_digit() || c == ';') {
+            style.apply(sgr);
+        }
+        Self {
+            style,
+            held: String::new(),
+        }
+    }
+
+    /// The style in force, as [`Self::resume`] takes it.
+    #[must_use]
+    pub fn sgr(&self) -> String {
+        self.style.sgr()
+    }
+
+    /// How many bytes of what was pushed wait for the rest of an escape sequence (not shown
+    /// yet).
+    #[must_use]
+    pub const fn held(&self) -> usize {
+        self.held.len()
     }
 
     /// The next part as HTML: its spans closed at its end, the style reopened at the next

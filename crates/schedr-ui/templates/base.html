@@ -8,7 +8,6 @@
 <!-- htmx swaps error answers in too (a panel that can't be shown says why); 204: nothing. -->
 <meta name="htmx-config" content='{"responseHandling": [{"code": "204", "swap": false}, {"code": "...", "swap": true}]}'>
 <script src="{{ page.base }}/assets/htmx-2.0.11.min.js" defer></script>
-<script src="{{ page.base }}/assets/htmx-ext-sse-2.2.4.js" defer></script>
 <script>
 // Before the page paints: the theme (the one chosen here before, else the system's), and the
 // browser's time zone in a cookie for the server, which shows times in UTC and in this zone.
@@ -64,51 +63,130 @@ function schedrAnswered(form, event) {
   }
   form.closest("dialog").close();
 }
-// A page hidden for a while closes its streams (B25): over plain HTTP/1.1 a browser opens at
-// most six connections to one host across its tabs, and a stream holds one for as long as it is
-// open, so tabs in the background would keep other pages from loading. Shown again, the page
-// reloads (its state is in its URL). Not while an action's dialog is open.
+// Live pages (decision 175). A browser opens at most six HTTP/1.1 connections to a host,
+// across its tabs, and a stream holds one for as long as it is open (B31, B32). So a browser
+// holds one stream, in a SharedWorker its live pages share (`assets/live.js`), handing each
+// change to every page, which reads its live parts again for those that concern it, at most
+// once a second. Without SharedWorker (e.g. Chrome on Android) each page holds its own stream,
+// given back after a while hidden (B25; shown again, the page reloads: its state is in its
+// URL; not while an action's dialog is open).
 var schedrHiddenClose = 10000;
 (function () {
-  var sources = [];
+  var LIVE = '[hx-trigger^="live:change"]';
+  var page = null;
+  var last = 0;
   var timer = null;
-  var closed = false;
-  document.addEventListener("htmx:sseOpen", function (event) {
-    sources.push(event.detail.source);
-  });
-  document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "hidden") {
-      timer = setTimeout(function () {
-        if (schedrDialogOpen() || sources.length === 0) return;
-        sources.forEach(function (source) { source.close(); });
-        sources = [];
-        closed = true;
-      }, schedrHiddenClose);
+  var heard = Date.now();
+  function wants(change) {
+    var only = function (name, value) { return !page[name] || page[name] === value; };
+    var kind = function (name) { return !page.kinds || page.kinds.split(",").indexOf(name) >= 0; };
+    // A refresh without a deployment is the worker's own (its stream dropped): every page's.
+    if (change.kind === "refresh") return !change.deployment || only("deployment", change.deployment);
+    if (!only("deployment", change.deployment)) return false;
+    switch (change.kind) {
+      case "run": return kind("run") && only("run", change.run) && only("dag", change.dag);
+      case "dag": return kind("dag") && !page.run && only("dag", change.dag);
+      case "workers": return kind("workers") && !page.run && !page.dag;
+      default: return false;
+    }
+  }
+  function read() {
+    document.querySelectorAll(LIVE).forEach(function (part) { htmx.trigger(part, "live:change"); });
+  }
+  // At most once a second; a change in between read when that second is up.
+  function changed() {
+    var wait = last + 1000 - Date.now();
+    if (wait <= 0) {
+      last = Date.now();
+      read();
+    } else if (timer === null) {
+      timer = setTimeout(function () { timer = null; last = Date.now(); read(); }, wait);
+    }
+  }
+  function receive(message) {
+    heard = Date.now();
+    if (message.type === "change" && wants(message.change)) changed();
+  }
+  function alone(base) {
+    var source = new EventSource(base + "/events?since=" + page.since, { withCredentials: true });
+    var hidden = null;
+    var closed = false;
+    source.addEventListener("change", function (event) {
+      receive({ type: "change", change: JSON.parse(event.data) });
+    });
+    source.addEventListener("ping", function () { heard = Date.now(); });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") {
+        hidden = setTimeout(function () {
+          if (schedrDialogOpen() || closed) return;
+          source.close();
+          closed = true;
+        }, schedrHiddenClose);
+        return;
+      }
+      clearTimeout(hidden);
+      if (closed) location.reload();
+    });
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    var events = document.body.dataset.events;
+    if (!events) return;
+    var url = new URL(events, location.href);
+    page = {};
+    url.searchParams.forEach(function (value, name) { page[name] = value; });
+    var base = url.pathname.replace(/\/events$/, "");
+    if (typeof SharedWorker === "undefined") {
+      alone(base);
       return;
     }
-    clearTimeout(timer);
-    if (closed) location.reload();
-  });
-})();
-// A live page's stream may be held back by a proxy that buffers it: when nothing (not even a
-// ping, every 15 s) has come for 30 s, its live parts are read again every 5 s.
-(function () {
-  var last = Date.now();
-  var seen = function () { last = Date.now(); };
-  document.addEventListener("htmx:sseOpen", function (event) {
-    seen();
-    ["ping", "change"].forEach(function (name) {
-      event.detail.source.addEventListener(name, seen);
+    var port = null;
+    function connect(since) {
+      try {
+        port = new SharedWorker(base + "/assets/live.js", { name: "schedr-live" }).port;
+      } catch (e) {
+        alone(base);
+        return;
+      }
+      port.onmessage = function (event) {
+        if (event.data.type === "alone") alone(base);
+        else receive(event.data);
+      };
+      port.start();
+      port.postMessage({ since: since });
+    }
+    connect(Number(page.since) || 0);
+    // Still here: the worker lets go of a page silent for 3 minutes (one that crashed).
+    setInterval(function () {
+      if (port) port.postMessage({ alive: true });
+    }, 30000);
+    window.addEventListener("pagehide", function () {
+      if (port) port.postMessage({ bye: true });
+    });
+    window.addEventListener("pageshow", function (event) {
+      // Back from the back-forward cache (its worker may have ended meanwhile): joined again,
+      // as a page made long ago, so its live parts are read at once.
+      if (event.persisted && port) connect(0);
     });
   });
+  // A stream held back by a proxy that buffers it: when nothing (not even a ping, every 15 s)
+  // has come for 30 s, the live parts are read every 5 s.
   setInterval(function () {
-    if (!document.body || !document.body.hasAttribute("sse-connect")) return;
-    if (Date.now() - last < 30000) return;
-    document.querySelectorAll('[hx-trigger^="sse:change"]').forEach(function (part) {
-      htmx.trigger(part, "sse:change");
-    });
+    if (page && Date.now() - heard >= 30000) read();
   }, 5000);
 })();
+// A log's next part not read (the UI didn't answer, or answered with an error: a proxy's 502
+// while the UI restarts, a lapsed sign-in's 401): kept, and read again a second later.
+document.addEventListener("htmx:sendError", function (event) {
+  var elt = event.detail && event.detail.elt;
+  if (elt && elt.matches && elt.matches(".log-tail")) htmx.trigger(elt, "retry");
+});
+document.addEventListener("htmx:beforeSwap", function (event) {
+  var elt = event.detail.requestConfig && event.detail.requestConfig.elt;
+  var status = event.detail.xhr ? event.detail.xhr.status : 0;
+  if (!elt || !elt.matches || !elt.matches(".log-tail") || status < 400) return;
+  event.detail.shouldSwap = false;
+  htmx.trigger(elt, "retry");
+});
 // While an action's dialog is open the live parts aren't read again (it would be swapped away
 // under the user); once it closes they are, for what changed meanwhile.
 function schedrDialogOpen() {
@@ -118,14 +196,14 @@ function schedrDialogOpen() {
 // once the dialog closes (below).
 document.addEventListener("htmx:beforeSwap", function (event) {
   var elt = event.detail.requestConfig && event.detail.requestConfig.elt;
-  if (schedrDialogOpen() && elt && elt.matches && elt.matches('[hx-trigger^="sse:change"]')) {
+  if (schedrDialogOpen() && elt && elt.matches && elt.matches('[hx-trigger^="live:change"]')) {
     event.detail.shouldSwap = false;
   }
 });
 document.addEventListener("close", function (event) {
   if (!event.target.matches || !event.target.matches("dialog.confirm")) return;
-  document.querySelectorAll('[hx-trigger^="sse:change"]').forEach(function (part) {
-    htmx.trigger(part, "sse:change");
+  document.querySelectorAll('[hx-trigger^="live:change"]').forEach(function (part) {
+    htmx.trigger(part, "live:change");
   });
 }, true);
 // A live part read again. A change during that read is owed: read once the read is done (its
@@ -133,7 +211,7 @@ document.addEventListener("close", function (event) {
 // read that fails leaves the part as it was, saying so, and the next change reads it again
 // (an error page swapped in would have removed the part, B143).
 (function () {
-  var LIVE = '[hx-trigger^="sse:change"]';
+  var LIVE = '[hx-trigger^="live:change"]';
   var reading = {};
   var owed = {};
   // Each read by its request: once its swap has replaced the part, its events no longer
@@ -161,7 +239,7 @@ document.addEventListener("close", function (event) {
     }
     note.textContent = "Not up to date: reading it again failed (" + why + "). It is read again with the next change.";
   }
-  document.addEventListener("sse:change", function (event) {
+  document.addEventListener("live:change", function (event) {
     var elt = event.target;
     if (elt.matches && elt.matches(LIVE) && reading[key(elt)]) owed[key(elt)] = true;
   }, true);
@@ -192,7 +270,7 @@ document.addEventListener("close", function (event) {
     var now = part(read.name);
     if (now === read.elt) {
       // Not replaced (the read failed): read again at once.
-      setTimeout(function () { htmx.trigger(now, "sse:change"); }, 0);
+      setTimeout(function () { htmx.trigger(now, "live:change"); }, 0);
     } else {
       // Replaced: once the new part is set up (htmx does that as it settles).
       settling[read.name] = true;
@@ -203,19 +281,10 @@ document.addEventListener("close", function (event) {
     Object.keys(settling).forEach(function (name) {
       var again = part(name);
       delete settling[name];
-      if (again) setTimeout(function () { htmx.trigger(again, "sse:change"); }, 0);
+      if (again) setTimeout(function () { htmx.trigger(again, "live:change"); }, 0);
     });
   });
 })();
-// A log tail moves its start past each part shown (the part's ID: where the log continues), so
-// a stream opened again after it closed doesn't append what is shown already (B145; a stream
-// that only dropped resumes by itself, sending the last ID).
-document.addEventListener("htmx:sseMessage", function (event) {
-  var log = event.target;
-  var next = event.detail && event.detail.lastEventId;
-  if (event.detail.type !== "log" || !next || !log.matches || !log.matches("pre.log[sse-connect]")) return;
-  log.setAttribute("sse-connect", log.getAttribute("sse-connect").replace(/([?&]from=)\d+/, "$1" + next));
-});
 function schedrTheme() {
   var root = document.documentElement;
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
@@ -223,7 +292,7 @@ function schedrTheme() {
 }
 </script>
 </head>
-<body{% if page.is_live() %} hx-ext="sse" sse-connect="{{ page.events }}"{% endif %}>
+<body{% if page.is_live() %} data-events="{{ page.events }}"{% endif %}>
 <header class="top">
   <a class="brand" href="{{ page.base }}/">schedr</a>
   <nav>

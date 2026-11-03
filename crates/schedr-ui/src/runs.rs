@@ -1496,10 +1496,16 @@ async fn log_tab<T: Transport>(
     let (text, trimmed) = log_end(&part.content);
     // Nothing from inside the log: its last line began before the last 1 MiB (where, the
     // panel can't know; the API shows no line from inside it).
+    // The style in force at its end carries into the followed part.
+    let mut colours = ansi::Converter::default();
     let html = if text.is_empty() && part.from > 0 && part.next >= part.size {
         LONG_LAST_LINE.to_owned()
     } else {
-        ansi::to_html(text)
+        colours.push(text)
+    };
+    let style = match colours.sgr() {
+        sgr if sgr.is_empty() => String::new(),
+        sgr => format!("&style={}", sgr.replace(';', "%3B")),
     };
     Ok(TabBody::Log {
         html,
@@ -1509,8 +1515,15 @@ async fn log_tab<T: Transport>(
         tries,
         // Followed while it runs, and to its end when it grew past this part and ended
         // between the two reads (B146).
-        tail: (part.running || part.next < part.size)
-            .then(|| format!("{panel_href}/tail?try={shown}&from={}{instance}", part.next)),
+        tail: (part.running || part.next < part.size).then(|| {
+            crate::live::tail_reader(
+                &format!(
+                    "{panel_href}/tail?try={shown}&from={}{instance}{style}",
+                    part.next
+                ),
+                false,
+            )
+        }),
     })
 }
 

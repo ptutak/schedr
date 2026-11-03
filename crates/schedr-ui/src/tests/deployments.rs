@@ -360,7 +360,7 @@ async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
     assert_eq!(attrs(&html, "#live", "hx-get"), ["/deployments"]);
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
-        ["sse:change, every 15s"]
+        ["live:change, every 15s"]
     );
     // An open panel stays open across a refresh, the page not moved (marked again, not
     // navigated to; the browser test checks it).

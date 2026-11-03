@@ -33,7 +33,7 @@ fn ansi_becomes_spans(#[case] text: &str, #[case] html: &str) {
 
 #[test]
 fn a_tails_parts_carry_the_colour_and_a_cut_escape() {
-    let mut converter = Converter::new();
+    let mut converter = Converter::default();
     assert_eq!(converter.push("plain \u{1b}"), "plain ");
     assert_eq!(converter.push("[31mred"), "<span class=\"fg-1\">red</span>");
     // Still red in the next part, until reset.
@@ -54,4 +54,27 @@ fn a_tails_parts_carry_the_colour_and_a_cut_escape() {
         converter.push("tle\u{7}x\u{1b}(Bz"),
         "<span class=\"fg-2 bold\">xz</span>"
     );
+}
+
+#[rstest]
+#[case("plain", "")]
+#[case("\u{1b}[1;31mx", "1;31")]
+#[case("\u{1b}[2;3;4;97;104mx", "2;3;4;97;104")]
+#[case("\u{1b}[31mx\u{1b}[39m", "")]
+fn a_tail_polled_part_by_part_resumes_the_colours(#[case] text: &str, #[case] sgr: &str) {
+    let mut converter = Converter::default();
+    converter.push(text);
+    assert_eq!(converter.sgr(), sgr);
+    // Resumed in a later request, the next part is shown as one converter would show it.
+    let mut whole = Converter::default();
+    whole.push(text);
+    assert_eq!(Converter::resume(sgr).push("next"), whole.push("next"));
+}
+
+#[test]
+fn a_cut_escape_is_held_for_the_next_read_and_junk_resumes_plain() {
+    let mut converter = Converter::default();
+    converter.push("a\u{1b}[3");
+    assert_eq!(converter.held(), 3);
+    assert_eq!(Converter::resume("1;<b>").push("x"), "x");
 }

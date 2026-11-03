@@ -123,7 +123,7 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             get(live::tail::<T>),
         )
         .route("/assets/style.css", get(assets::style))
-        .route(assets::SSE_PATH, get(assets::sse))
+        .route("/assets/live.js", get(assets::live))
         .route(assets::HTMX_PATH, get(assets::htmx))
         .route("/docs", get(docs::to_index))
         .route("/docs/", get(docs::index::<T>))

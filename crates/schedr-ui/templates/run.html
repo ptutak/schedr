@@ -6,7 +6,7 @@
 <!-- The live parts: read again together when the run changes (one request: the head swaps
      itself, the graph and the tasks with their commands swap out of band). -->
 <div id="action-results" class="results"></div>
-<div id="live-head"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live-head" hx-select-oob="#live-graph,#live-tasks" hx-swap="outerHTML"{% endif %}>
+<div id="live-head"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live-head" hx-select-oob="#live-graph,#live-tasks" hx-swap="outerHTML"{% endif %}>
 <h1>Run <span class="mono">{{ run.run_id }}</span> <span class="state {{ run.state }}">{{ run.state }}</span></h1>
 <p class="summary">{{ summary }}</p>
 {% if run.state == "queued" || run.state == "running" %}

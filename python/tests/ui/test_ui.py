@@ -6,7 +6,7 @@ import re
 import time
 from collections.abc import Callable
 
-from playwright.sync_api import BrowserContext, Page, Route, expect
+from playwright.sync_api import Browser, BrowserContext, Page, Route, expect
 
 
 def test_the_theme_toggle_switches_and_is_remembered(
@@ -63,6 +63,51 @@ def test_a_tasks_panel_opens_beside_the_graph_without_leaving_the_page(
     assert page.evaluate("window.notReloaded") is True
 
 
+def test_a_running_log_is_read_part_by_part_without_holding_a_connection(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # Decision 175: a running try's log is polled, each answer the next part and the element
+    # reading the one after it (the tail's answers faked here; the UI's are its unit tests').
+    page.goto(f"{standalone['url']}/d/default/runs/{standalone['run']}?task=load&tab=logs")
+    log = page.locator("#task-panel pre.log")
+    expect(log).to_contain_text("loading 2 customers")
+    answers = {
+        "from=1": 'step 2\n<span class="log-tail" hx-get="/fake/tail?from=2" '
+        'hx-trigger="load delay:0ms, retry delay:1s" hx-target="this" hx-swap="outerHTML"></span>',
+        "from=2": '<span class="fg-1">done</span>\n',
+    }
+    asked: list[str] = []
+
+    def answer(route: Route) -> None:
+        part = route.request.url.rsplit("?", 1)[1]
+        asked.append(part)
+        if part == "from=1" and asked.count(part) == 1:
+            route.abort()  # the UI didn't answer: read again a second later
+            return
+        if part == "from=2" and asked.count(part) == 1:
+            # An error answer (a proxy while the UI restarts) is kept out, and read again.
+            route.fulfill(status=502, content_type="text/html", body="<h1>502 Bad Gateway</h1>")
+            return
+        route.fulfill(content_type="text/html", body=answers[part])
+
+    page.route("**/fake/tail?*", answer)
+    page.evaluate(
+        """() => {
+            const log = document.querySelector("#task-panel pre.log");
+            log.insertAdjacentHTML("beforeend",
+                '<span class="log-tail" hx-get="/fake/tail?from=1" '
+                + 'hx-trigger="load delay:0ms, retry delay:1s" hx-target="this" '
+                + 'hx-swap="outerHTML"></span>');
+            htmx.process(log.lastElementChild);
+        }"""
+    )
+    expect(log).to_contain_text("step 2\ndone\n")
+    expect(log.locator(".fg-1")).to_have_text("done")
+    expect(log.locator(".log-tail")).to_have_count(0)
+    expect(log).not_to_contain_text("Bad Gateway")
+    assert asked == ["from=1", "from=1", "from=2", "from=2"]
+
+
 def test_the_runs_list_shows_the_run_and_links_it(page: Page, standalone: dict[str, str]) -> None:
     page.goto(standalone["url"] + "/runs")
     # Unpaused, the DAG has its scheduled runs too: the one triggered is among them.
@@ -84,7 +129,7 @@ def test_a_new_run_appears_on_its_dags_page_without_a_reload(
     # Live: the page follows its DAG's changes.
     # (Its stream also says when the page was made: a change after it is sent at once, B144.)
     expect(page.locator("body")).to_have_attribute(
-        "sse-connect", re.compile(rf"^/events\?deployment=default&dag={dag}&since=\d+$")
+        "data-events", re.compile(rf"^/events\?deployment=default&dag={dag}&since=\d+$")
     )
     trigger("2026-10-16T01:00:00Z")
     new_row = page.locator("table.runs tbody td", has_text="2026-10-16 01:00 UTC").first
@@ -202,16 +247,55 @@ def _set_visibility(page: Page, state: str) -> None:
     )
 
 
-def test_hidden_pages_give_their_connections_back_and_reload_when_shown(
-    context: BrowserContext, standalone: dict[str, str]
+def test_a_browsers_live_pages_share_one_stream_and_leave_its_connections_free(
+    context: BrowserContext, standalone: dict[str, str], trigger: Callable[[str], None]
 ) -> None:
-    # Six live pages hold the six connections a browser opens to one host over HTTP/1.1 (B25).
+    # B31, B32: a browser opens six HTTP/1.1 connections to a host, and each live page held
+    # one. Its pages now share one stream (decision 175): eight live pages, and a page still
+    # loads at once.
+    url, dag = standalone["url"], standalone["dag"]
+    tabs = []
+    for _ in range(8):
+        tab = context.new_page()
+        tab.goto(f"{url}/d/default/dags/{dag}")
+        expect(tab.locator("table.runs tbody tr").first).to_be_visible()
+        tabs.append(tab)
+    started = time.monotonic()
+    another = context.new_page()
+    another.goto(f"{url}/runs", timeout=5_000)
+    expect(another.locator("table")).to_be_visible()
+    assert time.monotonic() - started < 2, time.monotonic() - started
+    # Each of them still hears of a change concerning it.
+    trigger("2026-10-19T01:00:00Z")
+    for tab in tabs:
+        expect(
+            tab.locator("table.runs tbody td", has_text="2026-10-19 01:00 UTC").first
+        ).to_be_visible(timeout=5_000)
+    # The last page of the UI closed, the next opens the stream again.
+    for tab in [*tabs, another]:
+        tab.close()
+    page = context.new_page()
+    page.goto(f"{url}/d/default/dags/{dag}")
+    expect(page.locator("table.runs tbody tr").first).to_be_visible()
+    trigger("2026-10-20T01:00:00Z")
+    expect(
+        page.locator("table.runs tbody td", has_text="2026-10-20 01:00 UTC").first
+    ).to_be_visible(timeout=15_000)
+
+
+def test_without_shared_workers_hidden_pages_give_their_connections_back(
+    browser: Browser, standalone: dict[str, str]
+) -> None:
+    # Where a browser has no SharedWorker, each page holds its own stream, given back after a
+    # while hidden (B25), and reloads when shown again (its state is in its URL).
+    context = browser.new_context()
+    context.add_init_script("delete window.SharedWorker")
     live = f"{standalone['url']}/d/default/dags/{standalone['dag']}"
     tabs = []
     for _ in range(6):
         tab = context.new_page()
         tab.goto(live)
-        expect(tab.locator("body")).to_have_attribute("sse-connect", re.compile("/events"))
+        expect(tab.locator("table.runs tbody tr").first).to_be_visible()
         tab.evaluate("schedrHiddenClose = 100")
         tabs.append(tab)
     for tab in tabs:
@@ -220,11 +304,10 @@ def test_hidden_pages_give_their_connections_back_and_reload_when_shown(
     seventh = context.new_page()
     seventh.goto(f"{standalone['url']}/runs", timeout=10_000)
     expect(seventh.locator("table")).to_be_visible()
-    # Shown again, a page reloads (its state is in its URL) and follows its changes again.
     tabs[0].evaluate("window.notReloaded = true")
     _set_visibility(tabs[0], "visible")
-    expect(tabs[0].locator("body")).to_have_attribute("sse-connect", re.compile("/events"))
     tabs[0].wait_for_function("window.notReloaded === undefined")
+    context.close()
 
 
 def test_a_live_read_answered_while_a_dialog_is_open_doesnt_replace_it(
@@ -239,7 +322,7 @@ def test_a_live_read_answered_while_a_dialog_is_open_doesnt_replace_it(
 
     # The page's next live read is held in flight (as on a slow network) ...
     page.route(url, hold)
-    page.evaluate("""htmx.trigger(document.getElementById("live"), "sse:change")""")
+    page.evaluate("""htmx.trigger(document.getElementById("live"), "live:change")""")
     page.wait_for_function("() => document.querySelector('#live.htmx-request') !== null")
     assert len(held) == 1
     # ... while the user opens an action's dialog; then the read's answer arrives.
@@ -288,13 +371,13 @@ def test_a_deployment_nodes_panel_opens_on_click_and_stays_open_across_a_refresh
     expect(panel.locator("pre.config")).to_contain_text("[worker]")
     # A live refresh replaces the panels: the open one is open again.
     with page.expect_response(re.compile(r"/deployments$")):
-        page.evaluate("htmx.trigger(document.getElementById('live'), 'sse:change')")
+        page.evaluate("htmx.trigger(document.getElementById('live'), 'live:change')")
     expect(panel.locator(".panel-head h2")).to_contain_text("Worker ")
     # A refresh leaves where the page is scrolled to alone (it jumped to the open panel).
     page.set_viewport_size({"width": 1200, "height": 300})
     page.evaluate("window.scrollTo(0, 0)")
     with page.expect_response(re.compile(r"/deployments$")):
-        page.evaluate("htmx.trigger(document.getElementById('live'), 'sse:change')")
+        page.evaluate("htmx.trigger(document.getElementById('live'), 'live:change')")
     page.wait_for_function("() => document.querySelector('#live.htmx-request') === null")
     page.wait_for_timeout(300)
     assert page.evaluate("window.scrollY") == 0

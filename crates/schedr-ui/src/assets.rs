@@ -24,20 +24,18 @@ pub async fn htmx() -> impl IntoResponse {
     )
 }
 
-/// htmx's SSE extension, vendored (see PROJECT.md, Libraries).
-pub const SSE: &str = include_str!("../assets/htmx-ext-sse.js");
+/// The live pages' `SharedWorker` (decision 175): it holds a browser's one stream of changes.
+/// Not cached without asking (its URL, the worker's identity, stays the same).
+pub const LIVE: &str = include_str!("../assets/live.js");
 
-/// Where the SSE extension is served (its version in the name).
-pub const SSE_PATH: &str = "/assets/htmx-ext-sse-2.2.4.js";
-
-/// `GET /assets/htmx-ext-sse-<version>.js`.
-pub async fn sse() -> impl IntoResponse {
+/// `GET /assets/live.js`.
+pub async fn live() -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::CACHE_CONTROL, "no-cache"),
         ],
-        SSE,
+        LIVE,
     )
 }
 

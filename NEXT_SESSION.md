@@ -4,21 +4,32 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-03, day): M4.6e done; M4.6f, then M4.7
+## State (2026-11-03, day): M4.6f done; M4.7a in progress
 
 - **The user's standing instruction:** continue until the end of M4.7, each sub-step
   reviewed, checked, committed and pushed; stop only for the user's decisions.
-- **M4.6e committed** (decisions 176-178, B155 closed): secrets typed as their values
-  (`secrets['etl/db']['password']`, `.get(key, fallback)`, `secrets.value('path#key')`,
-  `task_ctx.secret(path, key)` / `secret_value`), `schedr.text(t"...")`; the guide warns a
-  fallback is never secret (the user asked). Reviewed by Codex (3 findings, all fixed: a
-  proxy's 404 page took the fallback; a `text(t"...")` default wasn't recorded; stale design
-  examples).
-- **M4.6f in progress** (decision 175, B31/B32): one stream per browser in a **SharedWorker**
-  (`crates/schedr-ui/assets/live.js`; the user chose it over Web Locks on 2026-11-03, since
-  Web Locks need https or localhost), the server's `/events` unfiltered JSON, pages filter;
-  the log tail polled; the SSE extension removed. Left: clippy, PROJECT.md 175's text and
-  the Libraries row, the review, `make check`.
+- **M4.6e committed** (decisions 176-178, B155 closed): secrets typed as their values; the
+  guide warns a fallback is never secret.
+- **M4.6f committed** (decision 175, B31/B32 closed): one stream per browser in a
+  **SharedWorker** (`crates/schedr-ui/assets/live.js`; the user chose it over Web Locks, which
+  need https or localhost), the server's `/events` unfiltered JSON, each page filtering; the
+  log tail polled; the SSE extension removed. Reviewed by Grok (5 findings, all fixed: an
+  error answer ended the log tail; the colour at the panel's cut was lost; a crashed page kept
+  the worker's stream, now let go after 3 silent minutes; a `refresh` of another deployment
+  read by every page; stale PROJECT.md text). B156 logged (the command poll's same shape).
+- **M4.7a in progress** (decisions 174, 179, 180, the user's 2026-11-03): `@connection`
+  functions recorded by the parser per root; the agent renders a connection for the task
+  (Python `with name():` over `connection_get`, commands `schedr task-ctx connection get`);
+  **a task opens only what it declares** (`@task(connections=[...])`, operators too), each
+  rendered before it starts; values are secrets and plain values only (no `dag_ctx`); a
+  declared name the folder lacks is a warning on the DAG's page (computed on read from the
+  root's current parse), checked by `schedr dags check` over a folder, and fails the attempt
+  before its code runs; doubles `task_context(connections=)` and `run_dag(connections=)`
+  (`dags test --connection`). Built and tested end to end; left: PROJECT.md 179/180 text,
+  `make schema`, the guide pages, the review (Codex's turn), `make check`, commit.
+- **Sandboxes:** Grok's and Codex's `sandbox.sh` give `uv` a cache of its own
+  (`~/.cache/grok-uv`, `~/.cache/codex-uv`; Codex's also in its `writable_roots`): `uv` failed
+  with a read-only `~/.cache/uv` (the user saw it in a side agent's log).
 
 ## State (2026-11-03): M4.6 done
 

@@ -324,7 +324,7 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
     // Its live part waits while a dialog is open.
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
-        ["sse:change[!schedrDialogOpen()]"]
+        ["live:change[!schedrDialogOpen()]"]
     );
     // A paused one offers Unpause instead.
     let mut paused = etl();
@@ -452,7 +452,7 @@ async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
     // The dialogs wait out the live reloads.
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
-        ["sse:change[!schedrDialogOpen()]"]
+        ["live:change[!schedrDialogOpen()]"]
     );
 }
 

@@ -313,10 +313,7 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
     );
     assert_eq!(
         attrs(&html, "script[src]", "src"),
-        [
-            "/assets/htmx-2.0.11.min.js",
-            "/assets/htmx-ext-sse-2.2.4.js"
-        ]
+        ["/assets/htmx-2.0.11.min.js"]
     );
     // Live: it follows its run, and reads its live parts again (without the panel) on a change.
     assert_eq!(events_followed(&html), "/events?deployment=etl&run=r2");
@@ -324,7 +321,7 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
     // Every change counts: a change during a read is read again after it.
     assert_eq!(
         attrs(&html, "#live-head", "hx-trigger"),
-        ["sse:change[!schedrDialogOpen()]"]
+        ["live:change[!schedrDialogOpen()]"]
     );
     assert_eq!(attrs(&html, "#live-head", "hx-sync"), ["this:queue last"]);
     assert_eq!(
@@ -349,7 +346,7 @@ async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
     assert_eq!(attrs(&html, ".panel-live", "hx-sync"), ["#task-panel:drop"]);
     assert_eq!(
         attrs(&html, ".panel-live", "hx-trigger"),
-        ["sse:change[!schedrDialogOpen()]"]
+        ["live:change[!schedrDialogOpen()]"]
     );
     let tab_syncs = attrs(&html, ".tabs a.tab", "hx-sync");
     assert_eq!(tab_syncs, ["#task-panel:replace"; 4]);
@@ -891,8 +888,37 @@ async fn a_log_that_grew_past_its_part_before_its_attempt_ended_is_followed_to_i
     )
     .await;
     assert_eq!(
-        attrs(&html, "pre.log", "sse-connect"),
+        attrs(&html, "pre.log .log-tail", "hx-get"),
         ["/d/etl/runs/r2/tasks/load/tail?try=2&from=262144"]
+    );
+}
+
+#[tokio::test]
+async fn a_followed_log_goes_on_in_the_colour_in_force_where_the_panel_ends() {
+    let mut answers = failed_run();
+    answers.retain(|(path, _, _)| !path.contains("/log?"));
+    answers.push((
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=4",
+        200,
+        log(0, 200_000, "star"),
+    ));
+    let mut part = log(0, 300_000, "\u{1b}[1;31mred and bold\n");
+    part["next"] = json!(262_144);
+    answers.push((
+        "/api/v1/runs/r2/tasks/load/attempts/2/log?from=0&limit=1048576",
+        200,
+        part,
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/load?tab=logs",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(
+        attrs(&html, "pre.log .log-tail", "hx-get"),
+        ["/d/etl/runs/r2/tasks/load/tail?try=2&from=262144&style=1%3B31"]
     );
 }
 

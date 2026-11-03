@@ -141,7 +141,7 @@ fn texts(html: &str, selector: &str) -> Vec<String> {
 /// The page's event stream, without when the page was made (checked to be there: a change
 /// after it is sent as the stream opens).
 fn events_followed(html: &str) -> String {
-    let url = attrs(html, "body", "sse-connect")
+    let url = attrs(html, "body", "data-events")
         .pop()
         .expect("a live page");
     let (followed, since) = url.rsplit_once("since=").expect("its time");
@@ -188,12 +188,12 @@ async fn the_dags_are_listed_by_id_with_their_state_and_schedule() {
     );
     assert!(html.contains("prefers-color-scheme: dark"));
     // Live parts: a change during a read is read again after it (B141, B142), a failed read
-    // leaves the part, saying so (B143); a log tail moves its start past what it showed
-    // (B145). Shown in a browser (headless Chromium, the vendored htmx) when fixed.
+    // leaves the part, saying so (B143); the browser's tabs share one stream (decision 175).
+    // Shown in a browser (headless Chromium, the vendored htmx) when fixed.
     for hook in [
         "owed[read.name]",
         "event.detail.shouldSwap = false;\n    stale(elt",
-        "\"sse-connect\", log.getAttribute(\"sse-connect\").replace(",
+        "new SharedWorker(base + \"/assets/live.js\"",
     ] {
         assert!(html.contains(hook), "{hook}");
     }

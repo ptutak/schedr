@@ -2,7 +2,7 @@
 {% block title %}Deployments · schedr{% endblock %}
 {% block content %}
 <h1>Deployments</h1>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change, every 15s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change, every 15s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 <p class="dim">Everything this UI shows. Each frame is a deployment, each rectangle around nodes a process (in standalone one for all of them). Click a node for its panel beside the graph: its facts, its problems and its configuration. Secrets are never shown: each node masks its own configuration before it leaves its process.</p>
 <p class="legend dim">
   <svg width="28" height="10" aria-hidden="true"><line class="edge http" x1="0" y1="5" x2="28" y2="5"></line></svg> HTTP

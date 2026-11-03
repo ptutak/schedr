@@ -1038,7 +1038,8 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     changed"); the browser then fetches the details through the normal API.
   - A comment line every ~15 s keeps proxies (e.g. the OpenShift router) from closing idle
     streams; reconnection is built into SSE.
-  - **Live log tail** is SSE too: the webserver relays the worker's tail stream (see Task logs).
+  - **Live log tail** is polled by the browser, a part a second, the webserver reading the
+    worker's range endpoint for it (decision 175; see Task logs).
   - Standalone: the webserver polls the database instead of listening.
 - **The user CLI uses the webserver's API**, the same one as the UI: one API, one place for
   authentication and permissions. Commands (see Runs: manual runs, backfill and pausing):
@@ -1165,8 +1166,8 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   Jinja2: a second runtime and image, the API's types duplicated, template errors at run
   time). Pages are HTML rendered from
   Rust templates (`askama`, checked at compile time); **htmx** adds the interactive parts
-  (buttons, filters, partial refreshes) and, with its SSE extension, live updates and the log
-  tail.
+  (buttons, filters, partial refreshes) and live updates (driven by a small script of our
+  own since decision 175; its SSE extension before).
   - **No JavaScript build:** no Node.js / npm, nothing new in CI. htmx and a small pan/zoom
     helper for the graph are vendored single files; all assets are **embedded in the `schedr`
     binary**, so `schedr ui` (and standalone) serves everything itself.
@@ -1181,9 +1182,10 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     **Two themes, light and dark**, as CSS variables defined once for each, switched by a
     toggle in a corner and remembered in the browser; before a choice, the system's
     preference.
-  - **The live log tail** (decision 23A, 2026-10-27): the server polls the worker's range
-    endpoint (`from`, about once a second while the attempt runs) and relays the new bytes to
-    the browser over SSE; no new worker endpoint. Not chosen: a streaming mode on the worker's
+  - **The live log tail** (decision 23A, 2026-10-27): the server reads the worker's range
+    endpoint (`from`) for the new bytes; no new worker endpoint. Since decision 175 the
+    browser asks for each part (about once a second while the attempt runs) instead of the
+    server sending them over SSE. Not chosen: a streaming mode on the worker's
     endpoint (a long-lived mTLS stream per viewer to each worker).
   - **No sessions of our own** (decision 24A, 2026-10-27): `basic` uses the browser's Basic
     auth, `proxy_header` the proxy's session; every action from the UI (a POST) must carry a
@@ -1256,27 +1258,36 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     when changes can't be followed (notifications off, a pooler without
     `notifications_url`) it sends `refresh` every 5 s, and a client that fell behind gets
     `refresh`. The UI relays one stream per deployment (reopened after 1 s, doubling to 30
-    s, with a `refresh` once back) and gives each page its own stream (`/events?…`) of
-    `change` events for what it shows; htmx reloads the page's live parts (one request; the
-    run page's head, graph and tasks swap together, its panel on its own, the log tab
-    excepted). A running try's log is tailed by the UI (`…/tail?try=&from=`): read every
-    second from where the page's text ended, a full 64 KiB part read again at once, sent as
-    `log` events until the attempt has ended and all of it is sent (`end`). Not chosen: the
+    s, with a `refresh` once back) and serves one unfiltered stream (`/events`) of every
+    change, held once per browser by a shared worker, each page choosing the changes that
+    concern it (decision 175); htmx reloads the page's live parts (one request; the run
+    page's head, graph and tasks swap together, its panel on its own, the log tab excepted).
+    A running try's log is followed by the page (`…/tail?try=&from=`, decision 175): each
+    answer is the next part (up to 1 MiB) and the element asking for the one after it, a
+    second later (at once when the part was full), until the attempt has ended and all of it
+    is shown. Not chosen: the
     master sending the changes itself (every write path would have to); a `changes` table
     on Postgres too (writes in the master's hot path).
   - **175. One live stream per browser** (the user's, 2026-11-03, on B31 and B32: a browser
     opens at most six HTTP/1.1 connections to a host, and each live page held one, so a
     click or a page's reload waited in the browser's queue, 7-10 s in Codex's reproduction).
-    The first tab takes a Web Lock (`navigator.locks`) and holds the only stream, handing
-    each change to the other tabs over a `BroadcastChannel`; when it closes another tab
-    takes the lock, opens the stream and refreshes. The shared stream carries the
-    deployments' changes unfiltered (an ID each), and each tab decides what concerns its
-    page. A running try's log tail is read by polling (about once a second while the attempt
+    A **SharedWorker** (`assets/live.js`), started by the browser's first live page of the
+    UI and ended with its last, holds the only stream and hands each change to every page
+    (the user's, 2026-11-03, over the Web Lock + `BroadcastChannel` first written here: Web
+    Locks need a secure context, so on `http://` to another host every tab would hold its
+    own stream again). A page joining later gets the changes since it was made (the worker
+    keeps a minute's), or `refresh` when it doesn't know; a stream opened again sends every
+    page `refresh`. A browser without SharedWorker (Chrome on Android) gives each page its own
+    stream, given back after 10 s hidden (B25). The shared stream carries the
+    deployments' changes unfiltered (JSON each), and each page decides which concern it.
+    A running try's log tail is read by polling (about once a second while the attempt
     runs), holding no connection. HTTP/2 through a TLS ingress lifts the limit too: the
     deployment guide says so. Not chosen: hidden tabs closing their stream at once (every tab
     switch reloads the page, and six visible pages still fill the pool); HTTP/2 alone (only
     over TLS, never on a local `http://` standalone); a log stream per log page (three
-    running logs, three connections).
+    running logs, three connections); a localStorage lease for plain HTTP (background tabs'
+    timers are throttled, so two tabs may briefly both stream). htmx's SSE extension is
+    dropped: nothing uses it any more.
   - **How M3.4 takes actions** (Claude's, 2026-10-28, within 35A and 24A): each action is a
     button opening a `<dialog>` that says what will happen (pause offers "also cancel its
     queued and running runs"; trigger takes the moment in `--for`'s forms, previewed in UTC
@@ -7426,7 +7437,6 @@ Rust crates chosen for the implementation (versions pinned when added):
 | REST | `axum` | tokio-native, the same stack as `tonic` |
 | web UI templates | `askama` 0.16.1 | HTML templates checked at compile time, escaping by default (M3.1, decision 26A) |
 | UI interactions | htmx 2.0.11 (2026-09-22, 0BSD), vendored as `crates/schedr-ui/assets/htmx.min.js` | partial updates without a JavaScript build (decision 26A); from npm's tarball, its sha512 integrity checked; the file's sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (M3.2b) |
-| live updates in the UI | htmx's SSE extension, `htmx-ext-sse` 2.2.4 (2025-10-18, 0BSD), vendored as `crates/schedr-ui/assets/htmx-ext-sse.js` (its readable `sse.js`) | server-sent events into htmx triggers and swaps (M3.3, 34A, 23A); from npm's tarball, its sha512 integrity checked; the file's sha256 `3b5992a541619babefc4c169505af474df5c3039da51e59b96ccf9241ecd61d2` |
 | password hashes (`basic` auth) | `bcrypt` 0.19.3 (2026-07-27), `base64` 0.23.1 (already in the lock, for Basic credentials) | the hashes PROJECT.md's `basic` mode keeps in a Secret; verification only (M3.5); brings blowfish 0.10.0, cipher 0.5.2, inout 0.2.5 (a 9-day patch on 0.2: meets the library-age rule) |
 | making the users file (`scripts/users-file.py`) | Python `bcrypt` 5.0.0 (2025-09-25), the script's own inline dependency (`uv run --script`), not the package's | the `name:bcrypt-hash` lines and a Secret holding them, from names with passwords asked for or `name:password` lines on stdin (the user's request, 2026-10-28); no htpasswd needed |
 | HTML in tests | `scraper` 0.29.0 (dev only) | the UI's pages read through a real HTML parser, by CSS selectors (M3.1) |

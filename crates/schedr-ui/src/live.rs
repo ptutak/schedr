@@ -6,22 +6,23 @@
 //!   following that deployment; when the stream ends or can't be opened it tries again (after
 //!   1 s, doubling to 30 s), and once it is back sends `refresh`, since anything may have
 //!   changed meanwhile.
-//! - **`GET /events`:** a page's own stream: a `change` event whenever something it shows may
-//!   have changed (its run, its DAG, a list's DAGs or runs, the workers), its data the
-//!   deployment's name; htmx then reloads the page's live parts (`hx-trigger="sse:change"`).
-//! - **The log tail:** `GET /d/<deployment>/runs/<run>/tasks/<task>/tail?try=&from=` reads
-//!   the log from `from` about once a second while the attempt runs and sends what is new as a
-//!   `log` event (HTML, colours converted), then `end`.
+//! - **`GET /events`:** a browser's one stream (decision 175: its pages share it through a
+//!   `SharedWorker`, `assets/live.js`): every deployment's changes, each page deciding which
+//!   concern it and reading its live parts again (`hx-trigger="live:change"`).
+//! - **The log tail:** `GET /d/<deployment>/runs/<run>/tasks/<task>/tail?try=&from=` answers
+//!   the log's next part (HTML, colours converted) and the element reading the one after it,
+//!   polled about once a second while the attempt runs (no connection held).
 
 use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::Extension;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{OriginalUri, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use schedr_client::{ClientError, ServerEvent, Transport};
@@ -29,6 +30,7 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::page::prefix;
 use crate::{Ui, ansi};
 
 #[cfg(test)]
@@ -187,56 +189,43 @@ async fn relay<T: Transport + Send + Sync>(
     }
 }
 
-/// What a page follows (`GET /events`'s query).
+/// `GET /events`'s query.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Follow {
-    /// Only this deployment (every one when absent).
-    #[serde(default)]
-    pub deployment: Option<String>,
-    /// Only this run.
-    #[serde(default)]
-    pub run: Option<String>,
-    /// Only this DAG (its runs too).
-    #[serde(default)]
-    pub dag: Option<String>,
-    /// What kinds of change matter, comma-separated: `run`, `dag`, `workers` (every kind when
-    /// absent).
-    #[serde(default)]
-    pub kinds: Option<String>,
-    /// When the page was made, in milliseconds since the epoch: a change after it is sent as
-    /// soon as the stream opens (one the page may not show, B144).
+    /// When the page opening the stream was made, in milliseconds since the epoch: a
+    /// deployment changed after it is sent a `refresh` as soon as the stream opens (one the
+    /// page may not show, B144).
     #[serde(default)]
     pub since: Option<i64>,
 }
 
-impl Follow {
-    /// Whether `change` may change what the page shows.
-    #[must_use]
-    pub fn wants(&self, change: &Change) -> bool {
-        let kind = |name: &str| {
-            self.kinds
-                .as_deref()
-                .is_none_or(|kinds| kinds.split(',').any(|k| k == name))
+impl Change {
+    /// The change as a stream sends it: what changed, in which deployment, and when it was
+    /// relayed (milliseconds since the epoch, this UI's clock, as a page's `since`).
+    fn json(&self, deployment: &str, at: i64) -> String {
+        let (kind, run, dag) = match self {
+            Self::Run { run_id, dag_id } => ("run", Some(run_id), Some(dag_id)),
+            Self::Dag { dag_id } => ("dag", None, Some(dag_id)),
+            Self::Workers => ("workers", None, None),
+            Self::Refresh => ("refresh", None, None),
         };
-        match change {
-            Change::Refresh => true,
-            Change::Run { run_id, dag_id } => {
-                kind("run")
-                    && self.run.as_ref().is_none_or(|r| r == run_id)
-                    && self.dag.as_ref().is_none_or(|d| d == dag_id)
-            }
-            Change::Dag { dag_id } => {
-                kind("dag") && self.run.is_none() && self.dag.as_ref().is_none_or(|d| d == dag_id)
-            }
-            Change::Workers => kind("workers") && self.run.is_none() && self.dag.is_none(),
-        }
+        serde_json::json!({
+            "deployment": deployment,
+            "kind": kind,
+            "run": run,
+            "dag": dag,
+            "at": at,
+        })
+        .to_string()
     }
 }
 
-/// `GET /events`: a `change` event (its data the deployment's name) whenever what the page
-/// follows may have changed, at most one a [`COALESCE`] per deployment (the last one never
-/// dropped), and a `ping` every [`KEEP_ALIVE`] (the page polls when even those stop coming:
-/// a proxy buffering the stream).
+/// `GET /events`: one browser's stream of every deployment's changes (decision 175: its tabs
+/// share it, and each page decides which concern it). First a `hello` (now, in milliseconds
+/// since the epoch), then a `change` event for each change (JSON: `deployment`, `kind`
+/// `run`/`dag`/`workers`/`refresh`, `run`, `dag`, `at`), the same change at most once a
+/// [`COALESCE`] per deployment (never dropped: sent when that time is up), and a `ping` every
+/// [`KEEP_ALIVE`] (a page polls when even those stop coming: a proxy buffering the stream).
 pub async fn events<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     Extension(relays): Extension<Arc<Relays>>,
@@ -245,15 +234,12 @@ pub async fn events<T: Transport + Send + Sync + 'static>(
     let Ok(Query(follow)) = follow else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let (sender, receiver) = mpsc::channel::<Result<Event, Infallible>>(16);
+    let (sender, receiver) = mpsc::channel::<Result<Event, Infallible>>(64);
+    // Sent before any change: the channel is empty.
+    let _ = sender.try_send(Ok(Event::default()
+        .event("hello")
+        .data(now_millis().to_string())));
     for (index, deployment) in ui.deployments.iter().enumerate() {
-        if follow
-            .deployment
-            .as_ref()
-            .is_some_and(|d| *d != deployment.name)
-        {
-            continue;
-        }
         let changes = relays.subscribe(&ui, index);
         let missed = follow
             .since
@@ -261,55 +247,71 @@ pub async fn events<T: Transport + Send + Sync + 'static>(
         tokio::spawn(forward(
             (changes, missed),
             sender.clone(),
-            follow.clone(),
             deployment.name.clone(),
         ));
     }
     streamed(receiver)
 }
 
-/// Hands one deployment's changes that `follow` wants to a page's stream until the page goes
-/// away: the first at once, then at most one every [`COALESCE`], a change in between sent when
-/// that time is up (htmx then reloads once, and never misses the last change).
+/// Hands one deployment's changes to a browser's stream until it goes away: a change at once,
+/// the same change again at most once a [`COALESCE`] (sent when that time is up, so the last is
+/// never missed).
 async fn forward(
     (mut changes, missed): (broadcast::Receiver<Change>, bool),
     sender: mpsc::Sender<Result<Event, Infallible>>,
-    follow: Follow,
     deployment: String,
 ) {
-    let mut last_sent: Option<tokio::time::Instant> = None;
-    // A change the page may have missed: sent at once.
-    let mut pending = missed;
+    // When each change (still held back, or not) was last sent.
+    let mut sent: Vec<(Change, tokio::time::Instant)> = Vec::new();
+    // Changes held back, in order, each once.
+    let mut held: Vec<Change> = Vec::new();
+    if missed {
+        held.push(Change::Refresh);
+    }
     let mut pings = tokio::time::interval_at(tokio::time::Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     loop {
-        let due = last_sent.map_or_else(tokio::time::Instant::now, |at| at + COALESCE);
-        let send = tokio::select! {
-            () = sender.closed() => return,
-            _ = pings.tick() => Some(Event::default().event("ping").data("")),
-            () = tokio::time::sleep_until(due), if pending => {
-                pending = false;
-                last_sent = Some(tokio::time::Instant::now());
-                Some(Event::default().event("change").data(deployment.as_str()))
+        let now = tokio::time::Instant::now();
+        sent.retain(|(_, at)| now.duration_since(*at) < COALESCE);
+        // Those held back whose time is up, and when the next one's is.
+        let (due, waiting): (Vec<Change>, Vec<Change>) = held
+            .drain(..)
+            .partition(|change| !sent.iter().any(|(c, _)| c == change));
+        held = waiting;
+        for change in due {
+            sent.push((change.clone(), now));
+            let event = Event::default()
+                .event("change")
+                .data(change.json(&deployment, now_millis()));
+            if sender.send(Ok(event)).await.is_err() {
+                return;
             }
+        }
+        let next = held
+            .iter()
+            .filter_map(|change| sent.iter().find(|(c, _)| c == change))
+            .map(|(_, at)| *at + COALESCE)
+            .min();
+        let ping = tokio::select! {
+            () = sender.closed() => return,
+            _ = pings.tick() => true,
+            () = tokio::time::sleep_until(next.unwrap_or(now)), if next.is_some() => false,
             change = changes.recv() => {
                 let change = match change {
                     Ok(change) => change,
                     Err(broadcast::error::RecvError::Lagged(_)) => Change::Refresh,
                     Err(broadcast::error::RecvError::Closed) => return,
                 };
-                if !follow.wants(&change) {
-                    None
-                } else if last_sent.is_some_and(|at| at.elapsed() < COALESCE) {
-                    pending = true;
-                    None
-                } else {
-                    last_sent = Some(tokio::time::Instant::now());
-                    Some(Event::default().event("change").data(deployment.as_str()))
+                if !held.contains(&change) {
+                    held.push(change);
                 }
+                false
             }
         };
-        if let Some(event) = send
-            && sender.send(Ok(event)).await.is_err()
+        if ping
+            && sender
+                .send(Ok(Event::default().event("ping").data("")))
+                .await
+                .is_err()
         {
             return;
         }
@@ -339,7 +341,7 @@ fn gave_up(reason: &str) -> String {
     )
 }
 
-/// The log tail's query: which try, and where its log continues.
+/// The log tail's query: which try, where its log continues, and how it was shown.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TailQuery {
     /// The try.
@@ -350,97 +352,110 @@ pub struct TailQuery {
     /// The instance of a mapped task.
     #[serde(default)]
     pub map_index: Option<u32>,
+    /// The colours in force where the log continues (`ansi::Converter::sgr`).
+    #[serde(default)]
+    pub style: String,
+    /// Since when the log has been out of reach, in milliseconds since the epoch.
+    #[serde(default)]
+    pub out: Option<i64>,
 }
 
-/// `GET /d/<deployment>/runs/<run>/tasks/<task>/tail?try=&from=`: the log from `from` as it
-/// grows (`log` events, HTML, the colours carried from one part to the next), then `end` once
-/// the attempt has ended and all of it is sent, or once the log can't be read (said in a last
-/// `log` event): gone, or out of reach for [`TAIL_GIVE_UP`].
+/// `GET /d/<deployment>/runs/<run>/tasks/<task>/tail?try=&from=` (decision 175: polled, so
+/// it holds no connection): the log from `from` as HTML, the colours carried from the part
+/// before (`style`), followed by the element reading the next part (in [`TAIL_INTERVAL`], at
+/// once when more is waiting), which replaces itself with the answer. Nothing follows once the
+/// attempt has ended and all of it is shown, or once the log can't be read (said where it is
+/// shown): gone, or out of reach for [`TAIL_GIVE_UP`].
 pub async fn tail<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     Path((deployment, run_id, task_id)): Path<(String, String, String)>,
     query: Result<Query<TailQuery>, QueryRejection>,
+    uri: OriginalUri,
     headers: HeaderMap,
 ) -> Response {
     let Ok(Query(query)) = query else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Some(index) = ui.deployments.iter().position(|d| d.name == deployment) else {
+    let Some(deployment) = ui.deployments.iter().find(|d| d.name == deployment) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // A browser reconnecting says where the log it showed ends (each part's event ID, B145).
-    let resumed = headers
-        .get("last-event-id")
-        .and_then(|id| id.to_str().ok())
-        .and_then(|id| id.parse::<u64>().ok());
-    let (sender, receiver) = mpsc::channel::<Result<Event, Infallible>>(16);
-    tokio::spawn(async move {
-        let client = &ui.deployments[index].client;
-        let mut from = resumed.unwrap_or(query.from);
-        let mut colours = ansi::Converter::new();
-        // Since when the log has been out of reach (a worker briefly unreachable is retried).
-        let mut failing: Option<tokio::time::Instant> = None;
-        loop {
-            let part = client
-                .instance_log_part(
-                    &run_id,
-                    (&task_id, query.map_index),
-                    query.try_number,
-                    from,
-                    TAIL_PART,
-                )
-                .await;
-            let mut more_now = false;
-            let (html, done) = match part {
-                Ok(part) => {
-                    failing = None;
-                    // Most of a part read (whole lines only: rarely all of it), and more
-                    // past it: read on at once.
-                    more_now =
-                        part.next.saturating_sub(from) >= TAIL_PART / 2 && part.next < part.size;
-                    from = part.next;
-                    let html = colours.push(&part.content);
-                    (html, !part.running && part.next >= part.size)
-                }
-                // Gone for good: the attempt has no such log (any more), or the request is
-                // wrong. Said where the log is shown.
-                Err(ClientError::Server { status, message }) if status != 503 => {
-                    (gave_up(&message), true)
-                }
-                // Out of reach (the worker, or the webserver): tried again for a while.
-                Err(error) => {
-                    let since = *failing.get_or_insert_with(tokio::time::Instant::now);
-                    if since.elapsed() >= TAIL_GIVE_UP {
-                        (gave_up(&error.to_string()), true)
-                    } else {
-                        (String::new(), false)
-                    }
-                }
-            };
-            if !html.is_empty()
-                && sender
-                    .send(Ok(Event::default()
-                        .event("log")
-                        .id(from.to_string())
-                        .data(html)))
-                    .await
-                    .is_err()
-            {
-                return;
-            }
-            if done {
-                let _ = sender
-                    .send(Ok(Event::default().event("end").data("")))
-                    .await;
-                return;
-            }
-            if sender.is_closed() {
-                return;
-            }
-            if !more_now {
-                tokio::time::sleep(TAIL_INTERVAL).await;
+    let part = deployment
+        .client
+        .instance_log_part(
+            &run_id,
+            (&task_id, query.map_index),
+            query.try_number,
+            query.from,
+            TAIL_PART,
+        )
+        .await;
+    let mut colours = ansi::Converter::resume(&query.style);
+    let (html, next) = match part {
+        Ok(part) => {
+            let html = colours.push(&part.content);
+            // Bytes of an escape sequence cut at the part's end: read again with the rest.
+            let from = part
+                .next
+                .saturating_sub(colours.held() as u64)
+                .max(query.from);
+            let done = !part.running && part.next >= part.size;
+            // Most of a part read (whole lines only: rarely all of it), and more past it:
+            // read on at once.
+            let now =
+                part.next.saturating_sub(query.from) >= TAIL_PART / 2 && part.next < part.size;
+            (html, (!done).then_some((from, None, now)))
+        }
+        // Gone for good: the attempt has no such log (any more), or the request is wrong.
+        Err(ClientError::Server { status, message }) if status != 503 => (gave_up(&message), None),
+        // Out of reach (the worker, or the webserver): tried again for a while.
+        Err(error) => {
+            let out = query.out.unwrap_or_else(now_millis);
+            let given = i64::try_from(TAIL_GIVE_UP.as_millis()).unwrap_or(i64::MAX);
+            if now_millis().saturating_sub(out) >= given {
+                (gave_up(&error.to_string()), None)
+            } else {
+                (String::new(), Some((query.from, Some(out), false)))
             }
         }
-    });
-    streamed(receiver)
+    };
+    let mut body = html;
+    if let Some((from, out, now)) = next {
+        let mut url = format!(
+            "{}{}?try={}&from={from}",
+            prefix(&headers),
+            uri.path(),
+            query.try_number
+        );
+        if let Some(index) = query.map_index {
+            let _ = write!(url, "&map_index={index}");
+        }
+        let style = colours.sgr();
+        if !style.is_empty() {
+            let _ = write!(url, "&style={}", style.replace(';', "%3B"));
+        }
+        if let Some(out) = out {
+            let _ = write!(url, "&out={out}");
+        }
+        body.push_str(&tail_reader(&url, now));
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// The element reading a log's next part from `url` (with the prefix): in [`TAIL_INTERVAL`],
+/// or at once; again a second after the UI didn't answer (`retry`, sent by the page).
+#[must_use]
+pub fn tail_reader(url: &str, now: bool) -> String {
+    let wait = if now { 0 } else { TAIL_INTERVAL.as_millis() };
+    format!(
+        "<span class=\"log-tail\" hx-get=\"{}\" hx-trigger=\"load delay:{wait}ms, retry delay:1s\" \
+         hx-target=\"this\" hx-swap=\"outerHTML\" hx-disinherit=\"*\"></span>",
+        url.replace('&', "&amp;").replace('"', "&quot;")
+    )
 }

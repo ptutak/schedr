@@ -4,7 +4,7 @@
 {% block content %}
 <p class="crumbs"><a href="{{ page.base }}/">DAGs</a> /{% if several %} {{ deployment }} /{% endif %}</p>
 <div id="action-results" class="results"></div>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 <div class="actions">
   {% if let Some(why) = row.held %}
   <button type="button" class="action" disabled title="{{ why }}">Trigger</button>

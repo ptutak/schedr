@@ -4,7 +4,7 @@
 {% block content %}
 <h1>Workers</h1>
 <div id="action-results" class="results"></div>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="sse:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}</div>
 {% endfor %}
