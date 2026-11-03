@@ -14,6 +14,7 @@ import itertools
 import typing
 from collections.abc import Callable, Mapping
 from datetime import timedelta
+from string.templatelib import Template
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
 
 from schedr import _build, _secrets
@@ -541,16 +542,16 @@ class TaskFunction[**P, R]:
     def _with_secret_defaults(
         self, fixed: dict[str, object], expand: tuple[str, object] | None
     ) -> dict[str, object]:
-        """``fixed`` with each parameter defaulting to a secret that no call gives.
+        """``fixed`` with each parameter defaulting to a secret or a t-string that no call gives.
 
         The runner calls the function with the recorded arguments only: a default left out
-        would reach it as the placeholder, never fetched.
+        would reach it as the placeholder or the ``Template``, never filled in.
         """
         mapped = expand[1] if expand is not None and expand[0] == "product" else {}
         given = dict(fixed)
         for name, parameter in self._signature.parameters.items():
             if (
-                isinstance(parameter.default, _secrets.Secret)
+                isinstance(parameter.default, _secrets.Secret | Template)
                 and name not in given
                 and not (isinstance(mapped, Mapping) and name in mapped)
             ):
@@ -1040,7 +1041,7 @@ def task[**P, R](
             run (``None``: no limit), for a mapped task: ``.expand()`` over 1,000 files, 10 at
             a time.
         secrets: The secrets it reads on demand, with ``task_ctx.secret(...)``:
-            ``secrets['path#key']``, ``'path#key'``, ``'path'`` (every key) or
+            ``secrets['path']['key']``, ``'path#key'``, ``'path'`` (every key) or
             ``SecretPrefix(...)`` (every secret under it, fetched when read). Secrets in its
             arguments need no declaring.
 

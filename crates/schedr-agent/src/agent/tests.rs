@@ -1656,6 +1656,7 @@ async fn an_ended_attempt_is_masked_and_takes_a_failed_reads_kind() {
         storage: None,
         path: "etl/db".into(),
         key: Some("password".into()),
+        default: None,
     };
     let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
         password.clone(),
@@ -1686,7 +1687,9 @@ async fn an_ended_attempt_is_masked_and_takes_a_failed_reads_kind() {
     "timeout".clone_into(&mut finished.error_kind);
     super::ended_with_secrets(&mut finished, &secrets, false);
     assert_eq!(finished.error_kind, "timeout");
-    assert!(super::masked_lines(&secrets).contains("`secrets['etl/db#password']` was masked once"));
+    assert!(
+        super::masked_lines(&secrets).contains("`secrets['etl/db']['password']` was masked once")
+    );
 }
 
 #[tokio::test]
@@ -1699,6 +1702,7 @@ async fn the_masking_note_masks_a_value_it_would_repeat() {
         storage: None,
         path: "etl/db".into(),
         key: Some("k".into()),
+        default: None,
     };
     let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
         word.clone(),
@@ -1711,7 +1715,7 @@ async fn the_masking_note_masks_a_value_it_would_repeat() {
     assert_eq!(secrets.mask.mask_text("x masked"), "x ****");
     let note = super::masked_lines(&secrets);
     assert!(
-        note.contains("`secrets['etl/db#k']` was **** once"),
+        note.contains("`secrets['etl/db']['k']` was **** once"),
         "{note}"
     );
     assert!(!note.contains("masked"), "{note}");

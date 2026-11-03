@@ -13,6 +13,7 @@ fn name(storage: Option<&str>, path: &str, key: Option<&str>) -> SecretName {
         storage: storage.map(str::to_owned),
         path: path.to_owned(),
         key: key.map(str::to_owned),
+        default: None,
     }
 }
 
@@ -88,7 +89,7 @@ async fn keys_and_whole_secrets_are_fetched() {
         .fetch(&name(None, "nope", Some("k")))
         .await
         .unwrap_err();
-    assert_eq!(error.to_string(), "`secrets['nope#k']`: no such secret");
+    assert_eq!(error.to_string(), "`secrets['nope']['k']`: no such secret");
     let other = stores
         .fetch(&name(Some("vault"), "etl/db", Some("user")))
         .await;
@@ -168,7 +169,7 @@ async fn a_storage_error_keeps_its_kind_and_names_the_secret() {
         let failed = stores.fetch(&name(None, "a", Some("k"))).await.unwrap_err();
         assert_eq!(failed.kind(), kind);
         assert!(
-            failed.to_string().starts_with("`secrets['a#k']`: "),
+            failed.to_string().starts_with("`secrets['a']['k']`: "),
             "{failed}"
         );
     }
@@ -329,4 +330,46 @@ async fn the_db_storage_reads_the_table_under_the_key() {
         .unwrap_err();
     assert_eq!(error.kind(), "secret_denied");
     assert!(!error.to_string().contains("hunter22"), "{error}");
+}
+
+#[tokio::test]
+async fn a_default_stands_in_for_a_missing_secret_or_key_unmasked() {
+    let with_default = |path: &str, key: &str, default: &str| SecretName {
+        default: Some(default.into()),
+        ..name(None, path, Some(key))
+    };
+    let stores = stores(Storage::new(Arc::new(memory())));
+    let needed = [
+        // Present: the value, masked; a missing key and a missing secret: the default.
+        with_default("etl/db", "password", "fallback-pw"),
+        with_default("etl/db", "port", "5432-default"),
+        with_default("nowhere", "k", "eu-west-default"),
+    ];
+    let secrets = AttemptSecrets::fetch(stores.clone(), &needed, Vec::new())
+        .await
+        .unwrap();
+    let fetched = secrets.fetched();
+    assert_eq!(fetched[&needed[0]], json!("hunter22"));
+    assert_eq!(fetched[&needed[1]], json!("5432-default"));
+    assert_eq!(fetched[&needed[2]], json!("eu-west-default"));
+    // A default is written in the DAG: not a secret, so not masked.
+    assert_eq!(
+        secrets
+            .mask
+            .mask_text("hunter22 5432-default eu-west-default"),
+        "**** 5432-default eu-west-default"
+    );
+
+    // A storage the worker lacks stays an error: a default never hides configuration.
+    let elsewhere = SecretName {
+        storage: Some("vault".into()),
+        ..with_default("etl/db", "password", "x")
+    };
+    let error = AttemptSecrets::fetch(stores, &[elsewhere], Vec::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("no secret storage `vault`"),
+        "{error}"
+    );
 }

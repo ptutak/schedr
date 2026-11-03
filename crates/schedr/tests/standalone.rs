@@ -321,14 +321,14 @@ from schedr import CommandOperator, Dag, secrets, task, task_ctx
 @task(secrets=["etl/db#user"])
 def check(password: str) -> int:
     assert password == "hunter22-pw", "the password"
-    assert task_ctx.secret("etl/db#user") == "etl-user"
+    assert task_ctx.secret("etl/db", "user") == "etl-user"
     print("password is", password)
     return len(password)
 
 with Dag("secrets"):
-    n = check(secrets["etl/db#password"])
+    n = check(secrets["etl/db"]["password"])
     CommandOperator("cmd", ["sh", "-c", 'echo "env $PW"; echo "len $0"', t"{n}"],
-        env={"PW": secrets["etl/db#password"]})
+        env={"PW": secrets["etl/db"]["password"]})
 "#;
 
 /// A task reads secrets set with the CLI, masked in its log; the table holds no value.
@@ -387,8 +387,8 @@ def check(password: str, port: str) -> int:
     return len(password)
 
 with Dag("vault"):
-    check(secrets["PATH#password"], secrets.vault["PATH#port"])
-    CommandOperator("cmd", ["sh", "-c", 'echo "env $PW"'], env={"PW": secrets["PATH#password"]})
+    check(secrets["PATH"]["password"], secrets.vault["PATH"]["port"])
+    CommandOperator("cmd", ["sh", "-c", 'echo "env $PW"'], env={"PW": secrets["PATH"]["password"]})
 "#;
 
 #[test]

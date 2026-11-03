@@ -401,6 +401,7 @@ async fn reads_a_declared_secret_and_refuses_the_others() {
         storage: None,
         path: path.into(),
         key: Some(key.into()),
+        default: None,
     };
     let stores = Arc::new(SecretStores::for_test(MemoryStorage::new([(
         name("etl/db", "password"),

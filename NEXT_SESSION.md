@@ -4,6 +4,22 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-03, day): M4.6e done; M4.6f, then M4.7
+
+- **The user's standing instruction:** continue until the end of M4.7, each sub-step
+  reviewed, checked, committed and pushed; stop only for the user's decisions.
+- **M4.6e committed** (decisions 176-178, B155 closed): secrets typed as their values
+  (`secrets['etl/db']['password']`, `.get(key, fallback)`, `secrets.value('path#key')`,
+  `task_ctx.secret(path, key)` / `secret_value`), `schedr.text(t"...")`; the guide warns a
+  fallback is never secret (the user asked). Reviewed by Codex (3 findings, all fixed: a
+  proxy's 404 page took the fallback; a `text(t"...")` default wasn't recorded; stale design
+  examples).
+- **M4.6f in progress** (decision 175, B31/B32): one stream per browser in a **SharedWorker**
+  (`crates/schedr-ui/assets/live.js`; the user chose it over Web Locks on 2026-11-03, since
+  Web Locks need https or localhost), the server's `/events` unfiltered JSON, pages filter;
+  the log tail polled; the SSE extension removed. Left: clippy, PROJECT.md 175's text and
+  the Libraries row, the review, `make check`.
+
 ## State (2026-11-03): M4.6 done
 
 - **Committed:** M4.6a+b (`b702efc`), M4.6c (`f9589e2`), M4.6d (Vault: the client over

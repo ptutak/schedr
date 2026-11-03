@@ -164,6 +164,11 @@ fn odd_answers() -> axum::Router {
             "/v1/secret/data/html",
             get(|| async { (Status::OK, "<html>login</html>") }),
         )
+        // A proxy's 404 page: no word from Vault on the secret (Codex, M4.6e).
+        .route(
+            "/v1/secret/data/html404",
+            get(|| async { (Status::NOT_FOUND, "<html>not here</html>") }),
+        )
         // Elsewhere: followed, the read would succeed (and carry the token there).
         .route(
             "/v1/secret/data/moved",
@@ -247,6 +252,7 @@ async fn each_answer_has_its_error_kind() {
     assert_eq!(kind(vault.read("etl/../sys").await), "secret_not_found");
     // An answer that isn't a secret is no answer, not "no such secret".
     assert_eq!(kind(vault.read("html").await), "secret_unavailable");
+    assert_eq!(kind(vault.read("html404").await), "secret_unavailable");
     assert_eq!(kind(vault.read("v1").await), "secret_unavailable");
     // A redirect isn't followed: it would carry the token elsewhere.
     assert_eq!(kind(vault.read("moved").await), "secret_unavailable");

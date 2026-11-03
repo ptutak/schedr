@@ -421,8 +421,21 @@ impl AttemptSecrets {
             if fetched.contains_key(name) {
                 continue;
             }
-            let value = secrets.stores.fetch(name).await?;
-            secrets.add_mask(name, &value);
+            // A default stands in for a missing secret or key (decision 176): written in the
+            // DAG, so not masked.
+            let value = match (secrets.stores.fetch(name).await, &name.default) {
+                // Not for a storage this worker lacks: a configuration error stays one.
+                (Err(SecretError::NotFound(_)), Some(default))
+                    if secrets.stores.storage_of(name).is_ok() =>
+                {
+                    Value::String(default.clone())
+                }
+                (value, _) => {
+                    let value = value?;
+                    secrets.add_mask(name, &value);
+                    value
+                }
+            };
             fetched.insert(name.clone(), value);
         }
         secrets.fetched = Mutex::new(fetched);

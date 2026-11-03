@@ -82,6 +82,7 @@ pub fn run_task_ctx_secret(
         storage: storage.clone(),
         path: path.to_owned(),
         key: key.map(str::to_owned),
+        default: None,
     };
     name.check()?;
     let mut stream = connect(env, Ctx::Task)?;

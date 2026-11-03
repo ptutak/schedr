@@ -7,6 +7,7 @@ operators; pass outputs between tasks as arguments (see PROJECT.md, Native API).
 from importlib.metadata import version
 
 from schedr._secrets import SecretPrefix, secrets
+from schedr._templates import text
 from schedr.context import SecretError, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
@@ -54,5 +55,6 @@ __all__ = [
     "secrets",
     "task",
     "task_ctx",
+    "text",
 ]
 __version__ = version("schedr")

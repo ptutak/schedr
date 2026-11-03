@@ -251,7 +251,7 @@ istio:
   #     resolution: DNS
   serviceEntries: []
 
-# Where tasks' secrets come from (`secrets['path#key']` in DAGs; the guide's Secrets page).
+# Where tasks' secrets come from (`secrets['path']['key']` in DAGs; the guide's Secrets page).
 secretStorage:
   # mode standalone: the `db` storage, values encrypted in the database under
   # SCHEDR_SECRET_KEY, from this existing Secret (`schedr secrets new-key` makes the key; keep

@@ -270,6 +270,13 @@
       "additionalProperties": false,
       "description": "A secret in a storage: `path#key`, or `path` for the whole secret.",
       "properties": {
+        "default": {
+          "description": "What a reference reads when the secret or its key is missing\n(`secrets['etl/db'].get('password', '')`); a key's only, never declared in `secrets=`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key": {
           "description": "The key in the secret (`password`); none for the whole secret, an object of key to\nvalue.",
           "type": [

@@ -76,7 +76,7 @@ pub enum Reference {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         path: Vec<PathElem>,
     },
-    /// A secret from a secret storage (`secrets['etl/db#password']`), fetched by the agent
+    /// A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent
     /// that runs the task, never by the master (see PROJECT.md, Secret storage).
     Secret(SecretName),
 }

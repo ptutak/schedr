@@ -26,7 +26,10 @@ from schedr import (
     dag_ctx,
     group,
     on,
+    secrets,
     task,
+    task_ctx,
+    text,
 )
 from schedr.types import ProcessResult
 
@@ -232,3 +235,48 @@ with Dag("with_params", params=TypedParams):
     wants_str(dag_ctx.params.region)  # pyright: ignore[reportAny]
     wants_str(dag_ctx.params(TypedParams).region)
     wants_int(dag_ctx.params(TypedParams).region)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+@task
+def connect(url: str, password: str, settings: dict[str, str]) -> None: ...
+
+
+with Dag("with_secrets"):
+    # A placeholder is typed as the value the task receives (decision 176).
+    connect(
+        text(t"postgresql://etl:{secrets['etl/db']['password']}@db/etl"),
+        secrets.value("etl/db#password"),
+        secrets["etl/db"],
+    )
+    connect(
+        secrets.vault["cfg"].get("url", ""),
+        secrets.value("etl/db#password", default=""),
+        secrets.storage("vault-2")["cfg"],
+    )
+    CommandOperator(
+        "dump",
+        ["pg_dump"],
+        env={"PGPASSWORD": secrets["etl/db"]["password"]},
+        secrets=["etl/api#token", secrets["etl/api"]["token"], secrets["etl/cfg"]],
+    )
+    # The kinds don't mix: a whole secret isn't one value, a value isn't a whole secret.
+    connect(
+        secrets["etl/db"],  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        secrets["etl/db"]["password"],
+        secrets.value("etl/db#password"),  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    )
+    # A t-string passed whole is a `Template`: `text(...)` marks it.
+    connect(
+        t"{secrets['etl/db']['password']}",  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        "x",
+        {},
+    )
+
+
+@task(secrets=["etl/api#token"])
+def reads_inside() -> int:
+    token: str = task_ctx.secret("etl/api", "token")
+    whole: dict[str, str] = task_ctx.secret("etl/api")
+    value: str = task_ctx.secret_value("etl/api#token")
+    wrong: dict[str, str] = task_ctx.secret("etl/api", "token")  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
+    return len(token) + len(whole) + len(value) + len(wrong)

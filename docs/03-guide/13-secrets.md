@@ -1,7 +1,12 @@
 # Secret storage
 
-Where the values behind a DAG's `secrets['path#key']` live, and who reads them. How a DAG
+Where the values behind a DAG's `secrets['path']['key']` live, and who reads them. How a DAG
 names and uses a secret is [Secrets](../02-dags/13-secrets.md).
+
+A DAG may give a fallback for a missing key (`.get(key, fallback)`). It is written in the
+DAG, shown in the DAG's JSON, the API and the UI, and never masked: **never put a real secret
+in a fallback** ([Fallbacks are not secret](../02-dags/13-secrets.md#fallbacks-are-not-secret)).
+Put each environment's real values in its storage.
 
 The **worker agent** that runs a task fetches its secrets, never the master or the webserver,
 and never the task's own code. Values stay in the agent's memory (never on disk), are given
@@ -54,9 +59,9 @@ unmasked_prefixes = ["variables/"]      # values under these aren't masked
 ## The `db` storage (standalone)
 
 Standalone always has a storage named `db`, in its own database (SQLite or Postgres). With
-no other storage configured it is the default, so `secrets['etl/db#password']` works with no
+no other storage configured it is the default, so `secrets['etl/db']['password']` works with no
 `[secret_storage]` at all. With Vault configured too, `db` stays reachable as
-`secrets.db['...']`.
+`secrets.db['etl/db']['password']`.
 
 A secret is a path with keys, as in Vault. Each value is encrypted with XChaCha20-Poly1305
 under **`SCHEDR_SECRET_KEY`** (32 bytes, base64), bound to its `path#key`, so a database
@@ -89,7 +94,7 @@ configure the Vault storage as the default, and delete `DIR`.
 
 ## Vault
 
-A `vault` storage reads **KV v2** (KV v1 isn't supported): `secrets['etl/db#password']` is
+A `vault` storage reads **KV v2** (KV v1 isn't supported): `secrets['etl/db']['password']` is
 the key `password` of the secret `etl/db` under `mount`. A value that isn't a string is read
 as its JSON text, as `vault kv get -field=` prints it: `5432` is `"5432"`, `true` is
 `"true"`. A deleted latest version is not found.

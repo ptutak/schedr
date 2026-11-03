@@ -479,6 +479,8 @@ async fn answer(response: reqwest::Response, what: &str) -> Result<Value, Secret
             ))
         });
     }
+    // Vault's own refusals are JSON (`{"errors": [...]}`); anything else came from elsewhere.
+    let from_vault = body.as_ref().is_ok_and(Value::is_object);
     let body = body.unwrap_or(Value::Null);
     let errors: Vec<&str> = body["errors"]
         .as_array()
@@ -491,11 +493,14 @@ async fn answer(response: reqwest::Response, what: &str) -> Result<Value, Secret
     };
     let message = format!("Vault refused {what} ({status}){detail}");
     Err(match status {
-        StatusCode::NOT_FOUND if what == READ => {
+        // Only Vault's own: a proxy's 404 page isn't "no such secret" (a fallback would
+        // stand in for a secret that may well be there).
+        StatusCode::NOT_FOUND if what == READ && from_vault => {
             SecretError::NotFound(format!("no such secret in Vault ({status})"))
         }
         // Not a secret's path: a login's or a lookup's (a wrong auth mount), which no retry
         // mends.
+        StatusCode::NOT_FOUND if what == READ => SecretError::Unavailable(message),
         StatusCode::NOT_FOUND
         | StatusCode::FORBIDDEN
         | StatusCode::UNAUTHORIZED

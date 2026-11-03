@@ -617,9 +617,9 @@ fn secrets_where_they_dont_belong_are_refused() {
         "edges": []
     }));
     let expected = [
-        "task `dump`: `secrets['etl/db#password']` in the command line",
+        "task `dump`: `secrets['etl/db']['password']` in the command line",
         "task `dump`: `secrets['etl/db']` is a whole secret",
-        "task `load`: `secrets['etl//db#k']`: a path has no empty part",
+        "task `load`: `secrets['etl//db']['k']`: a path has no empty part",
         "task `load`: secrets=: `SecretPrefix('tenants')`: a prefix ends with `/`",
         "task `each` is mapped over a secret",
         "task `each_product`: `secrets['etl/db']` is a whole secret",

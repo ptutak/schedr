@@ -1,25 +1,21 @@
-"""Secrets: read inside a Python task, under a prefix, and given to a command in `env`."""
+"""Secrets: passed to a task, read inside one, under a prefix, and in a command's `env`."""
 
-from typing import cast
-
-from schedr import CommandOperator, Dag, SecretError, SecretPrefix, secrets, task, task_ctx
+from schedr import CommandOperator, Dag, SecretError, SecretPrefix, secrets, task, task_ctx, text
 
 
-@task(secrets=["etl/db#password"])
-def connect() -> str:
-    # Fetched before the task started; masked in its log and output.
-    password = cast("str", task_ctx.secret("etl/db#password"))
-    url = f"postgresql://etl:{password}@db.example.com/etl"
+@task
+def connect(url: str) -> str:
+    # The agent filled in the password before the task started.
     print(f"connecting to {url}")
     return url
 
 
 @task(secrets=["etl/api#token", SecretPrefix("tenants/")])
 def call_api(tenant: str) -> str:
-    token = cast("str", task_ctx.secret("etl/api#token"))
+    token = task_ctx.secret("etl/api", "token")
     try:
         # Under the prefix: chosen at run time, fetched now.
-        key = cast("str", task_ctx.secret(f"tenants/{tenant}#api_key"))
+        key = task_ctx.secret(f"tenants/{tenant}", "api_key")
     except SecretError as error:
         if error.kind != "secret_not_found":
             raise
@@ -28,10 +24,13 @@ def call_api(tenant: str) -> str:
 
 
 with Dag("secrets_demo"):
-    connect()
+    connect(text(t"postgresql://etl:{secrets['etl/db']['password']}@db.example.com/etl"))
     call_api("acme")
     CommandOperator(
         "dump",
         ["sh", "-c", 'test -n "$PGPASSWORD" && echo "the password is set"'],
-        env={"PGPASSWORD": secrets["etl/db#password"]},
+        env={
+            "PGPASSWORD": secrets["etl/db"]["password"],
+            "PGPORT": secrets["etl/db"].get("port", "5432"),
+        },
     )

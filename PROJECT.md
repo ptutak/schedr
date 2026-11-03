@@ -1264,6 +1264,19 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     `log` events until the attempt has ended and all of it is sent (`end`). Not chosen: the
     master sending the changes itself (every write path would have to); a `changes` table
     on Postgres too (writes in the master's hot path).
+  - **175. One live stream per browser** (the user's, 2026-11-03, on B31 and B32: a browser
+    opens at most six HTTP/1.1 connections to a host, and each live page held one, so a
+    click or a page's reload waited in the browser's queue, 7-10 s in Codex's reproduction).
+    The first tab takes a Web Lock (`navigator.locks`) and holds the only stream, handing
+    each change to the other tabs over a `BroadcastChannel`; when it closes another tab
+    takes the lock, opens the stream and refreshes. The shared stream carries the
+    deployments' changes unfiltered (an ID each), and each tab decides what concerns its
+    page. A running try's log tail is read by polling (about once a second while the attempt
+    runs), holding no connection. HTTP/2 through a TLS ingress lifts the limit too: the
+    deployment guide says so. Not chosen: hidden tabs closing their stream at once (every tab
+    switch reloads the page, and six visible pages still fill the pool); HTTP/2 alone (only
+    over TLS, never on a local `http://` standalone); a log stream per log page (three
+    running logs, three connections).
   - **How M3.4 takes actions** (Claude's, 2026-10-28, within 35A and 24A): each action is a
     button opening a `<dialog>` that says what will happen (pause offers "also cancel its
     queued and running runs"; trigger takes the moment in `--for`'s forms, previewed in UTC
@@ -3737,12 +3750,12 @@ list) and likewise has no Python.
   "Vault". Vault-specific names appear only in the Vault implementation.
 - **Templates have a dedicated syntax for secrets**: a **general placeholder** (not a Vault-specific
   one) that refers to a value in secret storage (see Airflow compatibility, Scope: Templating), e.g.
-  `t"{secrets['etl/db#password']}"`.
+  `t"{secrets['etl/db']['password']}"`.
 - **Several secret storages** can be configured at the same time, each with a name (in
   standalone the `db` storage is always there besides any configured one, see below), and the
   placeholder syntax **names the storage** a secret comes from, so adding storages later
   doesn't change the syntax:
-  - `secrets['path#key']`: the **default** storage. The configuration marks one storage as
+  - `secrets['path']['key']`: the **default** storage. The configuration marks one storage as
     the default.
   - `secrets.<storage>['path#key']`: the named storage.
 - Secrets are **fetched by the worker agent** that runs the task, never by the master
@@ -3755,7 +3768,7 @@ list) and likewise has no Python.
   setups) to get a secret; never in the command line (a parse error, see Airflow compatibility,
   Scope: Templating):
   - **An environment variable**, set up by the user with a secret placeholder:
-    `env={"PGPASSWORD": t"{secrets['etl/db#password']}"}` (TOML: `env = { PGPASSWORD = {
+    `env={"PGPASSWORD": t"{secrets['etl/db']['password']}"}` (TOML: `env = { PGPASSWORD = {
     secret = "etl/db#password" } }`). For the many tools that read credentials only from the
     environment.
   - **On demand over the agent socket**, for secrets that should stay out of the environment
@@ -3772,8 +3785,8 @@ list) and likewise has no Python.
 
   | Place | Default storage | Named storage |
   |---|---|---|
-  | Python templates | `secrets['ci/deploy#token']` | `secrets.other['ci/deploy#token']` |
-  | Python `secrets=[...]` | the placeholder object, or a plain string `"ci/deploy#token"` | `secrets.other['ci/deploy#token']` |
+  | Python templates | `secrets['ci/deploy']['token']` | `secrets.other['ci/deploy']['token']` |
+  | Python `secrets=[...]` | the placeholder object, or a plain string `"ci/deploy#token"` | `secrets.other['ci/deploy']['token']` |
   | TOML `secrets = [...]`, `env = { X = { secret = ... } }` | `"ci/deploy#token"` | `{ storage = "other", path = "ci/deploy#token" }` |
   | CLI | `schedr task-ctx secret get 'ci/deploy#token'` | `schedr task-ctx secret get --storage other 'ci/deploy#token'` |
 
@@ -3837,8 +3850,8 @@ list) and likewise has no Python.
     through a Postgres role allowed only `SELECT` on it (workers would need a database URL,
     which they never have); the master handing secrets out (breaks the rule above).
   - **Always there in standalone,** named `db`; the **default** when no other storage is
-    configured, so `secrets['path#key']` works with no `[secret_storage]` at all. With Vault
-    configured (and its default), `db` stays reachable as `secrets.db['path#key']` and its
+    configured, so `secrets['path']['key']` works with no `[secret_storage]` at all. With Vault
+    configured (and its default), `db` stays reachable as `secrets.db['path']['key']` and its
     table stays empty. Not chosen: `db` only when nothing else is configured.
   - **Table:** `secrets(path TEXT PRIMARY KEY, data, created_at, updated_at)`, one row per
     path like a Vault KV v2 secret; `data` a JSON object of key to value (`jsonb` on
@@ -3890,7 +3903,7 @@ list) and likewise has no Python.
     Airflow 3's Task SDK) and `BaseHook.get_connection(conn_id)` (common in existing DAGs).
     Hooks themselves stay out of scope.
   - **Natively** a connection was just a secret with fields
-    (`secrets['connections/my_db#host']`), a typed native `Connection` not needed. **Being
+    (`secrets['connections/my_db']['host']`), a typed native `Connection` not needed. **Being
     reworked** (2026-10-25): the user wants connections the same DAG uses unchanged across
     environments (dev, preprod, prod), with shapes of their own, not Airflow's fixed fields: see
     Open questions, "Connections (draft)". Airflow's format becomes one shape among others.
@@ -3905,7 +3918,7 @@ list) and likewise has no Python.
     **`Variable.set(...)` is an error**: tasks never write to secret storage (it would become
     hidden state shared between runs).
   - **Templates:** `var.value.<key>` and `var.json.<key>...` translate onto native secret
-    placeholders (`secrets['variables/<key>#value']`, JSON-parsed for `var.json`), as the
+    placeholders (`secrets['variables/<key>']['value']`, JSON-parsed for `var.json`), as the
     placeholder rule in Templating requires.
 - **Unmasked prefixes:** `[secret_storage.<name>] unmasked_prefixes = ["variables/"]` in the
   server configuration marks parts of a storage as **non-secret configuration**, whose values
@@ -3922,7 +3935,7 @@ list) and likewise has no Python.
 
     ```python
     secrets=[
-        secrets['etl/db#password'],             # one value (placeholder object)
+        secrets['etl/db']['password'],             # one value (placeholder object)
         "etl/api#token",                        # one value, default storage (plain string)
         "connections/db_eu",                    # one whole secret, all its keys
         SecretPrefix("connections/"),           # a prefix: every secret under it
@@ -3945,7 +3958,7 @@ list) and likewise has no Python.
     forbidden in Vault paths).
   - Native use: a task reading secrets chosen at run time (e.g. one per tenant).
   - **Python tasks** get an on-demand reader mirroring `schedr task-ctx secret get` (e.g.
-    `task_ctx.secret("connections/db_eu#password")`), restricted to declared secrets and
+    `task_ctx.secret("connections/db_eu", "password")`), restricted to declared secrets and
     prefixes; `schedr task-ctx secret get` accepts secrets under a declared prefix too.
   - **Airflow:** every Airflow-layer Python task implicitly declares the prefix
     `SecretPrefix("<connections_path>/")`, so `Connection.get` / `BaseHook.get_connection` (often
@@ -4010,6 +4023,29 @@ list) and likewise has no Python.
     UI: the federated `schedr ui` over a list of deployments (M3.6). Not chosen: worker groups in
     one release, each with its own service account and role (a chart feature, later if
     wanted); tasks under another uid (a root start, against OpenShift's random uids).
+  - **176. A secret is typed as its value** (the user's, 2026-11-03, on B155: a placeholder
+    passed to a typed Python task failed `mypy --strict`). As an output is typed as what it
+    carries, indexing follows the data's shape, a path then a key: `secrets['etl/db']` is the
+    whole secret, typed `dict[str, str]`; `secrets['etl/db']['password']` one key, `str`;
+    `secrets['etl/db'].get('password', '')` a key or a default. The `#` form has a method of
+    its own: `secrets.value('etl/db#password', default=...)`, `str` (a path without `#key`
+    refused: the whole secret is indexed). `secrets['etl/db#password']` is refused when the
+    file loads, naming both forms. Inside a task: `task_ctx.secret('etl/api', 'token')` is
+    `str`, `task_ctx.secret('etl/api')` the whole secret, `dict[str, str]`, and
+    `task_ctx.secret_value('etl/api#token')` `str`. `#` stays wherever a secret is one string
+    (`secrets=`, TOML, the CLI, `--secret`, test values). `value` is reserved as `storage` is
+    (a storage named `value` is `secrets.storage('value')`). Misuse in the DAG body is still
+    refused when the file loads. Decision 53's default becomes `secrets.value('billing#client_id',
+    default='')`. Not chosen: everything typed `Any` (no checking); keeping the types and
+    casting (every typed DAG casts); `secrets.get(...)` for a whole secret (`get` reads as
+    `dict.get`, a value or a default); one `[...]` for both forms (`'etl/db'` and
+    `'etl/db#password'` are both `str`, so one return type).
+  - **177. `schedr.text(t"...")`** marks a t-string passed to a Python task where a `str` is
+    taken, typed `str` (a t-string is a `Template`, which no plain typing turns into a `str`,
+    and basedpyright has no plugins). Not chosen: building the text inside the task (awkward
+    for one-off strings); casting.
+  - **178. `secrets=` keeps both forms:** a plain string (`"etl/api#token"`, `"etl/api"`)
+    and a placeholder (`secrets['etl/api']['token']`, `secrets['etl/api']`).
   - **Claude's choices in M4.6b** (after the reviews by Grok and Codex; the user told):
     - **Masked forms** besides the value and its JSON form: JSON with every non-ASCII
       character as `\uXXXX` (Python's `json.dumps`), and Python's `repr` (an exception's
@@ -7953,7 +7989,7 @@ def count() -> int:
   in other templates. Per-deployment settings that aren't secrets (a `[connections]` table
   in the configuration): later, secrets and literals cover them.
 - **A missing secret:** both ways stay, `schedr connections check` before moving DAGs and a
-  default in the template (`secrets.get('path#key', '')`).
+  default in the template (`secrets.value('path#key', default='')`, decision 176).
 - **Async:** `@connection` on an `async def` generator gives `async with` (with M4's async
   task functions).
 - **Airflow (M5):** `schedr.airflow`'s `Connection.get(conn_id)` and
@@ -8053,7 +8089,7 @@ def version() -> str:
   or moved to another path, before its secret is stored there): `schedr connections check`
   against the target environment lists every missing secret, run before deploying (in CI
   or the chart's pre-upgrade hook); a parameter may fall back to a default
-  (`t"{secrets.get('billing#client_id', '')}"`) where an empty value is acceptable. Without
+  (`t"{secrets.value('billing#client_id', default='')}"`, decision 176) where an empty value is acceptable. Without
   either, tasks fail with `secret_not_found` (no retry used); a removed parameter is
   harmless; a value changed in the storage is read at the next attempt. Not chosen:
   versioned connections (versions everywhere for a gap a check catches); nothing (found in
@@ -8064,3 +8100,35 @@ def version() -> str:
   Airflow's setup and teardown schedr's resources. `schedr.airflow`'s `Connection` (M5) maps
   onto it, and its docs say so once. Not chosen: `@service` (clashes with Kubernetes
   Services); `@endpoint` (odd for a database or an SSH host).
+
+**174. M4.7's open questions** (the user's, 2026-11-03; the options were Claude's):
+- **Client libraries as optional extras:** `schedr[http]` (httpx), `schedr[mongo]`
+  (pymongo), `schedr[ssh]` (paramiko), `schedr[postgres]` (psycopg 3), `schedr[mysql]`
+  (PyMySQL), as `schedr[pydantic]`; imported on use, the error naming the extra when it is
+  missing. Not chosen: no extras (the error naming the package); hard dependencies.
+- **SQL:** Postgres through psycopg 3 and MySQL through PyMySQL. Not chosen: Postgres only
+  for now; an SQLAlchemy engine as the client.
+- **SSH host keys:** `known_hosts` (text, or a secret) required, with a loud opt-out
+  `insecure_skip_host_check=True`. Not chosen: no opt-out; accepting a host's key the first
+  time.
+- **HTTP authentication:** a bearer token, a user and password, extra headers, a CA file, a
+  client certificate and key. Not chosen: a token and headers only.
+- **The registry:** the parser records every connection in a DAG folder (its name, type and
+  templates, never a value) per root, as it records DAGs. Not chosen: only the connections
+  DAGs declare.
+- **`schedr connections check`** runs on a worker: the CLI asks the master, the master a
+  worker, and only present or missing comes back, never a value. Not chosen: in the CLI with
+  its own storage configuration (Vault credentials on an operator's machine).
+- **`schedr connections test NAME`** runs `check()` as a one-off job of a worker's agent,
+  not a run, its result back to the CLI. Not chosen: a generated run shown in the UI;
+  leaving it for later.
+- **Test doubles:** `task_context(connections={"name": fake})` takes objects (the task runs
+  in the test's process); `run_dag(connections={"name": {"param": value}})` takes the
+  connection's argument values, run by the real `@connection` function (each task is a
+  process of its own). Not chosen: `task_context` only (`run_dag`'s `secrets=` does the
+  same, by secret paths); doubles named by import path (later, if wanted).
+- **Async:** `async with` comes with M4.10's async tasks. Not chosen: building it in M4.7,
+  tested alone.
+- **Sub-steps:** M4.7a `@connection`, its Python use, `schedr task-ctx connection`, the
+  doubles; M4.7b the typed connections and their files; M4.7c `connections check` and
+  `test`.

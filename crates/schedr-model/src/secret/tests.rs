@@ -9,24 +9,39 @@ fn name(storage: Option<&str>, path: &str, key: Option<&str>) -> SecretName {
         storage: storage.map(str::to_owned),
         path: path.to_owned(),
         key: key.map(str::to_owned),
+        default: None,
     }
 }
 
 #[rstest]
-#[case(name(None, "etl/db", Some("password")), "secrets['etl/db#password']")]
+#[case(
+    name(None, "etl/db", Some("password")),
+    "secrets['etl/db']['password']"
+)]
 #[case(name(Some("other"), "etl/db", None), "secrets.other['etl/db']")]
 #[case(
     name(Some("vault-2"), "a", Some("k")),
-    "secrets.storage('vault-2')['a#k']"
+    "secrets.storage('vault-2')['a']['k']"
 )]
-#[case(name(Some("2nd"), "a", Some("k")), "secrets.storage('2nd')['a#k']")]
+#[case(name(Some("2nd"), "a", Some("k")), "secrets.storage('2nd')['a']['k']")]
 #[case(
     name(Some("storage"), "a", Some("k")),
-    "secrets.storage('storage')['a#k']"
+    "secrets.storage('storage')['a']['k']"
 )]
-#[case(name(Some("_a"), "a", Some("k")), "secrets.storage('_a')['a#k']")]
-#[case(name(Some("class"), "a", Some("k")), "secrets.storage('class')['a#k']")]
-#[case(name(None, "it's", Some("k")), "secrets[\"it's#k\"]")]
+#[case(name(Some("_a"), "a", Some("k")), "secrets.storage('_a')['a']['k']")]
+#[case(
+    name(Some("class"), "a", Some("k")),
+    "secrets.storage('class')['a']['k']"
+)]
+#[case(
+    name(Some("value"), "a", Some("k")),
+    "secrets.storage('value')['a']['k']"
+)]
+#[case(
+    SecretName { default: Some("eu".into()), ..name(None, "a", Some("k")) },
+    "secrets['a'].get('k', 'eu')"
+)]
+#[case(name(None, "it's", Some("k")), "secrets[\"it's\"]['k']")]
 fn a_name_is_shown_as_written(#[case] secret: SecretName, #[case] shown: &str) {
     assert_eq!(secret.to_string(), shown);
 }
@@ -125,4 +140,23 @@ fn what_a_declaration_covers() {
     assert!(prefix.covers(&deep) && !prefix.covers(&sibling));
     assert!(!other.covers(&deep));
     assert!(other.covers(&name(Some("other"), "etl/a", None)));
+}
+
+#[test]
+fn a_default_is_a_keys_and_never_declared() {
+    let whole = SecretName {
+        default: Some("x".into()),
+        ..name(None, "etl/db", None)
+    };
+    assert!(whole.check().unwrap_err().contains("a default is a key's"));
+    let key = SecretName {
+        default: Some("x".into()),
+        ..name(None, "etl/db", Some("k"))
+    };
+    assert_eq!(key.check(), Ok(()));
+    let declared = SecretDecl::Secret(key).check().unwrap_err();
+    assert!(
+        declared.contains("not a declaration in `secrets=`"),
+        "{declared}"
+    );
 }

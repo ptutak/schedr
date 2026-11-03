@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, overload
 
 from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference, SecretDecl, SecretRef
@@ -545,25 +545,72 @@ class TaskContext:
         """Which instance of a mapped task this is, from 0; ``None`` for an unmapped task."""
         return _task().map_index
 
-    def secret(self, name: str, *, storage: str | None = None) -> Any:
-        """A secret the task declares in ``secrets=``, read now.
+    @overload
+    def secret(self, path: str, key: str, *, storage: str | None = None) -> str: ...
+
+    @overload
+    def secret(self, path: str, *, storage: str | None = None) -> dict[str, str]: ...
+
+    def secret(
+        self, path: str, key: str | None = None, *, storage: str | None = None
+    ) -> str | dict[str, str]:
+        """A secret the task declares in ``secrets=``, read now: ``secret('etl/api', 'token')``.
 
         One declared by name was fetched before the task started; one under a declared
         ``SecretPrefix`` is fetched now. Its value is masked in the task's log and output.
 
         Args:
-            name: ``path#key``, or ``path`` for the whole secret.
+            path: The secret's path, ``etl/api``.
+            key: The key; none for the whole secret.
             storage: The storage; ``None`` for the default one.
 
         Returns:
-            A key's value (``str``), or a whole secret's keys and values
+            A key's value (``str``), or the whole secret's keys and values
             (``dict[str, str]``).
 
         Raises:
             SecretError: When it can't be read (not declared, not found, the storage down).
-            ValueError: For a bad name.
+            ValueError: For a bad path or key, or a path with ``#`` (that is
+                ``secret_value``).
         """
-        ref = parse_secret(name, storage)
+        if isinstance(path, str) and "#" in path:
+            raise ValueError(
+                f"task_ctx.secret({path!r}): give the path and the key apart, "
+                f"`task_ctx.secret({path.partition('#')[0]!r}, {path.partition('#')[2]!r})`, "
+                f"or write `task_ctx.secret_value({path!r})`"
+            )
+        ref = parse_secret(path, storage)
+        if key is not None:
+            ref = SecretRef(ref.path, key, storage)
+        return self._read(ref)
+
+    def secret_value(self, spec: str, *, storage: str | None = None) -> str:
+        """One value the task declares, written ``path#key``: ``secret_value('etl/api#token')``.
+
+        Args:
+            spec: ``path#key``.
+            storage: The storage; ``None`` for the default one.
+
+        Returns:
+            The value.
+
+        Raises:
+            SecretError: When it can't be read (not declared, not found, the storage down).
+            ValueError: For a spec without ``#key`` (the whole secret is ``secret(path)``) or a
+                bad one.
+        """
+        ref = parse_secret(spec, storage)
+        if ref.key is None:
+            raise ValueError(
+                f"task_ctx.secret_value({spec!r}): one value is `path#key`; the whole secret "
+                f"is `task_ctx.secret({spec!r})`"
+            )
+        value = self._read(ref)
+        if not isinstance(value, str):  # pragma: no cover - a key's value is text
+            raise TypeError(f"`{ref.label()}`: not text")
+        return value
+
+    def _read(self, ref: SecretRef) -> str | dict[str, str]:
         reader = _task().secrets
         if reader is None:
             raise SecretError(

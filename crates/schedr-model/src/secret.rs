@@ -28,6 +28,10 @@ pub struct SecretName {
     /// value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// What a reference reads when the secret or its key is missing
+    /// (`secrets['etl/db'].get('password', '')`); a key's only, never declared in `secrets=`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 impl SecretName {
@@ -38,6 +42,7 @@ impl SecretName {
             storage: None,
             path: path.into(),
             key: key.map(str::to_owned),
+            default: None,
         }
     }
 
@@ -54,7 +59,7 @@ impl SecretName {
     ///
     /// # Errors
     ///
-    /// Returns a message naming the secret as written (`secrets['etl//db#password']`).
+    /// Returns a message naming the secret as written (`secrets['etl//db']['password']`).
     pub fn check(&self) -> Result<(), String> {
         let problem = |reason: &str| Err(format!("`{self}`: {reason}"));
         if let Some(storage) = &self.storage
@@ -75,21 +80,31 @@ impl SecretName {
             if key.contains('#') || key.contains('\0') {
                 return problem("a key contains neither `#` nor NUL");
             }
+        } else if self.default.is_some() {
+            return problem("a default is a key's (`.get(key, default)`)");
         }
         Ok(())
     }
 }
 
 impl fmt::Display for SecretName {
-    /// As written in Python: `secrets['etl/db#password']`, `secrets.other['etl/db']`.
+    /// As written in Python (decision 176): `secrets['etl/db']['password']`,
+    /// `secrets.other['etl/db']`, `secrets['etl/db'].get('password', '')`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.storage {
             Some(storage) if !attribute(storage) => {
-                let (storage, spec) = (py_str(storage), py_str(&self.spec()));
-                write!(f, "secrets.storage({storage})[{spec}]")
+                write!(f, "secrets.storage({})", py_str(storage))?;
             }
-            Some(storage) => write!(f, "secrets.{storage}[{}]", py_str(&self.spec())),
-            None => write!(f, "secrets[{}]", py_str(&self.spec())),
+            Some(storage) => write!(f, "secrets.{storage}")?,
+            None => f.write_str("secrets")?,
+        }
+        write!(f, "[{}]", py_str(&self.path))?;
+        match (&self.key, &self.default) {
+            (None, _) => Ok(()),
+            (Some(key), None) => write!(f, "[{}]", py_str(key)),
+            (Some(key), Some(default)) => {
+                write!(f, ".get({}, {})", py_str(key), py_str(default))
+            }
         }
     }
 }
@@ -103,7 +118,8 @@ const PYTHON_KEYWORDS: [&str; 35] = [
 ];
 
 /// Whether `secrets.<storage>` reaches the storage (as Python's `storage_label` decides): a
-/// Python name, not a keyword, not `_` first (refused there), not `storage` (the method).
+/// Python name, not a keyword, not `_` first (refused there), not `storage` or `value` (the
+/// methods).
 fn attribute(storage: &str) -> bool {
     !storage.is_empty()
         && !storage.starts_with(|c: char| c.is_ascii_digit() || c == '_')
@@ -111,6 +127,7 @@ fn attribute(storage: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_')
         && storage != "storage"
+        && storage != "value"
         && !PYTHON_KEYWORDS.contains(&storage)
 }
 
@@ -171,6 +188,10 @@ impl SecretDecl {
     /// Returns a message naming it as written.
     pub fn check(&self) -> Result<(), String> {
         match self {
+            Self::Secret(name) if name.default.is_some() => Err(format!(
+                "`{name}`: a default is for a value passed to a task, not a declaration in \
+                 `secrets=`"
+            )),
             Self::Secret(name) => name.check(),
             Self::Prefix { storage, prefix } => {
                 let problem = |reason: &str| Err(format!("`{self}`: {reason}"));

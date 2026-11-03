@@ -24,13 +24,13 @@ def connect(password: str, db: dict[str, str], label: str) -> str:
 
 @task(secrets=[SecretPrefix("tenants/")])
 def tenant(name: str) -> str:
-    return task_ctx.secret(f"tenants/{name}#token")
+    return task_ctx.secret_value(f"tenants/{name}#token")
 
 with Dag("d"):
     connect(
-        secrets["etl/db#password"],
+        secrets["etl/db"]["password"],
         secrets["etl/db"],
-        t"user {secrets.other['etl/db#user']}",
+        t"user {secrets.other['etl/db']['user']}",
     )
     tenant("a")
 """
@@ -84,14 +84,14 @@ def test_secret_arguments_come_from_the_request(root: Path) -> None:
 
 def test_a_secret_not_fetched_is_an_input_error(root: Path) -> None:
     reference = {"kind": "secret", "path": "etl/db", "key": "port"}
-    with pytest.raises(TaskInputError, match=r"secrets\['etl/db#port'\]` wasn't fetched"):
+    with pytest.raises(TaskInputError, match=r"secrets\['etl/db'\]\['port'\]` wasn't fetched"):
         resolve(reference, {}, RUN)
     result = execute(request_for(root, "connect"))
     assert result["kind"] == "input_mismatch"
 
 
 def test_a_whole_secret_shaped_like_a_tag_reads_back_as_written() -> None:
-    run = {**RUN, "$secrets": {(None, "x", None): {"$date": "not a date"}}}
+    run = {**RUN, "$secrets": {(None, "x", None, None): {"$date": "not a date"}}}
     stored = resolve({"kind": "secret", "path": "x"}, {}, run)
     assert stored == {"$dict": {"$date": "not a date"}}
 
@@ -116,7 +116,7 @@ def test_a_failed_read_fails_the_attempt_with_its_kind(root: Path, kind: str) ->
     result = execute(request_for(root, "tenant"), secrets=reader)
     assert result["type"] == "task_failed"
     assert result["kind"] == kind
-    assert "tenants/a#token" in result["error"]["message"]
+    assert "secrets['tenants/a']['token']" in result["error"]["message"]
 
 
 def test_without_a_reader_a_read_is_denied(root: Path) -> None:
@@ -158,14 +158,20 @@ def test_the_reader_asks_the_agent_over_the_channel() -> None:
 
 def test_task_context_gives_secret_values() -> None:
     with task_context(secrets={"etl/db#password": "hunter22", "etl/db#user": "etl"}):
-        assert task_ctx.secret("etl/db#password") == "hunter22"
-        assert task_ctx.secret("etl/db#user", storage="vault") == "etl"
+        assert task_ctx.secret_value("etl/db#password") == "hunter22"
+        assert task_ctx.secret_value("etl/db#user", storage="vault") == "etl"
         assert task_ctx.secret("etl/db") == {"password": "hunter22", "user": "etl"}
+        assert task_ctx.secret("etl/db", "password") == "hunter22"
+        assert task_ctx.secret("etl/db", "user", storage="vault") == "etl"
+        with pytest.raises(ValueError, match=r"task_ctx.secret\('etl/db', 'user'\)"):
+            task_ctx.secret("etl/db#user")
+        with pytest.raises(ValueError, match=r"the whole secret is `task_ctx.secret\('etl/db'\)`"):
+            task_ctx.secret_value("etl/db")
         with pytest.raises(SecretError) as missing:
-            task_ctx.secret("etl/db#port")
+            task_ctx.secret_value("etl/db#port")
     assert missing.value.kind == "secret_not_found"
     with task_context(), pytest.raises(SecretError) as denied:
-        task_ctx.secret("etl/db#password")
+        task_ctx.secret_value("etl/db#password")
     assert denied.value.kind == "secret_denied"
     with pytest.raises(ValueError, match="path#key"), task_context(secrets={"etl/db": "x"}):
         pass
@@ -174,10 +180,10 @@ def test_task_context_gives_secret_values() -> None:
 def test_task_context_refuses_what_a_task_doesnt_declare() -> None:
     @task_decorator(secrets=["etl/db#user", SecretPrefix("tenants/")])
     def reads(name: str) -> str:
-        return task_ctx.secret(name)
+        return task_ctx.secret_value(name)
 
     def plain(name: str) -> str:
-        return task_ctx.secret(name)
+        return task_ctx.secret_value(name)
 
     given = {"etl/db#user": "etl", "etl/db#password": "pw", "tenants/a#t": "ta"}
     with task_context(secrets=given):

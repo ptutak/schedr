@@ -112,20 +112,26 @@ SECRETS = "$secrets"
 """Where :func:`execute` puts the request's fetched secrets in the run mapping."""
 
 
-def secret_key(name: Mapping[str, Any]) -> tuple[str | None, str, str | None]:
-    """A secret's name as stored (``{"storage": ..., "path": ..., "key": ...}``), as a key.
+def secret_key(
+    name: Mapping[str, Any],
+) -> tuple[str | None, str, str | None, str | None]:
+    """A secret's name as stored, as a key.
+
+    ``{"storage": ..., "path": ..., "key": ..., "default": ...}``.
 
     Args:
         name: The stored name (or a secret reference).
 
     Returns:
-        ``(storage, path, key)``.
+        ``(storage, path, key, default)``.
     """
-    return (name.get("storage"), name["path"], name.get("key"))
+    return (name.get("storage"), name["path"], name.get("key"), name.get("default"))
 
 
 def _label(name: Mapping[str, Any]) -> str:
-    return SecretRef(name["path"], name.get("key"), name.get("storage")).label()
+    return SecretRef(
+        name["path"], name.get("key"), name.get("storage"), name.get("default")
+    ).label()
 
 
 def secret_reader(channel: Channel) -> SecretReader:

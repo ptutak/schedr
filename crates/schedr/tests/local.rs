@@ -574,26 +574,26 @@ from schedr import CommandOperator, Dag, SecretPrefix, secrets, task, task_ctx
 @task(secrets=[SecretPrefix("tenants/")])
 def py(password: str) -> str:
     print("password is", password)
-    token = task_ctx.secret("tenants/a#token")
+    token = task_ctx.secret("tenants/a", "token")
     print("token is", token)
     return f"{{password}}/{{token}}"
 
 @task
 def undeclared() -> str:
-    return task_ctx.secret("etl/db#user")
+    return task_ctx.secret("etl/db", "user")
 
 @task(secrets=["tenants/b#token"])
 def missing() -> str:
-    return task_ctx.secret("tenants/b#token")
+    return task_ctx.secret("tenants/b", "token")
 
 with Dag("ok"):
     CommandOperator(
         "cmd",
         ["sh", "-c", '{bin} task-ctx secret get "etl/db#password"; echo; echo "env $PW"'],
-        env={{"PW": secrets["etl/db#password"]}},
+        env={{"PW": secrets["etl/db"]["password"]}},
         secrets=["etl/db#password"],
     )
-    py(secrets["etl/db#password"])
+    py(secrets["etl/db"]["password"])
 
 with Dag("denied"):
     undeclared()
@@ -637,7 +637,7 @@ fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
     let log = cmd["log"].as_str().unwrap();
     assert!(log.contains("****\nenv ****"), "{log}");
     assert!(
-        log.contains("secrets['etl/db#password']") && log.contains("masked"),
+        log.contains("secrets['etl/db']['password']") && log.contains("masked"),
         "{log}"
     );
     let py = &tasks[1];

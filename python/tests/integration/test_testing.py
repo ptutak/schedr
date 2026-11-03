@@ -455,13 +455,13 @@ def connect(password: str) -> str:
 @task(secrets=["etl/db#user"])
 def who() -> str:
     try:
-        task_ctx.secret("etl/db#port")
+        task_ctx.secret_value("etl/db#port")
     except SecretError as e:
-        return f"{e.kind}: {task_ctx.secret('etl/db#user')}"
+        return f"{e.kind}: {task_ctx.secret('etl/db', 'user')}"
     return "read an undeclared secret"
 
 with Dag("secrets"):
-    connect(secrets["etl/db#password"])
+    connect(secrets["etl/db"]["password"])
     who()
 """
 

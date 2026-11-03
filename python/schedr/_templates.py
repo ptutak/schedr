@@ -9,6 +9,7 @@ no placeholders: values are passed as arguments or in the environment, never as 
 from datetime import date, datetime, timedelta
 from string.templatelib import Interpolation
 from string.templatelib import Template as TString
+from typing import cast
 
 from schedr._model import Reference, SecretRef, Template, TemplatePart, TemplateRef
 
@@ -140,7 +141,7 @@ def check_in_text(reference: Reference, where: str) -> None:
     if isinstance(reference, SecretRef) and reference.key is None:
         raise TypeError(
             f"{where}: `{reference.label()}` is a whole secret (every key), which can't be "
-            "written into text: name its key, `'path#key'`"
+            f"written into text: name its key, `{reference.label()}['key']`"
         )
 
 
@@ -191,3 +192,25 @@ def to_template(tstring: TString, where: str) -> Template:
         else:
             add_text(_format_literal(item, where))
     return Template(parts)
+
+
+def text(template: TString, /) -> str:
+    """A t-string passed to a Python task where a ``str`` is taken: ``text(t"...")``.
+
+    A t-string is a ``Template``, which type checkers don't take for ``str``; this marks it as
+    the text it becomes when the task runs (decision 177). Nothing else changes: the
+    template is filled in by the worker, as a t-string passed whole is.
+
+    Args:
+        template: The t-string.
+
+    Returns:
+        The same template, typed as the text it becomes.
+
+    Raises:
+        TypeError: For anything but a t-string.
+    """
+    if not isinstance(template, TString):
+        raise TypeError(f'text() takes a t-string, text(t"..."), got {type(template).__name__}')
+    # Typed as the text the worker makes of it, as a placeholder is typed as its value.
+    return cast("str", template)

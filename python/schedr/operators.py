@@ -142,8 +142,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_active_per_run: Accepted for symmetry with ``@task``; an operator isn't mapped,
             so it limits nothing (a ``DagHint`` says so).
         secrets: The secrets the command reads on demand, with ``schedr task-ctx secret get``
-            (never in its environment): ``secrets['path#key']``, ``'path#key'``, ``'path'``
-            (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
+            (never in its environment): ``secrets['path']['key']``, ``'path#key'``,
+            ``'path'`` (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
             declaring; one in the command line is refused (the process list shows it).
 
     Raises:

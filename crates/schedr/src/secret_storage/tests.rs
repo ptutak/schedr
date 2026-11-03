@@ -44,6 +44,7 @@ fn password(storage: Option<&str>) -> SecretName {
         storage: storage.map(str::to_owned),
         path: "etl/db".into(),
         key: Some("password".into()),
+        default: None,
     }
 }
 

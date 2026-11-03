@@ -157,7 +157,8 @@ def storage_label(storage: str | None) -> str:
     """A storage as written in Python.
 
     ``secrets``, ``secrets.other``, or ``secrets.storage('vault-2')`` for a name that can't
-    be an attribute: not a Python name, a keyword, ``_`` first, or ``storage`` itself.
+    be an attribute: not a Python name, a keyword, ``_`` first, or ``storage`` or ``value``
+    (the methods).
 
     Args:
         storage: Its name; ``None`` for the default one.
@@ -171,7 +172,7 @@ def storage_label(storage: str | None) -> str:
         storage.isidentifier()
         and not keyword.iskeyword(storage)
         and not storage.startswith("_")
-        and storage != "storage"
+        and storage not in {"storage", "value"}
     )
     return f"secrets.{storage}" if dotted else f"secrets.storage({storage!r})"
 
@@ -205,11 +206,14 @@ class SecretRef:
         path: The secret's path in the storage (``etl/db``).
         key: The key in it (``password``); ``None`` for the whole secret.
         storage: The storage; ``None`` for the default one.
+        default: What a reference reads when the secret or its key is missing
+            (``.get(key, default)``); a key's only.
     """
 
     path: str
     key: str | None = None
     storage: str | None = None
+    default: str | None = None
 
     def spec(self) -> str:
         """``path#key``, or ``path`` for the whole secret.
@@ -220,12 +224,20 @@ class SecretRef:
         return self.path if self.key is None else f"{self.path}#{self.key}"
 
     def label(self) -> str:
-        """As written in Python: ``secrets['etl/db#password']``, ``secrets.other['etl/db']``.
+        """As written in Python (decision 176).
+
+        ``secrets['etl/db']['password']``, ``secrets.other['etl/db']``,
+        ``secrets['etl/db'].get('password', '')``.
 
         Returns:
             The label.
         """
-        return f"{storage_label(self.storage)}[{self.spec()!r}]"
+        whole = f"{storage_label(self.storage)}[{self.path!r}]"
+        if self.key is None:
+            return whole
+        if self.default is not None:
+            return f"{whole}.get({self.key!r}, {self.default!r})"
+        return f"{whole}[{self.key!r}]"
 
     def __post_init__(self) -> None:
         """Validates the storage name, the path and the key (as the master does).
@@ -245,6 +257,8 @@ class SecretRef:
                 reason = "the key after `#` is empty"
             elif "#" in self.key or "\0" in self.key:
                 reason = "a key contains neither `#` nor NUL"
+        if reason is None and self.key is None and self.default is not None:
+            reason = "a default is a key's (`.get(key, default)`)"
         if reason is not None:
             raise ValueError(f"`{self.label()}`: {reason}")
 
@@ -252,14 +266,16 @@ class SecretRef:
         """The reference as DAG JSON.
 
         Returns:
-            ``{"kind": "secret", "path": ..., "key": ..., "storage": ...}`` (``key`` and
-            ``storage`` only if set).
+            ``{"kind": "secret", "path": ..., "key": ..., "storage": ..., "default": ...}``
+            (``key``, ``storage`` and ``default`` only if set).
         """
         result: dict[str, Any] = {"kind": "secret", "path": self.path}
         if self.key is not None:
             result["key"] = self.key
         if self.storage is not None:
             result["storage"] = self.storage
+        if self.default is not None:
+            result["default"] = self.default
         return result
 
 

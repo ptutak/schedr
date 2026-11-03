@@ -730,4 +730,9 @@ def test_thread_names_lists_the_threads_besides_the_main_one() -> None:
     finally:
         stop.set()
         thread.join()
+    # `join` returns once Python is done with the thread; the OS thread may still be listed
+    # for a moment (seen once in `make check`, 2026-11-03).
+    deadline = time.monotonic() + 5
+    while "probe-thread" in thread_names() and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert "probe-thread" not in thread_names()

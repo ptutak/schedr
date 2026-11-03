@@ -53,53 +53,31 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B155: A secret placeholder or a t-string passed to a Python task's typed parameter fails mypy and basedpyright | 6 | medium | likely | usability |
-| 2 | B32: the UI briefly freezes on Trigger and other links, the request left pending | 6 | medium | likely | usability |
-| 3 | B31: a finished task stays `scheduled` on the UI long after it ended | 6 | medium | likely | usability |
-| 4 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 5 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 7 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 8 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 9 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 10 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 15 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 16 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 17 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 18 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 19 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 20 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 21 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 22 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 23 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 24 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 25 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 26 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
-
-## B155: A secret placeholder or a t-string passed to a Python task's typed parameter fails mypy and basedpyright
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): `connect(secrets['etl/db#password'])` or `connect(t"...{secrets['a#b']}...")` for `def connect(url: str)` is a type error under `mypy --strict`, though it runs.
-- **Found:** 2026-11-03, by Claude writing the M4.6 guide: `examples/docs/secrets.py` with
-  `connect(t"postgresql://etl:{secrets['etl/db#password']}@db/etl")` for `def connect(url:
-  str)` failed `make lint`: `Argument 1 to "__call__" of "TaskFunction" has incompatible type
-  "Template"; expected "str"`. `secrets[...]` is typed `Secret`, so passing a placeholder
-  alone fails the same way. The run itself works (the agent fills the value in), and the
-  guide's type-checker page promises that DAG code needs nothing beyond `--strict`.
-- **Why:** `TaskFunction.__call__` takes `P.args` / `P.kwargs` of the function, so an
-  argument must have the parameter's type. `dag_ctx` references are typed `Any` for this
-  reason; `secrets[...]` returns `Secret`, and a t-string is `string.templatelib.Template`.
-- **A fix** (a typing decision for the user: the API's public types): e.g. `secrets[...]`
-  typed as the value it stands for (`str`, or `Any` as `dag_ctx` is), and a t-string allowed
-  where a `str` is taken (no plain ParamSpec does that: overloads or a checker plugin).
-  `task_ctx.secret(...)` returns `Any` (a key's `str` or a whole secret's `dict`), so
-  basedpyright's `reportAny` flags its use: the example casts it. Overloads by
-  `path#key` vs `path` can't be told apart by type either.
-  Until then the guide's example passes secrets to commands (`env=`) and reads them in
-  Python tasks with `task_ctx.secret(...)`.
+| 1 | B32: the UI briefly freezes on Trigger and other links, the request left pending | 6 | medium | likely | usability |
+| 2 | B31: a finished task stays `scheduled` on the UI long after it ended | 6 | medium | likely | usability |
+| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 16 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 17 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 18 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 19 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 20 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 21 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 22 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 25 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B154: The scheduler's skipped DAGs are never logged
 
