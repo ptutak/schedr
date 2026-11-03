@@ -355,11 +355,11 @@ pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, Render
             TemplatePart::Text(text) => out.push_str(text),
             TemplatePart::Ref(r) => {
                 let label = reference_label(&r.reference);
-                out.push_str(&to_text(
-                    resolve(&r.reference, ctx)?,
-                    r.format.as_deref(),
-                    &label,
-                )?);
+                let text = to_text(resolve(&r.reference, ctx)?, r.format.as_deref(), &label)?;
+                match r.encode {
+                    Some(encoding) => out.push_str(&encoding.apply(&text)),
+                    None => out.push_str(&text),
+                }
             }
         }
     }

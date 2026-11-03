@@ -217,3 +217,13 @@ fn many_values_mask_a_large_stream_quickly() {
         started.elapsed()
     );
 }
+
+#[test]
+fn a_value_url_encoded_is_masked() {
+    // As a typed connection's URL holds it (decision 188), quoted in a driver's error.
+    let set = set(&[("pw", "p@ss/word#1")]);
+    assert_eq!(
+        set.mask_text("can't connect to mysql://root:p%40ss%2Fword%231@db/x"),
+        "can't connect to mysql://root:****@db/x"
+    );
+}

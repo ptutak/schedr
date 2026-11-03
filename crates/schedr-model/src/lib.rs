@@ -34,5 +34,7 @@ pub use task::{
 };
 pub use trigger::Trigger;
 pub use types::{Field, TypeDesc};
-pub use value::{DagCtxField, PathElem, Reference, Template, TemplatePart, TemplateRef, Value};
+pub use value::{
+    DagCtxField, Encoding, PathElem, Reference, Template, TemplatePart, TemplateRef, Value,
+};
 pub use version::{SchedrVersion, VersionError};

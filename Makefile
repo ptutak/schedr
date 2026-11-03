@@ -29,6 +29,11 @@ POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da
 VAULT_IMAGE := docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
 # Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
 # under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
+# The typed connections' servers (decision 185): mysql:8.4.11, created 2026-10-19; mongo:8.0.32,
+# created 2026-10-02; linuxserver/openssh-server:10.3_p1-r1-ls239, created 2026-10-11.
+MYSQL_IMAGE := docker.io/library/mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+MONGO_IMAGE := docker.io/library/mongo:8.0.32@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+SSH_IMAGE := docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # Port for make docs-serve; override with e.g. `make docs-serve DOCS_PORT=9000`.
@@ -105,25 +110,50 @@ test-python:     ## Run Python unit tests with coverage (fails below COVERAGE_MI
 
 test: test-rust test-python  ## Run all unit tests
 
-test-integration: ## Run integration tests (real processes, the binary, Postgres and Vault in containers)
+test-integration: ## Run integration tests (real processes, the binary; Postgres, Vault, MySQL, Mongo and an SSH server in containers)
 	@set -e; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)' --no-run; \
 	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
 	sync; \
-	name=schedr-test-pg-$$$$; \
+	name=schedr-test-pg-$$$$; vault=schedr-test-vault-$$$$; \
+	mysql=schedr-test-mysql-$$$$; mongo=schedr-test-mongo-$$$$; sshd=schedr-test-ssh-$$$$; \
+	keys=$$(mktemp -d); \
+	: "set before any container starts: a start failing leaves none behind"; \
+	trap '$(CONTAINER) rm -f '$$name' '$$vault' '$$mysql' '$$mongo' '$$sshd' >/dev/null 2>&1; rm -rf '$$keys EXIT; \
 	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
 		$(POSTGRES_IMAGE) >/dev/null; \
-	vault=schedr-test-vault-$$$$; \
 	vault_port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); \
 	$(CONTAINER) run -d --rm --name $$vault --network host -e VAULT_DEV_ROOT_TOKEN_ID=root \
 		-e VAULT_DEV_LISTEN_ADDRESS=127.0.0.1:$$vault_port -e SKIP_SETCAP=1 $(VAULT_IMAGE) >/dev/null; \
-	trap '$(CONTAINER) rm -f '$$name' '$$vault' >/dev/null' EXIT; \
+	ssh-keygen -q -t ed25519 -N '' -C schedr-test -f $$keys/id_ed25519; \
+	$(CONTAINER) run -d --rm --name $$mysql -e MYSQL_ROOT_PASSWORD=schedr -p 127.0.0.1::3306 \
+		$(MYSQL_IMAGE) >/dev/null; \
+	$(CONTAINER) run -d --rm --name $$mongo -p 127.0.0.1::27017 $(MONGO_IMAGE) >/dev/null; \
+	$(CONTAINER) run -d --rm --name $$sshd -e USER_NAME=schedr \
+		-e PUBLIC_KEY="$$(cat $$keys/id_ed25519.pub)" -p 127.0.0.1::2222 $(SSH_IMAGE) >/dev/null; \
 	port=$$($(CONTAINER) port $$name 5432/tcp | head -1 | sed 's/.*://'); \
 	until $(CONTAINER) exec $$name psql -h 127.0.0.1 -U postgres -c 'select 1' >/dev/null 2>&1; do \
 		sleep 0.5; done; \
 	export SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:$$port/postgres; \
 	until curl -sf http://127.0.0.1:$$vault_port/v1/sys/health >/dev/null; do sleep 0.5; done; \
 	export SCHEDR_TEST_VAULT_URL=http://127.0.0.1:$$vault_port SCHEDR_TEST_VAULT_TOKEN=root; \
+	mysql_port=$$($(CONTAINER) port $$mysql 3306/tcp | head -1 | sed 's/.*://'); \
+	mongo_port=$$($(CONTAINER) port $$mongo 27017/tcp | head -1 | sed 's/.*://'); \
+	ssh_port=$$($(CONTAINER) port $$sshd 2222/tcp | head -1 | sed 's/.*://'); \
+	: "MySQL's first start runs a server without networking, then the real one: wait on TCP"; \
+	until $(CONTAINER) exec $$mysql mysqladmin ping --protocol=TCP -h 127.0.0.1 -uroot -pschedr \
+		--silent >/dev/null 2>&1; do sleep 1; done; \
+	: "the CA of the certificate MySQL made itself, for the TLS tests"; \
+	$(CONTAINER) cp $$mysql:/var/lib/mysql/ca.pem $$keys/mysql-ca.pem; \
+	until $(CONTAINER) exec $$mongo mongosh --quiet --eval 'db.runCommand({ping: 1}).ok' \
+		>/dev/null 2>&1; do sleep 0.5; done; \
+	until ssh-keyscan -p $$ssh_port 127.0.0.1 > $$keys/known_hosts 2>/dev/null \
+		&& [ -s $$keys/known_hosts ]; do sleep 0.5; done; \
+	export SCHEDR_TEST_MYSQL_URL=mysql://root:schedr@127.0.0.1:$$mysql_port/mysql; \
+	export SCHEDR_TEST_MYSQL_CA=$$keys/mysql-ca.pem; \
+	export SCHEDR_TEST_MONGO_URI=mongodb://127.0.0.1:$$mongo_port/; \
+	export SCHEDR_TEST_SSH="127.0.0.1:$$ssh_port" SCHEDR_TEST_SSH_USER=schedr; \
+	export SCHEDR_TEST_SSH_KEY_FILE=$$keys/id_ed25519 SCHEDR_TEST_SSH_KNOWN_HOSTS=$$keys/known_hosts; \
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \

@@ -60,24 +60,36 @@ step touches their code or the user schedules them.
 | 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
 | 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
 | 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 8 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 16 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 17 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 18 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 19 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 20 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 21 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 22 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 25 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 8 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 9 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 10 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 15 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 16 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 17 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 18 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 19 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 20 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 21 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 22 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 23 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 24 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 25 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 26 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): `schedr-master`'s `a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse` (B45's test) takes 4.3-4.8 s alone, and its registration has 10 s to answer: in a full `make check` (2008 tests, the machine busy) it ran out once, `registered in time: Elapsed(())` at `crates/schedr-master/src/service/tests.rs:1557`.
+- **Found:** 2026-11-03, by Claude, in M4.7b1's `make check` (1921 of 2008 passed, this one
+  failed); alone it passed five times in five, at 4.3-4.8 s. M4.7b1 doesn't touch
+  registration.
+- **When:** possible: the whole Rust suite running in parallel on a busy machine (WSL).
+- **A fix:** find where its 4.5 s go (a parse per root, `STREAM_BUFFER + 10` roots, each
+  probably a real runner) and make that cheaper, or wait on progress (each `Registered` or
+  parse message) rather than one 10 s limit for the whole registration.
 
 ## B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected)
 

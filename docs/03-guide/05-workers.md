@@ -39,6 +39,13 @@ was registered, the backoff starts from 200 ms again.
 
 ## Running a task
 
+For [built-in connections](../02-dags/14-connections.md#built-in-types), install the client
+libraries in the interpreter where tasks run: `schedr[http]`, `schedr[ssh]`,
+`schedr[mongo]`, `schedr[postgres]` and `schedr[mysql]`, as needed. A library is imported
+when its connection is opened; without it the attempt fails, naming the extra to install.
+The worker image also needs CA certificates: HTTP, SQL and Mongo use the system's CAs by
+default. Give a private CA as the connection's `ca_cert` (PEM text).
+
 1. **Checks** (before anything starts): a free slot, not draining, the root and file present,
    the code at the hash the master expects, the interpreter defined. A failed check is a
    `Rejected` with a reason; most reasons are temporary, and the master tries again.

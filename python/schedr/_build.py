@@ -1215,6 +1215,18 @@ def _written_at() -> str:
     return f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno}"
 
 
+def caller_file() -> str:
+    """The file of the first caller outside schedr: the DAG folder's file being run.
+
+    Returns:
+        Its path as Python reports it, or ``""``.
+    """
+    frame: FrameType | None = sys._getframe(1)  # the cheap way to the caller's file
+    while frame is not None and Path(frame.f_code.co_filename).resolve().is_relative_to(_PACKAGE):
+        frame = frame.f_back
+    return "" if frame is None else frame.f_code.co_filename
+
+
 def _check_operand(operand: object, what: str) -> None:
     """Refuses a ``>>`` operand that is no task, output or group, where it is written."""
     items: Sequence[object] = operand if isinstance(operand, list | tuple) else [operand]

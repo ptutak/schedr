@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from schedr._model.ids import validate_task_id
 
@@ -363,20 +363,25 @@ class TemplateRef:
     Attributes:
         reference: What is filled in.
         format: The t-string format spec (``raw``, ``%Y-%m-%d``, ...), if any.
+        encode: How its text is written in: ``"url"``, percent-encoded (a typed
+            connection's URL, decision 188); ``None`` as it is.
     """
 
     reference: Reference
     format: str | None = None
+    encode: Literal["url"] | None = None
 
     def to_json(self) -> dict[str, Any]:
         """The template part as DAG JSON.
 
         Returns:
-            ``{"ref": {...reference, "format": ...}}`` (``format`` only if set).
+            ``{"ref": {...reference, "format": ..., "encode": ...}}`` (each only if set).
         """
         inner = self.reference.to_json()
         if self.format is not None:
             inner["format"] = self.format
+        if self.encode is not None:
+            inner["encode"] = self.encode
         return {"ref": inner}
 
 

@@ -20,10 +20,31 @@ mod tests;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionDef {
-    /// Its name, the function's (an identifier, unique in the root).
+    /// Its name: the function's, or a typed connection's first argument (an identifier,
+    /// unique in the root).
     pub name: String,
+    /// A typed connection's type (decision 174); none for a `@connection` function.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ConnectionType>,
     /// Its parameters' values, by parameter: literals, secrets, and t-strings of them.
     pub params: BTreeMap<String, Value>,
+}
+
+/// The built-in connection types (decision 174): each a fixed shape, given to a command as
+/// variables and files of its own (M4.7b2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionType {
+    /// An HTTP API (httpx).
+    Http,
+    /// An SSH host (paramiko).
+    Ssh,
+    /// A MongoDB database (pymongo).
+    Mongo,
+    /// A Postgres or MySQL database, by URL (psycopg 3, `PyMySQL`).
+    Sql,
+    /// Keys of one's own.
+    Generic,
 }
 
 impl ConnectionDef {

@@ -15,6 +15,10 @@ The names used across the documentation, the API and the logs.
 : A named set of values for a task to connect to a database, API or host. A task declares
   which it uses. See [Connections](../02-dags/14-connections.md).
 
+**Connection type**
+: A built-in connection for a kind of server, with a fixed set of values and a Python
+  client, or `Generic` for values of one's own. See [Built-in types](../02-dags/14-connections.md#built-in-types).
+
 **Content hash**
 : A hash of every file in a root (paths and contents). Workers with the same code report the
   same hash, so the master knows which workers have which code.

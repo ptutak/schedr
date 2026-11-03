@@ -24,6 +24,19 @@ worker only needs `[worker] master_url`. The stream stays open, so the master ca
 work and cancels at once. Heartbeats every 10 s keep it alive through proxies and the mesh's
 idle timeouts.
 
+## Task connections
+
+Tasks open [built-in connections](../02-dags/14-connections.md#built-in-types) from the
+worker to HTTP APIs, SSH hosts, MongoDB, Postgres or MySQL; `Generic` holds values and opens
+no network connection. HTTP verifies TLS; SQL defaults to `verify-full`, checking the
+certificate and host name; Mongo uses verified TLS by default. SSH trusts only the keys in
+`known_hosts`, unless its definition explicitly skips the host check. These settings are
+separate from schedr's `[tls] mode` for traffic between its roles.
+
+In Istio with `REGISTRY_ONLY` egress, an external database needs a `ServiceEntry` in the
+mesh registry. See [In a service mesh](../02-dags/14-connections.md#built-in-types) for
+the database TLS settings inside and outside the mesh.
+
 ## `[tls] mode`: who encrypts
 
 **`app` (the default): schedr does mTLS itself** on the master's gRPC port and on every

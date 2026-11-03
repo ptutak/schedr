@@ -20,6 +20,7 @@ fn ref_part(reference: Reference) -> TemplatePart {
     TemplatePart::Ref(TemplateRef {
         reference,
         format: None,
+        encode: None,
     })
 }
 

@@ -365,7 +365,12 @@ fn a_task_reads_secrets_set_with_the_cli() {
             .to_string_lossy()
             .starts_with("schedr.db")
         {
-            let bytes = std::fs::read(&path).unwrap();
+            // A journal listed can be gone by now (SQLite removes it at a commit's end).
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => panic!("{}: {e}", path.display()),
+            };
             assert!(
                 !bytes.windows(11).any(|w| w == b"hunter22-pw"),
                 "{} holds the value",

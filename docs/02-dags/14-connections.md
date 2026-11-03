@@ -36,6 +36,12 @@ The checks happen when the file loads, so a mistake is an import error, shown on
 | `*args`, `**kwargs`, or a positional-only parameter | every value is given by name |
 | two connections of one name in one file | the name must be unique |
 | values over 1 MiB as JSON | they travel with each task that opens it: give bigger data to the task |
+| `SSH(...)` without `known_hosts` or `insecure_skip_host_check=True` | the host can't be trusted |
+| `HTTP(...)` with both `token` and `user` | one way to authenticate |
+| `SQL(url="sqlite://...")` | the URL is `postgresql://` or `mysql://` |
+| `SQL(url="mysql://...?ssl_ca=...")` | a `mysql://` URL takes only `sslmode` |
+| `SQL(url="postgresql://etl:pw@db/etl", password=...)` | a password is given once |
+| `HTTP(..., check_path="https://other.example/health")` | `check_path` is a path under `base_url`: the token goes nowhere else |
 
 The name is the function's. It must be unique in the DAG folder: one defined in two files
 can't be opened, and the tasks naming it fail, saying which two files.
@@ -85,6 +91,98 @@ Read it into a variable first, as above: `eval "$(...)"` alone succeeds when the
 Without `--env`, or with `--json`, it prints every value as one line of JSON
 (`{"dsn": "...", "pool": 3}`), for `jq` or a program of your own. The function doesn't run
 for a command: a command gets the values only.
+
+## Built-in types
+
+For a common kind of server you don't write the function: a built-in type takes the values and
+gives its client. Its name is the first argument, as an operator's task ID is:
+
+```{literalinclude} ../../examples/docs/typed_connections.py
+:language: python
+:caption: examples/docs/typed_connections.py
+```
+
+| Type | Values (besides the name) | `with` gives | Its check |
+|---|---|---|---|
+| `HTTP` | `base_url`; `token` (a bearer token) or `user` and `password`; `headers`, `ca_cert`, `client_cert`, `client_key` (PEM text), `timeout`, `check_path` | an `httpx.Client` on `base_url` | a request to `check_path`, which must succeed; else any answer to `/` |
+| `SSH` | `host`, `user`, `port`; `private_key` (and its `passphrase`) or `password`; `known_hosts`; `timeout` | a connected paramiko `SSHClient` | connecting |
+| `Mongo` | `uri`, `database`; `user`, `password`; `ca_cert` (PEM text), `timeout` | a pymongo `Database` | `ping` |
+| `SQL` | `url` (`postgresql://` or `mysql://`, `?sslmode=...`); `user`, `password`; `ca_cert` (PEM text), `timeout` | a DB-API connection (psycopg 3, PyMySQL); the block's work committed when it ends, rolled back on an error | `SELECT 1` |
+| `Generic` | keys of your own | a `dict` | none |
+
+Each client's library is an extra, installed where tasks run: `schedr[http]`,
+`schedr[ssh]`, `schedr[mongo]`, `schedr[postgres]`, `schedr[mysql]`. It is imported only when
+a connection of its type is opened; without it, the attempt fails saying which extra to
+install.
+
+**SSH trusts only the host keys it is given.** `known_hosts` holds them as `known_hosts`
+lines (`ssh-keyscan HOST` prints them; `[host]:port` for another port than 22), and any other
+key is refused. Without them, `insecure_skip_host_check=True` accepts whatever key the host
+shows, an attacker's too, and says so to anyone reading the definition.
+
+**A password is a value of its own, or encoded in the URL.** `SQL` and `Mongo` take `user`
+and `password` apart from the URL, given to the driver as they are:
+
+```python
+warehouse = SQL(
+    "warehouse",
+    url="postgresql://db.example.com:5432/etl",
+    user="etl",
+    password=secrets["etl/db"]["password"],
+)
+```
+
+A t-string URL works too (`url=t"postgresql://etl:{secrets['etl/db']['password']}@db/etl"`):
+each value it fills in is percent-encoded, so a password with `@`, `/`, `?` or `#` in it is
+only a password, never another host or query. A value that is part of the URL's structure
+(`host:port`, a whole URL) is given whole instead, `url=secrets["etl/db"]["url"]`, as
+written in the storage. A user or a password both in the URL and given apart is refused.
+
+**SQL verifies TLS unless told not to.** Both databases take libpq's `sslmode` in the URL:
+`verify-full`, the default, needs TLS and checks the server's certificate and name, against
+`ca_cert` or the system's CAs; `verify-ca` checks the certificate only; `require` needs TLS,
+unchecked; `prefer` and `allow` use it when offered; `disable` never. A server without TLS
+(a local one) needs `?sslmode=disable`, which says so in the definition. A `mysql://` URL
+takes no other query key: PyMySQL would ignore it.
+
+A MySQL server left with the certificate it makes itself (no certificate of your own
+configured) can't pass `verify-full`: that certificate names no host. Give it one that names
+its host, or connect with `?sslmode=verify-ca` and its CA as `ca_cert` (the CA MySQL made is
+`ca.pem` in its data directory), which checks the certificate but not the name.
+
+**Mongo verifies TLS too**, unless the URI says `tls=false`: the server's certificate and
+name, against `ca_cert` or the system's CAs. The URI's own TLS options
+(`tlsAllowInvalidHostnames=true`, ...) apply as written. A local server without TLS needs
+`?tls=false`.
+
+**In a service mesh** (Istio, Linkerd) the sidecars carry a database's TLS as opaque bytes:
+Postgres and MySQL start TLS inside their own protocol, so the mesh can neither add it nor
+take it off. What to write depends on what protects the hop:
+
+| The database | Protected by | Write |
+|---|---|---|
+| outside the cluster (a managed database, a VM), reached through a `ServiceEntry` | its own TLS only: the mesh can't originate TLS for these protocols | the default, `verify-full`; its provider's CA as `ca_cert` when the system's CAs don't cover it |
+| in the mesh, without TLS of its own, under `STRICT` mutual TLS | the mesh's mutual TLS (the leg to the sidecar stays inside the pod) | `?sslmode=disable` (Mongo: `?tls=false`) |
+| in the mesh, with TLS of its own | both | `verify-full`, its certificate naming the host the task dials (`db.ns.svc.cluster.local`); else `verify-ca` with its CA |
+
+`?sslmode=disable` there means "no TLS from the task", not "no encryption", and schedr can't
+see the mesh's policy: it stays right only while the database stays in the mesh and the
+policy stays `STRICT` (under `PERMISSIVE`, plaintext is accepted). A comment beside the
+definition saying so helps the next reader.
+
+`known_hosts` lines are read as OpenSSH writes them, comments and blank lines too; a line
+that can't be read, or a marker (`@cert-authority`, `@revoked`), fails the attempt rather
+than being skipped.
+
+A connection's check (`name.run_check()` in a task; `schedr connections test NAME` to come)
+opens it and raises when it doesn't work. A `@connection` of your own gets one with
+`@name.check`:
+
+```python
+@orders_api.check
+def reachable(api: ApiClient) -> None:
+    api.get("/health")
+```
 
 ## When a connection can't be opened
 

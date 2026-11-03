@@ -1,6 +1,6 @@
 use pretty_assertions::assert_eq;
 use rstest::rstest;
-use schedr_model::{TaskId, TemplateRef};
+use schedr_model::{Encoding, TaskId, TemplateRef};
 
 use super::*;
 
@@ -43,6 +43,7 @@ fn part(reference: Reference, format: Option<&str>) -> TemplatePart {
     TemplatePart::Ref(TemplateRef {
         reference,
         format: format.map(str::to_owned),
+        encode: None,
     })
 }
 
@@ -378,4 +379,25 @@ fn a_value_resolves_to_stored_json() {
         serde_json::from_value(json!({"template": [{"ref": {"kind": "secret", "path": "p"}}]}))
             .unwrap();
     assert!(resolve_value(&text, &ctx).is_err());
+}
+
+#[test]
+fn a_url_encoded_reference_is_only_the_text_it_stands_for() {
+    // Decision 188: a password with a URL's structure in it changes no host, no query.
+    let mut ctx = ctx();
+    ctx.inputs
+        .insert("pw".into(), json!("x@evil.example/app?sslmode=disable#é~"));
+    let template = Template(vec![
+        text("postgresql://etl:"),
+        TemplatePart::Ref(TemplateRef {
+            reference: output("pw", vec![]),
+            format: None,
+            encode: Some(Encoding::Url),
+        }),
+        text("@db/etl"),
+    ]);
+    assert_eq!(
+        render(&template, &ctx).unwrap(),
+        "postgresql://etl:x%40evil.example%2Fapp%3Fsslmode%3Ddisable%23%C3%A9~@db/etl"
+    );
 }

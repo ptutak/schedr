@@ -33,6 +33,7 @@ from schedr import (
     task_ctx,
     text,
 )
+from schedr.connections import HTTP, SQL
 from schedr.types import ProcessResult
 
 
@@ -299,3 +300,37 @@ def opens() -> str:
 
 
 CommandOperator("export", ["true"], connections=[orders_api])
+
+
+# A check takes what its connection yields, or something wider.
+@orders_api.check
+def reachable(api: dict[str, str]) -> None:
+    assert api["base_url"]
+
+
+@orders_api.check
+def anything(api: object) -> None:
+    assert api
+
+
+@orders_api.check  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+def numbers(api: int) -> None:
+    assert api > 0
+
+
+billing = HTTP("billing", base_url="https://billing.example.com", token=secrets["billing"]["token"])
+warehouse_db = SQL(
+    "warehouse_db", url=text(t"postgresql://etl:{secrets['etl/db']['password']}@db/etl")
+)
+HTTP("no_name")  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]
+
+
+# A typed connection gives its client's own type.
+@task(connections=[billing, warehouse_db])
+def typed_clients() -> int:
+    with billing() as client:
+        status: int = client.get("/invoices").status_code
+        wrong: str = client.get("/invoices").status_code  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
+    with warehouse_db() as db:
+        db.cursor().execute("SELECT 1")
+    return status + len(wrong)

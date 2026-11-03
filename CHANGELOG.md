@@ -7,6 +7,17 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Built-in connection types** (M4.7b1, decisions 174, 183): `HTTP`, `SSH`, `Mongo`, `SQL`
+  (Postgres, MySQL) and `Generic` in `schedr.connections`, named by their first argument,
+  giving `httpx.Client`, a paramiko `SSHClient`, a pymongo `Database`, a DB-API connection or
+  a dict; each library an extra (`schedr[http]`, `[ssh]`, `[mongo]`, `[postgres]`,
+  `[mysql]`), imported on use. Each has a check (`run_check()`); `@name.check` adds one to a
+  `@connection`. SSH trusts only the host keys in `known_hosts` unless told
+  `insecure_skip_host_check=True`; SQL verifies TLS (`sslmode=verify-full`, libpq's
+  `sslmode` for MySQL too, decision 187) unless the URL says `?sslmode=...`, and Mongo
+  unless the URI says `tls=false` (decision 189). `SQL` and `Mongo` take `user` and
+  `password` apart from the URL; a value a t-string fills into their URL is percent-encoded
+  (decision 188).
 - **Connections** (M4.7a, decisions 174, 179, 180): `@connection(...)` on a generator function
   defines one by name for the DAG folder, its values secrets and plain values; a task
   declares what it opens (`@task(connections=[...])`, `CommandOperator(connections=)`), and

@@ -325,7 +325,7 @@
       "description": "A connection as the runner reports it when parsing (`file_parsed`).",
       "properties": {
         "name": {
-          "description": "Its name, the function's (an identifier, unique in the root).",
+          "description": "Its name: the function's, or a typed connection's first argument (an identifier,\nunique in the root).",
           "type": "string"
         },
         "params": {
@@ -334,6 +334,17 @@
           },
           "description": "Its parameters' values, by parameter: literals, secrets, and t-strings of them.",
           "type": "object"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConnectionType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A typed connection's type (decision 174); none for a `@connection` function."
         }
       },
       "required": [
@@ -341,6 +352,36 @@
         "params"
       ],
       "type": "object"
+    },
+    "ConnectionType": {
+      "description": "The built-in connection types (decision 174): each a fixed shape, given to a command as\nvariables and files of its own (M4.7b2).",
+      "oneOf": [
+        {
+          "const": "http",
+          "description": "An HTTP API (httpx).",
+          "type": "string"
+        },
+        {
+          "const": "ssh",
+          "description": "An SSH host (paramiko).",
+          "type": "string"
+        },
+        {
+          "const": "mongo",
+          "description": "A MongoDB database (pymongo).",
+          "type": "string"
+        },
+        {
+          "const": "sql",
+          "description": "A Postgres or MySQL database, by URL (psycopg 3, `PyMySQL`).",
+          "type": "string"
+        },
+        {
+          "const": "generic",
+          "description": "Keys of one's own.",
+          "type": "string"
+        }
+      ]
     },
     "Dag": {
       "additionalProperties": false,
@@ -571,6 +612,16 @@
         {
           "const": "selection",
           "description": "From a `@branch` task: taken when the branch chose the downstream task.",
+          "type": "string"
+        }
+      ]
+    },
+    "Encoding": {
+      "description": "How a reference's text is written into its template.",
+      "oneOf": [
+        {
+          "const": "url",
+          "description": "Percent-encoded, every byte but RFC 3986's unreserved ones (`A-Z a-z 0-9 - . _ ~`):\na value in a URL (a typed connection's) is only the text it stands for, never the\nURL's structure (another host, a query).",
           "type": "string"
         }
       ]
@@ -1948,6 +1999,17 @@
         }
       ],
       "properties": {
+        "encode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encoding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the text is written into the template, if not as it is (decision 188)."
+        },
         "format": {
           "description": "The t-string format spec, if any.",
           "type": [

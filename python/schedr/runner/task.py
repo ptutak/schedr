@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, is_typeddict
+from urllib.parse import quote
 
 from schedr._model import SecretRef
 from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
@@ -268,10 +269,9 @@ def render(
         spec = reference.get("format")
         if value is None or isinstance(value, list | dict | tuple):
             raise TaskInputError(f"a {type(value).__name__} can't be rendered into text")
-        if spec and "%" in spec:
-            out.append(value.strftime(spec))
-        else:
-            out.append(as_text(value))
+        written = value.strftime(spec) if spec and "%" in spec else as_text(value)
+        # A typed connection's URL (decision 188): only the text, never the URL's structure.
+        out.append(quote(written, safe="") if reference.get("encode") == "url" else written)
     return "".join(out)
 
 

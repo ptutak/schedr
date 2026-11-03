@@ -66,11 +66,13 @@ fn templates_serialize_as_lists_of_parts() {
         TemplatePart::Ref(TemplateRef {
             reference: planned_for(),
             format: None,
+            encode: None,
         }),
         TemplatePart::Text(" ".into()),
         TemplatePart::Ref(TemplateRef {
             reference: output("count", vec![]),
             format: Some("raw".into()),
+            encode: None,
         }),
     ]);
     let expected = json!([
@@ -97,10 +99,12 @@ fn template_text_and_references() {
         TemplatePart::Ref(TemplateRef {
             reference: planned_for(),
             format: None,
+            encode: None,
         }),
         TemplatePart::Ref(TemplateRef {
             reference: output("x", vec![]),
             format: None,
+            encode: None,
         }),
     ]);
     assert_eq!(
@@ -151,6 +155,7 @@ fn value_references_are_found_at_any_depth_in_order() {
             Value::Template(Template(vec![TemplatePart::Ref(TemplateRef {
                 reference: output("b", vec![PathElem::Index(1)]),
                 format: None,
+                encode: None,
             })])),
         )])),
         Value::List(vec![Value::Ref(planned_for())]),

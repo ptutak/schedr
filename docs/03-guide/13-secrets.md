@@ -15,9 +15,17 @@ master, the database's run tables, the API and the UI only ever see names.
 
 A [connection](../02-dags/14-connections.md) can also carry secrets to a task. Before the
 task starts, the worker renders each connection it declares, fetching its secrets and adding
-their values to the mask for its log and output. The mask also covers the shell-quoted form
-printed by `schedr task-ctx connection --env`; `unmasked_prefixes` (below) applies as to any
-other secret. The agent serves only connections the task declares.
+their values to the mask for its log and output. The mask also covers the percent-encoded
+form used in a URL and the shell-quoted form printed by `schedr task-ctx connection --env`;
+`min_mask_length` and `unmasked_prefixes` (below) apply as to any other secret. The agent
+serves only connections the task declares.
+
+For SQL and Mongo, give a password as `password` apart from the URL; it goes to the driver
+as a separate value. Values filled into a URL by a t-string are percent-encoded. See
+[Built-in types](../02-dags/14-connections.md#built-in-types) for the forms and their rules.
+When a client needs a file path, the built-in types pass keys and certificates through an
+anonymous memory file on Linux, never a disk. Elsewhere they use a temporary file, mode
+0600, removed when the client has read it.
 
 Two kinds of storage exist:
 

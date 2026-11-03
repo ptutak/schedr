@@ -90,8 +90,33 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 30
+      # The typed connections' servers (decision 185), the images as the Makefile's.
+      mysql:
+        image: docker.io/library/mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+        env:
+          MYSQL_ROOT_PASSWORD: schedr
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping --protocol=TCP -h 127.0.0.1 -uroot -pschedr --silent"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 60
+      mongo:
+        image: docker.io/library/mongo:8.0.32@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1}).ok'"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     env:
       SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
+      SCHEDR_TEST_MYSQL_URL: mysql://root:schedr@127.0.0.1:3306/mysql
+      SCHEDR_TEST_MONGO_URI: mongodb://127.0.0.1:27017/
+      SCHEDR_TEST_SSH: 127.0.0.1:2222
+      SCHEDR_TEST_SSH_USER: schedr
       SCHEDR_TEST_VAULT_URL: http://127.0.0.1:8200
       SCHEDR_TEST_VAULT_TOKEN: root
     steps:
@@ -106,6 +131,22 @@ jobs:
             -e VAULT_DEV_LISTEN_ADDRESS -e SKIP_SETCAP=1 \
             docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
           timeout 60 sh -c 'until curl -sf http://127.0.0.1:8200/v1/sys/health; do sleep 1; done'
+      # An SSH server with a key made here (a service container starts before any step).
+      - name: SSH server
+        run: |
+          keys="$RUNNER_TEMP/ssh"; mkdir -p "$keys"
+          ssh-keygen -q -t ed25519 -N '' -C schedr-test -f "$keys/id_ed25519"
+          docker run -d --rm --name sshd -e USER_NAME=schedr \
+            -e PUBLIC_KEY="$(cat "$keys/id_ed25519.pub")" -p 127.0.0.1:2222:2222 \
+            docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
+          timeout 60 sh -c "until ssh-keyscan -p 2222 127.0.0.1 > '$keys/known_hosts' 2>/dev/null && [ -s '$keys/known_hosts' ]; do sleep 1; done"
+          echo "SCHEDR_TEST_SSH_KEY_FILE=$keys/id_ed25519" >> "$GITHUB_ENV"
+          echo "SCHEDR_TEST_SSH_KNOWN_HOSTS=$keys/known_hosts" >> "$GITHUB_ENV"
+      # The CA of the certificate MySQL made itself, for the TLS tests.
+      - name: MySQL's CA
+        run: |
+          docker cp "${{ job.services.mysql.id }}:/var/lib/mysql/ca.pem" "$RUNNER_TEMP/mysql-ca.pem"
+          echo "SCHEDR_TEST_MYSQL_CA=$RUNNER_TEMP/mysql-ca.pem" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:

@@ -15,6 +15,7 @@
 use std::fmt::Write as _;
 use std::sync::{Mutex, PoisonError};
 
+use schedr_model::Encoding;
 use serde_json::Value;
 
 #[cfg(test)]
@@ -82,6 +83,8 @@ impl MaskSet {
             json_escaped(value, false),
             json_escaped(value, true),
             python_repr_escaped(value),
+            // As a URL's value is written (decision 188): a driver's error may quote the URL.
+            Encoding::Url.apply(value),
         ];
         // Single-quoted for a shell, `'` written `'\''` (`task-ctx connection --env`).
         let quoted: Vec<String> = forms

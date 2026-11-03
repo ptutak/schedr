@@ -8067,6 +8067,76 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     otherwise fail every task of other files using them (`connection_not_found`), the reason
     decision 179 doesn't refuse DAGs at load. The worker, the DAG page's warning and `schedr
     dags check` use the same registry. Not chosen: any error dropping the file's connections.
+- **Built (M4.7b1; decisions 174, 183, 185-189):** `schedr.connections`' `HTTP`, `SSH`,
+  `Mongo`, `SQL` and `Generic`, each a connection as `@connection` makes one around a
+  built-in generator function (the same checks, defaults recorded, the 1 MiB limit, test
+  doubles), recorded with its `type` (`ConnectionDef.kind`; M4.7b2 maps it to a command's
+  variables and files). The clients: `httpx.Client` (a bearer token or basic auth, headers,
+  a CA and a client certificate as PEM text, loaded into an `ssl.SSLContext`), a connected
+  paramiko `SSHClient` (`RejectPolicy` against `known_hosts`, or `AutoAddPolicy` with
+  `insecure_skip_host_check=True`; `known_hosts` read as OpenSSH writes it, comments too, a
+  line it can't read or a marker refused; the key read through an anonymous memory file,
+  never on a disk, so a killed task leaves none), a pymongo `Database` (documents as dicts; TLS by decision 189),
+  a psycopg 3 or PyMySQL connection by URL scheme (TLS by decision 187, credentials by 188;
+  committed when the block ends, rolled back on an error; PyMySQL 1.2.3's broken MySQL 8 first
+  login without TLS worked around through its `auth_plugin_map`, PyMySQL #1275 being
+  unreleased), a `dict` of one's own keys. HTTP's
+  `check_path` must be a path under `base_url` (an absolute one would get the token). Each
+  library an extra imported on use, the error naming it. A check per type (`run_check()`; a
+  `@connection` of one's own takes `@name.check`), run by M4.7c's `connections test`. Type
+  checkers see each client's type (aliases under `TYPE_CHECKING`, `object` at run time so
+  schedr's annotation reading works without the extras); `Connection` stays covariant (its
+  attributes `Final`, its type variable declared covariant, `@name.check` typed on a `self`
+  of its own so a check taking another type than the client is refused), so
+  `connections=[billing_api]` type-checks. Tested against real servers: HTTP served by the test, Postgres, MySQL 8.4,
+  Mongo 8.0 and an OpenSSH server in containers.
+  - **183. A typed connection's name is its first argument** (the user's, 2026-11-03):
+    `billing_api = HTTP("billing_api", base_url=...)`, as operators take their task ID.
+    Explicit, and it works in loops and under aliases. Not chosen: the module variable's
+    name found by the parser (no clear name for one bound twice or made in a function);
+    `name=` as a keyword.
+  - **184. A command gets a connection both ways** (the user's, 2026-11-03): a dict
+    `CommandOperator(connections={"API": billing_api})` gives `API_*` variables at the start,
+    the files written by the agent (mode 0600, in the attempt's folder, removed when it
+    ends); the list form stays for a script choosing at run time, and `schedr task-ctx
+    connection NAME --env P` then writes the type's files too and prints their paths. Not
+    chosen: the dict form only at the start (the CLI values only); the CLI only.
+  - **185. The clients are tested against real servers** (the user's, 2026-11-03): HTTP
+    against a local server, Postgres in the tests' container, MySQL, Mongo and an OpenSSH
+    server as podman containers in the integration tests (service containers in CI, pinned
+    by digest). Not chosen: real only where cheap (an in-process SSH server, Mongo and MySQL
+    unconnected); unit tests with mocked libraries.
+  - **186. M4.7b in two commits** (the user's, 2026-11-03): M4.7b1 the five types, their
+    Python clients, `check()` and the extras; M4.7b2 what commands get (variables, files,
+    `<PREFIX>_JSON`, a custom connection in the dict form).
+  - **187. SQL verifies TLS unless told not to** (the user's, 2026-11-03, on Codex's review
+    finding that PyMySQL ignored the URL's query: a MySQL connection never checked the
+    server's certificate). One vocabulary for both databases, libpq's `sslmode` in the URL
+    (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`), mapped to
+    PyMySQL for MySQL (an `ssl.SSLContext`, so a server without TLS is refused before
+    authenticating); `ca_cert` (PEM text, as HTTP's) for both, else the system's CAs
+    (`sslrootcert=system`); any other key of a `mysql://` URL refused at load. The default,
+    with no `sslmode`, is `verify-full`, as HTTP verifies and SSH needs `known_hosts`; a
+    server without TLS needs `?sslmode=disable`, written in the definition. Not chosen:
+    `prefer`, the drivers' own (TLS when offered, unchecked); `require` (TLS, unchecked).
+  - **188. A typed connection's credentials: apart, or encoded in its URL** (the user's,
+    2026-11-03, on Grok's security review: a secret filled into `t"postgresql://etl:{...}@db/etl"`
+    unencoded could change the host or turn TLS off, and an `@` in a password broke the URL,
+    libpq splitting at the first, Python at the last). Both: `SQL` and `Mongo` take `user` and
+    `password` values passed to the drivers as keywords, never in the URL (the docs' lead form;
+    M4.7b2 maps them to `PGPASSWORD`, `MYSQL_PWD`, off a command line); and each value a
+    t-string fills into their URL is percent-encoded (RFC 3986's unreserved kept), recorded
+    as the reference's `encode: "url"` and applied by the agent's renderer, the masker masking
+    the encoded form too. A value that is structure (a whole URL, `host:port`) is given whole.
+    One given in both places is refused at load. Not chosen: encoding only (a command would get
+    the password inside the URL); the separate values only (a t-string URL still open to a
+    value's structure); comparing the rendered URL's structure to the template's at open (an
+    `@` in a password refused, not fixed).
+  - **189. Mongo verifies TLS by default** (the user's, 2026-11-03, on Grok's review: pymongo
+    uses TLS only when the URI says `tls=true`). As SQL (decision 187): TLS with the
+    certificate and name checked unless the URI says `tls=false` (or `ssl=false`); the URI's
+    own TLS options as written; `ca_cert` (PEM text) for a private CA, else the system's. Not
+    chosen: pymongo's default, plaintext unless written.
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`

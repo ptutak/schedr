@@ -51,6 +51,10 @@ A task that opens a connection it didn't declare is refused: in Python it gets
 `ConnectionDeniedError`, and an attempt failing of it ends as `connection_denied`, which is not
 retried. See [Connections](../02-dags/14-connections.md).
 
+An error from opening or using a built-in connection, such as a refused TLS certificate or
+SSH host key, is the task's error if it is not caught. It has no schedr error kind and is
+retried as any other task failure is.
+
 ## Delivery
 
 Every message between master and worker may arrive more than once. The attempt ID makes

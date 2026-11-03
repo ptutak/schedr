@@ -103,3 +103,21 @@ fn a_file_the_master_refused_keeps_its_connections() {
 fn named(name: &str) -> ConnectionDef {
     serde_json::from_value(json!({"name": name, "params": {}})).unwrap()
 }
+
+#[test]
+fn a_typed_connection_records_its_type() {
+    let recorded = json!({"name": "billing", "type": "http", "params": {
+        "base_url": {"literal": "https://billing.example.com"},
+    }});
+    let def: ConnectionDef = serde_json::from_value(recorded.clone()).unwrap();
+    assert_eq!(def.kind, Some(ConnectionType::Http));
+    assert_eq!(serde_json::to_value(&def).unwrap(), recorded);
+    // A `@connection` function has none, and writes none.
+    assert_eq!(named("plain").kind, None);
+    assert_eq!(
+        serde_json::to_value(named("plain")).unwrap(),
+        json!({"name": "plain", "params": {}})
+    );
+    let unknown = json!({"name": "x", "type": "ftp", "params": {}});
+    assert!(serde_json::from_value::<ConnectionDef>(unknown).is_err());
+}

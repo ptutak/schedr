@@ -6,6 +6,7 @@
 //! them in at run time.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -101,6 +102,39 @@ pub struct TemplateRef {
     /// The t-string format spec, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// How the text is written into the template, if not as it is (decision 188).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode: Option<Encoding>,
+}
+
+/// How a reference's text is written into its template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoding {
+    /// Percent-encoded, every byte but RFC 3986's unreserved ones (`A-Z a-z 0-9 - . _ ~`):
+    /// a value in a URL (a typed connection's) is only the text it stands for, never the
+    /// URL's structure (another host, a query).
+    Url,
+}
+
+impl Encoding {
+    /// `text` written this way.
+    #[must_use]
+    pub fn apply(self, text: &str) -> String {
+        match self {
+            Self::Url => {
+                let mut out = String::with_capacity(text.len());
+                for byte in text.bytes() {
+                    if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                        out.push(char::from(byte));
+                    } else {
+                        let _ = write!(out, "%{byte:02X}"); // writing to a `String` can't fail
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 /// One part of a template: literal text, or a reference filled in at run time.

@@ -24,6 +24,16 @@ dependencies = []
 # Pydantic models as outputs and inputs (decision 59): schedr itself never imports Pydantic.
 # 2.11 brought `model_validate(..., by_name=True)`; 3.0 may change the v2 API.
 pydantic = ["pydantic>=2.11,<3"]
+# The typed connections' clients (decision 174), each imported only when one is opened.
+# httpx 0.28 is the API both modes share; 1.0 is still in development.
+http = ["httpx>=0.28,<1"]
+# 4.10 brought AsyncMongoClient (async with M4.10).
+mongo = ["pymongo>=4.10,<5"]
+# 5.0 dropped DSA keys; its key and host-key APIs are the ones used.
+ssh = ["paramiko>=5.0,<6"]
+# psycopg 3 with its own libpq build (the binary package), so no system libpq is needed.
+postgres = ["psycopg[binary]>=3.2,<4"]
+mysql = ["pymysql[rsa]>=1.1,<2"]  # rsa: cryptography, for SHA-2 password auth without TLS
 
 [dependency-groups]
 dev = [
@@ -38,6 +48,15 @@ dev = [
     "basedpyright==1.40.2",
     # Tests `schedr.pydantic.Model` and Pydantic outcome unions; never a runtime dependency.
     "pydantic==2.14.1",
+    # The typed connections' clients (the extras above), for their tests and type checks.
+    "httpx==0.28.1",
+    "pymongo==4.19.0",
+    "paramiko==5.1.0",
+    "psycopg[binary]==3.3.6",
+    "pymysql==1.2.3",
+    # Their type stubs (neither ships its own); the newest at least two weeks old.
+    "types-paramiko==5.0.0.20261006",
+    "types-PyMySQL==1.2.0.20260923",
 ]
 # The web UI's browser tests (`make test-ui`, decision 27A); not in `uv sync`'s default.
 ui-test = [

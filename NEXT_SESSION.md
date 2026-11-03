@@ -4,6 +4,29 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-03, evening): M4.7b1 committed; M4.7b2 next
+
+- **The user's standing instruction:** continue until the end of M4.7, each sub-step
+  reviewed, checked, committed and pushed; stop only for the user's decisions. **No git
+  history rewrite for now** (the user, 2026-11-03); `user.email` here is
+  `p.tutak@outlook.com`.
+- **M4.7a committed** (`c45d766`, decisions 174, 179-182).
+- **M4.7b1 committed** (decisions 183, 185-189): the built-in types `HTTP`, `SSH`, `Mongo`,
+  `SQL`, `Generic` (`python/schedr/connection_types.py`), each library an extra; tested
+  against real servers (MySQL, Mongo, an OpenSSH server added to `make test-integration` and
+  CI). Decision 187: SQL takes libpq's `sslmode` for both databases, `verify-full` by default;
+  188: `user`/`password` apart from the URL, and t-string values in a URL percent-encoded
+  (the reference's `encode: "url"`, the agent's renderer, the masker's encoded form); 189:
+  Mongo verifies TLS by default. Reviewed by Codex (8 findings) and Grok's security review
+  (4), all fixed. `WORKAROUND(pymysql==1.2.3)` in `_mysql`: MySQL 8's first login without TLS
+  (upstream fix PyMySQL #1275, unreleased): remove once a release has it. B159 logged (a
+  registration test past its 10 s under `make check`'s load).
+- **Next: M4.7b2** (decisions 184, 186): what commands get from a typed connection: the dict
+  form `CommandOperator(connections={"API": billing_api})`, `API_*` variables, the agent's
+  files (0600, in the attempt's folder), `<PREFIX>_JSON`, `task-ctx connection --env` writing
+  the files; `PGPASSWORD`/`MYSQL_PWD` from decision 188's `password`. Then **M4.7c**.
+- **Usage:** Grok 94% weekly (reset Friday 9:00), Codex 87%.
+
 ## State (2026-11-03, day): M4.6f done; M4.7a in progress
 
 - **The user's standing instruction:** continue until the end of M4.7, each sub-step

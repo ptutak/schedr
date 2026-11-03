@@ -140,6 +140,16 @@
         }
       ]
     },
+    "Encoding": {
+      "description": "How a reference's text is written into its template.",
+      "oneOf": [
+        {
+          "const": "url",
+          "description": "Percent-encoded, every byte but RFC 3986's unreserved ones (`A-Z a-z 0-9 - . _ ~`):\na value in a URL (a typed connection's) is only the text it stands for, never the\nURL's structure (another host, a query).",
+          "type": "string"
+        }
+      ]
+    },
     "Expand": {
       "description": "What a mapped task's instances vary over (decision 69): one instance per element.",
       "oneOf": [
@@ -902,6 +912,17 @@
         }
       ],
       "properties": {
+        "encode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encoding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the text is written into the template, if not as it is (decision 188)."
+        },
         "format": {
           "description": "The t-string format spec, if any.",
           "type": [
