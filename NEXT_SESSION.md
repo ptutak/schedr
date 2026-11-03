@@ -15,8 +15,10 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   decision 173), `examples/docs/secrets.py` (tested with `--secret` values), the stale lines
   fixed. **B155** logged: a secret or a t-string passed to a typed Python task parameter
   fails mypy (and `task_ctx.secret` is `Any`): a typing decision for the user.
-- **Overnight (the user's plan, 2026-11-03):** B31 and B32 (reproduce, fix, Codex review),
-  then the **M4.7 design questions** written up for the user's morning answers.
+- **Overnight (2026-11-03):** B31 and B32 reproduced by Codex: one cause, the browser's six
+  HTTP/1.1 connections held by live pages' streams (bug files updated). **Waiting for the
+  user:** B31/B32's fix, B155's typing, and the M4.7 questions (in the last message of
+  the session, `claude --resume` below).
 - The user said: no dynamic secrets planned; most probably no release before 1.0.0.
 - **Grok's weekly usage: 85%**, Codex's 80% (resets: Grok Friday 9:00).
 - **Rust coverage** stays just over the 85% floor: new code brings its tests.

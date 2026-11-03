@@ -2,9 +2,9 @@ title = "the UI briefly freezes on Trigger and other links, the request left pen
 severity = "medium"
 probability = "likely"
 kind = "usability"
-summary = "UI clicks hang for a moment; seen by the user (the cause suspected)"
+summary = "UI clicks hang for a moment; seen by the user (the browser's six connections, held by live pages' streams)"
 found = 2026-10-28
-suspected = true
+suspected = false
 details = '''
 - **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other
   links, the page hangs for a moment with nothing happening; the browser's Inspect shows the
@@ -16,4 +16,14 @@ details = '''
 - **To confirm:** a browser test with several live pages open on one UI, timing a click
   until its request is sent. **A fix** depends on the cause (one shared stream per browser,
   HTTP/2, fewer streams per page).
+- **Cause (2026-11-03, reproduced by Codex, checked by Claude):** as suspected, the browser's
+  limit of six HTTP/1.1 connections per host: five hidden live pages within their 10 s grace
+  (`schedrHiddenClose`, B25) and a sixth page's stream held the pool, so the Trigger POST left
+  the browser 9.9 s after the click; the UI answered it in 19 ms once it arrived. Visible
+  pages hold their streams for as long as they are open, so the same happens with six visible
+  live pages.
+- **The fix** (a decision for the user): one stream per browser shared by its tabs (a Web
+  Lock picks the tab holding it, a BroadcastChannel hands its changes to the others), hidden
+  pages closing theirs at once (each tab switch then reloads the page), or HTTP/2 to the UI
+  (TLS needed: through an ingress, or the UI's own).
 '''

@@ -54,8 +54,8 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B155: A secret placeholder or a t-string passed to a Python task's typed parameter fails mypy and basedpyright | 6 | medium | likely | usability |
-| 2 | B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected) | 6 | medium | likely | usability |
-| 3 | B31: a finished task stays `scheduled` on the UI long after it ended (Suspected) | 6 | medium | likely | usability |
+| 2 | B32: the UI briefly freezes on Trigger and other links, the request left pending | 6 | medium | likely | usability |
+| 3 | B31: a finished task stays `scheduled` on the UI long after it ended | 6 | medium | likely | usability |
 | 4 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
 | 5 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
 | 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
@@ -317,9 +317,9 @@ step touches their code or the user schedules them.
 - **Cosmetic:** every task is in the right box. **A fix:** route such edges around boxes,
   or order layers so that it can't happen; with B39.
 
-## B32: the UI briefly freezes on Trigger and other links, the request left pending (Suspected)
+## B32: the UI briefly freezes on Trigger and other links, the request left pending
 
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): UI clicks hang for a moment; seen by the user (the cause suspected).
+- **Rating:** severity **medium**, probability **likely**, usability (score 6): UI clicks hang for a moment; seen by the user (the browser's six connections, held by live pages' streams).
 - **Found:** 2026-10-28, by the user (dev notes): clicking "Trigger", and sometimes other
   links, the page hangs for a moment with nothing happening; the browser's Inspect shows the
   request `Pending`; then it goes through and the DAG is triggered properly.
@@ -330,10 +330,20 @@ step touches their code or the user schedules them.
 - **To confirm:** a browser test with several live pages open on one UI, timing a click
   until its request is sent. **A fix** depends on the cause (one shared stream per browser,
   HTTP/2, fewer streams per page).
+- **Cause (2026-11-03, reproduced by Codex, checked by Claude):** as suspected, the browser's
+  limit of six HTTP/1.1 connections per host: five hidden live pages within their 10 s grace
+  (`schedrHiddenClose`, B25) and a sixth page's stream held the pool, so the Trigger POST left
+  the browser 9.9 s after the click; the UI answered it in 19 ms once it arrived. Visible
+  pages hold their streams for as long as they are open, so the same happens with six visible
+  live pages.
+- **The fix** (a decision for the user): one stream per browser shared by its tabs (a Web
+  Lock picks the tab holding it, a BroadcastChannel hands its changes to the others), hidden
+  pages closing theirs at once (each tab switch then reloads the page), or HTTP/2 to the UI
+  (TLS needed: through an ingress, or the UI's own).
 
-## B31: a finished task stays `scheduled` on the UI long after it ended (Suspected)
+## B31: a finished task stays `scheduled` on the UI long after it ended
 
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): a finished task shown `scheduled` for up to ~15 s; seen by the user (the cause suspected).
+- **Rating:** severity **medium**, probability **likely**, usability (score 6): a finished task shown `scheduled` for up to ~15 s; seen by the user (the browser's six connections, held by live pages' streams).
 - **Found:** 2026-10-28, by the user (dev notes): during a run a task stays `scheduled` on
   the run page for quite a long time before it shows `success`, while its times say it
   finished a second after its upstream task.
@@ -343,6 +353,16 @@ step touches their code or the user schedules them.
   announced. Not checked.
 - **To confirm:** a test running a two-task DAG in standalone with a run page's live stream
   open, timing each task's state change against when the page hears of it.
+- **Cause (2026-11-03, reproduced by Codex, checked by Claude):** the browser's limit of six
+  HTTP/1.1 connections per host. Every live page holds one for its stream
+  (`crates/schedr-ui/templates/base.html`, `sse-connect`), and a hidden page gives its back
+  only after 10 s (`schedrHiddenClose`, B25). With six streams open, the run page's reload
+  waits in the browser's queue: the change was announced 0.6 s after the database's write,
+  the page showed it 7.2 s after (Playwright, standalone on SQLite, a proxy timing arrivals).
+  Without the contention, write to page took 0.07-0.19 s. A second, conditional cause: with
+  `[database] change_notifications = false`, pages refresh only every 15 s (12.2 s measured).
+- **The fix** shares B32's (a decision for the user): one stream per browser shared by its
+  tabs, hidden pages closing theirs at once, or HTTP/2 to the UI.
 
 ## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
 
