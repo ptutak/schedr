@@ -29,6 +29,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
+use schedr_model::connection::Registry;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
 use schedr_model::{
     AttemptStatus, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
@@ -209,6 +210,8 @@ pub struct Dispatcher {
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
     /// those hashes and of at least that version.
     current_code: BTreeMap<String, (BTreeSet<String>, Option<SchedrVersion>)>,
+    /// Each root's connections from its current parse (decision 174).
+    connections: BTreeMap<String, Arc<Registry>>,
     metrics: MasterMetrics,
     /// Attempts whose `Started` arrived but waits for the master: never taken back (B11).
     arrivals: Arrivals,
@@ -276,6 +279,7 @@ impl Dispatcher {
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
+            connections: BTreeMap::new(),
             metrics: MasterMetrics::default(),
             arrivals: Arrivals::default(),
             adopted_unrecorded: BTreeSet::new(),
@@ -435,6 +439,11 @@ impl Dispatcher {
     ) {
         self.current_code
             .insert(root.to_owned(), (accepted.clone(), version));
+    }
+
+    /// Each root's connections (decision 174): a task's assignment carries those it declares.
+    pub fn set_connections(&mut self, registries: BTreeMap<String, Arc<Registry>>) {
+        self.connections = registries;
     }
 
     /// A worker's schedr version: it gets only tasks of parses no newer.
@@ -1587,6 +1596,14 @@ impl Dispatcher {
             memory_budget_bytes: 0,
             setrlimit: false,
             upstream_outcomes: outcomes.into_iter().collect(),
+            // Only what the task declares (decision 179): the agent serves no other, and a
+            // root's whole registry could outgrow the worker's 4 MiB message.
+            connections_json: match (task, self.connections.get(&ready.dag.location.root)) {
+                (Some(task), Some(registry)) if !task.connections.is_empty() => {
+                    serde_json::to_vec(&registry.only(&task.connections)).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            },
         }
     }
 }
@@ -1603,6 +1620,7 @@ fn as_sent(task: &schedr_model::Task) -> schedr_model::Task {
         group: task.group.clone(),
         expand: None,
         secrets: task.secrets.clone(),
+        connections: task.connections.clone(),
     }
 }
 

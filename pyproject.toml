@@ -101,7 +101,7 @@ select = [
 
 [tool.ruff.lint.pylint]
 # The public API takes many keyword-only options (Dag, operators, @task), as designed.
-max-args = 13
+max-args = 14
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

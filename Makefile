@@ -48,19 +48,19 @@ setup:           ## Install dev tools, Python dev deps and pre-commit hooks
 
 fmt:             ## Format Rust and Python code
 	cargo fmt --all
-	uv run ruff format python examples
-	uv run ruff check --fix python examples
+	uv run ruff format python examples scripts
+	uv run ruff check --fix python examples scripts
 
 fmt-check:       ## Verify formatting without changing files
 	cargo fmt --all -- --check
-	uv run ruff format --check python examples
+	uv run ruff format --check python examples scripts
 
 # DAG code as authors write it (decision 57): the example DAGs and the typing checks.
 DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py
 
 lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG code
 	cargo clippy --workspace --all-targets -- -D warnings
-	uv run ruff check python examples
+	uv run ruff check python examples scripts
 	uv run mypy
 	uv run mypy --strict $(DAG_TYPED)
 	uv run basedpyright --project pyproject.toml
@@ -151,11 +151,35 @@ STANDALONE_DIR ?= .schedr
 LISTEN ?= 0.0.0.0
 FORK_SERVER ?= true
 
-standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/); the UI's Docs from site/ once `make docs` built it
+# The docs examples' secrets, as examples/test_docs.py gives them.
+STANDALONE_SECRETS := "etl/db password=s3cret-db-password" "etl/api token=s3cret-api-token" \
+	"tenants/acme api_key=s3cret-acme-key"
+# `prepare DIR`, a shell function for a standalone whose SQLite database is DIR/schedr.db: a
+# secret key made once in DIR/secret.key (`SCHEDR_SECRET_KEY`), and STANDALONE_SECRETS set
+# where missing (listed, never decrypted: one written under another key is kept). A new database is migrated first to hold them; one there already is migrated
+# by `standalone --migrate`.
+STANDALONE_PREPARE = prepare() { \
+	local key="$$1/secret.key" url="sqlite://$$1/schedr.db" entry path pair; \
+	mkdir -p "$$1"; \
+	if [ ! -s "$$key" ]; then (umask 077; target/debug/schedr secrets new-key > "$$key"); fi; \
+	[ -e "$$1/schedr.db" ] || SCHEDR_CONFIG__DATABASE__URL="$$url" target/debug/schedr db migrate; \
+	stored="$$(SCHEDR_CONFIG__DATABASE__URL="$$url" target/debug/schedr secrets list | cut -f1,2)"; \
+	for entry in $(STANDALONE_SECRETS); do \
+		path=$${entry%% *}; pair=$${entry\#* }; \
+		grep -qxF "$$path	$${pair%%=*}" <<< "$$stored" \
+		|| SCHEDR_CONFIG__DATABASE__URL="$$url" SCHEDR_SECRET_KEY="$$(cat "$$key")" \
+			target/debug/schedr secrets set "$$path" "$$pair" >/dev/null; \
+	done; \
+}
+
+standalone: SHELL := /bin/bash
+standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/); a secret key in .schedr/secret.key, the docs examples' secrets; the UI's Docs from site/ once `make docs` built it
 	cargo build -p schedr
-	mkdir -p $(STANDALONE_DIR)
+	set -euo pipefail; $(STANDALONE_PREPARE); \
+	dir="$(abspath $(STANDALONE_DIR))"; prepare "$$dir"; \
+	SCHEDR_SECRET_KEY="$$(cat "$$dir/secret.key")" \
+	SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/schedr.db" \
 	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
-	SCHEDR_CONFIG__DATABASE__URL="sqlite://$(abspath $(STANDALONE_DIR))/schedr.db" \
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
@@ -181,11 +205,13 @@ PORT_OFFSET ?= 0
 standalone-separate-ui: SHELL := /bin/bash
 standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the first with a standby master) and one `schedr ui` over both, on 8082
 	cargo build -p schedr
+	$(STANDALONE_PREPARE); \
 	dir="$(abspath $(STANDALONE_DIR))/federation"; \
 	python="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')"; \
 	ui=$$((8082 + $(PORT_OFFSET))); ui_ops=$$((8092 + $(PORT_OFFSET))); \
 	run() { \
-		mkdir -p "$$dir/$$1"; \
+		prepare "$$dir/$$1" || exit 1; \
+		SCHEDR_SECRET_KEY="$$(cat "$$dir/$$1/secret.key")" \
 		SCHEDR_DAG_PATH="$$2" \
 		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/$$1/schedr.db" \
 		SCHEDR_CONFIG__WORKER__DATA_DIR="$$dir/$$1" \
@@ -205,6 +231,7 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 	run main "$(abspath $(DAGS))" $$((8000 + $(PORT_OFFSET))); \
 	main=$$((8000 + $(PORT_OFFSET))); \
 	( until curl -sf -o /dev/null "http://127.0.0.1:$$((main + 80))/api/v1/dags"; do sleep 0.5; done; \
+	  SCHEDR_SECRET_KEY="$$(cat "$$dir/main/secret.key")" \
 	  SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/main/schedr.db" \
 	  SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 71)) \
 	  SCHEDR_CONFIG__OPS__PORT=$$((main + 91)) \

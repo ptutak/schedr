@@ -86,6 +86,15 @@ where
             Err(message) => report(err, &format!("error: {message}\n"), 1),
         };
     }
+    if let cli::Command::TaskCtx {
+        command: cli::TaskCtxCommand::Connection(command),
+    } = &cli.command
+    {
+        return match ctx::run_task_ctx_connection(command, env, VERSION, out) {
+            Ok(()) => 0,
+            Err(message) => report(err, &format!("error: {message}\n"), 1),
+        };
+    }
     let config = match app::load_config(cli.config.as_deref(), env, read_file) {
         Ok(config) => config,
         Err(e) => return report(err, &format!("error: {e}\n"), e.exit_code()),

@@ -55,28 +55,43 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
 | 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 3 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 4 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 5 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 6 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 7 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 8 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 12 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 13 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 14 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 15 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 16 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 17 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 18 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 19 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 20 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 21 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 22 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 23 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 24 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 3 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 8 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 13 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 16 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 17 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 18 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 19 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 20 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 21 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 22 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 25 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected)
+
+- **Rating:** severity **medium**, probability **rare**, reliability (score 2): `AssignTask` keeps inputs inline up to `INLINE_INPUTS_LIMIT` (4 MiB), the worker's whole gRPC message limit; the task's JSON, its run's params and its connections come on top, so inputs of a little under 4 MiB make a message the worker can't decode: its control stream ends, the task is never started and goes back to the queue after the start timeout, again and again.
+- **Found:** 2026-11-03, by Claude checking Grok's M4.7a security finding (a root's whole
+  connection registry rode in each assignment; fixed there: only the task's declared ones go).
+  Read in `crates/schedr-master/src/dispatch.rs`: `external = inputs.len() >
+  INLINE_INPUTS_LIMIT`, with `INLINE_INPUTS_LIMIT = 4 * 1024 * 1024`; the worker's
+  `MasterClient` keeps tonic's default 4 MiB receive limit (`crates/schedr/src/roles.rs`,
+  which `schedr-config`'s `MIN_MESSAGE_SIZE` says workers rely on). Not reproduced yet.
+- **When:** rare: an upstream output of a little under 4 MiB passed whole to a task.
+- **A fix:** the inline decision on the whole message's encoded size (inputs, task JSON,
+  params, connections) with a margin, e.g. inputs inline only while the message stays under
+  4 MiB less 64 KiB; a test with inputs of 4 MiB less a few bytes.
 
 ## B156: An action's status stops being followed after an error answer
 

@@ -20,6 +20,16 @@ fn values_are_masked_and_counted() {
 }
 
 #[test]
+fn a_value_quoted_for_a_shell_is_masked() {
+    // As `schedr task-ctx connection --env` prints it.
+    let set = set(&[("k", "long'private-token")]);
+    assert_eq!(
+        set.mask_text("export DB_PASSWORD='long'\\''private-token'"),
+        "export DB_PASSWORD='****'"
+    );
+}
+
+#[test]
 fn a_short_value_isnt_masked() {
     let set = MaskSet::new(5);
     assert!(!set.add("flag", "true"));

@@ -7,8 +7,8 @@ summary. It doesn't enforce timeouts or watch memory: the agent does (see PROJEC
 Rust/Python integration).
 """
 
+import contextlib
 import dataclasses
-import threading
 import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -30,7 +30,16 @@ from schedr._serialization.annotations import (
 )
 from schedr._serialization.codec import escaped
 from schedr._templates import as_text
-from schedr.context import RunValues, SecretError, SecretReader, TaskValues, running
+from schedr.connections import ConnectionDeniedError, ConnectionNotFoundError
+from schedr.context import (
+    ConnectionEnter,
+    ConnectionOpener,
+    RunValues,
+    SecretError,
+    SecretReader,
+    TaskValues,
+    running,
+)
 from schedr.outcomes import from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
 from schedr.runner.protocol import Channel
@@ -111,6 +120,12 @@ def resolve(
 SECRETS = "$secrets"
 """Where :func:`execute` puts the request's fetched secrets in the run mapping."""
 
+CONNECTION_NOT_FOUND = "connection_not_found"
+"""The error kind of a connection the agent doesn't know (not in the DAG folder's registry)."""
+
+CONNECTION_DENIED = "connection_denied"
+"""The error kind of a connection the task doesn't declare in ``connections=``."""
+
 
 def secret_key(
     name: Mapping[str, Any],
@@ -143,13 +158,10 @@ def secret_reader(channel: Channel) -> SecretReader:
     Returns:
         The reader ``task_ctx.secret`` calls.
     """
-    lock = threading.Lock()
 
     def read(ref: SecretRef) -> str | dict[str, str]:
-        with lock:
-            name = {k: v for k, v in ref.to_json().items() if k != "kind"}
-            channel.send({"type": "secret_get", "secret": name})
-            answer = channel.receive()
+        name = {k: v for k, v in ref.to_json().items() if k != "kind"}
+        answer = channel.ask({"type": "secret_get", "secret": name})
         if answer.get("type") == "secret":
             value: str | dict[str, str] = answer["value"]
             return value
@@ -158,6 +170,40 @@ def secret_reader(channel: Channel) -> SecretReader:
         raise SecretError("secret_unavailable", f"unexpected answer {answer.get('type')!r}")
 
     return read
+
+
+def connection_opener(channel: Channel) -> ConnectionOpener:
+    """Opens connections, their values asked of the agent (``connection_get``).
+
+    The agent renders them from what the parser recorded; one request at a time.
+
+    Args:
+        channel: The channel to the agent.
+
+    Returns:
+        The opener ``with name():`` calls.
+    """
+
+    def values_of(name: str) -> Mapping[str, object]:
+        answer = channel.ask({"type": "connection_get", "name": name})
+        if answer.get("type") == "connection":
+            values: Mapping[str, object] = answer["values"]
+            return values
+        if answer.get("type") == "connection_failed":
+            kind, message = str(answer["kind"]), str(answer["message"])
+            if kind == CONNECTION_NOT_FOUND:
+                raise ConnectionNotFoundError(message)
+            if kind == CONNECTION_DENIED:
+                raise ConnectionDeniedError(message)
+            raise SecretError(kind, message)
+        raise SecretError("secret_unavailable", f"unexpected answer {answer.get('type')!r}")
+
+    def open_connection(
+        name: str, enter: ConnectionEnter
+    ) -> contextlib.AbstractContextManager[object]:
+        return enter(values_of(name))
+
+    return open_connection
 
 
 PROCESS_RESULT = frozenset(
@@ -565,6 +611,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     request: Mapping[str, Any],
     imported: Callable[[], None] = lambda: None,
     secrets: SecretReader | None = None,
+    channel: Channel | None = None,
 ) -> dict[str, Any]:
     """Runs a task request and returns the message to send.
 
@@ -574,6 +621,7 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
             before the task's function (not when that fails).
         secrets: Reads a secret for ``task_ctx.secret`` (through the agent); ``None``: the
             task reads none.
+        channel: The channel to the agent, for the connections it opens; ``None``: none.
 
     Returns:
         ``task_succeeded`` with the encoded output, or ``task_failed``.
@@ -600,11 +648,18 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
         return failure(e, "import_failed")
     imported()
     try:
-        own = TaskValues(task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets)
+        opener = connection_opener(channel) if channel is not None else None
+        own = TaskValues(
+            task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener
+        )
         with running(run_values(run, params_class), own):
             result = function(**arguments)
     except SecretError as e:
         return failure(e, e.kind)
+    except ConnectionNotFoundError as e:
+        return failure(e, CONNECTION_NOT_FOUND)
+    except ConnectionDeniedError as e:
+        return failure(e, CONNECTION_DENIED)
     except (Exception, SystemExit) as e:
         return failure(e, None)
     if not task.get("branch"):
@@ -682,7 +737,10 @@ def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
     extend_sys_path(request["sys_path"])
     # The agent times the start from it: the interpreter's, then the DAG file's import.
     result = execute(
-        request, lambda: channel.send({"type": "task_imported"}), secret_reader(channel)
+        request,
+        lambda: channel.send({"type": "task_imported"}),
+        secret_reader(channel),
+        channel,
     )
     channel.send(result)
     return 0 if result["type"] == "task_succeeded" else 1

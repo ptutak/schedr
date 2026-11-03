@@ -236,6 +236,14 @@ pub async fn get_dag(
         if let Some(params) = &current.dag.params {
             view.params = ParamFieldView::of(params);
         }
+        if current.dag.tasks.iter().any(|t| !t.connections.is_empty()) {
+            let root = &current.dag.location.root;
+            view.warnings = state
+                .db
+                .current_connections(root)
+                .await?
+                .problems(&current.dag);
+        }
         let limited = current.dag.max_active_tasks.is_some()
             || current.dag.tasks.iter().any(|t| {
                 t.settings.max_active.is_some() || t.settings.max_active_per_run.is_some()

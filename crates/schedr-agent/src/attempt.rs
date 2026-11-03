@@ -8,9 +8,11 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use schedr_model::connection::Registry;
 use schedr_model::runner::{
     DagFile, ErrorSummary, RunInfo, RunnerMessage, SecretValue, TaskRequest,
 };
@@ -67,6 +69,8 @@ pub struct AttemptSpec {
     /// The copy of its root's code it was planned against (decision 102); `None`: the
     /// configured root.
     pub code_dir: Option<PathBuf>,
+    /// Its root's connections (decision 174): rendered when the task opens one.
+    pub connections: Arc<Registry>,
 }
 
 /// Why an assignment can't be read.
@@ -145,6 +149,12 @@ impl AttemptSpec {
             secrets: BTreeMap::new(),
             mask: Mask::default(),
             code_dir: None,
+            connections: Arc::new(if assign.connections_json.is_empty() {
+                Registry::default()
+            } else {
+                serde_json::from_slice(&assign.connections_json)
+                    .map_err(|e| invalid("connections", &e))?
+            }),
         })
     }
 

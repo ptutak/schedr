@@ -26,12 +26,14 @@ fn file_messages_round_trip() {
         RunnerMessage::FileParsed {
             path: "helpers.py".into(),
             dags: vec![],
+            connections: Vec::new(),
             error: None,
             warnings: Vec::new(),
         },
         RunnerMessage::FileParsed {
             path: "broken.py".into(),
             dags: vec![],
+            connections: Vec::new(),
             error: Some(ErrorSummary {
                 exception: "ModuleNotFoundError".into(),
                 message: "No module named 'pandas'".into(),
@@ -347,6 +349,7 @@ fn a_parsed_files_warnings_are_read_and_left_out_when_there_are_none() {
     let without = RunnerMessage::FileParsed {
         path: "sync.py".into(),
         dags: vec![],
+        connections: Vec::new(),
         error: None,
         warnings: Vec::new(),
     };

@@ -7987,16 +7987,16 @@ def count() -> int:
   `run_dag(..., connections=...)` swap a connection for a test double.
 
 **Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
-- **Declaring for an early start:** optional `@task(connections=[mongodb_default])`: the agent
-  renders it before the task starts and fails fast; without it, `with` renders on first use.
-  Not chosen so far: a required declaration (one more line everywhere).
+- **Declaring:** `@task(connections=[mongodb_default])` (the function or its name; the
+  operators too); **required since decision 179**: a task opens only what it declares, each
+  rendered before it starts.
 - **Checking an environment** before moving DAGs there: `schedr connections check` renders
   every connection the DAGs define against that environment's storage (all secrets present?)
   without running the functions.
 - **A "does it work?" hook:** an optional second function, `@mongodb_default.check` (e.g. a
   Mongo `ping`), run on a worker by `schedr connections test mongodb_default`.
-- **Arguments besides secrets:** literals, and run values (`t"{dag_ctx.run.planned_for}"`) as
-  in other templates. Per-deployment settings that aren't secrets (a `[connections]` table
+- **Arguments besides secrets:** literals; **not run values** (decision 180: a connection
+  is defined at module level, outside any DAG). Per-deployment settings that aren't secrets (a `[connections]` table
   in the configuration): later, secrets and literals cover them.
 - **A missing secret:** both ways stay, `schedr connections check` before moving DAGs and a
   default in the template (`secrets.value('path#key', default='')`, decision 176).
@@ -8009,6 +8009,64 @@ def count() -> int:
 **Bash, decided by the user:** a script choosing a connection while it runs uses M4's in-task
 CLI: `schedr task-ctx connection mongodb_default --env MONGO` prints `export MONGO_URI=…`
 lines for `eval`; `--json` prints the rendered arguments as an object.
+
+**Built (M4.7a; decisions 174, 179-182):**
+- **The registry:** parsing a file records each `@connection` it defines itself
+  (`file_parsed`'s `connections`: its name and values as DAG JSON values, secrets by name,
+  never a value); a file defining one name twice fails its import. The master keeps each
+  root's registry from its current parse (`Registry`; a name defined in two files is refused,
+  naming both) and sends with each assignment the connections its task declares
+  (`AssignTask.connections_json`; the agent serves no other). A file that failed to import
+  counts for nothing; one the master refused after it imported keeps its connections
+  (decision 182). A connection over 1 MiB as JSON fails its file's import (decision 181).
+- **Opening:** the agent renders each connection the task declares before it starts (its
+  secrets fetched and masked from then on; a default stands in for a missing one, decision
+  176; t-strings filled in), so a missing connection or secret fails the attempt before its
+  code runs. In a Python task `with name():` asks the agent (`connection_get`, answered
+  `connection` or `connection_failed`) and calls the function with the values decoded by its
+  parameters' types. A command reads them with `schedr task-ctx connection NAME [--env PREFIX
+  | --json]` over its context channel: the values as one line of JSON (the form `--params`
+  takes), or `export PREFIX_PARAM='…'` lines, each value single-quoted for `eval`.
+- **Error kinds:** `connection_not_found` (not in the folder, or defined twice; retried, as
+  `task_not_found`: new code can fix it), `connection_denied` (not declared; not retried), a
+  secret's own kinds. Python raises `ConnectionNotFoundError` and `ConnectionDeniedError`.
+- **Checked when the folder loads:** the master can't refuse a DAG at upload (a retried parse
+  uploads only the files that failed), so a DAG whose tasks declare a connection its root's
+  current parse lacks shows a warning on its page (`DagView.warnings`, worked out when read);
+  `schedr dags check DIR` reports it as an error.
+- **Doubles:** `task_context(connections={name: obj})` (a `@task` function called in it opens
+  only what it declares); `run_dag(connections={name: {param: value}})`, `dags test
+  --connection name=JSON`: the real function runs with those values, its own never rendered.
+- **Decisions:**
+  - **179. A task declares the connections it opens** (the user's, 2026-11-03, on a side
+    agent's note): `connections=` on `@task` and the operators, required; the agent serves
+    only declared ones and renders them before the start. Why: opening by name inside the
+    function is a read at run time, as `task_ctx.secret` is, which `secrets=` guards; without
+    it any task of a folder could read every connection's secrets unseen. A declared name the
+    folder lacks is a warning on the DAG when it loads (the user's), fails the attempt before
+    its code runs, and fails `schedr dags check`. Not chosen: optional declaring (decision
+    53's, as first built); optional but logged per attempt; refusing the DAG when it loads
+    (one file failing to import would refuse every DAG using its connections).
+  - **180. A connection's values are secrets and plain values** (the user's, 2026-11-03):
+    `@connection(...)` runs when its module loads, outside any DAG, where `dag_ctx` gives
+    nothing; a run's values go to the task's own arguments, or the function reads `dag_ctx`
+    while it runs in the task. Not chosen: `dag_ctx` references filled from the run opening
+    it (a special case of `dag_ctx` outside a DAG; it can be added later).
+  - **181. A connection's values take at most 1 MiB** (the user's, 2026-11-03, on Grok's
+    security review): the file defining a bigger one fails to import, in the SDK and again
+    in the master's validation (a DAG file can change the SDK it imports). Why: they travel
+    with each assignment of a task opening it, within the worker's 4 MiB gRPC message
+    (`schedr-config`'s `MIN_MESSAGE_SIZE`); a bigger assignment ends the worker's stream and
+    the task is offered again every start timeout, never starting. A connection's values are
+    a few short strings; bigger data goes to the task. Not chosen: failing the attempt (a new
+    error kind, found only when a run comes); leaving it (only the declared ones go now).
+  - **182. A file the master refused keeps its connections** (the user's, 2026-11-03, on a
+    side agent's note): one that imported but whose DAG is invalid (`max_active_runs: 0`)
+    still defines its connections for the root; one that failed to import defines none (the
+    master clears what it reported). Why: one bad DAG in a shared connections file would
+    otherwise fail every task of other files using them (`connection_not_found`), the reason
+    decision 179 doesn't refuse DAGs at load. The worker, the DAG page's warning and `schedr
+    dags check` use the same registry. Not chosen: any error dropping the file's connections.
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`

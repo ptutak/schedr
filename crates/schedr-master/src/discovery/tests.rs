@@ -48,6 +48,7 @@ fn upload(hash: &str, files: Vec<(&str, Vec<Dag>)>) -> ParseUpload {
             .map(|(path, dags)| ParsedFile {
                 path: path.to_owned(),
                 dags,
+                connections: Vec::new(),
                 error: None,
                 warnings: Vec::new(),
             })
@@ -588,6 +589,7 @@ fn failing(mut upload: ParseUpload, path: &str, exception: &str) -> ParseUpload 
     upload.files.push(ParsedFile {
         path: path.to_owned(),
         dags: Vec::new(),
+        connections: Vec::new(),
         error: Some(schedr_model::runner::ErrorSummary {
             exception: exception.to_owned(),
             message: "importing the file took longer than the parse timeout of 30 s".to_owned(),
@@ -1238,4 +1240,33 @@ async fn a_revert_after_the_newest_worker_left_is_a_switch() {
         .await
         .unwrap();
     assert_eq!(code(&discovery), etl("h1"));
+}
+
+#[tokio::test]
+async fn a_rolled_back_change_puts_the_roots_connections_back() {
+    // A code switch whose catalog write fails is rolled back (`memory`, `restore`): the
+    // assignments must go on carrying the connections of the code restored.
+    let mut discovery = discovery().await;
+    let registry = |path: &str| {
+        Arc::new(Registry::of(&[schedr_model::runner::ParsedFile {
+            path: path.to_owned(),
+            dags: Vec::new(),
+            connections: vec![serde_json::from_value(json!({"name": "db", "params": {}})).unwrap()],
+            error: None,
+            warnings: Vec::new(),
+        }]))
+    };
+    let before = registry("h1.py");
+    discovery
+        .registries
+        .insert("etl".to_owned(), Arc::clone(&before));
+    let memory = discovery.memory();
+    discovery
+        .registries
+        .insert("etl".to_owned(), registry("h2.py"));
+    discovery.restore(memory);
+    assert_eq!(
+        discovery.registries(),
+        &BTreeMap::from([("etl".to_owned(), before)])
+    );
 }

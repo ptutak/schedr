@@ -131,6 +131,7 @@ fn parsed_files_round_trip() {
     let failed = ParsedFile {
         path: "bad.py".to_owned(),
         dags: vec![],
+        connections: Vec::new(),
         error: Some(ErrorSummary {
             exception: "ImportError".to_owned(),
             message: "no module".to_owned(),

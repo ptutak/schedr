@@ -42,9 +42,10 @@ mod tests;
 /// isn't permitted, and what the same inputs always do again. (`secret_unavailable`, a secret
 /// storage that is down, and `import_failed` / `task_not_found`, which new code can fix, are
 /// retried.)
-pub const NOT_RETRIED_ERRORS: [&str; 8] = [
+pub const NOT_RETRIED_ERRORS: [&str; 9] = [
     "secret_not_found",
     "secret_denied",
+    "connection_denied",
     "inputs_too_large",
     "render_failed",
     "input_mismatch",

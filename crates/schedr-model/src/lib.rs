@@ -6,6 +6,7 @@
 
 pub mod beat;
 pub mod commands;
+pub mod connection;
 pub mod ctx;
 pub mod dag;
 pub mod ids;
@@ -22,6 +23,7 @@ pub mod types;
 pub mod value;
 pub mod version;
 
+pub use connection::ConnectionDef;
 pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params};
 pub use ids::{DagId, IdError, TaskId};
 pub use secret::{SecretDecl, SecretName};

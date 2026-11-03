@@ -116,6 +116,7 @@ class TaskOptions:
         max_active: At most this many instances running at once, across all runs.
         max_active_per_run: The same within one run.
         secrets: The secrets it declares (``secrets=``); a task's own, never inherited.
+        connections: The connections it opens (``connections=``, decision 179), by name.
     """
 
     retries: int | None = None
@@ -129,6 +130,7 @@ class TaskOptions:
     max_active: int | None = None
     max_active_per_run: int | None = None
     secrets: tuple[SecretDecl, ...] | None = None
+    connections: tuple[str, ...] | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -157,6 +159,7 @@ class TaskOptions:
                 else self.max_active_per_run
             ),
             secrets=base.secrets if self.secrets is None else self.secrets,
+            connections=base.connections if self.connections is None else self.connections,
         )
 
     def settings(self) -> TaskSettings:
@@ -481,6 +484,7 @@ class DagBuilder:
             group=scope.id if scope is not None else None,
             expand=expand,
             secrets=options.secrets or (),
+            connections=options.connections or (),
         )
         if expand is not None:
             self.mapped.add(task_id)
@@ -875,7 +879,7 @@ def check_literals(value: Value, annotation: object, where: str) -> None:
             check_literals(child, element, f"{where}[{step!r}]")
 
 
-def check_fits(builder: DagBuilder, value: Value, annotation: object, where: str) -> None:
+def check_fits(builder: DagBuilder | None, value: Value, annotation: object, where: str) -> None:
     """Checks that a list or dict holding references fits its parameter's type as a whole.
 
     The checks of each element (references, literals, t-strings) take a union's element types
@@ -884,7 +888,8 @@ def check_fits(builder: DagBuilder, value: Value, annotation: object, where: str
     task builds it.
 
     Args:
-        builder: The DAG being defined (for upstream output types).
+        builder: The DAG being defined (for upstream output types); ``None`` for a
+            connection's values, outside any DAG.
         value: The converted argument.
         annotation: The parameter's annotation.
         where: The argument, for messages.
@@ -898,7 +903,7 @@ def check_fits(builder: DagBuilder, value: Value, annotation: object, where: str
             raise TypeError(f"{where}: {problem}")
 
 
-def _misfit(builder: DagBuilder, value: Value, annotation: object, where: str) -> str | None:  # noqa: PLR0911
+def _misfit(builder: DagBuilder | None, value: Value, annotation: object, where: str) -> str | None:  # noqa: PLR0911
     """Why ``value`` isn't a value of ``annotation`` (see :func:`check_fits`), else ``None``."""
     annotation = unwrap(annotation)
     if annotation is Any or annotation is object:
@@ -928,7 +933,7 @@ def _misfit(builder: DagBuilder, value: Value, annotation: object, where: str) -
 
 
 def _reference_misfit(
-    builder: DagBuilder, reference: Reference, annotation: object, where: str
+    builder: DagBuilder | None, reference: Reference, annotation: object, where: str
 ) -> str | None:
     """Why a reference's data can't fill a place of type ``annotation``, else ``None``."""
     produced = reference_type(builder, reference, where)
@@ -949,7 +954,7 @@ def _place_misfit(produced: TypeDesc, annotation: object, what: str) -> str | No
 
 
 def _container_misfit(  # noqa: PLR0911
-    builder: DagBuilder, value: ListValue | MapValue, annotation: object, where: str
+    builder: DagBuilder | None, value: ListValue | MapValue, annotation: object, where: str
 ) -> str | None:
     """Why a written list or dict isn't a value of ``annotation`` (no union), else ``None``."""
     annotation = unwrap(annotation)
@@ -984,7 +989,7 @@ def _container_misfit(  # noqa: PLR0911
 
 
 def _first_misfit(
-    builder: DagBuilder, pairs: Sequence[tuple[Value, object]], where: str
+    builder: DagBuilder | None, pairs: Sequence[tuple[Value, object]], where: str
 ) -> str | None:
     """The first element that doesn't fit its type."""
     for child, element in pairs:
@@ -1342,11 +1347,12 @@ def reference_label(reference: Reference) -> str:
 _RENDERABLE = frozenset({"any", "str", "int", "float", "bool", "datetime", "date", "timedelta"})
 
 
-def reference_type(builder: DagBuilder, reference: Reference, where: str) -> TypeDesc:
+def reference_type(builder: DagBuilder | None, reference: Reference, where: str) -> TypeDesc:
     """The type of the data a reference stands for.
 
     Args:
-        builder: The DAG being defined (for upstream output types).
+        builder: The DAG being defined (for upstream output types); ``None`` outside a DAG (a
+            connection's values), where only secrets are known (decision 180).
         reference: The reference.
         where: Where it is used, for messages.
 
@@ -1357,12 +1363,17 @@ def reference_type(builder: DagBuilder, reference: Reference, where: str) -> Typ
         TypeError: If the path doesn't exist in the upstream output's type.
         ValueError: If the upstream task belongs to another DAG.
     """
-    if isinstance(reference, DagCtxRef):
-        return _DAG_CTX_TYPES[reference.field]
     if isinstance(reference, SecretRef):
         # A key's value is text; a whole secret is its keys' values by key.
         text = ScalarType("str")
         return text if reference.key is not None else DictType(text)
+    if builder is None:
+        raise TypeError(
+            f"{where}: `{reference_label(reference)}` isn't known outside a DAG; a connection "
+            "takes secrets and plain values (a run's values go to the task's own arguments)"
+        )
+    if isinstance(reference, DagCtxRef):
+        return _DAG_CTX_TYPES[reference.field]
     if isinstance(reference, ParamRef):
         return params_type(builder, reference.path, where)
     if reference.task not in builder.tasks:
@@ -1487,11 +1498,11 @@ def _is_date_like(desc: TypeDesc) -> bool:
     return isinstance(desc, ScalarType) and desc.name in ("datetime", "date", "any")
 
 
-def check_template_references(builder: DagBuilder, template: Template, where: str) -> None:
+def check_template_references(builder: DagBuilder | None, template: Template, where: str) -> None:
     """Checks that every reference in a template exists and can be rendered.
 
     Args:
-        builder: The DAG being defined.
+        builder: The DAG being defined (``None`` outside one, see :func:`reference_type`).
         template: The template.
         where: Where it is used, for messages.
 

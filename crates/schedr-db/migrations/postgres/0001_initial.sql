@@ -80,6 +80,8 @@ CREATE TABLE parse_files (
     -- The master that stored it (its lease holder); none when no master did (a test's).
     master_id       TEXT,
     parsed_at       TIMESTAMPTZ NOT NULL,
+    -- The connections the file defines itself (decision 174), never a value.
+    connections     JSONB NOT NULL DEFAULT '[]',
     PRIMARY KEY (parse_result_id, path)
 );
 

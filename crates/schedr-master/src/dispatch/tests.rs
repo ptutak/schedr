@@ -2064,3 +2064,31 @@ async fn an_instance_is_sent_without_what_its_task_maps_over() {
     assert_eq!(task["id"], "fetch");
     assert_eq!(task.get("expand"), None, "{task}");
 }
+
+#[tokio::test]
+async fn an_assignment_carries_only_the_connections_its_task_declares() {
+    // The agent serves no other (decision 179), and a root's whole registry could outgrow
+    // the worker's 4 MiB message.
+    let mut declaring = dag(0);
+    declaring.tasks[0].connections = ["db", "twice", "gone"].map(str::to_owned).to_vec();
+    let (mut dispatcher, _db, _run_id) = with_run(declaring).await;
+    let registry: Registry = serde_json::from_value(json!({
+        "connections": {
+            "db": {"name": "db", "params": {"host": {"literal": "h"}}},
+            "other": {"name": "other", "params": {"host": {"literal": "secret-host"}}},
+        },
+        "refused": {"twice": "defined in a.py and b.py", "elsewhere": "no"},
+    }))
+    .unwrap();
+    dispatcher.set_connections(BTreeMap::from([("etl".to_owned(), Arc::new(registry))]));
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let sent: Registry = serde_json::from_slice(&assignment(&out[0]).connections_json).unwrap();
+    assert_eq!(
+        sent,
+        serde_json::from_value(json!({
+            "connections": {"db": {"name": "db", "params": {"host": {"literal": "h"}}}},
+            "refused": {"twice": "defined in a.py and b.py"},
+        }))
+        .unwrap()
+    );
+}

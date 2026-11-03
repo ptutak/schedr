@@ -78,6 +78,11 @@ pub struct DagView {
     /// (decision 149): only on one DAG's view, not in the list; none when it takes none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<ParamFieldView>,
+    /// What is wrong with its current version that shows only when a run reaches it: a
+    /// connection a task declares that its root's current files don't define, or define twice
+    /// (decision 179). Only on one DAG's view, not in the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A concurrency limit and how many of what it limits run now: open attempts (assigned, not
@@ -174,6 +179,7 @@ impl DagView {
             }),
             limits: Vec::new(),
             params: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 }

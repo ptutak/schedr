@@ -128,6 +128,11 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                 problems.push(format!("task `{id}`: secrets=: {error}"));
             }
         }
+        for name in &task.connections {
+            if let Err(error) = TaskId::new(name) {
+                problems.push(format!("task `{id}`: connections=: `{name}`: {error}"));
+            }
+        }
         let mut in_text: Vec<&Template> = Vec::new();
         match &task.kind {
             TaskKind::Command { command, env } => {
@@ -573,6 +578,38 @@ pub fn validate_files(root: &str, files: Vec<ParsedFile>, checks: &Checks<'_>) -
         .collect()
 }
 
+/// The connections a root's DAGs declare checked against the root's own (decision 179): a
+/// file declaring one that isn't defined (or is defined twice) fails, as the attempt would.
+/// Only over a whole root's files: one file alone doesn't see its siblings' connections.
+#[must_use]
+pub fn connection_problems(files: Vec<ParsedFile>) -> Vec<ParsedFile> {
+    let registry = schedr_model::connection::Registry::of(&files);
+    files
+        .into_iter()
+        .map(|mut file| {
+            let problems: Vec<String> = file
+                .dags
+                .iter()
+                .flat_map(|dag| {
+                    registry
+                        .problems(dag)
+                        .into_iter()
+                        .map(|p| format!("DAG `{}`: {p}", dag.id))
+                })
+                .collect();
+            if !problems.is_empty() {
+                file.dags.clear();
+                file.error = Some(ErrorSummary {
+                    exception: INVALID_DAG_EXCEPTION.to_owned(),
+                    message: problems.join("\n"),
+                    traceback: String::new(),
+                });
+            }
+            file
+        })
+        .collect()
+}
+
 /// Room a worker's `Finished` needs besides the output (ids, the summary, framing).
 const RESULT_OVERHEAD: u64 = 64 * 1024;
 
@@ -635,23 +672,34 @@ fn validate_file(root: &str, mut file: ParsedFile, checks: &Checks<'_>) -> Parse
         return file;
     }
     if file.error.is_some() {
+        // Failed to import: nothing of it counts, whatever it reported.
         file.dags.clear();
+        file.connections.clear();
         return file;
     }
-    let problems: Vec<String> = file
-        .dags
-        .iter()
-        .flat_map(|dag| {
-            let mut problems = dag_problems(dag, root, &file.path, checks.master);
-            problems.extend(output_problems(dag, checks.max_message_size));
-            if let Some(storages) = checks.secret_storages {
-                problems.extend(storage_problems(dag, storages));
-            }
-            problems
-                .into_iter()
-                .map(move |p| format!("DAG `{}`: {p}", dag.id))
-        })
-        .collect();
+    let mut problems: Vec<String> = Vec::new();
+    file.connections.retain(|def| {
+        let size = serde_json::to_vec(def).map_or(usize::MAX, |json| json.len());
+        if size <= schedr_model::connection::MAX_CONNECTION_SIZE {
+            return true;
+        }
+        problems.push(format!(
+            "connection `{}`: its values take {size} bytes, over the 1 MiB a connection may \
+             hold (they travel with each task opening it); give bigger data to the task",
+            def.name
+        ));
+        false
+    });
+    problems.extend(file.dags.iter().flat_map(|dag| {
+        let mut problems = dag_problems(dag, root, &file.path, checks.master);
+        problems.extend(output_problems(dag, checks.max_message_size));
+        if let Some(storages) = checks.secret_storages {
+            problems.extend(storage_problems(dag, storages));
+        }
+        problems
+            .into_iter()
+            .map(move |p| format!("DAG `{}`: {p}", dag.id))
+    }));
     if !problems.is_empty() {
         file.dags.clear();
         file.error = Some(ErrorSummary {

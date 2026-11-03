@@ -92,12 +92,14 @@ fn files() -> Vec<ParsedFile> {
         ParsedFile {
             path: "sync.py".to_owned(),
             dags: vec![dag()],
+            connections: Vec::new(),
             error: None,
             warnings: Vec::new(),
         },
         ParsedFile {
             path: "bad.py".to_owned(),
             dags: vec![],
+            connections: Vec::new(),
             error: Some(ErrorSummary {
                 exception: "ImportError".to_owned(),
                 message: "no module".to_owned(),

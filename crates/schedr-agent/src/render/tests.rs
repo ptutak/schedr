@@ -343,3 +343,39 @@ fn an_outcome_reference_is_the_outcomes_name() {
         RenderError::MissingInput("other.outcome".into())
     );
 }
+
+#[test]
+fn a_value_resolves_to_stored_json() {
+    let mut ctx = ctx();
+    let whole = SecretName {
+        storage: None,
+        path: "p".into(),
+        key: None,
+        default: None,
+    };
+    ctx.secrets
+        .insert(whole.clone(), json!({"$date": "a key named like a tag"}));
+    let value: schedr_model::Value = serde_json::from_value(json!({"map": {
+        "n": {"literal": 1},
+        "count": {"ref": {"kind": "output", "task": "count"}},
+        "label": {"template": [{"text": "run "}, {"ref": {"kind": "dag_ctx", "field": "run_id"}}]},
+        "items": {"list": [{"literal": "a"}, {"ref": {"kind": "secret", "path": "p"}}]},
+        "tagged": {"map": {"$date": {"literal": "x"}}},
+    }}))
+    .unwrap();
+    assert_eq!(
+        resolve_value(&value, &ctx).unwrap(),
+        json!({
+            "n": 1, "count": 120, "label": "run 0192c4e1",
+            "items": ["a", {"$dict": {"$date": "a key named like a tag"}}],
+            "tagged": {"$dict": {"$date": "x"}},
+        })
+    );
+    // A whole secret isn't text.
+    ctx.secrets
+        .insert(whole, json!({"user": "u", "password": "p"}));
+    let text: schedr_model::Value =
+        serde_json::from_value(json!({"template": [{"ref": {"kind": "secret", "path": "p"}}]}))
+            .unwrap();
+    assert!(resolve_value(&text, &ctx).is_err());
+}

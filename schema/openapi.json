@@ -301,6 +301,13 @@
               "object",
               "null"
             ]
+          },
+          "warnings": {
+            "description": "What is wrong with its current version that shows only when a run reaches it: a\nconnection a task declares that its root's current files don't define, or define twice\n(decision 179). Only on one DAG's view, not in the list.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [

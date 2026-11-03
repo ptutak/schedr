@@ -287,8 +287,13 @@ impl ProcessExecutor {
             spec.task.secrets.clone(),
         )
         .await
-        .map_err(|e| fail(e.kind(), &e.to_string()))?;
-        if needed.is_empty() && spec.task.secrets.is_empty() {
+        .map_err(|e| fail(e.kind(), &e.to_string()))?
+        .with_connections(Arc::clone(&spec.connections), spec.task.connections.clone());
+        secrets
+            .open_declared()
+            .await
+            .map_err(|e| fail(e.kind(), &e.to_string()))?;
+        if needed.is_empty() && spec.task.secrets.is_empty() && !secrets.has_connections() {
             // Nothing to fetch or mask; kept to remember a read refused as undeclared, the
             // attempt's error kind if it then fails (decision 168).
             return Ok(Arc::new(secrets));
@@ -1588,6 +1593,7 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
             message,
             traceback: String::new(),
         }),
+        connection_json: Vec::new(),
     }
 }
 

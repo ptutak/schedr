@@ -591,6 +591,13 @@
         }
       ],
       "properties": {
+        "connections": {
+          "description": "The connections it opens (`connections=`, decision 179), by name: only these, opened\nbefore it starts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "expand": {
           "anyOf": [
             {

@@ -25,6 +25,7 @@ SECRETS = {
         "etl/api#token": "s3cret-api-token",
         "tenants/acme#api_key": "s3cret-acme-key",
     },
+    "connections.py": {"etl/api#token": "s3cret-api-token"},
 }
 
 
@@ -63,3 +64,7 @@ def test_doc_example_runs(path: Path) -> None:
             # Masked when stored: a secret's value never reaches the database.
             assert result.tasks["connect"].output == "postgresql://etl:****@db.example.com/etl"
             assert result.tasks["call_api"].output == "acme: a key of 15 characters, a token of 16"
+        if path.name == "connections.py":
+            assert result.tasks["fetch_orders"].output == (
+                "GET https://api.example.com/orders with a token of 16 characters"
+            )

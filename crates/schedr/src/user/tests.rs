@@ -396,6 +396,7 @@ fn a_dag_in_conflict_says_so() {
         held: None,
         limits: vec![],
         params: vec![],
+        warnings: Vec::new(),
     };
     let held = DagView {
         dag_id: "sync".to_owned(),

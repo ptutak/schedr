@@ -239,6 +239,50 @@
             "message"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The values of the connection a [`RunnerMessage::ConnectionGet`] asked for, rendered.",
+          "properties": {
+            "type": {
+              "const": "connection",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": true,
+              "description": "Each parameter's value, as stored JSON.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the connection a [`RunnerMessage::ConnectionGet`] asked for can't be opened.",
+          "properties": {
+            "kind": {
+              "description": "The error kind (`connection_not_found`, or a secret's).",
+              "type": "string"
+            },
+            "message": {
+              "description": "What went wrong, naming the connection (never a value).",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "message"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -275,6 +319,28 @@
           "type": "object"
         }
       ]
+    },
+    "ConnectionDef": {
+      "additionalProperties": false,
+      "description": "A connection as the runner reports it when parsing (`file_parsed`).",
+      "properties": {
+        "name": {
+          "description": "Its name, the function's (an identifier, unique in the root).",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Value"
+          },
+          "description": "Its parameters' values, by parameter: literals, secrets, and t-strings of them.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "params"
+      ],
+      "type": "object"
     },
     "Dag": {
       "additionalProperties": false,
@@ -1036,6 +1102,13 @@
           "additionalProperties": false,
           "description": "A file was imported, or failed to import.",
           "properties": {
+            "connections": {
+              "description": "The connections it defines itself (not those of modules it imports).",
+              "items": {
+                "$ref": "#/$defs/ConnectionDef"
+              },
+              "type": "array"
+            },
             "dags": {
               "description": "The DAGs it defines (none for a helper module).",
               "items": {
@@ -1144,6 +1217,25 @@
           "required": [
             "type",
             "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A running task opens a connection it didn't get with the request\n(`with name():`); the agent answers [`AgentMessage::Connection`] or\n[`AgentMessage::ConnectionFailed`].",
+          "properties": {
+            "name": {
+              "description": "The connection's name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
           ],
           "type": "object"
         },
@@ -1545,6 +1637,13 @@
         }
       ],
       "properties": {
+        "connections": {
+          "description": "The connections it opens (`connections=`, decision 179), by name: only these, opened\nbefore it starts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "expand": {
           "anyOf": [
             {

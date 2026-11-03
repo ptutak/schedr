@@ -373,3 +373,130 @@ async fn a_default_stands_in_for_a_missing_secret_or_key_unmasked() {
         "{error}"
     );
 }
+
+fn registry(params: &serde_json::Value) -> Arc<Registry> {
+    let def: schedr_model::ConnectionDef =
+        serde_json::from_value(json!({"name": "db", "params": params})).unwrap();
+    Arc::new(Registry {
+        connections: BTreeMap::from([("db".to_owned(), def)]),
+        refused: BTreeMap::from([("twice".to_owned(), "defined in a.py and b.py".to_owned())]),
+    })
+}
+
+#[tokio::test]
+async fn a_connection_is_rendered_with_its_secrets_masked_whatever_the_task_declares() {
+    let secret =
+        |path: &str, key: &str| json!({"ref": {"kind": "secret", "path": path, "key": key}});
+    let params = json!({
+        "dsn": {"template": [
+            {"text": "postgres://"}, {"ref": {"kind": "secret", "path": "etl/db", "key": "user"}},
+            {"text": "@db/x"}
+        ]},
+        "password": secret("etl/db", "password"),
+        "whole": {"ref": {"kind": "secret", "path": "etl/db"}},
+        "port": {"literal": 5432},
+        "region": {"ref": {"kind": "secret", "path": "nowhere", "key": "k", "default": "eu"}},
+    });
+    let secrets = AttemptSecrets::fetch(stores(Storage::new(Arc::new(memory()))), &[], Vec::new())
+        .await
+        .unwrap()
+        .with_connections(
+            registry(&params),
+            vec!["db".to_owned(), "twice".to_owned(), "other".to_owned()],
+        );
+    assert!(secrets.has_connections());
+    assert_eq!(secrets.mask.mask_text("hunter22"), "hunter22");
+    let values = secrets.connection("db").await.unwrap();
+    assert_eq!(
+        values,
+        BTreeMap::from([
+            ("dsn".to_owned(), json!("postgres://etl@db/x")),
+            ("password".to_owned(), json!("hunter22")),
+            (
+                "whole".to_owned(),
+                json!({"password": "hunter22", "user": "etl"})
+            ),
+            ("port".to_owned(), json!(5432)),
+            ("region".to_owned(), json!("eu")),
+        ])
+    );
+    // Masked from the moment it is read; a default isn't a secret.
+    assert_eq!(secrets.mask.mask_text("hunter22 eu"), "**** eu");
+    assert_eq!(secrets.failed_kind(), None);
+}
+
+#[tokio::test]
+async fn a_connection_that_cant_be_opened_says_why_with_its_kind() {
+    let params = json!({"token": {"ref": {"kind": "secret", "path": "gone", "key": "t"}}});
+    let secrets = AttemptSecrets::none(stores(Storage::new(Arc::new(memory())))).with_connections(
+        registry(&params),
+        vec!["db".to_owned(), "twice".to_owned(), "other".to_owned()],
+    );
+    let unknown = secrets.connection("other").await.unwrap_err();
+    assert_eq!(unknown.kind(), "connection_not_found");
+    assert!(
+        unknown
+            .to_string()
+            .contains("connection `other` isn't defined"),
+        "{unknown}"
+    );
+    let twice = secrets.connection("twice").await.unwrap_err();
+    assert_eq!(twice.to_string(), "defined in a.py and b.py");
+    let missing = secrets.connection("db").await.unwrap_err();
+    assert_eq!(missing.kind(), "secret_not_found");
+    // The connection, then the secret, each named once.
+    let message = missing.to_string();
+    assert!(
+        message.starts_with("connection `db`: `secrets['gone']['t']`: "),
+        "{message}"
+    );
+    assert_eq!(message.matches("secrets['gone']").count(), 1, "{message}");
+    // The attempt's error kind if it then fails (decision 168).
+    assert_eq!(secrets.failed_kind(), Some("secret_not_found"));
+}
+
+#[tokio::test]
+async fn only_a_declared_connection_opens_and_declared_ones_open_before_the_start() {
+    let params =
+        json!({"password": {"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}});
+    let secrets = AttemptSecrets::none(stores(Storage::new(Arc::new(memory()))))
+        .with_connections(registry(&params), Vec::new());
+    assert!(!secrets.has_connections());
+    let denied = secrets.connection("db").await.unwrap_err();
+    assert_eq!(denied.kind(), "connection_denied");
+    assert_eq!(
+        denied.to_string(),
+        "connection `db` isn't declared in the task's `connections=`"
+    );
+
+    let secrets = AttemptSecrets::none(stores(Storage::new(Arc::new(memory()))))
+        .with_connections(registry(&params), vec!["db".to_owned()]);
+    secrets.open_declared().await.unwrap();
+    // Masked before any of the task's code runs.
+    assert_eq!(secrets.mask.mask_text("hunter22"), "****");
+
+    let secrets = AttemptSecrets::none(stores(Storage::new(Arc::new(memory()))))
+        .with_connections(registry(&params), vec!["db".to_owned(), "gone".to_owned()]);
+    assert_eq!(
+        secrets.open_declared().await.unwrap_err().kind(),
+        "connection_not_found"
+    );
+}
+
+#[tokio::test]
+async fn a_test_runs_values_stand_for_a_declared_connection() {
+    let given = BTreeMap::from([(
+        "db".to_owned(),
+        BTreeMap::from([("password".to_owned(), json!("from-the-test"))]),
+    )]);
+    let stores =
+        Arc::new(SecretStores::for_test(MemoryStorage::new([])).with_test_connections(given));
+    let params =
+        json!({"password": {"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}});
+    let secrets =
+        AttemptSecrets::none(stores).with_connections(registry(&params), vec!["db".to_owned()]);
+    assert_eq!(
+        secrets.connection("db").await.unwrap(),
+        BTreeMap::from([("password".to_owned(), json!("from-the-test"))])
+    );
+}

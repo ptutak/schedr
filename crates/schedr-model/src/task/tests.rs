@@ -54,6 +54,7 @@ fn python_task_serializes_flat_with_a_kind_tag() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     let expected = json!({
         "id": "load",
@@ -84,6 +85,7 @@ fn command_and_empty_tasks_round_trip() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     let json = serde_json::to_value(&command).unwrap();
     assert_eq!(json["kind"], "command");
@@ -103,6 +105,7 @@ fn command_and_empty_tasks_round_trip() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     let json = serde_json::to_value(&empty).unwrap();
     assert_eq!(json["kind"], "empty");
@@ -161,6 +164,7 @@ fn references_of_a_python_task_come_from_its_arguments() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     assert_eq!(task.references(), vec![&output_ref("x"), &output_ref("y")]);
 }
@@ -188,6 +192,7 @@ fn references_of_a_command_task_come_from_its_command_line_and_env() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     assert_eq!(task.references(), vec![&planned_for, &output_ref("load")]);
 }
@@ -203,6 +208,7 @@ fn empty_tasks_have_no_references() {
         group: None,
         expand: None,
         secrets: Vec::new(),
+        connections: Vec::new(),
     };
     assert_eq!(task.references(), Vec::<&Reference>::new());
 }

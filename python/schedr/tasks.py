@@ -47,6 +47,7 @@ from schedr._serialization import (
     type_name,
 )
 from schedr._serialization.annotations import label, type_hints
+from schedr.connections import ConnectionsArg, declared_connections
 from schedr.context import declaring
 from schedr.outcomes import Done, Outcome
 
@@ -486,7 +487,7 @@ class TaskFunction[**P, R]:
         builder = _build.active()
         if builder is None:
             # In a test's `task_context`, a read it doesn't declare is refused, as on a worker.
-            with declaring(self._options.secrets or ()):
+            with declaring(self._options.secrets or (), self._options.connections or ()):
                 return self._fn(*args, **kwargs)
         task_id = builder.qualified(self._task_id)
         try:
@@ -768,6 +769,7 @@ class TaskFunction[**P, R]:
         max_active: int | None = None,
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
+        connections: ConnectionsArg = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -784,6 +786,7 @@ class TaskFunction[**P, R]:
             max_active: Overrides its limit across runs.
             max_active_per_run: Overrides its limit within a run.
             secrets: Overrides the secrets it declares.
+            connections: Overrides the connections it declares.
 
         Returns:
             A new task function; this one is unchanged.
@@ -802,6 +805,7 @@ class TaskFunction[**P, R]:
             secrets=None
             if secrets is None
             else _secrets.declared(secrets, f"task `{task_id or self._task_id}`"),
+            connections=declared_connections(connections, f"task `{task_id or self._task_id}`"),
         )
         return TaskFunction(
             self._fn, task_id or self._task_id, changes.over(self._options), self._branch
@@ -994,6 +998,7 @@ def task(
     max_active: int | None = None,
     max_active_per_run: int | None = None,
     secrets: SecretsArg = None,
+    connections: ConnectionsArg = None,
 ) -> TaskDecorator: ...
 
 
@@ -1013,6 +1018,7 @@ def task[**P, R](
     max_active: int | None = None,
     max_active_per_run: int | None = None,
     secrets: SecretsArg = None,
+    connections: ConnectionsArg = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -1044,6 +1050,9 @@ def task[**P, R](
             ``secrets['path']['key']``, ``'path#key'``, ``'path'`` (every key) or
             ``SecretPrefix(...)`` (every secret under it, fetched when read). Secrets in its
             arguments need no declaring.
+        connections: The connections it opens (``with mongodb_default() as db:``), each the
+            ``@connection`` function or its name: only these open, each rendered before the
+            task starts (a missing one or an unreadable secret fails it before it runs).
 
     Returns:
         The task function, or a decorator making one.
@@ -1065,6 +1074,9 @@ def task[**P, R](
         secrets=None
         if secrets is None
         else _secrets.declared(secrets, f"task `{task_id}`" if task_id else "`@task(...)`"),
+        connections=declared_connections(
+            connections, f"task `{task_id}`" if task_id else "`@task(...)`"
+        ),
     )
 
     decorator = TaskDecorator(task_id, options)

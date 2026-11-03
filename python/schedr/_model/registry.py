@@ -61,6 +61,15 @@ def parse_root(name: str, path: Path) -> Iterator[None]:
         _ROOT.reset(token)
 
 
+def parse_root_active() -> bool:
+    """Whether a parse root is set (the runner parsing a DAG folder).
+
+    Returns:
+        ``True`` inside :func:`parse_root`.
+    """
+    return _ROOT.get() is not None
+
+
 def location_for(filename: str) -> DagLocation:
     """Where a DAG defined in ``filename`` is, given the current parse root.
 
@@ -71,16 +80,30 @@ def location_for(filename: str) -> DagLocation:
         The root and the path relative to it, with ``/`` separators; ``local`` and the file
         name when there is no parse root or the file isn't under it.
     """
+    return root_location(filename) or DagLocation(LOCAL_ROOT, Path(filename).resolve().name)
+
+
+def root_location(filename: str) -> DagLocation | None:
+    """Where ``filename`` is in the current parse root, or ``None`` outside it (or without one).
+
+    Unlike :func:`location_for`, a root that is itself named ``local`` is told apart.
+
+    Args:
+        filename: The file's path, as Python reports it (``__file__``).
+
+    Returns:
+        The root and the path relative to it, with ``/`` separators, or ``None``.
+    """
     root = _ROOT.get()
-    file = Path(filename).resolve()
-    if root is not None:
-        name, given, resolved = root
-        # As scanned, through links (B61: a file in a linked directory was located by its
-        # target's name), else resolved (a root reached through a link itself).
-        for base, path in ((given, _absolute(Path(filename))), (resolved, file)):
-            if path.is_relative_to(base):
-                return DagLocation(name, PurePosixPath(path.relative_to(base)).as_posix())
-    return DagLocation(LOCAL_ROOT, file.name)
+    if root is None:
+        return None
+    name, given, resolved = root
+    # As scanned, through links (B61: a file in a linked directory was located by its
+    # target's name), else resolved (a root reached through a link itself).
+    for base, path in ((given, _absolute(Path(filename))), (resolved, Path(filename).resolve())):
+        if path.is_relative_to(base):
+            return DagLocation(name, PurePosixPath(path.relative_to(base)).as_posix())
+    return None
 
 
 def _absolute(path: Path) -> Path:

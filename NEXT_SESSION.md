@@ -19,14 +19,20 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   read by every page; stale PROJECT.md text). B156 logged (the command poll's same shape).
 - **M4.7a in progress** (decisions 174, 179, 180, the user's 2026-11-03): `@connection`
   functions recorded by the parser per root; the agent renders a connection for the task
-  (Python `with name():` over `connection_get`, commands `schedr task-ctx connection get`);
+  (Python `with name():` over `connection_get`, commands `schedr task-ctx connection NAME --env PREFIX | --json`);
   **a task opens only what it declares** (`@task(connections=[...])`, operators too), each
   rendered before it starts; values are secrets and plain values only (no `dag_ctx`); a
   declared name the folder lacks is a warning on the DAG's page (computed on read from the
   root's current parse), checked by `schedr dags check` over a folder, and fails the attempt
   before its code runs; doubles `task_context(connections=)` and `run_dag(connections=)`
-  (`dags test --connection`). Built and tested end to end; left: PROJECT.md 179/180 text,
-  `make schema`, the guide pages, the review (Codex's turn), `make check`, commit.
+  (`dags test --connection`). Built and tested end to end; reviewed by Codex (9 findings, all fixed) and Grok's
+  security review (4: 3 fixed, the key beside the database kept for a local target); the
+  user's decisions 181 (a connection over 1 MiB fails its import) and 182 (a file refused
+  after it imported keeps its connections). `make standalone` and
+  `standalone-separate-ui` keep a key per deployment and set the docs examples' secrets.
+  B157 logged (inline inputs near 4 MiB). Left: Codex's operator guide round (terra),
+  checked; `make check`; commit, push (pre-accepted through M4.7); drop the worktree
+  `schedr-codex-4.7a`, its branch and pyenv env.
 - **Sandboxes:** Grok's and Codex's `sandbox.sh` give `uv` a cache of its own
   (`~/.cache/grok-uv`, `~/.cache/codex-uv`; Codex's also in its `writable_roots`): `uv` failed
   with a read-only `~/.cache/uv` (the user saw it in a side agent's log).

@@ -13,10 +13,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use schedr_model::connection::Registry;
 use schedr_model::{SecretDecl, SecretName};
 use serde_json::Value;
 
 use crate::mask::MaskSet;
+use crate::render::{RenderContext, resolve_value};
 
 #[cfg(test)]
 mod tests;
@@ -56,7 +58,13 @@ impl SecretError {
     /// The same error with `name` in front of its message.
     #[must_use]
     pub fn about(self, name: &SecretName) -> Self {
-        let named = |message: String| format!("`{name}`: {message}");
+        self.within(&format!("`{name}`"))
+    }
+
+    /// The same error, of the same kind, with `what` in front of its message.
+    #[must_use]
+    pub fn within(self, what: &str) -> Self {
+        let named = |message: String| format!("{what}: {message}");
         match self {
             Self::Unavailable(m) => Self::Unavailable(named(m)),
             Self::Denied(m) => Self::Denied(named(m)),
@@ -220,6 +228,9 @@ pub struct SecretStores {
     any_name: bool,
     /// `[secret_storage] min_mask_length`.
     pub min_mask_length: usize,
+    /// For a test run: connections' values given in place of rendering them (`dags test
+    /// --connection`, `run_dag(connections=...)`), by connection and parameter, stored JSON.
+    test_connections: BTreeMap<String, BTreeMap<String, Value>>,
     /// What was fetched, by storage and path, with when it expires; an entry is dropped when
     /// it expires, whether or not anything reads again.
     cache: Arc<Mutex<Cache>>,
@@ -260,6 +271,7 @@ impl SecretStores {
             default,
             any_name: false,
             min_mask_length,
+            test_connections: BTreeMap::new(),
             cache: Arc::default(),
         })
     }
@@ -274,8 +286,19 @@ impl SecretStores {
             default: Some("test".to_owned()),
             any_name: true,
             min_mask_length: DEFAULT_MIN_MASK_LENGTH,
+            test_connections: BTreeMap::new(),
             cache: Arc::default(),
         }
+    }
+
+    /// The same stores, with connections' values for a test run, given instead of rendered.
+    #[must_use]
+    pub fn with_test_connections(
+        mut self,
+        connections: BTreeMap<String, BTreeMap<String, Value>>,
+    ) -> Self {
+        self.test_connections = connections;
+        self
     }
 
     /// The configured storages' names (reported in `Register`; the master checks DAGs
@@ -372,12 +395,46 @@ impl SecretStores {
     }
 }
 
+/// Why a connection can't be opened (decision 174): the attempt's error kind follows.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConnectionError {
+    /// Not in the root's registry: not defined, defined twice, or invalid.
+    #[error("{0}")]
+    NotFound(String),
+    /// Not in the task's `connections=` (decision 179).
+    #[error("{0}")]
+    Denied(String),
+    /// A secret it names can't be read.
+    #[error("{0}")]
+    Secret(SecretError),
+    /// A value can't be rendered (a whole secret in a t-string).
+    #[error("{0}")]
+    Render(String),
+}
+
+impl ConnectionError {
+    /// The attempt's error kind (`Finished.error_kind`), which decides the retry.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => schedr_model::runner::CONNECTION_NOT_FOUND,
+            Self::Denied(_) => schedr_model::runner::CONNECTION_DENIED,
+            Self::Secret(error) => error.kind(),
+            Self::Render(_) => crate::attempt::RENDER_FAILED,
+        }
+    }
+}
+
 /// The secrets of one attempt: what was fetched before it started, what it declares, and
 /// the values masked in its log and output.
 #[derive(Debug)]
 pub struct AttemptSecrets {
     stores: Arc<SecretStores>,
     declared: Vec<SecretDecl>,
+    /// Its root's connections (decision 174), from which those it declares are rendered.
+    connections: Arc<Registry>,
+    /// The connections it declares (`connections=`, decision 179): the only ones it opens.
+    declared_connections: Vec<String>,
     fetched: Mutex<BTreeMap<SecretName, Value>>,
     /// The values masked in the task's log and output (grows with on-demand reads).
     pub mask: Arc<MaskSet>,
@@ -396,6 +453,8 @@ impl AttemptSecrets {
         Self {
             stores,
             declared: Vec::new(),
+            connections: Arc::default(),
+            declared_connections: Vec::new(),
             fetched: Mutex::default(),
             mask: Arc::new(MaskSet::new(min)),
             failed: Mutex::default(),
@@ -416,30 +475,128 @@ impl AttemptSecrets {
     ) -> Result<Self, SecretError> {
         let mut secrets = Self::none(stores);
         secrets.declared = declared;
-        let mut fetched = BTreeMap::new();
         for name in needed {
-            if fetched.contains_key(name) {
-                continue;
-            }
-            // A default stands in for a missing secret or key (decision 176): written in the
-            // DAG, so not masked.
-            let value = match (secrets.stores.fetch(name).await, &name.default) {
-                // Not for a storage this worker lacks: a configuration error stays one.
-                (Err(SecretError::NotFound(_)), Some(default))
-                    if secrets.stores.storage_of(name).is_ok() =>
-                {
-                    Value::String(default.clone())
-                }
-                (value, _) => {
-                    let value = value?;
-                    secrets.add_mask(name, &value);
-                    value
-                }
-            };
-            fetched.insert(name.clone(), value);
+            secrets.fetch_one(name).await?;
         }
-        secrets.fetched = Mutex::new(fetched);
         Ok(secrets)
+    }
+
+    /// The same secrets, with the root's connections and those the task declares.
+    #[must_use]
+    pub fn with_connections(mut self, connections: Arc<Registry>, declared: Vec<String>) -> Self {
+        self.connections = connections;
+        self.declared_connections = declared;
+        self
+    }
+
+    /// Whether the task declares connections (their secrets fetched and masked).
+    #[must_use]
+    pub fn has_connections(&self) -> bool {
+        !self.declared_connections.is_empty()
+    }
+
+    /// Renders every connection the task declares, before it starts (decision 179): a
+    /// connection missing from the folder or a secret it can't read fails the attempt before
+    /// any of its code runs, and their secrets are masked from the start.
+    ///
+    /// # Errors
+    ///
+    /// The first [`ConnectionError`].
+    pub async fn open_declared(&self) -> Result<(), ConnectionError> {
+        for name in &self.declared_connections {
+            self.connection(name).await?;
+        }
+        Ok(())
+    }
+
+    /// The values of the connection `name` a running task opens, rendered as stored JSON by
+    /// parameter: its secrets read (masked from then on; a default stands in for a missing
+    /// one, decision 176), its t-strings filled in.
+    ///
+    /// # Errors
+    ///
+    /// [`ConnectionError`]; remembered for the attempt's error kind (decision 168).
+    pub async fn connection(&self, name: &str) -> Result<BTreeMap<String, Value>, ConnectionError> {
+        let result = self.connection_inner(name).await;
+        if let Err(error) = &result {
+            *self.failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(error.kind());
+        }
+        result
+    }
+
+    async fn connection_inner(
+        &self,
+        name: &str,
+    ) -> Result<BTreeMap<String, Value>, ConnectionError> {
+        if !self
+            .declared_connections
+            .iter()
+            .any(|declared| declared == name)
+        {
+            return Err(ConnectionError::Denied(format!(
+                "connection `{name}` isn't declared in the task's `connections=`"
+            )));
+        }
+        // A test run's own values: what the test gives is what the function gets.
+        if let Some(values) = self.stores.test_connections.get(name) {
+            return Ok(values.clone());
+        }
+        let def = self
+            .connections
+            .get(name)
+            .map_err(ConnectionError::NotFound)?;
+        let mut ctx = RenderContext::default();
+        for secret in def.secrets() {
+            let value = self
+                .fetch_one(secret)
+                .await
+                // Its message names the secret already.
+                .map_err(|e| ConnectionError::Secret(e.within(&format!("connection `{name}`"))))?;
+            ctx.secrets.insert(secret.clone(), value);
+        }
+        def.params
+            .iter()
+            .map(|(param, value)| {
+                resolve_value(value, &ctx)
+                    .map(|rendered| (param.clone(), rendered))
+                    .map_err(|e| {
+                        ConnectionError::Render(format!("connection `{name}`, `{param}`: {e}"))
+                    })
+            })
+            .collect()
+    }
+
+    /// A secret the attempt names (in its arguments, or a connection's): fetched already,
+    /// else fetched now and masked. A default stands in for a missing secret or key (decision
+    /// 176): written in the DAG, so not masked.
+    async fn fetch_one(&self, name: &SecretName) -> Result<Value, SecretError> {
+        let known = self
+            .fetched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned();
+        if let Some(value) = known {
+            return Ok(value);
+        }
+        let value = match (self.stores.fetch(name).await, &name.default) {
+            // Not for a storage this worker lacks: a configuration error stays one.
+            (Err(SecretError::NotFound(_)), Some(default))
+                if self.stores.storage_of(name).is_ok() =>
+            {
+                Value::String(default.clone())
+            }
+            (value, _) => {
+                let value = value?;
+                self.add_mask(name, &value);
+                value
+            }
+        };
+        self.fetched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.clone(), value.clone());
+        Ok(value)
     }
 
     /// The values fetched before the start, by name.

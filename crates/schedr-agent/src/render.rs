@@ -366,6 +366,43 @@ pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, Render
     Ok(out)
 }
 
+/// A value's stored JSON, its references and templates filled in: what a connection's
+/// parameter gets (decision 174), decoded by its type where it is used. A dict that would
+/// read as a tag is escaped, as the Python codec stores it (B66).
+///
+/// # Errors
+///
+/// Returns a [`RenderError`] if a reference can't be resolved or a template rendered.
+pub fn resolve_value(
+    value: &schedr_model::Value,
+    ctx: &RenderContext,
+) -> Result<Value, RenderError> {
+    use schedr_model::Value as Stored;
+    Ok(match value {
+        Stored::Literal(literal) => literal.clone(),
+        Stored::Ref(reference) => match resolve(reference, ctx)? {
+            // A whole secret, keys to values: a plain dict.
+            Value::Object(keys) if matches!(reference, Reference::Secret(_)) => {
+                schedr_model::params::escaped(keys.clone())
+            }
+            resolved => resolved.clone(),
+        },
+        Stored::Template(template) => Value::String(render(template, ctx)?),
+        Stored::List(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_value(item, ctx))
+                .collect::<Result<_, _>>()?,
+        ),
+        Stored::Map(entries) => schedr_model::params::escaped(
+            entries
+                .iter()
+                .map(|(key, item)| Ok((key.clone(), resolve_value(item, ctx)?)))
+                .collect::<Result<_, RenderError>>()?,
+        ),
+    })
+}
+
 /// The program and arguments of a command line.
 ///
 /// A shell command runs as `/bin/sh -c <text>`; an argument list renders each element, the

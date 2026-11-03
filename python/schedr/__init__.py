@@ -8,6 +8,12 @@ from importlib.metadata import version
 
 from schedr._secrets import SecretPrefix, secrets
 from schedr._templates import text
+from schedr.connections import (
+    Connection,
+    ConnectionDeniedError,
+    ConnectionNotFoundError,
+    connection,
+)
 from schedr.context import SecretError, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
@@ -25,6 +31,9 @@ __all__ = [
     "YEARLY",
     "Chosen",
     "CommandOperator",
+    "Connection",
+    "ConnectionDeniedError",
+    "ConnectionNotFoundError",
     "Cron",
     "Dag",
     "DagHint",
@@ -49,6 +58,7 @@ __all__ = [
     "TypingHint",
     "branch",
     "chain",
+    "connection",
     "dag_ctx",
     "group",
     "on",

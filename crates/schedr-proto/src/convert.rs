@@ -36,9 +36,20 @@ pub enum ConversionError {
         /// Why it doesn't parse.
         reason: String,
     },
+    /// A connection in a parsed file that isn't valid connection JSON.
+    #[error("ParsedFile `{path}`: connection {index} isn't valid: {reason}")]
+    InvalidConnectionJson {
+        /// The file.
+        path: String,
+        /// The connection's position in the file's list.
+        index: usize,
+        /// Why it doesn't parse.
+        reason: String,
+    },
 }
 
-/// The protocol's form of a parsed file: each DAG as DAG JSON bytes.
+/// The protocol's form of a parsed file: each DAG as DAG JSON bytes, each connection as its
+/// JSON.
 ///
 /// # Panics
 ///
@@ -57,6 +68,11 @@ pub fn parsed_file_to_proto(file: &ParsedFile) -> pb::ParsedFile {
             message: e.message.clone(),
             traceback: e.traceback.clone(),
         }),
+        connection_json: file
+            .connections
+            .iter()
+            .map(|c| serde_json::to_vec(c).expect("a connection always serializes"))
+            .collect(),
     }
 }
 
@@ -142,8 +158,21 @@ pub fn parsed_file_from_proto(file: pb::ParsedFile) -> Result<ParsedFile, Conver
             })
         })
         .collect::<Result<_, _>>()?;
+    let connections = file
+        .connection_json
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            serde_json::from_slice(bytes).map_err(|e| ConversionError::InvalidConnectionJson {
+                path: file.path.clone(),
+                index,
+                reason: e.to_string(),
+            })
+        })
+        .collect::<Result<_, _>>()?;
     Ok(ParsedFile {
         dags,
+        connections,
         error: file.import_error.map(|e| ErrorSummary {
             exception: e.exception,
             message: e.message,

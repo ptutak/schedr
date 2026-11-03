@@ -56,6 +56,23 @@ master restart, workers report their hashes again and the jobs are created again
 stored parse is parsed again only when a file of it failed transiently
 ([Parsed again](#parsed-again)).
 
+## Connections in a parse
+
+A file's parse records the `@connection` definitions made in that file: their names and
+values as DAG JSON, with secret names, never secret values. Imported definitions belong to
+their own files. Two definitions of one name in a file fail its import; a connection over
+1 MiB as JSON does too. See [Connections](../02-dags/14-connections.md).
+
+The master builds a registry for each root from its current parse. A name defined in two
+files is refused, with both files named. A file that failed to import contributes no
+connections; one that imported but whose DAG the master refused keeps them. Unlike the last
+DAG version, connections from a failed import are not kept.
+
+A DAG whose task declares a missing or refused connection still loads, but its
+[DAG page](12-ui.md#a-dag) warns which task and connection are affected. The attempt fails
+before the task's code runs. `schedr dags check DIR` checks a whole directory's registry and
+reports these as errors.
+
 ## When a file fails to import
 
 Each file of a parse is stored on its own, with the worker that parsed it and the time.

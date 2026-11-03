@@ -13,6 +13,12 @@ and never the task's own code. Values stay in the agent's memory (never on disk)
 to the task, and are masked in its log and output before anything leaves the worker. The
 master, the database's run tables, the API and the UI only ever see names.
 
+A [connection](../02-dags/14-connections.md) can also carry secrets to a task. Before the
+task starts, the worker renders each connection it declares, fetching its secrets and adding
+their values to the mask for its log and output. The mask also covers the shell-quoted form
+printed by `schedr task-ctx connection --env`; `unmasked_prefixes` (below) applies as to any
+other secret. The agent serves only connections the task declares.
+
 Two kinds of storage exist:
 
 | Kind | Where the values are | Where |
@@ -86,6 +92,10 @@ schema must be up to date. In Kubernetes, run them with `kubectl exec` in the po
 
 `set`, `get` and `export` need `SCHEDR_SECRET_KEY`; `list` and `delete` don't. The API and the
 UI never show a value.
+
+For a local try, `make standalone` and `make standalone-separate-ui` keep a key in each
+standalone's data folder as `secret.key` and set the documentation examples' secrets where
+missing. They reuse the key and leave existing secret keys in place.
 
 **Moving to Vault**, e.g. before moving from standalone to separate roles (workers have no
 database, so they can't read `db`): `schedr secrets export --to DIR` refuses a `DIR` that isn't

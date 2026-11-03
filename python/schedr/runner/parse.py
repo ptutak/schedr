@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from schedr._model import Dag, DagLocation, registry
+from schedr.connections import take_connections
 from schedr.outcomes import DagHint, TypingHint
 from schedr.runner.protocol import Channel
 from schedr.runner.sources import SourceOnlyLoader, import_from_source
@@ -142,18 +143,50 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", TypingHint)
         warnings.simplefilter("always", DagHint)
+        take_connections()
         try:
             dags = import_dag_file(root, root_dir, path)
             documents = [d.to_json() for d in dags]
+            connections = own_connections(root, path)
             error = None
         except (Exception, SystemExit) as e:
-            documents, error = [], import_error(e)
+            take_connections()
+            documents, connections, error = [], [], import_error(e)
     message: dict[str, Any] = {"type": "file_parsed", "path": path, "dags": documents}
     message["error"] = error
+    if connections:
+        message["connections"] = connections
     shown = [f"{w.category.__name__}: {w.message}" for w in caught]
     if shown:
         message["warnings"] = list(dict.fromkeys(shown))
     return message
+
+
+def own_connections(root: str, path: str) -> list[dict[str, Any]]:
+    """The connections the file just imported defines itself, as reported.
+
+    A module it imports may define connections too, reported when that module's own file is
+    parsed (as its DAGs, B110).
+
+    Args:
+        root: The DAG root's name.
+        path: The file's path relative to the root.
+
+    Returns:
+        Each connection's ``{"name", "params"}``, in definition order.
+
+    Raises:
+        ValueError: When the file defines two connections of one name.
+    """
+    here = DagLocation(root, PurePosixPath(path).as_posix())
+    own: dict[str, dict[str, Any]] = {}
+    for defined in take_connections():
+        if defined.location != here:
+            continue
+        if defined.name in own:
+            raise ValueError(f"connection `{defined.name}` is defined twice in {path}")
+        own[defined.name] = defined.to_json()
+    return list(own.values())
 
 
 def extend_sys_path(entries: list[str]) -> None:

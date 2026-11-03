@@ -111,6 +111,7 @@ fn parsed(path: &str, dags: Vec<Dag>) -> Step {
     Step::Send(RunnerMessage::FileParsed {
         path: path.to_owned(),
         dags,
+        connections: Vec::new(),
         error: None,
         warnings: Vec::new(),
     })
@@ -124,6 +125,7 @@ fn ok(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),
         dags,
+        connections: Vec::new(),
         error: None,
         warnings: Vec::new(),
     }
@@ -161,6 +163,7 @@ async fn import_errors_are_kept_per_file() {
         Step::Send(RunnerMessage::FileParsed {
             path: "a.py".to_owned(),
             dags: vec![],
+            connections: Vec::new(),
             error: Some(error.clone()),
             warnings: Vec::new(),
         }),

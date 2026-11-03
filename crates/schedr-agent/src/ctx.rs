@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Re
 use tokio::net::{UnixDatagram, UnixStream};
 use tokio::task::JoinSet;
 
-use crate::secrets::{AttemptSecrets, SecretError};
+use crate::secrets::{AttemptSecrets, ConnectionError, SecretError};
 
 #[cfg(test)]
 mod tests;
@@ -339,6 +339,21 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                     reason: format!("`{secret}` isn't declared in the task's `secrets=`"),
                 },
             },
+            Some(Ok(CtxRequest::ConnectionGet { name })) => {
+                let opened = match &info.secrets {
+                    Some(secrets) => secrets.connection(&name).await,
+                    None => Err(ConnectionError::NotFound(format!(
+                        "connection `{name}`: no connections are known for this task"
+                    ))),
+                };
+                match opened {
+                    Ok(values) => CtxAnswer::Connection { values },
+                    Err(error) => CtxAnswer::ConnectionFailed {
+                        kind: error.kind().to_owned(),
+                        reason: error.to_string(),
+                    },
+                }
+            }
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }

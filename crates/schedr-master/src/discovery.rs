@@ -19,11 +19,13 @@
 //! in conflict (see PROJECT.md, DAG ID conflicts).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use schedr_db::dags::{DagChange, NewParse, StoredParse};
 use schedr_db::{Database, DbError};
 use schedr_model::SchedrVersion;
+use schedr_model::connection::Registry;
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 
 use crate::catalog::{self, Source};
@@ -75,6 +77,9 @@ pub struct Discovery {
     accepted: BTreeMap<String, BTreeSet<String>>,
     /// Workers that take no parse jobs (draining or drained).
     no_parse: BTreeSet<String>,
+    /// Each root's connections from its current parse (decision 174); a task's assignment
+    /// carries those it declares.
+    registries: BTreeMap<String, Arc<Registry>>,
 }
 
 /// What discovery keeps in memory, copied by [`Discovery::memory`] to put back when the
@@ -89,6 +94,7 @@ pub struct Memory {
     parses: BTreeMap<(String, String), Vec<StoredParse>>,
     accepted: BTreeMap<String, BTreeSet<String>>,
     no_parse: BTreeSet<String>,
+    registries: BTreeMap<String, Arc<Registry>>,
 }
 
 /// A root's current parse.
@@ -132,6 +138,7 @@ impl Discovery {
             parses: BTreeMap::new(),
             accepted: BTreeMap::new(),
             no_parse: BTreeSet::new(),
+            registries: BTreeMap::new(),
             wakes: Wakes::default(),
         }
     }
@@ -148,6 +155,7 @@ impl Discovery {
             parses: self.parses.clone(),
             accepted: self.accepted.clone(),
             no_parse: self.no_parse.clone(),
+            registries: self.registries.clone(),
         }
     }
 
@@ -162,6 +170,7 @@ impl Discovery {
             parses,
             accepted,
             no_parse,
+            registries,
         } = memory;
         self.jobs = jobs;
         self.reports = reports;
@@ -171,6 +180,7 @@ impl Discovery {
         self.parses = parses;
         self.accepted = accepted;
         self.no_parse = no_parse;
+        self.registries = registries;
     }
 
     /// A worker drains (or is drained): it gets no parse jobs, and its unfinished ones go to
@@ -557,7 +567,7 @@ impl Discovery {
     /// # Errors
     ///
     /// [`DbError`] if reading or storing fails.
-    pub async fn refresh(&self, now: Timestamp) -> Result<Vec<DagChange>, DbError> {
+    pub async fn refresh(&mut self, now: Timestamp) -> Result<Vec<DagChange>, DbError> {
         // Every root's current parse: a root no worker reported since this master started
         // keeps its stored one, so its DAGs still count (a conflict with them stays, B92).
         let mut current = self.db.current_parses().await?;
@@ -573,6 +583,10 @@ impl Discovery {
             });
         }
         let changes = catalog::plan(&sources, &self.db.stored_dags().await?);
+        self.registries = sources
+            .iter()
+            .map(|source| (source.root.clone(), Arc::new(Registry::of(&source.files))))
+            .collect();
         if !changes.is_empty() {
             self.db.apply_dag_changes(&changes, now).await?;
             for change in &changes {
@@ -710,6 +724,12 @@ impl Discovery {
         Ok(())
     }
 
+    /// Each root's connections from its current parse, as Registry JSON (decision 174).
+    #[must_use]
+    pub const fn registries(&self) -> &BTreeMap<String, Arc<Registry>> {
+        &self.registries
+    }
+
     /// Refreshes the catalog; if that fails, forgets `root`'s current parse, so the next
     /// report of its code decides (and refreshes) again instead of finding nothing new.
     async fn refresh_or_forget(&mut self, root: &str, now: Timestamp) -> Result<(), DbError> {
@@ -731,7 +751,9 @@ fn retried_files(before: &[ParsedFile], files: Vec<ParsedFile>) -> Vec<ParsedFil
             None => true,
             Some(old) => {
                 old.error.as_ref().is_some_and(ErrorSummary::is_transient)
-                    && (old.dags != file.dags || old.error != file.error)
+                    && (old.dags != file.dags
+                        || old.error != file.error
+                        || old.connections != file.connections)
             }
         })
         .collect()

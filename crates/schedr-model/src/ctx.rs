@@ -53,6 +53,11 @@ pub enum CtxRequest {
         /// Which secret.
         secret: crate::secret::SecretName,
     },
+    /// A connection's values, rendered (decision 174): any connection of the task's root.
+    ConnectionGet {
+        /// The connection's name.
+        name: String,
+    },
 }
 
 /// The agent's answer to a [`CtxRequest`].
@@ -85,6 +90,18 @@ pub enum CtxAnswer {
         /// The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).
         kind: String,
         /// What went wrong, naming the secret (never a value).
+        reason: String,
+    },
+    /// The values of the connection asked for, by parameter, as stored JSON (tagged).
+    Connection {
+        /// The values.
+        values: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    /// Why the connection asked for can't be opened; the connection stays open.
+    ConnectionFailed {
+        /// The error kind (`connection_not_found`, `render_failed`, or a secret's).
+        kind: String,
+        /// What went wrong, naming the connection (never a value).
         reason: String,
     },
     /// A request the agent can't answer (one it doesn't know, out of order); the connection

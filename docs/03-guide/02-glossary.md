@@ -11,6 +11,10 @@ The names used across the documentation, the API and the logs.
   component unless renamed. A DAG file is referenced as root and relative path, e.g.
   `etl:team_a/sync.py`, so references are the same on every worker.
 
+**Connection**
+: A named set of values for a task to connect to a database, API or host. A task declares
+  which it uses. See [Connections](../02-dags/14-connections.md).
+
 **Content hash**
 : A hash of every file in a root (paths and contents). Workers with the same code report the
   same hash, so the master knows which workers have which code.

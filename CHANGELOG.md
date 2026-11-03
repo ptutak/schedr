@@ -7,6 +7,15 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Connections** (M4.7a, decisions 174, 179, 180): `@connection(...)` on a generator function
+  defines one by name for the DAG folder, its values secrets and plain values; a task
+  declares what it opens (`@task(connections=[...])`, `CommandOperator(connections=)`), and
+  the worker renders those before it starts, masking their secrets. `with name() as client:`
+  in a Python task; `schedr task-ctx connection NAME --env PREFIX` (export lines for `eval`)
+  or `--json` in a command. The error kinds `connection_not_found` (retried) and
+  `connection_denied`; a DAG's page warns of a declared connection its folder lacks, and
+  `schedr dags check DIR` fails on it. A connection's values take at most 1 MiB. Doubles: `task_context(connections=)`,
+  `run_dag(connections=)`, `schedr dags test --connection name=JSON`.
 - **Live pages share one stream per browser** (decision 175, B31 and B32): a SharedWorker
   holds the UI's `/events` stream for all of a browser's schedr pages, so six live tabs no
   longer leave clicks and page loads waiting for one of the browser's six connections; a

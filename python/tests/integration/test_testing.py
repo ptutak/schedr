@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from schedr.testing import RunDagError, run_dag
+from schedr.testing import RunDagError, run_dag, schedr_binary
 
 FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 
@@ -476,3 +476,78 @@ def test_secrets_are_given_and_masked(tmp_path: Path) -> None:
     assert "connecting with ****" in connect.log
     assert "hunter22-pw" not in connect.log
     assert result.tasks["who"].output == "secret_denied: ****"
+
+
+CONNECTIONS = """
+from collections.abc import Iterator
+
+from schedr import CommandOperator, Dag, ConnectionDeniedError, connection, secrets, task
+
+@connection(dsn=t"postgres://etl:{secrets['etl/db']['password']}@db/x", pool=3)
+def warehouse(dsn: str, pool: int) -> Iterator[str]:
+    print("opening", dsn)
+    yield f"{dsn} pool={pool}"
+    print("closed")
+
+@task(connections=[warehouse])
+def query() -> str:
+    with warehouse() as db:
+        return db
+
+@task
+def sneaky() -> str:
+    try:
+        with warehouse() as db:
+            return db
+    except ConnectionDeniedError as e:
+        return str(e)
+
+with Dag("connections"):
+    query()
+    sneaky()
+    CommandOperator(
+        "shell",
+        ["sh", "-c",
+         'vars="$("$0" task-ctx connection warehouse --env DB)" && eval "$vars" && echo "$DB_DSN"',
+         SCHEDR],
+        connections=[warehouse],
+    )
+"""
+
+
+def connections_dag() -> str:
+    """The DAG, its command naming this schedr binary (the task's PATH may have none)."""
+    return f"SCHEDR = {schedr_binary()!r}\n" + CONNECTIONS
+
+
+def test_a_connection_is_rendered_by_the_agent_and_masked(tmp_path: Path) -> None:
+    (tmp_path / "c.py").write_text(connections_dag())
+    given = {"etl/db#password": "hunter22-pw"}
+    result = run_dag(tmp_path / "c.py", "connections", for_=FOR, secrets=given)
+    assert result.state == "success", result
+    query = result.tasks["query"]
+    assert query.state == "success", query.log
+    assert query.output == "postgres://etl:****@db/x pool=3"
+    assert "opening postgres://etl:****@db/x" in query.log
+    assert "closed" in query.log
+    assert "hunter22-pw" not in query.log
+    shell = result.tasks["shell"]
+    assert shell.state == "success", shell.log
+    assert shell.output.stdout == "postgres://etl:****@db/x\n"
+    # Refused by the agent, though the folder defines it: the task doesn't declare it.
+    assert result.tasks["sneaky"].output == (
+        "connection `warehouse` isn't declared in the task's `connections=`"
+    )
+
+
+def test_run_dag_gives_a_connections_values(tmp_path: Path) -> None:
+    (tmp_path / "c.py").write_text(connections_dag())
+    result = run_dag(
+        tmp_path / "c.py",
+        "connections",
+        for_=FOR,
+        connections={"warehouse": {"dsn": "sqlite://test", "pool": 1}},
+    )
+    query = result.tasks["query"]
+    assert query.state == "success", query.log
+    assert query.output == "sqlite://test pool=1"

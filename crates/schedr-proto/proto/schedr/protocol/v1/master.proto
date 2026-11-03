@@ -286,6 +286,9 @@ message AssignTask {
   // The outcomes of the upstream tasks the task uses, by task ID; "" for one that was
   // skipped (its edges count as not taken: a reference to it stands for null).
   map<string, string> upstream_outcomes = 14;
+  // The connections of the task's root (decision 174), as schedr-model Registry JSON: the
+  // agent renders one when the task opens it. Empty: none.
+  bytes connections_json = 15;
 }
 
 message AssignParse {
@@ -310,6 +313,9 @@ message ParsedFile {
   repeated bytes dag_json = 2;
   // Set if importing the file failed (including a per-file timeout).
   optional ImportError import_error = 3;
+  // Each connection the file defines itself, as schedr-model ConnectionDef JSON (decision
+  // 174; never a secret's value).
+  repeated bytes connection_json = 4;
 }
 
 // Why a DAG file couldn't be imported (schedr-model ErrorSummary).

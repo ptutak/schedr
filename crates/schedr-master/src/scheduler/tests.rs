@@ -167,6 +167,7 @@ async fn current_parse(db: &Database, hash: &str, exception: Option<&str>) {
     let file = schedr_model::runner::ParsedFile {
         path: "a.py".to_owned(),
         dags: Vec::new(),
+        connections: Vec::new(),
         error: exception.map(|e| schedr_model::runner::ErrorSummary {
             exception: e.to_owned(),
             message: "No module named 'pandas'".to_owned(),

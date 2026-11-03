@@ -1090,6 +1090,8 @@ impl MasterCore {
         for (root, _, accepted, version) in self.discovery.current_code() {
             self.dispatcher.set_current_code(root, accepted, version);
         }
+        self.dispatcher
+            .set_connections(self.discovery.registries().clone());
     }
 }
 

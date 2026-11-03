@@ -1807,6 +1807,7 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         memory_budget_bytes: 0,
         setrlimit: false,
         upstream_outcomes: std::collections::HashMap::new(),
+        connections_json: Vec::new(),
     };
     for (timeout_ms, cancel, status) in [
         (json!(null), true, pb::AttemptStatus::Cancelled),

@@ -86,6 +86,7 @@ pub async fn parse_files<R: ParseRunner>(
                 parsed.push(ParsedFile {
                     path,
                     dags: Vec::new(),
+                    connections: Vec::new(),
                     error: Some(error),
                     warnings: Vec::new(),
                 });
@@ -143,6 +144,7 @@ async fn run_session<S: ParseSession>(
             RunnerMessage::FileParsed {
                 path,
                 dags,
+                connections,
                 error,
                 warnings,
             } if current.as_ref() == Some(&path) => {
@@ -152,6 +154,7 @@ async fn run_session<S: ParseSession>(
                 parsed.push(ParsedFile {
                     path,
                     dags,
+                    connections,
                     error,
                     warnings,
                 });

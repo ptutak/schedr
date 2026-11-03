@@ -297,7 +297,8 @@ pub fn duration_micros(text: &str) -> Result<i64, &'static str> {
 }
 
 /// A dict stored escaped when its only key would read as a tag (B66).
-fn escaped(object: Map<String, Value>) -> Value {
+#[must_use]
+pub fn escaped(object: Map<String, Value>) -> Value {
     if object.len() == 1 && object.keys().all(|k| TAGS.contains(&k.as_str())) {
         json!({ "$dict": object })
     } else {

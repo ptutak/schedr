@@ -19,6 +19,14 @@ pub const MAX_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 /// `task_not_found`).
 pub const TASK_NOT_FOUND: &str = "task_not_found";
 
+/// The error kind of a connection a task opens that its root's registry doesn't have
+/// (decision 174): not defined in the DAG folder, defined twice, or invalid.
+pub const CONNECTION_NOT_FOUND: &str = "connection_not_found";
+
+/// The error kind of a connection a task opens without declaring it in `connections=`
+/// (decision 179).
+pub const CONNECTION_DENIED: &str = "connection_denied";
+
 /// The error kind of an attempt whose DAG file is missing although the worker has the root at
 /// the hash the master expects (the newest code): the file is gone, not on its way.
 pub const DAG_FILE_MISSING: &str = "dag_file_missing";
@@ -98,6 +106,9 @@ pub struct ParsedFile {
     pub path: String,
     /// The DAGs it defines (none for a helper module or a failed import).
     pub dags: Vec<Dag>,
+    /// The connections it defines itself (decision 174: the root's registry).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<crate::connection::ConnectionDef>,
     /// Why importing it failed, if it did.
     pub error: Option<ErrorSummary>,
     /// The Python warnings importing it raised (`Category: message`), for `schedr dags
@@ -128,6 +139,9 @@ pub enum RunnerMessage {
         path: String,
         /// The DAGs it defines (none for a helper module).
         dags: Vec<Dag>,
+        /// The connections it defines itself (not those of modules it imports).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        connections: Vec<crate::connection::ConnectionDef>,
         /// Why importing it failed, if it did; then `dags` is empty.
         error: Option<ErrorSummary>,
         /// The Python warnings importing it raised (`Category: message`), e.g. a
@@ -153,6 +167,13 @@ pub enum RunnerMessage {
     SecretGet {
         /// Which secret.
         secret: crate::secret::SecretName,
+    },
+    /// A running task opens a connection it didn't get with the request
+    /// (`with name():`); the agent answers [`AgentMessage::Connection`] or
+    /// [`AgentMessage::ConnectionFailed`].
+    ConnectionGet {
+        /// The connection's name.
+        name: String,
     },
     /// The task failed: an exception, or an output that can't be stored.
     TaskFailed {
@@ -376,6 +397,18 @@ pub enum AgentMessage {
         /// The error kind (`secret_unavailable`, `secret_denied`, `secret_not_found`).
         kind: String,
         /// What went wrong, naming the secret (never a value).
+        message: String,
+    },
+    /// The values of the connection a [`RunnerMessage::ConnectionGet`] asked for, rendered.
+    Connection {
+        /// Each parameter's value, as stored JSON.
+        values: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    /// Why the connection a [`RunnerMessage::ConnectionGet`] asked for can't be opened.
+    ConnectionFailed {
+        /// The error kind (`connection_not_found`, or a secret's).
+        kind: String,
+        /// What went wrong, naming the connection (never a value).
         message: String,
     },
 }

@@ -8,6 +8,7 @@ object tagged by ``type`` (the shapes are ``schema/runner.schema.json``, generat
 import json
 import os
 import socket
+import threading
 from typing import Any
 
 MAX_MESSAGE_SIZE = 64 * 1024 * 1024
@@ -34,6 +35,23 @@ class Channel:
             sock: The socket.
         """
         self._sock = sock
+        self._asking = threading.Lock()
+
+    def ask(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Sends a request and receives its answer, one request at a time on this channel.
+
+        A task's threads may read secrets and open connections at once: each answer goes to
+        the thread that asked.
+
+        Args:
+            message: The request.
+
+        Returns:
+            The answer.
+        """
+        with self._asking:
+            self.send(message)
+            return self.receive()
 
     def send(self, message: dict[str, Any]) -> None:
         """Sends one message.

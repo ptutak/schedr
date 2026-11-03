@@ -27,7 +27,7 @@ use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, wa
 use crate::output::TailBuffer;
 use crate::parse::{ParseRunner, ParseSession};
 use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
-use crate::secrets::{AttemptSecrets, SecretError};
+use crate::secrets::{AttemptSecrets, ConnectionError, SecretError};
 use crate::status::{StopReason, Termination};
 use crate::supervise::{Limits, Process, Signal, Stops, Supervised, supervise};
 use crate::usage::Ended;
@@ -374,6 +374,12 @@ async fn task_conversation(
                     return (None, import);
                 }
             }
+            Ok(RunnerMessage::ConnectionGet { name }) => {
+                let answer = connection_answer(secrets, &name).await;
+                if write_message(stream, &answer).await.is_err() {
+                    return (None, import);
+                }
+            }
             message => return (message.ok(), import),
         }
     }
@@ -665,6 +671,23 @@ impl ParseRunner for ProcessParseRunner {
             return Err(error);
         }
         Ok(session)
+    }
+}
+
+/// The answer to a running Python task's `ConnectionGet` (decision 174).
+async fn connection_answer(secrets: Option<&AttemptSecrets>, name: &str) -> AgentMessage {
+    let opened = match secrets {
+        Some(secrets) => secrets.connection(name).await,
+        None => Err(ConnectionError::NotFound(format!(
+            "connection `{name}`: no connections are known for this task"
+        ))),
+    };
+    match opened {
+        Ok(values) => AgentMessage::Connection { values },
+        Err(error) => AgentMessage::ConnectionFailed {
+            kind: error.kind().to_owned(),
+            message: error.to_string(),
+        },
     }
 }
 

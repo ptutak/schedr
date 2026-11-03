@@ -70,6 +70,8 @@ struct DagPage {
     limits: Vec<LimitRow>,
     /// The trigger dialog's run parameters, rendered (empty: it takes none).
     params_html: String,
+    /// What fails when a run reaches it (a connection its root doesn't define).
+    warnings: Vec<String>,
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -212,6 +214,7 @@ pub async fn dag<T: Transport>(
         &DagPage {
             params_html,
             limits: dag.limits.iter().map(LimitRow::of).collect(),
+            warnings: dag.warnings.clone(),
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),

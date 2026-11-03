@@ -232,6 +232,10 @@ pub struct Task {
     /// The secrets it declares (`secrets=`): read on demand, never put in its environment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretDecl>,
+    /// The connections it opens (`connections=`, decision 179), by name: only these, opened
+    /// before it starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<String>,
 }
 
 impl Task {

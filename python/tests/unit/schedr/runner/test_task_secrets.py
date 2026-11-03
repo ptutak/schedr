@@ -1,3 +1,5 @@
+import contextlib
+import select
 import socket
 import sys
 import threading
@@ -12,7 +14,13 @@ from schedr import task as task_decorator
 from schedr._model import SecretRef
 from schedr.runner.parse import import_dag_file
 from schedr.runner.protocol import Channel
-from schedr.runner.task import TaskInputError, execute, resolve, secret_reader
+from schedr.runner.task import (
+    TaskInputError,
+    connection_opener,
+    execute,
+    resolve,
+    secret_reader,
+)
 from schedr.testing import task_context
 
 DAG = """
@@ -194,3 +202,51 @@ def test_task_context_refuses_what_a_task_doesnt_declare() -> None:
         # A plain function's reads aren't checked: it declares nothing.
         assert plain("etl/db#password") == "pw"
     assert denied.value.kind == "secret_denied"
+
+
+def test_a_secret_and_a_connection_asked_at_once_each_get_their_own_answer() -> None:
+    # Two threads of one task, one channel: the second request waits for the first's answer.
+    ours, theirs = socket.socketpair()
+    with ours, theirs:
+        channel = Channel(ours)
+        read, open_connection = secret_reader(channel), connection_opener(channel)
+        agent = Channel(theirs)
+        first_asked = threading.Event()
+        answer_of = {
+            "secret_get": {"type": "secret", "value": "s3cret"},
+            "connection_get": {"type": "connection", "values": {"host": "db"}},
+        }
+
+        def serve() -> None:
+            pending = [agent.receive()]
+            first_asked.set()
+            # Were they mixed, the second would come now, and be answered first.
+            if select.select([theirs], [], [], 0.5)[0]:
+                pending.insert(0, agent.receive())
+            for _ in range(2):
+                request = pending.pop(0) if pending else agent.receive()
+                agent.send(answer_of[request["type"]])
+
+        results: dict[str, object] = {}
+
+        def secret() -> None:
+            results["secret"] = read(SecretRef("a", "k"))
+
+        def connection() -> None:
+            with open_connection("db", lambda values: _held(dict(values))) as values:
+                results["connection"] = values
+
+        server = threading.Thread(target=serve)
+        server.start()
+        first = threading.Thread(target=secret)
+        first.start()
+        assert first_asked.wait(5)
+        second = threading.Thread(target=connection)
+        second.start()
+        for thread in (first, second, server):
+            thread.join(5)
+    assert results == {"secret": "s3cret", "connection": {"host": "db"}}
+
+
+def _held(values: dict[str, object]) -> contextlib.AbstractContextManager[object]:
+    return contextlib.nullcontext(values)

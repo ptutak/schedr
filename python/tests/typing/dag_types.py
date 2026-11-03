@@ -8,6 +8,7 @@ check that stops catching a mistake fails `make lint`.
 # The tasks here are signatures only: their bodies don't use their parameters.
 # pyright: reportUnusedParameter=false
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -23,6 +24,7 @@ from schedr import (
     Task,
     branch,
     chain,
+    connection,
     dag_ctx,
     group,
     on,
@@ -280,3 +282,20 @@ def reads_inside() -> int:
     value: str = task_ctx.secret_value("etl/api#token")
     wrong: dict[str, str] = task_ctx.secret("etl/api", "token")  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
     return len(token) + len(whole) + len(value) + len(wrong)
+
+
+@connection(base_url="https://api.example.com", token=secrets["etl/api"]["token"])
+def orders_api(base_url: str, token: str) -> Iterator[dict[str, str]]:
+    yield {"base_url": base_url, "token": token}
+
+
+# A connection yielding a client of its own declares as any other, by itself or by name.
+@task(connections=[orders_api, "warehouse"])
+def opens() -> str:
+    with orders_api() as api:
+        url: str = api["base_url"]
+        wrong: int = api["base_url"]  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
+        return url + str(wrong)
+
+
+CommandOperator("export", ["true"], connections=[orders_api])

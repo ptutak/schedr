@@ -232,3 +232,103 @@ fn a_full_channel_is_waited_for_until_the_deadline_not_forever() {
     );
     drop(agent_end);
 }
+
+/// Runs `schedr task-ctx connection` against a served channel whose task declares `db`.
+async fn connection_against_agent(args: ConnectionArgs) -> Result<String, String> {
+    let registry: schedr_model::connection::Registry = serde_json::from_value(json!({
+        "connections": {
+            "db": {"name": "db", "params": {
+                "dsn": {"literal": "postgres://it's@db/x"},
+                "pool": {"literal": 3},
+                "since": {"literal": {"$date": "2026-01-02"}},
+            }},
+            "other": {"name": "other", "params": {}},
+            "clash": {"name": "clash", "params": {
+                "host": {"literal": "lower"}, "HOST": {"literal": "upper"},
+            }},
+            "odd": {"name": "odd", "params": {"région": {"literal": "eu"}}},
+        }
+    }))
+    .unwrap();
+    let secrets = schedr_agent::secrets::AttemptSecrets::none(std::sync::Arc::new(
+        schedr_agent::secrets::SecretStores::none(),
+    ))
+    .with_connections(
+        std::sync::Arc::new(registry),
+        ["db", "clash", "odd"].map(str::to_owned).to_vec(),
+    );
+    let (ours, theirs) = channel().unwrap();
+    let mut served = info("0.1.0");
+    served.secrets = Some(std::sync::Arc::new(secrets));
+    let _serving = serve(ours, served);
+    let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let result = run_task_ctx_connection(&args, &env, "0.1.0", &mut out);
+        drop(theirs);
+        result.map(|()| String::from_utf8(out).unwrap())
+    })
+    .await
+    .unwrap()
+}
+
+fn connection(name: &str, env: Option<&str>) -> ConnectionArgs {
+    ConnectionArgs {
+        name: name.to_owned(),
+        env: env.map(str::to_owned),
+        json: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_prints_as_json_or_as_quoted_exports() {
+    assert_eq!(
+        connection_against_agent(connection("db", None))
+            .await
+            .unwrap(),
+        "{\"dsn\":\"postgres://it's@db/x\",\"pool\":3,\"since\":\"2026-01-02\"}\n"
+    );
+    assert_eq!(
+        connection_against_agent(connection("db", Some("PG")))
+            .await
+            .unwrap(),
+        "export PG_DSN='postgres://it'\\''s@db/x'\nexport PG_POOL='3'\nexport PG_SINCE='2026-01-02'\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_not_declared_or_a_bad_prefix_is_an_error() {
+    let denied = connection_against_agent(connection("other", None))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        denied,
+        "connection `other` isn't declared in the task's `connections=` (connection_denied)"
+    );
+    for bad in ["1X", "A-B", "", "A B"] {
+        let error = connection_against_agent(connection("db", Some(bad)))
+            .await
+            .unwrap_err();
+        assert!(error.starts_with(&format!("--env `{bad}`")), "{error}");
+    }
+    // A shell would keep one of two values, or refuse the name: neither is printed.
+    let clash = connection_against_agent(connection("clash", Some("DB")))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        clash,
+        "--env: parameters `HOST` and `host` would both be `DB_HOST`; read them with --json"
+    );
+    let odd = connection_against_agent(connection("odd", Some("DB")))
+        .await
+        .unwrap_err();
+    assert!(
+        odd.starts_with("--env: parameter `région` can't be"),
+        "{odd}"
+    );
+    // Both still read as JSON.
+    let json = connection_against_agent(connection("clash", None))
+        .await
+        .unwrap();
+    assert_eq!(json, "{\"HOST\":\"upper\",\"host\":\"lower\"}\n");
+}

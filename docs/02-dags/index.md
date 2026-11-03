@@ -29,4 +29,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 11-groups
 12-params
 13-secrets
+14-connections
 ```

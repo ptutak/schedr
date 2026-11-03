@@ -237,6 +237,10 @@ pub enum DagsCommand {
         /// A secret value for the run: `path#key=value`.
         #[arg(long = "secret", value_name = "SECRET")]
         secrets: Vec<String>,
+        /// A connection's values for the run, given instead of its own: `name={"param":
+        /// value}` (stored JSON); its function runs with them.
+        #[arg(long = "connection", value_name = "CONNECTION")]
+        connections: Vec<String>,
         /// Run only this task and its upstream tasks.
         #[arg(long, value_name = "TASK_ID")]
         task: Option<String>,
@@ -392,6 +396,8 @@ pub enum TaskCtxCommand {
         #[command(subcommand)]
         command: SecretCommand,
     },
+    /// A connection the task declares (`connections=`): its values, its secrets filled in.
+    Connection(ConnectionArgs),
 }
 
 /// `schedr task-ctx cleanup ...`.
@@ -450,6 +456,20 @@ pub enum SecretCommand {
     },
 }
 
+/// `schedr task-ctx connection NAME [--env PREFIX | --json]`.
+#[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
+pub struct ConnectionArgs {
+    /// The connection's name (its function's).
+    pub name: String,
+    /// Print `export PREFIX_PARAM='value'` lines for `eval`, one per parameter (the
+    /// parameter's name in capitals; a value that isn't text as JSON).
+    #[arg(long, value_name = "PREFIX")]
+    pub env: Option<String>,
+    /// Print the values as one line of JSON (the default).
+    #[arg(long, conflicts_with = "env")]
+    pub json: bool,
+}
+
 /// `schedr dag-ctx ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum DagCtxCommand {
@@ -497,7 +517,7 @@ impl Command {
             | Self::Workers { .. }
             | Self::DagCtx { .. }
             | Self::TaskCtx {
-                command: TaskCtxCommand::Secret { .. },
+                command: TaskCtxCommand::Secret { .. } | TaskCtxCommand::Connection(_),
             } => None,
             Self::TaskCtx { .. } => Some("M4"),
         }

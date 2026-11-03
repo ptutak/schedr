@@ -22,6 +22,7 @@ fn test_command(changes: impl FnOnce(&mut DagsCommand)) -> DagsCommand {
         planned_for: None,
         params: vec![],
         secrets: vec![],
+        connections: vec![],
         task: None,
         path: None,
     };
@@ -183,6 +184,7 @@ fn parsed(path: &str, error: bool) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),
         dags: vec![],
+        connections: Vec::new(),
         error: error.then(|| schedr_model::runner::ErrorSummary {
             exception: "RuntimeError".to_owned(),
             message: "boom".to_owned(),

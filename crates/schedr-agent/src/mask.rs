@@ -83,6 +83,13 @@ impl MaskSet {
             json_escaped(value, true),
             python_repr_escaped(value),
         ];
+        // Single-quoted for a shell, `'` written `'\''` (`task-ctx connection --env`).
+        let quoted: Vec<String> = forms
+            .iter()
+            .filter(|form| form.contains('\''))
+            .map(|form| form.replace('\'', "'\\''"))
+            .collect();
+        forms.extend(quoted);
         if value.contains('\n') {
             forms.extend(
                 value

@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
+use schedr_model::connection::Registry;
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{Dag, DagId, DagLocation};
 use uuid::Uuid;
@@ -92,7 +93,7 @@ pub enum DagChange {
 }
 
 /// The row of a parse file: path, DAGs JSON, error JSON.
-type FileRow = (String, String, Option<String>);
+type FileRow = (String, String, Option<String>, String);
 
 /// The row of a stored DAG with its current version.
 type DagRow = (
@@ -268,8 +269,8 @@ impl Database {
             VALUES ($1{uuid}, $2, $3, $4, $5, $6{ts}) \
             ON CONFLICT (root, content_hash, schedr_version) DO NOTHING";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json})";
         let id = Uuid::now_v7().to_string();
         let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             let done = sqlx::query(sql(backend, INSERT))
@@ -292,6 +293,7 @@ impl Database {
                         .bind(parse.worker_id)
                         .bind(self.fenced_as())
                         .bind(db_time(parse.parsed_at))
+                        .bind(to_json(&file.connections))
                         .execute(&mut *tx)
                         .await?;
                 }
@@ -324,8 +326,8 @@ impl Database {
         const DELETE: &str =
             "DELETE FROM parse_files WHERE parse_result_id = $1{uuid} AND path = $2";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json})";
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for file in files {
                 sqlx::query(sql(backend, DELETE))
@@ -341,6 +343,7 @@ impl Database {
                     .bind(worker_id)
                     .bind(self.fenced_as())
                     .bind(db_time(parsed_at))
+                    .bind(to_json(&file.connections))
                     .execute(&mut *tx)
                     .await?;
             }
@@ -376,7 +379,7 @@ impl Database {
     /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if a stored file doesn't
     /// read back.
     pub async fn parse_files(&self, parse_id: &str) -> Result<Vec<ParsedFile>, DbError> {
-        const FILES: &str = "SELECT path, dags{text}, error{text} FROM parse_files \
+        const FILES: &str = "SELECT path, dags{text}, error{text}, connections{text} FROM parse_files \
             WHERE parse_result_id = $1{uuid} ORDER BY path";
         let rows: Vec<FileRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, FILES))
@@ -385,9 +388,10 @@ impl Database {
                 .await?
         });
         rows.into_iter()
-            .map(|(path, dags, error)| {
+            .map(|(path, dags, error, connections)| {
                 Ok(ParsedFile {
                     dags: from_json("parse_files.dags", &dags)?,
+                    connections: from_json("parse_files.connections", &connections)?,
                     error: error
                         .map(|e| from_json("parse_files.error", &e))
                         .transpose()?,
@@ -396,6 +400,38 @@ impl Database {
                 })
             })
             .collect()
+    }
+
+    /// The connections of `root`'s current parse (decision 174), as the master builds its
+    /// registry: empty when it has none.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if a stored connection
+    /// doesn't read back.
+    pub async fn current_connections(&self, root: &str) -> Result<Registry, DbError> {
+        const CONNECTIONS: &str = "SELECT f.path, f.connections{text} FROM current_parses c \
+            JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
+            WHERE c.root = $1 ORDER BY f.path";
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, CONNECTIONS))
+                .bind(root)
+                .fetch_all(pool)
+                .await?
+        });
+        let files = rows
+            .into_iter()
+            .map(|(path, connections)| {
+                Ok(ParsedFile {
+                    connections: from_json("parse_files.connections", &connections)?,
+                    path,
+                    dags: Vec::new(),
+                    error: None,
+                    warnings: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, DbError>>()?;
+        Ok(Registry::of(&files))
     }
 
     /// Records `parse_id` as `root`'s current parse (the master's decision), at `now`.

@@ -334,6 +334,7 @@ class Task:
         group: The group it belongs to (the innermost), if any.
         expand: What its instances vary over, for a mapped task.
         secrets: The secrets it declares (``secrets=``), read on demand.
+        connections: The connections it opens (``connections=``), by name (decision 179).
     """
 
     id: str
@@ -344,6 +345,7 @@ class Task:
     group: str | None = None
     expand: Expand | None = None
     secrets: tuple[SecretDecl, ...] = ()
+    connections: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -387,4 +389,6 @@ class Task:
             result["expand"] = self.expand.to_json()
         if self.secrets:
             result["secrets"] = [declared.to_json() for declared in self.secrets]
+        if self.connections:
+            result["connections"] = list(self.connections)
         return result

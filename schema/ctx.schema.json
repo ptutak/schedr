@@ -108,6 +108,48 @@
           "type": "object"
         },
         {
+          "description": "The values of the connection asked for, by parameter, as stored JSON (tagged).",
+          "properties": {
+            "type": {
+              "const": "connection",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": true,
+              "description": "The values.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the connection asked for can't be opened; the connection stays open.",
+          "properties": {
+            "kind": {
+              "description": "The error kind (`connection_not_found`, `render_failed`, or a secret's).",
+              "type": "string"
+            },
+            "reason": {
+              "description": "What went wrong, naming the connection (never a value).",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A request the agent can't answer (one it doesn't know, out of order); the connection\nis closed after it.",
           "properties": {
             "reason": {
@@ -196,6 +238,24 @@
           "required": [
             "type",
             "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A connection's values, rendered (decision 174): any connection of the task's root.",
+          "properties": {
+            "name": {
+              "description": "The connection's name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
           ],
           "type": "object"
         }

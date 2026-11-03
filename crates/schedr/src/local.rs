@@ -107,6 +107,7 @@ pub async fn run_local(
             params,
             params_json,
             secrets,
+            connections,
             task,
             path,
         } => {
@@ -116,6 +117,11 @@ pub async fn run_local(
                 .map(|spec| schedr_agent::secrets::MemoryStorage::parse(spec))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| AppError::BadArgument(format!("--secret {e}")))?;
+            let connections = connections
+                .iter()
+                .map(|spec| given_connection(spec))
+                .collect::<Result<BTreeMap<_, _>, _>>()
+                .map_err(|e| AppError::BadArgument(format!("--connection {e}")))?;
             if task.is_some() {
                 return Err(not_yet("dags test --task", "M4"));
             }
@@ -129,6 +135,7 @@ pub async fn run_local(
                 planned_for: at,
                 params,
                 secrets,
+                connections,
             };
             test_dag(dag, &run, path.as_deref(), config, env, client.json, out).await
         }
@@ -151,7 +158,11 @@ async fn check_path(
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let root = LocalRoot::at(path)?;
-    let files = check_root(&root, config, env).await?;
+    let mut files = check_root(&root, config, env).await?;
+    if path.is_dir() {
+        // A whole root: what its tasks declare in `connections=` is checked against its own.
+        files = schedr_master::validate::connection_problems(files);
+    }
     let version = match against {
         Some(url) => Some(worker_versions(url, client, env).await),
         None => None,
@@ -617,6 +628,23 @@ struct TestRun {
     params: Option<serde_json::Map<String, serde_json::Value>>,
     /// `--secret` values: in memory, standing for every storage the DAG reads.
     secrets: Vec<(schedr_model::SecretName, String)>,
+    /// `--connection` values, by connection and parameter.
+    connections: BTreeMap<String, BTreeMap<String, Value>>,
+}
+
+/// A `--connection` value: `name={"param": value, ...}`.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub(crate) fn given_connection(spec: &str) -> Result<(String, BTreeMap<String, Value>), String> {
+    let Some((name, json)) = spec.split_once('=') else {
+        return Err(format!("`{spec}`: expected `name={{\"param\": value}}`"));
+    };
+    schedr_model::TaskId::new(name).map_err(|e| format!("`{name}`: {e}"))?;
+    let values = serde_json::from_str(json)
+        .map_err(|e| format!("`{name}`: its values must be a JSON object: {e}"))?;
+    Ok((name.to_owned(), values))
 }
 
 async fn test_dag(
@@ -676,10 +704,10 @@ async fn test_dag(
     // A test run's secrets are only its `--secret` values (none: every read is "not found"),
     // never the configured storages standalone would otherwise put in their place.
     let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
-    setup.secret_storage = setup
-        .secret_storage
-        .clone()
-        .given(schedr_agent::secrets::SecretStores::for_test(values));
+    setup.secret_storage = setup.secret_storage.clone().given(
+        schedr_agent::secrets::SecretStores::for_test(values)
+            .with_test_connections(test.connections.clone()),
+    );
     let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();

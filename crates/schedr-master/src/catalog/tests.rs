@@ -29,6 +29,7 @@ fn ok(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),
         dags,
+        connections: Vec::new(),
         error: None,
         warnings: Vec::new(),
     }
@@ -38,6 +39,7 @@ fn failed(path: &str) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),
         dags: vec![],
+        connections: Vec::new(),
         error: Some(ErrorSummary {
             exception: "SyntaxError".to_owned(),
             message: "invalid syntax".to_owned(),

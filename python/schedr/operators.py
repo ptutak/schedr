@@ -24,6 +24,7 @@ from schedr._model import (
 )
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
+from schedr.connections import ConnectionsArg, declared_connections
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
 from schedr.tasks import Output
 from schedr.types import ProcessResult
@@ -145,6 +146,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             (never in its environment): ``secrets['path']['key']``, ``'path#key'``,
             ``'path'`` (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
             declaring; one in the command line is refused (the process list shows it).
+        connections: The connections it reads with ``schedr task-ctx connection NAME``,
+            each the ``@connection`` function or its name.
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -168,6 +171,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_active: int | None = None,
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
+        connections: ConnectionsArg = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
@@ -215,6 +219,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             max_active=max_active,
             max_active_per_run=max_active_per_run,
             secrets=_secrets.declared(secrets, where),
+            connections=declared_connections(connections, where),
         )
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)

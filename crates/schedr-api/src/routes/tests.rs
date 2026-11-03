@@ -1076,6 +1076,7 @@ async fn the_current_codes_import_errors_are_listed() {
     let files = [schedr_model::runner::ParsedFile {
         path: "broken.py".to_owned(),
         dags: vec![],
+        connections: Vec::new(),
         error: Some(schedr_model::runner::ErrorSummary {
             exception: "ModuleNotFoundError".to_owned(),
             // Codex's review of the Deployments batch: an error quoting an address showed its

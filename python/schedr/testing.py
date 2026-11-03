@@ -27,9 +27,12 @@ from schedr._model import CommandKind, PythonKind, SecretRef, registry
 from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
-from schedr._serialization.codec import encode, json_form
+from schedr._serialization.codec import encode, encode_any, json_form
 from schedr._serialization.models import is_model
+from schedr.connections import ConnectionNotFoundError
 from schedr.context import (
+    ConnectionEnter,
+    ConnectionOpener,
     RunValues,
     SecretError,
     SecretReader,
@@ -74,6 +77,7 @@ def task_context(
     kind: str = "manual",
     params: object = None,
     secrets: Mapping[str, str] | None = None,
+    connections: Mapping[str, object] | None = None,
     task_id: str = "test",
     try_number: int = 1,
     map_index: int | None = None,
@@ -95,6 +99,9 @@ def task_context(
             a whole secret (``"path"``) is its keys'. A ``@task`` function called in the
             block reads only what its ``secrets=`` declares, as on a worker (a plain or
             ``async`` function's reads aren't checked).
+        connections: Test doubles for connections, by name: ``with mongodb_default() as db``
+            in the block gives ``db = connections["mongodb_default"]`` (the connection's
+            function isn't called); a connection without one raises ``ConnectionNotFoundError``.
         task_id: ``task_ctx.task_id``.
         try_number: ``task_ctx.try_number``.
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
@@ -117,8 +124,24 @@ def task_context(
     values = RunValues(
         dag_id, run_id or str(uuid.uuid7()), kind, planned, start, stored, params_class
     )
-    with running(values, TaskValues(task_id, try_number, map_index, reader)):
+    opener = _doubles(connections) if connections is not None else None
+    with running(values, TaskValues(task_id, try_number, map_index, reader, opener)):
         yield values
+
+
+def _doubles(connections: Mapping[str, object]) -> ConnectionOpener:
+    """Opens connections as ``task_context(connections=...)``'s doubles."""
+    given = dict(connections)
+
+    def open_double(name: str, enter: ConnectionEnter) -> contextlib.AbstractContextManager[object]:
+        del enter  # a double stands in for the function
+        if name not in given:
+            raise ConnectionNotFoundError(
+                f"connection `{name}`: no double for it in task_context(connections=...)"
+            )
+        return contextlib.nullcontext(given[name])
+
+    return open_double
 
 
 def _local_secrets(secrets: Mapping[str, str]) -> SecretReader:
@@ -399,6 +422,7 @@ def run_dag(
     for_: datetime | None = None,
     params: object = None,
     secrets: Mapping[str, str] | None = None,
+    connections: Mapping[str, Mapping[str, object]] | None = None,
     step: bool = False,
     replace: Mapping[str, object] | None = None,
 ) -> RunResult:
@@ -415,6 +439,9 @@ def run_dag(
             mapping of field names to JSON values (``{"region": "us"}``), over its defaults.
         secrets: Secret values, by ``"path#key"``, for every storage (``--secret``); masked
             in the logs and outputs as usual.
+        connections: Values for connections, by name, each its parameters' values
+            (``--connection``): the real ``@connection`` function runs with them instead of
+            its own, which are never rendered. A task still opens only what it declares.
         step: Yield each task as it ends (milestone M4).
         replace: Results replacing tasks (milestone M4).
 
@@ -442,6 +469,12 @@ def run_dag(
         command += ["--params", json.dumps(_params_json(params))]
     for name, value in (secrets or {}).items():
         command += ["--secret", f"{name}={value}"]
+    for name, values in (connections or {}).items():
+        stored = {
+            param: encode_any(value, f"connections[{name!r}][{param!r}]")
+            for param, value in values.items()
+        }
+        command += ["--connection", f"{name}={json.dumps(stored)}"]
     env = dict(os.environ)
     env.setdefault("SCHEDR_CONFIG__INTERPRETERS__PYTHON", sys.executable)
     done = subprocess.run(command, capture_output=True, text=True, env=env, check=False)

@@ -44,6 +44,13 @@ The master decides retries. What uses a retry, and what doesn't:
 | failed with an error certain to repeat (e.g. inputs too large, a template that can't render, a result bigger than the master accepts: `output_too_large`; a secret refused or not found: `secret_denied`, `secret_not_found`) | never retried |
 | failed because a secret's storage couldn't be reached (`secret_unavailable`) | yes, while the task's `retries` last ([Secrets](../02-dags/13-secrets.md#when-a-secret-cant-be-read)) |
 
+A missing or refused declared connection fails as `connection_not_found`, retried while the
+task's `retries` last. A secret it names can fail with the secret's own kind and retry rule.
+Both happen before the task's code runs; the attempt's error summary is `TaskNotStarted`.
+A task that opens a connection it didn't declare is refused: in Python it gets
+`ConnectionDeniedError`, and an attempt failing of it ends as `connection_denied`, which is not
+retried. See [Connections](../02-dags/14-connections.md).
+
 ## Delivery
 
 Every message between master and worker may arrive more than once. The attempt ID makes

@@ -133,6 +133,13 @@ class SecretError(Exception):
 type SecretReader = Callable[[SecretRef], str | dict[str, str]]
 """Reads one secret: a key's value, or a whole secret's keys and values."""
 
+type ConnectionEnter = Callable[[Mapping[str, object]], contextlib.AbstractContextManager[object]]
+"""A connection's function called with its rendered values (stored JSON, by parameter)."""
+
+type ConnectionOpener = Callable[[str, ConnectionEnter], contextlib.AbstractContextManager[object]]
+"""Opens a connection by name: its values rendered by the agent and given to ``enter``, or a
+test's double."""
+
 
 @dataclass(frozen=True, slots=True)
 class TaskValues:
@@ -144,12 +151,14 @@ class TaskValues:
         map_index: Which instance of a mapped task, from 0; ``None`` for an unmapped task.
         secrets: Reads a secret the task declares (``task_ctx.secret(...)``); ``None``: it
             can read none.
+        connections: Opens a connection (``with name():``); ``None``: none here.
     """
 
     task_id: str
     try_number: int
     map_index: int | None
     secrets: SecretReader | None = None
+    connections: ConnectionOpener | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
@@ -161,21 +170,44 @@ _DECLARED: ContextVar[tuple[SecretDecl, ...] | None] = ContextVar(
 """The ``secrets=`` of a ``@task`` function called outside a DAG, while it runs (tests)."""
 
 
+_DECLARED_CONNECTIONS: ContextVar[tuple[str, ...] | None] = ContextVar(
+    "schedr_declared_connections", default=None
+)
+"""The ``connections=`` of a ``@task`` function called outside a DAG, while it runs (tests)."""
+
+
 @contextlib.contextmanager
-def declaring(declared: tuple[SecretDecl, ...]) -> Iterator[None]:
-    """Makes ``declared`` the secrets a test's ``task_ctx.secret`` may read, in the block.
+def declaring(
+    declared: tuple[SecretDecl, ...], connections: tuple[str, ...] = ()
+) -> Iterator[None]:
+    """Makes what a ``@task`` function declares what a test's call of it may use.
+
+    ``declared`` are the secrets ``task_ctx.secret`` may read; ``connections`` those it may
+    open, in the block.
 
     Args:
         declared: The ``@task`` function's ``secrets=``.
+        connections: Its ``connections=``.
 
     Yields:
         Nothing.
     """
     token = _DECLARED.set(declared)
+    opened = _DECLARED_CONNECTIONS.set(connections)
     try:
         yield
     finally:
+        _DECLARED_CONNECTIONS.reset(opened)
         _DECLARED.reset(token)
+
+
+def declared_connections() -> tuple[str, ...] | None:
+    """The ``connections=`` of the ``@task`` function a test is calling; ``None`` outside one.
+
+    Returns:
+        The connections' names, or ``None``.
+    """
+    return _DECLARED_CONNECTIONS.get()
 
 
 def declared_secrets() -> tuple[SecretDecl, ...] | None:
@@ -515,6 +547,15 @@ _TASK_OUTSIDE = (
     "runs (it has no references for the DAG body); in tests, set it with "
     "`schedr.testing.task_context(...)`"
 )
+
+
+def current_task() -> TaskValues | None:
+    """The running task's own context, if a task is running.
+
+    Returns:
+        Its values, or ``None`` outside a running task.
+    """
+    return _TASK.get()
 
 
 def _task() -> TaskValues:

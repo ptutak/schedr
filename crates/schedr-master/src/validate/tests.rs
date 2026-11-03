@@ -258,6 +258,7 @@ fn file(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),
         dags,
+        connections: Vec::new(),
         error: None,
         warnings: Vec::new(),
     }
@@ -291,6 +292,7 @@ fn valid_files_and_import_errors_are_kept() {
     let failed = ParsedFile {
         path: "bad.py".to_owned(),
         dags: vec![dag_with(&json!({}))],
+        connections: Vec::new(),
         error: Some(error.clone()),
         warnings: Vec::new(),
     };
@@ -685,4 +687,48 @@ fn a_parse_is_checked_against_the_workers_storages() {
         &Checks::new(MASTER, LIMIT),
     );
     assert_eq!(files[0].error, None);
+}
+
+fn connection(name: &str, host: &str) -> schedr_model::connection::ConnectionDef {
+    serde_json::from_value(json!({"name": name, "params": {"host": {"literal": host}}})).unwrap()
+}
+
+#[test]
+fn a_file_refused_for_its_dag_keeps_its_connections_one_failing_to_import_doesnt() {
+    // The registry (worker, DAG page, `dags check`) is built from what validation leaves.
+    let mut invalid = file("shared.py", vec![dag_with(&json!({"max_active_runs": 0}))]);
+    invalid.connections = vec![connection("warehouse", "db")];
+    let mut failed = file("broken.py", Vec::new());
+    failed.connections = vec![connection("stale", "db")];
+    failed.error = Some(ErrorSummary {
+        exception: "ImportError".to_owned(),
+        message: "no module".to_owned(),
+        traceback: String::new(),
+    });
+    let files = validate_files("etl", vec![invalid, failed], &Checks::new(MASTER, LIMIT));
+    assert!(files[0].error.is_some());
+    assert_eq!(files[0].connections, [connection("warehouse", "db")]);
+    assert_eq!(files[1].connections, []);
+}
+
+#[test]
+fn a_connection_over_1_mib_fails_its_files_import() {
+    // It would travel with each assignment of a task opening it, within the worker's 4 MiB.
+    let mut big = file("sync.py", vec![dag_with(&json!({}))]);
+    big.connections = vec![
+        connection(
+            "huge",
+            &"x".repeat(schedr_model::connection::MAX_CONNECTION_SIZE),
+        ),
+        connection("small", "db"),
+    ];
+    let files = validate_files("etl", vec![big], &Checks::new(MASTER, LIMIT));
+    let error = files[0].error.as_ref().unwrap();
+    assert_eq!(
+        error.message,
+        "connection `huge`: its values take 1048624 bytes, over the 1 MiB a connection may hold \
+         (they travel with each task opening it); give bigger data to the task"
+    );
+    assert_eq!(files[0].dags, []);
+    assert_eq!(files[0].connections, [connection("small", "db")]);
 }

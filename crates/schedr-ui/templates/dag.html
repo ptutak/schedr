@@ -24,6 +24,12 @@
   {{ why }}. Its queued runs wait meanwhile. <a href="{{ page.base }}/import-errors">Import errors</a>
 </div>
 {% endif %}
+{% if !warnings.is_empty() %}
+<div class="banner warning">
+  Its runs fail at these tasks until the DAG folder defines what they declare:
+  <ul>{% for warning in warnings %}<li class="mono">{{ warning }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
 {% if !conflicts.is_empty() %}
 <div class="banner warning">
   Other files define <code>{{ row.dag_id }}</code> too; none of them runs until one is left:
