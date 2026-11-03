@@ -37,6 +37,21 @@ meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with
 workers that lost the master together don't come back in step. After a session in which it
 was registered, the backoff starts from 200 ms again.
 
+## Checking connections
+
+For each root, the master picks a connected, active worker that is not drained and has the
+root at the current parse's exact hash. It picks the one running the fewest attempts, then
+by worker name. A worker on older code, or newer code not parsed yet, isn't picked: the
+connection definitions come from that parse. `--worker NAME` asks for a particular one, which must
+meet the same conditions. If no suitable worker is found, the command is rejected.
+
+A worker runs one connection check or test at a time. Its time starts when the job arrives,
+including its wait for its turn and secret reads: 30 s for a check, or the test's `--timeout`
+(60 s by default). A test is a one-off attempt of the connection's file beside the tasks; it
+uses no task slot. Its process is journalled like an attempt's, so an agent restarted after
+being killed stops the process it left behind. See [Secret storage](13-secrets.md#checking-a-deployments-connections)
+and [State and failures](07-failures.md#connection-jobs).
+
 ## Running a task
 
 For [built-in connections](../02-dags/14-connections.md#built-in-types), install the client

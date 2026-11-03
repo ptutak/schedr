@@ -12,13 +12,16 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::workers::{WorkerRegistration, WorkerWarning};
 use schedr_db::{Database, DbError};
+use schedr_model::commands::{
+    CONNECTION_ANSWER_MARGIN_MS, ConnectionJobResult, ConnectionReport, ConnectionsResult, JobState,
+};
 use schedr_model::runner::ErrorSummary;
 use schedr_model::{SchedrVersion, WorkerState};
 use schedr_proto::convert::parsed_file_from_proto;
 use schedr_proto::pb::{self, master_message, worker_message};
 use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
 
-use crate::commands::{Applied, CommandError, Commander};
+use crate::commands::{Applied, CommandError, Commander, parse_connection_job_id};
 use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
     DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
@@ -260,6 +263,9 @@ pub struct MasterCore {
     /// Workers resumed whose follow-up (their parse jobs) failed: tried again each round, as
     /// the resume command isn't applied again (B99).
     unresumed: BTreeSet<String>,
+    /// The connection jobs sent and not answered, by job ID, with their worker (lost with
+    /// it) and when they are given up on (`schedr connections check` / `test`).
+    connection_jobs: BTreeMap<String, (String, Timestamp)>,
 }
 
 impl MasterCore {
@@ -291,6 +297,7 @@ impl MasterCore {
             arrivals,
             metrics: MasterMetrics::default(),
             unresumed: BTreeSet::new(),
+            connection_jobs: BTreeMap::new(),
             settings,
             db,
         }
@@ -369,6 +376,10 @@ impl MasterCore {
             );
             restored += 1;
         }
+        // The jobs a previous master sent: their answers would come to it.
+        self.db
+            .connections_commands_lost("the master restarted before the answer came")
+            .await?;
         Ok(restored)
     }
 
@@ -476,6 +487,12 @@ impl MasterCore {
                 "worker restarted (a new incarnation): its unreported attempts are lost \
                  (possibly out of memory)"
             );
+            // The old incarnation's jobs: none will answer.
+            self.connection_jobs_lost(
+                worker_id,
+                &format!("worker `{worker_id}` restarted before answering"),
+            )
+            .await?;
         }
         self.connections.insert(
             worker_id.to_owned(),
@@ -674,7 +691,121 @@ impl MasterCore {
                 moved.into_iter().map(assign_parse).collect()
             }
             worker_message::Message::Deregister(_) => self.deregistered(worker_id, now).await,
+            worker_message::Message::ConnectionJobDone(done) => {
+                self.connection_job_done(worker_id, done).await?;
+                Vec::new()
+            }
         })
+    }
+
+    /// A worker answered a connections job: its reports into the command's result.
+    async fn connection_job_done(
+        &mut self,
+        worker_id: &str,
+        done: pb::ConnectionJobDone,
+    ) -> Result<(), CoreError> {
+        let mut reports = Vec::with_capacity(done.report_json.len());
+        for json in &done.report_json {
+            let report: ConnectionReport =
+                serde_json::from_slice(json).map_err(|e| CoreError::BadMessage {
+                    worker_id: worker_id.to_owned(),
+                    reason: format!("a connection report doesn't read: {e}"),
+                })?;
+            reports.push(report);
+        }
+        // Only its own worker's answer, and once stored: until then it can still be lost.
+        if self
+            .connection_jobs
+            .get(&done.job_id)
+            .is_some_and(|(worker, _)| worker != worker_id)
+        {
+            return Ok(());
+        }
+        self.update_connection_job(&done.job_id, worker_id, |job| {
+            job.state = JobState::Done;
+            job.connections = reports;
+        })
+        .await?;
+        self.connection_jobs.remove(&done.job_id);
+        Ok(())
+    }
+
+    /// Changes one job of a connections command's stored result, if it is `worker_id`'s and
+    /// still running (an answer after the job was given up on is dropped).
+    async fn update_connection_job(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        update: impl FnOnce(&mut ConnectionJobResult),
+    ) -> Result<(), CoreError> {
+        let Some((command_id, root)) = parse_connection_job_id(job_id) else {
+            return Ok(());
+        };
+        let Some(record) = self.db.command(command_id).await? else {
+            return Ok(());
+        };
+        let Some(mut result) = record
+            .result
+            .and_then(|value| serde_json::from_value::<ConnectionsResult>(value).ok())
+        else {
+            return Ok(());
+        };
+        let Some(job) = result.jobs.iter_mut().find(|job| {
+            job.root == root && job.worker == worker_id && job.state == JobState::Running
+        }) else {
+            return Ok(());
+        };
+        update(job);
+        let value = serde_json::to_value(&result).unwrap_or_default();
+        self.db.set_command_result(command_id, &value).await?;
+        Ok(())
+    }
+
+    /// The connections jobs of a worker that went away (or restarted, `why`): lost, so their
+    /// command finishes.
+    async fn connection_jobs_lost(&mut self, worker_id: &str, why: &str) -> Result<(), CoreError> {
+        let lost: Vec<String> = self
+            .connection_jobs
+            .iter()
+            .filter(|(_, (worker, _))| worker == worker_id)
+            .map(|(job, _)| job.clone())
+            .collect();
+        for job_id in lost {
+            self.connection_job_lost(&job_id, worker_id, why.to_owned())
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn connection_job_lost(
+        &mut self,
+        job_id: &str,
+        worker_id: &str,
+        why: String,
+    ) -> Result<(), CoreError> {
+        self.update_connection_job(job_id, worker_id, |job| {
+            job.state = JobState::Lost;
+            job.reason = Some(why);
+        })
+        .await?;
+        self.connection_jobs.remove(job_id);
+        Ok(())
+    }
+
+    /// The connections jobs past their time: lost (their answer, if any, went with a stream
+    /// that ended).
+    async fn connection_jobs_overdue(&mut self, now: Timestamp) -> Result<(), CoreError> {
+        let overdue: Vec<(String, String)> = self
+            .connection_jobs
+            .iter()
+            .filter(|(_, (_, deadline))| *deadline <= now)
+            .map(|(job, (worker, _))| (job.clone(), worker.clone()))
+            .collect();
+        for (job_id, worker_id) in overdue {
+            let why = format!("worker `{worker_id}` didn't answer in time");
+            self.connection_job_lost(&job_id, &worker_id, why).await?;
+        }
+        Ok(())
     }
 
     /// A worker's stream ended: it may reconnect (same incarnation, tasks still running)
@@ -688,6 +819,7 @@ impl MasterCore {
             && connection.live
         {
             connection.live = false;
+            self.dispatcher.worker_disconnected(worker_id);
             self.db
                 .set_worker_state(worker_id, WorkerState::Disconnected, now)
                 .await?;
@@ -726,6 +858,16 @@ impl MasterCore {
             .apply_into(&self.scheduler, &mut self.dispatcher, &mut applied, now)
             .await;
         outgoing.append(&mut applied.outgoing);
+        for job in applied.connection_jobs.drain(..) {
+            let deadline = now
+                .checked_add(job.allowed + Duration::from_millis(CONNECTION_ANSWER_MARGIN_MS))
+                .unwrap_or(now);
+            self.connection_jobs
+                .insert(job.job_id, (job.worker_id, deadline));
+        }
+        if let Err(error) = self.connection_jobs_overdue(now).await {
+            tracing::warn!(%error, "overdue connection jobs not marked lost yet");
+        }
         // The drains and resumes decided before a failing command get their follow-up too:
         // being decided, they won't be applied again. A resume whose follow-up failed is
         // tried again each round until it succeeds, or the worker is drained again (B99).
@@ -1068,6 +1210,16 @@ impl MasterCore {
         self.sync_code();
         self.connections.remove(worker_id);
         self.arrivals.forget(worker_id);
+        // After what is retried: its failure is logged, the CLI giving up after its timeout.
+        if let Err(error) = self
+            .connection_jobs_lost(
+                worker_id,
+                &format!("worker `{worker_id}` went away before answering"),
+            )
+            .await
+        {
+            tracing::warn!(worker_id, %error, "a lost worker's connection jobs not marked lost");
+        }
         Ok(())
     }
 
@@ -1087,11 +1239,13 @@ impl MasterCore {
 
     /// Tells the dispatcher each root's current code, as discovery decided it.
     fn sync_code(&mut self) {
-        for (root, _, accepted, version) in self.discovery.current_code() {
+        let mut parsed = BTreeMap::new();
+        for (root, hash, accepted, version) in self.discovery.current_code() {
             self.dispatcher.set_current_code(root, accepted, version);
+            parsed.insert(root.to_owned(), hash.to_owned());
         }
         self.dispatcher
-            .set_connections(self.discovery.registries().clone());
+            .set_connections(self.discovery.registries(), &parsed);
     }
 }
 

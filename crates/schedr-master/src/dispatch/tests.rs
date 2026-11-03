@@ -2080,7 +2080,10 @@ async fn an_assignment_carries_only_the_connections_its_task_declares() {
         "refused": {"twice": "defined in a.py and b.py", "elsewhere": "no"},
     }))
     .unwrap();
-    dispatcher.set_connections(BTreeMap::from([("etl".to_owned(), Arc::new(registry))]));
+    dispatcher.set_connections(
+        &BTreeMap::from([("etl".to_owned(), Arc::new(registry))]),
+        &BTreeMap::new(),
+    );
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let sent: Registry = serde_json::from_slice(&assignment(&out[0]).connections_json).unwrap();
     assert_eq!(

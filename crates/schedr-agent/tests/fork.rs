@@ -198,6 +198,7 @@ fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
         },
         sys_path: vec![dir.to_string_lossy().into_owned()],
         secrets: Vec::new(),
+        connection_test: None,
     }
 }
 

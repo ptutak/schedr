@@ -9,13 +9,17 @@ use std::io::Write;
 
 use jiff::tz::TimeZone;
 use schedr_api::views::{
-    AttemptView, CommandView, DagView, RunDetail, RunView, TaskView, WorkerView,
+    AttemptView, CheckConnectionsRequest, CommandView, DagView, RunDetail, RunView, TaskView,
+    TestConnectionRequest, WorkerView,
 };
 
 use crate::app::AppError;
-use crate::cli::{DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand};
+use crate::cli::{
+    ConnectionsCommand, DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand,
+};
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short, trigger_text};
+use schedr_model::commands::{ConnectionsResult, JobState, SecretState};
 
 #[cfg(test)]
 mod tests;
@@ -163,6 +167,135 @@ pub async fn run_workers<T: Transport>(
             done(out, output, &command, &format!("resumed {worker}"))
         }
     }
+}
+
+/// Runs `schedr connections ...`: the command sent, then its result read back until every
+/// worker answered; a table of each connection, or the result as JSON.
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`]; [`AppError::Failed`] when a connection isn't
+/// fine, or a worker didn't answer.
+pub async fn run_connections<T: Transport>(
+    command: &ConnectionsCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    // A test may take its timeout; past it and a margin, its worker won't answer.
+    let (sent, wait) = match command {
+        ConnectionsCommand::Check { root, name, worker } => {
+            let request = CheckConnectionsRequest {
+                root: root.clone(),
+                name: name.clone(),
+                worker: worker.clone(),
+            };
+            let sent = client
+                .send_command(|| client.check_connections(&request))
+                .await?;
+            (sent, CONNECTIONS_ANSWER_MARGIN)
+        }
+        ConnectionsCommand::Test {
+            name,
+            root,
+            worker,
+            timeout,
+        } => {
+            let request = TestConnectionRequest {
+                root: root.clone(),
+                worker: worker.clone(),
+                timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
+            };
+            let sent = client
+                .send_command(|| client.test_connection(name, &request))
+                .await?;
+            (sent, *timeout + CONNECTIONS_ANSWER_MARGIN)
+        }
+    };
+    let applied = client.wait(sent).await?;
+    let result = client.wait_connections(applied, wait).await?;
+    if output.json {
+        print_json(out, &result)?;
+    } else {
+        write_connections(out, &result)?;
+    }
+    let bad = result
+        .jobs
+        .iter()
+        .map(|job| match job.state {
+            JobState::Done => job.connections.iter().filter(|c| !c.ok).count(),
+            _ => 1,
+        })
+        .sum::<usize>();
+    if bad > 0 {
+        return Err(AppError::Failed(format!(
+            "{bad} connection(s) or worker(s) not fine"
+        )));
+    }
+    Ok(())
+}
+
+/// How long past its own time a connections job's worker has to answer.
+const CONNECTIONS_ANSWER_MARGIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn write_connections(out: &mut impl Write, result: &ConnectionsResult) -> Result<(), AppError> {
+    let mut rows = Vec::new();
+    let mut notes = Vec::new();
+    for job in &result.jobs {
+        if job.state != JobState::Done {
+            rows.push(vec![
+                job.root.clone(),
+                "-".to_owned(),
+                job.worker.clone(),
+                match job.state {
+                    JobState::Lost => "lost".to_owned(),
+                    _ => "no answer".to_owned(),
+                },
+            ]);
+            if let Some(reason) = &job.reason {
+                notes.push(format!("{}: {reason}", job.root));
+            }
+            continue;
+        }
+        for report in &job.connections {
+            let state = if report.ok { "ok" } else { "failed" };
+            let state = match report.duration_ms {
+                Some(ms) => format!("{state} ({}.{:01} s)", ms / 1000, ms % 1000 / 100),
+                None => state.to_owned(),
+            };
+            rows.push(vec![
+                job.root.clone(),
+                report.name.clone(),
+                job.worker.clone(),
+                state,
+            ]);
+            for secret in &report.secrets {
+                if secret.state != SecretState::Present {
+                    let state = serde_json::to_value(secret.state)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    let why = secret
+                        .message
+                        .as_deref()
+                        .map(|m| format!(": {m}"))
+                        .unwrap_or_default();
+                    notes.push(format!(
+                        "{}: secret `{}` {state}{why}",
+                        report.name, secret.secret
+                    ));
+                }
+            }
+            if let Some(error) = &report.error {
+                notes.push(format!("{}: {error}", report.name));
+            }
+        }
+    }
+    write_table(out, &["ROOT", "CONNECTION", "WORKER", "STATE"], &rows)?;
+    for note in notes {
+        writeln!(out, "{note}")?;
+    }
+    Ok(())
 }
 
 fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {

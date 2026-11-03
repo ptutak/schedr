@@ -98,6 +98,15 @@ pub enum Command {
         #[command(subcommand)]
         command: TasksCommand,
     },
+    /// Check a deployment's connections, or test one, on a worker.
+    Connections {
+        /// How to reach the server.
+        #[command(flatten)]
+        client: ClientArgs,
+        /// The connections command.
+        #[command(subcommand)]
+        command: ConnectionsCommand,
+    },
     /// Drain and resume workers.
     Workers {
         /// How to reach the server.
@@ -350,6 +359,48 @@ pub enum TasksCommand {
     Output(TaskTarget),
 }
 
+/// `schedr connections ...` (decisions 174, 193, 198-200): run on a worker, through the
+/// master.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ConnectionsCommand {
+    /// Render every connection of a root (all roots if none is given) with the worker's
+    /// storages: each secret present or missing, never a value. Fails when one isn't.
+    Check {
+        /// The root; every root with connections if not given.
+        root: Option<String>,
+        /// Only this connection.
+        #[arg(long)]
+        name: Option<String>,
+        /// The worker to run it on; one having the root's current code otherwise.
+        #[arg(long)]
+        worker: Option<String>,
+    },
+    /// Open a connection on a worker and run its check (or open and close it, without one).
+    /// Fails when it doesn't work.
+    Test {
+        /// The connection.
+        name: String,
+        /// Its root, when several define one by that name.
+        #[arg(long)]
+        root: Option<String>,
+        /// The worker to run it on; one having the root's current code otherwise.
+        #[arg(long)]
+        worker: Option<String>,
+        /// How long it may take (`30s`, `2m`).
+        #[arg(long, default_value = "60s", value_parser = test_timeout)]
+        timeout: std::time::Duration,
+    },
+}
+
+fn test_timeout(text: &str) -> Result<std::time::Duration, String> {
+    let timeout = schedr_config::units::parse_duration(text).map_err(|e| e.to_string())?;
+    let most = std::time::Duration::from_millis(schedr_model::commands::MAX_CONNECTION_TEST_MS);
+    if timeout.is_zero() || timeout > most {
+        return Err(format!("1 ms to {} s", most.as_secs()));
+    }
+    Ok(timeout)
+}
+
 /// `schedr workers ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum WorkersCommand {
@@ -515,6 +566,7 @@ impl Command {
             | Self::Ui
             | Self::Tasks { .. }
             | Self::Workers { .. }
+            | Self::Connections { .. }
             | Self::DagCtx { .. }
             | Self::TaskCtx {
                 command: TaskCtxCommand::Secret { .. } | TaskCtxCommand::Connection(_),
@@ -538,6 +590,7 @@ impl Command {
             Self::Runs { .. } => "runs",
             Self::Tasks { .. } => "tasks",
             Self::Workers { .. } => "workers",
+            Self::Connections { .. } => "connections",
             Self::TaskCtx { .. } => "task-ctx",
             Self::DagCtx { .. } => "dag-ctx",
         }

@@ -182,6 +182,9 @@ jobs:
       # The stress suite runs nightly instead (stress.yml).
       - run: cargo nextest run --workspace -E 'kind(test) & not binary(stress)'
       - run: uv run pytest python/tests/integration examples
+      # The SSH server's own log (refused connections, penalties) when a test fails.
+      - if: failure()
+        run: docker logs sshd 2>&1 | tail -100
 
   # The web UI in a browser (decision 27A, `make test-ui`): a standalone with the example DAG
   # and a run, driven by Playwright's Chromium; a job of its own for the browser download.

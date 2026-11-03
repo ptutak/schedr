@@ -441,6 +441,30 @@ impl Database {
         Ok(decided == 1)
     }
 
+    /// Replaces an applied command's result: a connections command's, as its workers answer
+    /// (the master the only writer, one answer at a time). Whether it was applied.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the update fails.
+    pub async fn set_command_result(
+        &self,
+        id: &str,
+        result: &serde_json::Value,
+    ) -> Result<bool, DbError> {
+        const SET: &str =
+            "UPDATE commands SET result = $1{json} WHERE id = $2{uuid} AND status = 'applied'";
+        let set = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(to_json(result))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(set == 1)
+    }
+
     /// A command row by ID.
     ///
     /// # Errors
@@ -480,6 +504,47 @@ impl Database {
                 .await?
         });
         rows.into_iter().map(record).collect()
+    }
+
+    /// Marks every job still `running` in a connections command's result `lost`, with
+    /// `why`: at a master's start, the answers to an earlier master's jobs never come. How
+    /// many commands it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a query fails or stored data doesn't read.
+    pub async fn connections_commands_lost(&self, why: &str) -> Result<usize, DbError> {
+        const RUNNING: &str = "SELECT id{text}, kind, status, reason, result{text}, \
+            requested_by, {ts<}requested_at{>ts}, {ts<}decided_at{>ts} FROM commands \
+            WHERE status = 'applied' AND kind IN ('check_connections', 'test_connection') \
+            AND result{text} LIKE '%\"running\"%'";
+        let rows: Vec<RecordRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, RUNNING))
+                .fetch_all(pool)
+                .await?
+        });
+        let mut changed = 0;
+        for row in rows {
+            let command = record(row)?;
+            let Some(mut result) = command.result else {
+                continue;
+            };
+            let mut lost = false;
+            let jobs = result
+                .get_mut("jobs")
+                .and_then(serde_json::Value::as_array_mut);
+            for job in jobs.into_iter().flatten() {
+                if job.get("state").and_then(serde_json::Value::as_str) == Some("running") {
+                    job["state"] = "lost".into();
+                    job["reason"] = why.into();
+                    lost = true;
+                }
+            }
+            if lost && self.set_command_result(&command.id, &result).await? {
+                changed += 1;
+            }
+        }
+        Ok(changed)
     }
 }
 

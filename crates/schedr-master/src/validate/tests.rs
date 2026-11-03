@@ -310,7 +310,12 @@ fn valid_files_and_import_errors_are_kept() {
 #[test]
 fn paths_must_stay_inside_the_root() {
     for path in ["", "/etc/x.py", "../x.py", "a/../x.py", "./x.py", "a\\x.py"] {
-        let files = validate_files("etl", vec![file(path, vec![])], &Checks::new(MASTER, LIMIT));
+        // Its connections go too: a connection test would import the file by its path.
+        let mut outside = file(path, vec![]);
+        outside.connections =
+            vec![serde_json::from_value(json!({"name": "db", "params": {}})).unwrap()];
+        let files = validate_files("etl", vec![outside], &Checks::new(MASTER, LIMIT));
+        assert_eq!(files[0].connections, [], "{path}");
         let error = files[0].error.as_ref().unwrap();
         assert_eq!(error.exception, INVALID_PATH_EXCEPTION, "{path}");
         assert_eq!(

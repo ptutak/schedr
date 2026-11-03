@@ -57,6 +57,19 @@ Two kinds of storage exist:
 | `db` | schedr's own database, each value encrypted | standalone only |
 | `vault` | HashiCorp Vault, a KV v2 mount | standalone and workers |
 
+## Checking a deployment's connections
+
+Before a run needs its secrets, use `schedr connections check [ROOT]` to check and render
+connections using a worker's storages. It reports each secret's state, never its value, and
+does not open the connection. `schedr connections test NAME` opens it from a worker, where
+tasks run, and runs its check. For commands, options and examples see
+[Checking them on a worker](../02-dags/14-connections.md#checking-them-on-a-worker).
+
+Both commands use the webserver's API (also available in standalone), with its configured
+authentication. schedr has no user roles: anyone accepted by that API can run them. A check
+reads the storages without the worker's cache, so a corrected secret can be checked at once.
+The worker and its timing are described in [Workers](05-workers.md#checking-connections).
+
 ## Configuration
 
 Each storage is a table of its own, named by its key; DAGs write that name

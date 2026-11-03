@@ -210,8 +210,9 @@ pub struct Dispatcher {
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
     /// those hashes and of at least that version.
     current_code: BTreeMap<String, (BTreeSet<String>, Option<SchedrVersion>)>,
-    /// Each root's connections from its current parse (decision 174).
-    connections: BTreeMap<String, Arc<Registry>>,
+    /// Each root's connections from its current parse (decision 174), with that parse's
+    /// content hash: a connections job goes to a worker having the root at it.
+    connections: BTreeMap<String, (Option<String>, Arc<Registry>)>,
     metrics: MasterMetrics,
     /// Attempts whose `Started` arrived but waits for the master: never taken back (B11).
     arrivals: Arrivals,
@@ -442,8 +443,97 @@ impl Dispatcher {
     }
 
     /// Each root's connections (decision 174): a task's assignment carries those it declares.
-    pub fn set_connections(&mut self, registries: BTreeMap<String, Arc<Registry>>) {
-        self.connections = registries;
+    /// `parsed` is the content hash of each root's current parse (its registry's).
+    pub fn set_connections(
+        &mut self,
+        registries: &BTreeMap<String, Arc<Registry>>,
+        parsed: &BTreeMap<String, String>,
+    ) {
+        self.connections = registries
+            .iter()
+            .map(|(root, registry)| {
+                (
+                    root.clone(),
+                    (parsed.get(root).cloned(), Arc::clone(registry)),
+                )
+            })
+            .collect();
+    }
+
+    /// A worker's stream ended: no connections job goes to it until it registers again.
+    pub fn worker_disconnected(&mut self, worker_id: &str) {
+        self.workers.disconnected(worker_id);
+    }
+
+    /// The roots having connections, by name.
+    #[must_use]
+    pub fn connection_roots(&self) -> Vec<String> {
+        self.connections
+            .iter()
+            .filter(|(_, (_, registry))| {
+                !registry.connections.is_empty() || !registry.refused.is_empty()
+            })
+            .map(|(root, _)| root.clone())
+            .collect()
+    }
+
+    /// A root's connections, if it has any.
+    #[must_use]
+    pub fn registry(&self, root: &str) -> Option<&Arc<Registry>> {
+        self.connections.get(root).map(|(_, registry)| registry)
+    }
+
+    /// The worker a connections job of `root` goes to (decision 193), with the hash it has
+    /// the root at: `wanted`, else a connected, active worker having the root's current code,
+    /// the one running the fewest attempts. Why none can, otherwise. The current code is the
+    /// current parse's exactly (not newer code whose parse is on its way): its connections are
+    /// the ones the job carries.
+    ///
+    /// # Errors
+    ///
+    /// Why no worker can take it, for the command's rejection.
+    pub fn connection_worker(
+        &self,
+        root: &str,
+        wanted: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let Some(parsed) = self
+            .connections
+            .get(root)
+            .and_then(|(hash, _)| hash.as_ref())
+        else {
+            return Err(format!("root `{root}` has no parsed code yet"));
+        };
+        let current =
+            |w: &crate::workers::Worker| w.roots.get(root).filter(|hash| *hash == parsed).cloned();
+        if let Some(id) = wanted {
+            let worker = self
+                .workers
+                .get(id)
+                .filter(|w| w.connected)
+                .ok_or_else(|| format!("worker `{id}` isn't connected"))?;
+            // As for a task: a draining or drained worker takes no new work.
+            if worker.state != crate::workers::WorkerState::Active || worker.drained {
+                return Err(format!("worker `{id}` is draining or drained"));
+            }
+            return current(worker)
+                .map(|hash| (id.to_owned(), hash))
+                .ok_or_else(|| {
+                    format!("worker `{id}` doesn't have root `{root}` at its current code")
+                });
+        }
+        self.workers
+            .all()
+            .filter(|w| w.state == crate::workers::WorkerState::Active && !w.drained && w.connected)
+            .filter_map(|w| current(w).map(|hash| (w, hash)))
+            .min_by(|(a, _), (b, _)| {
+                a.attempts
+                    .len()
+                    .cmp(&b.attempts.len())
+                    .then(a.id.cmp(&b.id))
+            })
+            .map(|(w, hash)| (w.id.clone(), hash))
+            .ok_or_else(|| format!("no active worker has root `{root}` at its current code"))
     }
 
     /// A worker's schedr version: it gets only tasks of parses no newer.
@@ -1598,7 +1688,7 @@ impl Dispatcher {
             upstream_outcomes: outcomes.into_iter().collect(),
             // Only what the task declares (decision 179): the agent serves no other, and a
             // root's whole registry could outgrow the worker's 4 MiB message.
-            connections_json: match (task, self.connections.get(&ready.dag.location.root)) {
+            connections_json: match (task, self.registry(&ready.dag.location.root)) {
                 (Some(task), Some(registry)) if !task.connections.is_empty() => {
                     serde_json::to_vec(&registry.only(&task.connections)).unwrap_or_default()
                 }

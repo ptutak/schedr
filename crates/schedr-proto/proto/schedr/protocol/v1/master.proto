@@ -40,6 +40,7 @@ message WorkerMessage {
     Draining draining = 7;
     Deregister deregister = 8;
     Warnings warnings = 9;
+    ConnectionJobDone connection_job_done = 10;
   }
 }
 
@@ -214,6 +215,7 @@ message MasterMessage {
     AssignParse assign_parse = 3;
     CancelAttempt cancel_attempt = 4;
     FinishedAck finished_ack = 5;
+    ConnectionJob connection_job = 6;
   }
 }
 
@@ -294,6 +296,33 @@ message AssignTask {
 message AssignParse {
   string parse_job_id = 1;
   RootHash root = 2;
+}
+
+// `schedr connections check` / `test` (decision 174): one root's connections, rendered or
+// opened on this worker beside its tasks (no slot), one job at a time.
+message ConnectionJob {
+  // The job's ID, answered with.
+  string job_id = 1;
+  // The root, at the code the worker reported.
+  RootHash root = 2;
+  // The connections to check, as schedr-model Registry JSON (their files with them).
+  bytes connections_json = 3;
+  // Set for a test of one connection: open it and run its check.
+  optional ConnectionTest test = 4;
+}
+
+message ConnectionTest {
+  // The connection.
+  string name = 1;
+  // How long it may take; stopped after.
+  uint64 timeout_ms = 2;
+}
+
+// A connection job's answer.
+message ConnectionJobDone {
+  string job_id = 1;
+  // Each connection's report, as schedr-model ConnectionReport JSON (never a value).
+  repeated bytes report_json = 2;
 }
 
 message CancelAttempt {

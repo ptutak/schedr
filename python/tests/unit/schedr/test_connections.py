@@ -476,3 +476,26 @@ def test_a_prefix_a_variable_cant_start_with_is_refused(
 ) -> None:
     with Dag("c"), pytest.raises(error, match=message):
         CommandOperator("show", "true", connections=given, env=env)  # type: ignore[arg-type]
+
+
+def test_a_test_refuses_a_file_holding_two_connections_by_one_name() -> None:
+    """A test runs the connection the parse recorded: of two by one name it can't tell."""
+    from types import ModuleType  # noqa: PLC0415
+
+    from schedr.runner.task import TaskSetupError, defined_connection  # noqa: PLC0415
+
+    def opens() -> Iterator[str]:
+        yield "x"
+
+    real = connection()(opens)
+    module = ModuleType("m47c_two_connections")
+    module.real = real  # type: ignore[attr-defined]
+    module.alias = real  # type: ignore[attr-defined]
+    sys.modules[module.__name__] = module
+    try:
+        assert defined_connection(module.__name__, "opens") is real
+        module.decoy = Connection(opens, {}, name="opens")  # type: ignore[attr-defined]
+        with pytest.raises(TaskSetupError, match="2 connections named `opens`"):
+            defined_connection(module.__name__, "opens")
+    finally:
+        del sys.modules[module.__name__]

@@ -9,6 +9,7 @@ Rust/Python integration).
 
 import contextlib
 import dataclasses
+import sys
 import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -31,7 +32,7 @@ from schedr._serialization.annotations import (
 )
 from schedr._serialization.codec import escaped
 from schedr._templates import as_text
-from schedr.connections import ConnectionDeniedError, ConnectionNotFoundError
+from schedr.connections import Connection, ConnectionDeniedError, ConnectionNotFoundError
 from schedr.context import (
     ConnectionEnter,
     ConnectionOpener,
@@ -42,7 +43,7 @@ from schedr.context import (
     running,
 )
 from schedr.outcomes import from_return_type, outcome_enum
-from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error
+from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
 from schedr.runner.protocol import Channel
 
 SUCCESS = "SUCCESS"
@@ -626,6 +627,8 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     Returns:
         ``task_succeeded`` with the encoded output, or ``task_failed``.
     """
+    if request.get("connection_test"):
+        return run_connection_test(request, imported, channel)
     task, inputs, run = request["task"], request["inputs"], request["run"]
     if request.get("secrets"):
         fetched = {secret_key(s["name"]): s["value"] for s in request["secrets"]}
@@ -669,6 +672,76 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     except CodecError as e:
         return failure(e, "output_not_serializable", f"`{task_id}`: {e.reason}")
     return _stored(chosen, list[str], task)
+
+
+def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)
+    request: Mapping[str, Any],
+    imported: Callable[[], None] = lambda: None,
+    channel: Channel | None = None,
+) -> dict[str, Any]:
+    """Runs ``schedr connections test NAME`` on this worker (decision 198).
+
+    Imports the file defining the connection, opens it and runs its check (or opens and
+    closes it, without one).
+
+    Args:
+        request: The ``task`` message, its ``connection_test`` the connection's name.
+        imported: Called once the file is imported.
+        channel: The channel to the agent, for the connection's values.
+
+    Returns:
+        ``task_succeeded`` with no output, or ``task_failed``.
+    """
+    name = str(request["connection_test"])
+    dag_file = request["dag_file"]
+    try:
+        import_dag_entries(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
+        found = defined_connection(module_name(dag_file["root"], dag_file["path"]), name)
+    except TaskSetupError as e:
+        return failure(e, CONNECTION_NOT_FOUND)
+    except (Exception, SystemExit) as e:
+        return failure(e, "import_failed")
+    imported()
+    try:
+        opener = connection_opener(channel) if channel is not None else None
+        own = TaskValues(name, 1, None, None, opener)
+        with running(run_values(request["run"], None), own):
+            found.run_test()
+    except SecretError as e:
+        return failure(e, e.kind)
+    except ConnectionNotFoundError as e:
+        return failure(e, CONNECTION_NOT_FOUND)
+    except ConnectionDeniedError as e:
+        return failure(e, CONNECTION_DENIED)
+    except (Exception, SystemExit) as e:
+        return failure(e, None)
+    return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
+
+
+def defined_connection(module: str, name: str) -> Connection[object]:
+    """The connection ``name`` the module defines at its top level.
+
+    Args:
+        module: The module's name.
+        name: The connection's.
+
+    Returns:
+        The connection.
+
+    Raises:
+        TaskSetupError: When the module defines none by that name (any more).
+    """
+    loaded = sys.modules.get(module)
+    found: dict[int, Connection[object]] = {}
+    for value in vars(loaded).values() if loaded is not None else ():
+        if isinstance(value, Connection) and value.name == name:
+            found[id(value)] = value
+    if len(found) > 1:
+        # Which one the parse recorded can't be told: testing either could pass for the other.
+        raise TaskSetupError(f"the file holds {len(found)} connections named `{name}`: keep one")
+    if not found:
+        raise TaskSetupError(f"the file doesn't define connection `{name}` (any more?)")
+    return next(iter(found.values()))
 
 
 def outcome_of(result: object, annotation: object) -> tuple[str, object, object]:

@@ -32,6 +32,20 @@ back, and workers fill in the rest when they reconnect.
 | **A DAG's file fails to import** (anything but a timeout or a runner that died) | Every DAG of that file is held. No new run is created, a fire time during the hold is missed as while the DAG is paused, a manual trigger is rejected with the reason, and a queued run is not started. A run that has already started is not cancelled. When the file imports, the fire times the hold missed follow the DAG's `catchup`. See [A held DAG](06-parsing.md#a-held-dag). |
 | **A file's import times out, or its runner dies** | Nothing is held, and the file's DAGs keep their last version that imported. The parse is tried again, first after 30 seconds, then after twice as long each time, up to 10 minutes, with no limit on the tries. It goes to another worker that has the code, and to the worker that failed only when that worker is the only one. The master replaces only the files that failed this way and whose new result differs. See [Parsed again](06-parsing.md#parsed-again). |
 
+## Connection jobs
+
+The master marks a connection check or test job `lost` if its worker is lost or restarted,
+if the master restarts before the answer is stored, or if no answer comes within the job's
+time plus 30 s. A worker keeps up to 16 answers made while no master listens (discarding the
+oldest if full) and sends them after it registers again; the master drops an answer if the job
+is already `lost`.
+
+The CLI prints each connection as `ok` or `failed`, with failure details, or the worker's
+job as `lost` with its reason. `--json` prints the result instead. If it stops waiting before
+every job finishes, it reports a timeout. It exits 1 if a connection failed, a job was lost
+or a worker did not answer; otherwise it exits 0.
+See [Checking them on a worker](../02-dags/14-connections.md#checking-them-on-a-worker).
+
 ## Retries
 
 The master decides retries. What uses a retry, and what doesn't:

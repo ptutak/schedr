@@ -1,5 +1,6 @@
 use pretty_assertions::assert_eq;
 use schedr_model::DagId;
+use schedr_model::commands::CommandStatus;
 use schedr_model::runner::ParsedFile;
 use schedr_proto::convert::parsed_file_to_proto;
 use serde_json::json;
@@ -1330,4 +1331,255 @@ async fn a_resume_whose_follow_up_failed_is_retried_in_later_rounds() {
         });
     }
     assert!(assigned, "the resumed worker got no parse job");
+}
+
+/// Registers `w1` and parses a root defining connection `db`; returns the core.
+async fn with_connection() -> MasterCore {
+    let mut core = core().await;
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    let file: ParsedFile = serde_json::from_value(json!({
+        "path": "conns.py", "dags": [], "error": null,
+        "connections": [{"name": "db", "params": {"url": {"literal": "postgresql://db/x"}}}],
+    }))
+    .unwrap();
+    let mut parsed = upload(&job.parse_job_id);
+    parsed.files = vec![parsed_file_to_proto(&file)];
+    core.upload(parsed, ts(NOW)).await.unwrap();
+    core
+}
+
+/// Asks for a check of every root's connections; the job sent, and the command's ID.
+async fn check(core: &mut MasterCore) -> (pb::ConnectionJob, String) {
+    let command = schedr_model::commands::Command::CheckConnections {
+        root: None,
+        name: None,
+        worker: None,
+    };
+    let id = core
+        .db
+        .insert_command(&command, "anna", ts(NOW))
+        .await
+        .unwrap();
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let jobs: Vec<_> = out
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::ConnectionJob(job) => Some(job.clone()),
+            _ => None,
+        })
+        .collect();
+    let [job] = jobs.as_slice() else {
+        panic!("expected one ConnectionJob: {out:?}")
+    };
+    (job.clone(), id)
+}
+
+async fn stored(core: &MasterCore, id: &str) -> serde_json::Value {
+    core.db.command(id).await.unwrap().unwrap().result.unwrap()
+}
+
+#[tokio::test]
+async fn a_workers_answer_to_a_connections_job_fills_in_its_command() {
+    let mut core = with_connection().await;
+    let (job, id) = check(&mut core).await;
+    assert_eq!(job.job_id, format!("{id}/etl"));
+    let registry: schedr_model::connection::Registry =
+        serde_json::from_slice(&job.connections_json).unwrap();
+    assert_eq!(registry.files["db"], "conns.py");
+    assert_eq!(
+        stored(&core, &id).await,
+        json!({"jobs": [{"root": "etl", "worker": "w1", "state": "running"}]})
+    );
+    let report = json!({"name": "db", "ok": false, "error": "secret `etl/db#pw` missing"});
+    let done = || pb::ConnectionJobDone {
+        job_id: job.job_id.clone(),
+        report_json: vec![serde_json::to_vec(&report).unwrap()],
+    };
+    // Another worker's answer to it is dropped.
+    core.handle(
+        "w9",
+        worker_message::Message::ConnectionJobDone(done()),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored(&core, &id).await["jobs"][0]["state"], "running");
+    core.handle(
+        "w1",
+        worker_message::Message::ConnectionJobDone(done()),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stored(&core, &id).await,
+        json!({"jobs": [{"root": "etl", "worker": "w1", "state": "done",
+                         "connections": [report]}]})
+    );
+    // A report that doesn't read is a bad message.
+    let bad = pb::ConnectionJobDone {
+        job_id: job.job_id.clone(),
+        report_json: vec![b"{}".to_vec()],
+    };
+    assert!(matches!(
+        core.handle(
+            "w1",
+            worker_message::Message::ConnectionJobDone(bad),
+            ts(NOW)
+        )
+        .await,
+        Err(CoreError::BadMessage { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_connections_job_is_lost_with_its_worker() {
+    let mut core = with_connection().await;
+    let (_, id) = check(&mut core).await;
+    let bye = worker_message::Message::Deregister(pb::Deregister {});
+    core.handle("w1", bye, ts(NOW)).await.unwrap();
+    assert_eq!(
+        stored(&core, &id).await,
+        json!({"jobs": [{"root": "etl", "worker": "w1", "state": "lost",
+                         "reason": "worker `w1` went away before answering"}]})
+    );
+}
+
+/// Lets the database take the writes [`refuse`] made it refuse.
+async fn allow(core: &MasterCore, table: &str) {
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP TRIGGER refuse_{table}")))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+fn connection_jobs(out: &[Outgoing]) -> Vec<pb::ConnectionJob> {
+    out.iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::ConnectionJob(job) => Some(job.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_connections_job_goes_out_once_its_command_is_decided() {
+    // Sent before its decision was stored, it went out again with the next round's.
+    let mut core = with_connection().await;
+    let command = schedr_model::commands::Command::CheckConnections {
+        root: None,
+        name: None,
+        worker: None,
+    };
+    let id = core
+        .db
+        .insert_command(&command, "anna", ts(NOW))
+        .await
+        .unwrap();
+    refuse(&core, "commands", "NEW.status = 'applied'").await;
+    let (out, result) = core.tick_partial(ts(NOW)).await;
+    assert!(result.is_err());
+    assert_eq!(connection_jobs(&out), []);
+    allow(&core, "commands").await;
+    let out = core.tick(later(1)).await.unwrap();
+    assert_eq!(
+        connection_jobs(&out)
+            .iter()
+            .map(|job| job.job_id.clone())
+            .collect::<Vec<_>>(),
+        [format!("{id}/etl")]
+    );
+    assert_eq!(connection_jobs(&core.tick(later(2)).await.unwrap()), []);
+}
+
+#[tokio::test]
+async fn a_connections_job_whose_answer_wasnt_stored_is_still_lost_with_its_worker() {
+    let mut core = with_connection().await;
+    let (job, id) = check(&mut core).await;
+    let done = || {
+        worker_message::Message::ConnectionJobDone(pb::ConnectionJobDone {
+            job_id: job.job_id.clone(),
+            report_json: vec![br#"{"name": "db", "ok": true}"#.to_vec()],
+        })
+    };
+    // Another worker's answer leaves it waiting for its own.
+    core.handle("w9", done(), ts(NOW)).await.unwrap();
+    refuse(&core, "commands", "NEW.result LIKE '%done%'").await;
+    assert!(core.handle("w1", done(), ts(NOW)).await.is_err());
+    allow(&core, "commands").await;
+    let bye = worker_message::Message::Deregister(pb::Deregister {});
+    core.handle("w1", bye, ts(NOW)).await.unwrap();
+    assert_eq!(stored(&core, &id).await["jobs"][0]["state"], "lost");
+}
+
+#[tokio::test]
+async fn a_connections_job_is_lost_when_its_worker_restarts_or_doesnt_answer_in_time() {
+    let mut core = with_connection().await;
+    let (_, restarted) = check(&mut core).await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored(&core, &restarted).await["jobs"][0],
+        json!({"root": "etl", "worker": "w1", "state": "lost",
+               "reason": "worker `w1` restarted before answering"})
+    );
+    let (_, silent) = check(&mut core).await;
+    // A check has 30 s, and its answer 30 s more.
+    core.tick(later(59)).await.unwrap();
+    assert_eq!(stored(&core, &silent).await["jobs"][0]["state"], "running");
+    core.tick(later(61)).await.unwrap();
+    assert_eq!(
+        stored(&core, &silent).await["jobs"][0],
+        json!({"root": "etl", "worker": "w1", "state": "lost",
+               "reason": "worker `w1` didn't answer in time"})
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_master_calls_the_jobs_it_sent_before_lost() {
+    let mut first = with_connection().await;
+    let (_, id) = check(&mut first).await;
+    let mut restarted = MasterCore::new(first.db.clone(), Settings::default());
+    restarted.restore(later(10)).await.unwrap();
+    assert_eq!(
+        stored(&restarted, &id).await["jobs"][0],
+        json!({"root": "etl", "worker": "w1", "state": "lost",
+               "reason": "the master restarted before the answer came"})
+    );
+}
+
+#[tokio::test]
+async fn a_connections_job_goes_to_no_disconnected_worker() {
+    let mut core = with_connection().await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    let command = schedr_model::commands::Command::CheckConnections {
+        root: None,
+        name: None,
+        worker: None,
+    };
+    let id = core
+        .db
+        .insert_command(&command, "anna", later(1))
+        .await
+        .unwrap();
+    assert_eq!(connection_jobs(&core.tick(later(2)).await.unwrap()), []);
+    let record = core.db.command(&id).await.unwrap().unwrap();
+    assert_eq!(
+        (record.status, record.reason.as_deref()),
+        (
+            CommandStatus::Rejected,
+            Some("no active worker has root `etl` at its current code")
+        )
+    );
 }

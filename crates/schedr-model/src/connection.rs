@@ -105,6 +105,9 @@ pub struct Registry {
     /// Names that can't be used, with why: defined in more than one file, or invalid.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub refused: BTreeMap<String, String>,
+    /// The file defining each connection, relative to the root: a test imports it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub files: BTreeMap<String, String>,
 }
 
 impl Registry {
@@ -125,10 +128,11 @@ impl Registry {
         let mut registry = Self::default();
         for (name, mut defined) in places {
             defined.sort_by_key(|(path, _)| *path);
-            if let [(_, def)] = defined.as_slice() {
+            if let [(path, def)] = defined.as_slice() {
                 match def.check() {
                     Ok(()) => {
                         registry.connections.insert(name.to_owned(), (*def).clone());
+                        registry.files.insert(name.to_owned(), (*path).to_owned());
                     }
                     Err(why) => {
                         registry.refused.insert(name.to_owned(), why);
@@ -148,6 +152,11 @@ impl Registry {
         registry
     }
 
+    /// Every connection's name, the refused ones' after.
+    pub fn names(&self) -> impl Iterator<Item = &String> {
+        self.connections.keys().chain(self.refused.keys())
+    }
+
     /// Only the connections named in `names`, and why those refused are: what one task
     /// declares, sent with its assignment (the agent serves no other).
     #[must_use]
@@ -156,6 +165,9 @@ impl Registry {
         for name in names {
             if let Some(def) = self.connections.get(name) {
                 subset.connections.insert(name.clone(), def.clone());
+                if let Some(path) = self.files.get(name) {
+                    subset.files.insert(name.clone(), path.clone());
+                }
             } else if let Some(why) = self.refused.get(name) {
                 subset.refused.insert(name.clone(), why.clone());
             }

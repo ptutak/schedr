@@ -8256,6 +8256,40 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
   `mysql --defaults-file` and `curl -q -K`: the tools read `~/.my.cnf` after
   `--defaults-extra-file`, and `~/.curlrc` unless `-q` comes first, and those could turn
   the TLS check off.
+- **Built (M4.7c; decisions 174, 193, 198-200):** `schedr connections check [ROOT]
+  [--name N] [--worker W]` and `schedr connections test NAME [--root R] [--worker W]
+  [--timeout 60s]`, commands (`check_connections`, `test_connection`) through
+  `POST /api/v1/connections/check` and `/connections/{name}/test`. Applying one, the master
+  picks per root a connected, active worker having the root at its current hash (the fewest
+  attempts, then by name; or the one named) and sends it a `ConnectionJob` (the root's
+  registry as JSON, the test's name and timeout). The command's `result` is
+  `{"jobs": [{root, worker, state: running|done|lost, reason?, connections: [...]}]}`,
+  filled in from each worker's `ConnectionJobDone` (only from the worker it went to, only
+  while running; a job is `lost` when its worker is forgotten). A check fetches each secret
+  from the storages without the cache (a fixed secret shows at once), says present,
+  default, missing, denied or unavailable, and renders the connection, its error masked. A
+  test is a one-off Python attempt of the connection's file (`TaskRequest.connection_test`):
+  the runner imports the file, finds the `Connection` by name in its globals and runs
+  `run_test()` (its check, or `with conn(): pass`), under the test's timeout, in no slot;
+  one connections job at a time per worker. The CLI waits for the decision, then for every
+  job, past the timeout and a 60 s margin; exit 1 on a failure, a lost job or no answer.
+  Codex's review (11 findings, all confirmed and fixed): a job is sent only once its
+  command's decision is stored (sent before, a failed decision sent it again next round);
+  it goes to a connected worker having the root at its current parse's hash exactly (a
+  newer hash's code with the older registry mixed two versions); its time (a check's 30 s,
+  a test's timeout) counts from its arrival, its wait for its turn and its secrets' reads
+  included, the test's process stopped at the end; a test's process is journalled as an
+  attempt's (a worker killed mid-test stops it when it starts again) and planned at the
+  copy of the code it was sent for; an answer made while no master listened is sent after
+  the next registration; the master marks a job lost when its worker restarts, when it
+  doesn't answer within its time and 30 s, and at its own start for an earlier master's
+  jobs, and keeps tracking a job until its answer is stored; a check is ok only when every
+  secret it names is there. B160 logged (a task's own timeout restarting after its secrets
+  are read). Grok's security review (5 findings; 2 were Codex's too): a parsed file whose
+  path leaves the root keeps no connections either (a test imports by that path, and the
+  agent refuses such a path itself); a test refuses a file holding two `Connection`s by
+  the name (it could run one the parse never recorded, passing for the other); a named
+  worker draining or drained is refused, as the automatic pick does.
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`

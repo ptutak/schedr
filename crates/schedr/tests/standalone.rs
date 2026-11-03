@@ -1478,3 +1478,130 @@ fn a_command_and_a_plain_script_read_the_same_params_and_run() {
         "{output}"
     );
 }
+
+/// Connections of the test Postgres, its password a secret; `api`'s token never stored.
+fn connections_file() -> String {
+    let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect(
+        "SCHEDR_TEST_POSTGRES_URL: an administrative Postgres URL (`make test-integration` sets it)",
+    );
+    let (userinfo, place) = admin
+        .trim_start_matches("postgres://")
+        .trim_start_matches("postgresql://")
+        .split_once('@')
+        .expect("a URL with a user");
+    let user = userinfo.split(':').next().unwrap_or_default();
+    format!(
+        r#"
+from schedr import secrets
+from schedr.connections import SQL, Generic
+
+warehouse = SQL(
+    "warehouse",
+    url="postgresql://{place}?sslmode=disable",
+    user="{user}",
+    password=secrets["etl/db"]["password"],
+)
+api = Generic("api", token=secrets["etl/api"]["token"])
+region = Generic("region", name="eu-west")
+"#
+    )
+}
+
+/// The password the test Postgres takes.
+fn postgres_password() -> String {
+    let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").unwrap_or_default();
+    let userinfo = admin.split_once("://").unwrap_or_default().1;
+    let userinfo = userinfo.split_once('@').unwrap_or_default().0;
+    userinfo.split_once(':').unwrap_or_default().1.to_owned()
+}
+
+#[test]
+fn connections_are_checked_and_tested_on_a_worker() {
+    let standalone = Standalone::start(&[("conns.py", &connections_file())], None);
+    let (code, out, err) = standalone.secrets(None, &["set", "etl/db", "password=wrong-pw-123"]);
+    assert_eq!(code, 0, "{out}{err}");
+    // Once parsed: the root's connections known to the master.
+    let mut last = (0, String::new(), String::new());
+    standalone.wait("the connections to be known", || {
+        last = standalone.cli(&["connections", "check", "--json"]);
+        !last.2.contains("no root defines connections") && !last.2.contains("no parsed code")
+    });
+    let (code, out, err) = last;
+    assert_eq!(code, 1, "a missing secret fails the check: {out}{err}");
+    let result: Value = serde_json::from_str(&out).unwrap();
+    let job = &result["jobs"][0];
+    assert_eq!(
+        (job["root"].as_str(), job["state"].as_str()),
+        (Some("etl"), Some("done"))
+    );
+    let reports: Vec<(String, bool, Vec<String>)> = job["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let secrets = r["secrets"]
+                .as_array()
+                .map(|s| {
+                    s.iter()
+                        .map(|s| {
+                            format!(
+                                "{} {}",
+                                s["secret"].as_str().unwrap(),
+                                s["state"].as_str().unwrap()
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                r["name"].as_str().unwrap().to_owned(),
+                r["ok"].as_bool().unwrap(),
+                secrets,
+            )
+        })
+        .collect();
+    assert_eq!(
+        reports,
+        [
+            (
+                "api".to_owned(),
+                false,
+                vec!["secrets['etl/api']['token'] missing".to_owned()]
+            ),
+            ("region".to_owned(), true, vec![]),
+            (
+                "warehouse".to_owned(),
+                true,
+                vec!["secrets['etl/db']['password'] present".to_owned()]
+            ),
+        ]
+    );
+    assert!(!out.contains("wrong-pw-123"), "{out}");
+    // The table names what is missing.
+    let (code, table, _) = standalone.cli(&["connections", "check", "etl", "--name", "api"]);
+    assert_eq!(code, 1);
+    assert!(
+        table.contains("api: secret `secrets['etl/api']['token']` missing"),
+        "{table}"
+    );
+
+    // A wrong password fails the test, its message masked; the right one passes.
+    let (code, out, err) =
+        standalone.cli(&["connections", "test", "warehouse", "--timeout", "30s"]);
+    assert_eq!(code, 1, "{out}{err}\n{}", standalone.log());
+    assert!(out.contains("password authentication failed"), "{out}");
+    assert!(!out.contains("wrong-pw-123"), "{out}");
+    let right = format!("password={}", postgres_password());
+    let (code, out, err) = standalone.secrets(None, &["set", "etl/db", &right]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = standalone.cli(&["connections", "test", "warehouse"]);
+    assert_eq!(code, 0, "{out}{err}\n{}", standalone.log());
+    assert!(out.contains("warehouse") && out.contains("ok ("), "{out}");
+    // Without a check of its own, opened and closed (decision 198).
+    let (code, out, err) = standalone.cli(&["connections", "test", "region"]);
+    assert_eq!(code, 0, "{out}{err}");
+    // An unknown one is refused by the master.
+    let (code, _, err) = standalone.cli(&["connections", "test", "nope"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no root defines connection `nope`"), "{err}");
+}

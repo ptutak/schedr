@@ -654,6 +654,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             }
             worker_message::Message::Draining(_) => Some("draining"),
             worker_message::Message::Deregister(_) => Some("leaving"),
+            worker_message::Message::ConnectionJobDone(_) => Some("connections"),
         })
         .collect()
 }
@@ -1990,4 +1991,126 @@ async fn a_start_sweeps_connection_files_but_those_of_attempts_still_running() {
     assert!(dir.path().join("alive/DB/pgpass").exists());
     // No folder yet: nothing to sweep, nothing failing.
     super::sweep_connection_files(&dir.path().join("none"), &BTreeSet::new()).await;
+}
+
+fn offline_agent(dir: &Path) -> Agent<Fake> {
+    let settings = AgentSettings {
+        worker_id: "w1".to_owned(),
+        queues: vec![],
+        slots: 1,
+        setup: WorkerSetup {
+            roots: BTreeMap::new(),
+            parse_only: BTreeMap::new(),
+            python: PathBuf::from("python3"),
+            agent_env: BTreeMap::new(),
+            pass_env: vec![],
+            log_dir: dir.join("logs"),
+            connection_dir: dir.join("connections"),
+            memory: crate::memory::MemoryWatch::default(),
+            fork_server: None,
+        },
+        poll_interval: Duration::from_millis(20),
+        settle_time: Duration::ZERO,
+        journal_dir: dir.join("journal"),
+        code_dir: dir.join("code"),
+        drain: DrainPeriods::default(),
+        log_endpoint: String::new(),
+        node: NodeIdentity::default(),
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
+    };
+    Agent::new(settings, Fake::default(), "i1".to_owned())
+}
+
+/// Waits (the agent handling what ends meanwhile) until `ready` says so.
+async fn offline_until(agent: &mut Agent<Fake>, ready: impl Fn(&Agent<Fake>) -> bool) {
+    for _ in 0..500 {
+        if ready(agent) {
+            return;
+        }
+        agent
+            .offline(tokio::time::sleep(Duration::from_millis(10)))
+            .await;
+    }
+    panic!("never ready");
+}
+
+#[tokio::test]
+async fn a_connection_tests_process_is_journalled_and_its_answer_kept_while_offline() {
+    // A worker killed mid-test left its process running past its timeout; an answer made
+    // while the master was away was dropped, the job running for good.
+    let dir = TempDir::new().unwrap();
+    let journal = Journal::new(dir.path().join("journal"));
+    let mut agent = offline_agent(dir.path());
+    let done = agent.done_tx.clone();
+    done.send(Done::Spawned {
+        attempt_id: "connection-test-1".to_owned(),
+        identity: NO_PROCESS,
+        forked: false,
+    })
+    .unwrap();
+    let record = [(
+        "connection-test-1".to_owned(),
+        JournalRecord::Running(Some(NO_PROCESS)),
+    )];
+    offline_until(&mut agent, |_| {
+        journal.records().unwrap_or_default() == record
+    })
+    .await;
+    done.send(Done::Connections {
+        job_id: "c1/etl".to_owned(),
+        hash: None,
+        attempt_id: Some("connection-test-1".to_owned()),
+        reports: vec![crate::connection_jobs::failed("db", "no".to_owned())],
+    })
+    .unwrap();
+    offline_until(&mut agent, |agent| agent.unsent_answers.len() == 1).await;
+    assert_eq!(journal.records().unwrap(), []);
+    let answer = agent.unsent_answers[0].clone();
+    // Sent once registered again.
+    let registered = to_worker(master_message::Message::Registered(
+        pb::Registered::default(),
+    ));
+    let (seen, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        vec![registered],
+        |m| kinds(m).contains(&"connections"),
+        |agent| agent.unsent_answers.push_back(answer.clone()),
+    )
+    .await;
+    let sent = seen.iter().find_map(|m| match m.message.as_ref()? {
+        worker_message::Message::ConnectionJobDone(done) => Some(done.clone()),
+        _ => None,
+    });
+    assert_eq!(sent, Some(answer));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connections_job_waiting_past_its_time_for_its_turn_says_so() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = offline_agent(dir.path());
+    let turn = Arc::clone(&agent.connection_jobs);
+    let _other = turn.lock().await;
+    let registry = json!({"connections": {"db": {"name": "db", "params": {}}}});
+    agent.connection_job(pb::ConnectionJob {
+        job_id: "c1/etl".to_owned(),
+        root: Some(root_hash("etl", "sha256:h")),
+        connections_json: serde_json::to_vec(&registry).unwrap(),
+        test: None,
+    });
+    // A check has 30 s, its wait included (the clock paused, so this takes no time).
+    for _ in 0..40 {
+        if !agent.unsent_answers.is_empty() {
+            break;
+        }
+        agent
+            .offline(tokio::time::sleep(Duration::from_secs(1)))
+            .await;
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&agent.unsent_answers[0].report_json[0]).unwrap();
+    assert_eq!(
+        report["error"],
+        "its time was up during its wait for its turn (one connections job at a time per worker)"
+    );
 }

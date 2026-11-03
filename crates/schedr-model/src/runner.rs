@@ -329,6 +329,10 @@ pub struct TaskRequest {
     /// prefixes aside): filled into its arguments and read by `task_ctx.secret(...)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretValue>,
+    /// Set for `schedr connections test` (decision 174): no task is run; the file is
+    /// imported, and this connection opened and checked (decision 198).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_test: Option<String>,
 }
 
 /// A secret's value, fetched by the agent for an attempt.

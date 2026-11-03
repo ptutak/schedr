@@ -250,7 +250,7 @@ def version() -> str:
         with impostor():
             refused = "no"
     except Exception as e:
-        refused = type(e).__name__
+        refused = f"{{type(e).__name__}}: {{e}}"
     with router() as client:
         _, out, _ = client.exec_command("echo hello from $(whoami)")
         return out.read().decode().strip() + " / " + refused
@@ -260,7 +260,8 @@ with Dag("c"):
 """,
         {"router#key": key},
     )
-    assert outputs["version"] == f"hello from {user} / BadHostKeyException"
+    # Its message with it, to see why when another exception comes.
+    assert outputs["version"].startswith(f"hello from {user} / BadHostKeyException: "), outputs
 
 
 def test_commands_get_connections_as_their_tools_files(tmp_path: Path, api: str) -> None:

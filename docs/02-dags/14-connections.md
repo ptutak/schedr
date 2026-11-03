@@ -276,7 +276,8 @@ definition saying so helps the next reader.
 that can't be read, or a marker (`@cert-authority`, `@revoked`), fails the attempt rather
 than being skipped.
 
-A connection's check (`name.run_check()` in a task; `schedr connections test NAME` to come)
+A connection's check (`name.run_check()` in a task; `schedr connections test NAME` on a
+worker, below)
 opens it and raises when it doesn't work. A `@connection` of your own gets one with
 `@name.check`:
 
@@ -285,6 +286,43 @@ opens it and raises when it doesn't work. A `@connection` of your own gets one w
 def reachable(api: ApiClient) -> None:
     api.get("/health")
 ```
+
+## Checking them on a worker
+
+A connection's values come from the worker's secret storages, so whether it works depends on
+where it runs. Two commands ask a worker, through the master:
+
+```console
+$ schedr connections check etl
+ROOT  CONNECTION  WORKER    STATE
+etl   orders_api  worker-1  failed
+etl   warehouse   worker-1  ok
+orders_api: secret `secrets['etl/api']['token']` missing
+orders_api: connection `orders_api`: `secrets['etl/api']['token']`: no such secret
+$ schedr connections test warehouse
+ROOT  CONNECTION  WORKER    STATE
+etl   warehouse   worker-1  failed (0.3 s)
+warehouse: OperationalError: password authentication failed for user "etl"
+```
+
+- **`check [ROOT]`** renders every connection of the root (of every root, without one; one
+  connection with `--name`): each secret it names is present, missing, falling back to its
+  default, denied or unavailable, and never shown. Nothing is opened.
+- **`test NAME`** opens one connection on a worker and runs its check (a type's own, or
+  `@name.check`); one without a check is opened and closed, and a `Generic` only rendered.
+  It runs as a one-off attempt of the connection's file beside the tasks, taking no slot,
+  stopped after 60 s (`--timeout 2m`). A failure says why, with its secrets masked.
+
+A worker runs one of these at a time; the time a job waits for its turn is part of its own
+(a check has 30 s). It runs on the code the root's DAGs were last parsed from, so a worker
+still on older code, or on newer code not parsed yet, isn't picked.
+
+Either goes to a worker having the root's current code (the connected one with the fewest
+attempts), or the one `--worker NAME` names. `--json` prints the command's result as it is.
+Both exit 1 when a connection failed, or when no answer came (`lost`: the worker went
+away or restarted, the master restarted, or the answer didn't come in time). The API: `POST /api/v1/connections/check` and
+`POST /api/v1/connections/{name}/test`, each returning the command, its result filled in as
+the workers answer (`GET /api/v1/commands/{id}`).
 
 ## When a connection can't be opened
 

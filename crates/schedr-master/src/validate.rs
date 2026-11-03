@@ -678,7 +678,9 @@ fn shown_size(bytes: u64) -> String {
 
 fn validate_file(root: &str, mut file: ParsedFile, checks: &Checks<'_>) -> ParsedFile {
     if !inside_root(&file.path) {
+        // Its connections too: a test imports a connection's file by its path.
         file.dags.clear();
+        file.connections.clear();
         file.error = Some(ErrorSummary {
             exception: INVALID_PATH_EXCEPTION.to_owned(),
             message: format!("`{}` isn't a relative path inside the root", file.path),

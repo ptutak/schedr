@@ -80,6 +80,13 @@
           "additionalProperties": false,
           "description": "A task attempt.",
           "properties": {
+            "connection_test": {
+              "description": "Set for `schedr connections test` (decision 174): no task is run; the file is\nimported, and this connection opened and checked (decision 198).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "dag_file": {
               "$ref": "#/$defs/DagFile",
               "description": "The DAG file to import."

@@ -53,6 +53,8 @@ pub struct Worker {
     pub roots: BTreeMap<String, String>,
     /// Drained for maintenance (`schedr workers drain`): no new tasks until resumed.
     pub drained: bool,
+    /// Whether its stream is up: a connections job goes only to a worker that is.
+    pub connected: bool,
 }
 
 /// What a task needs of a worker.
@@ -138,6 +140,7 @@ impl Workers {
             known.queues = queues;
             known.slots = slots;
             known.state = WorkerState::Active;
+            known.connected = true;
             // It reports its roots again right after.
             known.roots.clear();
             return false;
@@ -155,6 +158,7 @@ impl Workers {
                 version: None,
                 roots: BTreeMap::new(),
                 drained: false,
+                connected: true,
             },
         );
         true
@@ -164,6 +168,13 @@ impl Workers {
     pub fn set_drained(&mut self, id: &str, drained: bool) {
         if let Some(worker) = self.workers.get_mut(id) {
             worker.drained = drained;
+        }
+    }
+
+    /// A worker's stream ended (it may come back, see [`Self::register`]).
+    pub fn disconnected(&mut self, id: &str) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.connected = false;
         }
     }
 

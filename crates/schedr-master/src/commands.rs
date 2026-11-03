@@ -6,11 +6,18 @@
 //! records what it produced (the run a trigger created, the runs a pause cancelled). A database
 //! failure leaves the command pending: the next pass tries again.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use schedr_db::commands::PendingCommand;
 use schedr_db::{Database, DbError};
-use schedr_model::commands::{Command, CommandStatus};
+use schedr_model::commands::{
+    CONNECTION_CHECK_TIMEOUT_MS, Command, CommandStatus, ConnectionJobResult, ConnectionsResult,
+    JobState, MAX_CONNECTION_TEST_MS,
+};
 use schedr_model::{DagId, RunState, TaskId, TaskInstanceState};
+use schedr_proto::pb;
+use schedr_proto::pb::master_message;
 use serde_json::json;
 
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
@@ -58,6 +65,20 @@ pub struct Applied {
     pub outgoing: Vec<Outgoing>,
     /// Workers drained (`true`) or resumed (`false`) for maintenance.
     pub drained: Vec<(String, bool)>,
+    /// Connection jobs sent, by job ID, with their worker (lost with it) and how long it has
+    /// to answer.
+    pub connection_jobs: Vec<SentJob>,
+}
+
+/// A connections job sent to a worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentJob {
+    /// Its ID.
+    pub job_id: String,
+    /// Its worker.
+    pub worker_id: String,
+    /// How long its worker has to do it (an answer may take a margin more).
+    pub allowed: Duration,
 }
 
 /// The outcome of one command before it is stored.
@@ -128,6 +149,7 @@ impl Commander {
             if !pending.applying {
                 self.db.mark_applying(&pending.id, now).await?;
             }
+            let sent_before = (applied.outgoing.len(), applied.connection_jobs.len());
             let outcome = self
                 .apply(&pending, scheduler, dispatcher, applied, now)
                 .await?;
@@ -135,9 +157,22 @@ impl Commander {
                 Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
                 Outcome::Rejected(reason) => (CommandStatus::Rejected, Some(reason), None),
             };
-            self.db
+            if let Err(error) = self
+                .db
                 .decide_command(&pending.id, status, reason.as_deref(), result.as_ref(), now)
-                .await?;
+                .await
+            {
+                // A connections job is sent with its decision only: applied again next round,
+                // it would run twice (the worker can't tell).
+                if matches!(
+                    pending.command,
+                    Ok(Command::CheckConnections { .. } | Command::TestConnection { .. })
+                ) {
+                    applied.outgoing.truncate(sent_before.0);
+                    applied.connection_jobs.truncate(sent_before.1);
+                }
+                return Err(error.into());
+            }
             self.count(&pending, status, now);
             applied.decided.push(Decided {
                 id: pending.id,
@@ -265,8 +300,215 @@ impl Commander {
                 self.resume(pending, worker_id, dispatcher, applied, now)
                     .await
             }
+            Command::CheckConnections { .. } | Command::TestConnection { .. } => Ok(
+                connections_command(dispatcher, &pending.id, command, applied),
+            ),
         }
     }
+}
+
+/// `check_connections` and `test_connection` (decisions 174, 193): their jobs sent.
+fn connections_command(
+    dispatcher: &Dispatcher,
+    command_id: &str,
+    command: &Command,
+    applied: &mut Applied,
+) -> Outcome {
+    match command {
+        Command::CheckConnections { root, name, worker } => check_connections(
+            dispatcher,
+            command_id,
+            (root.as_deref(), name.as_deref(), worker.as_deref()),
+            applied,
+        ),
+        Command::TestConnection {
+            name,
+            root,
+            worker,
+            timeout_ms,
+        } => test_connection(
+            dispatcher,
+            command_id,
+            (name, root.as_deref(), worker.as_deref(), *timeout_ms),
+            applied,
+        ),
+        _ => Outcome::Rejected(format!("`{}` isn't a connections command", command.kind())),
+    }
+}
+
+/// `check_connections`: a job per root to a worker having its current code (decision 193).
+fn check_connections(
+    dispatcher: &Dispatcher,
+    command_id: &str,
+    (root, name, worker): (Option<&str>, Option<&str>, Option<&str>),
+    applied: &mut Applied,
+) -> Outcome {
+    let roots = match root {
+        Some(root) => vec![root.to_owned()],
+        None => dispatcher.connection_roots(),
+    };
+    if roots.is_empty() {
+        return Outcome::Rejected("no root defines connections".to_owned());
+    }
+    let mut jobs = Vec::new();
+    for root in roots {
+        let Some(registry) = dispatcher.registry(&root) else {
+            return Outcome::Rejected(format!("root `{root}` defines no connections"));
+        };
+        let registry = match name {
+            Some(name)
+                if !registry.connections.contains_key(name)
+                    && !registry.refused.contains_key(name) =>
+            {
+                return Outcome::Rejected(format!("root `{root}` defines no connection `{name}`"));
+            }
+            Some(name) => registry.only(&[name.to_owned()]),
+            None => (**registry).clone(),
+        };
+        let (worker, hash) = match dispatcher.connection_worker(&root, worker) {
+            Ok(found) => found,
+            Err(why) => return Outcome::Rejected(why),
+        };
+        jobs.push(connection_job(
+            command_id, &root, &worker, &hash, &registry, None,
+        ));
+    }
+    let allowed = Duration::from_millis(CONNECTION_CHECK_TIMEOUT_MS);
+    Outcome::Applied(sent(jobs, allowed, applied))
+}
+
+/// `test_connection`: one job to a worker having the root's current code (decisions 193,
+/// 198-200), the root the one defining the connection unless given.
+fn test_connection(
+    dispatcher: &Dispatcher,
+    command_id: &str,
+    (name, root, worker, timeout_ms): (&str, Option<&str>, Option<&str>, u64),
+    applied: &mut Applied,
+) -> Outcome {
+    if timeout_ms == 0 || timeout_ms > MAX_CONNECTION_TEST_MS {
+        return Outcome::Rejected(format!(
+            "a test's timeout is 1 ms to {} s",
+            MAX_CONNECTION_TEST_MS / 1000
+        ));
+    }
+    let defining: Vec<String> = dispatcher
+        .connection_roots()
+        .into_iter()
+        .filter(|r| root.is_none_or(|given| given == r))
+        .filter(|r| {
+            dispatcher.registry(r).is_some_and(|registry| {
+                registry.connections.contains_key(name) || registry.refused.contains_key(name)
+            })
+        })
+        .collect();
+    let root = match defining.as_slice() {
+        [root] => root.clone(),
+        [] => {
+            return Outcome::Rejected(match root {
+                Some(root) => format!("root `{root}` defines no connection `{name}`"),
+                None => format!("no root defines connection `{name}`"),
+            });
+        }
+        several => {
+            return Outcome::Rejected(format!(
+                "connection `{name}` is defined in roots {}: give one (`--root`)",
+                several.join(", ")
+            ));
+        }
+    };
+    let registry = dispatcher
+        .registry(&root)
+        .map(|registry| registry.only(&[name.to_owned()]))
+        .unwrap_or_default();
+    if let Some(why) = registry.refused.get(name) {
+        return Outcome::Rejected(why.clone());
+    }
+    let (worker, hash) = match dispatcher.connection_worker(&root, worker) {
+        Ok(found) => found,
+        Err(why) => return Outcome::Rejected(why),
+    };
+    let test = pb::ConnectionTest {
+        name: name.to_owned(),
+        timeout_ms,
+    };
+    let job = connection_job(command_id, &root, &worker, &hash, &registry, Some(test));
+    let allowed = Duration::from_millis(timeout_ms);
+    Outcome::Applied(sent(vec![job], allowed, applied))
+}
+
+/// The result of a connections command once its jobs are sent: one running job per root; the
+/// messages and the jobs (lost with their worker) into `applied`.
+fn sent(
+    jobs: Vec<(Outgoing, ConnectionJobResult)>,
+    allowed: Duration,
+    applied: &mut Applied,
+) -> serde_json::Value {
+    let mut result = ConnectionsResult::default();
+    for (outgoing, job) in jobs {
+        applied.connection_jobs.push(SentJob {
+            job_id: job_id(&outgoing),
+            worker_id: outgoing.worker_id.clone(),
+            allowed,
+        });
+        applied.outgoing.push(outgoing);
+        result.jobs.push(job);
+    }
+    serde_json::to_value(result).unwrap_or_default()
+}
+
+/// A connections job's ID: its command's and its root, so an answer finds its place in the
+/// command's result whatever the master remembers.
+#[must_use]
+pub fn connection_job_id(command_id: &str, root: &str) -> String {
+    format!("{command_id}/{root}")
+}
+
+/// The command and the root a job ID names.
+#[must_use]
+pub fn parse_connection_job_id(job_id: &str) -> Option<(&str, &str)> {
+    job_id.split_once('/')
+}
+
+fn job_id(outgoing: &Outgoing) -> String {
+    match &outgoing.message.message {
+        Some(master_message::Message::ConnectionJob(job)) => job.job_id.clone(),
+        _ => String::new(),
+    }
+}
+
+fn connection_job(
+    command_id: &str,
+    root: &str,
+    worker: &str,
+    hash: &str,
+    registry: &schedr_model::connection::Registry,
+    test: Option<pb::ConnectionTest>,
+) -> (Outgoing, ConnectionJobResult) {
+    let message = pb::ConnectionJob {
+        job_id: connection_job_id(command_id, root),
+        root: Some(pb::RootHash {
+            kind: pb::RootKind::Dag.into(),
+            root: root.to_owned(),
+            content_hash: hash.to_owned(),
+        }),
+        connections_json: serde_json::to_vec(registry).unwrap_or_default(),
+        test,
+    };
+    (
+        Outgoing {
+            worker_id: worker.to_owned(),
+            message: pb::MasterMessage {
+                message: Some(master_message::Message::ConnectionJob(message)),
+            },
+        },
+        ConnectionJobResult {
+            root: root.to_owned(),
+            worker: worker.to_owned(),
+            state: JobState::Running,
+            reason: None,
+            connections: Vec::new(),
+        },
+    )
 }
 
 impl Commander {

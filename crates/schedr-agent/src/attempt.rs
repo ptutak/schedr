@@ -74,6 +74,8 @@ pub struct AttemptSpec {
     /// A command's connections given as variables (`connections={"DB": warehouse}`, decision
     /// 184), by variable (`DB_URL`). Empty until its secrets are fetched.
     pub connection_env: BTreeMap<String, String>,
+    /// Set for a connection test (decision 174): the runner opens and checks it, no task.
+    pub connection_test: Option<String>,
 }
 
 /// Why an assignment can't be read.
@@ -159,6 +161,7 @@ impl AttemptSpec {
                     .map_err(|e| invalid("connections", &e))?
             }),
             connection_env: BTreeMap::new(),
+            connection_test: None,
         })
     }
 
@@ -363,6 +366,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                             value: value.clone(),
                         })
                         .collect(),
+                    connection_test: spec.connection_test.clone(),
                 }),
             })
         }

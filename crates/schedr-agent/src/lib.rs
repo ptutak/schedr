@@ -9,6 +9,7 @@ pub mod agent;
 pub mod attempt;
 pub mod channel;
 pub mod connection_env;
+pub mod connection_jobs;
 pub mod ctx;
 pub mod drain;
 pub mod env;

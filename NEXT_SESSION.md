@@ -4,8 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-03, late night): M4.7c committed; M4.7d next
+
+- **M4.7c committed** (decisions 174, 193, 198-200): `schedr connections check` / `test`.
+  Codex's review (11 findings) and Grok's security review (5, two shared) all fixed: see
+  PROJECT.md's "Built (M4.7c" entry. B160 logged (a task's timeout restarting after its
+  secrets are read: a behaviour change for tasks, for the user to decide).
+- **CI:** Mongo pinned to 7.0.45 (8.x fails on Linux 6.19+); the SSH host-key test failed in
+  CI only (`SSHException` where `BadHostKeyException` is expected, passing locally): it now
+  records the exception's message and CI prints sshd's log on failure. Read them after this
+  push.
+- **Next: M4.7d** (decisions 202-205), the demo; its security review by Codex (Grok out
+  until Friday). Then **pause** (the user's instruction).
+
 ## State (2026-11-03, night): M4.7b2 committed; M4.7c next
 
+- **Grok is out until Friday 9:00** (97% weekly after M4.7b2; M4.7c's security review its
+  last, the user): M4.7d's security review goes to Codex.
 - **The user's standing instruction:** continue to the end of M4.7 (now M4.7b2, M4.7c, then
   the demo M4.7d), each sub-step reviewed (Codex, then Grok security-only), its guide by Codex
   on gpt-6.1-terra medium, `make check`, committed and pushed; stop only for the user's

@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use schedr_model::TaskKind;
 use schedr_model::beat::Beat;
+use schedr_model::connection::Registry;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::attempt_status_from_proto;
@@ -45,6 +46,7 @@ use tonic::transport::Channel;
 use crate::attempt::{
     AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan, plan_at,
 };
+use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
@@ -157,6 +159,31 @@ pub trait Executor: Clone + Send + Sync + 'static {
         dir: PathBuf,
         files: Vec<String>,
     ) -> impl Future<Output = Result<Vec<ParsedFile>, String>> + Send;
+
+    /// Checks a root's connections, or tests one (`schedr connections check` / `test`); a
+    /// report for each. An executor without secrets says it can't.
+    /// A test tells `spawned` its process, as an attempt does (the journal records it, so
+    /// a worker killed meanwhile stops it when it starts again).
+    fn connection_job(
+        &self,
+        job: ConnectionJob,
+        spawned: Spawned,
+    ) -> impl Future<Output = Vec<schedr_model::commands::ConnectionReport>> + Send {
+        drop(spawned);
+        async move {
+            job.registry
+                .connections
+                .keys()
+                .chain(job.registry.refused.keys())
+                .map(|name| {
+                    crate::connection_jobs::failed(
+                        name,
+                        "this worker can't check connections".to_owned(),
+                    )
+                })
+                .collect()
+        }
+    }
 }
 
 /// Warned once when `/proc` is missing, so a crash leaves task processes running.
@@ -240,6 +267,71 @@ impl Executor for ProcessExecutor {
         // Its connections' files go with it (decision 190): whichever way it ended.
         remove_connection_files(&connection_dir).await;
         finished
+    }
+
+    async fn connection_job(
+        &self,
+        job: ConnectionJob,
+        spawned: Spawned,
+    ) -> Vec<schedr_model::commands::ConnectionReport> {
+        use crate::connection_jobs::{failed, out_of_time};
+        // Read fresh: a secret just fixed is what the check or test sees.
+        let secrets = Arc::new(self.secrets.uncached());
+        let Some((name, _)) = job.test.clone() else {
+            let check = crate::connection_jobs::check(&secrets, &job.registry);
+            return match tokio::time::timeout_at(job.deadline, check).await {
+                Ok(reports) => reports,
+                Err(_) => job
+                    .registry
+                    .names()
+                    .map(|name| failed(name, out_of_time("check")))
+                    .collect(),
+            };
+        };
+        // What is left of its time once its turn came; all of it, secrets read included.
+        let left = job
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now());
+        let mut spec =
+            match crate::connection_jobs::test_spec(&job, &name, left, job.attempt_id.clone()) {
+                Ok(spec) => spec,
+                Err(why) => return vec![failed(&name, why)],
+            };
+        spec.stand_in_secrets();
+        // At the copy of the code the job was sent for, as a task's (decision 102).
+        let planned = match &spec.code_dir {
+            Some(dir) => plan_at(&spec, &self.setup, dir),
+            None => crate::attempt::plan(&spec, &self.setup),
+        };
+        let plan = match planned {
+            Ok(plan) => plan,
+            Err(NotRun::Rejected { detail, .. }) => return vec![failed(&name, detail)],
+            Err(NotRun::Failed { message, .. }) => return vec![failed(&name, message)],
+        };
+        let started = Instant::now();
+        let log = self.setup.log_file(&spec.attempt_id);
+        let (stop, stops) = Stops::new();
+        let fresh = Self {
+            secrets,
+            ..self.clone()
+        };
+        let run = fresh.run(spec, plan, stops, spawned);
+        tokio::pin!(run);
+        // The attempt's own timeout starts after its secrets are read: the job's covers both.
+        let finished = tokio::select! {
+            finished = &mut run => finished,
+            () = tokio::time::sleep_until(job.deadline) => {
+                let _ = stop.send(StopReason::TimedOut);
+                run.await
+            }
+        };
+        // No task's: nothing serves it.
+        let _ = tokio::fs::remove_file(&log).await;
+        vec![crate::connection_jobs::test_report(
+            &name,
+            &finished,
+            started.elapsed(),
+        )]
     }
 
     async fn parse(
@@ -501,7 +593,18 @@ enum Done {
         root: pb::RootHash,
         files: Result<Vec<ParsedFile>, String>,
     },
+    Connections {
+        job_id: String,
+        /// The hash whose copy of the code it held.
+        hash: Option<String>,
+        /// A test's attempt, recorded in the journal while its process ran.
+        attempt_id: Option<String>,
+        reports: Vec<schedr_model::commands::ConnectionReport>,
+    },
 }
+
+/// How many connections jobs' answers the agent keeps while no master listens.
+const UNSENT_ANSWERS: usize = 16;
 
 /// The worker agent.
 #[derive(Debug)]
@@ -514,10 +617,15 @@ pub struct Agent<E> {
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
     unacked: BTreeMap<String, pb::Finished>,
+    /// Connections jobs' answers made while no master listened, sent once one does (the
+    /// newest [`UNSENT_ANSWERS`]; the master calls an unanswered job lost in time anyway).
+    unsent_answers: std::collections::VecDeque<pb::ConnectionJobDone>,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
     /// The parse jobs running, by the hash they parse (their copy is kept meanwhile).
     parsing: BTreeMap<String, usize>,
+    /// Held by the connections job running (decision 199: one at a time).
+    connection_jobs: Arc<tokio::sync::Mutex<()>>,
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
     /// What is wrong with the worker now (the executor's), sent after `Register` and on change.
@@ -623,8 +731,10 @@ impl<E: Executor> Agent<E> {
             watchers,
             running: BTreeMap::new(),
             unacked: BTreeMap::new(),
+            unsent_answers: std::collections::VecDeque::new(),
             code_hashes: BTreeMap::new(),
             parsing: BTreeMap::new(),
+            connection_jobs: Arc::new(tokio::sync::Mutex::new(())),
             done_tx,
             done_rx,
             heartbeat: Duration::from_secs(10),
@@ -1049,11 +1159,15 @@ impl<E: Executor> Agent<E> {
                 for decision in registered.decisions {
                     self.decide(&decision, to_master).await;
                 }
+                for done in self.unsent_answers.drain(..) {
+                    let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
+                }
             }
             master_message::Message::AssignTask(assign) => {
                 self.assign(assign, to_master, client).await;
             }
             master_message::Message::AssignParse(job) => self.parse(job),
+            master_message::Message::ConnectionJob(job) => self.connection_job(job),
             master_message::Message::CancelAttempt(cancel) => {
                 // It stays running (its slot taken) until its process has ended and reported;
                 // a repeated cancel changes nothing.
@@ -1361,6 +1475,99 @@ impl<E: Executor> Agent<E> {
         });
     }
 
+    /// A connections job (decisions 174, 193): run beside the tasks, no slot, one at a time;
+    /// a job this worker can't run is answered with why.
+    fn connection_job(&mut self, job: pb::ConnectionJob) {
+        let job_id = job.job_id.clone();
+        let root = job.root.unwrap_or_default();
+        let registry: Registry = match serde_json::from_slice(&job.connections_json) {
+            Ok(registry) => registry,
+            Err(e) => {
+                tracing::warn!(job_id, error = %e, "a connections job that doesn't read");
+                return;
+            }
+        };
+        // The copy of the code it was sent for (a test imports from it), held meanwhile.
+        let watcher = self.watchers.get(&root.root);
+        let code_dir = watcher
+            .filter(|w| w.hash() == Some(root.content_hash.as_str()))
+            .and_then(|w| w.code_dir().map(Path::to_path_buf));
+        let hash = code_dir.as_ref().map(|_| root.content_hash.clone());
+        if let Some(hash) = &hash {
+            *self.parsing.entry(hash.clone()).or_default() += 1;
+        }
+        let test = job
+            .test
+            .map(|t| (t.name, Duration::from_millis(t.timeout_ms)));
+        if test.is_some() && code_dir.is_none() {
+            let name = test.map(|(name, _)| name).unwrap_or_default();
+            let why = format!(
+                "this worker no longer has root `{}` at the code it was sent for: try again",
+                root.root
+            );
+            let _ = self.done_tx.send(Done::Connections {
+                job_id,
+                hash,
+                attempt_id: None,
+                reports: vec![crate::connection_jobs::failed(&name, why)],
+            });
+            return;
+        }
+        // Its time counts from now, its wait for its turn included: the caller waits no
+        // longer than that and a margin.
+        let allowed = test.as_ref().map_or(
+            Duration::from_millis(schedr_model::commands::CONNECTION_CHECK_TIMEOUT_MS),
+            |(_, timeout)| *timeout,
+        );
+        let deadline = tokio::time::Instant::now() + allowed;
+        // A name of its own for its folders and its journal record.
+        let attempt_id = format!("connection-test-{}", jiff::Timestamp::now().as_nanosecond());
+        let tested = test.is_some().then(|| attempt_id.clone());
+        let job = ConnectionJob {
+            root: root.root,
+            code_dir,
+            registry: Arc::new(registry),
+            test,
+            attempt_id: attempt_id.clone(),
+            deadline,
+        };
+        let executor = self.executor.clone();
+        let done = self.done_tx.clone();
+        let on_spawn = self.done_tx.clone();
+        // Recorded as an attempt's process: a worker killed meanwhile stops it on its start.
+        let spawned: Spawned = Box::new(move |identity, _| {
+            let _ = on_spawn.send(Done::Spawned {
+                attempt_id,
+                identity,
+                forked: false,
+            });
+        });
+        let one_at_a_time = Arc::clone(&self.connection_jobs);
+        tokio::spawn(async move {
+            let reports = match tokio::time::timeout_at(deadline, one_at_a_time.lock()).await {
+                Ok(_turn) => executor.connection_job(job, spawned).await,
+                Err(_) => job
+                    .registry
+                    .names()
+                    .map(|name| {
+                        crate::connection_jobs::failed(
+                            name,
+                            crate::connection_jobs::out_of_time(
+                                "wait for its turn (one connections job at a time per worker)",
+                            ),
+                        )
+                    })
+                    .collect(),
+            };
+            let _ = done.send(Done::Connections {
+                job_id,
+                hash,
+                attempt_id: tested,
+                reports,
+            });
+        });
+    }
+
     /// Records what ended, and reports it over `link` (the outbound stream and the client)
     /// when connected.
     async fn on_done(
@@ -1436,6 +1643,56 @@ impl<E: Executor> Agent<E> {
                 self.collect_code();
                 self.report_parse(job_id, root, files, link);
             }
+            Done::Connections {
+                job_id,
+                hash,
+                attempt_id,
+                reports,
+            } => {
+                self.connections_done(job_id, hash, attempt_id, &reports, link.map(|(to, _)| to))
+                    .await;
+            }
+        }
+    }
+
+    /// A connections job ended: its code and journal record let go, its answer sent (kept
+    /// while no master listens).
+    async fn connections_done(
+        &mut self,
+        job_id: String,
+        hash: Option<String>,
+        attempt_id: Option<String>,
+        reports: &[schedr_model::commands::ConnectionReport],
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        if let Some(attempt_id) = attempt_id {
+            self.forget(&attempt_id).await;
+        }
+        if let Some(hash) = hash
+            && let Some(count) = self.parsing.get_mut(&hash)
+        {
+            *count -= 1;
+            if *count == 0 {
+                self.parsing.remove(&hash);
+            }
+            self.collect_code();
+        }
+        let report_json = reports
+            .iter()
+            .filter_map(|report| serde_json::to_vec(report).ok())
+            .collect();
+        let done = pb::ConnectionJobDone {
+            job_id,
+            report_json,
+        };
+        if let Some(to_master) = to_master {
+            let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
+        } else {
+            // Sent once registered again (the master drops an answer it gave up on).
+            if self.unsent_answers.len() == UNSENT_ANSWERS {
+                self.unsent_answers.pop_front();
+            }
+            self.unsent_answers.push_back(done);
         }
     }
 

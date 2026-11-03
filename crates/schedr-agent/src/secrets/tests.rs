@@ -384,6 +384,7 @@ fn registry(params: &serde_json::Value) -> Arc<Registry> {
     Arc::new(Registry {
         connections: BTreeMap::from([("db".to_owned(), def)]),
         refused: BTreeMap::from([("twice".to_owned(), "defined in a.py and b.py".to_owned())]),
+        files: BTreeMap::new(),
     })
 }
 
@@ -441,6 +442,7 @@ async fn a_password_a_command_gets_out_of_a_secret_url_is_masked_in_every_form()
     let registry = Arc::new(Registry {
         connections: BTreeMap::from([("db".to_owned(), def)]),
         refused: BTreeMap::new(),
+        files: BTreeMap::new(),
     });
     let dir = tempfile::tempdir().unwrap();
     let secrets = AttemptSecrets::fetch(stores(Storage::new(Arc::new(memory()))), &[], Vec::new())

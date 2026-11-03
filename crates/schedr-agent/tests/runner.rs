@@ -199,6 +199,7 @@ fn request(dir: &Path, dag: &Dag, task: &str, inputs: serde_json::Value) -> Task
         },
         sys_path: vec![dir.to_string_lossy().into_owned()],
         secrets: Vec::new(),
+        connection_test: None,
     }
 }
 
@@ -531,4 +532,98 @@ async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
     let (ran, took) = start(&deaf, stops, Some(Duration::from_millis(500)), big).await;
     assert_eq!(ran.supervised.stopped, Some(StopReason::TimedOut));
     assert!(took < Duration::from_secs(5), "{took:?}");
+}
+
+/// A connections test run by the real executor, at the copy of the code it was sent for (the
+/// root's own folder no longer having the file), ending by its deadline whatever its check
+/// does.
+#[tokio::test]
+async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
+    use std::sync::Arc;
+
+    use schedr_agent::agent::{Executor, ProcessExecutor};
+    use schedr_agent::attempt::WorkerSetup;
+    use schedr_agent::connection_jobs::ConnectionJob;
+    use schedr_agent::metrics::AgentMetrics;
+    use schedr_agent::secrets::SecretStores;
+    use schedr_model::connection::Registry;
+
+    let dir = TempDir::new().unwrap();
+    let configured = dir.path().join("etl");
+    let code = dir.path().join("code");
+    std::fs::create_dir_all(&configured).unwrap();
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(
+        code.join("conns.py"),
+        "import time\n\
+         from collections.abc import Iterator\n\
+         from schedr.connections import connection\n\n\
+         @connection()\n\
+         def fine() -> Iterator[str]:\n    yield 'x'\n\n\
+         @connection()\n\
+         def slow() -> Iterator[str]:\n    yield 'x'\n\n\
+         @slow.check\n\
+         def _wait(x: str) -> None:\n    time.sleep(60)\n",
+    )
+    .unwrap();
+    let executor = ProcessExecutor {
+        setup: WorkerSetup {
+            roots: BTreeMap::from([("etl".to_owned(), configured)]),
+            parse_only: BTreeMap::new(),
+            python: python(),
+            agent_env: BTreeMap::from([(
+                "PATH".to_owned(),
+                std::env::var("PATH").unwrap_or_default(),
+            )]),
+            pass_env: vec![],
+            log_dir: dir.path().join("logs"),
+            connection_dir: dir.path().join("connections"),
+            memory: schedr_agent::memory::MemoryWatch::default(),
+            fork_server: None,
+        },
+        parse_file_timeout: Duration::from_secs(5),
+        metrics: AgentMetrics::default(),
+        drain_terminate_period: Duration::from_secs(1),
+        forks: None,
+        secrets: Arc::new(SecretStores::none()),
+    };
+    let registry: Registry = serde_json::from_value(json!({
+        "connections": {"fine": {"name": "fine", "params": {}},
+                        "slow": {"name": "slow", "params": {}}},
+        "files": {"fine": "conns.py", "slow": "conns.py"},
+    }))
+    .unwrap();
+    let job = |name: &str, allowed: Duration| ConnectionJob {
+        root: "etl".to_owned(),
+        code_dir: Some(code.clone()),
+        registry: Arc::new(registry.clone()),
+        test: Some((name.to_owned(), Duration::from_secs(600))),
+        attempt_id: format!("connection-test-{name}"),
+        deadline: tokio::time::Instant::now() + allowed,
+    };
+    let fine = executor
+        .connection_job(job("fine", Duration::from_secs(30)), Box::new(|_, _| {}))
+        .await;
+    assert_eq!(
+        (fine[0].ok, fine[0].error.as_deref()),
+        (true, None),
+        "{fine:?}"
+    );
+    let started = std::time::Instant::now();
+    let slow = executor
+        .connection_job(job("slow", Duration::from_secs(2)), Box::new(|_, _| {}))
+        .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!slow[0].ok, "{slow:?}");
+    assert!(
+        slow[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("stopped after its timeout")),
+        "{slow:?}"
+    );
 }

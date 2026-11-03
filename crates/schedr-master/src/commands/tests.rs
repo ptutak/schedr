@@ -652,3 +652,253 @@ async fn a_round_applies_at_most_so_many_commands_the_rest_in_the_next() {
     );
     assert_eq!(world.apply().await.decided.len(), 5);
 }
+
+/// Roots `etl` (connections `db`, `api`, a refused `twice`) and `ml` (another `db`), both
+/// parsed at `h1`; `w1` has `etl` at it, `w2` both, `w3` `etl` at an older hash.
+fn with_connections(world: &mut World) {
+    let registry = |names: &[&str]| {
+        let mut registry = schedr_model::connection::Registry::default();
+        for name in names {
+            let def = serde_json::from_value(json!({"name": name, "params": {}})).unwrap();
+            registry.connections.insert((*name).to_owned(), def);
+            registry
+                .files
+                .insert((*name).to_owned(), "conns.py".to_owned());
+        }
+        registry
+    };
+    let mut etl = registry(&["db", "api"]);
+    etl.refused
+        .insert("twice".to_owned(), "defined in a.py and b.py".to_owned());
+    world.dispatcher.set_connections(
+        &std::collections::BTreeMap::from([
+            ("etl".to_owned(), std::sync::Arc::new(etl)),
+            ("ml".to_owned(), std::sync::Arc::new(registry(&["db"]))),
+        ]),
+        &std::collections::BTreeMap::from([
+            ("etl".to_owned(), "h1".to_owned()),
+            ("ml".to_owned(), "h1".to_owned()),
+        ]),
+    );
+    let current = std::collections::BTreeSet::from(["h1".to_owned()]);
+    world.dispatcher.set_current_code("etl", &current, None);
+    world.dispatcher.set_current_code("ml", &current, None);
+    world.dispatcher.report_root("w1", "etl", "h1");
+}
+
+async fn register(world: &mut World, worker: &str) {
+    world
+        .dispatcher
+        .register(worker, "i1", &[], 2, ts(NOW))
+        .await
+        .unwrap();
+}
+
+fn jobs_sent(applied: &Applied) -> Vec<(String, String, String, Option<pb::ConnectionTest>)> {
+    applied
+        .outgoing
+        .iter()
+        .filter_map(|o| match &o.message.message {
+            Some(master_message::Message::ConnectionJob(job)) => {
+                let registry: schedr_model::connection::Registry =
+                    serde_json::from_slice(&job.connections_json).unwrap();
+                let names: Vec<_> = registry
+                    .connections
+                    .keys()
+                    .chain(registry.refused.keys())
+                    .cloned()
+                    .collect();
+                Some((
+                    o.worker_id.clone(),
+                    job.job_id.clone(),
+                    format!(
+                        "{}@{}: {}",
+                        job.root.as_ref().unwrap().root,
+                        job.root.as_ref().unwrap().content_hash,
+                        names.join(",")
+                    ),
+                    job.test.clone(),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_check_goes_to_a_worker_with_each_roots_current_code() {
+    let mut world = world().await;
+    register(&mut world, "w2").await;
+    register(&mut world, "w3").await;
+    with_connections(&mut world);
+    world.dispatcher.report_root("w2", "etl", "h1");
+    world.dispatcher.report_root("w2", "ml", "h1");
+    world.dispatcher.report_root("w3", "etl", "h0");
+    let every = world
+        .ask(&Command::CheckConnections {
+            root: None,
+            name: None,
+            worker: None,
+        })
+        .await;
+    let one = world
+        .ask(&Command::CheckConnections {
+            root: Some("etl".to_owned()),
+            name: Some("api".to_owned()),
+            worker: Some("w2".to_owned()),
+        })
+        .await;
+    let applied = world.apply().await;
+    assert_eq!(
+        jobs_sent(&applied),
+        [
+            // The fewest attempts, then by ID: `w1` for `etl`; only `w2` has `ml`.
+            (
+                "w1".to_owned(),
+                format!("{every}/etl"),
+                "etl@h1: api,db,twice".to_owned(),
+                None
+            ),
+            (
+                "w2".to_owned(),
+                format!("{every}/ml"),
+                "ml@h1: db".to_owned(),
+                None
+            ),
+            (
+                "w2".to_owned(),
+                format!("{one}/etl"),
+                "etl@h1: api".to_owned(),
+                None
+            ),
+        ]
+    );
+    assert_eq!(
+        summary(&applied.decided[0]),
+        (
+            CommandStatus::Applied,
+            None,
+            Some(json!({"jobs": [
+                {"root": "etl", "worker": "w1", "state": "running"},
+                {"root": "ml", "worker": "w2", "state": "running"},
+            ]}))
+        )
+    );
+    let check = std::time::Duration::from_secs(30);
+    assert_eq!(
+        applied
+            .connection_jobs
+            .iter()
+            .map(|job| (job.job_id.clone(), job.worker_id.clone(), job.allowed))
+            .collect::<Vec<_>>(),
+        [
+            (format!("{every}/etl"), "w1".to_owned(), check),
+            (format!("{every}/ml"), "w2".to_owned(), check),
+            (format!("{one}/etl"), "w2".to_owned(), check),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_test_goes_to_the_root_defining_it_with_its_timeout() {
+    let mut world = world().await;
+    with_connections(&mut world);
+    let id = world
+        .ask(&Command::TestConnection {
+            name: "api".to_owned(),
+            root: None,
+            worker: None,
+            timeout_ms: 5_000,
+        })
+        .await;
+    let applied = world.apply().await;
+    assert_eq!(
+        jobs_sent(&applied),
+        [(
+            "w1".to_owned(),
+            format!("{id}/etl"),
+            "etl@h1: api".to_owned(),
+            Some(pb::ConnectionTest {
+                name: "api".to_owned(),
+                timeout_ms: 5_000
+            })
+        )]
+    );
+}
+
+#[tokio::test]
+async fn connections_commands_no_worker_or_root_can_take_are_rejected() {
+    let mut world = world().await;
+    register(&mut world, "w3").await;
+    with_connections(&mut world);
+    world.dispatcher.report_root("w3", "etl", "h0");
+    // Newer code, its parse on its way: tasks may go to it, connections jobs not (its
+    // connections may differ from those sent).
+    register(&mut world, "w4").await;
+    let newer = std::collections::BTreeSet::from(["h1".to_owned(), "h2".to_owned()]);
+    world.dispatcher.set_current_code("etl", &newer, None);
+    world.dispatcher.report_root("w4", "etl", "h2");
+    // Drained for maintenance: no new work, named or not.
+    register(&mut world, "w5").await;
+    world.dispatcher.report_root("w5", "etl", "h1");
+    world.dispatcher.drain("w5");
+    let test = |name: &str, root: Option<&str>, worker: Option<&str>, timeout_ms| {
+        Command::TestConnection {
+            name: name.to_owned(),
+            root: root.map(str::to_owned),
+            worker: worker.map(str::to_owned),
+            timeout_ms,
+        }
+    };
+    let check =
+        |root: Option<&str>, name: Option<&str>, worker: Option<&str>| Command::CheckConnections {
+            root: root.map(str::to_owned),
+            name: name.map(str::to_owned),
+            worker: worker.map(str::to_owned),
+        };
+    for command in [
+        test("db", None, None, 1_000),
+        test("nope", None, None, 1_000),
+        test("db", Some("ml"), None, 1_000),
+        test("twice", Some("etl"), None, 1_000),
+        test("api", None, None, 0),
+        test("api", None, Some("w3"), 1_000),
+        test("api", None, Some("w9"), 1_000),
+        test("api", None, Some("w4"), 1_000),
+        test("api", None, Some("w5"), 1_000),
+        check(Some("etl"), Some("nope"), None),
+        check(Some("other"), None, None),
+        check(None, None, None),
+    ] {
+        world.ask(&command).await;
+    }
+    let applied = world.apply().await;
+    let reasons: Vec<_> = applied
+        .decided
+        .iter()
+        .map(|d| {
+            d.reason
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", d.status))
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "connection `db` is defined in roots etl, ml: give one (`--root`)",
+            "no root defines connection `nope`",
+            "no active worker has root `ml` at its current code",
+            "defined in a.py and b.py",
+            "a test's timeout is 1 ms to 3600 s",
+            "worker `w3` doesn't have root `etl` at its current code",
+            "worker `w9` isn't connected",
+            "worker `w4` doesn't have root `etl` at its current code",
+            "worker `w5` is draining or drained",
+            "root `etl` defines no connection `nope`",
+            "root `other` defines no connections",
+            // `ml` has no worker: the whole check is refused, not sent in part.
+            "no active worker has root `ml` at its current code",
+        ]
+    );
+    assert_eq!(applied.outgoing.len(), 0);
+}

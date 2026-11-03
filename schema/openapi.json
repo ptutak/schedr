@@ -136,6 +136,34 @@
         ],
         "type": "object"
       },
+      "CheckConnectionsRequest": {
+        "additionalProperties": false,
+        "description": "Connections to check on a worker (`schedr connections check`).",
+        "properties": {
+          "name": {
+            "description": "One connection; all of the root's if not given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "description": "The root; every root with connections if not given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worker": {
+            "description": "The worker to run it on; one the master picks if not given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "CommandList": {
         "description": "The commands about a run.",
         "properties": {
@@ -932,6 +960,36 @@
         ],
         "type": "object"
       },
+      "TestConnectionRequest": {
+        "additionalProperties": false,
+        "description": "A connection to test on a worker (`schedr connections test`).",
+        "properties": {
+          "root": {
+            "description": "Its root; the one root defining it if not given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeout_ms": {
+            "description": "How long it may take, in milliseconds: 60 000 if not given (decision 200).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "worker": {
+            "description": "The worker to run it on; one the master picks if not given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "TriggerRequest": {
         "additionalProperties": false,
         "description": "A manual run to start.",
@@ -1267,6 +1325,123 @@
         "summary": "A command and the master's decision about it.",
         "tags": [
           "commands"
+        ]
+      }
+    },
+    "/api/v1/connections/check": {
+      "post": {
+        "operationId": "check_connections",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckConnectionsRequest"
+              }
+            }
+          },
+          "description": "Optional; every root's connections by default",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Render connections on a worker (`schedr connections check`, decision 174): each secret\nthey name present or missing, never a value. The command's result fills in as the\nworkers answer: poll it until no job is `running`.",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/api/v1/connections/{name}/test": {
+      "post": {
+        "operationId": "test_connection",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The connection's name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestConnectionRequest"
+              }
+            }
+          },
+          "description": "Optional",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open a connection on a worker and run its check (`schedr connections test`, decisions\n198-200), beside the tasks. The command's result fills in when the worker answers.",
+        "tags": [
+          "connections"
         ]
       }
     },
@@ -2419,6 +2594,10 @@
     {
       "description": "The worker registry",
       "name": "workers"
+    },
+    {
+      "description": "Checking and testing connections on a worker",
+      "name": "connections"
     }
   ]
 }

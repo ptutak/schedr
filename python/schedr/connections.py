@@ -226,6 +226,17 @@ class Connection(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (se
         with self._opened(entered) as client:
             checker(client, given.get("values", {}))
 
+    def run_test(self) -> None:
+        """Opens the connection and runs its check, or opens and closes it without one.
+
+        What ``schedr connections test NAME`` runs on a worker (decision 198).
+        """
+        if self._checker is not None:
+            self.run_check()
+            return
+        with self():
+            pass
+
     def __call__(self) -> AbstractContextManager[T_co]:
         """Opens the connection, in a running task.
 

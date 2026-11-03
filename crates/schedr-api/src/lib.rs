@@ -55,12 +55,15 @@ pub use state::ApiState;
         events::events,
         routes::drain_worker,
         routes::resume_worker,
+        routes::check_connections,
+        routes::test_connection,
     ),
     tags(
         (name = "dags", description = "DAGs and pausing"),
         (name = "runs", description = "Runs, their tasks and attempts"),
         (name = "commands", description = "Actions and the master's decisions"),
         (name = "workers", description = "The worker registry"),
+        (name = "connections", description = "Checking and testing connections on a worker"),
     ),
     modifiers(&BearerToken)
 )]
@@ -158,6 +161,11 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/workers/{worker_id}/resume",
             post(routes::resume_worker),
+        )
+        .route("/api/v1/connections/check", post(routes::check_connections))
+        .route(
+            "/api/v1/connections/{name}/test",
+            post(routes::test_connection),
         )
         .route(OPENAPI_PATH, get(docs::description))
         .route(DOCS_PATH, get(docs::redirect))

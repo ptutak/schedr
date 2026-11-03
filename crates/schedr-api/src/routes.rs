@@ -28,10 +28,11 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
-    ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery,
-    MasterView, NodeView, OutputView, ParamFieldView, PauseRequest, ProblemView, RunDetail,
-    RunList, RunView, RunsQuery, TaskView, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
+    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, DagList, DagView,
+    DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView,
+    LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
+    ProblemView, RunDetail, RunList, RunView, RunsQuery, TaskView, TestConnectionRequest,
+    TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -203,6 +204,62 @@ pub async fn drain_worker(
     key: RequestKey,
 ) -> Accepted {
     submit(&state, &user, key, Command::DrainWorker { worker_id }).await
+}
+
+/// The default time a connection test may take (decision 200).
+pub const CONNECTION_TEST_TIMEOUT_MS: u64 = 60_000;
+
+/// Render connections on a worker (`schedr connections check`, decision 174): each secret
+/// they name present or missing, never a value. The command's result fills in as the
+/// workers answer: poll it until no job is `running`.
+#[utoipa::path(post, path = "/api/v1/connections/check", tag = "connections",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)")),
+    request_body(content = CheckConnectionsRequest, description = "Optional; every root's connections by default"),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn check_connections(
+    State(state): State<ApiState>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+    body: Bytes,
+) -> Accepted {
+    let request: CheckConnectionsRequest = optional_body(&body)?;
+    let command = Command::CheckConnections {
+        root: request.root,
+        name: request.name,
+        worker: request.worker,
+    };
+    submit(&state, &user, key, command).await
+}
+
+/// Open a connection on a worker and run its check (`schedr connections test`, decisions
+/// 198-200), beside the tasks. The command's result fills in when the worker answers.
+#[utoipa::path(post, path = "/api/v1/connections/{name}/test", tag = "connections",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("name" = String, Path, description = "The connection's name")),
+    request_body(content = TestConnectionRequest, description = "Optional"),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn test_connection(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+    body: Bytes,
+) -> Accepted {
+    let request: TestConnectionRequest = optional_body(&body)?;
+    let timeout_ms = request.timeout_ms.unwrap_or(CONNECTION_TEST_TIMEOUT_MS);
+    if timeout_ms == 0 || timeout_ms > schedr_model::commands::MAX_CONNECTION_TEST_MS {
+        return Err(ApiError::BadRequest(format!(
+            "timeout_ms: 1 to {}",
+            schedr_model::commands::MAX_CONNECTION_TEST_MS
+        )));
+    }
+    let command = Command::TestConnection {
+        name,
+        root: request.root,
+        worker: request.worker,
+        timeout_ms,
+    };
+    submit(&state, &user, key, command).await
 }
 
 /// Let a drained worker take tasks again (`schedr workers resume`). Applied by the master;

@@ -10,10 +10,11 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptList, CommandList, CommandView, DagList, DagView, DeploymentView,
-    ImportErrorList, LogChunk, OutputView, PauseRequest, RunDetail, RunList, TriggerRequest,
-    WorkerList,
+    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, DagList, DagView,
+    DeploymentView, ImportErrorList, LogChunk, OutputView, PauseRequest, RunDetail, RunList,
+    TestConnectionRequest, TriggerRequest, WorkerList,
 };
+use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
 
 /// This client's version (the workspace's), sent in [`CLIENT_VERSION_HEADER`].
@@ -957,6 +958,78 @@ impl<T: Transport> Client<T> {
             Some(body),
         )
         .await
+    }
+
+    /// `POST /api/v1/connections/check`: the command (`schedr connections check`).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn check_connections(
+        &self,
+        request: &CheckConnectionsRequest,
+    ) -> Result<CommandView, ClientError> {
+        let body = to_body(request)?;
+        self.call(
+            Method::Post,
+            "/api/v1/connections/check".to_owned(),
+            Some(body),
+        )
+        .await
+    }
+
+    /// `POST /api/v1/connections/{name}/test`: the command (`schedr connections test`).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn test_connection(
+        &self,
+        name: &str,
+        request: &TestConnectionRequest,
+    ) -> Result<CommandView, ClientError> {
+        let body = to_body(request)?;
+        self.call(
+            Method::Post,
+            format!("/api/v1/connections/{}/test", path(name)),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Reads an applied connections command back until every job has its answer (or was
+    /// lost), for at most `timeout`: its result.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Timeout`] if a worker hasn't answered by then, a result that doesn't
+    /// read ([`ClientError::Unexpected`]), or a request failure.
+    pub async fn wait_connections(
+        &self,
+        command: CommandView,
+        timeout: Duration,
+    ) -> Result<ConnectionsResult, ClientError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut current = command;
+        loop {
+            let result: ConnectionsResult = current
+                .result
+                .clone()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| ClientError::Unexpected(format!("a connections result: {e}")))?
+                .unwrap_or_default();
+            if result.finished() {
+                return Ok(result);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ClientError::Timeout {
+                    command_id: current.command_id,
+                });
+            }
+            tokio::time::sleep(self.poll).await;
+            current = self.command(&current.command_id).await?;
+        }
     }
 
     /// `POST /api/v1/runs/{run}/cancel`: the command.

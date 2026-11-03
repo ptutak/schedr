@@ -277,9 +277,31 @@ impl SecretStores {
         })
     }
 
+    /// The same storages, read without the cache (`schedr connections check` / `test`): a
+    /// secret just fixed is what they see, not the value cached for the tasks.
+    #[must_use]
+    pub fn uncached(&self) -> Self {
+        Self {
+            storages: self
+                .storages
+                .iter()
+                .map(|(name, storage)| {
+                    let mut storage = storage.clone();
+                    storage.cache_ttl = Duration::ZERO;
+                    (name.clone(), storage)
+                })
+                .collect(),
+            default: self.default.clone(),
+            any_name: self.any_name,
+            min_mask_length: self.min_mask_length,
+            test_connections: self.test_connections.clone(),
+            cache: Arc::default(),
+        }
+    }
+
     /// Values in memory standing for every storage (a test run: `dags test --secret`).
     #[must_use]
-    pub fn for_test(values: MemoryStorage) -> Self {
+    pub fn for_test(values: impl SecretStorage + 'static) -> Self {
         let mut storage = Storage::new(Arc::new(values));
         storage.cache_ttl = Duration::ZERO;
         Self {
@@ -313,7 +335,7 @@ impl SecretStores {
     }
 
     /// The storage `name` comes from, with its configured name.
-    fn storage_of(&self, name: &SecretName) -> Result<(&str, &Storage), SecretError> {
+    pub(crate) fn storage_of(&self, name: &SecretName) -> Result<(&str, &Storage), SecretError> {
         let wanted = match (&name.storage, self.any_name) {
             (Some(storage), false) => storage.as_str(),
             (None, false) | (_, true) => self.default.as_deref().ok_or_else(|| {

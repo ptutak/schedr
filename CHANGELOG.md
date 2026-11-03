@@ -7,6 +7,12 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **`schedr connections check` and `test`** (M4.7c, decisions 174, 193, 198-200): `check
+  [ROOT]` renders every connection on a worker having the root's current code, saying of
+  each secret whether it is there (never its value); `test NAME` opens one there and runs its
+  check, beside the tasks (no slot, one at a time per worker), stopped after 60 s
+  (`--timeout`). `--worker` picks the worker. Exit 1 when one fails. The API:
+  `POST /api/v1/connections/check` and `POST /api/v1/connections/{name}/test`.
 - **Commands get connections as variables and files** (M4.7b2, decisions 184, 190-197):
   `CommandOperator(connections={"DB": warehouse})` gives `DB_*` variables and writes the
   files each type's tools read in a folder of the attempt's own (0700, in memory under

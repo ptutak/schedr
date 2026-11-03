@@ -483,6 +483,36 @@ pub struct TriggerRequest {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+/// Connections to check on a worker (`schedr connections check`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckConnectionsRequest {
+    /// The root; every root with connections if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// One connection; all of the root's if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The worker to run it on; one the master picks if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+}
+
+/// A connection to test on a worker (`schedr connections test`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TestConnectionRequest {
+    /// Its root; the one root defining it if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// The worker to run it on; one the master picks if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    /// How long it may take, in milliseconds: 60 000 if not given (decision 200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
 /// Pausing a DAG.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

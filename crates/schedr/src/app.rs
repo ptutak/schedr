@@ -210,6 +210,10 @@ pub async fn execute(
             let (api, output) = connect(client, env);
             run_dags(command, &api, &output, out).await
         }
+        (Command::Connections { client, command }, None) => {
+            let (api, output) = connect(client, env);
+            crate::user::run_connections(command, &api, &output, out).await
+        }
         (Command::Workers { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_workers(command, &api, &output, out).await
