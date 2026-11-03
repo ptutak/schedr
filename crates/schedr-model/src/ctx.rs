@@ -58,6 +58,14 @@ pub enum CtxRequest {
         /// The connection's name.
         name: String,
     },
+    /// A connection as a command gets it (decisions 184, 190): its files written in the
+    /// attempt's folder, and its variables (`task-ctx connection NAME --env PREFIX`).
+    ConnectionEnvGet {
+        /// The connection's name.
+        name: String,
+        /// The variables' prefix (`DB` gives `DB_URL`).
+        prefix: String,
+    },
 }
 
 /// The agent's answer to a [`CtxRequest`].
@@ -96,6 +104,11 @@ pub enum CtxAnswer {
     Connection {
         /// The values.
         values: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    /// The variables of the connection asked for, by name (`DB_URL`), its files written.
+    ConnectionEnv {
+        /// The variables.
+        variables: std::collections::BTreeMap<String, String>,
     },
     /// Why the connection asked for can't be opened; the connection stays open.
     ConnectionFailed {

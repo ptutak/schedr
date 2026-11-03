@@ -9,8 +9,8 @@ in a fallback** ([Fallbacks are not secret](../02-dags/13-secrets.md#fallbacks-a
 Put each environment's real values in its storage.
 
 The **worker agent** that runs a task fetches its secrets, never the master or the webserver,
-and never the task's own code. Values stay in the agent's memory (never on disk), are given
-to the task, and are masked in its log and output before anything leaves the worker. The
+and never the task's own code. Values are held in the agent's memory, given to the task,
+and masked in its log and output before anything leaves the worker. The
 master, the database's run tables, the API and the UI only ever see names.
 
 A [connection](../02-dags/14-connections.md) can also carry secrets to a task. Before the
@@ -19,6 +19,29 @@ their values to the mask for its log and output. The mask also covers the percen
 form used in a URL and the shell-quoted form printed by `schedr task-ctx connection --env`;
 `min_mask_length` and `unmasked_prefixes` (below) apply as to any other secret. The agent
 serves only connections the task declares.
+
+For commands, the worker writes connection files, including passwords and keys, in the
+attempt's private folder (directories 0700, files 0600). The default is memory-backed where
+`/dev/shm` exists; the fallback and an override may be on disk. See
+[Commands' connection files](05-workers.md#commands-connection-files). Passwords are
+removed from URL variables and put in the tool's file, so the documented invocations don't
+put them on the command line; commands can still expose secrets themselves. The mask covers
+JSON-escaped forms (also Mongo's YAML strings), curl's escapes, `.pgpass` escapes and MySQL
+option-file escapes, and passwords extracted from a masked URL, subject to the same masking
+settings. Masking protects against accidental output, not a task deliberately encoding a
+secret.
+
+Some values cannot be written safely: curl config values and `.pgpass` fields reject line
+breaks and NUL; MySQL option-file values reject NUL. SQL and Mongo URLs reject secret query
+keys such as `sslpassword` and `tlsCertificateKeyFilePassword`; Postgres `password` is
+extracted first, while MySQL's `password` query key is refused. These failures are
+`render_failed`. See [In a command](../02-dags/14-connections.md#in-a-command) for the
+variables and invocations.
+
+A task normally inherits the worker's `HOME`. Keep `~/.curlrc` and `~/.my.cnf` out of that
+user's home: curl and MySQL clients can read them too. The DAG page uses `curl -q -K` to
+skip curl's default config and `mysql --defaults-file` instead of `--defaults-extra-file`
+to avoid the user's MySQL options overriding the connection file.
 
 For SQL and Mongo, give a password as `password` apart from the URL; it goes to the driver
 as a separate value. Values filled into a URL by a t-string are percent-encoded. See

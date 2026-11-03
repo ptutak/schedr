@@ -177,6 +177,11 @@ pub enum TaskKind {
         /// Extra environment variables for the process.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         env: BTreeMap<String, Template>,
+        /// Connections given as variables and files (decision 184:
+        /// `connections={"DB": warehouse}`), by prefix: `DB_URL`, `DB_PGPASSFILE`, ... Each
+        /// is also in the task's `connections`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        connection_env: BTreeMap<String, String>,
     },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
@@ -287,7 +292,7 @@ impl Task {
             TaskKind::Python { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
-            TaskKind::Command { command, env } => command
+            TaskKind::Command { command, env, .. } => command
                 .templates()
                 .into_iter()
                 .chain(env.values())

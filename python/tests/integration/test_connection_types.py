@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from schedr.testing import run_dag
+from schedr.types import ProcessResult
 
 FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 # A password a URL would misread: `@` ends the user part, `/` the host, `?` and `#` the path.
@@ -34,8 +35,8 @@ def _run(tmp_path: Path, source: str, secrets: dict[str, str]) -> dict[str, obje
     """Runs DAG `c` of ``source``; its tasks' outputs, each task having succeeded."""
     (tmp_path / "c.py").write_text(source)
     result = run_dag(tmp_path / "c.py", "c", for_=FOR, secrets=secrets)
-    for task in result.tasks.values():
-        assert task.state == "success", (task.log, [a.error for a in task.attempts])
+    for task_id, task in result.tasks.items():
+        assert task.state == "success", (task_id, task.log, [a.error for a in task.attempts])
     return {task_id: task.output for task_id, task in result.tasks.items()}
 
 
@@ -260,3 +261,187 @@ with Dag("c"):
         {"router#key": key},
     )
     assert outputs["version"] == f"hello from {user} / BadHostKeyException"
+
+
+def test_commands_get_connections_as_their_tools_files(tmp_path: Path, api: str) -> None:
+    """Each tool logs in from the files written for it, no password on a command line
+    (decisions 184, 190): psql's `.pgpass`, mysql's option file, ssh's config, curl's."""
+    pg = urlsplit(_env("SCHEDR_TEST_POSTGRES_URL"))
+    my = urlsplit(_env("SCHEDR_TEST_MYSQL_URL"))
+    ca = Path(_env("SCHEDR_TEST_MYSQL_CA")).read_text().rstrip("\0")
+    host, port = _env("SCHEDR_TEST_SSH").rsplit(":", 1)
+    user = _env("SCHEDR_TEST_SSH_USER")
+    outputs = _run(
+        tmp_path,
+        f"""
+from schedr import CommandOperator, Dag, secrets
+from schedr.connections import HTTP, SQL, SSH
+
+pg = SQL(
+    "pg", url="postgresql://{pg.hostname}:{pg.port}/postgres?sslmode=disable",
+    user={pg.username!r}, password=secrets["pg"]["password"],
+)
+my = SQL(
+    "my", url="mysql://{my.hostname}:{my.port}/mysql?sslmode=verify-ca",
+    user={my.username!r}, password=secrets["my"]["password"], ca_cert=secrets["my"]["ca"],
+)
+router = SSH(
+    "router", host={host!r}, port={port}, user={user!r},
+    private_key=secrets["router"]["key"],
+    known_hosts={Path(_env("SCHEDR_TEST_SSH_KNOWN_HOSTS")).read_text()!r},
+)
+billing = HTTP("billing", base_url={api!r}, token=secrets["billing"]["token"])
+
+with Dag("c"):
+    CommandOperator(
+        "psql", ["sh", "-c", 'psql "$DB_URL" -tAc "select current_user"'], connections={{"DB": pg}}
+    )
+    CommandOperator(
+        "mysql",
+        ["sh", "-c", 'mysql --defaults-file="$DB_MYSQL_CNF" -N -e "select current_user()"'],
+        connections={{"DB": my}},
+    )
+    CommandOperator(
+        "ssh", ["sh", "-c", 'ssh -F "$R_SSH_CONFIG" target "echo hello from \\\\$(whoami)"'],
+        connections={{"R": router}},
+    )
+    CommandOperator(
+        "curl", ["sh", "-c", 'curl -q -sS -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"'],
+        connections={{"API": billing}},
+    )
+    # The same, read by the command itself.
+    CommandOperator(
+        "env",
+        [
+            "sh", "-c",
+            'vars="$(schedr task-ctx connection pg --env P)" && eval "$vars"'
+            ' && psql "$P_URL" -tAc "select 1"',
+        ],
+        connections=[pg],
+    )
+""",
+        {
+            "pg#password": pg.password or "",
+            "my#password": my.password or "",
+            "my#ca": ca,
+            "router#key": Path(_env("SCHEDR_TEST_SSH_KEY_FILE")).read_text(),
+            "billing#token": "s3cret-bearer",
+        },
+    )
+    stdout = {
+        task_id: output.stdout.strip()
+        for task_id, output in outputs.items()
+        if isinstance(output, ProcessResult)
+    }
+    assert stdout == {
+        "psql": pg.username,
+        "mysql": f"{my.username}@%",
+        "ssh": f"hello from {user}",
+        # The token reached the server, and was masked in the output.
+        "curl": "/invoices Bearer ****",
+        "env": "1",
+    }
+
+
+def test_mariadb_through_python_and_both_vendors_clients(tmp_path: Path) -> None:
+    """MariaDB as MySQL (decision 196): logins, TLS modes, and one option file read by
+    MySQL's client and MariaDB's (decision 195)."""
+    maria = urlsplit(_env("SCHEDR_TEST_MARIADB_URL"))
+    where = f"{maria.hostname}:{maria.port}"
+    outputs = _run(
+        tmp_path,
+        f"""
+from schedr import CommandOperator, Dag, secrets, task
+from schedr.connections import SQL
+
+root = SQL(
+    "root", url="mariadb://{where}/mysql?sslmode=disable",
+    user={maria.username!r}, password=secrets["maria"]["password"],
+)
+# MariaDB 11.4+ serves TLS with a certificate it made itself: encrypted, unchecked.
+encrypted = SQL(
+    "encrypted", url="mariadb://{where}/?sslmode=require",
+    user={maria.username!r}, password=secrets["maria"]["password"],
+)
+# That certificate can't pass verify-full (the default) from PyMySQL.
+verified = SQL(
+    "verified", url="mysql://{where}/", user={maria.username!r},
+    password=secrets["maria"]["password"],
+)
+# A password with a URL's structure in it, both ways (decision 188).
+odd_url = SQL(
+    "odd_url",
+    url=t"mariadb://odd:{{secrets['odd']['pw']}}@{where}/?sslmode=require",
+)
+odd_apart = SQL(
+    "odd_apart", url="mariadb://{where}/?sslmode=require", user="odd",
+    password=secrets["odd"]["pw"],
+)
+
+def cipher(connection) -> str:
+    cursor = connection.cursor()
+    cursor.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+    return cursor.fetchone()[1]
+
+@task(connections=[root, encrypted, verified, odd_url, odd_apart])
+def logins() -> str:
+    with root() as connection:
+        cursor = connection.cursor()
+        cursor.execute("DROP USER IF EXISTS 'odd'@'%'")
+        # With values, PyMySQL formats the query: `%%` is a `%`.
+        cursor.execute("CREATE USER 'odd'@'%%' IDENTIFIED BY %s", ({ODD!r},))
+        plain = cipher(connection)
+    with encrypted() as connection:
+        tls = cipher(connection)
+    try:
+        with verified():
+            refused = "no"
+    except Exception as e:
+        refused = type(e).__name__
+    users = []
+    for odd in (odd_url, odd_apart):
+        with odd() as connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT CURRENT_USER()")
+            users.append(cursor.fetchone()[0])
+    with root() as connection:
+        connection.cursor().execute("DROP USER 'odd'@'%'")
+    return f"{{plain!r}} {{bool(tls)}} {{refused}} {{users}}"
+
+with Dag("c"):
+    CommandOperator(
+        "mysql_client",
+        [
+            "sh", "-c",
+            'cp "$DB_MYSQL_CNF" "$OUT/my.cnf" && mysql --defaults-file="$DB_MYSQL_CNF" -N'
+            ' -e "SHOW STATUS LIKE \\'Ssl_cipher\\'"',
+        ],
+        env={{"OUT": {str(tmp_path)!r}}},
+        connections={{"DB": encrypted}},
+    )
+    logins()
+""",
+        {"maria#password": maria.password or "", "odd#pw": ODD},
+    )
+    assert outputs["logins"] == f"'' True OperationalError {['odd@%', 'odd@%']}"
+    mysql_client = outputs["mysql_client"]
+    assert isinstance(mysql_client, ProcessResult)
+    assert mysql_client.stdout.startswith("Ssl_cipher\tTLS"), mysql_client
+    # The same file, read by MariaDB's client in its container (its port the server's own
+    # there): `[client-mariadb]` gives it TLS; MySQL's `loose-ssl-mode` only a warning.
+    exec_ = _env("SCHEDR_TEST_MARIADB_EXEC").split()
+    script = (
+        "cat > /tmp/schedr-test.cnf && mariadb --defaults-file=/tmp/schedr-test.cnf"
+        " --host=127.0.0.1 --port=3306 -N -e \"SHOW STATUS LIKE 'Ssl_cipher'\""
+    )
+    read = subprocess.run(
+        [*exec_, "sh", "-c", script],
+        input=(tmp_path / "my.cnf").read_bytes(),
+        capture_output=True,
+        check=False,
+    )
+    assert read.returncode == 0, read.stderr
+    assert read.stdout.decode().startswith("Ssl_cipher\tTLS"), read
+    assert read.stderr.decode().strip() == (
+        "Warning: mariadb: unknown variable 'loose-ssl-mode=REQUIRED'"
+    )

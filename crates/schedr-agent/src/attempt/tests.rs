@@ -90,6 +90,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         ]),
         pass_env: vec![],
         log_dir: dir.path().join("logs"),
+        connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
         fork_server: None,
     };

@@ -135,7 +135,22 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
         }
         let mut in_text: Vec<&Template> = Vec::new();
         match &task.kind {
-            TaskKind::Command { command, env } => {
+            TaskKind::Command {
+                command,
+                env,
+                connection_env,
+            } => {
+                for (prefix, name) in connection_env {
+                    if let Err(error) = schedr_model::connection::check_prefix(prefix) {
+                        problems.push(format!("task `{id}`: connections=: {error}"));
+                    }
+                    if !task.connections.contains(name) {
+                        problems.push(format!(
+                            "task `{id}`: connections=: `{prefix}` names `{name}`, which the \
+                             task doesn't declare"
+                        ));
+                    }
+                }
                 for template in command.templates() {
                     for reference in template.references() {
                         if let Reference::Secret(name) = reference {

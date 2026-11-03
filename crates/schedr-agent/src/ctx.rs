@@ -354,6 +354,21 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                     },
                 }
             }
+            Some(Ok(CtxRequest::ConnectionEnvGet { name, prefix })) => {
+                let given = match &info.secrets {
+                    Some(secrets) => secrets.connection_env(&name, &prefix).await,
+                    None => Err(ConnectionError::NotFound(format!(
+                        "connection `{name}`: no connections are known for this task"
+                    ))),
+                };
+                match given {
+                    Ok(variables) => CtxAnswer::ConnectionEnv { variables },
+                    Err(error) => CtxAnswer::ConnectionFailed {
+                        kind: error.kind().to_owned(),
+                        reason: error.to_string(),
+                    },
+                }
+            }
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }

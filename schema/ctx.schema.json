@@ -127,6 +127,27 @@
           "type": "object"
         },
         {
+          "description": "The variables of the connection asked for, by name (`DB_URL`), its files written.",
+          "properties": {
+            "type": {
+              "const": "connection_env",
+              "type": "string"
+            },
+            "variables": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "The variables.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "variables"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Why the connection asked for can't be opened; the connection stays open.",
           "properties": {
             "kind": {
@@ -256,6 +277,29 @@
           "required": [
             "type",
             "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A connection as a command gets it (decisions 184, 190): its files written in the\nattempt's folder, and its variables (`task-ctx connection NAME --env PREFIX`).",
+          "properties": {
+            "name": {
+              "description": "The connection's name.",
+              "type": "string"
+            },
+            "prefix": {
+              "description": "The variables' prefix (`DB` gives `DB_URL`).",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_env_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "prefix"
           ],
           "type": "object"
         }

@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -435,6 +436,9 @@ pub struct AttemptSecrets {
     connections: Arc<Registry>,
     /// The connections it declares (`connections=`, decision 179): the only ones it opens.
     declared_connections: Vec<String>,
+    /// The attempt's folder for its connections' files (decision 190); `None`: none given
+    /// to a command as variables.
+    connection_dir: Option<PathBuf>,
     fetched: Mutex<BTreeMap<SecretName, Value>>,
     /// The values masked in the task's log and output (grows with on-demand reads).
     pub mask: Arc<MaskSet>,
@@ -455,6 +459,7 @@ impl AttemptSecrets {
             declared: Vec::new(),
             connections: Arc::default(),
             declared_connections: Vec::new(),
+            connection_dir: None,
             fetched: Mutex::default(),
             mask: Arc::new(MaskSet::new(min)),
             failed: Mutex::default(),
@@ -487,6 +492,60 @@ impl AttemptSecrets {
         self.connections = connections;
         self.declared_connections = declared;
         self
+    }
+
+    /// The same secrets, with the attempt's folder for its connections' files.
+    #[must_use]
+    pub fn with_connection_dir(mut self, dir: PathBuf) -> Self {
+        self.connection_dir = Some(dir);
+        self
+    }
+
+    /// The connection `name` as a command gets it (decisions 184, 190-192): its files written
+    /// in the attempt's folder, and its variables, named `PREFIX_...`.
+    ///
+    /// # Errors
+    ///
+    /// As [`AttemptSecrets::connection`]; a prefix that isn't a variable name's start, a
+    /// value its tool's file can't hold, or a file that can't be written (`render_failed`).
+    pub async fn connection_env(
+        &self,
+        name: &str,
+        prefix: &str,
+    ) -> Result<BTreeMap<String, String>, ConnectionError> {
+        // The prefix and the name are folders: only letters, digits and `_` (`.-` in a name,
+        // never an empty part) get through, whatever sent them.
+        schedr_model::connection::check_prefix(prefix).map_err(ConnectionError::Render)?;
+        schedr_model::TaskId::new(name)
+            .map_err(|e| ConnectionError::Denied(format!("connection `{name}`: {e}")))?;
+        let values = self.connection(name).await?;
+        let Some(attempt_dir) = &self.connection_dir else {
+            return Err(ConnectionError::Render(format!(
+                "connection `{name}`: this attempt has no folder for connection files"
+            )));
+        };
+        let kind = self.connections.get(name).ok().and_then(|def| def.kind);
+        let shown = schedr_model::params::shown(&Value::Object(values.into_iter().collect()));
+        let Value::Object(shown) = shown else {
+            // Parameters are identifiers, never a tag (`$datetime`): kept an error all the same.
+            return Err(ConnectionError::Render(format!(
+                "connection `{name}`: its values aren't an object of parameters"
+            )));
+        };
+        // By connection, then prefix: one connection given twice, or two under one prefix
+        // (the dict form's and `--env`'s), never write over each other's files.
+        let dir = crate::connection_env::folder(&attempt_dir.join(name), prefix);
+        let render =
+            |e: String| ConnectionError::Render(format!("connection `{name}` as {prefix}: {e}"));
+        let view = crate::connection_env::view(kind, &shown, &dir).map_err(render)?;
+        // A password taken out of a secret URL, one escaped for a tool's file: masked as what
+        // it came from is, before anything can print it.
+        for (source, form) in &view.derived {
+            if self.mask.mask_text(source) != *source {
+                self.mask.add(&format!("connection `{name}`"), form);
+            }
+        }
+        crate::connection_env::write(&view, prefix, &dir).map_err(render)
     }
 
     /// Whether the task declares connections (their secrets fetched and masked).

@@ -732,3 +732,24 @@ fn a_connection_over_1_mib_fails_its_files_import() {
     assert_eq!(files[0].dags, []);
     assert_eq!(files[0].connections, [connection("small", "db")]);
 }
+
+#[test]
+fn a_connection_given_by_prefix_must_be_declared_under_a_variables_prefix() {
+    let mut given = command("dump", &json!([[{"text": "psql"}]]), &json!({}));
+    given["connections"] = json!(["warehouse"]);
+    given["connection_env"] = json!({"DB": "warehouse", "1X": "warehouse", "SCHEDR": "warehouse",
+                                     "OTHER": "other"});
+    let found = problems(&json!({"tasks": [given], "edges": []}));
+    let expected = [
+        "task `dump`: connections=: `1X`: a prefix is letters, digits and `_`",
+        "task `dump`: connections=: `SCHEDR`: prefixes starting with SCHEDR are schedr's own",
+        "task `dump`: connections=: `OTHER` names `other`, which the task doesn't declare",
+    ];
+    for start in expected {
+        assert!(
+            found.iter().any(|p| p.starts_with(start)),
+            "{start} not in {found:#?}"
+        );
+    }
+    assert!(!found.iter().any(|p| p.contains("`DB`")), "{found:#?}");
+}

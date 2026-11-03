@@ -223,6 +223,18 @@ pub fn agent_settings(
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),
             log_dir: data_dir.join("logs").join(file_name(&worker_id)),
+            connection_dir: config
+                .worker
+                .connection_dir
+                .clone()
+                .unwrap_or_else(|| {
+                    schedr_agent::connection_env::default_dir(
+                        data_dir,
+                        Path::new("/dev/shm"),
+                        rustix::process::geteuid().as_raw(),
+                    )
+                })
+                .join(file_name(&worker_id)),
             memory,
             fork_server: fork_config(config),
         },
@@ -1479,6 +1491,9 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
+    // Secrets go there as files: a folder another user made first is refused (decision 201).
+    schedr_agent::connection_env::prepare(&agent.setup.connection_dir)
+        .map_err(AppError::BadArgument)?;
     // No database here: never the `db` storage.
     agent.secrets = std::sync::Arc::new(
         crate::secret_storage::SecretPlan::new(&config.secret_storage, env).stores(None)?,

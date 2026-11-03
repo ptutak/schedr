@@ -25,6 +25,10 @@ fn memory() -> MemoryStorage {
         ),
         (name(None, "etl/db", Some("user")), "etl".to_owned()),
         (
+            name(None, "etl/url", Some("value")),
+            "postgresql://etl:extr%3Acted@db/x".to_owned(),
+        ),
+        (
             name(None, "tenants/a", Some("token")),
             "token-of-a".to_owned(),
         ),
@@ -423,6 +427,30 @@ async fn a_connection_is_rendered_with_its_secrets_masked_whatever_the_task_decl
     // Masked from the moment it is read; a default isn't a secret.
     assert_eq!(secrets.mask.mask_text("hunter22 eu"), "**** eu");
     assert_eq!(secrets.failed_kind(), None);
+}
+
+#[tokio::test]
+async fn a_password_a_command_gets_out_of_a_secret_url_is_masked_in_every_form() {
+    // Codex's finding 3: the masker knows the whole URL; the password taken out of it, and
+    // its `.pgpass` form, are new.
+    let def: schedr_model::ConnectionDef = serde_json::from_value(json!({
+        "name": "db", "type": "sql",
+        "params": {"url": {"ref": {"kind": "secret", "path": "etl/url", "key": "value"}}},
+    }))
+    .unwrap();
+    let registry = Arc::new(Registry {
+        connections: BTreeMap::from([("db".to_owned(), def)]),
+        refused: BTreeMap::new(),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = AttemptSecrets::fetch(stores(Storage::new(Arc::new(memory()))), &[], Vec::new())
+        .await
+        .unwrap()
+        .with_connections(registry, vec!["db".to_owned()])
+        .with_connection_dir(dir.path().join("a1"));
+    let variables = secrets.connection_env("db", "DB").await.unwrap();
+    assert_eq!(variables["DB_PASSWORD"], "extr:cted");
+    assert_eq!(secrets.mask.mask_text("extr:cted extr\\:cted"), "**** ****");
 }
 
 #[tokio::test]

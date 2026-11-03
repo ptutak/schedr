@@ -8137,6 +8137,125 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     certificate and name checked unless the URI says `tls=false` (or `ssl=false`); the URI's
     own TLS options as written; `ca_cert` (PEM text) for a private CA, else the system's. Not
     chosen: pymongo's default, plaintext unless written.
+  - **190. What a command gets of a connection's secrets: files and variables** (the user's,
+    2026-11-03): a secret goes into the file its tool reads (curl's `-K` config, the SSH key,
+    Postgres's `.pgpass`, a MySQL option file) and into a prefixed variable for scripts
+    (`API_TOKEN`, `DB_PASSWORD`), masked in the log; a URL variable never holds a password,
+    which is moved out to the file, so `psql "$DB_URL"` puts none on a command line. Not
+    chosen: files only (no secret in a variable; less convenient for scripts); the sketch's
+    table as it stood (`_URL` with its password).
+  - **191. Commands get the Python clients' TLS defaults** (the user's, 2026-11-03): SQL's
+    `_URL` carries `sslmode=verify-full` and `sslrootcert` (the system's, or the `ca_cert`
+    file) unless written otherwise; MySQL's option file `ssl-mode=VERIFY_IDENTITY`; Mongo's
+    `_URI` `tls=true`; curl's config `--cacert` when a CA is given; SSH's config
+    `StrictHostKeyChecking yes` with only its `known_hosts`. Not chosen: values as written,
+    each tool's own defaults (psql `prefer`, mongosh plaintext).
+  - **192. Prefixed variables only** (the user's, 2026-11-03): `<PREFIX>_...`, never the tools'
+    own names (`PGHOST`, `MYSQL_PWD`); the docs show the mapping
+    (`PGPASSFILE="$DB_PGPASSFILE" psql "$DB_URL"`). Two of a type in a task never clash. Not
+    chosen: the tools' names opt-in per entry, or automatic with one connection of a type.
+  - **193. `connections check` and `test` run on any worker, or `--worker`** (the user's,
+    2026-11-03; M4.7c): the master picks a connected worker having the connection's root at
+    its current code, as for a task; `--worker NAME` picks one. `check` without a name covers
+    every connection of a root. Not chosen: every worker having the root (slower, more load);
+    `--worker` required.
+  - **194. Mongo commands: a database tools' file, mongosh through the variables** (the
+    user's, 2026-11-03): mongosh reads no password from a file, so a command gets
+    `<PREFIX>_TOOLS_CONFIG`, a 0600 YAML file with the `uri` (the user, no password) and the
+    `password`, for `mongodump --config` (and mongorestore, mongoexport, mongoimport); the
+    docs show mongosh logging in from the environment
+    (`--eval 'db.auth(process.env.DB_USER, process.env.DB_PASSWORD)'`). `<PREFIX>_URI` names no
+    user: mongosh would prompt for its password, hanging the task. Not chosen: a docs note
+    only; a `_URI_WITH_PASSWORD` variable (against decision 190).
+  - **195. One MySQL option file for MySQL's and MariaDB's clients** (the user's,
+    2026-11-03): MariaDB's client refuses MySQL's `ssl-mode` ("unknown variable"), so
+    `[client]` holds the login and MySQL's TLS as `loose-ssl-mode` (MySQL's client honours it;
+    MariaDB's skips it with one warning line), and `[client-mariadb]`, which only MariaDB's
+    programs read, holds MariaDB's (`ssl` / `skip-ssl`, `ssl-verify-server-cert`). TLS reaches
+    every program of both (`mysqldump`, `mariadb-dump`), so it isn't in `[mysql]`. A CA path in
+    `[client]` can't be unset for MariaDB's client: without `ca_cert`, the verify modes check
+    against the system's CAs with every client, a self-made certificate needing
+    `?sslmode=require`. Not chosen: two files (the author must know the worker's client); a
+    dialect per URL scheme (wrong when client and server differ).
+  - **196. MariaDB supported** (the user's, 2026-11-03): `SQL` takes `mariadb://` as
+    `mysql://`, through PyMySQL; a MariaDB 11.8 server in `make test-integration` and CI
+    (logins, TLS modes, a command through the option file with both vendors' clients); the
+    docs say MariaDB 11.4+'s self-made certificate can't pass `verify-*` (a real certificate,
+    or `?sslmode=require`). Not chosen: PyNaCl in `schedr[mysql]` for the `ed25519` login (a
+    dependency, for an opt-in plugin); tests only.
+  - **197. A Postgres URL names its `.pgpass` file** (the user's, 2026-11-03; Claude's
+    proposal, from the end-to-end test): psql reads only an unprefixed `PGPASSFILE`, so
+    `<PREFIX>_URL` carries `passfile=<the file's path>` (never the password) and
+    `psql "$DB_URL"` logs in as written. Not chosen: a bare URL, mapped by hand
+    (`PGPASSFILE="$DB_PGPASSFILE"`).
+  - **198. `connections test` of a connection without a check opens it** (the user's,
+    2026-11-03; M4.7c): `with name():` entered and left, an exception failing the test; a
+    `Generic` renders its values. Not chosen: refusing; the values only.
+  - **199. A connection test takes no task slot** (the user's, 2026-11-03; M4.7c): it runs
+    beside the tasks, one at a time per worker. Not chosen: a slot like a task.
+  - **200. A connection test is stopped after 60 s** (the user's, 2026-11-03; M4.7c),
+    `--timeout` to change it. Not chosen: the connection's own `timeout` only; a fixed 30 s.
+  - **201. Commands' connection files in memory** (the user's, 2026-11-03, on a side agent's
+    note): they hold passwords and keys in plain text, so they go under `/dev/shm` (a tmpfs;
+    in containers too), `/dev/shm/schedr-<uid>/<a hash of the data directory>/<worker>/`,
+    never on a disk, gone at a reboot or a pod's restart, still swept at start; `[worker]
+    connection_dir` overrides it, the data directory the fallback without `/dev/shm`. The
+    hash keeps workers of one user apart as their data directories did (a standalone's and a
+    worker's, both named after the host). `/dev/shm` is writable by every user: the worker
+    makes the folder and the one holding it itself, and refuses to start when either isn't a
+    real folder of its user's, mode 0700 (another user's made first, or a link). Not chosen:
+    memory files the command inherits (`/proc/self/fd/N`; `task-ctx --env` can't pass them to
+    a running process, and tools closing inherited files would break); the data directory,
+    with the docs recommending a memory-backed volume.
+  - **202. A connections demo, all in compose** (the user's, 2026-11-03; M4.7d): a compose
+    file runs the servers of every connection type (Postgres, MySQL, MariaDB, Mongo, SSH,
+    HTTP), schedr standalones without a UI and one `schedr ui` over them, as `make
+    standalone-separate-ui` does locally; a demo image FROM the base image adds the client
+    tools and the connection extras; `make demo` builds the images and runs `podman-compose
+    up`, so anyone runs it without Rust or uv. Not chosen: only the servers in compose,
+    schedr from a local build; both, by compose profile.
+  - **203. The demo shows two deployments, dev and prod** (the user's, 2026-11-03): the same
+    DAG folder, each standalone's own secrets pointing at other databases and users, under
+    one `schedr ui`: M4.7's acceptance (the same DAG reads a connection's values from two
+    environments' storages). Not chosen: one standalone.
+  - **204. The demo's HTTP server is go-httpbin, pinned** (the user's, 2026-11-03): its
+    `/bearer` checks the token, `/headers` echoes what was sent. Not chosen: a server of our
+    own.
+  - **205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
+    `schedr connections check` and `test` too. Not chosen: before M4.7c; in M4.7b2.
+- **Built (M4.7b2; decisions 184, 190-197, 201):** a command's connections as variables and
+  files. `CommandOperator(connections={"DB": warehouse})` records `connection_env` (prefix to
+  name) with the task, its names declared; the master refuses a prefix that can't start a
+  variable's name (or starts with `SCHEDR`) or names an undeclared connection, the Python
+  operator the same at load, plus an `env=` name under a prefix. The agent's
+  `connection_env` module maps a rendered connection by type: curl's `-K` config (quoted,
+  the token as a header), an SSH config with one `target` host (values quoted, `%` escaped, a
+  quote or a line break refused), its key (with its last line break) and `known_hosts`,
+  Postgres's `.pgpass` named in the URL (`passfile`), one MySQL option file for both vendors'
+  clients, Mongo's tools' YAML (values as JSON strings), a `Generic`'s or `@connection`'s
+  parameters one variable each; every one `<PREFIX>_JSON`. URLs parsed by hand (Mongo's lists
+  several hosts), the password moved out, the user put in, the TLS defaults added unless
+  written. Files written in `<connection dir>/<worker>/<attempt>/<name>/<prefix>/`
+  (0700, files 0600; in memory, decision 201), removed when the attempt ends, and swept when an agent starts (all but
+  the folders of processes it couldn't stop). The variables merged into the command's
+  environment, a name in both refused (`render_failed`), as two connections giving one name.
+  `task-ctx connection --env` asks the agent (`connection_env_get`), which writes the same
+  files. `SQL` takes `mariadb://`. Tested: unit tests per type, the agent running a command
+  with them (mode bits, cleanup, clashes), and against real servers psql, mysql (MySQL's
+  client, and MariaDB's in its container), ssh, curl and `--env`; MariaDB 11.8 joins the
+  integration servers. From the reviews (Codex's 10 findings, Grok's 5, all confirmed): every
+  folder on the connection path checked (the user's or root's, closed to others' writes
+  unless sticky, a link only root's), files written beside and renamed into place; a password
+  in a URL's query (libpq's `password=`) or an HTTP URL's user part moved out, other secret
+  query keys (`sslpassword`, MySQL's `password`) refused; the forms a file writes (a password
+  taken out of a secret URL, `.pgpass`'s and the option file's escapes) masked as their
+  source is; a line break refused where curl's config or `.pgpass` would split on it, a NUL
+  in the option file (MySQL's client skipped the next line, the TLS mode, which now comes
+  first); `protocol = TCP` (`localhost` was the socket); Mongo's database in the URI's path
+  with `authSource` (`<PREFIX>_AUTH_SOURCE` for mongosh's login). The DAG page says
+  `mysql --defaults-file` and `curl -q -K`: the tools read `~/.my.cnf` after
+  `--defaults-extra-file`, and `~/.curlrc` unless `-q` comes first, and those could turn
+  the TLS check off.
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`
@@ -8155,7 +8274,7 @@ router = SSH(host="10.0.0.1", user="netops", private_key=t"{secrets['router#key'
 # a DAG
 CommandOperator(
     "fetch",
-    command='curl -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"; ssh -F "$R_SSH_CONFIG" target "show version"',
+    command='curl -q -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"; ssh -F "$R_SSH_CONFIG" target "show version"',
     connections={"API": billing_api, "R": router},     # prefix -> connection
 )
 

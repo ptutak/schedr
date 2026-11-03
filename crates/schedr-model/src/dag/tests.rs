@@ -97,6 +97,7 @@ fn round_trips_through_json() {
         kind: TaskKind::Command {
             command: CommandLine::Shell(Template::text("echo done")),
             env: std::collections::BTreeMap::new(),
+            connection_env: std::collections::BTreeMap::new(),
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,

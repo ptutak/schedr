@@ -24,7 +24,7 @@ from schedr._model import (
 )
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
-from schedr.connections import ConnectionsArg, declared_connections
+from schedr.connections import Connection, ConnectionsArg, declared_connections
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
 from schedr.tasks import Output
 from schedr.types import ProcessResult
@@ -115,6 +115,49 @@ class Operator:
         return f"{type(self).__name__}({self._task_id!r})"
 
 
+def _connection_env(
+    given: Mapping[str, Connection[object] | str],
+    env: Mapping[str, Template],
+    where: str,
+) -> dict[str, str]:
+    """``connections={"DB": warehouse}``: each prefix to its connection's name, checked.
+
+    Args:
+        given: The prefixes and their connections (or names).
+        env: The task's ``env=``, whose names a connection's variables mustn't take.
+        where: The task, for messages.
+
+    Returns:
+        The connection's name by prefix.
+
+    Raises:
+        TypeError: For a prefix that isn't a string, or a value that isn't a connection.
+        ValueError: For a prefix that can't start a variable's name, or one taken by ``env=``.
+    """
+    names: dict[str, str] = {}
+    for prefix, connection in given.items():
+        if not isinstance(prefix, str):
+            raise TypeError(f"{where}: connections=: a prefix is a string, not {prefix!r}")
+        if not _ENV_NAME.fullmatch(prefix):
+            raise ValueError(
+                f"{where}: connections=: `{prefix}`: a prefix is letters, digits and `_`, not "
+                "starting with a digit"
+            )
+        if prefix.upper().startswith("SCHEDR"):
+            raise ValueError(
+                f"{where}: connections=: `{prefix}`: prefixes starting with SCHEDR are schedr's own"
+            )
+        taken = sorted(name for name in env if name.startswith(f"{prefix}_"))
+        if taken:
+            raise ValueError(
+                f"{where}: `{taken[0]}` in env= starts with the prefix `{prefix}` of a "
+                "connection's variables: rename one"
+            )
+        # One given: one name back (`None` only when nothing is).
+        (names[prefix],) = declared_connections([connection], where) or ("",)
+    return names
+
+
 class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     """Runs an inline command.
 
@@ -147,7 +190,9 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             ``'path'`` (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
             declaring; one in the command line is refused (the process list shows it).
         connections: The connections it reads with ``schedr task-ctx connection NAME``,
-            each the ``@connection`` function or its name.
+            each the ``@connection`` function or its name; or a dict of prefix to connection
+            (``{"DB": warehouse}``), each given as variables (``DB_URL``, ...) and the files
+            its tools read, written for the attempt and removed after it.
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -171,7 +216,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_active: int | None = None,
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
-        connections: ConnectionsArg = None,
+        connections: ConnectionsArg | Mapping[str, Connection[object] | str] = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
@@ -209,6 +254,10 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
         for template in [*line.templates(), *variables.values()]:
             _build.check_template_references(builder, template, where)
+        connection_env: dict[str, str] = {}
+        if isinstance(connections, Mapping):
+            connection_env = _connection_env(connections, variables, where)
+            connections = list(dict.fromkeys(connection_env.values()))
         options = _build.TaskOptions(
             retries,
             retry_delay,
@@ -224,7 +273,11 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)
         builder.add_task(
-            task_id, CommandKind(line, variables), ScalarType("process_result"), options, spec
+            task_id,
+            CommandKind(line, variables, connection_env),
+            ScalarType("process_result"),
+            options,
+            spec,
         )
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)

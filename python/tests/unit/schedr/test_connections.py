@@ -436,3 +436,43 @@ def test_a_command_declares_connections_too() -> None:
     (show,) = dag.tasks
     assert show.connections == ("local", "other")
     assert show.to_json()["connections"] == ["local", "other"]
+
+
+def test_a_command_given_connections_by_prefix_declares_and_names_them() -> None:
+    local = define_local()
+    with Dag("c"):
+        CommandOperator(
+            "show",
+            ["sh", "-c", 'psql "$DB_URL"'],
+            connections={"DB": local, "OTHER": "other", "AGAIN": "local"},
+        )
+    (dag,) = registry.take_defined()
+    (show,) = dag.tasks
+    assert show.connections == ("local", "other")
+    assert show.to_json()["connection_env"] == {"AGAIN": "local", "DB": "local", "OTHER": "other"}
+
+
+def test_a_command_without_prefixes_writes_no_connection_env() -> None:
+    with Dag("c"):
+        CommandOperator("show", "true", connections=["other"])
+    (dag,) = registry.take_defined()
+    assert "connection_env" not in dag.tasks[0].to_json()
+
+
+@pytest.mark.parametrize(
+    ("given", "env", "error", "message"),
+    [
+        ({"1DB": "other"}, {}, ValueError, "`1DB`: a prefix is letters"),
+        ({"DB-X": "other"}, {}, ValueError, "`DB-X`: a prefix is letters"),
+        ({"Schedr_db": "other"}, {}, ValueError, "SCHEDR are schedr's own"),
+        ({"DB": "other"}, {"DB_URL": "x"}, ValueError, "`DB_URL` in env= starts with"),
+        ({"DB": 3}, {}, TypeError, "takes `@connection` functions"),
+        ({"DB": "not a name"}, {}, ValueError, "connections="),
+        ({1: "other"}, {}, TypeError, "a prefix is a string"),
+    ],
+)
+def test_a_prefix_a_variable_cant_start_with_is_refused(
+    given: dict[object, object], env: dict[str, str], error: type[Exception], message: str
+) -> None:
+    with Dag("c"), pytest.raises(error, match=message):
+        CommandOperator("show", "true", connections=given, env=env)  # type: ignore[arg-type]

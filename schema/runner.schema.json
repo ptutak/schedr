@@ -1655,6 +1655,13 @@
               "$ref": "#/$defs/CommandLine",
               "description": "The command line."
             },
+            "connection_env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Connections given as variables and files (decision 184:\n`connections={\"DB\": warehouse}`), by prefix: `DB_URL`, `DB_PGPASSFILE`, ... Each\nis also in the task's `connections`.",
+              "type": "object"
+            },
             "env": {
               "additionalProperties": {
                 "$ref": "#/$defs/Template"

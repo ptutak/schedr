@@ -1,4 +1,5 @@
 use std::os::fd::AsRawFd;
+use std::path::Path;
 
 use pretty_assertions::assert_eq;
 use schedr_agent::ctx::{CtxInfo, channel, serve};
@@ -235,6 +236,12 @@ fn a_full_channel_is_waited_for_until_the_deadline_not_forever() {
 
 /// Runs `schedr task-ctx connection` against a served channel whose task declares `db`.
 async fn connection_against_agent(args: ConnectionArgs) -> Result<String, String> {
+    let dir = tempfile::tempdir().unwrap();
+    connection_in(args, dir.path()).await
+}
+
+/// As [`connection_against_agent`], the attempt's connection files in `files`.
+async fn connection_in(args: ConnectionArgs, files: &Path) -> Result<String, String> {
     let registry: schedr_model::connection::Registry = serde_json::from_value(json!({
         "connections": {
             "db": {"name": "db", "params": {
@@ -256,7 +263,8 @@ async fn connection_against_agent(args: ConnectionArgs) -> Result<String, String
     .with_connections(
         std::sync::Arc::new(registry),
         ["db", "clash", "odd"].map(str::to_owned).to_vec(),
-    );
+    )
+    .with_connection_dir(files.to_path_buf());
     let (ours, theirs) = channel().unwrap();
     let mut served = info("0.1.0");
     served.secrets = Some(std::sync::Arc::new(secrets));
@@ -288,11 +296,24 @@ async fn a_connection_prints_as_json_or_as_quoted_exports() {
             .unwrap(),
         "{\"dsn\":\"postgres://it's@db/x\",\"pool\":3,\"since\":\"2026-01-02\"}\n"
     );
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("db/PG/connection.json");
     assert_eq!(
-        connection_against_agent(connection("db", Some("PG")))
+        connection_in(connection("db", Some("PG")), dir.path())
             .await
             .unwrap(),
-        "export PG_DSN='postgres://it'\\''s@db/x'\nexport PG_POOL='3'\nexport PG_SINCE='2026-01-02'\n"
+        format!(
+            "export PG_DSN='postgres://it'\\''s@db/x'\nexport PG_JSON='{}'\nexport PG_POOL='3'\n\
+             export PG_SINCE='2026-01-02'\n",
+            json.display()
+        )
+    );
+    // The agent wrote the file the variable names, every value in it.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+    assert_eq!(
+        written,
+        json!({"dsn": "postgres://it's@db/x", "pool": 3, "since": "2026-01-02"})
     );
 }
 
@@ -317,13 +338,14 @@ async fn a_connection_not_declared_or_a_bad_prefix_is_an_error() {
         .unwrap_err();
     assert_eq!(
         clash,
-        "--env: parameters `HOST` and `host` would both be `DB_HOST`; read them with --json"
+        "connection `clash` as DB: `host` would be a variable another value has: read the \
+         values with `schedr task-ctx connection NAME --json` (render_failed)"
     );
     let odd = connection_against_agent(connection("odd", Some("DB")))
         .await
         .unwrap_err();
     assert!(
-        odd.starts_with("--env: parameter `région` can't be"),
+        odd.starts_with("connection `odd` as DB: `région` can't be a variable's name"),
         "{odd}"
     );
     // Both still read as JSON.

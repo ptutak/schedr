@@ -2,7 +2,7 @@
 
 from typing import cast
 
-from schedr import Dag, secrets, task
+from schedr import CommandOperator, Dag, secrets, task
 from schedr.connections import HTTP, SQL, SSH, Generic, Mongo
 
 # Usually in a module of its own (`connections.py`), imported by the DAGs using them. The
@@ -42,3 +42,10 @@ def bucket_names() -> list[str]:
 
 with Dag("typed_connections"):
     bucket_names()
+    # A command gets each connection as variables (and the files its tools read), by
+    # prefix: `{"DB": warehouse}` would give `psql "$DB_URL"` its URL and password file.
+    CommandOperator(
+        "list_buckets",
+        ["sh", "-c", 'echo "$REGION_NAME: $REGION_BUCKETS"'],
+        connections={"REGION": region},
+    )

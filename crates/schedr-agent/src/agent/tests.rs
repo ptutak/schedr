@@ -167,6 +167,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
             fork_server: None,
         },
@@ -576,6 +577,7 @@ async fn against_master(
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
             fork_server: None,
         },
@@ -1048,6 +1050,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
             fork_server: None,
         },
@@ -1258,6 +1261,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: settings_dir.path().join("logs"),
+            connection_dir: settings_dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
             fork_server: None,
         },
@@ -1304,6 +1308,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             agent_env: BTreeMap::new(),
             pass_env: vec![],
             log_dir: dir.path().join("logs"),
+            connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
             fork_server: None,
         },
@@ -1747,6 +1752,7 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         agent_env: std::collections::BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
         pass_env: vec![],
         log_dir: dir.path().join("logs"),
+        connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
         fork_server: None,
     };
@@ -1833,4 +1839,155 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         );
         assert_eq!(finished.status, i32::from(status), "{finished:?}");
     }
+}
+
+/// A command given the connection `db` (`url`, `password`) as `DB`, with `env`, run by a
+/// real executor: what it finished with, and what it wrote in `out`.
+async fn command_with_connection(
+    script: &str,
+    env: serde_json::Value,
+) -> (pb::Finished, String, TempDir) {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("etl")).unwrap();
+    std::fs::write(dir.path().join("etl/sync.py"), "").unwrap();
+    let setup = WorkerSetup {
+        roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
+        parse_only: BTreeMap::new(),
+        python: PathBuf::from("/usr/bin/python3"),
+        agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
+        pass_env: vec![],
+        log_dir: dir.path().join("logs"),
+        connection_dir: dir.path().join("connections"),
+        memory: crate::memory::MemoryWatch::default(),
+        fork_server: None,
+    };
+    let executor = ProcessExecutor {
+        setup: setup.clone(),
+        parse_file_timeout: Duration::from_secs(5),
+        metrics: AgentMetrics::default(),
+        drain_terminate_period: Duration::from_secs(1),
+        forks: None,
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
+    };
+    let task = json!({
+        "id": "load",
+        "kind": "command",
+        "command": {"argv": [[{"text": "sh"}], [{"text": "-c"}], [{"text": script}]]},
+        "env": env,
+        "connection_env": {"DB": "db"},
+        "connections": ["db"],
+        "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": 20_000,
+                     "queue": "default", "max_output_size": 1024, "preload": true,
+                     "fresh_process": false},
+        "output_type": {"type": "process_result"},
+    });
+    let connections = json!({"connections": {"db": {"name": "db", "type": "sql", "params": {
+        "url": {"literal": "postgresql://etl@db.example.com/etl"},
+        "password": {"literal": "p:w"},
+    }}}});
+    let assign = pb::AssignTask {
+        attempt_id: "a1".to_owned(),
+        task_id: "load".to_owned(),
+        map_index: -1,
+        try_number: 1,
+        run: Some(pb::RunInfo {
+            params_json: Vec::new(),
+            run_id: "r1".to_owned(),
+            kind: "manual".to_owned(),
+            planned_for: Some(prost_types::Timestamp {
+                seconds: 1_792_036_800,
+                nanos: 0,
+            }),
+            since: Some(prost_types::Timestamp {
+                seconds: 1_791_950_400,
+                nanos: 0,
+            }),
+            dag_id: "sync".to_owned(),
+        }),
+        task_json: serde_json::to_vec(&task).unwrap(),
+        dag_file: Some(pb::DagFileRef {
+            root: "etl".to_owned(),
+            path: "sync.py".to_owned(),
+        }),
+        expected_code_hash: String::new(),
+        inputs_json: b"{}".to_vec(),
+        inputs_external: false,
+        cancel_grace_ms: 1_000,
+        memory_budget_bytes: 0,
+        setrlimit: false,
+        upstream_outcomes: std::collections::HashMap::new(),
+        connections_json: serde_json::to_vec(&connections).unwrap(),
+    };
+    let mut spec = crate::attempt::AttemptSpec::from_assign(&assign, None).unwrap();
+    spec.stand_in_secrets();
+    let plan = crate::attempt::plan(&spec, &setup).unwrap();
+    let (_sender, stops) = Stops::new();
+    let finished = executor.run(spec, plan, stops, Box::new(|_, _| {})).await;
+    let out = std::fs::read_to_string(dir.path().join("etl/out")).unwrap_or_default();
+    (finished, out, dir)
+}
+
+#[tokio::test]
+async fn a_command_gets_a_connection_as_variables_and_files_removed_after_it() {
+    let (finished, out, dir) = command_with_connection(
+        r#"{ printf '%s\n' "$DB_URL" "$DB_PASSWORD" "$KEPT"; cat "$DB_PGPASSFILE";
+            stat -c %a "$(dirname "$DB_PGPASSFILE")" "$DB_PGPASSFILE"; } > out"#,
+        json!({"KEPT": [{"text": "yes"}]}),
+    )
+    .await;
+    assert_eq!(
+        finished.status,
+        i32::from(pb::AttemptStatus::Success),
+        "{finished:?}"
+    );
+    assert_eq!(
+        out,
+        format!(
+            "postgresql://etl@db.example.com/etl?sslmode=verify-full&sslrootcert=system&passfile=\
+         {}\np:w\nyes\n\
+         *:*:*:*:p\\:w\n700\n600\n",
+            schedr_model::Encoding::Url.apply(
+                &dir.path()
+                    .join("connections/a1/db/DB/pgpass")
+                    .to_string_lossy()
+            )
+        )
+    );
+    assert!(
+        !dir.path().join("connections/a1").exists(),
+        "the attempt's connection files are left"
+    );
+}
+
+#[tokio::test]
+async fn a_connections_variable_also_in_env_fails_the_attempt() {
+    let (finished, out, dir) =
+        command_with_connection("echo ran > out", json!({"DB_URL": [{"text": "mine"}]})).await;
+    assert_eq!(
+        finished.status,
+        i32::from(pb::AttemptStatus::Failed),
+        "{finished:?}"
+    );
+    assert_eq!(finished.error_kind, crate::attempt::RENDER_FAILED);
+    assert!(
+        String::from_utf8_lossy(&finished.error_summary_json)
+            .contains("`DB_URL` is in the task's `env=`"),
+        "{finished:?}"
+    );
+    assert_eq!(out, "", "the command ran");
+    assert!(!dir.path().join("connections/a1").exists());
+}
+
+#[tokio::test]
+async fn a_start_sweeps_connection_files_but_those_of_attempts_still_running() {
+    let dir = TempDir::new().unwrap();
+    for attempt in ["gone", "alive"] {
+        std::fs::create_dir_all(dir.path().join(attempt).join("DB")).unwrap();
+        std::fs::write(dir.path().join(attempt).join("DB/pgpass"), "pw").unwrap();
+    }
+    super::sweep_connection_files(dir.path(), &BTreeSet::from(["alive".to_owned()])).await;
+    assert!(!dir.path().join("gone").exists());
+    assert!(dir.path().join("alive/DB/pgpass").exists());
+    // No folder yet: nothing to sweep, nothing failing.
+    super::sweep_connection_files(&dir.path().join("none"), &BTreeSet::new()).await;
 }

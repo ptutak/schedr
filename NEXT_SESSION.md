@@ -4,6 +4,29 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-03, night): M4.7b2 committed; M4.7c next
+
+- **The user's standing instruction:** continue to the end of M4.7 (now M4.7b2, M4.7c, then
+  the demo M4.7d), each sub-step reviewed (Codex, then Grok security-only), its guide by Codex
+  on gpt-6.1-terra medium, `make check`, committed and pushed; stop only for the user's
+  decisions; **pause after M4.7d**. No history rewrite.
+- **M4.7b2 committed** (decisions 184, 190-197, 201): commands get connections as `PREFIX_*`
+  variables and tools' files in `/dev/shm/schedr-<uid>/<hash>/<worker>/<attempt>/...`
+  (`[worker] connection_dir`); MariaDB supported (`mariadb://`, an 11.8 container in the
+  integration tests and CI). Codex's review (10 findings) and Grok's (5) all fixed: see
+  PROJECT.md's "Built (M4.7b2" entry. The docs say `mysql --defaults-file` and `curl -q -K`.
+- **Next: M4.7c** (decisions 174, 193, 198-200): `schedr connections check` (agent-side
+  rendering) and `test` (a connection opened by a Python runner one-off on a worker, no slot,
+  one at a time per worker, 60 s default with `--timeout`; without a check, open and close;
+  a Generic renders its values). Planned: `Command::CheckConnections` /
+  `TestConnection` in `crates/schedr-model/src/commands.rs`, stored in `commands` (`result`
+  JSONB), the master sending a new MasterMessage to a chosen worker like `AssignParse`, the
+  CLI polling `GET /api/v1/commands/{id}`.
+- **Then M4.7d** (decisions 202-205): the podman-compose demo (`make demo`): Postgres,
+  MySQL, MariaDB, Mongo, SSH, go-httpbin (pinned); dev + prod standalones (one DAG folder,
+  separate secrets) without UI, one `schedr ui`; a demo image FROM the base with the client
+  tools.
+
 ## State (2026-11-03, evening): M4.7b1 committed; M4.7b2 next
 
 - **The user's standing instruction:** continue until the end of M4.7, each sub-step

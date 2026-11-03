@@ -60,7 +60,14 @@ def test_a_typed_connection_is_recorded_with_its_type_and_every_value(tmp_path: 
             lambda: SSH("a", host="h", user="u", known_hosts="k", insecure_skip_host_check=True),
             "not both",
         ),
-        (lambda: SQL("a", url="sqlite:///x.db"), r"postgresql:// or mysql://, not sqlite://"),
+        (
+            lambda: SQL("a", url="sqlite:///x.db"),
+            r"postgresql://, mysql:// or mariadb://, not sqlite://",
+        ),
+        (
+            lambda: SQL("a", url="mariadb://u@h/x?ssl_ca=/x"),
+            "a mariadb:// URL takes only `sslmode`, not `ssl_ca`",
+        ),
         (
             lambda: SQL("a", url=t"oracle://u:{secrets['db']['password']}@h/x"),
             "not oracle://",
@@ -147,6 +154,8 @@ def test_sql_takes_libpqs_sslmode_for_mysql_too() -> None:
         SQL("a", url=f"mysql://u@h/x?sslmode={mode}")
         SQL("b", url=f"postgresql://u@h/x?sslmode={mode}&application_name=etl")
     SQL("c", url=t"mysql://u@h/x?sslmode={secrets['db']['mode']}")
+    # MariaDB speaks MySQL's protocol (decision 196).
+    SQL("d", url="mariadb://u@h/x?sslmode=require")
 
 
 def test_known_hosts_takes_comments_and_refuses_what_it_cant_read() -> None:

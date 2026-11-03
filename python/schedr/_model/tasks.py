@@ -207,10 +207,13 @@ class CommandKind:
     Attributes:
         command: The command line.
         env: Extra environment variables for the process.
+        connection_env: Connections given as variables and files, by prefix: the
+            connection's name (``{"DB": "warehouse"}`` gives ``DB_URL``, ...).
     """
 
     command: CommandLine
     env: Mapping[str, Template] = field(default_factory=dict)
+    connection_env: Mapping[str, str] = field(default_factory=dict)
 
     def references(self) -> list[Reference]:
         """The command line's and the environment's references.
@@ -225,11 +228,16 @@ class CommandKind:
         """The kind's fields as DAG JSON.
 
         Returns:
-            ``{"kind": "command", "command": ..., "env": {...}}`` (``env`` only if not empty).
+            ``{"kind": "command", "command": ..., "env": {...}, "connection_env": {...}}``
+            (``env`` and ``connection_env`` only if not empty).
         """
         result: dict[str, Any] = {"kind": "command", "command": self.command.to_json()}
         if self.env:
             result["env"] = {key: self.env[key].to_json() for key in sorted(self.env)}
+        if self.connection_env:
+            result["connection_env"] = {
+                key: self.connection_env[key] for key in sorted(self.connection_env)
+            }
         return result
 
 

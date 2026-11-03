@@ -670,6 +670,12 @@ pub struct WorkerSection {
     /// (else `~/.local/share/schedr`) when not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<PathBuf>,
+    /// Where commands' connection files go while their attempts run (`.pgpass`, SSH keys:
+    /// secrets as files their tools read), in a folder per worker; the worker's user's own,
+    /// mode 0700, or the worker refuses to start. In memory when not set: under `/dev/shm`
+    /// where it exists, else `connections/` in `data_dir`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_dir: Option<PathBuf>,
     /// Agent environment variables passed to tasks besides the allow-list.
     pub pass_env: Vec<String>,
     /// The master's gRPC URL, e.g. `https://schedr-master:8070` (`http://` with `[tls] mode =
@@ -773,6 +779,7 @@ impl Default for WorkerSection {
             slots: 2,
             queues: Vec::new(),
             data_dir: None,
+            connection_dir: None,
             pass_env: Vec::new(),
             termination_grace_period: Duration::from_secs(30),
             drain_terminate_period: Duration::from_secs(3),

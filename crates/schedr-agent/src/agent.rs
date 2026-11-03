@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
+use schedr_model::TaskKind;
 use schedr_model::beat::Beat;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
 use schedr_proto::PROTOCOL_VERSION;
@@ -228,6 +229,32 @@ impl Executor for ProcessExecutor {
 
     async fn run(
         &self,
+        spec: AttemptSpec,
+        plan: Plan,
+        stop: Stops,
+        spawned: Spawned,
+    ) -> pb::Finished {
+        let connection_dir = self.setup.connection_dir.join(&spec.attempt_id);
+        // Boxed: the attempt's future is large, and every caller would hold it.
+        let finished = Box::pin(self.run_attempt(spec, plan, stop, spawned)).await;
+        // Its connections' files go with it (decision 190): whichever way it ended.
+        remove_connection_files(&connection_dir).await;
+        finished
+    }
+
+    async fn parse(
+        &self,
+        root: String,
+        dir: PathBuf,
+        files: Vec<String>,
+    ) -> Result<Vec<ParsedFile>, String> {
+        self.parse_files(root, dir, files).await
+    }
+}
+
+impl ProcessExecutor {
+    async fn run_attempt(
+        &self,
         mut spec: AttemptSpec,
         mut plan: Plan,
         stop: Stops,
@@ -259,17 +286,6 @@ impl Executor for ProcessExecutor {
         finished
     }
 
-    async fn parse(
-        &self,
-        root: String,
-        dir: PathBuf,
-        files: Vec<String>,
-    ) -> Result<Vec<ParsedFile>, String> {
-        self.parse_files(root, dir, files).await
-    }
-}
-
-impl ProcessExecutor {
     /// Fetches the secrets the attempt needs, then plans it again with their values (it was
     /// planned with stand-ins). A failure ends it: nothing runs with a missing secret.
     async fn fetch_secrets(
@@ -288,7 +304,8 @@ impl ProcessExecutor {
         )
         .await
         .map_err(|e| fail(e.kind(), &e.to_string()))?
-        .with_connections(Arc::clone(&spec.connections), spec.task.connections.clone());
+        .with_connections(Arc::clone(&spec.connections), spec.task.connections.clone())
+        .with_connection_dir(self.setup.connection_dir.join(&spec.attempt_id));
         secrets
             .open_declared()
             .await
@@ -297,6 +314,11 @@ impl ProcessExecutor {
             // Nothing to fetch or mask; kept to remember a read refused as undeclared, the
             // attempt's error kind if it then fails (decision 168).
             return Ok(Arc::new(secrets));
+        }
+        if let TaskKind::Command { connection_env, .. } = &spec.task.kind {
+            spec.connection_env = command_connections(&secrets, connection_env)
+                .await
+                .map_err(|(kind, message)| fail(kind, &message))?;
         }
         spec.secrets = secrets.fetched();
         spec.mask = Mask(Some(Arc::clone(&secrets.mask)));
@@ -512,6 +534,65 @@ pub struct Agent<E> {
     /// When the agent's event loop last turned (the worker's liveness).
     beat: Beat,
     metrics: AgentMetrics,
+}
+
+/// A command's connections given as variables (`connections={"DB": warehouse}`, decision
+/// 184): their files written, their variables merged; two giving one variable are refused.
+async fn command_connections(
+    secrets: &AttemptSecrets,
+    given: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, (&'static str, String)> {
+    let mut variables: BTreeMap<String, String> = BTreeMap::new();
+    let mut from: BTreeMap<String, &str> = BTreeMap::new();
+    for (prefix, name) in given {
+        let more = secrets
+            .connection_env(name, prefix)
+            .await
+            .map_err(|e| (e.kind(), e.to_string()))?;
+        for (variable, value) in more {
+            if let Some(other) = from.insert(variable.clone(), prefix) {
+                return Err((
+                    crate::attempt::RENDER_FAILED,
+                    format!(
+                        "`{variable}` is a variable of the connections given as {other} and as \
+                         {prefix}: use prefixes that don't start one another"
+                    ),
+                ));
+            }
+            variables.insert(variable, value);
+        }
+    }
+    Ok(variables)
+}
+
+/// Removes an attempt's connection files; a failure is logged (the next start sweeps them).
+async fn remove_connection_files(dir: &Path) {
+    match tokio::fs::remove_dir_all(dir).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(dir = %dir.display(), %error, "can't remove an attempt's connection files");
+        }
+    }
+}
+
+/// Removes the connection files the previous agent's attempts left (decision 190): all
+/// but those of the processes it couldn't stop.
+async fn sweep_connection_files(dir: &Path, alive: &std::collections::BTreeSet<String>) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            tracing::warn!(dir = %dir.display(), %error, "can't read the connection files' folder");
+            return;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !alive.contains(&name) {
+            remove_connection_files(&entry.path()).await;
+        }
+    }
 }
 
 impl<E: Executor> Agent<E> {
@@ -735,7 +816,7 @@ impl<E: Executor> Agent<E> {
                 JournalRecord::Running(process) => {
                     orphans.spawn(async move {
                         let Some(identity) = process else {
-                            return Some(attempt_id);
+                            return Ok(attempt_id);
                         };
                         match stop_orphan(identity, ORPHAN_GRACE).await {
                             Ok(Orphan::Gone) => {}
@@ -753,19 +834,25 @@ impl<E: Executor> Agent<E> {
                                     %error,
                                     "can't stop a task process left by the previous agent"
                                 );
-                                return None;
+                                return Err(attempt_id);
                             }
                         }
-                        Some(attempt_id)
+                        Ok(attempt_id)
                     });
                 }
             }
         }
+        let mut alive = std::collections::BTreeSet::new();
         while let Some(stopped) = orphans.join_next().await {
-            if let Ok(Some(attempt_id)) = stopped {
-                self.forget(&attempt_id).await;
+            match stopped {
+                Ok(Ok(attempt_id)) => self.forget(&attempt_id).await,
+                Ok(Err(attempt_id)) => {
+                    alive.insert(attempt_id);
+                }
+                Err(_) => {}
             }
         }
+        sweep_connection_files(&self.settings.setup.connection_dir, &alive).await;
     }
 
     /// Records `record` for an attempt in the journal.

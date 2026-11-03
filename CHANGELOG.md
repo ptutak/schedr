@@ -7,6 +7,17 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Commands get connections as variables and files** (M4.7b2, decisions 184, 190-197):
+  `CommandOperator(connections={"DB": warehouse})` gives `DB_*` variables and writes the
+  files each type's tools read in a folder of the attempt's own (0700, in memory under
+  `/dev/shm` where the machine has it, else the data directory, unless `[worker]
+  connection_dir` says otherwise; removed when it ends): curl's `-K` config, an SSH config (`ssh -F "$DB_SSH_CONFIG" target`) with its key
+  and `known_hosts`, Postgres's `.pgpass` named in `DB_URL` (`psql "$DB_URL"`), one option
+  file for MySQL's and MariaDB's clients (`mysql --defaults-file="$DB_MYSQL_CNF"`),
+  Mongo's database tools' file (`mongodump --config "$DB_TOOLS_CONFIG"`), and `DB_JSON` with
+  every value. A URL variable never holds a password; the TLS defaults are Python's.
+  `schedr task-ctx connection NAME --env PREFIX` now prints these same variables, the files
+  written. **MariaDB** is supported (decision 196): `SQL` takes `mariadb://`.
 - **Built-in connection types** (M4.7b1, decisions 174, 183): `HTTP`, `SSH`, `Mongo`, `SQL`
   (Postgres, MySQL) and `Generic` in `schedr.connections`, named by their first argument,
   giving `httpx.Client`, a paramiko `SSHClient`, a pymongo `Database`, a DB-API connection or

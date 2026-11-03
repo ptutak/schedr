@@ -121,72 +121,39 @@ pub fn run_task_ctx_connection(
         name, env: prefix, ..
     } = command;
     if let Some(prefix) = prefix {
-        check_prefix(prefix)?;
+        schedr_model::connection::check_prefix(prefix).map_err(|e| format!("--env {e}"))?;
     }
     let mut stream = connect(env, Ctx::Task)?;
-    let request = CtxRequest::ConnectionGet { name: name.clone() };
-    let values = match call(&mut stream, version, &request)? {
-        CtxAnswer::Connection { values } => Value::Object(values.into_iter().collect()),
+    let request = match prefix {
+        None => CtxRequest::ConnectionGet { name: name.clone() },
+        Some(prefix) => CtxRequest::ConnectionEnvGet {
+            name: name.clone(),
+            prefix: prefix.clone(),
+        },
+    };
+    let text = match call(&mut stream, version, &request)? {
+        CtxAnswer::Connection { values } => {
+            let shown = schedr_model::params::shown(&Value::Object(values.into_iter().collect()));
+            format!("{shown}\n")
+        }
+        CtxAnswer::ConnectionEnv { variables } => exports(&variables),
         CtxAnswer::ConnectionFailed { kind, reason } => return Err(format!("{reason} ({kind})")),
         CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => return Err(reason),
         _ => return Err("the agent answered with something else than the connection".to_owned()),
-    };
-    let shown = schedr_model::params::shown(&values);
-    let text = match prefix {
-        None => format!("{shown}\n"),
-        Some(prefix) => exports(prefix, &shown)?,
     };
     out.write_all(text.as_bytes())
         .map_err(|e| format!("can't write output: {e}"))
 }
 
-/// A `--env` prefix: the start of an environment variable's name (`MONGO`, `DB_1`).
-fn check_prefix(prefix: &str) -> Result<(), String> {
-    let mut chars = prefix.chars();
-    let starts = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-    if starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        Ok(())
-    } else {
-        Err(format!(
-            "--env `{prefix}`: a prefix is letters, digits and `_`, not starting with a digit"
-        ))
-    }
-}
-
-/// `export PREFIX_PARAM='value'` lines, one per parameter, in order: text as it is, anything
-/// else as JSON, single-quoted for the shell (a `'` written `'\''`).
-///
-/// # Errors
-///
-/// A parameter whose name isn't one a shell takes (`région`), or two that become one
-/// variable (`host` and `HOST`).
-fn exports(prefix: &str, values: &Value) -> Result<String, String> {
+/// `export NAME='value'` lines, one per variable, in order, single-quoted for the shell (a
+/// `'` written `'\''`): the agent named them, its files written already.
+fn exports(variables: &BTreeMap<String, String>) -> String {
     let mut lines = String::new();
-    let mut named: BTreeMap<String, &str> = BTreeMap::new();
-    for (param, value) in values.as_object().into_iter().flatten() {
-        if !param.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(format!(
-                "--env: parameter `{param}` can't be a shell variable's name (letters, digits \
-                 and `_` only); read it with --json"
-            ));
-        }
-        let variable = format!("{prefix}_{}", param.to_ascii_uppercase());
-        if let Some(other) = named.insert(variable.clone(), param) {
-            return Err(format!(
-                "--env: parameters `{other}` and `{param}` would both be `{variable}`; read them \
-                 with --json"
-            ));
-        }
-        let text = match value {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
+    for (variable, text) in variables {
         let quoted = text.replace('\'', "'\\''");
         let _ = writeln!(lines, "export {variable}='{quoted}'");
     }
-    Ok(lines)
+    lines
 }
 
 /// The values an answer holds, as printed: params in the JSON form `--params` takes.
@@ -200,6 +167,7 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         CtxAnswer::Secret { .. }
         | CtxAnswer::SecretFailed { .. }
         | CtxAnswer::Connection { .. }
+        | CtxAnswer::ConnectionEnv { .. }
         | CtxAnswer::ConnectionFailed { .. } => {
             Err("the agent answered with a secret to another request".to_owned())
         }
@@ -334,7 +302,9 @@ fn call(
     match answer {
         CtxAnswer::Welcome => {}
         CtxAnswer::Refused { reason } | CtxAnswer::Error { reason } => return Err(reason),
-        CtxAnswer::Secret { .. } | CtxAnswer::Connection { .. } => {
+        CtxAnswer::Secret { .. }
+        | CtxAnswer::Connection { .. }
+        | CtxAnswer::ConnectionEnv { .. } => {
             return Err("the agent answered hello with a secret".to_owned());
         }
         other => return Err(format!("the agent answered hello with {other:?}")),

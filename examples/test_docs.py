@@ -67,6 +67,8 @@ def test_doc_example_runs(path: Path) -> None:
             assert result.tasks["call_api"].output == "acme: a key of 15 characters, a token of 16"
         if path.name == "typed_connections.py":
             assert result.tasks["bucket_names"].output == ["eu-west/raw", "eu-west/clean"]
+            listed = result.tasks["list_buckets"].output
+            assert listed.stdout == 'eu-west: ["raw","clean"]\n'  # type: ignore[union-attr]
         if path.name == "connections.py":
             assert result.tasks["fetch_orders"].output == (
                 "GET https://api.example.com/orders with a token of 16 characters"

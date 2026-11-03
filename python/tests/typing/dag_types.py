@@ -334,3 +334,12 @@ def typed_clients() -> int:
     with warehouse_db() as db:
         db.cursor().execute("SELECT 1")
     return status + len(wrong)
+
+
+# A command gets connections as variables by prefix: functions, typed ones, or names.
+CommandOperator(
+    "dump",
+    ["sh", "-c", 'psql "$DB_URL"'],
+    connections={"DB": warehouse_db, "API": billing, "ORDERS": orders_api, "W": "warehouse"},
+)
+CommandOperator("bad", ["true"], connections={"DB": 3})  # type: ignore[dict-item]  # pyright: ignore[reportArgumentType]

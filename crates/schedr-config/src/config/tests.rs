@@ -230,7 +230,7 @@ fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expec
 }
 
 #[test]
-fn master_webserver_and_worker_defaults() {
+fn master_and_webserver_defaults() {
     let config = Config::default();
     assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(60));
     assert_eq!(
@@ -296,6 +296,11 @@ fn master_webserver_and_worker_defaults() {
     );
     assert_eq!(config.webserver.port, 8080);
     assert_eq!(config.webserver.auth.identity_header, None);
+}
+
+#[test]
+fn worker_and_tls_defaults() {
+    let config = Config::default();
     assert_eq!(
         config.worker,
         WorkerSection {
@@ -303,6 +308,7 @@ fn master_webserver_and_worker_defaults() {
             slots: 2,
             queues: vec![],
             data_dir: None,
+            connection_dir: None,
             pass_env: vec![],
             master_url: None,
             termination_grace_period: Duration::from_secs(30),

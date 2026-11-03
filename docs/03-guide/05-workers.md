@@ -43,6 +43,10 @@ For [built-in connections](../02-dags/14-connections.md#built-in-types), install
 libraries in the interpreter where tasks run: `schedr[http]`, `schedr[ssh]`,
 `schedr[mongo]`, `schedr[postgres]` and `schedr[mysql]`, as needed. A library is imported
 when its connection is opened; without it the attempt fails, naming the extra to install.
+For commands, install the tools the DAGs call in the worker image: `psql`, a MySQL or
+MariaDB client (`mysql` and the dump tools), MongoDB database tools and/or `mongosh`,
+`curl`, and `ssh`, as needed. schedr does not supply these clients. See
+[In a command](../02-dags/14-connections.md#in-a-command) for their use.
 The worker image also needs CA certificates: HTTP, SQL and Mongo use the system's CAs by
 default. Give a private CA as the connection's `ca_cert` (PEM text).
 
@@ -81,6 +85,27 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    (the master may have failed to store it) after one heartbeat interval, then ever less often
    (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's
    answer to its journal settles the result. `Finished` includes `usage` and `core_dumped` (below).
+
+### Commands' connection files
+
+By default the worker writes these files under
+`/dev/shm/schedr-<uid>/<hash of data dir>/<worker>/` when `/dev/shm` is a directory.
+Otherwise it uses `<data_dir>/connections/<worker>/`. Set `[worker] connection_dir` to
+choose the base directory; the worker ID is appended. The hash separates workers of the
+same user with different data directories. The fallback or a configured directory can be on
+disk, so mount memory-backed storage there if the files must stay in memory.
+
+Before starting, the worker creates the worker folder and its parent, and checks the whole
+path. Those last two must be real directories owned by the worker user, with no group or
+other permissions. Other directories must be owned by that user or root, and not writable by
+others (or by another group), unless sticky; symlinks there must be root-owned. An unsafe
+path stops startup, naming the path and reason, with `connection files (secrets) can't go
+below it` and advice to remove it or set `[worker] connection_dir`.
+
+Each attempt gets its own folder, with connection and prefix folders beneath it (0700;
+files 0600). The worker removes it when the attempt ends; a removal failure is logged. On
+restart it sweeps folders left by earlier attempts, except those of processes it could not
+stop. See [Secret storage](13-secrets.md) for what the files hold.
 
 ### A command's context channel
 

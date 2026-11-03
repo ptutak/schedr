@@ -211,6 +211,9 @@ pub async fn run(
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
     let _lock = lock_data_dir(&setup.data_dir)?;
     let _journal_lock = lock_journal(&setup.agent)?;
+    // After the lock: a second standalone on the data directory stops before touching it.
+    schedr_agent::connection_env::prepare(&setup.agent.setup.connection_dir)
+        .map_err(AppError::BadArgument)?;
     let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
     let auth = role_auth(
         "webserver",

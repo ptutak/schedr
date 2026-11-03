@@ -34,6 +34,12 @@ every key.
 - **Probes** go to the ops port: liveness on `/healthz` for every role, readiness on `/readyz`
   for the master, the webserver and `schedr ui` (ready once it listens). Workers need no
   readiness probe: nothing connects to them through a Service.
+- **Connection files:** commands write these under `/dev/shm` by default. Docker and
+  Podman typically give a container 64 MB there; size it for concurrent attempts and their
+  connection files. In Kubernetes, mount an `emptyDir` with `medium: Memory` at `/dev/shm`
+  or at a base chosen by `[worker] connection_dir`, and size it and the pod's memory for
+  those files. The worker checks ownership and permissions on the path at startup; see
+  [Commands' connection files](05-workers.md#commands-connection-files).
 - **Memory:** a worker pod's memory limit is split between its slots (see
   [Workers](05-workers.md#memory)); size the pod for its slots. The chart turns the fork
   server on by default, and with its preload list the worker keeps two long-lived fork

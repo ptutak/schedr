@@ -33,6 +33,13 @@ certificate and host name; Mongo uses verified TLS by default. SSH trusts only t
 `known_hosts`, unless its definition explicitly skips the host check. These settings are
 separate from schedr's `[tls] mode` for traffic between its roles.
 
+For commands, the MySQL/MariaDB option file uses `loose-ssl-mode` in `[client]` for
+MySQL's TLS and `[client-mariadb]` for MariaDB's; MariaDB skips the former with a warning.
+It sets `protocol = TCP`, including for `localhost`. MariaDB 11.4+'s self-made server
+certificate passes `verify-*` only with MariaDB's own client, never Python's or MySQL's:
+give the server a certificate of your own, or use `?sslmode=require`. The clients differ in some TLS modes; see
+[In a command](../02-dags/14-connections.md#in-a-command).
+
 In Istio with `REGISTRY_ONLY` egress, an external database needs a `ServiceEntry` in the
 mesh registry. See [In a service mesh](../02-dags/14-connections.md#built-in-types) for
 the database TLS settings inside and outside the mesh.

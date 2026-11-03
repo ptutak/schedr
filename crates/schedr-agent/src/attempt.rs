@@ -71,6 +71,9 @@ pub struct AttemptSpec {
     pub code_dir: Option<PathBuf>,
     /// Its root's connections (decision 174): rendered when the task opens one.
     pub connections: Arc<Registry>,
+    /// A command's connections given as variables (`connections={"DB": warehouse}`, decision
+    /// 184), by variable (`DB_URL`). Empty until its secrets are fetched.
+    pub connection_env: BTreeMap<String, String>,
 }
 
 /// Why an assignment can't be read.
@@ -155,6 +158,7 @@ impl AttemptSpec {
                 serde_json::from_slice(&assign.connections_json)
                     .map_err(|e| invalid("connections", &e))?
             }),
+            connection_env: BTreeMap::new(),
         })
     }
 
@@ -214,6 +218,9 @@ pub struct WorkerSetup {
     pub pass_env: Vec<String>,
     /// Where task log files go.
     pub log_dir: PathBuf,
+    /// Where a command's connection files go (decision 184): a folder per attempt, mode
+    /// 0700, removed when it ends.
+    pub connection_dir: PathBuf,
     /// How the memory watchdog watches tasks and parse runners.
     pub memory: crate::memory::MemoryWatch,
     /// The DAG interpreter's fork servers, when it has `fork_server = true`.
@@ -359,7 +366,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                 }),
             })
         }
-        TaskKind::Command { command, env } => {
+        TaskKind::Command { command, env, .. } => {
             let mut ctx = RenderContext::new(
                 &spec.run.dag_id,
                 &spec.run.run_id,
@@ -373,11 +380,12 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             ctx.secrets.clone_from(&spec.secrets);
             let (program, args) =
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
-            let task_env = env
+            let mut task_env = env
                 .iter()
                 .map(|(name, template)| Ok((name.clone(), render(template, &ctx)?)))
                 .collect::<Result<BTreeMap<_, _>, crate::render::RenderError>>()
                 .map_err(|e| failed(RENDER_FAILED, &e))?;
+            add_connection_env(&mut task_env, &spec.connection_env)?;
             let env = task_environment(&setup.agent_env, &setup.pass_env, &task_env, &vars)
                 .map_err(|e| failed(RENDER_FAILED, &e))?;
             Ok(Plan::Command(ProcessSpec {
@@ -525,6 +533,26 @@ const fn status_or_failed(status: AttemptStatus) -> AttemptStatus {
 
 fn summary(exception: &str, message: &str) -> Vec<u8> {
     ErrorSummary::json(exception, message).into_bytes()
+}
+
+/// A command's connections' variables added to its `env=`; one in both is refused.
+fn add_connection_env(
+    env: &mut BTreeMap<String, String>,
+    connection_env: &BTreeMap<String, String>,
+) -> Result<(), NotRun> {
+    for (name, value) in connection_env {
+        if env.contains_key(name) {
+            return Err(failed(
+                RENDER_FAILED,
+                &format!(
+                    "`{name}` is in the task's `env=` and is a variable of a connection it is \
+                     given: rename one"
+                ),
+            ));
+        }
+        env.insert(name.clone(), value.clone());
+    }
+    Ok(())
 }
 
 fn failed(kind: &str, error: &dyn std::fmt::Display) -> NotRun {

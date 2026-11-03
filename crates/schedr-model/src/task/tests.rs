@@ -79,6 +79,7 @@ fn command_and_empty_tasks_round_trip() {
         kind: TaskKind::Command {
             command: CommandLine::Argv(vec![Template::text("./notify.sh")]),
             env: BTreeMap::from([("TOKEN".to_owned(), Template::text("x"))]),
+            connection_env: std::collections::BTreeMap::new(),
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,
@@ -118,6 +119,7 @@ fn command_without_env_omits_it_and_python_without_arguments_defaults_them() {
     let kind = TaskKind::Command {
         command: CommandLine::Shell(Template::text("ls")),
         env: BTreeMap::new(),
+        connection_env: std::collections::BTreeMap::new(),
     };
     assert_eq!(
         serde_json::to_value(&kind).unwrap(),
@@ -186,6 +188,7 @@ fn references_of_a_command_task_come_from_its_command_line_and_env() {
                 "COUNT".to_owned(),
                 Template(vec![ref_part(output_ref("load"))]),
             )]),
+            connection_env: std::collections::BTreeMap::new(),
         },
         settings: TaskSettings::default(),
         output_type: TypeDesc::ProcessResult,

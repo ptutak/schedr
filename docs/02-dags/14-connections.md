@@ -38,8 +38,8 @@ The checks happen when the file loads, so a mistake is an import error, shown on
 | values over 1 MiB as JSON | they travel with each task that opens it: give bigger data to the task |
 | `SSH(...)` without `known_hosts` or `insecure_skip_host_check=True` | the host can't be trusted |
 | `HTTP(...)` with both `token` and `user` | one way to authenticate |
-| `SQL(url="sqlite://...")` | the URL is `postgresql://` or `mysql://` |
-| `SQL(url="mysql://...?ssl_ca=...")` | a `mysql://` URL takes only `sslmode` |
+| `SQL(url="sqlite://...")` | the URL is `postgresql://`, `mysql://` or `mariadb://` |
+| `SQL(url="mysql://...?ssl_ca=...")` | a `mysql://` or `mariadb://` URL takes only `sslmode` |
 | `SQL(url="postgresql://etl:pw@db/etl", password=...)` | a password is given once |
 | `HTTP(..., check_path="https://other.example/health")` | `check_path` is a path under `base_url`: the token goes nowhere else |
 
@@ -68,10 +68,105 @@ A task opens only what it declares, as it reads at run time only the secrets its
 declares. Opening another fails the attempt as `connection_denied`, even when the folder
 defines it.
 
-A command reads a connection's values with `schedr task-ctx connection NAME`, over the same
-channel as `schedr task-ctx secret get`. With `--env PREFIX` it prints them as `export` lines
-for the shell to `eval`, one per parameter (`PREFIX_` and the parameter's name in capitals),
-each value single-quoted:
+### In a command
+
+A command gets a connection as variables and files: `connections=` takes a dict, each key the
+prefix of that connection's variables.
+
+```python
+CommandOperator(
+    "export",
+    ["sh", "-c", 'psql "$DB_URL" -f export.sql'],
+    connections={"DB": warehouse},
+)
+```
+
+Before the command starts, the worker renders the connection (its secrets fetched and
+masked, as for Python), writes the files the connection's tools read into a folder of the
+attempt's own (mode 0700, each file 0600), and sets the variables: `DB_URL`, `DB_PGPASSFILE`,
+`DB_JSON`, ... The files are in memory, under `/dev/shm`, where the machine has it, else in
+the worker's data directory (`[worker] connection_dir` puts them elsewhere). The folder is removed when the attempt ends, however
+it ends; a worker that restarts removes what an attempt before it left.
+
+- **A password goes into its tool's file**, and into a variable for scripts (`DB_PASSWORD`),
+  masked in the log, in every form the tool's file writes it. A URL variable never holds
+  one, so `psql "$DB_URL"` puts no password on the command line, where anyone on the machine
+  could read it in the process list: one written in the URL (`postgresql://u:pw@db`,
+  `?password=`, `https://u:pw@api`) is taken out of it, and one the tool's file can't take
+  (`?sslpassword=`, MySQL's `?password=`) fails the attempt.
+- **TLS is verified as in Python:** `DB_URL` carries `sslmode=verify-full` unless the URL says
+  otherwise, Mongo's `tls=true`, SSH's config trusts only the connection's `known_hosts`.
+- **Only prefixed names:** `DB_URL`, never the tools' own (`PGHOST`, `MYSQL_PWD`), so two
+  connections of one type in a task never clash. A prefix is letters, digits and `_`, not
+  starting with a digit, and not `SCHEDR...`. A variable both in `env=` and given by a
+  connection fails the attempt (an `env=` name starting with a connection's prefix is refused
+  when the file loads).
+
+What each type gives (the prefix `DB`; `?` when the value is given):
+
+| Type | Variables | Use it as |
+|---|---|---|
+| `SQL`, Postgres | `DB_URL` (the user, `sslmode`, `sslrootcert`, and `passfile` naming the `.pgpass` file), `DB_USER`?, `DB_PASSWORD`?, `DB_PGPASSFILE`?, `DB_CA_FILE`? | `psql "$DB_URL"` (libpq reads the password file from the URL) |
+| `SQL`, MySQL or MariaDB | `DB_URL` (no password), `DB_HOST`, `DB_PORT`, `DB_USER`?, `DB_DATABASE`?, `DB_PASSWORD`?, `DB_MYSQL_CNF`, `DB_CA_FILE`? | `mysql --defaults-file="$DB_MYSQL_CNF"` (first on the command line; over TCP, `localhost` too), `mysqldump` and `mariadb-dump` too; not `--defaults-extra-file`, after which the clients read `~/.my.cnf`, whose options would win |
+| `Mongo` | `DB_URI` (the database in its path, `authSource`; no user or password; `tls=true` and `tlsCAFile` unless written), `DB_DATABASE`, `DB_AUTH_SOURCE`, `DB_USER`?, `DB_PASSWORD`?, `DB_TOOLS_CONFIG`, `DB_CA_FILE`? | `mongodump --config "$DB_TOOLS_CONFIG"` (and `mongorestore`, `mongoexport`, `mongoimport`); mongosh below |
+| `HTTP` | `DB_BASE_URL` (no user or password), `DB_TOKEN`? or `DB_USER`?/`DB_PASSWORD`?, `DB_CURL_CONFIG`, `DB_CA_FILE`?, `DB_CERT_FILE`?, `DB_KEY_FILE`? | `curl -q -K "$DB_CURL_CONFIG" "$DB_BASE_URL/orders"` (the token, headers, certificates and timeout in the config; `-q` first, or curl reads `~/.curlrc` too, which could turn off the TLS check or send the token through a proxy) |
+| `SSH` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_SSH_CONFIG`, `DB_KEY_FILE`?, `DB_KNOWN_HOSTS`, `DB_PASSWORD`?, `DB_KEY_PASSPHRASE`? | `ssh -F "$DB_SSH_CONFIG" target uptime`, `scp -F "$DB_SSH_CONFIG" file target:` |
+| `Generic`, a `@connection` | one per parameter, `DB_` and its name in capitals: text as it is, anything else as JSON | `"$DB_DSN"` |
+
+Every connection also gets `DB_JSON`, a file with all its values as one object of JSON, for
+`jq` or a program of your own. A parameter whose name can't be a variable's (`région`), or
+two that would be one (`host` and `HOST`), fails the attempt: read such a connection with
+`schedr task-ctx connection NAME --json` instead. A value curl's config or `.pgpass` can't
+hold (a line break in a header, a token or a Postgres password) fails it too.
+
+SSH's config has one host, `target`, with the connection's host, port, user, key and
+`known_hosts`, `StrictHostKeyChecking yes`, and `BatchMode yes` unless a password is given
+(a prompt would hang the task). With `insecure_skip_host_check=True` it takes any host key.
+
+**The MySQL option file serves both vendors' clients.** MySQL's client and MariaDB's read
+different TLS options, and MariaDB's refuses MySQL's `ssl-mode`. So the login and MySQL's TLS
+(written `loose-ssl-mode`, which MariaDB's client skips with one warning line) are in
+`[client]`, read by every program of both, and MariaDB's TLS is in `[client-mariadb]`, which
+only MariaDB's programs read:
+
+```ini
+[client]
+host = "db.example.com"
+port = 3306
+user = "etl"
+password = "..."
+loose-ssl-mode = VERIFY_IDENTITY
+ssl-capath = "/etc/ssl/certs"
+
+[client-mariadb]
+ssl
+ssl-verify-server-cert
+
+[mysql]
+database = "shop"
+```
+
+MariaDB's client has no "CA only" check and no "TLS if offered": `verify-ca` checks the name
+too, and `allow` and `prefer` require TLS.
+
+**mongosh reads no password from a file**, and `--password "$DB_PASSWORD"` would put it on
+the command line. Log in from the variables instead, on the database that holds the user
+(`DB_AUTH_SOURCE`: the URI's `authSource`, else the database in its path, else `admin`),
+then run your script in the same session, on the connection's database:
+
+```sh
+mongosh "$DB_URI" --quiet --norc \
+  --eval 'db.getSiblingDB(process.env.DB_AUTH_SOURCE).auth(process.env.DB_USER, process.env.DB_PASSWORD)' \
+  --file job.js
+```
+
+`DB_URI` names no user: with one and no password, mongosh would prompt for it and the task
+would hang.
+
+A command can also read a connection itself, over the same channel as `schedr task-ctx secret
+get`: `schedr task-ctx connection NAME --env PREFIX` writes the same files and prints the same
+variables as `export` lines for the shell to `eval`, each value single-quoted. The connection
+is declared in the list form:
 
 ```python
 CommandOperator(
@@ -79,7 +174,7 @@ CommandOperator(
     [
         "sh", "-c",
         'vars="$(schedr task-ctx connection warehouse --env DB)" && eval "$vars"'
-        ' && psql "$DB_DSN" -f export.sql',
+        ' && psql "$DB_URL" -f export.sql',
     ],
     connections=["warehouse"],
 )
@@ -89,8 +184,8 @@ Read it into a variable first, as above: `eval "$(...)"` alone succeeds when the
 (it evaluates nothing), and the command would go on without the values.
 
 Without `--env`, or with `--json`, it prints every value as one line of JSON
-(`{"dsn": "...", "pool": 3}`), for `jq` or a program of your own. The function doesn't run
-for a command: a command gets the values only.
+(`{"dsn": "...", "pool": 3}`), and writes no file. The function doesn't run for a command: a
+command gets the values only.
 
 ## Built-in types
 
@@ -107,7 +202,7 @@ gives its client. Its name is the first argument, as an operator's task ID is:
 | `HTTP` | `base_url`; `token` (a bearer token) or `user` and `password`; `headers`, `ca_cert`, `client_cert`, `client_key` (PEM text), `timeout`, `check_path` | an `httpx.Client` on `base_url` | a request to `check_path`, which must succeed; else any answer to `/` |
 | `SSH` | `host`, `user`, `port`; `private_key` (and its `passphrase`) or `password`; `known_hosts`; `timeout` | a connected paramiko `SSHClient` | connecting |
 | `Mongo` | `uri`, `database`; `user`, `password`; `ca_cert` (PEM text), `timeout` | a pymongo `Database` | `ping` |
-| `SQL` | `url` (`postgresql://` or `mysql://`, `?sslmode=...`); `user`, `password`; `ca_cert` (PEM text), `timeout` | a DB-API connection (psycopg 3, PyMySQL); the block's work committed when it ends, rolled back on an error | `SELECT 1` |
+| `SQL` | `url` (`postgresql://`, `mysql://` or `mariadb://`, `?sslmode=...`); `user`, `password`; `ca_cert` (PEM text), `timeout` | a DB-API connection (psycopg 3, PyMySQL); the block's work committed when it ends, rolled back on an error | `SELECT 1` |
 | `Generic` | keys of your own | a `dict` | none |
 
 Each client's library is an extra, installed where tasks run: `schedr[http]`,
@@ -143,7 +238,14 @@ written in the storage. A user or a password both in the URL and given apart is 
 `ca_cert` or the system's CAs; `verify-ca` checks the certificate only; `require` needs TLS,
 unchecked; `prefer` and `allow` use it when offered; `disable` never. A server without TLS
 (a local one) needs `?sslmode=disable`, which says so in the definition. A `mysql://` URL
-takes no other query key: PyMySQL would ignore it.
+takes no other query key, nor does a `mariadb://` one: PyMySQL would ignore it.
+
+**MariaDB** is reached as MySQL, through PyMySQL: `mariadb://` or `mysql://`, the same
+rules. MariaDB 11.4 and later serve TLS with a certificate they make in memory when none is
+configured; nothing but MariaDB's own client can check it, so the default `verify-full` fails
+with Python and with MySQL's client. Give the server a certificate of your own, or connect
+with `?sslmode=require` (encrypted, the certificate unchecked). Its `ed25519` login plugin
+isn't supported (PyMySQL needs PyNaCl for it): use `mysql_native_password`, its default.
 
 A MySQL server left with the certificate it makes itself (no certificate of your own
 configured) can't pass `verify-full`: that certificate names no host. Give it one that names

@@ -196,3 +196,27 @@ impl Registry {
         }))
     }
 }
+
+/// A connection's prefix in a command's `connections={"DB": ...}` (decision 184): the start
+/// of an environment variable's name, not schedr's own.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn check_prefix(prefix: &str) -> Result<(), String> {
+    let mut chars = prefix.chars();
+    let starts = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !starts || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(format!(
+            "`{prefix}`: a prefix is letters, digits and `_`, not starting with a digit"
+        ));
+    }
+    if prefix.to_ascii_uppercase().starts_with("SCHEDR") {
+        return Err(format!(
+            "`{prefix}`: prefixes starting with SCHEDR are schedr's own"
+        ));
+    }
+    Ok(())
+}

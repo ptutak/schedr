@@ -30,8 +30,10 @@ VAULT_IMAGE := docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8b
 # Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
 # under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
 # The typed connections' servers (decision 185): mysql:8.4.11, created 2026-10-19; mongo:8.0.32,
-# created 2026-10-02; linuxserver/openssh-server:10.3_p1-r1-ls239, created 2026-10-11.
+# created 2026-10-02; linuxserver/openssh-server:10.3_p1-r1-ls239, created 2026-10-11;
+# mariadb:11.8.9 (decision 196), created 2026-10-26.
 MYSQL_IMAGE := docker.io/library/mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+MARIADB_IMAGE := docker.io/library/mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
 MONGO_IMAGE := docker.io/library/mongo:8.0.32@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
 SSH_IMAGE := docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
@@ -110,16 +112,17 @@ test-python:     ## Run Python unit tests with coverage (fails below COVERAGE_MI
 
 test: test-rust test-python  ## Run all unit tests
 
-test-integration: ## Run integration tests (real processes, the binary; Postgres, Vault, MySQL, Mongo and an SSH server in containers)
+test-integration: ## Run integration tests (real processes, the binary; Postgres, Vault, MySQL, MariaDB, Mongo and an SSH server in containers)
 	@set -e; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)' --no-run; \
 	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
 	sync; \
 	name=schedr-test-pg-$$$$; vault=schedr-test-vault-$$$$; \
-	mysql=schedr-test-mysql-$$$$; mongo=schedr-test-mongo-$$$$; sshd=schedr-test-ssh-$$$$; \
+	mysql=schedr-test-mysql-$$$$; mariadb=schedr-test-mariadb-$$$$; \
+	mongo=schedr-test-mongo-$$$$; sshd=schedr-test-ssh-$$$$; \
 	keys=$$(mktemp -d); \
 	: "set before any container starts: a start failing leaves none behind"; \
-	trap '$(CONTAINER) rm -f '$$name' '$$vault' '$$mysql' '$$mongo' '$$sshd' >/dev/null 2>&1; rm -rf '$$keys EXIT; \
+	trap '$(CONTAINER) rm -f '$$name' '$$vault' '$$mysql' '$$mariadb' '$$mongo' '$$sshd' >/dev/null 2>&1; rm -rf '$$keys EXIT; \
 	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
 		$(POSTGRES_IMAGE) >/dev/null; \
 	vault_port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); \
@@ -128,6 +131,8 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 	ssh-keygen -q -t ed25519 -N '' -C schedr-test -f $$keys/id_ed25519; \
 	$(CONTAINER) run -d --rm --name $$mysql -e MYSQL_ROOT_PASSWORD=schedr -p 127.0.0.1::3306 \
 		$(MYSQL_IMAGE) >/dev/null; \
+	$(CONTAINER) run -d --rm --name $$mariadb -e MARIADB_ROOT_PASSWORD=schedr -p 127.0.0.1::3306 \
+		$(MARIADB_IMAGE) >/dev/null; \
 	$(CONTAINER) run -d --rm --name $$mongo -p 127.0.0.1::27017 $(MONGO_IMAGE) >/dev/null; \
 	$(CONTAINER) run -d --rm --name $$sshd -e USER_NAME=schedr \
 		-e PUBLIC_KEY="$$(cat $$keys/id_ed25519.pub)" -p 127.0.0.1::2222 $(SSH_IMAGE) >/dev/null; \
@@ -138,11 +143,14 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 	until curl -sf http://127.0.0.1:$$vault_port/v1/sys/health >/dev/null; do sleep 0.5; done; \
 	export SCHEDR_TEST_VAULT_URL=http://127.0.0.1:$$vault_port SCHEDR_TEST_VAULT_TOKEN=root; \
 	mysql_port=$$($(CONTAINER) port $$mysql 3306/tcp | head -1 | sed 's/.*://'); \
+	mariadb_port=$$($(CONTAINER) port $$mariadb 3306/tcp | head -1 | sed 's/.*://'); \
 	mongo_port=$$($(CONTAINER) port $$mongo 27017/tcp | head -1 | sed 's/.*://'); \
 	ssh_port=$$($(CONTAINER) port $$sshd 2222/tcp | head -1 | sed 's/.*://'); \
 	: "MySQL's first start runs a server without networking, then the real one: wait on TCP"; \
 	until $(CONTAINER) exec $$mysql mysqladmin ping --protocol=TCP -h 127.0.0.1 -uroot -pschedr \
 		--silent >/dev/null 2>&1; do sleep 1; done; \
+	until $(CONTAINER) exec $$mariadb mariadb-admin ping --protocol=TCP -h 127.0.0.1 -uroot \
+		-pschedr --silent >/dev/null 2>&1; do sleep 1; done; \
 	: "the CA of the certificate MySQL made itself, for the TLS tests"; \
 	$(CONTAINER) cp $$mysql:/var/lib/mysql/ca.pem $$keys/mysql-ca.pem; \
 	until $(CONTAINER) exec $$mongo mongosh --quiet --eval 'db.runCommand({ping: 1}).ok' \
@@ -151,6 +159,9 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 		&& [ -s $$keys/known_hosts ]; do sleep 0.5; done; \
 	export SCHEDR_TEST_MYSQL_URL=mysql://root:schedr@127.0.0.1:$$mysql_port/mysql; \
 	export SCHEDR_TEST_MYSQL_CA=$$keys/mysql-ca.pem; \
+	export SCHEDR_TEST_MARIADB_URL=mysql://root:schedr@127.0.0.1:$$mariadb_port/mysql; \
+	: "MariaDB's own client, run in its container, reading an option file from stdin"; \
+	export SCHEDR_TEST_MARIADB_EXEC="$(CONTAINER) exec -i $$mariadb"; \
 	export SCHEDR_TEST_MONGO_URI=mongodb://127.0.0.1:$$mongo_port/; \
 	export SCHEDR_TEST_SSH="127.0.0.1:$$ssh_port" SCHEDR_TEST_SSH_USER=schedr; \
 	export SCHEDR_TEST_SSH_KEY_FILE=$$keys/id_ed25519 SCHEDR_TEST_SSH_KNOWN_HOSTS=$$keys/known_hosts; \

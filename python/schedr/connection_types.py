@@ -528,7 +528,8 @@ class DbApiConnection(Protocol):
 
 
 _POSTGRES = ("postgresql", "postgres")
-_MYSQL = ("mysql",)
+# MariaDB speaks MySQL's protocol: the same driver (decision 196).
+_MYSQL = ("mysql", "mariadb")
 
 
 def _scheme(url: str) -> str:
@@ -560,7 +561,7 @@ def _sslmode(url: str, scheme: str, *, mode_written: bool = True) -> str:
     other = sorted(set(query) - {"sslmode"})
     if scheme in _MYSQL and other:
         raise ValueError(
-            f"a mysql:// URL takes only `sslmode`, not {', '.join(f'`{key}`' for key in other)}"
+            f"a {scheme}:// URL takes only `sslmode`, not {', '.join(f'`{key}`' for key in other)}"
         )
     return mode
 
@@ -671,7 +672,9 @@ def _sql(
     elif scheme in _MYSQL:
         connection = _mysql(url, user, password, ca_cert, timeout)
     else:
-        raise ValueError(f"an SQL connection's URL is postgresql:// or mysql://, not {scheme}://")
+        raise ValueError(
+            f"an SQL connection's URL is postgresql://, mysql:// or mariadb://, not {scheme}://"
+        )
     try:
         yield connection
         connection.commit()
@@ -728,9 +731,9 @@ class SQL(Connection[DbApiConnection]):
 
         Args:
             name: Its name, unique in the DAG folder.
-            url: ``postgresql://host:5432/db`` or ``mysql://...``, with ``?sslmode=...`` for
-                another TLS mode than ``verify-full``; a value a t-string fills in is
-                percent-encoded (decision 188), so a secret can't change the URL.
+            url: ``postgresql://host:5432/db``, ``mysql://...`` or ``mariadb://...``, with
+                ``?sslmode=...`` for another TLS mode than ``verify-full``; a value a t-string
+                fills in is percent-encoded (decision 188), so a secret can't change the URL.
             user: The user, if not in the URL.
             password: Its password, if not in the URL: given to the driver as it is, never
                 put in the URL.
@@ -745,7 +748,8 @@ class SQL(Connection[DbApiConnection]):
         scheme = _scheme_written(url)
         if scheme is not None and scheme not in _POSTGRES + _MYSQL:
             raise ValueError(
-                f"connection `{name}`: the URL is postgresql:// or mysql://, not {scheme}://"
+                f"connection `{name}`: the URL is postgresql://, mysql:// or mariadb://, not "
+                f"{scheme}://"
             )
         try:
             # A t-string's text, its values left out: they are encoded, so its structure
