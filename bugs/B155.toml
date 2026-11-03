@@ -1,0 +1,26 @@
+title = "A secret placeholder or a t-string passed to a Python task's typed parameter fails mypy and basedpyright"
+severity = "medium"
+probability = "likely"
+kind = "usability"
+summary = "`connect(secrets['etl/db#password'])` or `connect(t\"...{secrets['a#b']}...\")` for `def connect(url: str)` is a type error under `mypy --strict`, though it runs"
+found = 2026-11-03
+suspected = false
+details = '''
+- **Found:** 2026-11-03, by Claude writing the M4.6 guide: `examples/docs/secrets.py` with
+  `connect(t"postgresql://etl:{secrets['etl/db#password']}@db/etl")` for `def connect(url:
+  str)` failed `make lint`: `Argument 1 to "__call__" of "TaskFunction" has incompatible type
+  "Template"; expected "str"`. `secrets[...]` is typed `Secret`, so passing a placeholder
+  alone fails the same way. The run itself works (the agent fills the value in), and the
+  guide's type-checker page promises that DAG code needs nothing beyond `--strict`.
+- **Why:** `TaskFunction.__call__` takes `P.args` / `P.kwargs` of the function, so an
+  argument must have the parameter's type. `dag_ctx` references are typed `Any` for this
+  reason; `secrets[...]` returns `Secret`, and a t-string is `string.templatelib.Template`.
+- **A fix** (a typing decision for the user: the API's public types): e.g. `secrets[...]`
+  typed as the value it stands for (`str`, or `Any` as `dag_ctx` is), and a t-string allowed
+  where a `str` is taken (no plain ParamSpec does that: overloads or a checker plugin).
+  `task_ctx.secret(...)` returns `Any` (a key's `str` or a whole secret's `dict`), so
+  basedpyright's `reportAny` flags its use: the example casts it. Overloads by
+  `path#key` vs `path` can't be told apart by type either.
+  Until then the guide's example passes secrets to commands (`env=`) and reads them in
+  Python tasks with `task_ctx.secret(...)`.
+'''

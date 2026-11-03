@@ -10,13 +10,13 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   `reqwest`, `type = "vault"`, the chart's `secretStorage`, the test Vault in
   `make test-integration` and CI; decision 173; reviewed by Codex and Grok, both for
   security). **M4.6 is done.**
-- **Next:** the guide pages for M4.6 by Grok (a worker round): `[secret_storage]`, Vault,
-  `schedr secrets`, the chart's `secretStorage`; the trust boundary (decision 173: a task
-  can log in to Vault as its worker; teams kept apart run separate deployments, still in one
-  federated UI); `docs/03-guide/10-deployment.md:220` (a projected token is mounted with
-  Vault); `07-failures.md` naming `secret_not_found` / `secret_denied`; the stale lines in
-  `docs/02-dags/07-testing.md` (143/168/210) and `docs/03-guide/12-ui.md:616`. Then the
-  user's choice: M4.7 or the open bugs.
+- **The M4.6 guide** (written by Claude: the user said "do it yourself, save Grok"):
+  `docs/02-dags/13-secrets.md` (DAG authors), `docs/03-guide/13-secrets.md` (operators,
+  decision 173), `examples/docs/secrets.py` (tested with `--secret` values), the stale lines
+  fixed. **B155** logged: a secret or a t-string passed to a typed Python task parameter
+  fails mypy (and `task_ctx.secret` is `Any`): a typing decision for the user.
+- **Overnight (the user's plan, 2026-11-03):** B31 and B32 (reproduce, fix, Codex review),
+  then the **M4.7 design questions** written up for the user's morning answers.
 - The user said: no dynamic secrets planned; most probably no release before 1.0.0.
 - **Grok's weekly usage: 85%**, Codex's 80% (resets: Grok Friday 9:00).
 - **Rust coverage** stays just over the 85% floor: new code brings its tests.

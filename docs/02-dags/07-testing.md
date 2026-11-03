@@ -139,9 +139,10 @@ durations and tuples in `output` use the tags in
 checked the same way as `schedr runs trigger`
 ([Run parameters](12-params.md#giving-values-to-a-run)). `-p region=us` is text; `-p
 full:=true` and `-p 'limits:=[1,2]'` are JSON. The two forms can't be combined. The report
-does not print the parameters; `schedr runs show` does, for a run on a server. `--secret`
-and `--task` are accepted and then report that they are not implemented yet (milestone
-M4). Secrets and running one task are
+does not print the parameters; `schedr runs show` does, for a run on a server.
+`--secret 'path#key=value'` (repeatable) gives a secret's value, for every storage name
+([Secrets](13-secrets.md#testing)). `--task` is accepted and then reports that it is not
+implemented yet (milestone M4); running one task is
 [Testing DAGs](../_generated/05-design/08-testing-dags.md).
 
 ## One task, and its context
@@ -165,8 +166,10 @@ no process.
 | `params` | `None`. An instance of the DAG's params class (a dataclass or a Pydantic model). `dag_ctx.params(Cls)` then takes that class. A mapping is a `TypeError`. |
 
 Both times must be aware datetimes, and `since` must not be after `planned_for`.
-`secrets` raises `NotImplementedError` (milestone M4). `params` does not ask the master:
-the block reads the instance you give.
+`secrets` is a mapping of `"path#key"` to values for `task_ctx.secret(...)`; a `@task`
+function called in the block reads only what its `secrets=` declares
+([Secrets](13-secrets.md#testing)). `params` does not ask the master: the block reads the
+instance you give.
 
 ## `run_dag`
 
@@ -207,6 +210,7 @@ values (`{"region": "us"}`). It is sent as `--params`. An instance is encoded fi
 date goes as `"2026-10-01"` and the instance's own defaults are included. A mapping is
 sent as given, and the master fills the rest. The checks are the ones a trigger gets
 ([Run parameters](12-params.md#giving-values-to-a-run)). A refusal raises `RunDagError`
-with the master's reason. `RunResult` does not carry the parameters. `secrets`, `step` and
-`replace` raise `NotImplementedError` (milestone M4). Those, and `schedr dags test
---task`, are [Testing DAGs](../_generated/05-design/08-testing-dags.md).
+with the master's reason. `RunResult` does not carry the parameters. `secrets` gives
+secret values by `"path#key"`, passed as `--secret` and masked in the logs and outputs as on
+a worker. `step` and `replace` raise `NotImplementedError` (milestone M4). Those, and
+`schedr dags test --task`, are [Testing DAGs](../_generated/05-design/08-testing-dags.md).

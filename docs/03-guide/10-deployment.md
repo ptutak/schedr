@@ -217,8 +217,9 @@ no musl wheel, so no compiler ends up in your image.
   create the Secrets by hand;
 - **`serviceAccount`**: the chart creates one by default, holding no permissions;
   `create: false` with a `name` runs the pod as an existing one (e.g. the account a namespace
-  in the mesh already has). No token is mounted (`automountToken: false`): schedr never
-  calls the Kubernetes API;
+  in the mesh already has). Its token isn't mounted (`automountToken: false`): schedr never
+  calls the Kubernetes API. With a Vault secret storage on, a projected token of its own is
+  mounted for Vault's login only ([Secret storage](13-secrets.md#in-the-chart));
 - the pod's `fsGroup` is 0, so the volume is writable by the image's group, except on
   OpenShift (found by its API), which sets its own;
 - `terminationGracePeriodSeconds` (600) is passed to schedr as `[worker]

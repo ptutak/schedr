@@ -48,9 +48,8 @@ would fail, because a naive datetime cannot be stored
 `dag_ctx.params.region` is a reference in the DAG body, as `planned_for` is, and the value
 inside a task. `dag_ctx.params(ReportParams)` is the whole instance, typed by that class.
 Declaring the class, giving a run its values, and what a field may be are
-[Run parameters](12-params.md). Declared secrets are
-[Secret storage](../_generated/05-design/05-secret-storage.md); an `env` entry on a command
-is an ordinary environment variable ([Tasks and operators](02-tasks.md#commands)). A
+[Run parameters](12-params.md). Secrets, given to a task or declared and read inside it, are
+[Secrets](13-secrets.md); an `env` entry on a command is an ordinary environment variable ([Tasks and operators](02-tasks.md#commands)). A
 t-string fills a command before it starts. While the command runs, it reads the run with
 `schedr dag-ctx`, and a Python script it starts reads the same values with `schedr.script`
 ([Reading the run from a command](#reading-the-run-from-a-command)).
@@ -276,6 +275,6 @@ already has the descriptor.
 Unlike `dag_ctx`, it has no references: reading it in the DAG body, or anywhere outside a
 running task, raises `RuntimeError`. A test sets it with `task_context(task_id=...,
 try_number=..., map_index=...)` ([Testing a DAG](07-testing.md#one-task-and-its-context)).
-Secrets, connections, cleanup handles and resource values come later, including
-`schedr task-ctx`
+A declared secret is `task_ctx.secret(...)` ([Secrets](13-secrets.md)). Connections,
+cleanup handles and resource values come later, with more of `schedr task-ctx`
 ([In-task CLI](../_generated/05-design/03-architecture.md#in-task-cli-schedr-task-ctx-and-schedr-dag-ctx)).

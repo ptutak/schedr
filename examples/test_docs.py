@@ -18,6 +18,14 @@ VALIDATOR = Draft202012Validator(SCHEMA)
 DOC_EXAMPLES = sorted((HERE / "docs").glob("*.py"))
 QUOTED = [HERE / "sync.py", HERE / "daily_report.py", *DOC_EXAMPLES]
 FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
+# The values a docs DAG's secrets are given (`schedr dags test --secret`).
+SECRETS = {
+    "secrets.py": {
+        "etl/db#password": "s3cret-db-password",
+        "etl/api#token": "s3cret-api-token",
+        "tenants/acme#api_key": "s3cret-acme-key",
+    },
+}
 
 
 def _module_name(path: Path) -> str:
@@ -43,7 +51,7 @@ def test_example_dag_json_matches_the_schema(path: Path) -> None:
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
 def test_doc_example_runs(path: Path) -> None:
     for dag in _load(path):
-        result = run_dag(path, dag.id, for_=FOR)
+        result = run_dag(path, dag.id, for_=FOR, secrets=SECRETS.get(path.name))
         assert result.state == "success", dag.id
         ended = [
             (task.task_id, task.state)
@@ -51,3 +59,7 @@ def test_doc_example_runs(path: Path) -> None:
             if task.state not in {"success", "skipped"}
         ]
         assert ended == [], dag.id
+        if path.name == "secrets.py":
+            # Masked when stored: a secret's value never reaches the database.
+            assert result.tasks["connect"].output == "postgresql://etl:****@db.example.com/etl"
+            assert result.tasks["call_api"].output == "acme: a key of 15 characters, a token of 16"
