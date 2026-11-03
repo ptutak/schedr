@@ -114,7 +114,7 @@ jobs:
           --health-timeout 5s
           --health-retries 60
       mongo:
-        image: docker.io/library/mongo:8.0.32@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+        image: docker.io/library/mongo:7.0.45@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4
         ports:
           - 27017:27017
         options: >-

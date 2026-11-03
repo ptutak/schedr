@@ -29,12 +29,13 @@ POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da
 VAULT_IMAGE := docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
 # Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
 # under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
-# The typed connections' servers (decision 185): mysql:8.4.11, created 2026-10-19; mongo:8.0.32,
-# created 2026-10-02; linuxserver/openssh-server:10.3_p1-r1-ls239, created 2026-10-11;
+# The typed connections' servers (decision 185): mysql:8.4.11, created 2026-10-19; mongo:7.0.45,
+# created 2026-10-26 (8.x won't start on Linux 6.19+, as CI's runners have: SERVER-121912);
+# linuxserver/openssh-server:10.3_p1-r1-ls239, created 2026-10-11;
 # mariadb:11.8.9 (decision 196), created 2026-10-26.
 MYSQL_IMAGE := docker.io/library/mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
 MARIADB_IMAGE := docker.io/library/mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
-MONGO_IMAGE := docker.io/library/mongo:8.0.32@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+MONGO_IMAGE := docker.io/library/mongo:7.0.45@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4
 SSH_IMAGE := docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
