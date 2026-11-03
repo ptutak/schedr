@@ -251,6 +251,44 @@ istio:
   #     resolution: DNS
   serviceEntries: []
 
+# Where tasks' secrets come from (`secrets['path#key']` in DAGs; the guide's Secrets page).
+secretStorage:
+  # mode standalone: the `db` storage, values encrypted in the database under
+  # SCHEDR_SECRET_KEY, from this existing Secret (`schedr secrets new-key` makes the key; keep
+  # it as you keep the database's password). Empty: no key, and reading the `db` storage fails
+  # as secret_denied. Workers in mode distributed never have it.
+  db:
+    existingSecret: ""
+    secretKey: secret-key
+  # A Vault storage (KV v2) that standalone or the workers read, logging in with Vault's
+  # Kubernetes auth as the pods' ServiceAccount (the workers' own, with an account per role).
+  # With no other storage configured it is the default; with more (config), set
+  # SECRET_STORAGE__DEFAULT.
+  vault:
+    enabled: false
+    # The storage's name, as DAGs write it (`secrets.vault['...']`).
+    name: vault
+    # e.g. https://vault.example.com:8200
+    address: ""
+    # The KV v2 mount.
+    mount: secret
+    # The Vault namespace (Vault Enterprise).
+    namespace: ""
+    auth:
+      # The Vault role bound to the pods' ServiceAccount.
+      role: ""
+      # The Kubernetes auth method's mount in Vault (e.g. kubernetes, or openshift).
+      mount: kubernetes
+      # The projected token Vault's login uses (the pods mount no other): its lifetime, and
+      # the audience the Vault role expects, if any.
+      tokenExpirationSeconds: 3600
+      audience: ""
+    # A ConfigMap with the CA certificates Vault's certificate is checked against (else the
+    # system's), e.g. a cluster's trusted CA bundle.
+    caCert:
+      configMap: ""
+      key: ca.crt
+
 # Secrets synced from Vault by the Vault Secrets Operator (secrets.hashicorp.com), e.g. the
 # one database.existingSecret names. Off: create those Secrets by hand.
 vault:

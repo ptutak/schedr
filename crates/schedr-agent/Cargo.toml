@@ -25,10 +25,12 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+reqwest.workspace = true
 tracing.workspace = true
 unicode-general-category.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 http-body-util.workspace = true
 hyper-util.workspace = true
 pretty_assertions.workspace = true

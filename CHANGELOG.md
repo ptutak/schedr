@@ -7,7 +7,7 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
-- **Secrets** (M4.6, in progress): `secrets['path#key']`, `secrets.<storage>[...]` and a
+- **Secrets** (M4.6): `secrets['path#key']`, `secrets.<storage>[...]` and a
   whole secret `secrets['path']` as task arguments, in `env=` and in t-strings; `secrets=`
   declarations with `SecretPrefix` for reads on demand (`task_ctx.secret(...)` in a Python
   task, `schedr task-ctx secret get` in a command); every fetched value masked in the task's
@@ -19,7 +19,11 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
   always there and the default; `schedr secrets set/list/get/delete`, `schedr secrets
   export --to DIR` (one file per path, for `vault kv put`) and `schedr secrets new-key`;
   `[secret_storage]` in the configuration (`default`, `min_mask_length`, a storage's
-  `cache_ttl` and `unmasked_prefixes`; several storages need `default`). Vault follows.
+  `cache_ttl` and `unmasked_prefixes`; several storages need `default`). **Vault** (KV v2) with Kubernetes auth (the chart's
+  `secretStorage.vault`, a projected service-account token) or a token, renewed by the agent;
+  the chart's `secretStorage.db` for standalone's key. A task can log in to Vault as its
+  worker (decision 173): teams that must be kept apart run separate deployments, still in one
+  federated UI.
 
 ## 0.1.0
 

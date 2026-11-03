@@ -34,6 +34,25 @@ for template in worker master webserver; do
 done
 echo "ok: the roles, their Services, the budget, an account each"
 
+# Secret storage: Vault on the workers only (they fetch secrets), with a projected token; the
+# `db` storage's key never (standalone's).
+VAULT=(--set secretStorage.vault.enabled=true --set secretStorage.vault.address=https://v:8200
+    --set secretStorage.vault.auth.role=schedr-worker --set secretStorage.db.existingSecret=sk)
+for template in worker master webserver; do
+    out=$(helm template t "$CHART" "${PG[@]}" "${VAULT[@]}" --show-only "templates/$template.yaml")
+    count=$(grep -c 'SCHEDR_CONFIG__SECRET_STORAGE__VAULT__AUTH__ROLE' <<<"$out" || true)
+    want=$([ "$template" = worker ] && echo 1 || echo 0)
+    [ "$count" = "$want" ] || fail "Vault on the workers only ($template: $count)"
+    ! grep -q 'SCHEDR_SECRET_KEY' <<<"$out" || fail "the db storage's key in mode distributed ($template)"
+done
+helm template t "$CHART" "${PG[@]}" "${VAULT[@]}" --show-only templates/worker.yaml \
+    | grep -q 'serviceAccountToken:' || fail "the workers' projected token for Vault"
+refused "${PG[@]}" --set secretStorage.vault.enabled=true --set secretStorage.vault.auth.role=r
+refused "${PG[@]}" --set secretStorage.vault.enabled=true --set secretStorage.vault.address=https://v
+refused "${PG[@]}" "${VAULT[@]}" --set secretStorage.vault.name=Vault
+refused "${PG[@]}" "${VAULT[@]}" --set secretStorage.vault.name=my__vault
+echo "ok: Vault on the workers, its projected token; no db key"
+
 # The generated certificates: one CA, the names each role is checked by, both usages.
 secret() {
     sed -n "/^  name: t-schedr-$1-tls\$/,/^---/p" "$WORK/out.yaml" \

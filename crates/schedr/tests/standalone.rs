@@ -55,6 +55,18 @@ impl Standalone {
 
     /// Starts standalone as [`Self::start`] does, with more `standalone` arguments.
     fn start_with(files: &[(&str, &str)], database_url: Option<&str>, extra: &[&str]) -> Self {
+        Self::start_configured(files, database_url, extra, "", &[])
+    }
+
+    /// Starts standalone as [`Self::start_with`] does, with more configuration (TOML appended
+    /// to the file) and environment variables.
+    fn start_configured(
+        files: &[(&str, &str)],
+        database_url: Option<&str>,
+        extra: &[&str],
+        more_config: &str,
+        more_env: &[(&str, &str)],
+    ) -> Self {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("dags/etl");
         std::fs::create_dir_all(&root).unwrap();
@@ -69,7 +81,7 @@ impl Standalone {
              [worker]\ndata_dir = \"{data}\"\nslots = 4\nlog_port = 0\n\n\
              [master]\ngrpc_port = 0\ntick_interval = \"100ms\"\n\n\
              [webserver]\nport = 0\n\n\
-             [ops]\nport = 0\n",
+             [ops]\nport = 0\n{more_config}",
             python = python(),
             data = dir.path().join("data").display(),
         );
@@ -81,6 +93,7 @@ impl Standalone {
             // A URL with a password is a secret: from the environment, never the file.
             command.env("SCHEDR_CONFIG__DATABASE__URL", url);
         }
+        command.envs(more_env.iter().copied());
         let child = command
             .arg("--config")
             .arg(dir.path().join("config.toml"))
@@ -360,6 +373,71 @@ fn a_task_reads_secrets_set_with_the_cli() {
             );
         }
     }
+}
+
+/// Reads a secret from Vault: the default storage, and by name.
+const VAULT_SECRETS: &str = r#"
+from schedr import CommandOperator, Dag, secrets, task
+
+@task
+def check(password: str, port: str) -> int:
+    assert password == "hunter22-vault", "the password"
+    assert port == "5432", "a number as its JSON text"
+    print("password is", password)
+    return len(password)
+
+with Dag("vault"):
+    check(secrets["PATH#password"], secrets.vault["PATH#port"])
+    CommandOperator("cmd", ["sh", "-c", 'echo "env $PW"'], env={"PW": secrets["PATH#password"]})
+"#;
+
+#[test]
+fn a_task_reads_secrets_from_vault() {
+    let url = std::env::var("SCHEDR_TEST_VAULT_URL")
+        .expect("SCHEDR_TEST_VAULT_URL: a Vault in dev mode (`make test-integration` starts one)");
+    let token = std::env::var("SCHEDR_TEST_VAULT_TOKEN").unwrap_or_else(|_| "root".to_owned());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = format!("e2e-{}-{nanos}/db", std::process::id());
+    let written = Command::new("curl")
+        .args([
+            "-sf",
+            "-X",
+            "POST",
+            "-H",
+            &format!("X-Vault-Token: {token}"),
+        ])
+        .args([
+            "-d",
+            r#"{"data": {"password": "hunter22-vault", "port": 5432}}"#,
+        ])
+        .arg(format!("{url}/v1/secret/data/{path}"))
+        .status()
+        .unwrap();
+    assert!(written.success());
+    let dag = VAULT_SECRETS.replace("PATH", &path);
+    let config = format!(
+        "\n[secret_storage.vault]\ntype = \"vault\"\naddress = \"{url}\"\n\
+         auth = {{ method = \"token\" }}\n"
+    );
+    let standalone = Standalone::start_configured(
+        &[("vault.py", &dag)],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_CONFIG__SECRET_STORAGE__VAULT__TOKEN", &token)],
+    );
+    standalone.wait("DAG `vault`", || standalone.dag_ids() == ["vault"]);
+    let run_id = standalone.trigger("vault");
+    standalone.wait_for_state(&run_id, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("password is ****") && logs.contains("env ****"),
+        "{logs}"
+    );
+    assert!(!logs.contains("hunter22-vault"), "{logs}");
 }
 
 /// Every task log, of every worker (`data/logs/<worker ID>/`).

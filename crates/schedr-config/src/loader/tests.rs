@@ -469,6 +469,44 @@ type = "db"
     assert_eq!(db.secret_storage.default.as_deref(), Some("db"));
 }
 
+#[test]
+fn a_vault_storage_takes_its_token_from_the_environment() {
+    let toml = r#"
+[secret_storage.vault]
+type = "vault"
+address = "https://vault.example.com:8200"
+mount = "team/kv"
+namespace = "team-x"
+auth = { method = "token" }
+
+[secret_storage.k8s]
+type = "vault"
+address = "https://vault.example.com:8200"
+auth = { method = "kubernetes", role = "schedr-worker", mount = "k8s-prod" }
+
+[secret_storage]
+default = "vault"
+"#;
+    let config = load(
+        Some(file(toml)),
+        &env(&[("SCHEDR_CONFIG__SECRET_STORAGE__VAULT__TOKEN", "hvs.dev")]),
+        &[],
+    )
+    .unwrap();
+    let vault = &config.secret_storage.storages["vault"];
+    assert_eq!(vault.token.as_deref(), Some("hvs.dev"));
+    // Never printed, not even for debugging (the whole config's `Debug` holds it).
+    assert!(!format!("{config:?}").contains("hvs.dev"), "{vault:?}");
+    assert!(
+        format!("{vault:?}").contains("token: Some(\"****\")"),
+        "{vault:?}"
+    );
+    assert_eq!(vault.mount.as_deref(), Some("team/kv"));
+    let k8s = config.secret_storage.storages["k8s"].auth.clone().unwrap();
+    assert_eq!(k8s.role.as_deref(), Some("schedr-worker"));
+    assert_eq!(k8s.mount.as_deref(), Some("k8s-prod"));
+}
+
 #[rstest::rstest]
 #[case(
     "[secret_storage]\ndefault = \"vault\"\n",
@@ -476,16 +514,48 @@ type = "db"
 )]
 #[case("[secret_storage.\"a b\"]\ntype = \"db\"\n", "storage name `a b`")]
 #[case(
+    "[secret_storage.my__vault]\ntype = \"db\"\n",
+    "storage name `my__vault`"
+)]
+#[case(
     "[secret_storage.default]\ntype = \"db\"\n",
     "expected a string for key \"default.secret_storage.default\""
 )]
 #[case(
     "[secret_storage.x]\ntype = \"file\"\n",
-    "unknown variant: found `file`, expected ``db``"
+    "unknown variant: found `file`, expected ``db` or `vault``"
 )]
 #[case(
     "[secret_storage.x]\ntype = \"db\"\naddress = \"h\"\n",
-    "unknown field: found `address`"
+    "[secret_storage.x] address: only a `type = \"vault\"` storage has it"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\nauth = { method = \"kubernetes\", role = \"r\" }\n",
+    "[secret_storage.v] needs `address`"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"vault:8200\"\nauth = { method = \"kubernetes\", role = \"r\" }\n",
+    "address `vault:8200`: an http:// or https:// URL"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"https://v\"\n",
+    "[secret_storage.v] needs `auth`"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"https://v\"\nauth = { method = \"kubernetes\" }\n",
+    "auth method `kubernetes` needs `role`"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"https://v\"\nauth = { method = \"token\" }\n",
+    "auth method `token` needs the token in SCHEDR_CONFIG__SECRET_STORAGE__V__TOKEN"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"https://v\"\nmount = \"a//b\"\nauth = { method = \"kubernetes\", role = \"r\" }\n",
+    "mount `a//b`"
+)]
+#[case(
+    "[secret_storage.v]\ntype = \"vault\"\naddress = \"https://v\"\ntoken = \"hvs.x\"\nauth = { method = \"token\" }\n",
+    "a token isn't written in the file; set SCHEDR_CONFIG__SECRET_STORAGE__V__TOKEN"
 )]
 #[case(
     "[secret_storage.x]\ntype = \"db\"\nunmasked_prefixes = [\"etl\"]\n",

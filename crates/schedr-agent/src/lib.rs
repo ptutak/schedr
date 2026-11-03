@@ -28,4 +28,5 @@ pub mod secrets;
 pub mod status;
 pub mod supervise;
 pub mod usage;
+pub mod vault;
 pub mod watch;

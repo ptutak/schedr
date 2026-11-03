@@ -885,15 +885,37 @@ pub enum SecretStorageType {
     /// The `secrets` table of schedr's database, encrypted under `SCHEDR_SECRET_KEY`
     /// (standalone only).
     Db,
+    /// Vault's KV v2 (`HashiCorp` Vault).
+    Vault,
 }
 
-/// `[secret_storage.<name>]`: one secret storage.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// `[secret_storage.<name>]`: one secret storage. Its `Debug` hides the token.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SecretStorageConfig {
-    /// Its kind: `db`.
+    /// Its kind: `db` or `vault`.
     #[serde(rename = "type")]
     pub kind: SecretStorageType,
+    /// Vault's address, e.g. `https://vault.example.com:8200` (`vault`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The KV v2 mount (`vault`; default `secret`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// The Vault Enterprise namespace (`vault`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// A PEM file of the CA certificates Vault's certificate is checked against, instead of
+    /// the system's (`vault`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert: Option<PathBuf>,
+    /// How the agent logs in to Vault (`vault`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<VaultAuthConfig>,
+    /// The Vault token for `auth = { method = "token" }`: only from
+    /// `SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN`, never the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     /// How long a fetched value is kept in the agent's memory (never on disk); `0s` fetches
     /// every time.
     #[serde(
@@ -907,6 +929,51 @@ pub struct SecretStorageConfig {
     /// credentials).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmasked_prefixes: Vec<String>,
+}
+
+impl std::fmt::Debug for SecretStorageConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretStorageConfig")
+            .field("kind", &self.kind)
+            .field("address", &self.address)
+            .field("mount", &self.mount)
+            .field("namespace", &self.namespace)
+            .field("ca_cert", &self.ca_cert)
+            .field("auth", &self.auth)
+            .field("token", &self.token.as_ref().map(|_| crate::masked::MASK))
+            .field("cache_ttl", &self.cache_ttl)
+            .field("unmasked_prefixes", &self.unmasked_prefixes)
+            .finish()
+    }
+}
+
+/// How the agent logs in to Vault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultAuthMethod {
+    /// A token from the environment (`SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN`): local
+    /// development.
+    Token,
+    /// Vault's Kubernetes auth method, with the pod's service-account token.
+    Kubernetes,
+}
+
+/// `auth = { ... }` of a Vault storage.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAuthConfig {
+    /// `token` or `kubernetes`.
+    pub method: VaultAuthMethod,
+    /// The Vault role (`kubernetes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// The auth method's mount (`kubernetes`; default `kubernetes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// The service-account token's file (`kubernetes`; default
+    /// `/var/run/secrets/kubernetes.io/serviceaccount/token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
 }
 
 const fn default_cache_ttl() -> Duration {

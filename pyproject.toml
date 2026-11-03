@@ -135,6 +135,50 @@ failOnWarnings = true
 reportUnusedExpression = false
 reportUnusedCallResult = false
 
+# An editor (Zed, VS Code) runs basedpyright on every file it opens, `make lint` only on the
+# DAG code above. The typing checks keep the strict rules; the library and its tests are
+# mypy's and ruff's, so there the rules basedpyright alone enforces are off (they flagged the
+# library's wrapped messages, `Any` at JSON boundaries, ...): the editor shows what the CLI
+# checks. The first root that holds a file applies.
+[[tool.basedpyright.executionEnvironments]]
+root = "python/tests/typing"
+extraPaths = ["python"]
+
+[[tool.basedpyright.executionEnvironments]]
+root = "python"
+reportAny = false
+reportArgumentType = false
+reportAttributeAccessIssue = false
+reportCallIssue = false
+reportDeprecated = false
+reportExplicitAny = false
+reportGeneralTypeIssues = false
+reportImplicitOverride = false
+reportImplicitStringConcatenation = false
+reportImportCycles = false
+reportIncompatibleMethodOverride = false
+reportMatchNotExhaustive = false
+reportOperatorIssue = false
+reportOptionalMemberAccess = false
+reportPossiblyUnboundVariable = false
+reportPrivateLocalImportUsage = false
+reportPrivateUsage = false
+reportReturnType = false
+reportUnannotatedClassAttribute = false
+reportUndefinedVariable = false
+reportUninitializedInstanceVariable = false
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportUnnecessaryComparison = false
+reportUnnecessaryContains = false
+reportUnnecessaryIsInstance = false
+reportUnreachable = false
+reportUnusedClass = false
+reportUnusedParameter = false
+
 # --- pytest -------------------------------------------------------------
 [tool.pytest.ini_options]
 # python/tests/ui needs the `ui-test` group and a browser: `make test-ui` runs it.

@@ -2829,8 +2829,9 @@ permission to create pods.
     job**, as do messages out of order.
 - **Trust boundary: a worker is one trust domain.** All tasks on a worker run under the same
   UID, so they are **not isolated from each other** (a task can read another task's
-  environment or files). Teams that must be isolated get separate queues and workers. This is
-  stated in the documentation.
+  environment or files), nor from the agent (its key, its Vault login: decision 173). Teams
+  that must be isolated get separate deployments (decision 173). This is stated in the
+  documentation.
 - **Shared model and schemas.** **Rust types are the reference.** Protobuf for gRPC. A **JSON
   Schema generated from the Rust types** (`schemars`) describes the DAG JSON and the agent ↔
   runner messages; it is committed to the repository and **CI fails if it is out of date**.
@@ -3998,6 +3999,17 @@ list) and likewise has no Python.
     never moves unnamed secrets elsewhere. Not chosen: standalone falling back to `db` (a
     second Vault would quietly switch them to the table); always naming the default, even for
     a single Vault (more configuration for the common case).
+  - **173. A task can log in to Vault as its worker** (the user's, 2026-11-03: accepted, on
+    Codex's security review of M4.6d). Tasks run as the agent's user, so they can read the
+    projected service-account token Vault's login uses, and read whatever the worker's Vault
+    role allows without declaring it. It reaches no more than a DAG could declare (any path
+    can be declared); what it skips is the declaration and the UI showing it. Decision 101
+    extended: **teams that must be kept apart run separate schedr deployments** (a release
+    each: its own master, database, workers, service accounts and Vault role); queues alone
+    don't separate them, as a release's workers share one role. They are still seen in one
+    UI: the federated `schedr ui` over a list of deployments (M3.6). Not chosen: worker groups in
+    one release, each with its own service account and role (a chart feature, later if
+    wanted); tasks under another uid (a root start, against OpenShift's random uids).
   - **Claude's choices in M4.6b** (after the reviews by Grok and Codex; the user told):
     - **Masked forms** besides the value and its JSON form: JSON with every non-ASCII
       character as `\uXXXX` (Python's `json.dumps`), and Python's `repr` (an exception's
@@ -4058,6 +4070,43 @@ list) and likewise has no Python.
       and binds each value, it can't stop someone who can write the database from restoring
       an older state, as restoring a backup does. Also found: a test run (`dags test`) got
       standalone's configured storages instead of its `--secret` values; now only those.
+  - **Claude's choices in M4.6d** (the user told):
+    - **Configuration:** `type = "vault"` with `address` (http or https), `mount` (default
+      `secret`), `namespace`, `ca_cert` (a PEM file: only those CAs, as `VAULT_CACERT`) and
+      `auth = { method = "kubernetes", role, mount (default kubernetes), token_file (default
+      the pod's) }` or `{ method = "token" }`, its token only from
+      `SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN` (one in the file is refused). Each a
+      startup error when missing or misplaced (a Vault field on a `db` storage, a role with
+      `token`).
+    - **The agent's token:** looked up (a given one) or logged in for (Kubernetes) at the
+      first read; renewed at two thirds of its time to live by a task of its own, a login
+      again when renewal fails; a read refused (403) with Kubernetes auth logs in again once
+      and retries. Nothing is sent to Vault before a read: a worker starts while Vault is
+      down, and its reads are `secret_unavailable` (retried).
+    - **Answers:** 404 or a deleted latest version is `secret_not_found`; 400, 401 and 403
+      `secret_denied` (with Vault's own messages); anything else, a timeout (30 s) or no
+      connection `secret_unavailable`. A path's parts are percent-encoded, and `.` or `..`
+      refused.
+    - **The chart:** `secretStorage.db.existingSecret` (+ `secretKey`) gives standalone's
+      `SCHEDR_SECRET_KEY`; `secretStorage.vault` (`name`, `address`, `mount`, `namespace`,
+      `auth.role`, `auth.mount`, `caCert.configMap`) configures Vault on standalone and the
+      workers (never the master or the webserver). The pods mount no service-account token,
+      so Vault's login gets a **projected one** of its own (`auth.tokenExpirationSeconds`,
+      `auth.audience`). Under Istio's `REGISTRY_ONLY`, Vault outside the mesh needs a
+      ServiceEntry (`istio.serviceEntries`).
+    - **After Codex's security review:** the configuration's `Debug` hides the token; the
+      client follows no redirect (a 3xx would carry the token or the login's JWT
+      elsewhere; Vault's own clients follow none); a success that isn't JSON or not KV v2's
+      shape is `secret_unavailable`, not `secret_not_found`. The task reading the login
+      token: decision 173.
+    - **After Grok's review** (the same two findings, and the task reading the token):
+      the session is locked only to copy or replace it, never across a call to Vault, so a
+      slow renewal holds up no read while the token lasts; logins go one at a time, and the
+      reads that waited on a failed one get its error instead of logging in one after
+      another (each up to 30 s); a 404 outside a secret's read (a wrong auth mount) is
+      `secret_denied` with Vault's words, not `secret_not_found`; a storage name with `__`
+      is refused (its environment variables would split there), in the configuration and
+      the chart.
 
 ## State storage
 
@@ -4242,6 +4291,10 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     `python/tests/typing/dag_types.py`, whose expected mistakes carry ignore comments that
     must stay needed (57.3). basedpyright is pointed at `pyproject.toml` (`--project`): a
     `pyrightconfig.json` in a parent directory would win otherwise.
+    An editor runs basedpyright on every file it opens: an execution environment for
+    `python/` turns off there the rules basedpyright alone enforces (the library and its tests
+    are mypy's and ruff's), `python/tests/typing` keeping the strict ones, so the editor shows
+    what `make lint` checks (the user, 2026-11-03: Zed flagged the library's wrapped messages).
   - Not chosen: B `Output` typed as a subclass of `Any` (accepted everywhere: no argument
     checked); D′ calls kept as `Output[T]` with `.value` for each data pass and `.on(Cls)`
     typed `Cls` (every plain pass grows); C a mypy plugin (mypy only: editors on pyright get

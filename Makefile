@@ -24,6 +24,9 @@ COVERAGE_MIN := 85
 # PROJECT.md, Repository and tooling: Testing.
 # postgres:17.6-alpine, created 2025-10-15 (PROJECT.md, CI supply-chain pins).
 POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+# vault:2.1.2, created 2026-10-07: the Vault storage's tests (dev mode, on the host's network so
+# it reaches the tests' fake Kubernetes API on 127.0.0.1).
+VAULT_IMAGE := docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
 # Podman when installed (Docker's port forwarding doesn't work everywhere, e.g. the snap
 # under WSL), else Docker; override with `make test-integration CONTAINER=docker`.
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
@@ -102,7 +105,7 @@ test-python:     ## Run Python unit tests with coverage (fails below COVERAGE_MI
 
 test: test-rust test-python  ## Run all unit tests
 
-test-integration: ## Run integration tests (real processes, the binary, Postgres in Docker)
+test-integration: ## Run integration tests (real processes, the binary, Postgres and Vault in containers)
 	@set -e; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)' --no-run; \
 	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
@@ -110,11 +113,17 @@ test-integration: ## Run integration tests (real processes, the binary, Postgres
 	name=schedr-test-pg-$$$$; \
 	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
 		$(POSTGRES_IMAGE) >/dev/null; \
-	trap '$(CONTAINER) rm -f '$$name' >/dev/null' EXIT; \
+	vault=schedr-test-vault-$$$$; \
+	vault_port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); \
+	$(CONTAINER) run -d --rm --name $$vault --network host -e VAULT_DEV_ROOT_TOKEN_ID=root \
+		-e VAULT_DEV_LISTEN_ADDRESS=127.0.0.1:$$vault_port -e SKIP_SETCAP=1 $(VAULT_IMAGE) >/dev/null; \
+	trap '$(CONTAINER) rm -f '$$name' '$$vault' >/dev/null' EXIT; \
 	port=$$($(CONTAINER) port $$name 5432/tcp | head -1 | sed 's/.*://'); \
 	until $(CONTAINER) exec $$name psql -h 127.0.0.1 -U postgres -c 'select 1' >/dev/null 2>&1; do \
 		sleep 0.5; done; \
 	export SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:$$port/postgres; \
+	until curl -sf http://127.0.0.1:$$vault_port/v1/sys/health >/dev/null; do sleep 0.5; done; \
+	export SCHEDR_TEST_VAULT_URL=http://127.0.0.1:$$vault_port SCHEDR_TEST_VAULT_TOKEN=root; \
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \
@@ -307,6 +316,11 @@ chart-check:     ## Lint the Helm chart and render it with its main combinations
 	helm template t charts/schedr | grep -q 'fsGroup: 0'
 	! helm template t charts/schedr --api-versions security.openshift.io/v1 | grep -q fsGroup
 	helm template t charts/schedr --set podSecurityContext.fsGroup=2000 | grep -q 'fsGroup: 2000'
+	: "secretStorage in standalone: the db storage's key from its Secret, Vault with a projected token"
+	helm template t charts/schedr --set secretStorage.db.existingSecret=sk \
+		--set secretStorage.vault.enabled=true --set secretStorage.vault.address=https://v:8200 \
+		--set secretStorage.vault.auth.role=r | grep -q -A3 'SCHEDR_SECRET_KEY$$'
+	! helm template t charts/schedr | grep -q 'SCHEDR_SECRET_KEY\|SECRET_STORAGE'
 	: "notifications: on by default; a listening URL from the database Secret when given"
 	helm template t charts/schedr | grep -q -A1 'SCHEDR_CONFIG__DATABASE__NOTIFICATIONS$$'
 	helm template t charts/schedr --set database.existingSecret=pg \

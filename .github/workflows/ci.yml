@@ -92,7 +92,20 @@ jobs:
           --health-retries 30
     env:
       SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
+      SCHEDR_TEST_VAULT_URL: http://127.0.0.1:8200
+      SCHEDR_TEST_VAULT_TOKEN: root
     steps:
+      # Vault in dev mode on the host's network (not a service container: Vault must reach the
+      # tests' fake Kubernetes API on 127.0.0.1). The image as the Makefile's VAULT_IMAGE.
+      - name: Vault
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: root
+          VAULT_DEV_LISTEN_ADDRESS: "127.0.0.1:8200"
+        run: |
+          docker run -d --rm --name vault --network host -e VAULT_DEV_ROOT_TOKEN_ID \
+            -e VAULT_DEV_LISTEN_ADDRESS -e SKIP_SETCAP=1 \
+            docker.io/hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
+          timeout 60 sh -c 'until curl -sf http://127.0.0.1:8200/v1/sys/health; do sleep 1; done'
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:

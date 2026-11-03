@@ -4,24 +4,22 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-02, night): M4.6c committed, M4.6d under way
+## State (2026-11-03): M4.6 done
 
-- **Committed:** M4.6a+b (`b702efc`), M4.6c (the `db` storage, `[secret_storage]`, `schedr
-  secrets ...`; decisions 171-172; reviewed by Codex and by Grok for security; also Grok's
-  security review of M4.6b fixed in it).
-- **M4.6d (Vault) under way:** the client (`crates/schedr-agent/src/vault.rs`, own over
-  `reqwest`: token and Kubernetes auth, renewal, a login again on a refused token), its tests
-  against a fake Vault and a real dev-mode Vault (`tests/vault.rs`, `SCHEDR_TEST_VAULT_URL`),
-  the test Vault in `make test-integration` and CI. Left: `type = "vault"` in the config and
-  its startup errors, the token only from the environment, wiring in `SecretPlan`, the chart
-  (`SCHEDR_SECRET_KEY` from an existing Secret, the Vault role), an end-to-end test, the
-  review (Codex) and a security review (Grok), then **M4.6 done**; then the guide pages for
-  M4.6 by Grok (also the stale lines in `docs/02-dags/07-testing.md` and
-  `docs/03-guide/12-ui.md` that Codex found).
-- The user said: develop to the end of M4.6, commit and push each sub-step after its review
-  and `make check`. No dynamic secrets planned. Most probably no release before 1.0.0.
-- **Grok's weekly usage: 82%**, Codex's 79% (resets: Grok Friday 9:00).
-- **Rust coverage is 85.21%**, just over the floor: new code brings its tests.
+- **Committed:** M4.6a+b (`b702efc`), M4.6c (`f9589e2`), M4.6d (Vault: the client over
+  `reqwest`, `type = "vault"`, the chart's `secretStorage`, the test Vault in
+  `make test-integration` and CI; decision 173; reviewed by Codex and Grok, both for
+  security). **M4.6 is done.**
+- **Next:** the guide pages for M4.6 by Grok (a worker round): `[secret_storage]`, Vault,
+  `schedr secrets`, the chart's `secretStorage`; the trust boundary (decision 173: a task
+  can log in to Vault as its worker; teams kept apart run separate deployments, still in one
+  federated UI); `docs/03-guide/10-deployment.md:220` (a projected token is mounted with
+  Vault); `07-failures.md` naming `secret_not_found` / `secret_denied`; the stale lines in
+  `docs/02-dags/07-testing.md` (143/168/210) and `docs/03-guide/12-ui.md:616`. Then the
+  user's choice: M4.7 or the open bugs.
+- The user said: no dynamic secrets planned; most probably no release before 1.0.0.
+- **Grok's weekly usage: 85%**, Codex's 80% (resets: Grok Friday 9:00).
+- **Rust coverage** stays just over the 85% floor: new code brings its tests.
 - **uv:** `.claude/settings.local.json` sets `UV_PROJECT_ENVIRONMENT` and `UV_NO_SYNC=1`;
   the Makefile unexports `UV_NO_SYNC` so `make` syncs as CI does.
 - **Dev containers** may still run: `podman rm -f schedr-pg-dev schedr-vault-dev`.

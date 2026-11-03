@@ -1,7 +1,7 @@
 //! `[secret_storage]` made into the agent's storages, per role (see PROJECT.md, Secret
 //! storage): standalone always has the `db` storage (its default when nothing else is
-//! configured); a worker in a distributed deployment has only what is configured, and never
-//! `db` (it has no database connection, and a secret never passes through the master).
+//! configured); a worker in a distributed deployment has only what is configured (Vault), and
+//! never `db` (it has no database connection, and a secret never passes through the master).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -74,6 +74,7 @@ impl SecretPlan {
                         db.ok_or_else(|| standalone_only(&format!("[secret_storage.{name}]")))?;
                     Arc::new(DbStorage::with_key(db.clone(), self.key.clone()))
                 }
+                SecretStorageType::Vault => vault(name, configured)?,
             };
             storages.insert(
                 name.clone(),
@@ -105,6 +106,61 @@ impl SecretPlan {
         SecretStores::new(storages, default, self.section.min_mask_length)
             .map_err(AppError::BadArgument)
     }
+}
+
+/// The service account's token file, where Kubernetes mounts it.
+const SERVICE_ACCOUNT_TOKEN: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
+/// A Vault storage from its table (the loader checked its fields; nothing is sent to Vault
+/// until a read).
+fn vault(
+    name: &str,
+    configured: &schedr_config::config::SecretStorageConfig,
+) -> Result<Arc<dyn schedr_agent::secrets::SecretStorage>, AppError> {
+    use schedr_agent::vault::{VaultAuth, VaultSettings, VaultStorage};
+    use schedr_config::config::VaultAuthMethod;
+    let bad = |what: String| AppError::BadArgument(format!("[secret_storage.{name}] {what}"));
+    let address = configured
+        .address
+        .clone()
+        .ok_or_else(|| bad("needs `address`".to_owned()))?;
+    let auth = configured
+        .auth
+        .as_ref()
+        .ok_or_else(|| bad("needs `auth`".to_owned()))?;
+    let auth = match auth.method {
+        VaultAuthMethod::Token => VaultAuth::Token(configured.token.clone().unwrap_or_default()),
+        VaultAuthMethod::Kubernetes => VaultAuth::Kubernetes {
+            role: auth.role.clone().unwrap_or_default(),
+            mount: auth
+                .mount
+                .clone()
+                .unwrap_or_else(|| "kubernetes".to_owned()),
+            jwt_file: auth
+                .token_file
+                .clone()
+                .unwrap_or_else(|| SERVICE_ACCOUNT_TOKEN.into()),
+        },
+    };
+    let ca_cert = match &configured.ca_cert {
+        Some(path) => Some(
+            std::fs::read(path)
+                .map_err(|e| bad(format!("ca_cert: can't read {}: {e}", path.display())))?,
+        ),
+        None => None,
+    };
+    let settings = VaultSettings {
+        address,
+        mount: configured
+            .mount
+            .clone()
+            .unwrap_or_else(|| "secret".to_owned()),
+        namespace: configured.namespace.clone(),
+        ca_cert,
+        auth,
+    };
+    let storage = VaultStorage::new(settings).map_err(bad)?;
+    Ok(storage)
 }
 
 fn standalone_only(what: &str) -> AppError {

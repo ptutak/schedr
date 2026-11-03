@@ -74,6 +74,9 @@ spec:
             {{- . | nindent 12 }}
             {{- end }}
             {{- include "schedr.tlsEnv" (list . "worker") | trim | nindent 12 }}
+            {{- with include "schedr.secretStorageEnv" (list . false) | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- with include "schedr.extraEnv" . | trim }}
             {{- . | nindent 12 }}
             {{- end }}
@@ -107,10 +110,16 @@ spec:
             {{- with include "schedr.dagMounts" . | trim }}
             {{- . | nindent 12 }}
             {{- end }}
+            {{- with include "schedr.secretStorageMounts" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
         {{- with include "schedr.gitSync" . | trim }}
         {{- . | nindent 8 }}
         {{- end }}
       {{- $volumes := include "schedr.dagVolumes" . | trim }}
+      {{- with include "schedr.secretStorageVolumes" . | trim }}
+      {{- $volumes = printf "%s\n%s" $volumes . | trim }}
+      {{- end }}
       {{- if or $volumes (eq .Values.tls.mode "app") }}
       volumes:
         {{- if eq .Values.tls.mode "app" }}

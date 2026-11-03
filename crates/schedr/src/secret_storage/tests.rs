@@ -8,6 +8,12 @@ use super::*;
 fn db_storage() -> SecretStorageConfig {
     SecretStorageConfig {
         kind: SecretStorageType::Db,
+        address: None,
+        mount: None,
+        namespace: None,
+        ca_cert: None,
+        auth: None,
+        token: None,
         cache_ttl: std::time::Duration::ZERO,
         unmasked_prefixes: Vec::new(),
     }
@@ -101,4 +107,52 @@ fn a_worker_never_has_the_db_storage() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("default = \"db\""), "{error}");
+}
+
+fn vault_storage(ca_cert: Option<std::path::PathBuf>) -> SecretStorageConfig {
+    SecretStorageConfig {
+        kind: SecretStorageType::Vault,
+        address: Some("http://127.0.0.1:1".into()),
+        auth: Some(schedr_config::config::VaultAuthConfig {
+            method: schedr_config::config::VaultAuthMethod::Kubernetes,
+            role: Some("schedr-worker".into()),
+            mount: None,
+            token_file: None,
+        }),
+        ca_cert,
+        ..db_storage()
+    }
+}
+
+#[tokio::test]
+async fn a_worker_has_its_vault_as_the_default() {
+    let env = BTreeMap::new();
+    let mut section = SecretStorageSection::default();
+    section.storages.insert("vault".into(), vault_storage(None));
+    let stores = SecretPlan::new(&section, &env).stores(None).unwrap();
+    assert_eq!(stores.names(), ["vault"]);
+    // The default, with Kubernetes auth's default token file (none outside a pod): denied,
+    // from Vault's login, not "no default storage".
+    let error = stores.fetch(&password(None)).await.unwrap_err();
+    assert_eq!(error.kind(), "secret_denied", "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("/var/run/secrets/kubernetes.io/serviceaccount/token"),
+        "{error}"
+    );
+    // A CA certificate that can't be read stops the start.
+    let mut section = SecretStorageSection::default();
+    section.storages.insert(
+        "vault".into(),
+        vault_storage(Some("/nonexistent/ca.pem".into())),
+    );
+    let error = SecretPlan::new(&section, &env)
+        .stores(None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("[secret_storage.vault] ca_cert: can't read /nonexistent/ca.pem"),
+        "{error}"
+    );
 }

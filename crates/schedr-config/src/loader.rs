@@ -73,8 +73,9 @@ pub enum ConfigError {
         /// The size, as written.
         size: String,
     },
-    /// `[secret_storage]` can't be used: a bad storage name, or a `default` not configured.
-    #[error("[secret_storage] {0}")]
+    /// `[secret_storage]` can't be used: a bad storage name, or a `default` not configured
+    /// (the message names the table).
+    #[error("{0}")]
     SecretStorage(String),
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
@@ -172,6 +173,16 @@ pub fn load(
         return Err(ConfigError::NoInstances);
     }
     check_secret_storage(&config.secret_storage)?;
+    for name in config.secret_storage.storages.keys() {
+        // As every credential: from the environment, never the file.
+        if from_file(&format!("secret_storage.{name}.token")) {
+            return Err(ConfigError::SecretStorage(format!(
+                "[secret_storage.{name}] token: a token isn't written in the file; set \
+                 SCHEDR_CONFIG__SECRET_STORAGE__{}__TOKEN",
+                name.to_ascii_uppercase()
+            )));
+        }
+    }
     if !config.interpreters.contains_key(DEFAULT_DAG_INTERPRETER) {
         config.interpreters.insert(
             DEFAULT_DAG_INTERPRETER.to_owned(),
@@ -204,6 +215,78 @@ pub fn load(
 /// The secret storage name every standalone has (`[secret_storage]`'s `db`).
 pub const DB_STORAGE: &str = "db";
 
+/// A storage's fields for its type: Vault's only for `vault`, and what its auth method
+/// needs.
+fn check_storage_fields(
+    name: &str,
+    storage: &crate::config::SecretStorageConfig,
+) -> Result<(), ConfigError> {
+    use crate::config::{SecretStorageType, VaultAuthMethod};
+    let problem = |what: String| {
+        Err(ConfigError::SecretStorage(format!(
+            "[secret_storage.{name}] {what}"
+        )))
+    };
+    let vault_fields = [
+        ("address", storage.address.is_some()),
+        ("mount", storage.mount.is_some()),
+        ("namespace", storage.namespace.is_some()),
+        ("ca_cert", storage.ca_cert.is_some()),
+        ("auth", storage.auth.is_some()),
+        ("token", storage.token.is_some()),
+    ];
+    if storage.kind == SecretStorageType::Db {
+        if let Some((field, _)) = vault_fields.iter().find(|(_, set)| *set) {
+            return problem(format!("{field}: only a `type = \"vault\"` storage has it"));
+        }
+        return Ok(());
+    }
+    let Some(address) = &storage.address else {
+        return problem("needs `address`, e.g. \"https://vault.example.com:8200\"".to_owned());
+    };
+    if !(address.starts_with("https://") || address.starts_with("http://")) {
+        return problem(format!("address `{address}`: an http:// or https:// URL"));
+    }
+    if let Some(mount) = &storage.mount
+        && mount
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return problem(format!(
+            "mount `{mount}`: a path such as `secret` or `team/kv`"
+        ));
+    }
+    let Some(auth) = &storage.auth else {
+        return problem(
+            "needs `auth`: { method = \"kubernetes\", role = \"...\" } or { method = \"token\" }"
+                .to_owned(),
+        );
+    };
+    let env = format!(
+        "SCHEDR_CONFIG__SECRET_STORAGE__{}__TOKEN",
+        name.to_ascii_uppercase()
+    );
+    match auth.method {
+        VaultAuthMethod::Token => {
+            if storage.token.as_deref().is_none_or(str::is_empty) {
+                return problem(format!("auth method `token` needs the token in {env}"));
+            }
+            if auth.role.is_some() || auth.mount.is_some() || auth.token_file.is_some() {
+                return problem("auth method `token` has no role, mount or token_file".to_owned());
+            }
+        }
+        VaultAuthMethod::Kubernetes => {
+            if auth.role.as_deref().is_none_or(str::is_empty) {
+                return problem("auth method `kubernetes` needs `role`".to_owned());
+            }
+            if storage.token.is_some() {
+                return problem(format!("auth method `kubernetes` takes no token ({env})"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `[secret_storage]`'s names and `default`. Which storages a role may have (`db` in
 /// standalone only) is the role's to check.
 fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result<(), ConfigError> {
@@ -211,15 +294,19 @@ fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result
         let valid = !name.is_empty()
             && name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            // Its environment variables (`SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN`)
+            // would split there.
+            && !name.contains("__");
         if !valid || name == "default" {
             return Err(ConfigError::SecretStorage(format!(
-                "storage name `{name}`: letters, digits, `_` and `-` only, and not `default` \
+                "[secret_storage] storage name `{name}`: letters, digits, `_` and `-` only, no `__`, and not `default` \
                  (DAGs write it `secrets.{name}[...]`)"
             )));
         }
     }
     for (name, storage) in &section.storages {
+        check_storage_fields(name, storage)?;
         // A prefix matches the start of a path: `etl` would also be `etl-other/...`, and an
         // empty one every path (Grok's finding in M4.6c's security review).
         if let Some(bad) = storage
@@ -238,7 +325,7 @@ fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result
     if section.default.is_none() && section.storages.len() > 1 {
         let configured: Vec<&str> = section.storages.keys().map(String::as_str).collect();
         return Err(ConfigError::SecretStorage(format!(
-            "several storages ({}) and no `default`: set [secret_storage] default to the one \
+            "[secret_storage] several storages ({}) and no `default`: set [secret_storage] default to the one \
              `secrets['...']` means",
             configured.join(", ")
         )));
@@ -249,7 +336,7 @@ fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result
     {
         let configured: Vec<&str> = section.storages.keys().map(String::as_str).collect();
         return Err(ConfigError::SecretStorage(format!(
-            "default `{default}` isn't a configured storage (configured: {}; `db` in \
+            "[secret_storage] default `{default}` isn't a configured storage (configured: {}; `db` in \
              standalone)",
             if configured.is_empty() {
                 "none".to_owned()
