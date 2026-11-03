@@ -227,7 +227,8 @@ warehouse = SQL(
 )
 ```
 
-A t-string URL works too (`url=t"postgresql://etl:{secrets['etl/db']['password']}@db/etl"`):
+A t-string URL works too (`url=text(t"postgresql://etl:{secrets['etl/db']['password']}@db/etl")`,
+`text()` telling a type checker the `str` it becomes, as in [Secrets](13-secrets.md)):
 each value it fills in is percent-encoded, so a password with `@`, `/`, `?` or `#` in it is
 only a password, never another host or query. A value that is part of the URL's structure
 (`host:port`, a whole URL) is given whole instead, `url=secrets["etl/db"]["url"]`, as
@@ -323,6 +324,10 @@ Both exit 1 when a connection failed, or when no answer came (`lost`: the worker
 away or restarted, the master restarted, or the answer didn't come in time). The API: `POST /api/v1/connections/check` and
 `POST /api/v1/connections/{name}/test`, each returning the command, its result filled in as
 the workers answer (`GET /api/v1/commands/{id}`).
+
+**To try it all:** the repository's demo, `examples/demo` (`make demo`, podman and
+podman-compose), runs a server of every type and two deployments, `dev` and `prod`, over one
+DAG folder with secrets of their own, each type opened from Python and from a command.
 
 ## When a connection can't be opened
 

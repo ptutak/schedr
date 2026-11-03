@@ -1,0 +1,12 @@
+# `schedr ui` over the demo's two deployments (compose.yaml), on http://127.0.0.1:8082.
+[ui]
+bind = "0.0.0.0"
+port = 8082
+
+[[ui.deployments]]
+name = "dev"
+url = "http://dev:8080"
+
+[[ui.deployments]]
+name = "prod"
+url = "http://prod:8080"

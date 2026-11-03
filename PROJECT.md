@@ -8223,6 +8223,12 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     own.
   - **205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
     `schedr connections check` and `test` too. Not chosen: before M4.7c; in M4.7b2.
+  - **206. A Mongo user logs in where Mongo's own clients log in** (the user's, 2026-11-03,
+    found running the demo): the URI's `authSource`, else the database in its path, else
+    `admin`, in Python and in the tools' files alike; `database=` is only the database the
+    task gets, and `Mongo`'s docstring says so. Not chosen: `database=` as the login
+    database when the URI names none (friendlier for a user made in the app's database, but
+    unlike every Mongo client, and it would break users made in `admin`).
 - **Built (M4.7b2; decisions 184, 190-197, 201):** a command's connections as variables and
   files. `CommandOperator(connections={"DB": warehouse})` records `connection_env` (prefix to
   name) with the task, its names declared; the master refuses a prefix that can't start a
@@ -8290,6 +8296,36 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
   agent refuses such a path itself); a test refuses a file holding two `Connection`s by
   the name (it could run one the parse never recorded, passing for the other); a named
   worker draining or drained is refused, as the automatic pick does.
+- **Built (M4.7d; decisions 202-206):** the connections demo, `examples/demo`. A compose
+  file (`podman-compose`, or `docker compose`) runs Postgres, MySQL, MariaDB, Mongo, an
+  OpenSSH server and go-httpbin, two `schedr standalone --no-ui` deployments `dev` and
+  `prod` over one DAG folder, and `schedr ui` over both on 127.0.0.1:8082. Its image is FROM
+  the base image, adding the servers' clients (MariaDB's for both MySQL and MariaDB, with
+  the connector's `caching_sha2_password` plugin; `mongoexport`, Alpine having no mongosh)
+  and the connection extras (pinned, hashed). Every password, token and key is generated
+  once into a volume by a one-off container (`keys.sh`; podman-compose 1.0.6 ignores
+  `depends_on` conditions); each deployment fills its own `db` secret storage from it at
+  start and names its SQLite file for `db migrate` and `secrets set`. The DAG opens each
+  connection from Python and from the server's own client. `make demo` runs it; `make
+  demo-check` runs both deployments' DAG, every task required to succeed, then `connections
+  check` and a `test` of all seven connections in both. The pin check also reads the
+  examples' compose files and Containerfiles. Found running it: Mongo users log in on the
+  URI's `authSource`, else its path's database, else `admin` (decision 206, documented);
+  OpenSSH 10's `ssh-keyscan` writes comments on standard output (the SSH integration test
+  failing on Ubuntu 26.04's runners, fixed); B161 logged (`No` masked in a client's error);
+  the schedr services set `NO_PROXY=*` (podman passes the machine's `HTTP_PROXY` on, which
+  took the UI's calls to a proxy). Codex's review, security included (9 findings, all
+  fixed): one volume per reader (each deployment's own, 0700 for user 1001; the servers'
+  passwords; the SSH server's public keys; its host key), so `dev` reads nothing of
+  `prod`'s or the administrator password; no password on a command line in the servers'
+  first start (psql reads it, the MySQL clients from an option file); shared SELinux labels
+  (`:z`) on mounts two containers share; `demo-check` requires each task's own result,
+  naming its deployment (a Python task's output, a command's log), and the Mongo and SSH
+  tasks fail rather than return nothing; the pin check follows YAML merges and checks a
+  `${VAR:-default}` image's default; compose follows `CONTAINER` (podman-compose with
+  podman, `docker compose` with docker); a half-done key step starts over; a base image
+  named with its registry is pulled. Decision 202's "without Rust or uv" holds once a
+  release has connections: until then the first run builds the base image (README).
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`

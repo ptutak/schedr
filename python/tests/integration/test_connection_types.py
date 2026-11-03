@@ -225,7 +225,13 @@ def test_ssh_logs_in_with_its_key_and_trusts_only_known_hosts(tmp_path: Path) ->
     other = tmp_path / "other"
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", other], check=True)
     kind, encoded = Path(f"{other}.pub").read_text().split()[:2]
-    host_names = Path(_env("SCHEDR_TEST_SSH_KNOWN_HOSTS")).read_text().split()[0]
+    # The host field of its first key line: OpenSSH 10's ssh-keyscan writes a comment
+    # (`# host:port SSH-2.0-...`) before each key, on standard output.
+    host_names = next(
+        line.split()[0]
+        for line in Path(_env("SCHEDR_TEST_SSH_KNOWN_HOSTS")).read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
     impostor_hosts = f"{host_names} {kind} {encoded}\n"
     outputs = _run(
         tmp_path,

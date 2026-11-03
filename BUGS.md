@@ -68,18 +68,32 @@ step touches their code or the user schedules them.
 | 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 14 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
 | 15 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 16 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 17 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 18 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 19 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 20 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 21 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 22 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 23 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 24 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 25 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 26 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 27 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 19 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 20 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 21 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 22 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 23 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 24 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 25 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 26 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 27 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 28 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, correctness (score 1): The demo's MySQL client task logged `...caching_sha2_password.so: **** such file or directory`: `No` masked, though none of the attempt's secrets (`dev_app`, a 24-character password, `dev`, too short to mask) is `No`; the mask set alone doesn't reproduce it.
+- **Found:** 2026-11-03, running the connections demo (M4.7d): `mysql_from_its_client`, its
+  connection `orders_db` as `MY` (the MySQL option file), the client failing for a missing
+  plugin; read with `schedr tasks logs`.
+- **Not reproduced:** a `MaskSet` (min 5) holding the attempt's values masks nothing in the
+  exact line (`mask_text` and `mask`). Left to check: the stream masking across chunks
+  (the client's stderr written in pieces), the derived forms (`cnf_escaped`), the values of
+  the other declared secrets, and whether the reader (`tasks logs`) masks again.
+- **Why it matters:** over-masking makes a log mislead (an error reads as a secret); not a
+  leak.
 
 ## B160: A task's timeout starts again after its secrets are read
 

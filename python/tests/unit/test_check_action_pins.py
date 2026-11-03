@@ -413,5 +413,49 @@ def test_shell_script_image_is_scanned(tmp_path: Path) -> None:
     assert "alpine" in errors[0]
 
 
+def test_an_examples_compose_file_and_containerfile_are_scanned(tmp_path: Path) -> None:
+    (tmp_path / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.1"\n')
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("name: CI\non: push\njobs: {}\n")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "maturin-requirements.txt").write_text(
+        f"maturin==1.15.0 \\\n    --hash=sha256:{DIGEST}\n"
+    )
+    demo = tmp_path / "examples" / "demo"
+    demo.mkdir(parents=True)
+    (demo / "compose.yaml").write_text(
+        "services:\n"
+        "  db:\n    image: docker.io/library/postgres:17.6\n"
+        f"  ok:\n    image: docker.io/library/mysql:8.4@sha256:{DIGEST}\n"
+        "  own:\n    image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}\n"
+    )
+    (demo / "Containerfile").write_text("ARG SCHEDR=x\nFROM ${SCHEDR}\nFROM python:3.14\n")
+    errors = pins().check_repository(tmp_path)
+    assert len(errors) == 2, errors
+    assert "examples/demo/Containerfile" in errors[0]
+    assert "examples/demo/compose.yaml:3" in errors[1]
+    assert "postgres:17.6" in errors[1]
+
+
+def test_a_compose_images_default_and_a_merged_image_are_checked() -> None:
+    text = (
+        "x-db: &db\n  image: docker.io/library/postgres:latest\n"
+        "services:\n"
+        "  default:\n    image: ${DB_IMAGE:-docker.io/library/postgres:17.6}\n"
+        "  bare:\n    image: ${DB_IMAGE}\n"
+        "  own:\n    image: ${DEMO_IMAGE-localhost/schedr-demo:latest}\n"
+        "  merged:\n    <<: *db\n    environment: {}\n"
+        f"  pinned:\n    <<: *db\n    image: docker.io/library/postgres:17.6@sha256:{DIGEST}\n"
+    )
+    errors = pins().compose_errors(text, "compose.yaml")
+    assert len(errors) == 2, errors
+    assert "compose.yaml:5" in errors[0]
+    assert "postgres:17.6" in errors[0]
+    assert "compose.yaml:2" in errors[1]
+    assert "postgres:latest" in errors[1]
+
+
 def test_this_repository_is_pinned() -> None:
     assert pins().check_repository(ROOT) == []

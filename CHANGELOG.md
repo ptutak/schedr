@@ -7,6 +7,13 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **A connections demo** (M4.7d, decisions 202-205): `make demo` runs every connection type's
+  server, two deployments (`dev`, `prod`) over one DAG folder with secrets of their own, and
+  one UI on http://127.0.0.1:8082, in containers; `make demo-check` runs it unattended. See
+  `examples/demo/README.md`.
+- **Mongo's login database documented** (decision 206): a user logs in on the URI's
+  `authSource`, else its path's database, else `admin`; `database=` is only the database
+  the task gets.
 - **`schedr connections check` and `test`** (M4.7c, decisions 174, 193, 198-200): `check
   [ROOT]` renders every connection on a worker having the root's current code, saying of
   each secret whether it is there (never its value); `test NAME` opens one there and runs its

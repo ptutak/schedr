@@ -163,6 +163,11 @@ reportUnusedCallResult = false
 root = "python/tests/typing"
 extraPaths = ["python"]
 
+# The demo's DAG folder (examples/demo): its root on the path, as on a worker.
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/demo/dags"
+extraPaths = ["python"]
+
 [[tool.basedpyright.executionEnvironments]]
 root = "python"
 reportAny = false

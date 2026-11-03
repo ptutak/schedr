@@ -2,3 +2,5 @@
 # its copy of test_docs.py fails: it reads ../schema, outside this root).
 test_*.py
 conftest.py
+# The connections demo's DAGs: run by `make demo`, with their own secrets.
+demo/

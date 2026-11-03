@@ -1,0 +1,110 @@
+# The connections demo (decisions 202-205; `make demo`): a server of every connection type,
+# two schedr deployments (`dev`, `prod`) running the same DAG folder (dags/) with secrets of
+# their own, and one `schedr ui` over both on http://127.0.0.1:8082. `make demo` first builds
+# the images and generates every password and key into the demo's volumes (keys.sh).
+#
+# The images are those the integration tests use (Makefile), pinned the same way.
+name: schedr-demo
+
+# Each container mounts only the volume of what it reads (examples/demo/keys.sh).
+x-servers: &servers schedr-demo-servers:/demo/servers:ro
+# Every call stays on the demo's network: no proxy, whatever podman passes on from the
+# machine's environment (its HTTP_PROXY would take the UI's calls to `dev` and `prod`).
+x-no-proxy: &no-proxy
+  NO_PROXY: "*"
+  no_proxy: "*"
+
+services:
+  postgres:
+    image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_PASSWORD_FILE: /demo/servers/admin_password
+    volumes:
+      - *servers
+      - ./servers/postgres-init.sh:/docker-entrypoint-initdb.d/demo.sh:ro,z
+
+  mysql:
+    image: docker.io/library/mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /demo/servers/admin_password
+      CLIENT: mysql
+    volumes:
+      - *servers
+      - ./servers/mysql-init.sh:/docker-entrypoint-initdb.d/demo.sh:ro,z
+
+  mariadb:
+    image: docker.io/library/mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /demo/servers/admin_password
+      CLIENT: mariadb
+    volumes:
+      - *servers
+      - ./servers/mysql-init.sh:/docker-entrypoint-initdb.d/demo.sh:ro,z
+
+  mongo:
+    image: docker.io/library/mongo:7.0.45@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /demo/servers/admin_password
+    volumes:
+      - *servers
+      - ./servers/mongo-init.js:/docker-entrypoint-initdb.d/demo.js:ro,z
+
+  # One user, `demo`, logging in with either deployment's key; its host key is the one the
+  # deployments' known_hosts trusts.
+  ssh:
+    image: docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
+    environment:
+      USER_NAME: demo
+      PUBLIC_KEY_DIR: /demo/ssh-users
+    volumes:
+      - schedr-demo-ssh-users:/demo/ssh-users:ro
+      - schedr-demo-ssh-host:/config/ssh_host_keys
+
+  # go-httpbin 2.26.0 (pushed 2026-10-15): /bearer answers 200 for any bearer token, 401
+  # without one.
+  httpbin:
+    image: docker.io/mccutchen/go-httpbin:2.26.0@sha256:873b4fdb27fe7cc66fa12cb9362574e1b0bf31df7ca8a71b2502988327a0b8a4
+
+  dev:
+    image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}
+    entrypoint: [/sbin/tini, --, schedr-demo-start]
+    environment:
+      <<: *no-proxy
+      DEMO_ENV: dev
+      SCHEDR_DAG_PATH: /dags
+    volumes:
+      - schedr-demo-dev:/demo/own:ro
+      - ./dags:/dags:ro,z
+
+  prod:
+    image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}
+    entrypoint: [/sbin/tini, --, schedr-demo-start]
+    environment:
+      <<: *no-proxy
+      DEMO_ENV: prod
+      SCHEDR_DAG_PATH: /dags
+    volumes:
+      - schedr-demo-prod:/demo/own:ro
+      - ./dags:/dags:ro,z
+
+  ui:
+    image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}
+    command: [--config, /etc/schedr/ui.toml, ui]
+    environment: *no-proxy
+    volumes:
+      - ./ui.toml:/etc/schedr/ui.toml:ro,z
+    ports:
+      - 127.0.0.1:8082:8082
+
+volumes:
+  schedr-demo-dev:
+    external: true
+  schedr-demo-prod:
+    external: true
+  schedr-demo-servers:
+    external: true
+  schedr-demo-ssh-users:
+    external: true
+  schedr-demo-ssh-host:
+    external: true

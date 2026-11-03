@@ -11,8 +11,9 @@ Checks, against PROJECT.md (CI supply-chain pins):
   ``taiki-e/install-action``'s ``tool:`` is ``name@version``; ``astral-sh/setup-uv``
   and ``azure/setup-helm`` set ``version:`` to ``x.y.z``;
 - every image used by a workflow (including ``container:`` and ``services``),
-  ``scripts/*.sh``, the Makefile, ``images/**/Dockerfile`` or
-  ``examples/kubernetes/Dockerfile`` is pinned to ``@sha256:<64 hex>`` (no tag is
+  ``scripts/*.sh``, the Makefile, ``images/**/Dockerfile``, an ``examples/``
+  ``Dockerfile`` or ``Containerfile``, or a service of an ``examples/`` ``compose.yaml``
+  is pinned to ``@sha256:<64 hex>`` (no tag is
   implicit ``:latest``);
 - ``scripts/maturin-requirements.txt`` carries a sha256 hash for every requirement.
 
@@ -562,10 +563,69 @@ def _image_files(root: Path) -> list[Path]:
     images = root / "images"
     if images.is_dir():
         found.extend(sorted(images.glob("**/Dockerfile")))
-    example = root / "examples" / "kubernetes" / "Dockerfile"
-    if example.is_file():
-        found.append(example)
+    examples = root / "examples"
+    if examples.is_dir():
+        # Images of one's own (examples/kubernetes) and the demo's (examples/demo).
+        for pattern in ("**/Dockerfile", "**/Containerfile"):
+            found.extend(sorted(examples.glob(pattern)))
     return found
+
+
+def compose_errors(text: str, display: str) -> list[str]:
+    """Return one error per unpinned ``image:`` of a compose file's services.
+
+    Only the images: a volume (``./init.sh:/docker-entrypoint-initdb.d/x.sh:ro``) looks like
+    one to a line scan. A service's image may come from a YAML merge (``<<: *db``); a
+    variable's default (``${VAR:-...}``) is what is pulled when it isn't set, so it is
+    checked as the image; a variable without one is the user's choice. An image of one's own
+    built locally (``localhost/...``) is pulled from nowhere.
+    """
+    errors: list[str] = []
+    try:
+        document = yaml.compose(text)
+    except yaml.YAMLError as exc:
+        return [f"{display}: cannot read ({exc})"]
+    services = _mapping_child(document, "services")
+    if not isinstance(services, yaml.MappingNode):
+        return errors
+    for _, service in services.value:
+        image = _mapping_child(service, "image")
+        value = _scalar(image) if image is not None else None
+        if image is None or value is None:
+            continue
+        if (variable := COMPOSE_VARIABLE.fullmatch(value)) is not None:
+            value = variable["default"]
+            if value is None:
+                continue
+        if value.startswith("localhost/"):
+            continue
+        if not DIGEST.search(value):
+            _report(errors, display, _line(image), _pin_error(value))
+    return errors
+
+
+# A compose variable as the whole value: `${NAME}`, `${NAME:-default}` or `${NAME-default}`.
+COMPOSE_VARIABLE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-(?P<default>[^}]*))?\}")
+
+
+def _mapping_child(node: yaml.Node | None, key: str) -> yaml.Node | None:
+    """The value of ``key`` in a mapping node, or None.
+
+    A key of its own first, then one it merges (``<<: *anchor``, or a list of them, the
+    first holding it).
+    """
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    merged: list[yaml.Node] = []
+    for name, value in node.value:
+        if _scalar(name) == key:
+            return value
+        if _scalar(name) == "<<":
+            merged.extend(value.value if isinstance(value, yaml.SequenceNode) else [value])
+    for source in merged:
+        if (found := _mapping_child(source, key)) is not None:
+            return found
+    return None
 
 
 def check_repository(root: Path) -> list[str]:
@@ -581,6 +641,9 @@ def check_repository(root: Path) -> list[str]:
     for path in _image_files(root):
         display = _display(path, root)
         errors.extend(image_errors(path.read_text(), display))
+    examples = root / "examples"
+    for path in sorted(examples.glob("**/compose.yaml")) if examples.is_dir() else []:
+        errors.extend(compose_errors(path.read_text(), _display(path, root)))
     requirements = root / "scripts" / "maturin-requirements.txt"
     display = _display(requirements, root)
     if not requirements.is_file():

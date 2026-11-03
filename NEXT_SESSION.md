@@ -4,6 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-04, small hours): M4.7 done (M4.7d committed); paused
+
+- **M4.7d built** (decisions 202-206): the connections demo, `examples/demo`; `make
+  demo-check` passes (both deployments' runs, `connections check` and a `test` of all seven
+  connections in both). See PROJECT.md's "Built (M4.7d" entry. Decision 206 (the user's):
+  Mongo users log in where Mongo's clients do; documented.
+- **CI's SSH test fixed:** Ubuntu 26.04's runners have OpenSSH 10, whose `ssh-keyscan`
+  writes `# host:port SSH-2.0-...` comments on standard output; the test took `#` as the
+  impostor's host. It now skips comment lines.
+- **B161 logged** (suspected): `No` masked in the demo's MySQL client error, matching no
+  secret; not reproduced with the mask alone.
+- **Codex's review** (security included; Grok out until Friday 9:00): 9 findings, all
+  fixed (PROJECT.md's M4.7d entry); no guide round (the demo's README and the DAG page
+  cover it). Codex at 94% weekly: the user resets it.
+- **Paused** (the user's instruction: pause after M4.7). Next: M4.8 (PLAN.md), or B160 (a
+  task's timeout restarting after its secrets: a behaviour change for the user to decide).
+
 ## State (2026-11-03, late night): M4.7c committed; M4.7d next
 
 - **M4.7c committed** (decisions 174, 193, 198-200): `schedr connections check` / `test`.

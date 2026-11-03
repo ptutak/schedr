@@ -1,0 +1,21 @@
+# The connections demo's image (`make demo`): the schedr base image, the client tools the
+# demo's commands run (psql, MySQL's and MariaDB's clients, Mongo's database tools, curl,
+# ssh) and the connection libraries the base doesn't have (psycopg, PyMySQL). `make demo`
+# builds it; by hand, after `make image`, from the repository root:
+#   podman build --build-arg SCHEDR=schedr:0.1.0 -t schedr-demo examples/demo
+#
+# Alpine has no mongosh (it is a Node.js program): the demo's Mongo command uses
+# mongoexport, which reads the same tools config file.
+ARG SCHEDR=schedr:0.1.0
+FROM ${SCHEDR}
+USER root
+# Alpine's MySQL client is MariaDB's; it logs in to MySQL 8 with the caching_sha2_password
+# plugin, which mariadb-connector-c has.
+RUN apk add --no-cache postgresql18-client mariadb-client mariadb-connector-c mongodb-tools \
+    openssh-client curl
+RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
+    pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore \
+        --require-hashes --only-binary :all: -r /tmp/requirements.txt
+COPY keys.sh /usr/local/bin/schedr-demo-keys
+COPY start.sh /usr/local/bin/schedr-demo-start
+USER 1001

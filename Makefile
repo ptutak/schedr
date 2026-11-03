@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo demo-image demo-check demo-down demo-clean demo-requirements help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -65,12 +65,15 @@ fmt-check:       ## Verify formatting without changing files
 
 # DAG code as authors write it (decision 57): the example DAGs and the typing checks.
 DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py
+# The demo's DAG folder apart: its `connections` module is another than examples/docs/'s.
+DEMO_DAGS = $(wildcard examples/demo/dags/*.py)
 
 lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG code
 	cargo clippy --workspace --all-targets -- -D warnings
 	uv run ruff check python examples scripts
 	uv run mypy
 	uv run mypy --strict $(DAG_TYPED)
+	uv run mypy --strict $(DEMO_DAGS)
 	uv run basedpyright --project pyproject.toml
 
 schema:          ## Regenerate the committed files under schema/
@@ -288,6 +291,54 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 	run second "$(abspath $(DAGS2)):$$broken" $$((8100 + $(PORT_OFFSET))); \
 	target/debug/schedr --config "$$dir/ui.toml" ui & \
 	wait -n
+
+# The connections demo (examples/demo, decisions 202-205): the base image (built once, `make
+# image`), the demo image FROM it, every password and key generated into the demo's volumes,
+# then compose: the servers, `dev` and `prod`, and `schedr ui` on http://127.0.0.1:8082.
+# `make demo-down` stops it; `make demo-clean` also drops the generated passwords and keys.
+DEMO_IMAGE ?= localhost/schedr-demo:latest
+export DEMO_IMAGE  # compose.yaml reads it
+# Compose of the same engine as CONTAINER: images and volumes made with one are seen by it.
+COMPOSE ?= $(if $(filter podman,$(notdir $(CONTAINER))),podman-compose,docker compose)
+DEMO_COMPOSE = $(COMPOSE) -f examples/demo/compose.yaml
+# One volume per reader (examples/demo/keys.sh): each container mounts only its own.
+DEMO_VOLUMES := schedr-demo-dev schedr-demo-prod schedr-demo-servers schedr-demo-ssh-users \
+	schedr-demo-ssh-host
+
+# The base image: there already, else pulled when IMAGE names a registry
+# (`IMAGE=ghcr.io/ptutak/schedr:<version>`), else built from this checkout (`make image`,
+# which needs Rust and uv).
+demo-image:      ## Build the connections demo's image (on the base image: there, pulled, or built)
+	$(CONTAINER) image inspect $(IMAGE) >/dev/null 2>&1 || case "$(IMAGE)" in \
+		*.*/*) $(CONTAINER) pull $(IMAGE) ;; \
+		*) $(MAKE) image ;; \
+	esac
+	$(CONTAINER) build --build-arg SCHEDR=$(IMAGE) -t $(DEMO_IMAGE) examples/demo
+	for volume in $(DEMO_VOLUMES); do \
+		$(CONTAINER) volume inspect $$volume >/dev/null 2>&1 || $(CONTAINER) volume create $$volume >/dev/null; \
+	done
+	$(CONTAINER) run --rm --user 0 -v schedr-demo-dev:/demo/dev -v schedr-demo-prod:/demo/prod \
+		-v schedr-demo-servers:/demo/servers -v schedr-demo-ssh-users:/demo/ssh-users \
+		-v schedr-demo-ssh-host:/demo/ssh-host --entrypoint schedr-demo-keys $(DEMO_IMAGE)
+
+demo: demo-image ## Run the connections demo: every connection type, dev and prod, one UI on 127.0.0.1:8082
+	$(DEMO_COMPOSE) up
+
+demo-check: demo-image ## Run the demo in the background, check every connection from both deployments, stop it
+	COMPOSE="$(DEMO_COMPOSE)" scripts/demo-check.sh
+
+demo-down:       ## Stop the connections demo
+	$(DEMO_COMPOSE) down
+
+demo-clean: demo-down ## Stop the demo and drop its generated passwords and keys
+	$(CONTAINER) volume rm -f $(DEMO_VOLUMES)
+
+demo-requirements: ## Pin the demo image's libraries (examples/demo/requirements.in) again
+	uv pip compile --python-platform x86_64-unknown-linux-musl --python-version 3.14 \
+		--exclude-newer $$(date -u -d '14 days ago' +%Y-%m-%d) --no-annotate --quiet \
+		--generate-hashes --only-binary :all: -c images/schedr/requirements.txt \
+		--custom-compile-command 'make demo-requirements' \
+		examples/demo/requirements.in -o examples/demo/requirements.txt
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
 # transaction pooling in front of it (any database name passed through), on a network of their

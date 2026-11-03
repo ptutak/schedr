@@ -451,8 +451,10 @@ class Mongo(Connection[MongoDatabase]):
             name: Its name, unique in the DAG folder.
             uri: The MongoDB URI (``mongodb://host/``); a value a t-string fills in is
                 percent-encoded (decision 188).
-            database: The database the task gets.
-            user: The user, if not in the URI.
+            database: The database the task gets (not where the user logs in).
+            user: The user, if not in the URI. It logs in, as with every Mongo client, on
+                the URI's ``authSource``, else the database in its path, else ``admin``:
+                ``mongodb://host/orders`` for a user made in ``orders``.
             password: Its password, if not in the URI.
             ca_cert: The CA certificates (PEM text) to check the server's against, instead of
                 the system's.
