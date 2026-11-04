@@ -1,0 +1,1 @@
+<span class="state {{ cell.state }}">{{ cell.label }}</span>{% for line in cell.details %}<div class="{% if cell.state == "success" %}dim{% else %}warning-text{% endif %}">{{ line }}</div>{% endfor %}

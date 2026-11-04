@@ -2,16 +2,17 @@
     will happen; Confirm posts the form with htmx and the command's fragment goes to the top of
     the page's results (#action-results). `fields`: the form's own fields, by kind: "" none,
     "pause" (also cancel its runs), "trigger" (the moment, shown in both zones as it is typed;
-    `base` is the pages' prefix; `extra`: the run parameters' inputs, rendered). The dialog closes on its form's own answer only (a request
+    `base` is the pages' prefix; `extra`: the run parameters' inputs, rendered). `target` and
+    `swap`: where the answer goes instead (a connection test's: its row's result cell). The dialog closes on its form's own answer only (a request
     from inside it, the moment's preview, bubbles up to the form too), and the preview swaps
     its own way (it would inherit the form's). The live parts around a dialog pass nothing on
     (`hx-disinherit`), or their `hx-select` would empty its answers. Each action has a key, sent
     as `Idempotency-Key` (B140), kept per action until an answer says whether it arrived. One submit at a time: a second click while the
     first is on its way is dropped, and the button disabled meanwhile. -#}
-{% macro action(label, title, text, post, fields, base, extra = "") %}
+{% macro action(label, title, text, post, fields, base, extra = "", target = "#action-results", swap = "afterbegin") %}
 <button type="button" class="action" onclick="schedrOpen(this)">{{ label }}</button>
-<dialog class="confirm">
-  <form hx-post="{{ post }}" hx-target="#action-results" hx-swap="afterbegin" hx-sync="this:drop" hx-disabled-elt="find button[type=submit]" hx-on::after-request="schedrAnswered(this, event)">
+<dialog class="confirm" aria-label="{{ title }}">
+  <form hx-post="{{ post }}" hx-target="{{ target }}" hx-swap="{{ swap }}" hx-sync="this:drop" hx-disabled-elt="find button[type=submit]" hx-on::after-request="schedrAnswered(this, event)">
     <h3>{{ title }}</h3>
     <p>{{ text }}</p>
     {% if fields == "pause" %}

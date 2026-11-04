@@ -74,6 +74,7 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
         paths,
         [
             "/api/v1/commands/{command_id}",
+            "/api/v1/connections",
             "/api/v1/connections/check",
             "/api/v1/connections/{name}/test",
             "/api/v1/dags",

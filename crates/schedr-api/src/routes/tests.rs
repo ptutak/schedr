@@ -1559,3 +1559,84 @@ async fn params_with_nul_are_refused_before_any_command() {
     );
     assert_eq!(db.pending_commands(10).await.unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn each_roots_connections_are_listed_with_the_tasks_declaring_them() {
+    let task = json!({
+        "id": "extract", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "none"},
+        "connections": ["db", "gone"]
+    });
+    let (app, db, _) = api_with(task, &[]).await;
+    let (status, body) = get(&app, "/api/v1/connections").await;
+    assert_eq!(status, StatusCode::OK);
+    // No current parse yet: the task's declarations alone, refused.
+    assert_eq!(body["roots"][0]["root"], "etl");
+    assert_eq!(body["roots"][0]["connections"][0]["name"], "db");
+    let def = |name: &str, kind| schedr_model::connection::ConnectionDef {
+        name: name.to_owned(),
+        kind,
+        params: std::collections::BTreeMap::from([(
+            "password".to_owned(),
+            serde_json::from_value(
+                json!({"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}),
+            )
+            .unwrap(),
+        )]),
+    };
+    let file = |path: &str, connections| schedr_model::runner::ParsedFile {
+        path: path.to_owned(),
+        dags: vec![],
+        connections,
+        error: None,
+        warnings: Vec::new(),
+    };
+    let files = [
+        file(
+            "conns.py",
+            vec![
+                def("db", Some(schedr_model::connection::ConnectionType::Sql)),
+                def("dup", None),
+                def("unused", None),
+            ],
+        ),
+        file("other.py", vec![def("dup", None)]),
+    ];
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "h2",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts(NOW),
+            files: &files,
+        })
+        .await
+        .unwrap();
+    db.set_current_parse("etl", &parse_id, ts(NOW))
+        .await
+        .unwrap();
+    let (status, body) = get(&app, "/api/v1/connections").await;
+    assert_eq!(status, StatusCode::OK);
+    let text = body.to_string();
+    // Secret names stay in the DAG JSON: the list carries none, and never a value.
+    assert!(!text.contains("etl/db"), "{text}");
+    let gone = "connection `gone` isn't defined in the DAG folder (a `@connection` function in \
+                a file of the DAG root that imports)";
+    let dup = "connection `dup` is defined in more than one file (conns.py, other.py): rename one";
+    assert_eq!(
+        body,
+        json!({"roots": [{"root": "etl", "connections": [
+            {"name": "db", "type": "sql", "file": "conns.py",
+             "used_by": [{"dag_id": "sync", "tasks": ["extract"]}]},
+            {"name": "dup", "refused": dup, "used_by": []},
+            {"name": "gone", "refused": gone,
+             "used_by": [{"dag_id": "sync", "tasks": ["extract"]}]},
+            {"name": "unused", "file": "conns.py", "used_by": []},
+        ]}]})
+    );
+}

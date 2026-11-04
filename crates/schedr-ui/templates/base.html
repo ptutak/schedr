@@ -36,31 +36,40 @@
 // kept for that action (its URL) in this tab until an answer says whether the command arrived.
 // Sent again (the dialog reopened, the page refreshed or reloaded) after no answer came, it is
 // the command stored then, if it was: never a second run.
-function schedrKeyName(form) { return "schedr-key:" + form.getAttribute("hx-post"); }
-function schedrOpen(button) {
-  var dialog = button.nextElementSibling;
-  var form = dialog.querySelector("form");
-  var key = form.dataset.key || null;
-  try { key = key || sessionStorage.getItem(schedrKeyName(form)); } catch (e) {}
+function schedrKeyName(elt) { return "schedr-key:" + elt.getAttribute("hx-post"); }
+// The key of the action `elt` posts (a dialog's form, or a button of its own: Check all),
+// made if there is none.
+function schedrKey(elt) {
+  var key = elt.dataset.key || null;
+  try { key = key || sessionStorage.getItem(schedrKeyName(elt)); } catch (e) {}
   if (!key) {
     key = Array.from(crypto.getRandomValues(new Uint8Array(16)), function (b) {
       return b.toString(16).padStart(2, "0");
     }).join("");
-    try { sessionStorage.setItem(schedrKeyName(form), key); } catch (e) {}
+    try { sessionStorage.setItem(schedrKeyName(elt), key); } catch (e) {}
   }
-  form.dataset.key = key;
-  form.setAttribute("hx-headers", JSON.stringify({"Idempotency-Key": key}));
+  elt.dataset.key = key;
+  return key;
+}
+function schedrOpen(button) {
+  var dialog = button.nextElementSibling;
+  var form = dialog.querySelector("form");
+  form.setAttribute("hx-headers", JSON.stringify({"Idempotency-Key": schedrKey(form)}));
   dialog.showModal();
 }
 // Only the UI's own definite answer drops the key (its header): not "may have arrived", nor
 // a proxy's error page, which htmx swaps in like any answer.
-function schedrAnswered(form, event) {
-  if (event.detail.elt !== form) return;
+function schedrForget(elt, event) {
+  if (event.detail.elt !== elt) return;
   var xhr = event.detail.xhr;
   if (xhr && xhr.getResponseHeader("Schedr-Command-Answer") === "definite") {
-    delete form.dataset.key;
-    try { sessionStorage.removeItem(schedrKeyName(form)); } catch (e) {}
+    delete elt.dataset.key;
+    try { sessionStorage.removeItem(schedrKeyName(elt)); } catch (e) {}
   }
+}
+function schedrAnswered(form, event) {
+  if (event.detail.elt !== form) return;
+  schedrForget(form, event);
   form.closest("dialog").close();
 }
 // Live pages (decision 175). A browser opens at most six HTTP/1.1 connections to a host,
@@ -174,16 +183,18 @@ var schedrHiddenClose = 10000;
     if (page && Date.now() - heard >= 30000) read();
   }, 5000);
 })();
-// A log's next part not read (the UI didn't answer, or answered with an error: a proxy's 502
-// while the UI restarts, a lapsed sign-in's 401): kept, and read again a second later.
+// A log's next part, or a command's state, not read (the UI didn't answer, or answered with
+// an error: a proxy's 502 while the UI restarts, a lapsed sign-in's 401): kept, and read again
+// a second later.
+var SCHEDR_RETRIED = ".log-tail, [data-poll]";
 document.addEventListener("htmx:sendError", function (event) {
   var elt = event.detail && event.detail.elt;
-  if (elt && elt.matches && elt.matches(".log-tail")) htmx.trigger(elt, "retry");
+  if (elt && elt.matches && elt.matches(SCHEDR_RETRIED)) htmx.trigger(elt, "retry");
 });
 document.addEventListener("htmx:beforeSwap", function (event) {
   var elt = event.detail.requestConfig && event.detail.requestConfig.elt;
   var status = event.detail.xhr ? event.detail.xhr.status : 0;
-  if (!elt || !elt.matches || !elt.matches(".log-tail") || status < 400) return;
+  if (!elt || !elt.matches || !elt.matches(SCHEDR_RETRIED) || status < 400) return;
   event.detail.shouldSwap = false;
   htmx.trigger(elt, "retry");
 });
@@ -300,6 +311,7 @@ function schedrTheme() {
     <a href="{{ page.base }}/runs">Runs</a>
     <a href="{{ page.base }}/deployments">Deployments</a>
     <a href="{{ page.base }}/workers">Workers</a>
+    <a href="{{ page.base }}/connections">Connections</a>
     <a href="{{ page.base }}/import-errors">Import errors <span hx-get="{{ page.base }}/import-errors/count" hx-trigger="load" hx-swap="outerHTML"></span></a>
     {% if page.docs %}<a href="{{ page.base }}/docs/">Docs</a>{% endif %}
   </nav>

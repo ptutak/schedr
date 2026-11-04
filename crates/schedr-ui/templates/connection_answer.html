@@ -1,0 +1,15 @@
+{#- A connections command's answer (`kind`: "check" or "test"), read again every
+    `poll_ms` while a job runs (and a second after a read that failed: `data-poll`). A
+    check's is a line under its button, and each connection's result goes to its row's check
+    place (out of band); a test's goes in its row's test place. -#}
+{% if kind == "check" %}
+<div class="command {{ state }}"{% if !poll.is_empty() %} data-poll hx-get="{{ poll }}" hx-trigger="load delay:{{ poll_ms }}ms, retry delay:1s" hx-swap="outerHTML"{% endif %}><strong>{{ what }}</strong>: {{ status_line }}</div>
+{% for cell in cells %}
+<div hx-swap-oob="innerHTML:#{{ cell.id }}">{% include "connection_cell.html" %}</div>
+{% endfor %}
+{% else %}
+<div class="connection-answer"{% if !poll.is_empty() %} data-poll hx-get="{{ poll }}" hx-trigger="load delay:{{ poll_ms }}ms, retry delay:1s" hx-swap="outerHTML"{% endif %}>
+{% for cell in cells %}{% include "connection_cell.html" %}{% endfor %}
+{% if cells.is_empty() %}<span class="state {{ state }}">{{ status_line }}</span>{% endif %}
+</div>
+{% endif %}

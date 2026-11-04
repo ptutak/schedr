@@ -337,3 +337,10 @@ td .stale, .stale { color: var(--dim); }
 
 /* A run's parameters in its facts (decision 134: masked). */
 .facts dd.params { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+/* Connections (M4.7e): Check all above its table; a result cell wide enough for its lines. */
+.connection-actions { margin: 4px 0 8px; }
+td.connection-result { min-width: 14em; }
+td.connection-result .warning-text, td.connection-result .dim { font-size: 0.9em; overflow-wrap: anywhere; }
+.command.unknown { border-color: var(--waiting); }
+.state.unknown { background: var(--waiting-bg); color: var(--waiting); }
+.connection-test:not(:empty) { margin-top: 4px; }

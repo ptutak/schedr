@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, DagList, DagView,
-    DeploymentView, ImportErrorList, LogChunk, OutputView, PauseRequest, RunDetail, RunList,
-    TestConnectionRequest, TriggerRequest, WorkerList,
+    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
+    DagList, DagView, DeploymentView, ImportErrorList, LogChunk, OutputView, PauseRequest,
+    RunDetail, RunList, TestConnectionRequest, TriggerRequest, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -637,6 +637,16 @@ impl<T: Transport> Client<T> {
     /// [`ClientError`] if the request fails or the answer doesn't read.
     pub async fn import_errors(&self) -> Result<ImportErrorList, ClientError> {
         self.call(Method::Get, "/api/v1/import-errors".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/connections`: each root's connections and the tasks declaring them.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn connections(&self) -> Result<ConnectionList, ClientError> {
+        self.call(Method::Get, "/api/v1/connections".to_owned(), None)
             .await
     }
 

@@ -492,7 +492,7 @@ fn failed(what: String, reason: &str) -> Response {
 pub const ANSWER_HEADER: &str = "schedr-command-answer";
 
 /// `response` marked as a definite answer ([`ANSWER_HEADER`]), if it is one the UI rendered.
-fn definite(mut response: Response) -> Response {
+pub(crate) fn definite(mut response: Response) -> Response {
     if response.status().is_success() {
         response.headers_mut().insert(
             header::HeaderName::from_static(ANSWER_HEADER),

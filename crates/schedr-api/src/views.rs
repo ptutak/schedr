@@ -865,6 +865,147 @@ pub struct ImportErrorList {
     pub errors: Vec<ImportErrorView>,
 }
 
+/// Each DAG root's connections, in its current code (decision 211): what the UI lists, never
+/// a value.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ConnectionList {
+    /// By root.
+    pub roots: Vec<RootConnections>,
+}
+
+/// One root's connections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RootConnections {
+    /// The DAG root.
+    pub root: String,
+    /// By name: those its files define, and those its tasks declare without one.
+    pub connections: Vec<ConnectionInfo>,
+}
+
+/// A connection, as its root's current parse records it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ConnectionInfo {
+    /// Its name.
+    pub name: String,
+    /// A typed connection's type (`http`, `ssh`, `mongo`, `sql`, `generic`); none for a
+    /// `@connection` function, or one that can't be used.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The file defining it, relative to the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Why it can't be used: defined twice, invalid, or defined nowhere (a task declares it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    /// The DAGs whose tasks declare it, by DAG.
+    #[serde(default)]
+    pub used_by: Vec<ConnectionUse>,
+}
+
+/// The tasks of one DAG declaring a connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ConnectionUse {
+    /// The DAG.
+    pub dag_id: String,
+    /// Its tasks declaring it, in the DAG's order.
+    pub tasks: Vec<String>,
+}
+
+impl ConnectionList {
+    /// The list of each root's `registries` (root to its current parse's), with the tasks of
+    /// `dags` (their current versions, those not removed) declaring each.
+    #[must_use]
+    pub fn of(
+        registries: &std::collections::BTreeMap<String, schedr_model::connection::Registry>,
+        dags: &[StoredDag],
+    ) -> Self {
+        use std::collections::BTreeMap;
+        // Root, then connection, then DAG: its tasks.
+        let mut uses: BTreeMap<&str, BTreeMap<&str, BTreeMap<String, Vec<String>>>> =
+            BTreeMap::new();
+        for dag in dags.iter().filter(|d| !d.removed) {
+            let Some(current) = &dag.current else {
+                continue;
+            };
+            let root = current.dag.location.root.as_str();
+            for task in &current.dag.tasks {
+                for name in &task.connections {
+                    uses.entry(root)
+                        .or_default()
+                        .entry(name.as_str())
+                        .or_default()
+                        .entry(dag.dag_id.to_string())
+                        .or_default()
+                        .push(task.id.to_string());
+                }
+            }
+        }
+        let empty = schedr_model::connection::Registry::default();
+        let mut roots: Vec<&str> = registries.keys().map(String::as_str).collect();
+        roots.extend(uses.keys().filter(|r| !registries.contains_key(**r)));
+        roots.sort_unstable();
+        roots.dedup();
+        let mut list = Self::default();
+        for root in roots {
+            let registry = registries.get(root).unwrap_or(&empty);
+            let declared = uses.get(root);
+            let mut names: Vec<&str> = registry.names().map(String::as_str).collect();
+            names.extend(declared.into_iter().flat_map(|d| d.keys().copied()));
+            names.sort_unstable();
+            names.dedup();
+            if names.is_empty() {
+                continue;
+            }
+            let connections = names
+                .into_iter()
+                .map(|name| {
+                    let found = registry.get(name);
+                    ConnectionInfo {
+                        name: name.to_owned(),
+                        kind: found
+                            .as_ref()
+                            .ok()
+                            .and_then(|def| def.kind)
+                            .map(connection_type),
+                        file: registry.files.get(name).cloned(),
+                        refused: found.err(),
+                        used_by: declared
+                            .and_then(|d| d.get(name))
+                            .map(|by_dag| {
+                                by_dag
+                                    .iter()
+                                    .map(|(dag_id, tasks)| ConnectionUse {
+                                        dag_id: dag_id.clone(),
+                                        tasks: tasks.clone(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    }
+                })
+                .collect();
+            list.roots.push(RootConnections {
+                root: root.to_owned(),
+                connections,
+            });
+        }
+        list
+    }
+}
+
+/// A connection type as the DAG JSON writes it.
+fn connection_type(kind: schedr_model::connection::ConnectionType) -> String {
+    use schedr_model::connection::ConnectionType;
+    match kind {
+        ConnectionType::Http => "http",
+        ConnectionType::Ssh => "ssh",
+        ConnectionType::Mongo => "mongo",
+        ConnectionType::Sql => "sql",
+        ConnectionType::Generic => "generic",
+    }
+    .to_owned()
+}
+
 /// The workers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerList {

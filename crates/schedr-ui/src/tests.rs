@@ -13,6 +13,7 @@ use tower::ServiceExt;
 use super::*;
 
 mod actions;
+mod connections;
 mod deployments;
 mod runs;
 
@@ -345,6 +346,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/runs",
             "/deployments",
             "/workers",
+            "/connections",
             "/import-errors",
             "/docs/"
         ]
@@ -353,7 +355,14 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let (_, page) = get(&ui(vec![deployment("etl", etl())]), "/", &[]).await;
     assert_eq!(
         attrs(&page, "header nav a", "href"),
-        ["/", "/runs", "/deployments", "/workers", "/import-errors"]
+        [
+            "/",
+            "/runs",
+            "/deployments",
+            "/workers",
+            "/connections",
+            "/import-errors"
+        ]
     );
 }
 

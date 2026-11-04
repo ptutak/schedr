@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "confirm.html" as confirm %}
+{% block title %}Connections · schedr{% endblock %}
+{% block content %}
+<h1>Connections</h1>
+<p class="dim">Each deployment's connections, by DAG root, in its current code. <strong>Check all</strong> renders them on a worker: whether each secret they name is there, nothing contacted. <strong>Test</strong> opens one there and runs its check: a real login, with that deployment's secrets.</p>
+<div id="action-results" class="results"></div>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
+{% endfor %}
+{% if groups.is_empty() && unavailable.is_empty() %}
+<p class="empty">No connections.</p>
+{% endif %}
+{% for group in groups %}
+<h2>{{ group.title }}</h2>
+{% include "connection_group.html" %}
+{% endfor %}
+{% endblock %}

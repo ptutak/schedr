@@ -42,6 +42,15 @@
   {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
   {% if !limits.is_empty() %}<dt>Limits</dt><dd><ul class="limits">{% for limit in limits %}<li{% if limit.reached %} class="reached"{% endif %}><code>{{ limit.name }}</code> {{ limit.value }} on {{ limit.of }}: {{ limit.running }}{% if limit.reached %} (reached: the rest wait){% endif %}</li>{% endfor %}</ul></dd>{% endif %}
 </dl>
+{#- Above the runs (which grow); kept as it is across live reloads (`hx-preserve` in the
+    group), so a check or a test shown, or still running, stays. -#}
+{% if let Some(group) = connections %}
+<h2>Connections</h2>
+{% include "connection_group.html" %}
+{% else if !connections_unavailable.is_empty() %}
+<h2>Connections</h2>
+<div class="banner warning">Unavailable: {{ connections_unavailable }}</div>
+{% endif %}
 <h2>Runs <a class="more" href="{{ runs_href }}">all runs of this DAG</a></h2>
 {% if runs.is_empty() %}
 <p class="empty">No runs yet.</p>

@@ -28,9 +28,9 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, DagList, DagView,
-    DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery, LimitView,
-    LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
+    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
+    DagList, DagView, DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery,
+    LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
     ProblemView, RunDetail, RunList, RunView, RunsQuery, TaskView, TestConnectionRequest,
     TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
@@ -204,6 +204,21 @@ pub async fn drain_worker(
     key: RequestKey,
 ) -> Accepted {
     submit(&state, &user, key, Command::DrainWorker { worker_id }).await
+}
+
+/// Each DAG root's connections in its current code (decision 211): name, type, the file
+/// defining it, why one can't be used, and the DAGs and tasks declaring it; never a value.
+/// A task declaring a connection no file defines lists it too, refused.
+#[utoipa::path(get, path = "/api/v1/connections", tag = "connections",
+    responses((status = 200, body = ConnectionList)))]
+pub async fn list_connections(State(state): State<ApiState>) -> ApiResult<ConnectionList> {
+    let mut registries = std::collections::BTreeMap::new();
+    for root in state.db.current_parses().await?.into_keys() {
+        let registry = state.db.current_connections(&root).await?;
+        registries.insert(root, registry);
+    }
+    let dags = state.db.stored_dags().await?;
+    Ok(Json(ConnectionList::of(&registries, &dags)))
 }
 
 /// The default time a connection test may take (decision 200).

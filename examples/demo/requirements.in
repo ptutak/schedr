@@ -1,4 +1,0 @@
-# The connections the demo opens beyond the base image's libraries (schedr[postgres],
-# schedr[mysql]), at the versions uv.lock has; `make demo-requirements` pins them.
-psycopg[binary]==3.3.6
-pymysql[rsa]==1.2.3

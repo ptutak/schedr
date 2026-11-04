@@ -113,7 +113,7 @@ async fn an_action_shows_its_command_until_the_master_decides() {
     );
     assert_eq!(
         attrs(&html, ".command", "hx-trigger"),
-        ["load delay:1000ms"]
+        ["load delay:1000ms, retry delay:1s"]
     );
     let (status, html) = get(&app, &poll[0], &[]).await;
     assert_eq!(status, StatusCode::OK);

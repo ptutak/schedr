@@ -1,6 +1,7 @@
 # The schedr base image (see PROJECT.md, Components and roles: production path): the binary,
-# Python, the `schedr` package and a set of libraries for tasks (requirements.in: API calls,
-# data, networking, MongoDB), running `schedr standalone` by default. More libraries go in an
+# Python, the `schedr` package, a set of libraries for tasks (requirements.in: API calls,
+# data, networking, every connection type's client) and the command-line clients a command
+# uses its connections with, running `schedr standalone` by default. More libraries go in an
 # image of your own built FROM this one (examples/kubernetes/Dockerfile).
 #
 # Alpine, for a small system to keep patched; it uses musl, so the musllinux wheel:
@@ -27,6 +28,14 @@ FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12
 # tini as PID 1 reaps orphaned processes (a task's child that outlives it), which schedr, not
 # being an init, wouldn't.
 RUN apk add --no-cache tini
+
+# The clients commands use their connections with (docs/02-dags/14-connections.md): psql,
+# MySQL's and MariaDB's (Alpine's MySQL client is MariaDB's; mariadb-connector-c has the
+# caching_sha2_password plugin MySQL 8 logs in with), Mongo's database tools (Alpine has no
+# mongosh, a Node.js program: mongoexport and the others read the same tools config file),
+# ssh and scp, curl.
+RUN apk add --no-cache postgresql18-client mariadb-client mariadb-connector-c mongodb-tools \
+    openssh-client curl
 
 # The libraries, only from the builder's wheels (no compiler in this image), mounted rather
 # than copied: a copied layer would keep the wheels (80 MB) though deleted after.

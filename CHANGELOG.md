@@ -7,6 +7,16 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Connections in the web UI** (M4.7e, decisions 207-211): a **Connections** page (every
+  deployment's, by DAG root) and a section on each DAG's page (those its tasks declare), with
+  **Check all** per root and **Test** per connection (after a confirmation), the results
+  filled in as the workers answer. The API: `GET /api/v1/connections`, each root's
+  connections with their type, file and the DAGs and tasks declaring them.
+- **Every connection type works in the base image** (decision 212): psycopg and PyMySQL join
+  its libraries, and the command-line clients commands use their connections with: psql,
+  mysql and mariadb (with their dump tools), Mongo's database tools, ssh and scp, curl (the
+  image grows to about 670 MB). `pip install schedr[connections]` installs every type's
+  client elsewhere.
 - **A connections demo** (M4.7d, decisions 202-205): `make demo` runs every connection type's
   server, two deployments (`dev`, `prod`) over one DAG folder with secrets of their own, and
   one UI on http://127.0.0.1:8082, in containers; `make demo-check` runs it unattended. See

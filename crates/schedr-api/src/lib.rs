@@ -55,6 +55,7 @@ pub use state::ApiState;
         events::events,
         routes::drain_worker,
         routes::resume_worker,
+        routes::list_connections,
         routes::check_connections,
         routes::test_connection,
     ),
@@ -162,6 +163,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/workers/{worker_id}/resume",
             post(routes::resume_worker),
         )
+        .route("/api/v1/connections", get(routes::list_connections))
         .route("/api/v1/connections/check", post(routes::check_connections))
         .route(
             "/api/v1/connections/{name}/test",

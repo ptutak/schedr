@@ -414,3 +414,54 @@ def test_a_runs_tasks_show_their_ends_soon_after_them(
     # not at the next refresh.
     expect(page.locator("svg.dag rect.box.success")).to_have_count(3, timeout=4_000)
     expect(page.locator("h1 .state")).to_have_text("success", timeout=1_000)
+
+
+def test_check_all_fills_each_connections_row_once_the_worker_answers(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    page.goto(f"{standalone['url']}/connections")
+    rows = page.locator("table.connections tbody tr")
+    expect(rows.filter(has_text="settings")).to_be_visible(timeout=30_000)
+    page.get_by_role("button", name="Check all").click()
+    status = page.locator(".connection-group .results .command")
+    expect(status).to_contain_text("1 ok, 1 failed", timeout=30_000)
+    plain = rows.filter(has_text="plain").locator("td.connection-result")
+    expect(plain).to_contain_text("check: ok")
+    settings = rows.filter(has_text="settings").locator("td.connection-result")
+    expect(settings).to_contain_text("check: failed")
+    expect(settings).to_contain_text("secrets['ui/settings']['token']")
+
+
+def test_a_connection_is_tested_from_its_dags_page_after_a_confirmation(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    page.goto(f"{standalone['url']}/d/default/dags/with_connections")
+    row = page.locator("table.connections tbody tr", has_text="plain")
+    expect(row).to_be_visible(timeout=30_000)
+    row.get_by_role("button", name="Test").click()
+    dialog = page.locator("dialog.confirm[open]")
+    expect(dialog).to_contain_text("a real login")
+    dialog.get_by_role("button", name="Test").click()
+    expect(dialog).to_be_hidden()
+    expect(row.locator("td.connection-result")).to_contain_text(
+        re.compile(r"test: ok \(\d+\.\d s\)"), timeout=60_000
+    )
+
+
+def test_a_shown_connection_result_stays_when_its_dags_page_is_read_again(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    url = standalone["url"]
+    page.goto(f"{url}/d/default/dags/with_connections")
+    page.get_by_role("button", name="Check all").click()
+    cell = page.locator("table.connections tbody tr", has_text="plain").locator(
+        "td.connection-result"
+    )
+    expect(cell).to_contain_text("check: ok", timeout=30_000)
+    page.evaluate("window.notReloaded = true")
+    # A new run of the DAG: the page's live part is read again, the run listed.
+    answer = page.request.post(f"{url}/api/v1/dags/with_connections/runs", data={})
+    assert answer.ok, answer.text()
+    expect(page.locator("table.runs tbody tr")).to_have_count(1, timeout=30_000)
+    expect(cell).to_contain_text("check: ok")
+    assert page.evaluate("window.notReloaded") is True

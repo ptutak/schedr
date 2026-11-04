@@ -791,7 +791,8 @@ of the mesh would defeat the point.
   some work out of the box; changes 2.10's "the base image carries only schedr"): API calls
   (`requests`, `httpx`, `aiohttp`, `tenacity`), data (`polars`, `orjson`, `pyyaml`,
   `python-dateutil`), networking (`paramiko`, `netmiko`, `ncclient`, `dnspython`, `netaddr`)
-  and MongoDB (`pymongo`); no service frameworks or ORMs (no SQLAlchemy: nothing is served from
+  and MongoDB (`pymongo`); since decision 212 also `psycopg[binary]` and `pymysql[rsa]`, and
+  the connections' command-line clients; no service frameworks or ORMs (no SQLAlchemy: nothing is served from
   tasks). `images/schedr/requirements.in`, pinned with every dependency (46 packages) in
   `requirements.txt` by `make image-requirements` (`uv pip compile` for musl and Python 3.14
   with `--exclude-newer` two weeks back, stricter than the library-age rule (a new major or
@@ -8229,6 +8230,49 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     task gets, and `Mongo`'s docstring says so. Not chosen: `database=` as the login
     database when the URI names none (friendlier for a user made in the app's database, but
     unlike every Mongo client, and it would break users made in `admin`).
+  - **207. Connections in the UI: Check and Test buttons** (the user's, 2026-11-04; M4.7e):
+    a DAG page gets a Connections section, a row per connection its tasks declare (Python
+    tasks' and `CommandOperator(connections=)`'s): name, type, the tasks using it, the last
+    result; **Check all** on top (renders them on a worker: secrets there or not, nothing
+    contacted) and **Test** on each row (opens it and runs its check: a real login). Not
+    chosen: Check only (no side effects, but a wrong password or a firewall goes unseen);
+    Test only (one login per connection to learn what a check says at once).
+  - **208. The DAG page's Check is the root's check, its rows shown** (the user's,
+    2026-11-04): `POST /api/v1/connections/check` as it is, the page showing the DAG's
+    connections of the answer. Not chosen: a `names` filter in the API (an API change for
+    rows a page can pick).
+  - **209. Results live on the page** (the user's, 2026-11-04): a row says "running" when
+    pressed and is filled in when the worker answers (the command polled, as the UI's other
+    actions are), kept until the page is left. Not chosen: results stored and shown on later
+    visits (a history of checks to keep).
+  - **210. Anyone signed in may press Test, after a confirm dialog** (the user's,
+    2026-11-04): as with the CLI and the API (no roles yet); the dialog names the connection
+    and says it logs in to the real system with this deployment's secrets. Not chosen:
+    waiting for roles.
+  - **211. A Connections page, now** (the user's, 2026-11-04): `/connections`, in the
+    navigation beside Workers and Import errors, over every deployment the UI shows, as
+    those pages are: grouped by deployment, a heading per root (`dev · dags`) with its own
+    Check all, a row per connection (name, type, file, the DAGs and tasks declaring it, the
+    last result, Test); every connection of the root, used by a DAG or not. The UI has no
+    roots page: a root is a heading. It reads a new `GET /api/v1/connections`: each root's
+    connections in its current code, name, type, file and who declares them, no values. Not
+    chosen: later, after the DAG section; a section of each deployment's page (about its
+    nodes, so harder to find); the DAG section only.
+  - **212. Every connection type works in the base image** (the user's, 2026-11-04, in
+    M4.7e: "we have http, mongo and paramiko by default, but no postgres/mysql"): its
+    libraries gain `psycopg[binary]` and `pymysql[rsa]` (with httpx, pymongo and paramiko,
+    every type's client), and `schedr[connections]` installs them all outside it; it also
+    carries the command-line clients commands use their connections with: `postgresql18-client`,
+    `mariadb-client` with `mariadb-connector-c` (MySQL 8's `caching_sha2_password`),
+    `mongodb-tools`, `openssh-client`, `curl` (477 MB to about 670 MB: mongodb-tools 104 MB,
+    the MariaDB client 37 MB, the rest about 5 MB; "650MB image is not big"). The demo's
+    image keeps only its start scripts (its requirements and `make demo-requirements` gone).
+    Alpine has no mongosh (a Node.js program). Not chosen: only curl, ssh and psql in the
+    base (5 MB; Claude's pick), the rest in an image of one's own; none, the demo's
+    Containerfile as the recipe; the SQL drivers through the extras only (two standards in
+    one image).
+    Later, if someone needs it (the user's): a slim image beside it (schedr, Python and
+    its own dependencies only), the full one staying the default.
 - **Built (M4.7b2; decisions 184, 190-197, 201):** a command's connections as variables and
   files. `CommandOperator(connections={"DB": warehouse})` records `connection_env` (prefix to
   name) with the task, its names declared; the master refuses a prefix that can't start a
@@ -8326,6 +8370,32 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
   podman, `docker compose` with docker); a half-done key step starts over; a base image
   named with its registry is pulled. Decision 202's "without Rust or uv" holds once a
   release has connections: until then the first run builds the base image (README).
+- **Built (M4.7e; decisions 207-212):** connections in the web UI. `GET /api/v1/connections`
+  lists each root's connections in its current code (`ConnectionList::of`: the registry and
+  the current DAGs' tasks): name, type, file, why one is refused, and the DAGs and tasks
+  declaring it (a name a task declares that no file defines too, refused); no secret's
+  value (a refusal's reason may quote a secret reference as the code writes it: its name,
+  a literal default, public as the code is). The UI's `/connections` page (in the navigation after Workers) asks every
+  deployment at once and shows a table per deployment and root; a DAG's page shows its root's
+  rows its tasks declare, above its runs (which grow; the user's). The rows are read again
+  with the live part (the code may have changed); a row's check result, its test result and
+  the check's line each have a place of their own, kept as they are (`hx-preserve`, by their
+  IDs: a result shown, or a poll still running, stays), so a check never replaces a test
+  still being read. Check all posts `check_connections` for the root's rows (not the
+  refused), under a key kept in the browser until a definite answer (B140), as a dialog's
+  form; Test, from a confirmation dialog (named by its title) naming the real login,
+  `test_connection`. Each answer reads its command every second until the job answered or
+  was lost, and a second after a read that failed (`data-poll`, also an action's command):
+  a check's line under its button and each row's check place, out of band
+  (`hx-swap-oob="innerHTML:#cell-check"`; `check: running` meanwhile); a test's in its row's
+  test place: `check: ok`, `test: failed (1.2 s)` with the masked error, and each secret not
+  plainly there. A connection asked about that the worker didn't report: `no answer`,
+  failed. No answer from the webserver: `may have arrived` (never "not sent"). A webserver
+  without the list (404) shows no section. Browser tests: Check all on the page, a Test from
+  a DAG's page, a result kept across a live reload. The base image (decision 212):
+  `psycopg[binary]` and `pymysql[rsa]` in `requirements.in` (3 pins more: cryptography was
+  there), the clients by `apk`; `schedr[connections]` in `pyproject.toml`; the demo's image
+  `FROM` it with its scripts only.
 
 **Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
 CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`

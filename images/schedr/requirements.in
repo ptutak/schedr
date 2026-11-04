@@ -19,3 +19,7 @@ dnspython
 netaddr
 # MongoDB (no musllinux wheel: built in the image's builder stage)
 pymongo
+# SQL: Postgres (psycopg 3 with its own libpq) and MySQL or MariaDB (rsa: SHA-2 logins);
+# with the above, every connection type's client (schedr[connections])
+psycopg[binary]
+pymysql[rsa]

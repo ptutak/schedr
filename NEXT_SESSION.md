@@ -4,6 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-04, end of day): M4.7e committed; stopped for the day
+
+- **M4.7e** (decisions 207-211, the user's): connections in the web UI. A Connections page
+  (every deployment's, by root) and a DAG page's section above its runs, Check all per root
+  and Test per row behind a confirmation, results filled in live; `GET /api/v1/connections`.
+  See PROJECT.md's "Built (M4.7e" entry. Reviewed by Codex (security included; Grok out until
+  Friday 9:00): 9 findings, all fixed; the guide's Connections section by Codex (terra).
+- **CI:** M4.7d's run green, the SSH test fixed (OpenSSH 10's `ssh-keyscan` comments).
+- **Also in M4.7e (decision 212, the user's):** every connection type's clients in the base
+  image, Python (psycopg, PyMySQL added) and command line (psql, MariaDB's client, Mongo's
+  tools, ssh, curl; about 670 MB); `schedr[connections]`; the demo image only adds scripts.
+  Later, if someone needs it: a slim image beside the full one (decision 212).
+  Committed before `make image` and `make demo-check` finished on it (the user's call): check
+  both, and CI's image job.
+- **Next:** M4.8 (PLAN.md), or B160 (a task's timeout restarting after its secrets: a
+  behaviour change for the user to decide). Codex was reset on 2026-11-04.
+
 ## State (2026-11-04, small hours): M4.7 done (M4.7d committed); paused
 
 - **M4.7d built** (decisions 202-206): the connections demo, `examples/demo`; `make

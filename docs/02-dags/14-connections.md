@@ -206,9 +206,11 @@ gives its client. Its name is the first argument, as an operator's task ID is:
 | `Generic` | keys of your own | a `dict` | none |
 
 Each client's library is an extra, installed where tasks run: `schedr[http]`,
-`schedr[ssh]`, `schedr[mongo]`, `schedr[postgres]`, `schedr[mysql]`. It is imported only when
-a connection of its type is opened; without it, the attempt fails saying which extra to
-install.
+`schedr[ssh]`, `schedr[mongo]`, `schedr[postgres]`, `schedr[mysql]`, or all of them as
+`schedr[connections]`. It is imported only when a connection of its type is opened; without
+it, the attempt fails saying which extra to install. The base image has them all, and the
+command-line clients the commands above use (psql, mysql and mariadb with their dump tools,
+Mongo's database tools, ssh and scp, curl); Alpine has no mongosh.
 
 **SSH trusts only the host keys it is given.** `known_hosts` holds them as `known_hosts`
 lines (`ssh-keyscan HOST` prints them; `[host]:port` for another port than 22), and any other
@@ -324,6 +326,13 @@ Both exit 1 when a connection failed, or when no answer came (`lost`: the worker
 away or restarted, the master restarted, or the answer didn't come in time). The API: `POST /api/v1/connections/check` and
 `POST /api/v1/connections/{name}/test`, each returning the command, its result filled in as
 the workers answer (`GET /api/v1/commands/{id}`).
+
+**In the web UI:** the **Connections** page lists every deployment's connections by DAG
+root: type, the file defining each, the DAGs and tasks declaring it, and why one can't be
+used. A DAG's page shows those its tasks declare. Each root has **Check all**; each row a
+**Test**, behind a confirmation (it logs in for real, with that deployment's secrets). The
+results fill the rows as the workers answer, and stay until you leave the page. The list is
+`GET /api/v1/connections` (names, types and files; never a value).
 
 **To try it all:** the repository's demo, `examples/demo` (`make demo`, podman and
 podman-compose), runs a server of every type and two deployments, `dev` and `prod`, over one

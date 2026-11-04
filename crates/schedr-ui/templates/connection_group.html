@@ -1,0 +1,30 @@
+{#- One root's connections (`group`), on the Connections page and a DAG's page: Check all for
+    them (its answer under the button, then each row's check result filled in), Test per row
+    behind a confirmation dialog (its answer in the row's test result). A row's check and test
+    results have places of their own (a check never replaces a test still being read), kept as
+    they are when a live part around them is read again (`hx-preserve`, by their IDs), the
+    rows themselves read again. Check all keeps its key (B140) as a dialog's form does. The
+    including page imports `confirm` and has `page`. -#}
+<div class="connection-group">
+  <div class="connection-actions">
+    <button type="button" class="action" hx-post="{{ group.check_post }}" hx-target="#{{ group.status_id }}" hx-swap="innerHTML" hx-sync="this:drop" hx-disabled-elt="this" hx-on::config-request="event.detail.headers['Idempotency-Key'] = schedrKey(this)" hx-on::after-request="schedrForget(this, event)" title="Render them on a worker: whether each secret is there; nothing is contacted">Check all</button>
+  </div>
+  <div id="{{ group.status_id }}" class="results" hx-preserve="true"></div>
+  <table class="list connections">
+    <thead>
+      <tr><th>Connection</th><th>Type</th><th>Defined in</th><th>Used by</th><th>Last result</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for row in group.rows %}
+      <tr>
+        <td class="mono">{{ row.name }}</td>
+        <td>{% if row.kind.is_empty() %}<span class="dim">-</span>{% else %}{{ row.kind }}{% endif %}</td>
+        <td class="mono">{% if row.file.is_empty() %}<span class="dim">-</span>{% else %}{{ row.file }}{% endif %}</td>
+        <td>{% for used in row.used_by %}<div><a href="{{ used.href }}">{{ used.dag_id }}</a> <span class="dim mono">{{ used.tasks }}</span></div>{% endfor %}{% if row.used_by.is_empty() %}<span class="dim">no DAG</span>{% endif %}</td>
+        <td class="connection-result">{% if let Some(why) = row.refused %}<span class="state failed">refused</span><div class="warning-text">{{ why }}</div>{% else %}<div id="{{ row.cell_id }}-check" class="connection-check" hx-preserve="true"><span class="dim">-</span></div><div id="{{ row.cell_id }}-test" class="connection-test" hx-preserve="true"></div>{% endif %}</td>
+        <td>{% if row.refused.is_none() %}{% call confirm::action("Test", row.test_title, row.test_text, row.test_post, "", page.base, "", "#" ~ row.cell_id ~ "-test", "innerHTML") %}{% endcall %}{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

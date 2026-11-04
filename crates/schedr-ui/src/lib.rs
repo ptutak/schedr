@@ -17,6 +17,7 @@ use schedr_client::{Client, Transport};
 mod actions;
 mod ansi;
 mod assets;
+mod connections;
 pub mod deployments;
 mod docs;
 pub mod graph;
@@ -64,7 +65,7 @@ pub struct Ui<T> {
 
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
 /// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/deployments`,
-/// `/workers`, the
+/// `/workers`, `/connections` (and its checks and tests), the
 /// actions (POSTs, see `actions`), `/events`, `/time`, `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
@@ -85,6 +86,19 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         )
         .route("/deployments", get(deployments::list::<T>))
         .route("/workers", get(workers::list::<T>))
+        .route("/connections", get(connections::list::<T>))
+        .route(
+            "/d/{deployment}/connections/check",
+            post(connections::check::<T>),
+        )
+        .route(
+            "/d/{deployment}/connections/{name}/test",
+            post(connections::test::<T>),
+        )
+        .route(
+            "/d/{deployment}/connections/commands/{command}",
+            get(connections::poll::<T>),
+        )
         .route("/import-errors", get(imports::list::<T>))
         .route("/import-errors/count", get(imports::nav_count::<T>))
         .route("/import-errors/notice", get(imports::notice::<T>))

@@ -1589,6 +1589,13 @@ name = "schedr"
 source = { editable = "." }
 
 [package.optional-dependencies]
+connections = [
+    { name = "httpx" },
+    { name = "paramiko" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pymongo" },
+    { name = "pymysql", extra = ["rsa"] },
+]
 http = [
     { name = "httpx" },
 ]
@@ -1646,8 +1653,9 @@ requires-dist = [
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.11,<3" },
     { name = "pymongo", marker = "extra == 'mongo'", specifier = ">=4.10,<5" },
     { name = "pymysql", extras = ["rsa"], marker = "extra == 'mysql'", specifier = ">=1.1,<2" },
+    { name = "schedr", extras = ["http", "mongo", "ssh", "postgres", "mysql"], marker = "extra == 'connections'" },
 ]
-provides-extras = ["http", "mongo", "mysql", "postgres", "pydantic", "ssh"]
+provides-extras = ["connections", "http", "mongo", "mysql", "postgres", "pydantic", "ssh"]
 
 [package.metadata.requires-dev]
 dev = [

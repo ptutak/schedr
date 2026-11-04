@@ -61,6 +61,7 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
     dags.mkdir()
     shutil.copy(REPO / "examples" / "sync.py", dags / "sync.py")
     shutil.copy(Path(__file__).parent / "form_params.py", dags / "form_params.py")
+    shutil.copy(Path(__file__).parent / "with_connections.py", dags / "with_connections.py")
     binary = os.environ.get("SCHEDR_BIN", str(REPO / "target" / "debug" / "schedr"))
     log = work / "standalone.log"
     env = {

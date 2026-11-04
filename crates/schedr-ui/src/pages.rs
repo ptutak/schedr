@@ -72,6 +72,10 @@ struct DagPage {
     params_html: String,
     /// What fails when a run reaches it (a connection its root doesn't define).
     warnings: Vec<String>,
+    /// The connections its tasks declare (decision 207): its root's group, if any.
+    connections: Option<crate::connections::Group>,
+    /// Why they can't be shown now (empty: they can).
+    connections_unavailable: String,
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -199,6 +203,18 @@ pub async fn dag<T: Transport>(
         Err(error) => return unavailable_page(&page, &deployment.name, &error),
     };
     let conflicts = dag.conflict.iter().flatten().map(location).collect();
+    // Asked only for a DAG whose tasks declare connections (the warnings name them, or none);
+    // a webserver without the list (404) has none to show.
+    let (connections, connections_unavailable) = match deployment.client.connections().await {
+        Ok(list) => (
+            crate::connections::groups(&page, deployment, &list, Some(&dag.dag_id), false)
+                .into_iter()
+                .next(),
+            String::new(),
+        ),
+        Err(ClientError::Server { status: 404, .. }) => (None, String::new()),
+        Err(error) => (None, error.to_string()),
+    };
     let params_html = match TriggerParams::of(&dag.params).render() {
         Ok(html) => html,
         Err(error) => {
@@ -215,6 +231,8 @@ pub async fn dag<T: Transport>(
             params_html,
             limits: dag.limits.iter().map(LimitRow::of).collect(),
             warnings: dag.warnings.clone(),
+            connections,
+            connections_unavailable,
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),

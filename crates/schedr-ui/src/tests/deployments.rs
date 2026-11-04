@@ -368,8 +368,15 @@ async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
     assert!(!html.contains("location.replace"));
     // In the navigation, in its place; the Config page and each deployment's page are gone.
     assert_eq!(
-        texts(&html, "header nav a")[..5],
-        ["DAGs", "Runs", "Deployments", "Workers", "Import errors"]
+        texts(&html, "header nav a")[..6],
+        [
+            "DAGs",
+            "Runs",
+            "Deployments",
+            "Workers",
+            "Connections",
+            "Import errors"
+        ]
     );
     for gone in ["/config", "/deployments/etl"] {
         let (status, _) = get(&app, gone, &[]).await;

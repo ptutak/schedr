@@ -236,6 +236,84 @@
         ],
         "type": "object"
       },
+      "ConnectionInfo": {
+        "description": "A connection, as its root's current parse records it.",
+        "properties": {
+          "file": {
+            "description": "The file defining it, relative to the root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "refused": {
+            "description": "Why it can't be used: defined twice, invalid, or defined nowhere (a task declares it).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "A typed connection's type (`http`, `ssh`, `mongo`, `sql`, `generic`); none for a\n`@connection` function, or one that can't be used.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "used_by": {
+            "description": "The DAGs whose tasks declare it, by DAG.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionUse"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConnectionList": {
+        "description": "Each DAG root's connections, in its current code (decision 211): what the UI lists, never\na value.",
+        "properties": {
+          "roots": {
+            "description": "By root.",
+            "items": {
+              "$ref": "#/components/schemas/RootConnections"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "type": "object"
+      },
+      "ConnectionUse": {
+        "description": "The tasks of one DAG declaring a connection.",
+        "properties": {
+          "dag_id": {
+            "description": "The DAG.",
+            "type": "string"
+          },
+          "tasks": {
+            "description": "Its tasks declaring it, in the DAG's order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dag_id",
+          "tasks"
+        ],
+        "type": "object"
+      },
       "DagList": {
         "description": "The DAGs.",
         "properties": {
@@ -786,6 +864,27 @@
         ],
         "type": "object"
       },
+      "RootConnections": {
+        "description": "One root's connections.",
+        "properties": {
+          "connections": {
+            "description": "By name: those its files define, and those its tasks declare without one.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionInfo"
+            },
+            "type": "array"
+          },
+          "root": {
+            "description": "The DAG root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "connections"
+        ],
+        "type": "object"
+      },
       "RunDetail": {
         "description": "A run with its tasks.",
         "properties": {
@@ -1325,6 +1424,26 @@
         "summary": "A command and the master's decision about it.",
         "tags": [
           "commands"
+        ]
+      }
+    },
+    "/api/v1/connections": {
+      "get": {
+        "operationId": "list_connections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each DAG root's connections in its current code (decision 211): name, type, the file\ndefining it, why one can't be used, and the DAGs and tasks declaring it; never a value.\nA task declaring a connection no file defines lists it too, refused.",
+        "tags": [
+          "connections"
         ]
       }
     },

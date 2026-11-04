@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: demo demo-image demo-check demo-down demo-clean demo-requirements help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -332,13 +332,6 @@ demo-down:       ## Stop the connections demo
 
 demo-clean: demo-down ## Stop the demo and drop its generated passwords and keys
 	$(CONTAINER) volume rm -f $(DEMO_VOLUMES)
-
-demo-requirements: ## Pin the demo image's libraries (examples/demo/requirements.in) again
-	uv pip compile --python-platform x86_64-unknown-linux-musl --python-version 3.14 \
-		--exclude-newer $$(date -u -d '14 days ago' +%Y-%m-%d) --no-annotate --quiet \
-		--generate-hashes --only-binary :all: -c images/schedr/requirements.txt \
-		--custom-compile-command 'make demo-requirements' \
-		examples/demo/requirements.in -o examples/demo/requirements.txt
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
 # transaction pooling in front of it (any database name passed through), on a network of their
