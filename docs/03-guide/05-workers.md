@@ -99,7 +99,7 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    and runs it on the same worker. The attempt holds its slot through the cleanup and its
    retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain
    available. Handles are journaled locally and survive an agent restart with the journal disk;
-   a lost worker does not run its cleanup. See [Cleaning up after a task](../02-dags/15-cleanup.md).
+   the master also stores them and can move cleanup after worker loss when `cleanup_anywhere` is enabled. See [Cleaning up after a task](../02-dags/15-cleanup.md).
 6. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`: again on a reconnect, and while the connection stays up
    (the master may have failed to store it) after one heartbeat interval, then ever less often
@@ -396,7 +396,7 @@ Under `<data_dir>/journal/<worker ID>/`, an attempt's record holds its process g
 `cleaning` task result and cleanup process, or its unacknowledged `finished` result. Records
 are written atomically (temporary file, fsync, rename). An attempt with cleanup also keeps
 `<attempt_id>.attempt` (assignment, inputs, code copy and hash) and `<attempt_id>.handles`
-(one handle per line). Handles stay on the worker; the master does not receive them.
+(one handle per line). Handles are also sent to and stored by the master.
 
 At startup the agent stops orphaned process groups (SIGTERM, SIGKILL after 10 s). A finished
 result is reported in `Register`: `Ack` removes it, `Continue` sends it again, and `Kill`

@@ -1435,3 +1435,123 @@ fn one_ui_shows_a_federation_of_standalones_and_a_distributed_deployment() {
     ui_process.wait().unwrap();
     drop((lite, pg, distributed));
 }
+
+/// A task that registers a handle and runs on; its cleanup writes the handle to `marker`.
+fn left_behind(marker: &std::path::Path, anywhere: bool) -> String {
+    let anywhere = if anywhere { "True" } else { "False" };
+    let marker = marker.display();
+    format!(
+        r#"
+import time
+from dataclasses import dataclass
+from schedr import Dag, cleanup_handle, task
+
+@dataclass
+class Job:
+    id: str
+
+def undo(handles: list[Job]) -> None:
+    with open("{marker}", "w") as out:
+        out.write(handles[0].id)
+
+@task(cleanup=undo, cleanup_anywhere={anywhere})
+def work() -> str:
+    cleanup_handle(Job("j-1"))
+    time.sleep(10)
+    return "done"
+
+with Dag("left_behind"):
+    work()
+"#,
+    )
+}
+
+#[test]
+fn a_killed_workers_cleanup_runs_on_another_with_cleanup_anywhere() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.root().join("cleaned");
+    std::fs::write(
+        cluster.root().join("left_behind.py"),
+        left_behind(&marker, true),
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.start_as("worker-2", "worker", &[("SCHEDR_CONFIG__WORKER__ID", "w2")]);
+    cluster.wait("both workers", || {
+        cluster.worker_state("w2").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("left_behind");
+    cluster.wait("the task to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    // Time for its handle to reach the master.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let first = cluster.attempts(&run_id, "work")[0]["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (role, other) = if first == "w2" {
+        ("worker-2", "w1")
+    } else {
+        ("worker", "w2")
+    };
+    cluster.kill(role);
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "j-1",
+        "{}",
+        cluster.logs()
+    );
+    let attempts = cluster.attempts(&run_id, "work");
+    assert_eq!(attempts[0]["status"], "lost", "{}", cluster.logs());
+    assert_eq!(attempts[0]["worker_id"], other);
+}
+
+#[test]
+fn a_restarted_agent_runs_the_cleanup_of_the_task_it_lost() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let marker = cluster.root().join("cleaned");
+    std::fs::write(
+        cluster.root().join("left_behind.py"),
+        left_behind(&marker, false),
+    )
+    .unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    // The restart comes before the worker's lease is up.
+    cluster.start_with("master", &[("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "60s")]);
+    for role in ["webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.wait("the worker", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("left_behind");
+    cluster.wait("the task to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    cluster.kill("worker");
+    cluster.start("worker");
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "j-1",
+        "{}",
+        cluster.logs()
+    );
+    assert_eq!(cluster.attempts(&run_id, "work")[0]["status"], "lost");
+}

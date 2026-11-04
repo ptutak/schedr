@@ -650,6 +650,22 @@ impl MasterCore {
         Ok(())
     }
 
+    /// Handles an attempt registered.
+    async fn handles_added(
+        &mut self,
+        worker_id: &str,
+        added: &pb::HandlesAdded,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        match Box::pin(self.dispatcher.handles_added(worker_id, added)).await {
+            // Refused for its data, it would end the stream on every reconnect.
+            Err(error) if error.is_data_fault() => {
+                tracing::error!(worker_id, %error, "handles the database refuses");
+            }
+            handled => handled?,
+        }
+        Ok(Vec::new())
+    }
+
     /// A message on a registered worker's stream.
     ///
     /// # Errors
@@ -761,6 +777,9 @@ impl MasterCore {
                     self.arrivals.start_handled(id);
                 }
                 vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
+            }
+            worker_message::Message::HandlesAdded(added) => {
+                self.handles_added(worker_id, &added).await?
             }
             worker_message::Message::TaskEnded(ended) => {
                 self.task_ended(worker_id, ended, now).await?;

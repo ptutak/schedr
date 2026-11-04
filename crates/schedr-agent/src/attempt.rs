@@ -81,6 +81,8 @@ pub struct AttemptSpec {
     pub cleanup_handles: Option<Vec<CleanupHandle>>,
     /// The journal its handles go to; `None` keeps them in memory only.
     pub journal: Option<crate::journal::Journal>,
+    /// Told each handle, to send it on to the master; `None` keeps them here.
+    pub handle_sink: Option<crate::handles::HandleSink>,
 }
 
 /// Why an assignment can't be read.
@@ -169,6 +171,7 @@ impl AttemptSpec {
             connection_test: None,
             cleanup_handles: None,
             journal: None,
+            handle_sink: None,
         })
     }
 

@@ -364,7 +364,7 @@ impl Database {
                         .collect();
                     let text = format!(
                         "UPDATE task_instances SET queued_reason = $1, updated_at = $2{{ts}} \
-                         WHERE state = 'queued' AND id IN ({})",
+                         WHERE state IN ('queued', 'cleaning_up') AND id IN ({})",
                         ids.join(", ")
                     );
                     let mut update = sqlx::query(sql_text(backend, &text))

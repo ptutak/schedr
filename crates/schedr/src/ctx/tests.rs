@@ -389,6 +389,7 @@ fn cleanup_of(handles: &[&str]) -> Arc<AttemptHandles> {
         retries: 0,
         retry_delay_ms: 0,
         handles: (!handles.is_empty()).then(|| handles.iter().map(ToString::to_string).collect()),
+        anywhere: false,
     };
     Arc::new(AttemptHandles::new(
         Some(&cleanup),

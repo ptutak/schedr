@@ -33,9 +33,37 @@ Do not register something that must outlive the attempt.
 Handles are masked like task output, so a secret value in a handle may be replaced by its
 mask. Declare a secret separately if the cleanup needs it. All handles together are limited
 to about 1 MiB per attempt; exceeding the limit fails the registration and the attempt.
-Handles are journaled on the worker before registration returns and survive an agent restart
-when its journal disk survives. They are not sent to the master. After a restart the cleanup
-waits for the master's `Continue`; if the worker is lost, its cleanup does not run.
+Handles are journaled on the worker before registration returns and sent to the master,
+which stores them. Nothing secret belongs in a handle. Registration does not wait for the
+master to acknowledge it, so a worker lost before delivery can lose a handle. Handles also
+survive an agent restart when its journal disk survives; after restart the cleanup waits for
+the master's `Continue`.
+
+## Cleanup on another worker
+
+Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `.override()`, or in
+`TaskDefaults` to let the master move a started attempt's cleanup when its worker is lost.
+Use it when the cleanup can work with the registered handles and the other worker's code and
+resources. Do not use it for worker-local files or processes that another pod cannot access:
+idempotence alone does not make a cleanup safe on another pod.
+
+A worker cut off from the master keeps running its task. After the worker lease expires, the
+master counts it lost and cannot distinguish it from a dead pod. With `cleanup_anywhere=True`,
+cleanup can therefore start on another worker **while the task is still running**. The old
+worker can run the same cleanup too, when its task ends there or when it reconnects, receives
+`Kill` and its task is cancelled. The cleanup must be safe to run during the task, not only
+safe to repeat. For example, deleting a shared temporary directory is unsafe if the task may
+still be writing to it, even if deleting an already absent directory is harmless.
+
+The moved cleanup uses the task's queue and the receiving worker's current code; it is
+assigned ahead of waiting tasks and is not held by limits. The master keeps the task result
+reported in `TaskEnded`, or records the task as `lost` if none arrived. The attempt stays
+open until cleanup finishes. Each move counts as a cleanup try: if the worker is lost after
+`cleanup_retries + 1` moves, cleanup ends `worker_lost` and fails the run. A refused
+assignment is tried again, preferring another worker; an assignment with no `Started` is
+taken back without another move. If no worker is available, the instance remains
+`cleaning_up`, shown as `unschedulable` with the reason "no worker for the cleanup".
+Without `cleanup_anywhere`, a lost worker's cleanup ends `worker_lost`.
 
 ## A command
 

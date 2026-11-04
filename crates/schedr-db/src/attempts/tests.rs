@@ -217,6 +217,8 @@ async fn an_instance_is_assigned_once_with_the_next_try_number() {
             started: false,
             map_index: -1,
             result_kept: false,
+            cleanup_moves: 0,
+            moving: false,
         }
     );
     assert_eq!(

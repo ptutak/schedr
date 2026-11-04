@@ -53,7 +53,7 @@ use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
-use crate::handles::AttemptHandles;
+use crate::handles::{AttemptHandles, HandleSink};
 use crate::journal::{
     Journal, JournalRecord, KeptAttempt, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
@@ -435,6 +435,9 @@ impl ProcessExecutor {
             AttemptHandles::new(spec.task.cleanup.as_ref(), Arc::clone(&secrets.mask));
         if let Some(journal) = &spec.journal {
             handles = handles.journaled(journal.clone(), spec.attempt_id.clone());
+        }
+        if let Some(sink) = &spec.handle_sink {
+            handles = handles.forwarded(sink.clone());
         }
         let handles = Arc::new(handles);
         let started = AtomicBool::new(false);
@@ -827,6 +830,12 @@ enum Done {
     },
     /// A task with a cleanup: its process ended and the cleanup starts.
     TaskEnded(pb::Finished),
+    /// A handle was journaled: on to the master.
+    Handle {
+        attempt_id: String,
+        position: u32,
+        handle: CleanupHandle,
+    },
     Attempt(pb::Finished),
     Parse {
         job_id: String,
@@ -1257,7 +1266,7 @@ impl<E: Executor> Agent<E> {
             Ok::<_, std::io::Error>((journal.kept(&id)?, journal.handles(&id)?))
         })
         .await;
-        let (kept, handles) = match read {
+        let (kept, journaled) = match read {
             Ok(Ok((Some(kept), handles))) => (kept, handles),
             Ok(Ok((None, _))) => return false,
             // Run without what it needs, it could report success and leave them behind: the
@@ -1268,6 +1277,15 @@ impl<E: Executor> Agent<E> {
             }
             Err(error) => {
                 tracing::error!(attempt_id, %error, "reading a kept attempt failed");
+                return false;
+            }
+        };
+        // A moved cleanup's handles came in its assignment, kept whole before it started.
+        let handles = match kept.assign.cleanup_only.as_ref().map(moved_handles) {
+            None => journaled,
+            Some(Ok(handles)) => handles,
+            Some(Err(error)) => {
+                tracing::error!(attempt_id, %error, "a moved cleanup's handles don't read");
                 return false;
             }
         };
@@ -1591,6 +1609,9 @@ impl<E: Executor> Agent<E> {
                 }
             }
             _ => {
+                if self.running.contains_key(id) {
+                    self.send_handles(id, to_master).await;
+                }
                 if let Some(waiting) = self.waiting.remove(id) {
                     self.start_waiting(id, waiting, to_master).await;
                 } else if let Some(ended) = self.cleaning.get(id) {
@@ -1603,6 +1624,28 @@ impl<E: Executor> Agent<E> {
                     self.send_again(id, to_master);
                 }
             }
+        }
+    }
+
+    /// Sends an attempt's handles again: some may have gone with the old stream, or never
+    /// left (decision 242). The master keeps what it has.
+    async fn send_handles(
+        &self,
+        attempt_id: &str,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
+        let journal = self.journal.clone();
+        let id = attempt_id.to_owned();
+        let read = tokio::task::spawn_blocking(move || journal.handles(&id)).await;
+        match read {
+            Ok(Ok(handles)) if !handles.is_empty() => {
+                let _ = to_master.send(handles_message(attempt_id.to_owned(), 0, &handles));
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(attempt_id, %error, "can't read the handles to send them again");
+            }
+            Err(error) => tracing::warn!(attempt_id, %error, "reading the handles failed"),
         }
     }
 
@@ -1685,6 +1728,21 @@ impl<E: Executor> Agent<E> {
         }
         self.remember_code(&assign, &spec.attempt_id);
         self.note_cleanup(&mut spec, &assign);
+        if let Some(only) = &assign.cleanup_only
+            && !matches!(planned, Err(NotRun::Rejected { .. }))
+        {
+            match moved_handles(only) {
+                Ok(handles) => self.moved_cleanup(spec, handles, to_master).await,
+                // Run without them, it could report success and leave them behind.
+                Err(error) => {
+                    self.code_hashes.remove(&spec.attempt_id);
+                    self.forget(&spec.attempt_id).await;
+                    let detail = format!("a handle that doesn't read: {error}");
+                    let _ = to_master.send(reject(pb::RejectReason::InvalidSpecification, detail));
+                }
+            }
+            return;
+        }
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
@@ -1706,6 +1764,29 @@ impl<E: Executor> Agent<E> {
                 self.launch(spec, plan, stopped);
             }
         }
+    }
+
+    /// Runs the cleanup of an attempt whose worker was lost (decision 243). Its task's result
+    /// is the master's: what is reported here only stands for it.
+    async fn moved_cleanup(
+        &mut self,
+        spec: AttemptSpec,
+        handles: Vec<CleanupHandle>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
+        let id = spec.attempt_id.clone();
+        let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
+            attempt_id: id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        })));
+        let (stop, _) = Stops::new();
+        self.running.insert(id.clone(), stop);
+        let waiting = WaitingCleanup {
+            spec,
+            handles,
+            ended: None,
+        };
+        self.start_waiting(&id, waiting, to_master).await;
     }
 
     /// Journals an attempt about to start: first what its cleanup would need after a restart.
@@ -1752,6 +1833,15 @@ impl<E: Executor> Agent<E> {
             return;
         };
         spec.journal = Some(self.journal.clone());
+        let done = self.done_tx.clone();
+        let attempt_id = spec.attempt_id.clone();
+        spec.handle_sink = Some(HandleSink(Arc::new(move |position, handle| {
+            let _ = done.send(Done::Handle {
+                attempt_id: attempt_id.clone(),
+                position,
+                handle: handle.clone(),
+            });
+        })));
         let room = cleanup
             .timeout_ms
             .map_or(self.settings.setup.timeouts.cleanup, Duration::from_millis);
@@ -2079,6 +2169,15 @@ impl<E: Executor> Agent<E> {
             Done::TaskEnded(finished) => {
                 self.task_ended(finished, link.map(|(to_master, _)| to_master))
                     .await;
+            }
+            Done::Handle {
+                attempt_id,
+                position,
+                handle,
+            } => {
+                if let Some((to_master, _)) = link {
+                    let _ = to_master.send(handles_message(attempt_id, position, &[handle]));
+                }
             }
             Done::Attempt(mut finished) => {
                 fit_result(&mut finished, self.master_limit);
@@ -2457,11 +2556,31 @@ async fn next_request(shutdown: &mut Option<watch::Receiver<u32>>) -> u32 {
     std::future::pending().await
 }
 
+/// Handles for the master, from place `first` on.
+fn handles_message(attempt_id: String, first: u32, handles: &[CleanupHandle]) -> pb::WorkerMessage {
+    wrap(worker_message::Message::HandlesAdded(pb::HandlesAdded {
+        attempt_id,
+        first,
+        handle_json: handles
+            .iter()
+            .filter_map(|handle| serde_json::to_vec(handle).ok())
+            .collect(),
+    }))
+}
+
 /// A task's end, as the master hears of it.
 fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
     wrap(worker_message::Message::TaskEnded(pb::TaskEnded {
         result: Some(result),
     }))
+}
+
+/// The handles a moved cleanup came with.
+fn moved_handles(only: &pb::CleanupOnly) -> Result<Vec<CleanupHandle>, serde_json::Error> {
+    only.handle_json
+        .iter()
+        .map(|json| serde_json::from_slice(json))
+        .collect()
 }
 
 /// The result of a task the agent's restart stopped: `lost`, as the master would end it, and

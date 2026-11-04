@@ -72,6 +72,7 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         setrlimit: false,
         upstream_outcomes: std::collections::HashMap::new(),
         connections_json: Vec::new(),
+        cleanup_only: None,
     }
 }
 

@@ -49,6 +49,8 @@ class TaskDefaults:
             ``cleanup_timeout``, 5 minutes).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
+        cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost
+            (default no: only you know whether it depends on where the task ran).
     """
 
     retries: int | None = None
@@ -64,6 +66,7 @@ class TaskDefaults:
     cleanup_timeout: timedelta | None = None
     cleanup_retries: int | None = None
     cleanup_retry_delay: timedelta | None = None
+    cleanup_anywhere: bool | None = None
 
     def options(self) -> _build.TaskOptions:
         """These defaults as task options.
@@ -85,6 +88,7 @@ class TaskDefaults:
             cleanup_timeout=self.cleanup_timeout,
             cleanup_retries=self.cleanup_retries,
             cleanup_retry_delay=self.cleanup_retry_delay,
+            cleanup_anywhere=self.cleanup_anywhere,
         )
 
 

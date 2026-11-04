@@ -205,10 +205,23 @@ CREATE TABLE attempts (
     -- The task's result (a protobuf `Finished`), kept from its process's end until the attempt
     -- ends: a worker lost during the cleanup doesn't lose it (decision 229).
     task_result       BLOB,
+    -- How many times its cleanup moved to another worker (`cleanup_anywhere`, decision 247);
+    -- `worker_id` is NULL while it waits for one.
+    cleanup_moves     INTEGER NOT NULL DEFAULT 0,
+    -- When the moved cleanup was assigned, until its `Started`.
+    moved_at          TEXT,
     UNIQUE (task_instance_id, try_number)
 );
 
 CREATE INDEX attempts_open ON attempts (assigned_at) WHERE status IS NULL;
+
+-- An attempt's cleanup handles (decision 228), for a cleanup on another worker.
+CREATE TABLE cleanup_handles (
+    attempt_id  TEXT NOT NULL REFERENCES attempts (id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL CHECK (position >= 0),
+    handle      TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, position)
+);
 
 CREATE TABLE outputs (
     task_instance_id TEXT PRIMARY KEY REFERENCES task_instances (id) ON DELETE CASCADE,

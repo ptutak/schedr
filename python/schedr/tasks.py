@@ -860,6 +860,7 @@ class TaskFunction[**P, R]:
         cleanup_timeout: timedelta | None = None,
         cleanup_retries: int | None = None,
         cleanup_retry_delay: timedelta | None = None,
+        cleanup_anywhere: bool | None = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -881,6 +882,7 @@ class TaskFunction[**P, R]:
             cleanup_timeout: Overrides how long one try of its cleanup may run.
             cleanup_retries: Overrides how many times a failed cleanup is retried.
             cleanup_retry_delay: Overrides the delay before each cleanup retry.
+            cleanup_anywhere: Overrides whether the cleanup may run on another worker.
 
         Returns:
             A new task function; this one is unchanged.
@@ -903,6 +905,7 @@ class TaskFunction[**P, R]:
             cleanup_timeout=cleanup_timeout,
             cleanup_retries=cleanup_retries,
             cleanup_retry_delay=cleanup_retry_delay,
+            cleanup_anywhere=cleanup_anywhere,
         )
         return TaskFunction(
             self._fn,
@@ -1111,6 +1114,7 @@ def task(
     cleanup_timeout: timedelta | None = None,
     cleanup_retries: int | None = None,
     cleanup_retry_delay: timedelta | None = None,
+    cleanup_anywhere: bool | None = None,
 ) -> TaskDecorator: ...
 
 
@@ -1135,6 +1139,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
     cleanup_timeout: timedelta | None = None,
     cleanup_retries: int | None = None,
     cleanup_retry_delay: timedelta | None = None,
+    cleanup_anywhere: bool | None = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -1177,6 +1182,8 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
             ``cleanup_timeout``, 5 minutes).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
+        cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost
+            (default no: only you know whether it depends on where the task ran).
 
     Returns:
         The task function, or a decorator making one.
@@ -1204,6 +1211,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
         cleanup_timeout=cleanup_timeout,
         cleanup_retries=cleanup_retries,
         cleanup_retry_delay=cleanup_retry_delay,
+        cleanup_anywhere=cleanup_anywhere,
     )
 
     decorator = TaskDecorator(task_id, options, cleanup)

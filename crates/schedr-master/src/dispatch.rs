@@ -31,7 +31,11 @@ use prost::Message as _;
 use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
 use schedr_model::connection::Registry;
-use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
+use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
+use schedr_model::runner::{
+    CleanupHandle, DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND,
+};
+use schedr_model::task::{CleanupRun, TaskCleanup};
 use schedr_model::{
     AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
@@ -71,6 +75,12 @@ pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
         },
     }
 }
+
+/// The error kind of a result the database refused (not retried).
+const RESULT_NOT_STORED: &str = "result_not_stored";
+
+/// Why a moved cleanup waits, shown as `unschedulable` (decision 244).
+const NO_CLEANUP_WORKER: &str = "no worker for the cleanup";
 
 /// What is done with the task results kept for a worker's attempts as it goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,6 +695,7 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.set_aside.retain(|_, until| *until > now);
+        self.assign_cleanups(now, outgoing).await?;
         let ready: Vec<ReadyInstance> = self
             .db
             .ready_instances(now)
@@ -1066,6 +1077,15 @@ impl Dispatcher {
         let Some(attempt) = self.db.attempt(&rejected.attempt_id).await? else {
             return Ok(());
         };
+        if attempt.moving && attempt.worker_id == worker_id && attempt.status.is_none() {
+            // A moved cleanup goes on waiting, this worker asked last.
+            self.rejections
+                .entry(attempt.instance_id.clone())
+                .or_default()
+                .insert(worker_id.to_owned(), rejected.detail.clone());
+            self.take_back_cleanup(&attempt, now).await?;
+            return Ok(());
+        }
         if attempt.worker_id != worker_id || attempt.status.is_some() || attempt.started {
             return Ok(());
         }
@@ -1186,7 +1206,18 @@ impl Dispatcher {
                 .as_ref()
                 .map(|c| cleanup_end(c, worker_id))
                 .transpose()?;
-            let (end, result) = ended(finished, status, error_summary, cleanup);
+            // A cleanup that moved knows nothing of the task: its result is the kept one
+            // (a refused one is reported as `result_not_stored`, and stands).
+            let kept = if attempt.cleanup_moves > 0 && finished.error_kind != RESULT_NOT_STORED {
+                self.kept_result(&attempt).await?
+            } else {
+                None
+            };
+            let (end, result) = if let Some((kept, status)) = kept {
+                ended(&kept, status, summary_of(&kept), cleanup)
+            } else {
+                ended(finished, status, error_summary, cleanup)
+            };
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
@@ -1218,6 +1249,14 @@ impl Dispatcher {
                 && !self.adopted_unrecorded.contains(&attempt.id)
         });
         expired.truncate(EXPIRIES_PER_ROUND);
+        // A moved cleanup never started: it goes on waiting.
+        for attempt in self.db.unstarted_cleanups(cutoff, limit).await? {
+            // Its `Started` is here, waiting its turn: the worker has it.
+            if self.arrivals.start_waiting(&attempt.id) {
+                continue;
+            }
+            self.take_back_cleanup(&attempt, now).await?;
+        }
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
             let result = by_master(AttemptStatus::AssignmentExpired);
@@ -1340,23 +1379,19 @@ impl Dispatcher {
         if results == KeptResults::Refused && attempt.result_kept {
             return self.end_refused(attempt, now).await;
         }
-        let cleanup = self
-            .has_cleanup(attempt)
-            .await?
-            .then(|| cleanup_not_run(&attempt.worker_id));
-        let kept = self
-            .db
-            .task_result(&attempt.id)
-            .await?
-            .and_then(|bytes| pb::Finished::decode(bytes.as_slice()).ok())
-            .and_then(|finished| {
-                let status = attempt_status_from_proto(finished.status).ok()?;
-                Some((finished, status))
-            });
+        let task_cleanup = self.task_cleanup(attempt).await?;
+        let kept = self.kept_result(attempt).await?;
+        if let Some(wanted) = &task_cleanup
+            && wanted.anywhere
+            && attempt.cleanup_moves <= wanted.retries
+        {
+            return self.move_cleanup(attempt, &summary, now).await;
+        }
+        let cleanup = task_cleanup
+            .as_ref()
+            .map(|wanted| cleanup_not_run(&attempt.worker_id, wanted));
         let (end, result) = if let Some((finished, status)) = kept {
-            let error_summary = (!finished.error_summary_json.is_empty())
-                .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned());
-            ended(&finished, status, error_summary, cleanup)
+            ended(&finished, status, summary_of(&finished), cleanup)
         } else {
             let result = AttemptResult {
                 cleanup: cleanup.as_ref().map(|c| c.result),
@@ -1379,8 +1414,9 @@ impl Dispatcher {
         attempt: &StoredAttempt,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        let cleanup = cleanup_not_run(&attempt.worker_id);
-        let kind = "result_not_stored".to_owned();
+        let wanted = self.task_cleanup(attempt).await?.unwrap_or_else(no_cleanup);
+        let cleanup = cleanup_not_run(&attempt.worker_id, &wanted);
+        let kind = RESULT_NOT_STORED.to_owned();
         let result = AttemptResult {
             error_kind: Some(kind.clone()),
             cleanup: Some(cleanup.result),
@@ -1398,16 +1434,216 @@ impl Dispatcher {
         self.record(attempt, &end, &result, now).await
     }
 
-    /// Whether the attempt's task has a cleanup.
-    async fn has_cleanup(&self, attempt: &StoredAttempt) -> Result<bool, DispatchError> {
+    /// The cleanup of the attempt's task.
+    async fn task_cleanup(
+        &self,
+        attempt: &StoredAttempt,
+    ) -> Result<Option<TaskCleanup>, DispatchError> {
         let run = self.db.run_tasks(&attempt.run_id).await?;
-        Ok(run
-            .and_then(|run| {
-                run.dag
-                    .task(&attempt.task_id)
-                    .map(|task| task.cleanup.is_some())
+        Ok(run.and_then(|run| run.dag.task(&attempt.task_id)?.cleanup.clone()))
+    }
+
+    /// The task's result kept for an attempt, and its status.
+    async fn kept_result(
+        &self,
+        attempt: &StoredAttempt,
+    ) -> Result<Option<(pb::Finished, AttemptStatus)>, DispatchError> {
+        Ok(self
+            .db
+            .task_result(&attempt.id)
+            .await?
+            .and_then(|bytes| pb::Finished::decode(bytes.as_slice()).ok())
+            .and_then(|finished| {
+                let status = attempt_status_from_proto(finished.status).ok()?;
+                Some((finished, status))
+            }))
+    }
+
+    /// Moves an attempt's cleanup off a lost worker (`cleanup_anywhere`, decision 243): the
+    /// attempt stays open, its instance `cleaning_up`, the task `lost` unless it reported its
+    /// end, and a later round gives it to another worker.
+    async fn move_cleanup(
+        &mut self,
+        attempt: &StoredAttempt,
+        summary: &str,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        self.workers.release(&attempt.id);
+        let lost = pb::Finished {
+            attempt_id: attempt.id.clone(),
+            status: pb::AttemptStatus::Lost.into(),
+            error_summary_json: summary.as_bytes().to_vec(),
+            ..pb::Finished::default()
+        };
+        self.db
+            .move_cleanup(&attempt.id, &lost.encode_to_vec())
+            .await?;
+        self.execution
+            .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
+            .await?;
+        Ok(())
+    }
+
+    /// A moved cleanup's worker refused it or never started it: it waits again, and that
+    /// worker's slot is free.
+    async fn take_back_cleanup(
+        &mut self,
+        attempt: &StoredAttempt,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        self.workers.release(&attempt.id);
+        self.db.unassign_cleanup(&attempt.id).await?;
+        let until = now
+            .checked_add(self.set_aside_for)
+            .unwrap_or(Timestamp::MAX);
+        self.set_aside.insert(attempt.instance_id.clone(), until);
+        Ok(())
+    }
+
+    /// Gives the moved cleanups waiting to workers, ahead of the tasks waiting and not held by
+    /// limits (decision 246): their attempts are counted already.
+    async fn assign_cleanups(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        let mut reasons = Vec::new();
+        for (attempt_id, ready) in self.db.waiting_cleanups().await? {
+            if self.set_aside.contains_key(&ready.instance_id) {
+                continue;
+            }
+            let Some(task) = ready.dag.task(&ready.task_id) else {
+                continue;
+            };
+            let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
+            // A worker that refused it may take it yet: it does when no other can.
+            let refused: BTreeSet<String> = self
+                .rejections
+                .get(&ready.instance_id)
+                .map(|by| by.keys().cloned().collect())
+                .unwrap_or_default();
+            let Some(worker_id) = self
+                .workers
+                .pick(needs, &refused)
+                .or_else(|| self.workers.pick(needs, &BTreeSet::new()))
+                .map(str::to_owned)
+            else {
+                if ready.queued_reason.as_deref() != Some(NO_CLEANUP_WORKER) {
+                    reasons.push((ready.instance_id.clone(), NO_CLEANUP_WORKER.to_owned()));
+                }
+                continue;
+            };
+            if !self.db.assign_cleanup(&attempt_id, &worker_id, now).await? {
+                continue;
+            }
+            let message = self
+                .cleanup_message(&ready, &worker_id, &attempt_id)
+                .await?;
+            self.workers.reserve(&worker_id, &attempt_id, now);
+            outgoing.push(Outgoing {
+                worker_id,
+                message: pb::MasterMessage {
+                    message: Some(pb::master_message::Message::AssignTask(message)),
+                },
+            });
+        }
+        if !reasons.is_empty() {
+            self.db.set_queued_reasons(&reasons, now).await?;
+        }
+        Ok(())
+    }
+
+    /// The assignment of a moved cleanup: its task's, with its handles.
+    async fn cleanup_message(
+        &mut self,
+        ready: &ReadyInstance,
+        worker_id: &str,
+        attempt_id: &str,
+    ) -> Result<pb::AssignTask, DispatchError> {
+        let task = ready.dag.task(&ready.task_id);
+        let inputs = match task {
+            Some(task) => {
+                let inputs = mapping::inputs(
+                    &self.db,
+                    &ready.dag,
+                    &ready.run_id,
+                    (task, ready.map_index),
+                    &mut self.resolved,
+                )
+                .await;
+                match inputs {
+                    Ok(inputs) => serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec()),
+                    Err(InputsError::Db(error)) => return Err(error.into()),
+                    // It ran with them: what can't be read now fails on the worker, if at all.
+                    Err(InputsError::NotArguments(_)) => b"{}".to_vec(),
+                }
+            }
+            None => b"{}".to_vec(),
+        };
+        let outcomes =
+            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+        let params = self.params_json(ready).await?;
+        let handles = self.db.cleanup_handles(attempt_id).await?;
+        let mut message = self.assign_message(
+            ready,
+            worker_id,
+            attempt_id,
+            ready.try_number,
+            (inputs, outcomes, params),
+        );
+        message.cleanup_only = Some(pb::CleanupOnly {
+            handle_json: handles.into_iter().map(String::into_bytes).collect(),
+        });
+        Ok(message)
+    }
+
+    /// Handles an attempt registered, kept for a cleanup on another worker (decision 242). Only
+    /// from the worker it is assigned to (B46), while it is open, and up to what an attempt
+    /// may hold (decision 228); a handle that doesn't read is left out.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn handles_added(
+        &mut self,
+        worker_id: &str,
+        added: &pb::HandlesAdded,
+    ) -> Result<(), DispatchError> {
+        let Some(attempt) = self.db.attempt(&added.attempt_id).await? else {
+            return Ok(());
+        };
+        if attempt.worker_id != worker_id || attempt.status.is_some() {
+            return Ok(());
+        }
+        let handles: Option<Vec<String>> = added
+            .handle_json
+            .iter()
+            .map(|json| {
+                serde_json::from_slice::<CleanupHandle>(json).ok()?;
+                String::from_utf8(json.clone()).ok()
             })
-            .unwrap_or(false))
+            .collect();
+        let Some(handles) = handles else {
+            tracing::warn!(
+                worker_id,
+                attempt_id = attempt.id,
+                "a handle that doesn't read"
+            );
+            return Ok(());
+        };
+        let limit = MAX_CTX_MESSAGE_SIZE as usize;
+        let fitted = self
+            .db
+            .add_cleanup_handles(&attempt.id, added.first, &handles, limit)
+            .await?;
+        if !fitted {
+            tracing::warn!(
+                worker_id,
+                attempt_id = attempt.id,
+                "more handles than an attempt may hold"
+            );
+        }
+        Ok(())
     }
 
     /// Runs `work` in one transaction; if it fails, the memory it changed is put back as it
@@ -1540,7 +1776,11 @@ impl Dispatcher {
         self.stops.extend(
             attempts
                 .iter()
-                .filter(|a| a.run_id == run_id && stopping.contains(&(&a.task_id, a.map_index)))
+                .filter(|a| {
+                    a.run_id == run_id
+                        && !a.worker_id.is_empty()
+                        && stopping.contains(&(&a.task_id, a.map_index))
+                })
                 .map(|a| cancel(&a.worker_id, &a.id)),
         );
         Ok(())
@@ -1819,6 +2059,7 @@ impl Dispatcher {
                 }
                 _ => Vec::new(),
             },
+            cleanup_only: None,
         }
     }
 }
@@ -1904,18 +2145,45 @@ fn ended(
     (end, result)
 }
 
+/// A result's error summary, as stored.
+fn summary_of(finished: &pb::Finished) -> Option<String> {
+    (!finished.error_summary_json.is_empty())
+        .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned())
+}
+
+/// A cleanup standing in when the task's is gone from its DAG.
+const fn no_cleanup() -> TaskCleanup {
+    TaskCleanup {
+        run: CleanupRun::Python,
+        timeout_ms: None,
+        retries: 0,
+        retry_delay_ms: 0,
+        handles: None,
+        anywhere: false,
+    }
+}
+
 /// The cleanup of an attempt whose worker is gone: it didn't run, or not to its end, and that
 /// fails the run (decision 220).
-fn cleanup_not_run(worker_id: &str) -> CleanupEnd {
+fn cleanup_not_run(worker_id: &str, wanted: &TaskCleanup) -> CleanupEnd {
+    let message = if wanted.anywhere {
+        format!(
+            "the cleanup didn't run to its end: worker `{worker_id}` is gone, the last of {} it \
+             may be moved to",
+            wanted.retries.saturating_add(1)
+        )
+    } else {
+        format!(
+            "the cleanup didn't run to its end: worker `{worker_id}` is gone; with \
+             `cleanup_anywhere=True` it runs on another worker"
+        )
+    };
     CleanupEnd {
         result: CleanupResult::WorkerLost,
         tries: 0,
         duration_ms: 0,
         error_kind: Some("worker_lost".to_owned()),
-        error_summary: Some(ErrorSummary::json(
-            "WorkerLost",
-            &format!("the cleanup didn't run to its end: worker `{worker_id}` is gone"),
-        )),
+        error_summary: Some(ErrorSummary::json("WorkerLost", &message)),
     }
 }
 

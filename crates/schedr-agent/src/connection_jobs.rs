@@ -165,6 +165,7 @@ pub fn test_spec(
         connection_test: Some(name.to_owned()),
         cleanup_handles: None,
         journal: None,
+        handle_sink: None,
     })
 }
 

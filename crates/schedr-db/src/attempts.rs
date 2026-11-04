@@ -5,7 +5,7 @@
 //! `queued` (two passes can't assign it twice). An attempt's first end wins: delivery is at
 //! least once, so a repeated `Finished` changes nothing (see PROJECT.md, Task assignment).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -103,6 +103,10 @@ pub struct StoredAttempt {
     pub map_index: i32,
     /// Whether the task's result is kept while its cleanup runs.
     pub result_kept: bool,
+    /// How many times its cleanup moved to another worker.
+    pub cleanup_moves: u32,
+    /// Whether its moved cleanup was assigned, and hasn't been started yet.
+    pub moving: bool,
 }
 
 /// How an attempt ended.
@@ -193,24 +197,34 @@ type AttemptRow = (
     bool,
     i32,
     bool,
+    i32,
+    bool,
 );
 
 /// The attempt queries (sqlx needs `'static` text, so the shared columns are written out).
 const ATTEMPT_BY_ID: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.id = $1{uuid}";
 const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
+const UNSTARTED_CLEANUPS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
+    t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    WHERE a.status IS NULL AND a.moved_at < $1{ts} ORDER BY a.moved_at LIMIT $2";
 const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.task_id \
     FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL ORDER BY a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.started_at IS NULL AND a.assigned_at < $1{ts} \
     ORDER BY a.assigned_at, a.id LIMIT $2";
 
@@ -374,8 +388,9 @@ impl Database {
     ///
     /// [`DbError`] if the write fails.
     pub async fn set_task_result(&self, attempt_id: &str, result: &[u8]) -> Result<(), DbError> {
+        // The first stands: a cleanup that moved reports no result of its own.
         const SET: &str = "UPDATE attempts SET task_result = $1 \
-            WHERE id = $2{uuid} AND status IS NULL";
+            WHERE id = $2{uuid} AND status IS NULL AND task_result IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(result)
@@ -400,6 +415,206 @@ impl Database {
                 .await?
         });
         Ok(row.and_then(|(result,)| result))
+    }
+
+    /// Adds handles an attempt registered, from place `first` on, keeping what is there (they
+    /// are sent again after a reconnect), up to `limit` bytes in all. Returns whether all
+    /// fitted.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails.
+    pub async fn add_cleanup_handles(
+        &self,
+        attempt_id: &str,
+        first: u32,
+        handles: &[String],
+        limit: usize,
+    ) -> Result<bool, DbError> {
+        const STORED: &str = "SELECT position, CAST(OCTET_LENGTH(handle) AS BIGINT) \
+            FROM cleanup_handles WHERE attempt_id = $1{uuid}";
+        const ADD: &str = "INSERT INTO cleanup_handles (attempt_id, position, handle) \
+            VALUES ($1{uuid}, $2, $3) ON CONFLICT (attempt_id, position) DO NOTHING";
+        let fitted = in_tx!(self, |tx, backend| {
+            let stored: Vec<(i32, i64)> = sqlx::query_as(sql(backend, STORED))
+                .bind(attempt_id)
+                .fetch_all(&mut *tx)
+                .await?;
+            let mut size = stored.iter().fold(0_usize, |size, (_, bytes)| {
+                size.saturating_add(usize::try_from(*bytes).unwrap_or(usize::MAX))
+            });
+            let taken: BTreeSet<i32> = stored.into_iter().map(|(position, _)| position).collect();
+            let mut fitted = true;
+            for (index, handle) in handles.iter().enumerate() {
+                // From a worker: `first` may be anything.
+                let index = u32::try_from(index).unwrap_or(u32::MAX);
+                let position = i32::try_from(first.saturating_add(index)).unwrap_or(i32::MAX);
+                // Sent again: what is kept counts once, and what follows it still fits.
+                if taken.contains(&position) {
+                    continue;
+                }
+                size = size.saturating_add(handle.len());
+                if size > limit {
+                    fitted = false;
+                    break;
+                }
+                sqlx::query(sql(backend, ADD))
+                    .bind(attempt_id)
+                    .bind(position)
+                    .bind(handle)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            fitted
+        });
+        Ok(fitted)
+    }
+
+    /// An attempt's handles, each as JSON text, in registration order.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn cleanup_handles(&self, attempt_id: &str) -> Result<Vec<String>, DbError> {
+        const HANDLES: &str = "SELECT handle FROM cleanup_handles WHERE attempt_id = $1{uuid} \
+            ORDER BY position";
+        let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, HANDLES))
+                .bind(attempt_id)
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(rows.into_iter().map(|(handle,)| handle).collect())
+    }
+
+    /// Takes an attempt's cleanup off its worker, to wait for another (decision 243), with
+    /// the task's result if none is kept yet, counting a move (decision 247).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the write fails.
+    pub async fn move_cleanup(&self, attempt_id: &str, result: &[u8]) -> Result<(), DbError> {
+        const MOVE: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL, \
+            cleanup_moves = cleanup_moves + 1, task_result = COALESCE(task_result, $1) \
+            WHERE id = $2{uuid} AND status IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, MOVE))
+                .bind(result)
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// Gives a moved cleanup to `worker_id`, if it still waits. Returns whether it did.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the write fails.
+    pub async fn assign_cleanup(
+        &self,
+        attempt_id: &str,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Result<bool, DbError> {
+        const ASSIGN: &str = "UPDATE attempts SET worker_id = $1, moved_at = $2{ts} \
+            WHERE id = $3{uuid} AND status IS NULL AND worker_id IS NULL";
+        const REASON: &str = "UPDATE task_instances SET queued_reason = NULL \
+            WHERE id = (SELECT task_instance_id FROM attempts WHERE id = $1{uuid})";
+        let updated = in_tx!(self, |tx, backend| {
+            let updated = sqlx::query(sql(backend, ASSIGN))
+                .bind(worker_id)
+                .bind(db_time(now))
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            sqlx::query(sql(backend, REASON))
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?;
+            updated
+        });
+        Ok(updated == 1)
+    }
+
+    /// Takes back a moved cleanup its worker refused or never started: it waits again, no
+    /// move counted.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the write fails.
+    pub async fn unassign_cleanup(&self, attempt_id: &str) -> Result<(), DbError> {
+        const BACK: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL \
+            WHERE id = $1{uuid} AND status IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, BACK))
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// The moved cleanups assigned before `cutoff` and not started.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn unstarted_cleanups(
+        &self,
+        cutoff: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<StoredAttempt>, DbError> {
+        let query = UNSTARTED_CLEANUPS;
+        let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, query))
+                .bind(db_time(cutoff))
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(stored_attempt).collect()
+    }
+
+    /// The moved cleanups waiting for a worker, oldest first: each attempt's ID, and what an
+    /// assignment needs.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn waiting_cleanups(&self) -> Result<Vec<(String, ReadyInstance)>, DbError> {
+        const WAITING: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
+            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
+            t.queued_reason, p.schedr_version, t.map_index FROM attempts a \
+            JOIN task_instances t ON t.id = a.task_instance_id \
+            JOIN runs r ON r.id = t.run_id \
+            JOIN dag_versions v ON v.id = r.dag_version_id \
+            JOIN parse_results p ON p.id = v.parse_result_id \
+            WHERE a.status IS NULL AND a.worker_id IS NULL ORDER BY a.assigned_at, a.id";
+        const IDS: &str = "SELECT a.id{text}, a.task_instance_id{text} FROM attempts a \
+            WHERE a.status IS NULL AND a.worker_id IS NULL";
+        let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, WAITING))
+                .fetch_all(pool)
+                .await?
+        });
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, IDS)).fetch_all(pool).await?
+        });
+        let mut waiting = Vec::with_capacity(rows.len());
+        for row in rows {
+            let dag = self.dag_version(&row.7).await?;
+            let instance = ready(row, dag)?;
+            if let Some((attempt, _)) = ids.iter().find(|(_, i)| *i == instance.instance_id) {
+                waiting.push((attempt.clone(), instance));
+            }
+        }
+        Ok(waiting)
     }
 
     /// Every open attempt (no end recorded) with its DAG, run and task: what the concurrency
@@ -493,7 +708,7 @@ impl Database {
         now: Timestamp,
     ) -> Result<bool, DbError> {
         const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
-            start_method = $2 WHERE id = $3{uuid} AND status IS NULL";
+            start_method = $2, moved_at = NULL WHERE id = $3{uuid} AND status IS NULL";
         let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, START))
                 .bind(db_time(now))
@@ -514,8 +729,8 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn mark_adopted(&self, attempt_id: &str, now: Timestamp) -> Result<(), DbError> {
-        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}) \
-            WHERE id = $2{uuid} AND status IS NULL";
+        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
+            moved_at = NULL WHERE id = $2{uuid} AND status IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, START))
                 .bind(db_time(now))
@@ -807,8 +1022,20 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
 }
 
 fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
-    let (id, instance_id, run_id, task_id, try_number, worker_id, status, started, map_index, kept) =
-        row;
+    let (
+        id,
+        instance_id,
+        run_id,
+        task_id,
+        try_number,
+        worker_id,
+        status,
+        started,
+        map_index,
+        kept,
+        moves,
+        moving,
+    ) = row;
     Ok(StoredAttempt {
         id,
         instance_id,
@@ -822,5 +1049,7 @@ fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
         started,
         map_index,
         result_kept: kept,
+        cleanup_moves: u32::try_from(moves).unwrap_or(0),
+        moving,
     })
 }

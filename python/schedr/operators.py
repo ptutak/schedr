@@ -262,6 +262,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             ``cleanup_timeout``, 5 minutes).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
+        cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost
+            (default no: only you know whether it depends on where the task ran).
         cleanup_handles: The handle types the attempt may register; default: any.
 
     Raises:
@@ -291,6 +293,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         cleanup_timeout: timedelta | None = None,
         cleanup_retries: int | None = None,
         cleanup_retry_delay: timedelta | None = None,
+        cleanup_anywhere: bool | None = None,
         cleanup_handles: Sequence[str] | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
@@ -328,6 +331,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             cleanup_timeout=cleanup_timeout,
             cleanup_retries=cleanup_retries,
             cleanup_retry_delay=cleanup_retry_delay,
+            cleanup_anywhere=cleanup_anywhere,
         )
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)

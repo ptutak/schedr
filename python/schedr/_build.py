@@ -149,6 +149,7 @@ class TaskOptions:
     cleanup_timeout: timedelta | None = None
     cleanup_retries: int | None = None
     cleanup_retry_delay: timedelta | None = None
+    cleanup_anywhere: bool | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -189,6 +190,9 @@ class TaskOptions:
                 if self.cleanup_retry_delay is None
                 else self.cleanup_retry_delay
             ),
+            cleanup_anywhere=(
+                base.cleanup_anywhere if self.cleanup_anywhere is None else self.cleanup_anywhere
+            ),
         )
 
     def cleanup_set(self) -> str | None:
@@ -197,7 +201,12 @@ class TaskOptions:
         Returns:
             Its name, or ``None``.
         """
-        for name in ("cleanup_timeout", "cleanup_retries", "cleanup_retry_delay"):
+        for name in (
+            "cleanup_timeout",
+            "cleanup_retries",
+            "cleanup_retry_delay",
+            "cleanup_anywhere",
+        ):
             if getattr(self, name) is not None:
                 return name
         return None
@@ -231,6 +240,7 @@ class TaskOptions:
                 else to_ms(self.cleanup_retry_delay, "cleanup_retry_delay")
             ),
             wanted.handles,
+            bool(self.cleanup_anywhere),
         )
 
     def settings(self) -> TaskSettings:

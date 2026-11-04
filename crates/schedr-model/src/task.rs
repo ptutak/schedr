@@ -221,6 +221,9 @@ pub struct TaskCleanup {
     /// parameter would never see them).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handles: Option<Vec<String>>,
+    /// Whether it may run on another worker when its own is lost (`cleanup_anywhere`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub anywhere: bool,
 }
 
 /// What a mapped task's instances vary over (decision 69): one instance per element.

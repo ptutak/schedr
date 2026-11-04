@@ -1879,6 +1879,10 @@
       "additionalProperties": false,
       "description": "A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).",
       "properties": {
+        "anywhere": {
+          "description": "Whether it may run on another worker when its own is lost (`cleanup_anywhere`).",
+          "type": "boolean"
+        },
         "handles": {
           "description": "The handle types it takes: `None` any, none listed none (a function without a `handles`\nparameter would never see them).",
           "items": {

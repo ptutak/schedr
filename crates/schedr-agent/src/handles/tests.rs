@@ -9,6 +9,7 @@ fn cleanup(handles: &[&str]) -> TaskCleanup {
         retries: 0,
         retry_delay_ms: 0,
         handles: (!handles.is_empty()).then(|| handles.iter().map(ToString::to_string).collect()),
+        anywhere: false,
     }
 }
 
@@ -142,4 +143,23 @@ async fn handles_keep_one_order_in_memory_and_in_the_journal() {
         added.unwrap().unwrap();
     }
     assert_eq!(journal.handles("a1").unwrap(), handles.list());
+}
+
+#[tokio::test]
+async fn each_handle_is_told_on_with_its_place() {
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let telling = Arc::clone(&told);
+    let sink = HandleSink(Arc::new(move |position, handle: &CleanupHandle| {
+        telling
+            .lock()
+            .unwrap()
+            .push((position, handle.handle_type.clone()));
+    }));
+    let handles = handles(&[]).forwarded(sink);
+    handles.add(handle("A", json!({}))).await.unwrap();
+    handles.add(handle("B", json!({}))).await.unwrap();
+    assert_eq!(
+        *told.lock().unwrap(),
+        [(0, "A".to_owned()), (1, "B".to_owned())]
+    );
 }

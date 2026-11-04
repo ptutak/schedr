@@ -42,6 +42,7 @@ message WorkerMessage {
     Warnings warnings = 9;
     ConnectionJobDone connection_job_done = 10;
     TaskEnded task_ended = 11;
+    HandlesAdded handles_added = 12;
   }
 }
 
@@ -183,6 +184,16 @@ message TaskEnded {
   Finished result = 1;
 }
 
+// Cleanup handles an attempt registered, already masked, for a cleanup on another worker
+// (decision 242): sent as they are registered, all of them again after a reconnect.
+message HandlesAdded {
+  string attempt_id = 1;
+  // The registration order of the first; the others follow it.
+  uint32 first = 2;
+  // Each a schedr-model CleanupHandle as JSON.
+  repeated bytes handle_json = 3;
+}
+
 enum CleanupStatus {
   CLEANUP_STATUS_UNSPECIFIED = 0;
   CLEANUP_STATUS_OK = 1;
@@ -319,6 +330,13 @@ message AssignTask {
   // The connections of the task's root (decision 174), as schedr-model Registry JSON: the
   // agent renders one when the task opens it. Empty: none.
   bytes connections_json = 15;
+  // Only the cleanup of an attempt whose worker was lost (decision 243), with its handles.
+  optional CleanupOnly cleanup_only = 16;
+}
+
+message CleanupOnly {
+  // Each a schedr-model CleanupHandle as JSON, in registration order.
+  repeated bytes handle_json = 1;
 }
 
 message AssignParse {

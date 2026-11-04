@@ -60,6 +60,31 @@ def test_the_dags_defaults_and_the_tasks_own_settings_apply() -> None:
     assert (found["timeout_ms"], found["retries"], found["retry_delay_ms"]) == (60_000, 1, 2_000)
 
 
+def test_cleanup_anywhere_is_set_on_the_task_or_in_the_dags_defaults() -> None:
+    with Dag("d4") as off:
+        export("2026-11-04")
+    assert "anywhere" not in _cleanup_json(off, "export")
+    with Dag("d5") as own:
+        export.override(cleanup_anywhere=True)("2026-11-04")
+    assert _cleanup_json(own, "export")["anywhere"] is True
+    with Dag("d6", defaults=TaskDefaults(cleanup_anywhere=True)) as defaulted:
+        export("2026-11-04")
+    assert _cleanup_json(defaulted, "export")["anywhere"] is True
+    with Dag("d7") as command:
+        CommandOperator(task_id="run", command="true", cleanup="undo", cleanup_anywhere=True)
+    assert _cleanup_json(command, "run")["anywhere"] is True
+
+
+def test_the_task_decorator_takes_cleanup_anywhere() -> None:
+    @task(cleanup=undo, cleanup_anywhere=True)
+    def moved(day: str) -> None:
+        del day
+
+    with Dag("d8") as dag:
+        moved("2026-11-04")
+    assert _cleanup_json(dag, "moved")["anywhere"] is True
+
+
 def test_cleanup_options_without_a_cleanup_are_refused() -> None:
     @task(cleanup_retries=1)
     def plain() -> None: ...

@@ -6974,6 +6974,19 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   is lost, or isn't reported after a restart, ends with it (else `lost`), with `worker_lost` as its
   cleanup result. A drain stops each task at the deadline less one try of its cleanup, and never
   touches one in its cleanup. No new configuration value.
+- **Built (M4.8b2; decisions 243-247):** handles go to the master as they are journaled
+  (`HandlesAdded`, all of them again on `Continue`) into `cleanup_handles`: the first at each place
+  stands, up to 1 MiB of bytes per attempt, only from the attempt's own worker. With
+  `cleanup_anywhere` (task, DAG default, operator), a lost worker's attempt gives its cleanup to
+  another worker (`AssignTask.cleanup_only`), ahead of waiting tasks and not held by limits; the
+  task's result stays the one the master kept. A worker refusing it is asked last, not left out:
+  with none other it is asked again. An assignment with no `Started` comes back without counting as
+  a move. The moved cleanup's handles are read from its kept assignment after a restart; a handle
+  that doesn't read is refused, never dropped. No new configuration value. **Known limit:** a worker
+  cut off from the master keeps running; after the lease the master can't tell it from a dead pod.
+  So a cleanup with `cleanup_anywhere` can start on another worker while the task still runs, and
+  the old worker runs it too when the task ends there or `Kill` cancels it: such a cleanup must be
+  safe during the task, not only safe to repeat.
 
 ### Timings: public keys and hidden ones
 

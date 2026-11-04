@@ -1,6 +1,6 @@
 # Master–worker protocol
 
-This page describes the code as of M4.8b. Workers open the `Control` stream; their stable worker ID and per-process incarnation ID distinguish a reconnect from a restart. Times and their settings are in [Timings](14-timings.md).
+Workers open the `Control` stream; their stable worker ID and per-process incarnation ID distinguish a reconnect from a restart. Times and their settings are in [Timings](14-timings.md).
 
 ## Registering and heartbeats
 
@@ -120,6 +120,7 @@ sequenceDiagram
     participant W as Worker
     participant M as Master
     P->>W: Register handles (journal before returning)
+    W->>M: HandlesAdded
     P-->>W: Task result
     W->>W: Journal cleaning record
     W->>M: TaskEnded (task result)
@@ -192,21 +193,78 @@ A finished entry for an open attempt gets `Continue` and is sent again. Without 
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    alt Cleanup under way and TaskEnded stored
+    opt Task ends before worker is lost
         W->>M: TaskEnded (task result)
-        Note over M: Worker lease: 60 s default without messages; worker is lost
-        M->>M: End with saved task result and cleanup worker_lost
-    else No saved task result
-        Note over M: Worker lease: 60 s default without messages; worker is lost
-        M->>M: Started attempt ends lost; unstarted assignment expires without a retry
-        opt The task has a cleanup and the attempt had started
-            M->>M: Cleanup result worker_lost: the run will fail, even if a retry succeeds
-        end
     end
-    Note over M: A started lost attempt uses a retry subject to task policy
+    Note over M: Worker lease expires; worker is lost
+    alt Started task without cleanup_anywhere
+        M->>M: Keep reported task result or mark task lost
+        opt Task has cleanup
+            M->>M: End cleanup worker_lost
+        end
+    else Unstarted assignment
+        M->>M: End assignment_expired; retry without using a task retry
+    else Started task with cleanup_anywhere and moves remaining
+        M->>M: Keep task result or mark task lost; move cleanup
+    else Cleanup has exhausted its moves
+        M->>M: End cleanup worker_lost
+    end
 ```
 
 A restart that omits an attempt is reconciled similarly; a saved task result is retained.
+
+## Lost worker with cleanup_anywhere
+
+```{mermaid}
+sequenceDiagram
+    participant O as Original worker
+    participant M as Master
+    participant W as Another worker
+    O->>M: HandlesAdded (journaled handles)
+    Note over M: Worker lease expires; original worker is lost
+    M->>M: Keep task result or mark task lost; move cleanup
+    alt No eligible worker
+        M->>M: Remain cleaning_up; no worker for the cleanup
+    else Worker available
+        M->>W: AssignTask (cleanup_only, handles)
+        alt Refused
+            W-->>M: Rejected
+            M->>M: Take back; prefer another worker next time
+        else No Started
+            Note over M: Assignment expires; take back without another move
+        else Started
+            W->>M: Started
+            W->>M: TaskEnded
+            W->>W: Run cleanup
+            W->>M: Finished (cleanup result)
+            M->>M: Keep original task result and finish attempt
+            M-->>W: FinishedAck
+        end
+    end
+```
+
+Each move counts as a cleanup try; if the receiving worker is lost after
+`cleanup_retries + 1` moves, cleanup ends `worker_lost`. A refused worker can be asked again
+when no other is available. A handle not delivered before the original worker is lost cannot
+accompany the cleanup.
+
+A lost worker may only be cut off from the master. Its task continues, so the moved cleanup
+can run concurrently with it. On reconnect, `Kill` cancels the old task, whose worker may also
+run cleanup. See [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
+
+```{mermaid}
+sequenceDiagram
+    participant O as Cut-off worker
+    participant M as Master
+    participant W as Another worker
+    Note over O: Task continues running
+    Note over M: Lease expires; worker counted lost
+    M->>W: AssignTask (cleanup_only)
+    W->>W: Cleanup runs while original task runs
+    O->>M: Register (running attempt)
+    M-->>O: Registered (Kill)
+    O->>O: Cancel task; run its cleanup
+```
 
 ## Drain
 
@@ -315,6 +373,7 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | [assignment expiry](14-timings.md#fixed-timings) |
 | `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
+| `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
 | `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck` | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |
 | `Draining` | Worker on shutdown | Stop assignments, mark draining | Yes | [`[worker] termination_grace_period`](14-timings.md#public-timing-keys) |
 | `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT`](14-timings.md#fixed-timings) |
@@ -326,7 +385,7 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
 | `Registered` | Master after `Register` | Apply timing and journal decisions | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
-| `AssignTask` | Master after storing assignment | Validate and start attempt | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, leave cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |

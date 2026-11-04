@@ -57,6 +57,25 @@ pub enum HandleError {
     },
 }
 
+/// Told each handle once it is journaled, with its place, to send it on to the master.
+#[derive(Clone)]
+pub struct HandleSink(pub Arc<SendHandle>);
+
+/// How a [`HandleSink`] sends a handle on.
+pub type SendHandle = dyn Fn(u32, &CleanupHandle) + Send + Sync;
+
+impl std::fmt::Debug for HandleSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HandleSink")
+    }
+}
+
+impl PartialEq for HandleSink {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// What an attempt may register.
 #[derive(Debug)]
 enum Taken {
@@ -83,6 +102,8 @@ pub struct AttemptHandles {
     mask: Arc<MaskSet>,
     /// Where each is on disk before the task hears it is registered, and under which attempt.
     journal: Option<(Journal, String)>,
+    /// Told each handle, after the journal.
+    sink: Option<HandleSink>,
     /// Held from a handle's place in the list to its line in the journal: one order in both.
     adding: tokio::sync::Mutex<()>,
     registered: Mutex<Registered>,
@@ -103,6 +124,7 @@ impl AttemptHandles {
             },
             mask,
             journal: None,
+            sink: None,
             adding: tokio::sync::Mutex::new(()),
             registered: Mutex::default(),
         }
@@ -115,6 +137,13 @@ impl AttemptHandles {
         self
     }
 
+    /// These handles told to `sink`, once journaled.
+    #[must_use]
+    pub fn forwarded(mut self, sink: HandleSink) -> Self {
+        self.sink = Some(sink);
+        self
+    }
+
     /// The handles read back from the journal, for a cleanup after a restart: closed.
     #[must_use]
     pub fn restored(handles: Vec<CleanupHandle>, mask: Arc<MaskSet>) -> Self {
@@ -122,6 +151,7 @@ impl AttemptHandles {
             taken: Taken::Any,
             mask,
             journal: None,
+            sink: None,
             adding: tokio::sync::Mutex::new(()),
             registered: Mutex::new(Registered {
                 handles,
@@ -155,7 +185,7 @@ impl AttemptHandles {
         // As listed: the whole handle and a comma.
         let added = serde_json::to_string(&handle).map_or(usize::MAX, |json| json.len() + 1);
         let _adding = self.adding.lock().await;
-        {
+        let position = {
             let mut registered = self
                 .registered
                 .lock()
@@ -169,14 +199,19 @@ impl AttemptHandles {
             }
             registered.size = size;
             registered.handles.push(handle.clone());
-        }
+            u32::try_from(registered.handles.len() - 1).unwrap_or(u32::MAX)
+        };
         if let Some((journal, attempt_id)) = &self.journal {
             let (journal, attempt_id) = (journal.clone(), attempt_id.clone());
-            tokio::task::spawn_blocking(move || journal.add_handle(&attempt_id, &handle))
+            let line = handle.clone();
+            tokio::task::spawn_blocking(move || journal.add_handle(&attempt_id, &line))
                 .await
                 .map_err(std::io::Error::other)
                 .and_then(|written| written)
                 .map_err(|error| HandleError::NotJournaled(error.to_string()))?;
+        }
+        if let Some(sink) = &self.sink {
+            (sink.0)(position, &handle);
         }
         Ok(())
     }

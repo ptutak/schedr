@@ -205,7 +205,8 @@ async fn slot_problems(
     dispatcher: &Dispatcher,
     found: &mut Vec<String>,
 ) {
-    for attempt in open {
+    // A moved cleanup waiting for a worker holds no slot.
+    for attempt in open.iter().filter(|a| !a.worker_id.is_empty()) {
         let held = dispatcher
             .workers()
             .get(&attempt.worker_id)

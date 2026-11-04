@@ -749,6 +749,324 @@ async fn an_attempt_a_restarted_agent_doesnt_report_keeps_its_tasks_result() {
     );
 }
 
+/// [`dag`], `extract` with a `cleanup_anywhere` cleanup of `retries`.
+fn dag_with_anywhere(retries: u32, cleanup_retries: u32) -> Dag {
+    let mut dag = serde_json::to_value(dag(retries)).unwrap();
+    dag["tasks"][0]["cleanup"] = json!({
+        "run": "python", "retries": cleanup_retries, "retry_delay_ms": 0, "anywhere": true
+    });
+    serde_json::from_value(dag).unwrap()
+}
+
+/// A run's first attempt started on `w1`.
+async fn started_attempt(dispatcher: &mut Dispatcher) -> String {
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    attempt
+}
+
+fn handles_of(attempt: &str, first: u32, json: &[Json]) -> pb::HandlesAdded {
+    pb::HandlesAdded {
+        attempt_id: attempt.to_owned(),
+        first,
+        handle_json: json
+            .iter()
+            .map(|v| serde_json::to_vec(v).unwrap())
+            .collect(),
+    }
+}
+
+fn job(id: &str) -> Json {
+    json!({"handle_type": "Job", "value": {"id": id}})
+}
+
+fn cleaned(attempt: &str) -> pb::Finished {
+    pb::Finished {
+        attempt_id: attempt.to_owned(),
+        status: pb::AttemptStatus::Lost.into(),
+        cleanup: Some(pb::CleanupResult {
+            status: pb::CleanupStatus::Ok.into(),
+            tries: 1,
+            ..pb::CleanupResult::default()
+        }),
+        ..pb::Finished::default()
+    }
+}
+
+#[tokio::test]
+async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let added = handles_of(&attempt, 0, &[job("j-1")]);
+    dispatcher.handles_added("w1", &added).await.unwrap();
+    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
+    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    // No worker: it waits, its attempt open, the reason shown (decisions 221, 244).
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), Vec::new());
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(extract.state, TaskInstanceState::CleaningUp);
+    let waiting = db.waiting_cleanups().await.unwrap();
+    assert_eq!(
+        waiting[0].1.queued_reason.as_deref(),
+        Some(NO_CLEANUP_WORKER)
+    );
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!((out.len(), out[0].worker_id.as_str()), (1, "w2"));
+    let assigned = assignment(&out[0]);
+    assert_eq!(assigned.attempt_id, attempt);
+    let only = assigned.cleanup_only.as_ref().expect("only the cleanup");
+    assert_eq!(only.handle_json, added.handle_json);
+    dispatcher
+        .started("w2", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    // The new worker knows nothing of the task: the kept result stands.
+    dispatcher
+        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        (extract.state, extract.cleanup_result),
+        (TaskInstanceState::Success, Some(CleanupResult::Ok))
+    );
+    let outputs = db.run_outputs(&run_id).await.unwrap();
+    assert_eq!(outputs.get(&id("extract")), Some(&json!(7)));
+}
+
+#[tokio::test]
+async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        extract_instance(&db, &run_id).await.state,
+        TaskInstanceState::CleaningUp,
+        "the retry waits (decision 221)"
+    );
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .started("w2", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Lost)
+    );
+    assert_eq!(
+        extract_instance(&db, &run_id).await.state,
+        TaskInstanceState::UpForRetry
+    );
+}
+
+#[tokio::test]
+async fn a_cleanup_that_keeps_losing_workers_ends_worker_lost() {
+    // Decision 247: with no retries, one move; the next worker lost ends it.
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .started("w2", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost("w2", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        extract_instance(&db, &run_id).await.cleanup_result,
+        Some(CleanupResult::WorkerLost)
+    );
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Lost)
+    );
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.step(ts(NOW)).await.unwrap();
+    let refused = rejected(&attempt, pb::RejectReason::CodeMismatch, "not yet");
+    dispatcher.rejected("w2", &refused, ts(NOW)).await.unwrap();
+    let stored = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((stored.worker_id.as_str(), stored.cleanup_moves), ("", 1));
+    assert_eq!(dispatcher.workers().get("w2").unwrap().attempts.len(), 0);
+
+    // Past the set-aside it goes out again; no `Started` in time, and it comes back.
+    let again = later(600);
+    let out = dispatcher.step(again).await.unwrap();
+    assert_eq!(out.len(), 1);
+    let expired = later(1200);
+    dispatcher.expire(expired).await.unwrap();
+    let stored = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((stored.worker_id.as_str(), stored.status), ("", None));
+}
+
+/// A started attempt whose worker `w1` was lost, its cleanup given to `w2`.
+async fn moved_to_w2(dispatcher: &mut Dispatcher) -> String {
+    let attempt = started_attempt(dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 1);
+    attempt
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_whose_start_arrived_is_not_taken_back() {
+    let (dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let arrivals = crate::core::Arrivals::default();
+    let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    arrivals.start_arrived("w2", &attempt);
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
+    arrivals.start_handled(&attempt);
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "");
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_adopted_after_a_reconnect_is_not_taken_back() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    dispatcher.adopt("w2", &attempt, later(5)).await.unwrap();
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_refused_goes_to_another_worker_and_back_if_none_is_left() {
+    let (mut dispatcher, _db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    // Fewer slots than the worker refusing it: picked on room alone, it would never get it.
+    dispatcher
+        .register("w3", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 9, ts(NOW))
+        .await
+        .unwrap();
+    let refused = rejected(&attempt, pb::RejectReason::DiskNotWritable, "full");
+    dispatcher.rejected("w2", &refused, ts(NOW)).await.unwrap();
+    let out = dispatcher.step(later(600)).await.unwrap();
+    assert_eq!(out[0].worker_id, "w3");
+    dispatcher
+        .rejected("w3", &refused, later(600))
+        .await
+        .unwrap();
+    let out = dispatcher.step(later(1200)).await.unwrap();
+    assert_eq!(
+        out.len(),
+        1,
+        "with every worker refusing, one is asked again"
+    );
+}
+
+#[tokio::test]
+async fn handles_sent_again_count_once_so_the_new_ones_still_fit() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_cleanup(1)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let big = |id: &str| json!({"handle_type": "Job", "value": id.repeat(600_000)});
+    let small = json!({"handle_type": "Job", "value": "b".repeat(100_000)});
+    let first = handles_of(&attempt, 0, &[big("a")]);
+    dispatcher.handles_added("w1", &first).await.unwrap();
+    let again = handles_of(&attempt, 0, &[big("a"), small]);
+    dispatcher.handles_added("w1", &again).await.unwrap();
+    assert_eq!(db.cleanup_handles(&attempt).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn the_limit_on_handles_counts_bytes_and_any_first_place_is_safe() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_cleanup(1)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let wide = json!({"handle_type": "Job", "value": "\u{1F600}".repeat(100_000)});
+    for first in 0..5 {
+        let one = handles_of(&attempt, first, std::slice::from_ref(&wide));
+        dispatcher.handles_added("w1", &one).await.unwrap();
+    }
+    let kept = db.cleanup_handles(&attempt).await.unwrap();
+    let bytes: usize = kept.iter().map(String::len).sum();
+    assert!(bytes <= 1 << 20, "{bytes} bytes kept");
+    let last = handles_of(&attempt, u32::MAX, &[job("a"), job("b")]);
+    dispatcher.handles_added("w1", &last).await.unwrap();
+}
+
+#[tokio::test]
+async fn handles_are_kept_once_for_the_attempts_own_worker_and_up_to_the_limit() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_cleanup(1)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let first = handles_of(&attempt, 0, &[job("j-1")]);
+    dispatcher.handles_added("w1", &first).await.unwrap();
+    // Sent again after a reconnect, with one more; another worker's are ignored.
+    let again = handles_of(&attempt, 0, &[job("other"), job("j-2")]);
+    dispatcher.handles_added("w1", &again).await.unwrap();
+    let forged = handles_of(&attempt, 9, &[job("forged")]);
+    dispatcher.handles_added("w9", &forged).await.unwrap();
+    let kept = db.cleanup_handles(&attempt).await.unwrap();
+    assert_eq!(kept.len(), 2);
+    assert!(
+        kept[0].contains("j-1") && kept[1].contains("j-2"),
+        "{kept:?}"
+    );
+    let not_a_handle = handles_of(&attempt, 5, &[json!(1)]);
+    dispatcher.handles_added("w1", &not_a_handle).await.unwrap();
+    let huge = json!({"handle_type": "Job", "value": "x".repeat(2 << 20)});
+    let too_much = handles_of(&attempt, 5, &[huge]);
+    dispatcher.handles_added("w1", &too_much).await.unwrap();
+    assert_eq!(db.cleanup_handles(&attempt).await.unwrap().len(), 2);
+}
+
 #[tokio::test]
 async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
     // B17: a worker draining and leaving (or lost) ended every open attempt `lost`, using a

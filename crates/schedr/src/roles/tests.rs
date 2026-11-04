@@ -446,7 +446,7 @@ async fn the_roles_say_what_they_miss() {
         Err(AppError::NoDatabase)
     ));
     assert!(matches!(webserver(&mesh).await, Err(AppError::NoDatabase)));
-    let error = worker(&config(), &env(&[("HOME", "/h")]))
+    let error = Box::pin(worker(&config(), &env(&[("HOME", "/h")])))
         .await
         .unwrap_err();
     assert!(
@@ -457,14 +457,16 @@ async fn the_roles_say_what_they_miss() {
     );
     let mut bad_url = config();
     bad_url.worker.master_url = Some("schedr-master:8070".to_owned());
-    let error = worker(&bad_url, &env(&[("HOME", "/h")])).await.unwrap_err();
+    let error = Box::pin(worker(&bad_url, &env(&[("HOME", "/h")])))
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().contains("needs the https:// scheme"),
         "{error}"
     );
     let mut no_certificates = config();
     no_certificates.worker.master_url = Some("https://schedr-master:8070".to_owned());
-    let error = worker(&no_certificates, &env(&[("HOME", "/h")]))
+    let error = Box::pin(worker(&no_certificates, &env(&[("HOME", "/h")])))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("needs [tls] ca"), "{error}");

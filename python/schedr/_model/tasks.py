@@ -347,6 +347,7 @@ class TaskCleanup:
         retry_delay_ms: The delay before each retry.
         handles: The handle types it takes: ``None`` any, empty none (a function without a
             ``handles`` parameter would never see them).
+        anywhere: Whether it may run on another worker when its own is lost.
     """
 
     line: CommandLine | None = None
@@ -354,6 +355,7 @@ class TaskCleanup:
     retries: int = DEFAULT_CLEANUP_RETRIES
     retry_delay_ms: int = DEFAULT_CLEANUP_RETRY_DELAY_MS
     handles: tuple[str, ...] | None = None
+    anywhere: bool = False
 
     def references(self) -> list[Reference]:
         """The references of its command line.
@@ -384,6 +386,8 @@ class TaskCleanup:
             result["timeout_ms"] = self.timeout_ms
         if self.handles is not None:
             result["handles"] = list(self.handles)
+        if self.anywhere:
+            result["anywhere"] = True
         return result
 
 
