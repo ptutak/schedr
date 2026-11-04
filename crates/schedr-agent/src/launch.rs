@@ -406,7 +406,7 @@ pub async fn run_python(
 ) -> Result<Ran, LaunchError> {
     let PythonTask { request, secrets } = task.into();
     let started = Instant::now();
-    // The timeout counts from here: the runner's start is part of the attempt (B56).
+    // The remaining timeout includes the runner's start (B56, B160).
     let deadline = limits
         .timeout
         .map(|timeout| tokio::time::Instant::from_std(started) + timeout);
@@ -536,6 +536,13 @@ pub async fn run_command(
         None => (spawn(spec).await.map_err(start)?, None),
     };
     spawned(process.id());
+    // The timeout counts from here, as a runner's does: a slow start is part of the attempt.
+    let limits = Limits {
+        timeout: limits
+            .timeout
+            .map(|timeout| timeout.saturating_sub(started.elapsed())),
+        ..limits
+    };
     let supervised = supervise(&mut process, limits, stop)
         .await
         .map_err(LaunchError::Supervise)?;

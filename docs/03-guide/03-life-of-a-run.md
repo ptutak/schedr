@@ -113,11 +113,14 @@ imported and the arguments are built, the runner sends `task_imported` (no field
 the function; it does not send that message when the import or the arguments fail. The agent
 times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
 [Observability](09-observability.md)). The result comes back over the same local socket.
-The task's timeout counts from the moment the agent starts launching it, so the runner's start
-is part of it: a cancel or the timeout arriving before the runner's `hello` stops the runner
-then (SIGTERM, the grace, SIGKILL), and the attempt ends `cancelled` or `timed_out`. The
-same holds while it waits for a fork server and while it sends the task's request. A runner
-that doesn't say `hello` within 30 s fails the attempt with `start_failed`.
+The task's timeout counts from the moment the agent starts launching it, including reading
+its secrets and connections before the process starts. The process gets only the time left:
+a 1 s timeout with a 500 ms secret read leaves 500 ms for the process. A cancel or the timeout
+arriving during those reads ends the attempt `cancelled` or `timed_out`, without starting a
+process. The runner's start is part of the same timeout: a cancel or the timeout arriving
+before its `hello` stops the runner then (SIGTERM, the grace, SIGKILL). The same holds while
+it waits for a fork server and while it sends the task's request. A runner that doesn't say
+`hello` within 30 s fails the attempt with `start_failed`.
 The memory watchdog samples the group's memory every second. With `fork_server = true` on
 the DAG interpreter, a Linux worker starts that Python runner from a fork server (see
 [The fork server](05-workers.md#the-fork-server)), and the attempts API shows `start_method`

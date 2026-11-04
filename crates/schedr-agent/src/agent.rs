@@ -317,7 +317,8 @@ impl Executor for ProcessExecutor {
         };
         let run = fresh.run(spec, plan, stops, spawned);
         tokio::pin!(run);
-        // The attempt's own timeout starts after its secrets are read: the job's covers both.
+        // The job's deadline also covers planning and waiting for its turn; the attempt's
+        // timeout covers its secret reads and process together.
         let finished = tokio::select! {
             finished = &mut run => finished,
             () = tokio::time::sleep_until(job.deadline) => {
@@ -352,8 +353,8 @@ impl ProcessExecutor {
         stop: Stops,
         spawned: Spawned,
     ) -> pb::Finished {
-        let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let fetching = Instant::now();
+        let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let timeout = spec.timeout();
         let mut stop = stop;
         // A slow storage gives way to a cancel, a drain's interrupt or the timeout: nothing
@@ -368,8 +369,17 @@ impl ProcessExecutor {
             Ok(Err(finished)) => return *finished,
             Err(reason) => return stopped_before_start(&spec, reason, fetching.elapsed()),
         };
+        let elapsed = fetching.elapsed();
+        let timeout = timeout.map(|timeout| timeout.saturating_sub(elapsed));
+        // Fetching may finish in the same poll as its deadline: do not start a process
+        // with no time left, whichever branch of the select won.
+        if timeout.is_some_and(|left| left.is_zero()) {
+            return stopped_before_start(&spec, StopReason::TimedOut, elapsed);
+        }
         let python = matches!(plan, Plan::Python { .. });
-        let mut finished = self.run_planned(&spec, plan, stop, spawned, &secrets).await;
+        let mut finished = self
+            .run_planned(&spec, plan, timeout, stop, spawned, &secrets)
+            .await;
         ended_with_secrets(&mut finished, &secrets, python);
         let log = self.setup.log_file(&spec.attempt_id);
         // Read on demand while it ran: too short to mask, warned now.
@@ -432,12 +442,13 @@ impl ProcessExecutor {
         &self,
         spec: &AttemptSpec,
         plan: Plan,
+        timeout: Option<Duration>,
         stop: Stops,
         spawned: Spawned,
         secrets: &Arc<AttemptSecrets>,
     ) -> pb::Finished {
         let limits = Limits {
-            timeout: spec.timeout(),
+            timeout,
             grace: spec.cancel_grace,
             interrupt_grace: self.drain_terminate_period,
         };

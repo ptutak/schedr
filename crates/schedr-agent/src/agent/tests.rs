@@ -1740,8 +1740,27 @@ impl crate::secrets::SecretStorage for Hanging {
     }
 }
 
-#[tokio::test]
-async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
+/// Answers slowly, but successfully: its read must count against the process's time.
+#[derive(Debug)]
+struct Delayed;
+
+impl crate::secrets::SecretStorage for Delayed {
+    fn read<'a>(&'a self, _path: &'a str) -> crate::secrets::ReadFuture<'a> {
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok(BTreeMap::from([(
+                "password".to_owned(),
+                "hunter22".to_owned(),
+            )]))
+        })
+    }
+}
+
+fn command_needing_secret(
+    storage: Arc<dyn crate::secrets::SecretStorage>,
+    timeout_ms: &serde_json::Value,
+    command: &[&str],
+) -> (ProcessExecutor, AttemptSpec, Plan, TempDir) {
     use crate::secrets::{SecretStores, Storage};
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("etl")).unwrap();
@@ -1758,7 +1777,7 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         fork_server: None,
     };
     let stores = SecretStores::new(
-        std::collections::BTreeMap::from([("main".to_owned(), Storage::new(Arc::new(Hanging)))]),
+        std::collections::BTreeMap::from([("main".to_owned(), Storage::new(storage))]),
         Some("main".to_owned()),
         5,
     )
@@ -1771,19 +1790,23 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         forks: None,
         secrets: Arc::new(stores),
     };
-    let task = |timeout_ms: serde_json::Value| {
-        json!({
-            "id": "load",
-            "kind": "command",
-            "command": {"argv": [[{"text": "true"}]]},
-            "env": {"PW": [{"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}]},
-            "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": timeout_ms,
-                         "queue": "default", "max_output_size": 1024, "preload": true,
-                         "fresh_process": false},
-            "output_type": {"type": "process_result"},
-        })
-    };
-    let assign = |task: &serde_json::Value| pb::AssignTask {
+    let task = json!({
+        "id": "load",
+        "kind": "command",
+        "command": {"argv": command.iter().map(|arg| json!([{"text": arg}])).collect::<Vec<_>>()},
+        "connections": ["db"],
+        "connection_env": {"DB": "db"},
+        "env": {"PW": [{"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}]},
+        "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": timeout_ms,
+                     "queue": "default", "max_output_size": 1024, "preload": true,
+                     "fresh_process": false},
+        "output_type": {"type": "process_result"},
+    });
+    let connections = json!({"connections": {"db": {"name": "db", "type": "sql", "params": {
+        "url": {"literal": "postgresql://etl@db.example.com/etl"},
+        "password": {"template": [{"ref": {"kind": "secret", "path": "etl/db", "key": "password"}}]},
+    }}}});
+    let assign = pb::AssignTask {
         attempt_id: "a1".to_owned(),
         task_id: "load".to_owned(),
         map_index: -1,
@@ -1802,7 +1825,7 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
             }),
             dag_id: "sync".to_owned(),
         }),
-        task_json: serde_json::to_vec(task).unwrap(),
+        task_json: serde_json::to_vec(&task).unwrap(),
         dag_file: Some(pb::DagFileRef {
             root: "etl".to_owned(),
             path: "sync.py".to_owned(),
@@ -1814,16 +1837,22 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         memory_budget_bytes: 0,
         setrlimit: false,
         upstream_outcomes: std::collections::HashMap::new(),
-        connections_json: Vec::new(),
+        connections_json: serde_json::to_vec(&connections).unwrap(),
     };
+    let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
+    spec.stand_in_secrets();
+    let plan = crate::attempt::plan(&spec, &setup).unwrap();
+    (executor, spec, plan, dir)
+}
+
+#[tokio::test]
+async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
     for (timeout_ms, cancel, status) in [
         (json!(null), true, pb::AttemptStatus::Cancelled),
         (json!(200), false, pb::AttemptStatus::TimedOut),
     ] {
-        let mut spec =
-            crate::attempt::AttemptSpec::from_assign(&assign(&task(timeout_ms)), None).unwrap();
-        spec.stand_in_secrets();
-        let plan = crate::attempt::plan(&spec, &setup).unwrap();
+        let (executor, spec, plan, _dir) =
+            command_needing_secret(Arc::new(Hanging), &timeout_ms, &["true"]);
         let (sender, stops) = Stops::new();
         if cancel {
             tokio::spawn(async move {
@@ -1840,6 +1869,125 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         );
         assert_eq!(finished.status, i32::from(status), "{finished:?}");
     }
+}
+
+#[tokio::test]
+async fn the_timeout_covers_the_secret_read_and_the_command_together() {
+    for (timeout_ms, status) in [
+        (10_000, pb::AttemptStatus::Success),
+        (1_000, pb::AttemptStatus::TimedOut),
+    ] {
+        let (executor, spec, plan, dir) =
+            command_needing_secret(Arc::new(Delayed), &json!(timeout_ms), &["sleep", "0.8"]);
+        let connection_dir = dir.path().join("connections/a1");
+        let files = connection_dir.clone();
+        let (_sender, stops) = Stops::new();
+        let finished = executor
+            .run(
+                spec,
+                plan,
+                stops,
+                Box::new(move |_, _| assert!(files.join("db/DB/pgpass").is_file())),
+            )
+            .await;
+        assert_eq!(finished.status, i32::from(status), "{finished:?}");
+        assert!(!connection_dir.exists());
+    }
+}
+
+/// Returns without yielding after the deadline, so fetching wins the select even though
+/// its budget is spent. The executor must check the time again before starting a process.
+#[derive(Debug)]
+struct CompletesLate;
+
+impl crate::secrets::SecretStorage for CompletesLate {
+    fn read<'a>(&'a self, _path: &'a str) -> crate::secrets::ReadFuture<'a> {
+        Box::pin(async {
+            std::thread::sleep(Duration::from_millis(20));
+            Ok(BTreeMap::from([(
+                "password".to_owned(),
+                "hunter22".to_owned(),
+            )]))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_fetch_finishing_with_no_time_left_does_not_start_and_removes_connection_files() {
+    let (executor, spec, plan, dir) =
+        command_needing_secret(Arc::new(CompletesLate), &json!(1), &["true"]);
+    let spawned = Arc::new(AtomicBool::new(false));
+    let saw_spawn = Arc::clone(&spawned);
+    let (_sender, stops) = Stops::new();
+    let finished = executor
+        .run(
+            spec,
+            plan,
+            stops,
+            Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+        )
+        .await;
+    assert_eq!(
+        finished.status,
+        i32::from(pb::AttemptStatus::TimedOut),
+        "{finished:?}"
+    );
+    assert!(!spawned.load(Ordering::SeqCst));
+    // The fetch created connection files in its final poll, and run cleaned them up.
+    assert!(dir.path().join("connections").is_dir());
+    assert!(!dir.path().join("connections/a1").exists());
+}
+
+/// Answers at once, leaving the runtime's only blocking thread busy: starting the process,
+/// which opens its log there, then waits past the attempt's timeout.
+#[derive(Debug)]
+struct BusiesBlockingThread;
+
+impl crate::secrets::SecretStorage for BusiesBlockingThread {
+    fn read<'a>(&'a self, _path: &'a str) -> crate::secrets::ReadFuture<'a> {
+        Box::pin(async {
+            drop(tokio::task::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_millis(1200));
+            }));
+            Ok(BTreeMap::from([(
+                "password".to_owned(),
+                "hunter22".to_owned(),
+            )]))
+        })
+    }
+}
+
+#[test]
+fn the_timeout_covers_a_commands_slow_start() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (executor, spec, plan, _dir) = command_needing_secret(
+            Arc::new(BusiesBlockingThread),
+            &json!(500),
+            &["sleep", "0.2"],
+        );
+        let spawned = Arc::new(AtomicBool::new(false));
+        let saw_spawn = Arc::clone(&spawned);
+        let (_sender, stops) = Stops::new();
+        let finished = executor
+            .run(
+                spec,
+                plan,
+                stops,
+                Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+            )
+            .await;
+        assert!(spawned.load(Ordering::SeqCst), "{finished:?}");
+        assert_eq!(
+            finished.status,
+            i32::from(pb::AttemptStatus::TimedOut),
+            "{finished:?}"
+        );
+    });
 }
 
 /// A command given the connection `db` (`url`, `password`) as `DB`, with `env`, run by a

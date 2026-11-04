@@ -15,7 +15,7 @@ timeout and no retries, and keeps the DAG's `retry_delay` and `max_output_size`.
 |---|---|---|
 | `retries` | `0` | How many times a failed attempt is retried. |
 | `retry_delay` | 5 minutes | How long the task waits before each retry. |
-| `timeout` | none | How long one attempt may run. When it is reached the attempt ends `timed_out`. |
+| `timeout` | none | How long one attempt may run, including secret and connection reads and process start. When it is reached the attempt ends `timed_out`. |
 | `queue` | `"default"` | Which workers may run the task. A worker with no `[worker] queues` serves `default`. |
 | `max_output_size` | 1 MiB | How large the stored output may be. `KiB` and `MiB` are the sizes in bytes (`8 * MiB`). For a command the limit is per stream. |
 | `preload` | `True` | A Python task forks from the preloaded fork server. `False` forks only from the bare one, for code that misbehaves next to the preloaded libraries. |

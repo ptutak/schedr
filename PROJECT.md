@@ -2491,6 +2491,16 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   and sending the request (a runner that reads nothing). Not chosen: A the timeout
   starting at the hello, as before (start-up bounded by the 30 s hello limit only; a tight
   timeout wouldn't fail for slow imports on a busy worker).
+- **The timeout covers the whole attempt, secret and connection reads included** (decision
+  213, the user's, 2026-11-04; B160; extends decision 116): the process gets only what is
+  left of `timeout` after the worker reads the attempt's secrets and connections. A 500 ms
+  read and an 800 ms command with a 1 s timeout end `timed_out`; with a long enough timeout
+  they succeed. If the read uses all the time, no process starts; the attempt ends
+  `timed_out` and its connection files are removed as on every other end. A command's slow
+  start counts too, as a runner's does (Codex's review). Not chosen: the
+  timeout covering only the process, a slow storage not counting against it (a task running
+  past launch plus timeout); a separate limit for the fetch (two limits to configure and
+  reason about instead of one for the attempt).
 - **The worker's journal** holds running attempts and results not yet acknowledged,
   reported in `Register` after a reconnect; in memory in M1, on disk since M2.3, surviving an
   agent restart (see Worker lifecycle).

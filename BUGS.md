@@ -53,34 +53,33 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B160: A task's timeout starts again after its secrets are read | 4 | medium | possible | correctness |
-| 2 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 3 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 4 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 9 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 10 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 11 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 12 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 14 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 15 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 19 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 20 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 21 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 22 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 23 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 24 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 25 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 26 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 27 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 28 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 3 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 8 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 9 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 10 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 11 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 14 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 15 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 16 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 17 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 18 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 19 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 20 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 21 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 22 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 23 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 24 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 25 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 26 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 27 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected)
 
@@ -94,19 +93,6 @@ step touches their code or the user schedules them.
   the other declared secrets, and whether the reader (`tasks logs`) masks again.
 - **Why it matters:** over-masking makes a log mislead (an error reads as a secret); not a
   leak.
-
-## B160: A task's timeout starts again after its secrets are read
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `run_attempt` (`crates/schedr-agent/src/agent.rs`) waits for the attempt's secrets under `sleep_for(timeout)`, then runs its process with the whole `timeout` again: a task with a 5 s timeout whose secrets take 4 s may run 9 s.
-- **Found:** 2026-11-03, by Codex's review of M4.7c (finding 10), proven with a test (a 5 s
-  timeout, a 4 s secret read and a 2 s check passed after 7.8 s). M4.7c's `connections
-  test` no longer has it (the job's deadline covers both); tasks still do.
-- **When:** possible: a slow secret storage (Vault under load, a network delay) and a task
-  near its timeout.
-- **A fix:** run the process with what is left of the timeout after the fetch
-  (`timeout - fetching.elapsed()`), or one deadline for the fetch and the run. A behaviour
-  change for tasks: the timeout becomes the attempt's whole time, secrets included; to be
-  decided and written down (PROJECT.md, the guide's timeouts).
 
 ## B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load
 
