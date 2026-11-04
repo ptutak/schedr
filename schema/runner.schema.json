@@ -1906,15 +1906,17 @@
           "description": "What it runs."
         },
         "timeout_ms": {
-          "description": "How long one try may run, in milliseconds.",
+          "description": "How long one try may run, in milliseconds; `None`: `[worker] cleanup_timeout`.",
           "format": "uint64",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
         "run",
-        "timeout_ms",
         "retries",
         "retry_delay_ms"
       ],

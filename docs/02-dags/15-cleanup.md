@@ -54,7 +54,8 @@ to the cleanup too. Don't put secrets directly in the cleanup command.
 
 ## Time and retries
 
-`cleanup_timeout` limits each cleanup try (default five minutes); `cleanup_retries` is the
+`cleanup_timeout` limits each cleanup try; when omitted, `[worker] cleanup_timeout` supplies it
+(five minutes by default; see [Timings](../03-guide/14-timings.md)). `cleanup_retries` is the
 number of retries after a failure (default three), and `cleanup_retry_delay` is the delay
 before each retry (default 30 seconds). Set them on the task or in `TaskDefaults`. A cancel
 does not stop a cleanup already running; its timeout still applies.

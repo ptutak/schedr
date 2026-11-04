@@ -4,7 +4,7 @@
 //!
 //! Events: `run` (`{"run_id", "dag_id"}`: the run, its tasks or attempts), `dag`
 //! (`{"dag_id"}`), `workers` (`{}`), and `refresh` (`{}`: anything may have changed, when
-//! changes were missed or can't be followed; then every `[webserver] refresh_interval`, 15 s
+//! changes were missed or can't be followed; then every `refresh_interval`, 15 s
 //! by default). A comment
 //! every [`KEEP_ALIVE`] keeps idle connections open through proxies.
 //!
@@ -29,7 +29,7 @@ use crate::state::ApiState;
 mod tests;
 
 /// How often `refresh` is sent when the database's changes can't be followed, unless set
-/// otherwise (`[webserver] refresh_interval`).
+/// otherwise (`refresh_interval`).
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 /// How often a follower checks that the database still announces its changes (turned off by

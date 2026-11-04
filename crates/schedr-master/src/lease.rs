@@ -23,7 +23,7 @@ use schedr_db::{Database, DbError};
 #[cfg(test)]
 mod tests;
 
-/// The default lease period (`[master] lease_period`).
+/// The default lease period (`lease_period`).
 pub const DEFAULT_LEASE_PERIOD: Duration = Duration::from_secs(30);
 
 /// What a renewal found.

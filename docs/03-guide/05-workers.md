@@ -12,7 +12,7 @@ The agent runs one event loop per session with the master. Each turn handles one
 - a message from the master: `Registered`, `AssignTask`, `AssignParse`, `CancelAttempt`,
   `FinishedAck`;
 - a task or parse job that ended (its result goes to the journal, then to the master);
-- the heartbeat timer (`[master] heartbeat_interval`, 10 s, set by the master): free slots and
+- the heartbeat timer (the 10 s [heartbeat interval](14-timings.md#fixed-timings), sent by the master): free slots and
   running attempts;
 - the scan timer (`[dags] poll_interval`, 30 s): a root whose files changed and then stayed
   unchanged for `[dags] settle_time` (5 s) gets a new hash, sent as `CodeVersionChanged`;
@@ -419,7 +419,7 @@ fires, it kills everything in the container, the agent included. So the agent en
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
   budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the
   same budget.
-- Every `[worker] memory_check_interval` (1 s) the agent measures each task's process group
+- Every [second](14-timings.md#fixed-timings) the agent measures each task's process group
   (PSS, so shared pages aren't counted twice). A spawned task uses resident set size (RSS)
   for a process whose PSS can't be read. A forked task shares pages with its fork server, so
   its RSS counts those pages and would look far bigger than the task's own memory. If a
@@ -445,8 +445,8 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 
 | From the end of the grace period | What happens |
 |---|---|
-| − (`drain_terminate_period` + `drain_report_period`), 5 s by default | Whatever still runs gets SIGTERM. |
-| − `drain_report_period`, 2 s by default | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
+| − the termination and report periods, 5 s by default | Whatever still runs gets SIGTERM. |
+| − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
 | until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, sends `Deregister` and exits 0. |
 
 So the worker is gone before the pod is killed, and no task ends `lost` because it was slow

@@ -10,8 +10,7 @@ worker. Each sees a consistent view, and two decisions never interleave.
 
 ## Rounds
 
-The scheduling loop runs a **round** (a "tick" in the code and the metrics) every
-`[master] tick_interval` (1 s). On Postgres it also runs one as soon as a new command is
+The scheduling loop runs a **round** (a "tick" in the code and the metrics) every [second](14-timings.md#fixed-timings). On Postgres it also runs one as soon as a new command is
 announced. Every notification that has arrived by then is taken by that one round, so a
 burst of commands costs one round, not one each. The 1 s timer starts again after a round
 woken this way.
@@ -45,7 +44,7 @@ The webserver listens the same way, for the UI's live pages (see
 transaction mode, the webserver logs `the database's changes can't be followed (notifications
 off, or a pooler in transaction mode): live pages refresh every 15 s` and those pages get
 `refresh` on that timer instead of hearing each change. The number of seconds is
-`[webserver] refresh_interval` (15 s by default, at least 1 s). `[database]
+the [refresh interval](14-timings.md#fixed-timings) (15 s by default, at least 1 s). `[database]
 change_notifications = false` turns the change triggers off, and the pages refresh on that
 same timer. On SQLite neither side listens. The master's commands wait for the next round.
 The writes append a row to `changes`, and the webserver reads the new rows every second, so
@@ -62,8 +61,8 @@ and holds up the workers' messages and the lease:
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
 | 3 | **Scheduler** | Visits the [busy DAGs](#busy-and-quiet-dags) every round and the quiet ones woken this round (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), and starts queued runs while the DAG is under `max_active_runs`. |
 | 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after 10 s (not one whose `Started` has arrived and waits to be handled); assigns ready tasks to workers (oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
-| 5 | **Parse jobs** | Moves parse jobs that have run longer than 10 minutes to another worker with the same code. |
-| 6 | **Lost workers** | Marks a worker not heard from for `[master] lease_timeout` (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
+| 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
+| 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
 
 The limits are counted in the master's memory: the open attempts (assigned and not yet
 started, running, cleaning up) by DAG, by task and by a run's task. A new master reads them
@@ -112,10 +111,10 @@ error the database returns. What such an error leaves behind is made safe instea
   crashed before sending it, or the connection broke) is sent again when the worker
   reconnects, as every worker does after either.
 
-Every query has a time limit (`[database] query_timeout`, 10 s; a write's transaction, a few
+Every query has a time limit (the [query time limit](14-timings.md#fixed-timings), 10 s; a write's transaction, a few
 of these), enforced by schedr itself and, for writes on Postgres, by Postgres too, so a slow
 query ends with an error rather than holding the round. If the round still stops turning, the
-loop stops beating, and liveness fails after `[ops] loop_stall_timeout` (2 min). Kubernetes
+loop stops beating, and liveness fails after the [loop stall limit](14-timings.md#fixed-timings) (2 min). Kubernetes
 restarts the master, which reads its state back (see [State and failures](07-failures.md)).
 
 ### Busy and quiet DAGs
@@ -127,16 +126,16 @@ round, a round visits the busy DAGs and the quiet ones something woke.
 
 A visit is **active** when a run is running or queued, or the round created one. An active
 visit marks the DAG **busy**, and every later round visits it until
-`[master] quiet_dag_after` (60 s) after the last active visit. A DAG that was not busy — one
+the [quiet wait](14-timings.md#fixed-timings) (60 s) after the last active visit. A DAG that was not busy — one
 just learned, or one already quiet — turns **quiet** on an idle visit at once, unless a fire
-time is within `[master] quiet_dag_wake_ahead` (60 s): then the visit leaves it busy. A
+time is within the [wake-ahead time](14-timings.md#fixed-timings) (60 s): then the visit leaves it busy. A
 quiet DAG is skipped until it wakes. A paused DAG has no timer. A visit that finds it paused
 makes it quiet once that busy wait has elapsed; until then rounds still visit it.
 
 What wakes a quiet DAG:
 
 - **Its timer.** The next fire time (from the DAG's start, and within its end) less
-  `quiet_dag_wake_ahead`. That visit leaves it busy, and it stays busy while a fire time is
+  the [wake-ahead time](14-timings.md#fixed-timings). That visit leaves it busy, and it stays busy while a fire time is
   still that close. A paused DAG, or one with no next fire time, has no timer.
 - **A queued run.** Each round asks which DAGs have a run in `queued`, so a manual run wakes
   its DAG whatever stored it, and a chained, event or backfill run will too. The DAG is
@@ -147,7 +146,7 @@ What wakes a quiet DAG:
 - **A command** about the DAG: trigger, pause or unpause, applied earlier in the same round.
 - **A new version**, or a removed DAG that came back, stored by discovery between rounds.
 
-Two safety nets bound a missed wake by about `[master] quiet_dag_full_pass_interval` (60 s):
+Two safety nets bound a missed wake by about the [quiet DAG full pass interval](14-timings.md#fixed-timings) (60 s):
 
 - **The sweep.** Each round also visits a slice of the quiet DAGs, those visited longest ago
   (a tie goes to the smaller DAG ID). The slice is the share of them that the time since the
@@ -236,11 +235,11 @@ counter).
 - **Taking it:** a master takes the lease before anything else. One that finds it held waits
   as a **standby**: it says so in its log once, `/readyz` answers "starting: master", and it
   tries again every third of the period until the lease is free or expired.
-- **Keeping it:** a task of its own renews the lease every third of `[master] lease_period`
+- **Keeping it:** a task of its own renews the lease every third of the [master lease period](14-timings.md#fixed-timings)
   (30 s), so a long round doesn't hold renewals up. A renewal only extends the master's own
   lease, at its own takeover counter: it never takes the lease back from another master. The
   master leads only while its last renewal is recent enough by its own clock: until the period
-  less one `[database] query_timeout` (10 s) after the renewal began, so it pauses before the
+  less the [query time limit](14-timings.md#fixed-timings) (10 s) after the renewal began, so it pauses before the
   lease can expire. The period must be at least three query limits.
 - **Losing it for a while** (the database slow or unreachable): the master **pauses**. No
   rounds; worker messages, registrations and parse uploads wait in their queues. Running
@@ -308,5 +307,5 @@ Then the master listens for workers and starts its loop, and `/readyz` turns rea
 
 Every 15 s the loop also counts runs, tasks and workers by state with one read-only query, for
 `/metrics` (see [Observability](09-observability.md)). Unlike a round, this refresh only reads,
-so it has a time limit of its own (half of `loop_stall_timeout`). If it runs out, the gauges
+so it has a time limit of its own (half of the [loop stall limit](14-timings.md#fixed-timings)). If it runs out, the gauges
 keep their previous values.

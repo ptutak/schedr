@@ -87,8 +87,9 @@ pub struct Standalone {
     /// The token a UI elsewhere presents to pass users' names on (`[webserver] ui_token_file`:
     /// a federation of standalones, decision 36).
     pub ui_token_file: Option<PathBuf>,
-    /// How often live pages refresh when the database's changes can't be followed.
-    pub refresh: Duration,
+    /// How long the webserver waits, and how often live pages refresh when the database's
+    /// changes can't be followed.
+    pub api_timings: crate::roles::ApiTimings,
     /// Whether the writes announce their changes (applied with `--migrate`).
     pub change_notifications: bool,
     /// The web UI it serves next to its API; none with `--no-ui`.
@@ -139,20 +140,20 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         http: localhost(config.webserver.port),
         logs: localhost(config.worker.log_port),
         ops: localhost(config.ops.port),
-        loop_stall_timeout: config.ops.loop_stall_timeout,
-        query_timeout: config.database.query_timeout,
+        loop_stall_timeout: config.timings.loop_stall_timeout,
+        query_timeout: config.timings.query_timeout,
         notifications: config.database.notifications,
         notifications_url: config.database.notifications_url.clone(),
-        lease_period: config.master.lease_period,
+        lease_period: config.timings.lease_period,
         retention: log_retention(config),
         master: master_settings(config),
-        tick: config.master.tick_interval,
+        tick: config.timings.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env),
         parse_file_timeout: config.dags.parse_file_timeout,
         auth: config.webserver.auth.clone(),
         ui_token_file: config.webserver.ui_token_file.clone(),
-        refresh: config.webserver.refresh_interval,
+        api_timings: crate::roles::ApiTimings::of(config),
         change_notifications: config.database.change_notifications,
         ui: Some(LocalUi {
             docs_dir: docs_dir(config),
@@ -281,9 +282,10 @@ pub async fn run(
         }
         served
     });
+    let node = webserver_node(setup.config.clone());
     let api = Box::pin(serve_api(
         db,
-        (auth, setup.refresh, webserver_node(setup.config.clone())),
+        (auth, setup.api_timings, node),
         (http, None),
         None,
         setup.ui.clone(),

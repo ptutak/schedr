@@ -7,11 +7,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pretty_assertions::assert_eq;
 use schedr_agent::fork::{ForkMetrics, ForkServers, ForkSetup};
-use schedr_agent::launch::run_python;
+use schedr_agent::handles::AttemptHandles;
+use schedr_agent::launch::{PythonTask, run_python};
+use schedr_agent::mask::MaskSet;
 use schedr_agent::metrics::{ForkFallbackLabels, ForkServerLabels};
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::status::Termination;
@@ -22,7 +25,9 @@ use tempfile::TempDir;
 
 const DAGS: &str = r#"
 import os, time
-from schedr import Dag, task
+from dataclasses import dataclass
+from pathlib import Path
+from schedr import Dag, cleanup_handle, task
 
 @task
 def whoami() -> int:
@@ -47,7 +52,19 @@ def fresh_sees_preload() -> bool:
     import sys
     return "schedr_probe_preloaded" in sys.modules
 
+@dataclass
+class Job:
+    job_id: str
+
+def undo(handles: list[Job]) -> None:
+    Path(__file__).with_name("undone").write_text(f"{handles} in {os.getpid()}")
+
+@task(cleanup=undo)
+def registers() -> None:
+    cleanup_handle(Job("j-1"))
+
 with Dag("sync"):
+    registers()
     whoami()
     slow()
     sees_preload()
@@ -70,6 +87,7 @@ fn spec(program: PathBuf, args: &[&str], dir: &Path, log: &str) -> ProcessSpec {
         log_file: dir.join(log),
         max_output_size: 64 * 1024,
         mask: schedr_agent::mask::Mask::default(),
+        start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
     }
 }
 
@@ -102,6 +120,7 @@ fn retrying_servers(
         ),
         preload: preload.iter().map(|p| (*p).to_owned()).collect(),
         import_retry,
+        preload_timeout: schedr_agent::fork::PRELOAD_TIMEOUT,
     };
     setup
         .process
@@ -825,6 +844,7 @@ async fn the_fork_servers_start_before_the_log_directory_exists() {
         ),
         preload: vec!["json".to_owned()],
         import_retry: Duration::ZERO,
+        preload_timeout: schedr_agent::fork::PRELOAD_TIMEOUT,
     };
     let _forks = ForkServers::start(&setup, &metrics);
     until("both servers are up", || {
@@ -879,4 +899,79 @@ async fn the_timeout_covers_waiting_for_the_fork_server() {
         Some(schedr_agent::status::StopReason::TimedOut)
     );
     assert_eq!(ran.runner_result, None);
+}
+
+#[tokio::test]
+async fn a_forked_task_registers_handles_and_its_forked_cleanup_gets_them() {
+    let dir = root();
+    let dag = the_dag(dir.path()).await;
+    let (forks, metrics) = servers(python(), dir.path(), &["json"]);
+    until("the preloaded server is up", || {
+        state(&metrics, "preloaded", "up") == 1
+    })
+    .await;
+    let process = spec(
+        python(),
+        &["-m", "schedr.runner", "task"],
+        dir.path(),
+        "task.log",
+    );
+    let request = request(dir.path(), &dag, "registers");
+    let handles = Arc::new(AttemptHandles::new(
+        request.task.cleanup.as_ref(),
+        Arc::new(MaskSet::new(4)),
+    ));
+    let task = PythonTask {
+        request: request.clone(),
+        secrets: None,
+        handles: Some(Arc::clone(&handles)),
+    };
+    let mut hold = None;
+    let ran = run_python(
+        &process,
+        task,
+        limits(None),
+        Stops::new().1,
+        Some(&forks),
+        &mut hold,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert!(ran.forked, "{ran:?}");
+    assert!(
+        matches!(ran.runner_result, Some(RunnerMessage::TaskSucceeded { .. })),
+        "{ran:?}"
+    );
+    drop(hold);
+    handles.close();
+    let registered = handles.list();
+    assert_eq!(registered.len(), 1);
+
+    let cleanup = TaskRequest {
+        cleanup: Some(registered),
+        ..request
+    };
+    let mut pid = None;
+    let mut hold = None;
+    let ran = run_python(
+        &process,
+        cleanup,
+        limits(None),
+        Stops::new().1,
+        Some(&forks),
+        &mut hold,
+        |seen, _| pid = Some(seen),
+    )
+    .await
+    .unwrap();
+    assert!(ran.forked, "{ran:?}");
+    assert!(
+        matches!(ran.runner_result, Some(RunnerMessage::TaskSucceeded { .. })),
+        "{ran:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("undone")).unwrap(),
+        format!("[Job(job_id='j-1')] in {}", pid.unwrap())
+    );
 }

@@ -60,8 +60,8 @@ impl Size {
 /// Settings every stress role gets: worker leases long enough for a loaded machine (a lost
 /// worker found within 20 s), the master's rounds every 200 ms.
 pub const ROLE_ENV: &[(&str, &str)] = &[
-    ("SCHEDR_CONFIG__MASTER__LEASE_TIMEOUT", "20s"),
-    ("SCHEDR_CONFIG__MASTER__TICK_INTERVAL", "200ms"),
+    ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "20s"),
+    ("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "200ms"),
 ];
 
 /// A cluster under load: the roles, its database read directly, and the tasks' marks.

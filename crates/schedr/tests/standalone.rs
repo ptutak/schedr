@@ -79,7 +79,7 @@ impl Standalone {
             "[dags]\npoll_interval = \"200ms\"\nsettle_time = \"0s\"\n\n\
              [interpreters]\npython = \"{python}\"\n\n\
              [worker]\ndata_dir = \"{data}\"\nslots = 4\nlog_port = 0\n\n\
-             [master]\ngrpc_port = 0\ntick_interval = \"100ms\"\n\n\
+             [master]\ngrpc_port = 0\n\n\
              [webserver]\nport = 0\n\n\
              [ops]\nport = 0\n{more_config}",
             python = python(),
@@ -102,6 +102,7 @@ impl Standalone {
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
             .env("SCHEDR_DAG_PATH", &root)
+            .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "100ms")
             .env("SCHEDR_SECRET_KEY", SECRET_KEY)
             .stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log))
@@ -1604,4 +1605,55 @@ fn connections_are_checked_and_tested_on_a_worker() {
     let (code, _, err) = standalone.cli(&["connections", "test", "nope"]);
     assert_eq!(code, 1);
     assert!(err.contains("no root defines connection `nope`"), "{err}");
+}
+
+const CLEANUPS: &str = r#"
+import time
+from datetime import timedelta
+
+from schedr import Dag, task
+
+def slow_and_failing() -> None:
+    time.sleep(1.5)
+    raise ValueError("can't clean")
+
+@task(cleanup=slow_and_failing, cleanup_retries=1, cleanup_retry_delay=timedelta(0))
+def works() -> int:
+    return 1
+
+with Dag("cleanups"):
+    works()
+"#;
+
+#[test]
+fn on_postgres_a_cleanup_shows_cleaning_up_and_its_failure_fails_the_run() {
+    let url = postgres_database();
+    let standalone = Standalone::start(&[("cleanups.py", CLEANUPS)], Some(&url));
+    let query = |sql: &str| {
+        let out = Command::new("psql")
+            .args([url.as_str(), "-tAc", sql])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    standalone.wait("DAG `cleanups`", || standalone.dag_ids() == ["cleanups"]);
+    let run_id = standalone.trigger("cleanups");
+    standalone.wait("the instance in its cleanup", || {
+        query("SELECT state FROM task_instances") == "cleaning_up"
+    });
+    standalone.wait_for_state(&run_id, "failed");
+    assert_eq!(
+        query("SELECT state, cleanup_result FROM task_instances"),
+        "success|failed"
+    );
+    assert_eq!(
+        query(
+            "SELECT status, cleanup_result, cleanup_tries, cleanup_error_kind IS NULL FROM attempts"
+        ),
+        "success|failed|2|t"
+    );
+    assert!(
+        query("SELECT cleanup_error_summary FROM attempts").contains("can't clean"),
+        "the cleanup's error is stored"
+    );
 }

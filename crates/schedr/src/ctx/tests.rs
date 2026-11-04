@@ -385,7 +385,7 @@ async fn cleanup_against_agent(
 fn cleanup_of(handles: &[&str]) -> Arc<AttemptHandles> {
     let cleanup = TaskCleanup {
         run: CleanupRun::Python,
-        timeout_ms: 1000,
+        timeout_ms: Some(1000),
         retries: 0,
         retry_delay_ms: 0,
         handles: (!handles.is_empty()).then(|| handles.iter().map(ToString::to_string).collect()),

@@ -489,7 +489,7 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
         stays as the message left it. Not chosen: leaving it (memory wrong until the worker
         reconnects).
       - **D2: a read-back waits for a slow commit:** checked at once, then every
-        `[master] read_back_interval` (500 ms) for up to `[master] read_back_window` (3 s),
+        `read_back_interval` (500 ms) for up to `read_back_window` (3 s),
         holding the master's lock: rounds and worker messages wait that long, only after a
         commit cut off (a database incident; never seen in the stress runs). Not seen by
         then: not stored (a stored round's attempts are taken back after 10 s and run
@@ -6929,6 +6929,52 @@ failed cleanup; the slot stays held during cleanup retry delays; a drain leaves 
 cleanup try, not its retries; after an agent restart cleanups run from the journal with the
 attempt's kept code, the attempt stays `lost` and its instance `cleaning_up` until they end, a
 missing copy being a failed cleanup; each mapped instance has its own cleanup.
+
+### Timings: public keys and hidden ones
+
+- **Built (M4.8t; decisions 231-238):** what a deployment may need to tune is a key, the rest
+  fixed, and `SCHEDR_HIDDEN__*` changes the fixed ones.
+
+Decisions 231-238 (the user's, 2026-11-04; the options were Claude's).
+
+- **231. A timing is a key only if its right value depends on the deployment.** New keys:
+  `[master] parse_job_timeout`, `[webserver] worker_request_timeout`,
+  `connection_test_timeout`, `[worker] runner_start_timeout`, `fork_server_preload_timeout`,
+  `cleanup_timeout`, Vault storages' `request_timeout` and `connect_timeout`. Each has a doc
+  comment saying what it does and when to change it. Not chosen: every timing a key (a wrong
+  value can run tasks twice or lose a healthy worker).
+- **232. Eighteen timings left the config:** `tick_interval`, `heartbeat_interval`,
+  `lease_timeout`, `lease_period`, `read_back_window`, `read_back_interval`, `query_timeout`
+  (with the lease fixed at 30 s it could only go down), `loop_stall_timeout`, `set_aside`,
+  `listen_retry`, `quiet_dag_after`, `quiet_dag_wake_ahead`, `quiet_dag_full_pass_interval`,
+  `refresh_interval`, `worker_connect_timeout`, `drain_report_period`,
+  `memory_check_interval`, `handshake_timeout`. A file or `SCHEDR_CONFIG__*` setting one fails
+  as an unknown key; no migration, it is a prerelease.
+- **233. `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing:** environment only, read
+  once at startup with the configuration, each one set warned about, documented as unsupported
+  and at one's own risk. The tests use it to run in seconds. The odd name keeps anyone from
+  setting one by accident. An unknown name or a bad duration stops the start. Not chosen:
+  keeping them as keys with a warning; a build for tests only (the tests would run another
+  binary).
+- **234. A hidden timing of zero is refused,** for all of them: a zero interval panics in
+  `tokio::time::interval`.
+- **235. A cleanup without its own timeout takes `[worker] cleanup_timeout`:** the DAG JSON
+  leaves `timeout_ms` out, and the worker fills it in. Not chosen: the 5 minutes fixed in the
+  Python API (the key would change nothing).
+- **236. The constants follow in M4.8u,** about 40 more on the hidden route, as values passed
+  down in each crate's own struct with defaults, in the server, worker and webserver only: the
+  client, `task-ctx` and the CLI don't load this configuration. The two auth timings stay
+  constants until it is checked what they do to a revoked token. Not chosen: one global set at
+  startup (tests in a process would share it, and it hides a dependency).
+- **237. A new configuration value is public or hidden, and a constant in the binary only for a
+  really good reason:** a key when its right value depends on the deployment, `SCHEDR_HIDDEN__*`
+  otherwise. Not chosen: a constant by default (changing it takes a rebuild).
+- **238. A public timing that can't work at zero is refused at load:** `[dags] poll_interval`,
+  `parse_file_timeout`, `[master] parse_job_timeout`, `[webserver] worker_request_timeout`,
+  `[worker] log_retention`, `runner_start_timeout`, `fork_server_preload_timeout`,
+  `cleanup_timeout`, Vault storages' `request_timeout` and `connect_timeout`. Where zero means
+  something (`settle_time`, `cancel_grace`, `code_wait`, `drain_terminate_period`,
+  `fork_server_import_retry`, `cache_ttl`) it stays allowed.
 
 ### Output serialization
 

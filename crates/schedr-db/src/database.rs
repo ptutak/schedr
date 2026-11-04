@@ -15,7 +15,7 @@ use crate::status::SchemaStatus;
 #[cfg(test)]
 mod tests;
 
-/// The longest a query may take by default (`[database] query_timeout`).
+/// The longest a query may take by default (`query_timeout`).
 pub const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Why a database operation failed.
@@ -40,7 +40,7 @@ pub enum DbError {
         reason: String,
     },
     /// A query took longer than the limit ([`Database::connect_with_timeout`]): cut off here.
-    #[error("a database query took longer than {} s (`[database] query_timeout`)", .0.as_secs_f64())]
+    #[error("a database query took longer than {} s (`query_timeout`)", .0.as_secs_f64())]
     QueryTimeout(Duration),
     /// The `COMMIT` of a [`Database::atomically`] transaction was cut off by the time limit or
     /// lost with its connection: whether the transaction is stored isn't known (read it back).

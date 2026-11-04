@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 use pretty_assertions::assert_eq;
-use schedr_db::attempts::AttemptEnd;
+use schedr_db::attempts::{AttemptEnd, CleanupEnd};
 use schedr_db::commands::Submitted;
 use schedr_db::dags::{DagChange, NewParse};
 use schedr_db::instances::InstanceUpdate;
@@ -18,7 +18,8 @@ use schedr_db::{Backend, Database, SchemaStatus};
 use schedr_model::commands::{Command, CommandStatus};
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{
-    AttemptStatus, Dag, DagId, DagLocation, RunKind, RunState, TaskId, TaskInstanceState,
+    AttemptStatus, CleanupResult, Dag, DagId, DagLocation, RunKind, RunState, TaskId,
+    TaskInstanceState,
 };
 use serde_json::json;
 use sqlx::{AssertSqlSafe, Connection as _};
@@ -1769,4 +1770,47 @@ async fn writes_to_one_secret_at_once_keep_every_key() {
         let expected = 16 + usize::from(path == "existing");
         assert_eq!(stored.len(), expected, "{path}: {:?}", stored.keys());
     }
+}
+
+#[tokio::test]
+async fn a_cleanups_end_and_result_are_stored() {
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let instance_id = ready[0].instance_id.clone();
+    let (attempt_id, _) = db
+        .assign_attempt(&instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let end = AttemptEnd {
+        cleanup: Some(CleanupEnd {
+            result: CleanupResult::Failed,
+            tries: 4,
+            duration_ms: 1_500,
+            error_kind: Some("timeout".to_owned()),
+            // B105: NUL in `jsonb` must not make the attempt's end fail for ever.
+            error_summary: Some(json!({"message": "bad\u{0}"}).to_string()),
+        }),
+        ..AttemptEnd::by_master(AttemptStatus::Success)
+    };
+    assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let stored = |db: Database, run_id: String, instance_id: String| async move {
+        let tasks = db.run_tasks(&run_id).await.unwrap().unwrap();
+        let found = tasks.instances.iter().find(|i| i.id == instance_id);
+        found.unwrap().cleanup_result
+    };
+    assert_eq!(
+        stored(db.clone(), run_id.clone(), instance_id.clone()).await,
+        None
+    );
+    db.set_cleanup_result(&instance_id, CleanupResult::Failed, ts(NOW))
+        .await
+        .unwrap();
+    db.set_cleanup_result(&instance_id, CleanupResult::Ok, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored(db, run_id, instance_id).await,
+        Some(CleanupResult::Failed)
+    );
 }

@@ -125,7 +125,7 @@ async fn standalone_serves_the_api_and_stops_when_asked() {
     configured.webserver.port = 0;
     // Every port the system's choice: a standalone running here holds the defaults.
     configured.worker.log_port = 0;
-    configured.master.tick_interval = Duration::from_millis(50);
+    configured.timings.tick_interval = Duration::from_millis(50);
     let mut setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
     assert!(!setup.migrate, "migrating is asked for (`--migrate`)");
     setup.migrate = true;

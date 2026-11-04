@@ -111,6 +111,9 @@ where
     if let Err(message) = logging::init(&config.log, stdout_is_terminal) {
         return report(err, &format!("error: {message}\n"), 1);
     }
+    for name in &config.timings.overridden {
+        tracing::warn!("{name} is set: an unsupported timing, at your own risk");
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

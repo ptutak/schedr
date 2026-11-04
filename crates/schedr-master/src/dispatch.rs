@@ -73,7 +73,7 @@ pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
 
 /// How a commit cut off by the time limit or a lost connection is read back: whether the work
 /// is stored, checked at once, then every `interval` for up to `window`, since a server slow
-/// enough to have cut it off may still be committing it (`[master] read_back_window`,
+/// enough to have cut it off may still be committing it (`read_back_window`,
 /// `read_back_interval`). Never seen meanwhile: not stored (a stored round's attempts are
 /// taken back after [`START_TIMEOUT`] and run again). The master holds its lock meanwhile:
 /// only after a commit cut off, a database incident.
@@ -375,7 +375,7 @@ impl Dispatcher {
     }
 
     /// The dispatcher leaving a task whose assignment fails on its own out for `set_aside`,
-    /// and reading a commit cut off back as `read_back` says (`[master] set_aside`,
+    /// and reading a commit cut off back as `read_back` says (`set_aside`,
     /// `read_back_window`, `read_back_interval`).
     #[must_use]
     pub fn with_set_aside(mut self, set_aside: Duration, read_back: ReadBack) -> Self {

@@ -46,7 +46,6 @@ def test_a_task_records_its_cleanup_with_the_defaults_and_its_handle_types() -> 
         export("2026-11-04")
     assert _cleanup_json(dag, "export") == {
         "run": "python",
-        "timeout_ms": 300_000,
         "retries": 3,
         "retry_delay_ms": 30_000,
         "handles": ["ExportJob", "TempDir"],

@@ -26,7 +26,7 @@ use tonic::transport::server::{Connected, TcpConnectInfo};
 
 use crate::reload::Tls;
 
-/// How long a client has to complete the TLS handshake.
+/// How long a client has to complete the TLS handshake, unless `handshake_timeout` says.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How many handshakes may run at once; beyond that, accepting waits (a flood of connections
@@ -182,10 +182,11 @@ async fn accept_loop(
             Protocol::Ui => tls.ui_server(),
         };
         let accepted = accepted.clone();
+        let handshake_timeout = tls.handshake_timeout();
         tokio::spawn(async move {
             let _permit = permit;
             let handshake = TlsAcceptor::from(config).accept(tcp);
-            match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake).await {
+            match tokio::time::timeout(handshake_timeout, handshake).await {
                 Ok(Ok(stream)) => {
                     let _ = accepted.send((Conn::Tls(Box::new(stream)), peer)).await;
                 }

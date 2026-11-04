@@ -77,6 +77,8 @@ impl Drop for Role {
 pub struct Cluster {
     pub dir: TempDir,
     pub database_url: String,
+    /// The master's tick.
+    tick: String,
     /// The REST API, once the webserver listens.
     pub api: String,
     /// The master's port once it listens (kept for a restart) and the URL workers use.
@@ -156,9 +158,7 @@ impl Cluster {
              [interpreters]\npython = \"{python}\"\n\n\
              [worker]\nid = \"w1\"\ndata_dir = \"{data}\"\nslots = 4\n\
              log_bind = \"127.0.0.1\"\nlog_port = 0\nlog_address = \"127.0.0.1\"\n\n\
-             [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\ntick_interval = \"{tick}\"\n\
-             heartbeat_interval = \"1s\"\nlease_timeout = \"4s\"\nlease_period = \"15s\"\n\n\
-             [database]\nquery_timeout = \"5s\"\n\n\
+             [master]\nbind = \"127.0.0.1\"\ngrpc_port = 0\n\n\
              [webserver]\nbind = \"127.0.0.1\"\nport = 0\nui_port = 0\n\n\
              [ops]\nbind = \"127.0.0.1\"\nport = 0\n\n\
              [tls]\nmode = \"mesh\"\n",
@@ -169,6 +169,7 @@ impl Cluster {
         Self {
             dir,
             database_url,
+            tick: tick.to_owned(),
             api: String::new(),
             grpc_port: None,
             roles: Vec::new(),
@@ -239,6 +240,11 @@ impl Cluster {
             // A panic's stack in the role's log (B15).
             .env("RUST_BACKTRACE", "1")
             .env("SCHEDR_CONFIG__DATABASE__URL", &self.database_url)
+            .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", &self.tick)
+            .env("SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL", "1s")
+            .env("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "4s")
+            .env("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "15s")
+            .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "5s")
             .env("SCHEDR_DAG_PATH", self.root());
         if self.ca.is_some() {
             command

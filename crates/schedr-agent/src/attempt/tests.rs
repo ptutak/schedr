@@ -92,6 +92,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         log_dir: dir.path().join("logs"),
         connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
+        timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
     };
     (dir, setup)

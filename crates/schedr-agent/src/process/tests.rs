@@ -38,6 +38,7 @@ async fn a_log_file_is_never_written_through_a_link() {
         log_file,
         max_output_size: 1024,
         mask: Mask::default(),
+        start_timeout: crate::launch::RUNNER_START_TIMEOUT,
     };
     assert!(open_log(&spec).await.is_err());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");

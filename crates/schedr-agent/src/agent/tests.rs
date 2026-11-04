@@ -170,6 +170,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -580,6 +581,7 @@ async fn against_master(
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -1055,6 +1057,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -1266,6 +1269,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             log_dir: settings_dir.path().join("logs"),
             connection_dir: settings_dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -1313,6 +1317,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -1776,6 +1781,7 @@ fn command_needing_secret(
         log_dir: dir.path().join("logs"),
         connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
+        timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
     };
     let stores = SecretStores::new(
@@ -2015,6 +2021,7 @@ async fn command_with_connection(
         log_dir: dir.path().join("logs"),
         connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
+        timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
     };
     let executor = ProcessExecutor {
@@ -2164,6 +2171,7 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
             log_dir: dir.join("logs"),
             connection_dir: dir.join("connections"),
             memory: crate::memory::MemoryWatch::default(),
+            timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -2279,6 +2287,16 @@ fn attempt_with_cleanup(
     cleanup: &str,
     retries: u32,
 ) -> (ProcessExecutor, AttemptSpec, Plan, TempDir) {
+    attempt_with_timed_cleanup(script, cleanup, retries, &serde_json::json!(5_000))
+}
+
+/// The same, one try of the cleanup limited to `timeout_ms`.
+fn attempt_with_timed_cleanup(
+    script: &str,
+    cleanup: &str,
+    retries: u32,
+    timeout_ms: &serde_json::Value,
+) -> (ProcessExecutor, AttemptSpec, Plan, TempDir) {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("etl")).unwrap();
     std::fs::write(dir.path().join("etl/sync.py"), "").unwrap();
@@ -2291,6 +2309,7 @@ fn attempt_with_cleanup(
         log_dir: dir.path().join("logs"),
         connection_dir: dir.path().join("connections"),
         memory: crate::memory::MemoryWatch::default(),
+        timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
     };
     let executor = ProcessExecutor {
@@ -2312,7 +2331,7 @@ fn attempt_with_cleanup(
                      "queue": "default", "max_output_size": 1024, "preload": true,
                      "fresh_process": false},
         "output_type": {"type": "process_result"},
-        "cleanup": {"run": {"command": line(cleanup)}, "timeout_ms": 5_000,
+        "cleanup": {"run": {"command": line(cleanup)}, "timeout_ms": timeout_ms,
                     "retries": retries, "retry_delay_ms": 1},
     });
     let assign = pb::AssignTask {
@@ -2388,6 +2407,19 @@ async fn a_cleanup_runs_after_a_failed_task_and_leaves_its_result() {
     let ended = ended.expect("the task's end is reported before its cleanup");
     assert_eq!(ended.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(ended.cleanup, None);
+}
+
+#[tokio::test]
+async fn a_cleanup_without_a_timeout_gets_the_workers() {
+    let mut attempt = attempt_with_timed_cleanup("exit 0", "sleep 30", 0, &serde_json::Value::Null);
+    attempt.0.setup.timeouts.cleanup = std::time::Duration::from_millis(200);
+    let (_sender, stops) = Stops::new();
+    let started = std::time::Instant::now();
+    let (finished, _, _) = run_with_cleanup(attempt, stops).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    assert_eq!(cleanup.tries, 1);
 }
 
 #[tokio::test]
@@ -2496,4 +2528,28 @@ fn a_result_too_large_by_itself_fails_and_fits_with_its_cleanup_error() {
     assert_eq!(finished.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(finished.error_kind, "output_too_large");
     assert!(prost::Message::encoded_len(&finished) <= limit);
+}
+
+#[tokio::test]
+async fn a_cleanup_over_the_memory_budget_is_killed_and_fails_alone() {
+    let cleanup = r#"python3 -c "
+import time
+held = b'x' * (400 << 20)
+time.sleep(30)
+"; echo survived >> $OUT"#;
+    let (mut executor, spec, plan, dir) = attempt_with_cleanup("true", cleanup, 0);
+    executor.setup.memory = crate::memory::MemoryWatch {
+        budget: Some(100 << 20),
+        interval: Duration::from_millis(50),
+        proc_root: PathBuf::from("/proc"),
+    };
+    let (_sender, stops) = Stops::new();
+    let started = std::time::Instant::now();
+    let (finished, _, _) = run_with_cleanup((executor, spec, plan, dir), stops).await;
+    assert!(started.elapsed() < Duration::from_secs(4), "not killed");
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Success));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    let summary = String::from_utf8(cleanup.error_summary_json).unwrap();
+    assert!(summary.contains(MEMORY_EXCEPTION), "{summary}");
 }

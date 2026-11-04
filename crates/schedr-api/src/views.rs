@@ -508,7 +508,7 @@ pub struct TestConnectionRequest {
     /// The worker to run it on; one the master picks if not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<String>,
-    /// How long it may take, in milliseconds: 60 000 if not given (decision 200).
+    /// How long it may take, in milliseconds: `[webserver] connection_test_timeout` if not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 }

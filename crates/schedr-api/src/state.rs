@@ -33,6 +33,8 @@ pub struct ApiState {
     pub logs: Arc<dyn LogSource>,
     /// The webserver's metrics.
     pub metrics: ApiMetrics,
+    /// How long a connection test may take when its request doesn't say.
+    pub connection_test_timeout: std::time::Duration,
     /// What changed, for `GET /api/v1/events`.
     pub feed: Feed,
     /// This webserver as a node of its deployment (`GET /api/v1/deployment`), its
@@ -54,6 +56,7 @@ impl ApiState {
             clock: Timestamp::now,
             logs: Arc::new(HttpLogSource::new(None)),
             metrics: ApiMetrics::default(),
+            connection_test_timeout: crate::routes::CONNECTION_TEST_TIMEOUT,
             feed,
             node: Arc::new(crate::views::NodeView {
                 process_id: String::new(),
@@ -61,6 +64,15 @@ impl ApiState {
                 schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
                 config: serde_json::json!({}),
             }),
+        }
+    }
+
+    /// This state, giving a connection test `timeout` when its request doesn't say.
+    #[must_use]
+    pub fn with_connection_test_timeout(self, timeout: std::time::Duration) -> Self {
+        Self {
+            connection_test_timeout: timeout,
+            ..self
         }
     }
 
@@ -80,7 +92,7 @@ impl ApiState {
     }
 
     /// This state's live pages refreshed every `interval` when the database's changes can't be
-    /// followed (`[webserver] refresh_interval`).
+    /// followed (`refresh_interval`).
     #[must_use]
     pub fn with_refresh(self, interval: std::time::Duration) -> Self {
         Self {

@@ -36,7 +36,7 @@ use crate::usage::Ended;
 /// The environment variable with the runner's descriptor of its socket to the agent.
 pub const FD_ENV: &str = "SCHEDR_AGENT_FD";
 
-/// How long a started runner has to say hello.
+/// How long a started runner has to say hello, unless `[worker] runner_start_timeout` says.
 pub const RUNNER_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The version runners must have (the same `schedr` package as the agent).
@@ -96,7 +96,7 @@ pub async fn start_runner(
     spawned: impl FnOnce(i32),
 ) -> Result<Runner, LaunchError> {
     let (process, mut stream, starting) = spawn_runner(spec, spawned).await?;
-    match handshake(&mut stream, mode, None).await {
+    match handshake(&mut stream, mode, spec.start_timeout, None).await {
         Handshake::Said(Ok(())) => Ok(Runner {
             process,
             stream,
@@ -146,24 +146,24 @@ enum Handshake {
     Stopped(StopReason),
 }
 
-/// Waits for the runner's hello in `mode`, for at most [`RUNNER_START_TIMEOUT`]. With
+/// Waits for the runner's hello in `mode`, for at most `timeout`. With
 /// `stops`, an attempt's reasons to stop and its deadline (`None` for none) are raced
 /// against it: the first to come ends the wait.
 async fn handshake(
     stream: &mut UnixStream,
     mode: RunnerMode,
+    timeout: Duration,
     stops: Option<(&mut Stops, Option<tokio::time::Instant>)>,
 ) -> Handshake {
     let hello = async {
-        match tokio::time::timeout(RUNNER_START_TIMEOUT, accept_runner(stream, AGENT_VERSION)).await
-        {
+        match tokio::time::timeout(timeout, accept_runner(stream, AGENT_VERSION)).await {
             Ok(Ok(said)) if said == mode => Ok(()),
             Ok(Ok(said)) => Err(LaunchError::WrongMode {
                 expected: mode,
                 got: said,
             }),
             Ok(Err(error)) => Err(error.into()),
-            Err(_) => Err(LaunchError::NoHello(RUNNER_START_TIMEOUT)),
+            Err(_) => Err(LaunchError::NoHello(timeout)),
         }
     };
     match unless_stopped(hello, stops).await {
@@ -317,7 +317,7 @@ async fn start_task_runner(
         let (process, stream, _) = spawn_runner(spec, |pid| spawned(pid, false)).await?;
         (TaskProcess::Spawned(process), stream)
     };
-    let error = match handshake(&mut stream, mode, stops).await {
+    let error = match handshake(&mut stream, mode, spec.start_timeout, stops).await {
         Handshake::Said(Ok(())) => return Ok(Start::Ready(process, stream, starting.elapsed())),
         Handshake::Stopped(reason) => return Ok(Start::Stopped(process, reason)),
         Handshake::Said(Err(error)) => error,

@@ -329,9 +329,6 @@ type Expand = ExpandProduct | ExpandKwargs
 """What a mapped task's instances vary over (decision 69)."""
 
 
-DEFAULT_CLEANUP_TIMEOUT_MS = 300_000
-"""How long one try of a cleanup may run: ``cleanup_timeout``'s default."""
-
 DEFAULT_CLEANUP_RETRIES = 3
 """How many times a failed cleanup is retried: ``cleanup_retries``' default."""
 
@@ -345,7 +342,7 @@ class TaskCleanup:
 
     Attributes:
         line: The command it runs; ``None``: the task's ``cleanup=`` function.
-        timeout_ms: How long one try may run.
+        timeout_ms: How long one try may run; ``None``: the worker's ``cleanup_timeout``.
         retries: How many times it is retried after a failed try, on the same worker.
         retry_delay_ms: The delay before each retry.
         handles: The handle types it takes: ``None`` any, empty none (a function without a
@@ -353,7 +350,7 @@ class TaskCleanup:
     """
 
     line: CommandLine | None = None
-    timeout_ms: int = DEFAULT_CLEANUP_TIMEOUT_MS
+    timeout_ms: int | None = None
     retries: int = DEFAULT_CLEANUP_RETRIES
     retry_delay_ms: int = DEFAULT_CLEANUP_RETRY_DELAY_MS
     handles: tuple[str, ...] | None = None
@@ -372,18 +369,19 @@ class TaskCleanup:
         """The cleanup as DAG JSON.
 
         Returns:
-            Its ``run`` (``"python"`` or ``{"command": ...}``), ``timeout_ms``, ``retries`` and
-            ``retry_delay_ms``, with ``handles`` when they are limited.
+            Its ``run`` (``"python"`` or ``{"command": ...}``), ``retries`` and
+            ``retry_delay_ms``, with ``timeout_ms`` and ``handles`` when set.
         """
         run: str | dict[str, Any] = (
             "python" if self.line is None else {"command": self.line.to_json()}
         )
         result: dict[str, Any] = {
             "run": run,
-            "timeout_ms": self.timeout_ms,
             "retries": self.retries,
             "retry_delay_ms": self.retry_delay_ms,
         }
+        if self.timeout_ms is not None:
+            result["timeout_ms"] = self.timeout_ms
         if self.handles is not None:
             result["handles"] = list(self.handles)
         return result

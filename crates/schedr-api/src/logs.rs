@@ -72,6 +72,8 @@ pub trait LogSource: Send + Sync + fmt::Debug {
 #[derive(Debug)]
 pub struct HttpLogSource {
     tls: Option<Tls>,
+    connect_timeout: Duration,
+    request_timeout: Duration,
     /// The client, with the TLS generation it was built for.
     client: Mutex<Option<(u64, reqwest::Client)>>,
 }
@@ -82,7 +84,20 @@ impl HttpLogSource {
     pub const fn new(tls: Option<Tls>) -> Self {
         Self {
             tls,
+            connect_timeout: CONNECT_TIMEOUT,
+            request_timeout: REQUEST_TIMEOUT,
             client: Mutex::new(None),
+        }
+    }
+
+    /// This, with the time connecting to a worker and a whole request may take (`[webserver]
+    /// worker_connect_timeout`, `worker_request_timeout`).
+    #[must_use]
+    pub fn with_timeouts(self, connect: Duration, request: Duration) -> Self {
+        Self {
+            connect_timeout: connect,
+            request_timeout: request,
+            ..self
         }
     }
 
@@ -100,8 +115,8 @@ impl HttpLogSource {
         let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT);
+            .connect_timeout(self.connect_timeout)
+            .timeout(self.request_timeout);
         if let Some(tls) = &self.tls {
             builder = builder.tls_backend_preconfigured((*tls.worker_client()).clone());
         }

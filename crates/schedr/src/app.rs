@@ -133,8 +133,8 @@ pub async fn run_db(
         DbCommand::Migrate { wait } => {
             crate::roles::migrate_leased(
                 url,
-                config.database.query_timeout,
-                (config.master.lease_period, wait),
+                config.timings.query_timeout,
+                (config.timings.lease_period, wait),
                 config.database.change_notifications,
             )
             .await?;

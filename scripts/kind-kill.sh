@@ -233,7 +233,8 @@ wait_success() {
     on_line "$out" "$id" success || fail "$dag run $id did not succeed"
 }
 
-# [master] lease_timeout. The pod is force-deleted just after, and timed until it is Ready.
+# The worker lease timeout (see docs/03-guide/14-timings.md). The pod is force-deleted
+# just after, and timed until it is Ready.
 # Under this, the attempt has to be WorkerRestarted. At or over it, WorkerLost is the rule.
 LEASE_TIMEOUT=60
 

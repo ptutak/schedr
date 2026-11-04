@@ -19,7 +19,7 @@ use crate::cli::{
 };
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short, trigger_text};
-use schedr_model::commands::{ConnectionsResult, JobState, SecretState};
+use schedr_model::commands::{ConnectionsResult, JobState, MAX_CONNECTION_TEST_MS, SecretState};
 
 #[cfg(test)]
 mod tests;
@@ -204,12 +204,15 @@ pub async fn run_connections<T: Transport>(
             let request = TestConnectionRequest {
                 root: root.clone(),
                 worker: worker.clone(),
-                timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
+                timeout_ms: timeout.map(|t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX)),
             };
             let sent = client
                 .send_command(|| client.test_connection(name, &request))
                 .await?;
-            (sent, *timeout + CONNECTIONS_ANSWER_MARGIN)
+            // Not given, it is the webserver's to say: the longest any test may take is waited
+            // for at most, and the job's end comes first.
+            let longest = std::time::Duration::from_millis(MAX_CONNECTION_TEST_MS);
+            (sent, timeout.unwrap_or(longest) + CONNECTIONS_ANSWER_MARGIN)
         }
     };
     let applied = client.wait(sent).await?;

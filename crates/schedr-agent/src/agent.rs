@@ -511,7 +511,9 @@ impl ProcessExecutor {
             }
         }
         let log = self.setup.log_file(&spec.attempt_id);
-        let timeout = Duration::from_millis(cleanup.timeout_ms);
+        let timeout = cleanup
+            .timeout_ms
+            .map_or(self.setup.timeouts.cleanup, Duration::from_millis);
         let mut result = pb::CleanupResult::default();
         for try_number in 1..=cleanup.retries.saturating_add(1) {
             if try_number > 1 {
@@ -662,6 +664,7 @@ impl ProcessExecutor {
                 log_file: self.setup.log_dir.join(format!("parse-{root}.log")),
                 max_output_size: 64 * 1024,
                 mask: crate::mask::Mask::default(),
+                start_timeout: self.setup.timeouts.runner_start,
             },
             memory: self.setup.memory.clone(),
             kills: self.metrics.watchdog_kills.clone(),

@@ -208,6 +208,7 @@ pub async fn check_root(
             log_file: log_file.clone(),
             max_output_size: 64 * 1024,
             mask: schedr_agent::mask::Mask::default(),
+            start_timeout: config.worker.runner_start_timeout,
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),
@@ -695,7 +696,7 @@ async fn test_dag(
     local.webserver.port = 0;
     local.worker.log_port = 0;
     local.ops.port = 0;
-    local.master.tick_interval = Duration::from_millis(100);
+    local.timings.tick_interval = Duration::from_millis(100);
     local.dags.poll_interval = Duration::from_millis(200);
     local.dags.settle_time = Duration::ZERO;
     let mut setup = plan(&local, env)?;

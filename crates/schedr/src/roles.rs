@@ -40,7 +40,6 @@ use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::lease::{Leadership, Renewal};
 use schedr_master::metrics::MasterMetrics;
-use schedr_master::parse_jobs::PARSE_JOB_TIMEOUT;
 use schedr_master::problems::{ProblemKind, Problems};
 use schedr_master::service::{Hub, LeaseLost};
 use schedr_proto::pb::master_client::MasterClient;
@@ -95,22 +94,22 @@ pub async fn served(
 #[must_use]
 pub fn master_settings(config: &Config) -> Settings {
     Settings {
-        heartbeat_interval: config.master.heartbeat_interval,
-        lease_timeout: config.master.lease_timeout,
+        heartbeat_interval: config.timings.heartbeat_interval,
+        lease_timeout: config.timings.lease_timeout,
         cancel_grace: config.master.cancel_grace,
-        parse_job_timeout: PARSE_JOB_TIMEOUT,
+        parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,
-        set_aside: config.master.set_aside,
+        set_aside: config.timings.set_aside,
         read_back: schedr_master::dispatch::ReadBack {
-            window: config.master.read_back_window,
-            interval: config.master.read_back_interval,
+            window: config.timings.read_back_window,
+            interval: config.timings.read_back_interval,
         },
-        listen_retry: config.master.listen_retry,
+        listen_retry: config.timings.listen_retry,
         quiet: schedr_master::quiet::QuietSettings {
             enabled: config.master.quiet_dags,
-            after: config.master.quiet_dag_after,
-            wake_ahead: config.master.quiet_dag_wake_ahead,
-            full_pass_interval: config.master.quiet_dag_full_pass_interval,
+            after: config.timings.quiet_dag_after,
+            wake_ahead: config.timings.quiet_dag_wake_ahead,
+            full_pass_interval: config.timings.quiet_dag_full_pass_interval,
         },
         // At most 1 GiB (checked when the configuration is read).
         max_message_size: usize::try_from(config.master.grpc_max_message_size)
@@ -175,11 +174,6 @@ pub fn agent_settings(
         .clone()
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
-    if config.worker.memory_check_interval.is_zero() {
-        return Err(AppError::BadArgument(
-            "[worker] memory_check_interval must be longer than 0s (e.g. \"1s\")".to_owned(),
-        ));
-    }
     if let Some(budget) = config.worker.memory_budget
         && budget < MIN_BUDGET
     {
@@ -209,6 +203,11 @@ pub fn agent_settings(
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
         setup: WorkerSetup {
+            timeouts: schedr_agent::attempt::WorkerTimeouts {
+                runner_start: config.worker.runner_start_timeout,
+                fork_preload: config.worker.fork_server_preload_timeout,
+                cleanup: config.worker.cleanup_timeout,
+            },
             roots: config
                 .dag_roots
                 .iter()
@@ -245,7 +244,7 @@ pub fn agent_settings(
         drain: DrainPeriods {
             grace: config.worker.termination_grace_period,
             terminate_period: config.worker.drain_terminate_period,
-            report_period: config.worker.drain_report_period,
+            report_period: config.timings.drain_report_period,
         },
         // Known once the log endpoint listens (see [`log_endpoint`]).
         log_endpoint: String::new(),
@@ -288,7 +287,7 @@ pub fn memory_watch(config: &Config, limit: Option<u64>, default_reserve: Reserv
             config.worker.slots,
             reserve,
         ),
-        interval: config.worker.memory_check_interval,
+        interval: config.timings.memory_check_interval,
         ..MemoryWatch::default()
     }
 }
@@ -367,6 +366,7 @@ pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
         key: file(&config.tls.key, "key")?,
     };
     Tls::load(files, &config.tls.worker_name, &config.tls.ui_name)
+        .map(|tls| tls.with_handshake_timeout(config.timings.handshake_timeout))
         .map(Some)
         .map_err(|e| AppError::BadArgument(e.to_string()))
 }
@@ -620,7 +620,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let deployments = ui_deployments(config, tls.as_ref())?;
     let stop = stop_on_signal();
     watch_tls(tls.as_ref(), config, &stop);
-    let health = Health::new(config.ops.loop_stall_timeout);
+    let health = Health::new(config.timings.loop_stall_timeout);
     let ready = health.starting("ui");
     let ops = Ops::new(Registry::default(), health.clone());
     start_ops(config, "ui", ops, &stop).await?;
@@ -671,6 +671,32 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
     (!dir.as_os_str().is_empty() && dir.is_dir()).then(|| dir.clone())
 }
 
+/// How long the webserver waits and refreshes (`[webserver]`).
+#[derive(Debug, Clone, Copy)]
+pub struct ApiTimings {
+    /// `refresh_interval`.
+    pub refresh: Duration,
+    /// `worker_connect_timeout`.
+    pub worker_connect: Duration,
+    /// `worker_request_timeout`.
+    pub worker_request: Duration,
+    /// `connection_test_timeout`.
+    pub connection_test: Duration,
+}
+
+impl ApiTimings {
+    /// The ones `config` sets.
+    #[must_use]
+    pub const fn of(config: &Config) -> Self {
+        Self {
+            refresh: config.timings.refresh_interval,
+            worker_connect: config.timings.worker_connect_timeout,
+            worker_request: config.webserver.worker_request_timeout,
+            connection_test: config.webserver.connection_test_timeout,
+        }
+    }
+}
+
 /// Serves the REST API on `listener` until `stop`, reading task logs from workers (over mTLS
 /// with `tls`), showing this webserver as `node` (`GET /api/v1/deployment`); with `ui`, the
 /// web UI too, at `/`, calling this API in process.
@@ -680,7 +706,7 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
 /// [`AppError::BadArgument`] if the HTTP server fails.
 pub async fn serve_api(
     db: Database,
-    (auth, refresh, node): (Auth, Duration, NodeView),
+    (auth, timings, node): (Auth, ApiTimings, NodeView),
     (listener, ui_port): (TcpListener, Option<TcpListener>),
     tls: Option<Tls>,
     ui: Option<LocalUi>,
@@ -694,9 +720,13 @@ pub async fn serve_api(
     let (ui_process, ui_host) = (node.process_id.clone(), node.host.clone());
     let state = ApiState::new(db, None)
         .with_auth(auth)
-        .with_refresh(refresh)
+        .with_refresh(timings.refresh)
         .with_node(node)
-        .with_logs(std::sync::Arc::new(HttpLogSource::new(tls.clone())))
+        .with_logs(std::sync::Arc::new(
+            HttpLogSource::new(tls.clone())
+                .with_timeouts(timings.worker_connect, timings.worker_request),
+        ))
+        .with_connection_test_timeout(timings.connection_test)
         .with_metrics(observed.metrics);
     observed.ready.ready();
     let api = router(state);
@@ -859,7 +889,7 @@ pub async fn run_worker(
 /// [`AppError::NoDatabase`] without a URL; [`AppError::Db`] if it can't be reached.
 pub async fn connect_database(config: &Config, role: &str) -> Result<Database, AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
-    let db = Database::connect_with_timeout(url, config.database.query_timeout)
+    let db = Database::connect_with_timeout(url, config.timings.query_timeout)
         .await?
         .with_notifications(
             config.database.notifications,
@@ -1231,7 +1261,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
     check_timeouts(config)?;
-    let health = Health::new(config.ops.loop_stall_timeout);
+    let health = Health::new(config.timings.loop_stall_timeout);
     let ready = health.starting("master");
     let metrics = MasterMetrics::default();
     let mut registry = Registry::default();
@@ -1240,7 +1270,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     let db = connect_database(config, "master").await?;
     let url = config.database.url.as_deref().unwrap_or_default();
     let period = (
-        config.master.lease_period,
+        config.timings.lease_period,
         migrate,
         config.database.change_notifications,
     );
@@ -1269,7 +1299,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     Box::pin(serve_master(
         db,
         master_settings(config),
-        (config.master.tick_interval, problems),
+        (config.timings.tick_interval, problems),
         listener,
         tls,
         leadership,
@@ -1283,37 +1313,46 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     .await
 }
 
-/// Checks that `[database] query_timeout` and `[master] lease_period` are shorter than `[ops]
-/// loop_stall_timeout`, so one hung query doesn't look like a stuck loop, and a stuck master
+/// Checks that `query_timeout` and `lease_period` are shorter than
+/// `loop_stall_timeout`, so one hung query doesn't look like a stuck loop, and a stuck master
 /// doesn't lead past its restart.
 ///
 /// # Errors
 ///
 /// [`AppError::BadArgument`] when it isn't.
 pub fn check_timeouts(config: &Config) -> Result<(), AppError> {
+    // A test asked for without a timeout gets this one, and the API refuses what's outside this.
+    let most = Duration::from_millis(schedr_model::commands::MAX_CONNECTION_TEST_MS);
+    let test = config.webserver.connection_test_timeout;
+    if test.as_millis() == 0 || test > most {
+        return Err(AppError::BadArgument(format!(
+            "[webserver] connection_test_timeout ({} s) must be at least 1 ms and at most {} s",
+            test.as_secs_f64(),
+            most.as_secs_f64()
+        )));
+    }
     // Below 1 ms every query would be cut off at once.
-    if config.database.query_timeout >= config.ops.loop_stall_timeout
-        || config.database.query_timeout.as_millis() == 0
+    if config.timings.query_timeout >= config.timings.loop_stall_timeout
+        || config.timings.query_timeout.as_millis() == 0
     {
         return Err(AppError::BadArgument(format!(
-            "[database] query_timeout ({} s) must be at least 1 ms and shorter than [ops] \
-             loop_stall_timeout ({} s)",
-            config.database.query_timeout.as_secs_f64(),
-            config.ops.loop_stall_timeout.as_secs_f64()
+            "query_timeout ({} s) must be at least 1 ms and shorter than loop_stall_timeout ({} s)",
+            config.timings.query_timeout.as_secs_f64(),
+            config.timings.loop_stall_timeout.as_secs_f64()
         )));
     }
     // A paused master keeps its loop beating, but a lease longer than the stall limit would
     // leave a stuck one leading past its restart. A renewal (limited by the query limit) must
     // fit a third of it, and leading stops a query limit before it ends.
-    if config.master.lease_period >= config.ops.loop_stall_timeout
-        || config.master.lease_period < config.database.query_timeout * 3
+    if config.timings.lease_period >= config.timings.loop_stall_timeout
+        || config.timings.lease_period < config.timings.query_timeout * 3
     {
         return Err(AppError::BadArgument(format!(
-            "[master] lease_period ({} s) must be at least three [database] query_timeout \
-             ({} s) and shorter than [ops] loop_stall_timeout ({} s)",
-            config.master.lease_period.as_secs_f64(),
-            config.database.query_timeout.as_secs_f64(),
-            config.ops.loop_stall_timeout.as_secs_f64()
+            "the master's lease ({} s) must be at least three query_timeout ({} s) and shorter \
+             than loop_stall_timeout ({} s)",
+            config.timings.lease_period.as_secs_f64(),
+            config.timings.query_timeout.as_secs_f64(),
+            config.timings.loop_stall_timeout.as_secs_f64()
         )));
     }
     Ok(())
@@ -1364,7 +1403,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     let tls = role_tls(config)?;
     check_timeouts(config)?;
     check_ui_port(config)?;
-    let health = Health::new(config.ops.loop_stall_timeout);
+    let health = Health::new(config.timings.loop_stall_timeout);
     let ready = health.starting("webserver");
     let metrics = ApiMetrics::default();
     let mut registry = Registry::default();
@@ -1427,11 +1466,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     };
     serve_api(
         db,
-        (
-            auth,
-            config.webserver.refresh_interval,
-            webserver_node(masked(config)),
-        ),
+        (auth, ApiTimings::of(config), webserver_node(masked(config))),
         (listener, ui_port),
         tls,
         None,
@@ -1479,7 +1514,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     })?;
     master_host(&master_url, config.tls.mode)?;
     let tls = role_tls(config)?;
-    let health = Health::new(config.ops.loop_stall_timeout);
+    let health = Health::new(config.timings.loop_stall_timeout);
     let ready = health.starting("worker");
     let metrics = AgentMetrics::default();
     let mut registry = Registry::default();

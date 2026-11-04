@@ -221,8 +221,9 @@ pub async fn list_connections(State(state): State<ApiState>) -> ApiResult<Connec
     Ok(Json(ConnectionList::of(&registries, &dags)))
 }
 
-/// The default time a connection test may take (decision 200).
-pub const CONNECTION_TEST_TIMEOUT_MS: u64 = 60_000;
+/// The default time a connection test may take (decision 200), unless `[webserver]
+/// connection_test_timeout` says.
+pub const CONNECTION_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Render connections on a worker (`schedr connections check`, decision 174): each secret
 /// they name present or missing, never a value. The command's result fills in as the
@@ -261,7 +262,8 @@ pub async fn test_connection(
     body: Bytes,
 ) -> Accepted {
     let request: TestConnectionRequest = optional_body(&body)?;
-    let timeout_ms = request.timeout_ms.unwrap_or(CONNECTION_TEST_TIMEOUT_MS);
+    let default_ms = u64::try_from(state.connection_test_timeout.as_millis()).unwrap_or(u64::MAX);
+    let timeout_ms = request.timeout_ms.unwrap_or(default_ms);
     if timeout_ms == 0 || timeout_ms > schedr_model::commands::MAX_CONNECTION_TEST_MS {
         return Err(ApiError::BadRequest(format!(
             "timeout_ms: 1 to {}",

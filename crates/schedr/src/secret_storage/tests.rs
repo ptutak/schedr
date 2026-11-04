@@ -14,6 +14,8 @@ fn db_storage() -> SecretStorageConfig {
         ca_cert: None,
         auth: None,
         token: None,
+        request_timeout: std::time::Duration::from_secs(30),
+        connect_timeout: std::time::Duration::from_secs(10),
         cache_ttl: std::time::Duration::ZERO,
         unmasked_prefixes: Vec::new(),
     }

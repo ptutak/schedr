@@ -50,7 +50,8 @@ flowchart LR
    ([When a file fails to import](#when-a-file-fails-to-import)). The
    upload runs beside the worker's session, so heartbeats go on while it is sent.
 
-A parse job that hasn't finished after 10 minutes, or whose worker is lost, goes to the next
+A parse job that hasn't finished after `[master] parse_job_timeout` (10 minutes by default),
+or whose worker is lost, goes to the next
 worker that reported the same hash. Parse jobs live only in the master's memory. After a
 master restart, workers report their hashes again and the jobs are created again. A
 stored parse is parsed again only when a file of it failed transiently
@@ -110,7 +111,7 @@ setting"). The gauge is `schedr_master_dags{state="held"}`
 
 Only `ParseTimeout` and `RunnerDied` are parsed again, with no limit on the number of
 tries. The first retry waits 30 seconds. Each wait after that is twice the last, up to 10
-minutes. That wait is separate from a parse job that hasn't finished after 10 minutes,
+minutes. That wait is separate from a parse job that has passed `[master] parse_job_timeout`,
 which is handed to another worker at once. The retry goes to a worker other than the one
 whose parse failed, when another worker has reported the same code. The worker that failed
 gets it only when it is the only one.

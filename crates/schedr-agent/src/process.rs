@@ -12,6 +12,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustix::process::{Pid, kill_process_group, test_kill_process_group};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -45,6 +46,8 @@ pub struct ProcessSpec {
     pub max_output_size: usize,
     /// The secret values masked in its output, on their way to the log and the tail.
     pub mask: Mask,
+    /// How long a runner has to say hello, if it is one (`[worker] runner_start_timeout`).
+    pub start_timeout: Duration,
 }
 
 /// A started task process.

@@ -195,7 +195,7 @@ no musl wheel, so no compiler ends up in your image.
   a space; or `database.existingSecret`, a Secret holding the whole URL. Any connection pooler
   can sit in between. Behind one in transaction mode the master finds it
   and polls for new commands, and the webserver can't follow changes for the UI, so the live
-  pages refresh every `[webserver] refresh_interval` (15 s by default; see
+  pages refresh on the [refresh interval](14-timings.md#fixed-timings) (15 s by default; see
   [the master](04-master.md)). To listen anyway,
   `database.notificationsUrlKey` names a key of the same Secret with a URL straight to
   Postgres. The master and the webserver both use it
@@ -446,18 +446,17 @@ a 20 s task, and `scripts/kind-mesh.sh` checks it for standalone in the mesh.
 
 A crash leaves no time to drain. `kubectl delete pod POD --force --grace-period=0` kills the
 container at once. What schedr does then is in [State and failures](07-failures.md). With the
-chart's defaults (one master, workers as a StatefulSet with a volume each, `[master]
-lease_period` 30 s):
+chart's defaults (one master, workers as a StatefulSet with a volume each, the [master lease period](14-timings.md#fixed-timings) of 30 s):
 
 | Killed | The run | Attempts |
 |---|---|---|
-| The master pod | Finishes. Workers keep the task and register again with the new master. It holds the lease within `[master] lease_period` (30 s) of the old one's last renewal, after its pod has been scheduled and has started. The kind script allows 180 s for that. | The same attempt, `success`. No retry. Each worker is `disconnected` until it registers, then `active`. |
+| The master pod | Finishes. Workers keep the task and register again with the new master. It holds the lease within the [master lease period](14-timings.md#fixed-timings) (30 s) of the old one's last renewal, after its pod has been scheduled and has started. The kind script allows 180 s for that. | The same attempt, `success`. No retry. Each worker is `disconnected` until it registers, then `active`. |
 | A worker pod | Finishes when the task has a retry left. The default is `retries=0`, so a DAG that does not set `retries` fails the run here. The StatefulSet brings the pod back under the same name, with its volume, so the journal is still there. | `lost`, with `error_summary.exception` `WorkerRestarted` ("worker `<id>` restarted while the attempt ran (possibly out of memory)"), then `success`. The other worker stays `active`. |
 | The standalone pod, SQLite on its volume | Finishes the same way. The volume keeps the database and the journal, so a run that already succeeded is still there. | `lost` / `WorkerRestarted`, then `success`, and the task needs a retry left. |
 
 A worker listed `lost` after the master is killed means the downtime was counted against the
 lease, which it must not be. A killed worker's attempt is `WorkerLost` instead of
-`WorkerRestarted` when its new pod is not ready within `[master] lease_timeout` (60 s). That
+`WorkerRestarted` when its new pod is not ready within the [worker lease](14-timings.md#fixed-timings) (60 s). That
 is the rule, and the kind script prints it. The other worker has to stay `active`.
 
 `scripts/kind-kill.sh` runs these three, in that order, on the local kind cluster `schedr-test`

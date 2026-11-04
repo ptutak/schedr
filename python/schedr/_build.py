@@ -221,11 +221,9 @@ class TaskOptions:
             raise ValueError(f"cleanup_retries must not be negative, got {retries}")
         return TaskCleanup(
             wanted.line,
-            (
-                defaults.timeout_ms
-                if self.cleanup_timeout is None
-                else to_ms(self.cleanup_timeout, "cleanup_timeout")
-            ),
+            None
+            if self.cleanup_timeout is None
+            else to_ms(self.cleanup_timeout, "cleanup_timeout"),
             retries,
             (
                 defaults.retry_delay_ms

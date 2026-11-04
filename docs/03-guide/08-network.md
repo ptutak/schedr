@@ -310,7 +310,7 @@ comment every 15 s keeps an idle stream from looking dead. The response is
 `Content-Type: text/event-stream`, with `Cache-Control: no-cache` and
 `X-Accel-Buffering: no`. The webserver follows the database once, from the first stream, and
 hands each change to every open stream. When the changes can't be followed, each stream gets
-`refresh` every `[webserver] refresh_interval` (15 s by default; see
+`refresh` on the [refresh interval](14-timings.md#fixed-timings) (15 s by default; see
 [Live updates](12-ui.md#live-updates)). A stream more than 1,024 changes behind gets
 `refresh` instead of the ones it skipped.
 

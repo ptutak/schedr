@@ -24,6 +24,7 @@ fn shell(dir: &Path, script: &str, max_output_size: usize) -> ProcessSpec {
         log_file: dir.join("task.log"),
         max_output_size,
         mask: schedr_agent::mask::Mask::default(),
+        start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
     }
 }
 

@@ -45,7 +45,8 @@ class TaskDefaults:
             runs.
         max_active_per_run: At most this many instances of each task running at once within
             one run (for mapped tasks).
-        cleanup_timeout: How long one try of a task's cleanup may run (default 5 minutes).
+        cleanup_timeout: How long one try of a task's cleanup may run (default: the worker's
+            ``cleanup_timeout``, 5 minutes).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
     """

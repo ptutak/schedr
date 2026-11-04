@@ -1640,3 +1640,28 @@ async fn each_roots_connections_are_listed_with_the_tasks_declaring_them() {
         ]}]})
     );
 }
+
+#[tokio::test]
+async fn a_connection_test_without_a_timeout_gets_the_configured_one() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let state = ApiState::new(db.clone(), Some("x-forwarded-user".to_owned()))
+        .with_connection_test_timeout(std::time::Duration::from_mins(2));
+    let app = router(state);
+    for body in ["", r#"{"timeout_ms": 5000}"#] {
+        let path = "/api/v1/connections/warehouse/test";
+        let (status, _) = send(&app, Method::POST, path, body).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
+    let timeouts: Vec<_> = db
+        .pending_commands(10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| match c.command.unwrap() {
+            Command::TestConnection { timeout_ms, .. } => timeout_ms,
+            other => panic!("expected a connection test, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(timeouts, [120_000, 5_000]);
+}

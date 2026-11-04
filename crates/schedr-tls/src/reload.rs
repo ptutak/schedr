@@ -19,6 +19,7 @@ mod tests;
 #[derive(Debug, Clone)]
 pub struct Tls {
     inner: Arc<Inner>,
+    handshake_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -71,7 +72,23 @@ impl Tls {
                     failed: None,
                 }),
             }),
+            handshake_timeout: crate::incoming::HANDSHAKE_TIMEOUT,
         })
+    }
+
+    /// This, giving peers `timeout` to complete a handshake (`handshake_timeout`).
+    #[must_use]
+    pub fn with_handshake_timeout(self, timeout: Duration) -> Self {
+        Self {
+            handshake_timeout: timeout,
+            ..self
+        }
+    }
+
+    /// How long a peer has to complete a handshake.
+    #[must_use]
+    pub const fn handshake_timeout(&self) -> Duration {
+        self.handshake_timeout
     }
 
     fn configs(&self) -> Configs {

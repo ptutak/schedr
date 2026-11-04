@@ -4,7 +4,7 @@
 //! while a role starts.
 //!
 //! - **`/healthz`** (liveness): 503 once a loop the role watches (the master's scheduling
-//!   loop, the worker agent's event loop) hasn't turned for `[ops] loop_stall_timeout`; it
+//!   loop, the worker agent's event loop) hasn't turned for `loop_stall_timeout`; it
 //!   never asks another component (a database or master outage mustn't restart the role).
 //! - **`/readyz`**: 503 until every part of the role has started.
 //! - **`/metrics`**: the role's metrics (`schedr_…`), its process's (`process_…`, from

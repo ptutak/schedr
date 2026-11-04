@@ -386,9 +386,10 @@ pub enum ConnectionsCommand {
         /// The worker to run it on; one having the root's current code otherwise.
         #[arg(long)]
         worker: Option<String>,
-        /// How long it may take (`30s`, `2m`).
-        #[arg(long, default_value = "60s", value_parser = test_timeout)]
-        timeout: std::time::Duration,
+        /// How long it may take (`30s`, `2m`); `[webserver] connection_test_timeout` if not
+        /// given.
+        #[arg(long, value_parser = test_timeout)]
+        timeout: Option<std::time::Duration>,
     },
 }
 

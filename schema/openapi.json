@@ -1071,7 +1071,7 @@
             ]
           },
           "timeout_ms": {
-            "description": "How long it may take, in milliseconds: 60 000 if not given (decision 200).",
+            "description": "How long it may take, in milliseconds: `[webserver] connection_test_timeout` if not given.",
             "format": "int64",
             "minimum": 0,
             "type": [

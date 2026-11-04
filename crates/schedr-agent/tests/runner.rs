@@ -37,6 +37,7 @@ fn runner(mode: &str, root: &Path, log: &Path) -> ProcessSpec {
         log_file: log.to_path_buf(),
         max_output_size: 64 * 1024,
         mask: schedr_agent::mask::Mask::default(),
+        start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
     }
 }
 
@@ -411,6 +412,7 @@ async fn a_cancel_or_timeout_during_the_runners_start_stops_it() {
         log_file: dir.path().join("silent.log"),
         max_output_size: 1024,
         mask: schedr_agent::mask::Mask::default(),
+        start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
     };
     let limits = |timeout| Limits {
         timeout,
@@ -468,6 +470,7 @@ async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
         log_file: dir.path().join("start.log"),
         max_output_size: 1024,
         mask: schedr_agent::mask::Mask::default(),
+        start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
     };
     let limits = |timeout| Limits {
         timeout,
@@ -580,6 +583,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: schedr_agent::memory::MemoryWatch::default(),
+            timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
         parse_file_timeout: Duration::from_secs(5),

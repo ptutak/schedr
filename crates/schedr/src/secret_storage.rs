@@ -158,6 +158,8 @@ fn vault(
         namespace: configured.namespace.clone(),
         ca_cert,
         auth,
+        request_timeout: configured.request_timeout,
+        connect_timeout: configured.connect_timeout,
     };
     let storage = VaultStorage::new(settings).map_err(bad)?;
     Ok(storage)

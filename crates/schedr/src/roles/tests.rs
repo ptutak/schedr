@@ -31,13 +31,13 @@ fn loopback() -> SocketAddr {
 #[test]
 fn the_master_settings_come_from_the_config() {
     let mut config = config();
-    config.master.lease_timeout = Duration::from_secs(90);
+    config.timings.lease_timeout = Duration::from_secs(90);
     config.master.grpc_max_message_size = 16 << 20;
     let settings = master_settings(&config);
     assert_eq!(settings.lease_timeout, Duration::from_secs(90));
     assert_eq!(settings.max_message_size, 16 << 20);
     assert_eq!(settings.heartbeat_interval, Duration::from_secs(10));
-    assert_eq!(settings.parse_job_timeout, PARSE_JOB_TIMEOUT);
+    assert_eq!(settings.parse_job_timeout, Duration::from_mins(10));
 }
 
 #[test]
@@ -163,7 +163,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
         memory_db().await,
         (
             schedr_api::auth::Auth::default(),
-            Duration::from_secs(15),
+            ApiTimings::of(&Config::default()),
             webserver_node(serde_json::json!({})),
         ),
         (listen(loopback()).await.unwrap(), None),
@@ -521,7 +521,7 @@ fn the_memory_watch_takes_the_configured_budget_or_shares_the_limit() {
     assert_eq!(half.budget, Some((limit - limit / 100 * 50) / 2));
     config.worker.memory_reserve = None;
     config.worker.memory_budget = Some(100 << 20);
-    config.worker.memory_check_interval = Duration::from_millis(200);
+    config.timings.memory_check_interval = Duration::from_millis(200);
     let watch = memory_watch(&config, None, WORKER_RESERVE);
     assert_eq!(
         (watch.budget, watch.interval),
@@ -535,17 +535,8 @@ fn the_memory_watch_takes_the_configured_budget_or_shares_the_limit() {
 }
 
 #[test]
-fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
+fn a_tiny_budget_is_refused() {
     let mut config = config();
-    config.worker.memory_check_interval = Duration::ZERO;
-    let error = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE)
-        .unwrap_err()
-        .to_string();
-    assert_eq!(
-        error,
-        "[worker] memory_check_interval must be longer than 0s (e.g. \"1s\")"
-    );
-    let mut config = self::config();
     config.worker.memory_budget = Some(1 << 10);
     let error = agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE)
         .unwrap_err()
@@ -557,31 +548,49 @@ fn a_zero_check_interval_or_a_tiny_budget_is_refused() {
 }
 
 #[test]
+fn the_connection_test_timeout_must_be_one_the_api_accepts() {
+    let mut config = config();
+    config.webserver.connection_test_timeout = Duration::from_hours(1);
+    check_timeouts(&config).unwrap();
+    for refused in [
+        Duration::ZERO,
+        Duration::from_micros(500),
+        Duration::from_hours(2),
+    ] {
+        config.webserver.connection_test_timeout = refused;
+        let error = check_timeouts(&config).unwrap_err().to_string();
+        assert!(
+            error.starts_with("[webserver] connection_test_timeout"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn the_query_timeout_must_be_shorter_than_the_loop_stall_timeout() {
     let mut config = config();
     assert!(check_timeouts(&config).is_ok());
-    config.database.query_timeout = Duration::from_mins(3);
+    config.timings.query_timeout = Duration::from_mins(3);
     assert_eq!(
         check_timeouts(&config).unwrap_err().to_string(),
-        "[database] query_timeout (180 s) must be at least 1 ms and shorter than [ops] \
-         loop_stall_timeout (120 s)"
+        "query_timeout (180 s) must be at least 1 ms and shorter than loop_stall_timeout (120 s)"
     );
-    config.database.query_timeout = Duration::ZERO;
+    config.timings.query_timeout = Duration::ZERO;
     assert!(check_timeouts(&config).is_err());
-    config.database.query_timeout = Duration::from_micros(500);
+    config.timings.query_timeout = Duration::from_micros(500);
     assert!(check_timeouts(&config).is_err());
 }
 
 #[test]
 fn the_lease_period_must_be_shorter_than_the_loop_stall_timeout() {
     let mut config = config();
-    config.master.lease_period = Duration::from_mins(2);
+    config.timings.lease_period = Duration::from_mins(2);
     assert_eq!(
         check_timeouts(&config).unwrap_err().to_string(),
-        "[master] lease_period (120 s) must be at least three [database] query_timeout (10 s) \
-         and shorter than [ops] loop_stall_timeout (120 s)"
+        "the master's lease (120 s) must be at least three query_timeout (10 s) and shorter than \
+         loop_stall_timeout (120 s)"
     );
-    config.master.lease_period = Duration::from_secs(30);
+    config.timings.lease_period = Duration::from_secs(30);
     assert!(check_timeouts(&config).is_ok());
 }
 
@@ -589,10 +598,10 @@ fn the_lease_period_must_be_shorter_than_the_loop_stall_timeout() {
 fn the_lease_period_must_fit_three_query_timeouts() {
     // A renewal, limited by the query limit, must fit a third of the period.
     let mut config = config();
-    config.master.lease_period = Duration::from_secs(29);
+    config.timings.lease_period = Duration::from_secs(29);
     assert!(check_timeouts(&config).is_err());
-    config.database.query_timeout = Duration::from_millis(300);
-    config.master.lease_period = Duration::from_millis(900);
+    config.timings.query_timeout = Duration::from_millis(300);
+    config.timings.lease_period = Duration::from_millis(900);
     assert!(check_timeouts(&config).is_ok());
 }
 
@@ -774,7 +783,7 @@ async fn standalones_pages_want_a_sign_in_and_its_api_no_other_sites_writes() {
             memory_db().await,
             (
                 auth,
-                Duration::from_secs(15),
+                ApiTimings::of(&Config::default()),
                 webserver_node(serde_json::json!({})),
             ),
             (listener, None),
@@ -902,7 +911,7 @@ async fn in_mesh_mode_the_ui_port_takes_the_uis_name_and_the_api_port_doesnt() {
             memory_db().await,
             (
                 schedr_api::auth::Auth::default(),
-                Duration::from_secs(15),
+                ApiTimings::of(&Config::default()),
                 webserver_node(serde_json::json!({})),
             ),
             (listener, Some(ui_listener)),
@@ -961,7 +970,7 @@ async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
             memory_db().await,
             (
                 schedr_api::auth::Auth::default(),
-                Duration::from_secs(15),
+                ApiTimings::of(&Config::default()),
                 webserver_node(serde_json::json!({})),
             ),
             (listener, None),

@@ -102,8 +102,8 @@ The names used across the documentation, the API and the logs.
 
 **Busy DAG**
 : A DAG the leading master visits every round. It has a run running or queued, a fire time
-  within `[master] quiet_dag_wake_ahead`, or its last active visit was less than
-  `[master] quiet_dag_after` ago. See [The master](04-master.md#busy-and-quiet-dags).
+  within the [wake-ahead time](14-timings.md#fixed-timings) (60 s), or its last active visit was less than
+  the [quiet wait](14-timings.md#fixed-timings) (60 s) ago. See [The master](04-master.md#busy-and-quiet-dags).
 
 **Quiet DAG**
 : A DAG rounds skip until it wakes: nothing in progress, and no fire time that near. Its
@@ -117,7 +117,7 @@ The names used across the documentation, the API and the logs.
   master whether a worker reconnected (tasks still running) or restarted (its tasks are gone).
 
 **Lease**
-: How long a worker may stay silent (`[master] lease_timeout`, 60 s, counted from when its
+: How long a worker may stay silent (the [worker lease](14-timings.md#fixed-timings), 60 s, counted from when its
   latest message arrived, or from the master's start after a restart) before the master
   declares it `lost` and ends its attempts. Heartbeats renew it.
 

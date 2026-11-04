@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use rstest::rstest;
 
 use super::*;
 use crate::roots::Root;
@@ -43,7 +44,7 @@ fn no_sources_gives_the_defaults_with_the_builtin_python() {
 
 #[test]
 fn precedence_is_flags_then_environment_then_file() {
-    let contents = "[ops]\nport = 9001\nloop_stall_timeout = \"1m\"\n[log]\nlevel = \"warn\"\n";
+    let contents = "[ops]\nport = 9001\n[master]\ncancel_grace = \"1m\"\n[log]\nlevel = \"warn\"\n";
     let vars = env(&[
         ("SCHEDR_CONFIG__OPS__PORT", "9002"),
         ("SCHEDR_CONFIG__LOG__LEVEL", "debug"),
@@ -51,7 +52,7 @@ fn precedence_is_flags_then_environment_then_file() {
     let config = load(Some(file(contents)), &vars, &[flag("ops.port", "9003")]).unwrap();
     assert_eq!(config.ops.port, 9003);
     assert_eq!(config.log.level, "debug");
-    assert_eq!(config.ops.loop_stall_timeout, Duration::from_secs(60));
+    assert_eq!(config.master.cancel_grace, Duration::from_secs(60));
 }
 
 #[test]
@@ -190,7 +191,7 @@ fn rejects_unknown_keys_and_bad_toml() {
 #[test]
 fn every_figment_error_is_kept_in_the_message() {
     let err = load(
-        Some(file("[ops]\nport = \"a\"\nloop_stall_timeout = 5\n")),
+        Some(file("[ops]\nport = \"a\"\n[master]\ncancel_grace = 5\n")),
         &env(&[]),
         &[],
     )
@@ -199,7 +200,7 @@ fn every_figment_error_is_kept_in_the_message() {
         panic!("expected Invalid, got {err:?}")
     };
     assert!(
-        message.contains("port") || message.contains("loop_stall_timeout"),
+        message.contains("port") || message.contains("cancel_grace"),
         "{message}"
     );
 }
@@ -314,14 +315,14 @@ fn the_drain_times_must_fit_in_the_termination_grace_period() {
     let fits = load(
         Some(file(
             "[worker]\ntermination_grace_period = \"10s\"\n\
-             drain_terminate_period = \"6s\"\ndrain_report_period = \"4s\"\n",
+             drain_terminate_period = \"6s\"\n",
         )),
-        &env(&[]),
+        &env(&[("SCHEDR_HIDDEN__WORKER__DRAIN_REPORT_PERIOD", "4s")]),
         &[],
     )
     .unwrap();
     assert_eq!(fits.worker.drain_terminate_period, Duration::from_secs(6));
-    assert_eq!(fits.worker.drain_report_period, Duration::from_secs(4));
+    assert_eq!(fits.timings.drain_report_period, Duration::from_secs(4));
     let error = load(
         Some(file("[worker]\ntermination_grace_period = \"4s\"\n")),
         &env(&[]),
@@ -574,4 +575,173 @@ fn a_bad_secret_storage_is_refused(#[case] toml: &str, #[case] message: &str) {
         .unwrap_err()
         .to_string();
     assert!(error.contains(message), "{error}");
+}
+
+#[test]
+fn a_hidden_variable_sets_its_timing_and_is_remembered() {
+    let vars = env(&[
+        ("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "100ms"),
+        ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "2s"),
+        ("SCHEDR_HIDDEN__TLS__HANDSHAKE_TIMEOUT", "1m"),
+    ]);
+    let timings = load(None, &vars, &[]).unwrap().timings;
+    assert_eq!(timings.tick_interval, Duration::from_millis(100));
+    assert_eq!(timings.query_timeout, Duration::from_secs(2));
+    assert_eq!(timings.handshake_timeout, Duration::from_mins(1));
+    assert_eq!(
+        timings.overridden,
+        [
+            "SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT",
+            "SCHEDR_HIDDEN__MASTER__TICK_INTERVAL",
+            "SCHEDR_HIDDEN__TLS__HANDSHAKE_TIMEOUT",
+        ]
+    );
+}
+
+#[test]
+fn without_a_hidden_variable_the_timings_are_the_fixed_ones() {
+    assert_eq!(
+        load(None, &env(&[]), &[]).unwrap().timings,
+        Timings::default()
+    );
+}
+
+#[rstest]
+#[case("SCHEDR_HIDDEN__MASTER__TICK", "1s", "no such timing")]
+#[case("SCHEDR_HIDDEN__MASTER__CANCEL_GRACE", "1s", "no such timing")]
+#[case(
+    "SCHEDR_HIDDEN__MASTER__TICK_INTERVAL",
+    "0s",
+    "must be longer than zero"
+)]
+#[case(
+    "SCHEDR_HIDDEN__WORKER__MEMORY_CHECK_INTERVAL",
+    "0ms",
+    "must be longer than zero"
+)]
+fn a_hidden_variable_that_cant_be_used_is_refused(
+    #[case] name: &str,
+    #[case] value: &str,
+    #[case] reason: &str,
+) {
+    assert_eq!(
+        load(None, &env(&[(name, value)]), &[]).unwrap_err(),
+        ConfigError::BadHiddenTiming {
+            name: name.to_owned(),
+            reason: reason.to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_hidden_variable_that_isnt_a_duration_is_refused() {
+    let name = "SCHEDR_HIDDEN__MASTER__TICK_INTERVAL";
+    let error = load(None, &env(&[(name, "soon")]), &[]).unwrap_err();
+    assert!(
+        matches!(&error, ConfigError::BadHiddenTiming { name: said, .. } if said == name),
+        "{error:?}"
+    );
+}
+
+#[rstest]
+#[case("[master]\ntick_interval = \"100ms\"\n", "tick_interval")]
+#[case("[master]\nread_back_window = \"1s\"\n", "read_back_window")]
+#[case("[database]\nquery_timeout = \"1s\"\n", "query_timeout")]
+#[case("[ops]\nloop_stall_timeout = \"1m\"\n", "loop_stall_timeout")]
+#[case("[tls]\nhandshake_timeout = \"1s\"\n", "handshake_timeout")]
+fn a_file_cant_set_a_fixed_timing(#[case] contents: &str, #[case] key: &str) {
+    let error = load(Some(file(contents)), &env(&[]), &[]).unwrap_err();
+    assert!(error.to_string().contains(key), "{error}");
+}
+
+#[test]
+fn the_normal_variables_cant_set_a_fixed_timing() {
+    let vars = env(&[("SCHEDR_CONFIG__MASTER__TICK_INTERVAL", "100ms")]);
+    let error = load(None, &vars, &[]).unwrap_err();
+    assert!(error.to_string().contains("tick_interval"), "{error}");
+}
+
+#[test]
+fn the_new_timeouts_are_read_from_a_file() {
+    let config = load(
+        Some(file(
+            "[master]\nparse_job_timeout = \"1m\"\n\
+             [webserver]\nworker_request_timeout = \"2m\"\nconnection_test_timeout = \"3m\"\n\
+             [worker]\nrunner_start_timeout = \"4m\"\nfork_server_preload_timeout = \"5m\"\n\
+             cleanup_timeout = \"6m\"\n",
+        )),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(config.master.parse_job_timeout, Duration::from_mins(1));
+    assert_eq!(
+        config.webserver.worker_request_timeout,
+        Duration::from_mins(2)
+    );
+    assert_eq!(
+        config.webserver.connection_test_timeout,
+        Duration::from_mins(3)
+    );
+    assert_eq!(config.worker.runner_start_timeout, Duration::from_mins(4));
+    assert_eq!(
+        config.worker.fork_server_preload_timeout,
+        Duration::from_mins(5)
+    );
+    assert_eq!(config.worker.cleanup_timeout, Duration::from_mins(6));
+}
+
+#[rstest]
+#[case("[dags]\npoll_interval = \"0s\"\n", "[dags] poll_interval")]
+#[case("[dags]\nparse_file_timeout = \"0s\"\n", "[dags] parse_file_timeout")]
+#[case("[master]\nparse_job_timeout = \"0s\"\n", "[master] parse_job_timeout")]
+#[case(
+    "[webserver]\nworker_request_timeout = \"0s\"\n",
+    "[webserver] worker_request_timeout"
+)]
+#[case("[worker]\nlog_retention = \"0s\"\n", "[worker] log_retention")]
+#[case(
+    "[worker]\nrunner_start_timeout = \"0s\"\n",
+    "[worker] runner_start_timeout"
+)]
+#[case(
+    "[worker]\nfork_server_preload_timeout = \"0s\"\n",
+    "[worker] fork_server_preload_timeout"
+)]
+#[case("[worker]\ncleanup_timeout = \"0s\"\n", "[worker] cleanup_timeout")]
+fn a_timing_that_cant_work_at_zero_is_refused(#[case] contents: &str, #[case] key: &str) {
+    assert_eq!(
+        load(Some(file(contents)), &env(&[]), &[]).unwrap_err(),
+        ConfigError::ZeroTiming {
+            key: key.to_owned()
+        }
+    );
+}
+
+#[test]
+fn a_zero_stays_allowed_where_it_means_something() {
+    let config = load(
+        Some(file(
+            "[dags]\nsettle_time = \"0s\"\n[master]\ncancel_grace = \"0s\"\ncode_wait = \"0s\"\n\
+             [worker]\ndrain_terminate_period = \"0s\"\nfork_server_import_retry = \"0s\"\n",
+        )),
+        &env(&[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(config.master.cancel_grace, Duration::ZERO);
+}
+
+#[test]
+fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
+    let page = include_str!("../../../../docs/03-guide/14-timings.md");
+    let names: Vec<&str> = page
+        .split('`')
+        .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
+        .collect();
+    assert_eq!(names.len(), 18, "{names:?}");
+    for name in names {
+        let timings = load(None, &env(&[(name, "1s")]), &[]).unwrap().timings;
+        assert_eq!(timings.overridden, [name]);
+    }
 }

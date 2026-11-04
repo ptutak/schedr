@@ -297,8 +297,8 @@ impl Drop for Masters {
 /// Short leases for the failover scenarios: a master leads 6 s after a renewal, less the 2 s
 /// query limit.
 const SHORT_LEASE: &[(&str, &str)] = &[
-    ("SCHEDR_CONFIG__MASTER__LEASE_PERIOD", "6s"),
-    ("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "2s"),
+    ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "6s"),
+    ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "2s"),
 ];
 
 /// Waits until the role `name` exits; its exit code.
@@ -796,7 +796,7 @@ fn stress_12_memory_watchdog() {
     stress.start_core("master", &[]);
     let budget = [
         ("SCHEDR_CONFIG__WORKER__MEMORY_BUDGET", "100MiB"),
-        ("SCHEDR_CONFIG__WORKER__MEMORY_CHECK_INTERVAL", "100ms"),
+        ("SCHEDR_HIDDEN__WORKER__MEMORY_CHECK_INTERVAL", "100ms"),
     ];
     stress.start_workers(2, 4, &budget);
     stress.wait_for_dags(normal.len() + 1, 10 * MINUTE);

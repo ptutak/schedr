@@ -188,6 +188,8 @@ fn settings(address: String, auth: VaultAuth) -> VaultSettings {
         namespace: None,
         ca_cert: None,
         auth,
+        request_timeout: std::time::Duration::from_secs(30),
+        connect_timeout: std::time::Duration::from_secs(10),
     }
 }
 

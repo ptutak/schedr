@@ -21,12 +21,6 @@ use crate::secrets::{ReadFuture, SecretData, SecretError, SecretStorage};
 #[cfg(test)]
 mod tests;
 
-/// How long one request to Vault may take.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How long connecting to Vault may take.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// A token is renewed when this part of its time to live has passed.
 const RENEW_AT: f64 = 2.0 / 3.0;
 
@@ -81,6 +75,10 @@ pub struct VaultSettings {
     pub ca_cert: Option<Vec<u8>>,
     /// How the agent logs in.
     pub auth: VaultAuth,
+    /// How long one request may take.
+    pub request_timeout: Duration,
+    /// How long connecting may take.
+    pub connect_timeout: Duration,
 }
 
 /// The agent's Vault token and when to renew it.
@@ -135,8 +133,8 @@ impl VaultStorage {
     /// When the CA certificate doesn't read or the HTTP client can't be made.
     pub fn new(settings: VaultSettings) -> Result<Arc<Self>, String> {
         let mut builder = Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(settings.request_timeout)
+            .connect_timeout(settings.connect_timeout)
             // A redirect would carry the token or the login's JWT elsewhere; Vault's own
             // clients follow none either. A 3xx is an answer like any other (unavailable).
             .redirect(reqwest::redirect::Policy::none());

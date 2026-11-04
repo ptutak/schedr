@@ -37,7 +37,7 @@ use tokio::task::JoinHandle;
 
 use crate::attempt::WorkerSetup;
 use crate::channel::{ChannelError, Messages, read_message};
-use crate::launch::{LaunchError, RUNNER_START_TIMEOUT, start_runner};
+use crate::launch::{LaunchError, start_runner};
 use crate::metrics::{ForkFallbackLabels, ForkServerLabels};
 use crate::output::TailBuffer;
 use crate::process::{OsProcess, ProcessSpec, collect, open_log};
@@ -306,6 +306,8 @@ pub struct ForkSetup {
     pub preload: Vec<String>,
     /// How long a failing import is retried (`[worker] fork_server_import_retry`).
     pub import_retry: Duration,
+    /// How long it may take to preload (`[worker] fork_server_preload_timeout`).
+    pub preload_timeout: Duration,
 }
 
 impl ForkServers {
@@ -339,12 +341,14 @@ impl ForkServers {
             log_file: setup.log_dir.join("fork-server.log"),
             max_output_size: 64 * 1024,
             mask: crate::mask::Mask::default(),
+            start_timeout: setup.timeouts.runner_start,
         };
         let setup = ForkSetup {
             interpreter: config.interpreter.clone(),
             process,
             preload: config.preload.clone(),
             import_retry: config.import_retry,
+            preload_timeout: setup.timeouts.fork_preload,
         };
         Some(Self::start(&setup, metrics))
     }
@@ -387,6 +391,7 @@ impl ForkServers {
             process.log_file = process
                 .log_file
                 .with_file_name(format!("fork-server-{}.log", kind.label()));
+            let preload_timeout = setup.preload_timeout;
             let retry = setup.import_retry;
             tokio::spawn(keep_up(
                 Arc::downgrade(&servers),
@@ -394,6 +399,7 @@ impl ForkServers {
                 process,
                 preload,
                 retry,
+                preload_timeout,
             ));
         }
         Self {
@@ -467,12 +473,13 @@ async fn keep_up(
     process: ProcessSpec,
     preload: Vec<String>,
     import_retry: Duration,
+    preload_timeout: Duration,
 ) {
     let mut backoff = BACKOFF_FIRST / 2;
     // Since when its preload has been failing, and the reason last logged.
     let mut failing: Option<(Instant, String)> = None;
     loop {
-        let up_for = match start_server(&process, &preload).await {
+        let up_for = match start_server(&process, &preload, preload_timeout).await {
             Ok(Started::Ready(mut os, control)) => {
                 {
                     let Some(all) = servers.upgrade() else {
@@ -554,7 +561,11 @@ enum Started {
 }
 
 /// Starts a fork server and has it preload `preload`.
-async fn start_server(process: &ProcessSpec, preload: &[String]) -> Result<Started, LaunchError> {
+async fn start_server(
+    process: &ProcessSpec,
+    preload: &[String],
+    preload_timeout: Duration,
+) -> Result<Started, LaunchError> {
     // Its directory and log go in the worker's log directory, which tasks create on their
     // first run: a fork server starting before any task needs it now.
     for dir in [
@@ -583,7 +594,7 @@ async fn start_server(process: &ProcessSpec, preload: &[String]) -> Result<Start
         preload: preload.to_vec(),
     });
     crate::channel::write_message(&mut control, &request).await?;
-    let answer = tokio::time::timeout(PRELOAD_TIMEOUT, read_message(&mut control)).await;
+    let answer = tokio::time::timeout(preload_timeout, read_message(&mut control)).await;
     match answer {
         Ok(Ok(RunnerMessage::ForkServerReady)) => Ok(Started::Ready(Box::new(os), control)),
         Ok(Ok(RunnerMessage::ForkServerDisabled { reason, threads })) => {
@@ -600,7 +611,7 @@ async fn start_server(process: &ProcessSpec, preload: &[String]) -> Result<Start
         }
         .into()),
         Ok(Err(error)) => Err(error.into()),
-        Err(_) => Err(LaunchError::NoHello(PRELOAD_TIMEOUT)),
+        Err(_) => Err(LaunchError::NoHello(preload_timeout)),
     }
 }
 
@@ -682,7 +693,7 @@ async fn fork_on(
         _open: OwnedFd::from(status.try_clone().map_err(io)?),
     };
     let mut status = tokio_stream(status).map_err(io)?;
-    let started = tokio::time::timeout(RUNNER_START_TIMEOUT, read_message(&mut status)).await;
+    let started = tokio::time::timeout(spec.start_timeout, read_message(&mut status)).await;
     let Ok(Ok(RunnerMessage::ProcessStarted { pid })) = started else {
         return Err(Fallback::ShimDied);
     };

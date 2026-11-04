@@ -606,7 +606,7 @@ fn a_worker_stopped_with_sigterm_drains_and_its_interrupted_task_runs_again_with
             ("SCHEDR_CONFIG__WORKER__ID", "w2"),
             ("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "2s"),
             ("SCHEDR_CONFIG__WORKER__DRAIN_TERMINATE_PERIOD", "1s"),
-            ("SCHEDR_CONFIG__WORKER__DRAIN_REPORT_PERIOD", "1s"),
+            ("SCHEDR_HIDDEN__WORKER__DRAIN_REPORT_PERIOD", "1s"),
         ],
     );
     cluster.wait("both workers", || {
@@ -922,7 +922,7 @@ fn a_task_over_its_memory_budget_is_killed_alone_and_retried() {
         "worker",
         &[
             ("SCHEDR_CONFIG__WORKER__MEMORY_BUDGET", "100MiB"),
-            ("SCHEDR_CONFIG__WORKER__MEMORY_CHECK_INTERVAL", "100ms"),
+            ("SCHEDR_HIDDEN__WORKER__MEMORY_CHECK_INTERVAL", "100ms"),
         ],
     );
     cluster.wait("the worker to say its budget", || {
@@ -1021,8 +1021,8 @@ fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
         "waiting-master",
         "master",
         &[
-            ("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "20s"),
-            ("SCHEDR_CONFIG__MASTER__LEASE_PERIOD", "60s"),
+            ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "20s"),
+            ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "60s"),
         ],
     );
     assert_eq!(
@@ -1173,8 +1173,8 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
     let lease = [
-        ("SCHEDR_CONFIG__MASTER__LEASE_PERIOD", "3s"),
-        ("SCHEDR_CONFIG__DATABASE__QUERY_TIMEOUT", "1s"),
+        ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "3s"),
+        ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "1s"),
     ];
     cluster.start_with("master", &lease);
     cluster.start("webserver");

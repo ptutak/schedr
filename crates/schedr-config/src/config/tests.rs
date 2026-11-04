@@ -34,7 +34,6 @@ fn defaults_match_the_documented_values() {
         OpsSection {
             bind: std::net::IpAddr::from([0, 0, 0, 0]),
             port: 8090,
-            loop_stall_timeout: Duration::from_secs(120)
         }
     );
     assert_eq!(
@@ -113,7 +112,6 @@ fn reads_every_section() {
 
         [ops]
         port = 9100
-        loop_stall_timeout = "30s"
         "#,
     )
     .unwrap();
@@ -147,7 +145,6 @@ fn reads_every_section() {
     assert_eq!(config.log.format, LogFormat::Json);
     assert_eq!(config.log.level, "info,schedr::master=debug");
     assert_eq!(config.ops.port, 9100);
-    assert_eq!(config.ops.loop_stall_timeout, Duration::from_secs(30));
 }
 
 #[test]
@@ -196,7 +193,6 @@ fn reads_the_database_url() {
         Config::default().database,
         DatabaseSection {
             url: None,
-            query_timeout: Duration::from_secs(10),
             notifications: true,
             notifications_url: None,
             change_notifications: true,
@@ -211,9 +207,7 @@ fn reads_the_database_url() {
         config.database.notifications_url.as_deref(),
         Some("postgres://schedr@pg/schedr")
     );
-    let config =
-        parse("[database]\nquery_timeout = \"10s\"\n[ops]\nbind = \"127.0.0.1\"\n").unwrap();
-    assert_eq!(config.database.query_timeout, Duration::from_secs(10));
+    let config = parse("[ops]\nbind = \"127.0.0.1\"\n").unwrap();
     assert_eq!(config.ops.bind, std::net::IpAddr::from([127, 0, 0, 1]));
 }
 
@@ -239,61 +233,14 @@ fn master_and_webserver_defaults() {
             bind: std::net::IpAddr::from([0, 0, 0, 0]),
             grpc_port: 8070,
             grpc_max_message_size: 64 * 1024 * 1024,
-            tick_interval: Duration::from_secs(1),
-            heartbeat_interval: Duration::from_secs(10),
-            lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
-            lease_period: Duration::from_secs(30),
-            set_aside: Duration::from_mins(1),
-            listen_retry: Duration::from_mins(30),
-            read_back_window: Duration::from_secs(3),
-            read_back_interval: Duration::from_millis(500),
+            parse_job_timeout: Duration::from_mins(10),
             quiet_dags: true,
-            quiet_dag_after: Duration::from_mins(1),
-            quiet_dag_wake_ahead: Duration::from_mins(1),
-            quiet_dag_full_pass_interval: Duration::from_mins(1),
         }
     );
-    let tuned = parse(
-        "[master]\nset_aside = \"2m\"\nlisten_retry = \"1h\"\nread_back_window = \"5s\"\n\
-         read_back_interval = \"250ms\"\n",
-    )
-    .unwrap();
-    assert_eq!(
-        (
-            tuned.master.set_aside,
-            tuned.master.listen_retry,
-            tuned.master.read_back_window,
-            tuned.master.read_back_interval
-        ),
-        (
-            Duration::from_mins(2),
-            Duration::from_hours(1),
-            Duration::from_secs(5),
-            Duration::from_millis(250)
-        )
-    );
-    let quiet = parse(
-        "[master]\nquiet_dags = false\nquiet_dag_after = \"5m\"\nquiet_dag_wake_ahead = \"2m\"\n\
-         quiet_dag_full_pass_interval = \"30s\"\n",
-    )
-    .unwrap()
-    .master;
-    assert_eq!(
-        (
-            quiet.quiet_dags,
-            quiet.quiet_dag_after,
-            quiet.quiet_dag_wake_ahead,
-            quiet.quiet_dag_full_pass_interval
-        ),
-        (
-            false,
-            Duration::from_mins(5),
-            Duration::from_mins(2),
-            Duration::from_secs(30)
-        )
-    );
+    let quiet = parse("[master]\nquiet_dags = false\n").unwrap().master;
+    assert!(!quiet.quiet_dags);
     assert_eq!(config.webserver.port, 8080);
     assert_eq!(config.webserver.auth.identity_header, None);
 }
@@ -313,7 +260,6 @@ fn worker_and_tls_defaults() {
             master_url: None,
             termination_grace_period: Duration::from_secs(30),
             drain_terminate_period: Duration::from_secs(3),
-            drain_report_period: Duration::from_secs(2),
             log_bind: std::net::IpAddr::from([0, 0, 0, 0]),
             log_port: 8081,
             log_address: None,
@@ -321,7 +267,9 @@ fn worker_and_tls_defaults() {
             log_max_size: None,
             memory_budget: None,
             memory_reserve: None,
-            memory_check_interval: Duration::from_secs(1),
+            runner_start_timeout: Duration::from_secs(30),
+            fork_server_preload_timeout: Duration::from_mins(5),
+            cleanup_timeout: Duration::from_mins(5),
             fork_server_import_retry: Duration::from_mins(20),
         }
     );
@@ -348,9 +296,6 @@ fn reads_the_master_webserver_and_worker_sections() {
 
         [master]
         grpc_port = 9070
-        tick_interval = "500ms"
-        heartbeat_interval = "5s"
-        lease_timeout = "30s"
         cancel_grace = "10s"
         code_wait = "3m"
 
@@ -373,16 +318,12 @@ fn reads_the_master_webserver_and_worker_sections() {
         log_retention = "7d"
         log_max_size = "10GiB"
         memory_budget = "2GiB"
-        memory_check_interval = "500ms"
         fork_server_import_retry = "0s"
         "#,
     )
     .unwrap();
     assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(120));
     assert_eq!(config.master.grpc_port, 9070);
-    assert_eq!(config.master.tick_interval, Duration::from_millis(500));
-    assert_eq!(config.master.heartbeat_interval, Duration::from_secs(5));
-    assert_eq!(config.master.lease_timeout, Duration::from_secs(30));
     assert_eq!(config.master.cancel_grace, Duration::from_secs(10));
     assert_eq!(config.master.code_wait, Duration::from_mins(3));
     assert_eq!(
@@ -414,10 +355,6 @@ fn reads_the_master_webserver_and_worker_sections() {
     assert_eq!(config.worker.log_retention, Duration::from_hours(168));
     assert_eq!(config.worker.log_max_size, Some(10 << 30));
     assert_eq!(config.worker.memory_budget, Some(2 << 30));
-    assert_eq!(
-        config.worker.memory_check_interval,
-        Duration::from_millis(500)
-    );
     assert_eq!(config.worker.fork_server_import_retry, Duration::ZERO);
 }
 
@@ -452,7 +389,7 @@ fn reads_the_tls_section() {
 #[test]
 fn the_defaults_serialize_to_what_reads_back_as_the_defaults() {
     let written = serde_json::to_value(Config::default()).unwrap();
-    assert_eq!(written["master"]["tick_interval"], "1s");
+    assert_eq!(written["master"]["cancel_grace"], "30s");
     assert_eq!(written["worker"]["log_retention"], "30d");
     // Unset options are left out, as in a file that doesn't set them.
     assert_eq!(written["database"].get("url"), None);
@@ -489,8 +426,9 @@ fn the_schema_documents_every_key_with_its_default() {
     let schema = serde_json::to_value(config_schema()).unwrap();
     let ops = &schema["$defs"]["OpsSection"]["properties"];
     assert_eq!(ops["port"]["default"], 8090);
-    assert_eq!(ops["loop_stall_timeout"]["default"], "2m");
-    assert_eq!(ops["loop_stall_timeout"]["$ref"], "#/$defs/Duration");
+    let master = &schema["$defs"]["MasterSection"]["properties"];
+    assert_eq!(master["cancel_grace"]["default"], "30s");
+    assert_eq!(master["cancel_grace"]["$ref"], "#/$defs/Duration");
     assert!(
         ops["bind"]["description"]
             .as_str()

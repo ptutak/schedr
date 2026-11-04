@@ -27,6 +27,104 @@ pub const DEFAULT_DAG_INTERPRETER: &str = "python";
 /// define one.
 pub const BUILTIN_PYTHON: &str = "python3";
 
+/// The start of the environment variables that set a timing of [`Timings`]:
+/// `SCHEDR_HIDDEN__MASTER__TICK_INTERVAL=100ms`. Not configuration, and unsupported: the tests
+/// need them, and anyone may experiment at their own risk. The name keeps them from being set by
+/// accident; a file can't set them, and each one set is warned about.
+pub const HIDDEN_PREFIX: &str = "SCHEDR_HIDDEN__";
+
+/// The timings that aren't a user's to choose, each tuned, tied to others, or what the cluster's
+/// correctness depends on (a wrong value can run tasks twice, or lose a healthy worker): fixed,
+/// not configuration. Only `SCHEDR_HIDDEN__*` changes them, which is what the tests do, to run
+/// in seconds; anyone else does so at their own risk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Timings {
+    /// How often the master's loop runs (scheduler, commands, dispatching).
+    pub tick_interval: Duration,
+    /// How often workers send `Heartbeat` (the master's setting, sent to every worker).
+    pub heartbeat_interval: Duration,
+    /// A worker silent for this long is lost.
+    pub lease_timeout: Duration,
+    /// How long the master's lease lasts (one master per database: a second one waits as a
+    /// standby, and takes over at most this long after the first dies); renewed every third
+    /// of it. At least three `query_timeout`s, shorter than `loop_stall_timeout`.
+    pub lease_period: Duration,
+    /// After a commit cut off by the time limit or a lost connection, how long the master reads
+    /// back whether it was stored (holding its lock: rounds and worker messages wait). Not seen
+    /// by then: taken as not stored.
+    pub read_back_window: Duration,
+    /// How often it reads back within `read_back_window`.
+    pub read_back_interval: Duration,
+    /// The longest a query (or waiting for a connection) may take; a write's transaction, a
+    /// few of these. Shorter than `loop_stall_timeout`, so one hung query doesn't look
+    /// like a stuck loop, and at most a third of `lease_period`.
+    pub query_timeout: Duration,
+    /// The master's liveness fails when its scheduling loop hasn't started an iteration for
+    /// this long.
+    pub loop_stall_timeout: Duration,
+    /// How long a task whose assignment fails on its own (its data won't read, the database
+    /// refuses it) is left out of the rounds, so the others go on, before it is tried again.
+    pub set_aside: Duration,
+    /// How often a master whose listening for commands failed to start (the database too slow
+    /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
+    pub listen_retry: Duration,
+    /// A DAG that had a run in progress turns quiet this long after the last one (a DAG found
+    /// idle otherwise is quiet at once), unless a fire time is within `quiet_dag_wake_ahead`:
+    /// rounds then skip it until something wakes it.
+    pub quiet_dag_after: Duration,
+    /// How long before its next fire time a quiet DAG is woken (it is busy from then on).
+    pub quiet_dag_wake_ahead: Duration,
+    /// Every quiet DAG is visited within this long, spread over the rounds (each visits a
+    /// slice, those visited longest ago), and every DAG's ID and version are checked against
+    /// memory this often: about the longest a missed wake can delay a DAG.
+    pub quiet_dag_full_pass_interval: Duration,
+    /// How often the web UI's live pages are told to read themselves again when the
+    /// database's changes can't be followed (`[database] change_notifications = false`, or no
+    /// listening connection).
+    pub refresh_interval: Duration,
+    /// How long connecting to a worker may take, to fetch a task's log. Raise it on a slow
+    /// network between the webserver and the workers.
+    pub worker_connect_timeout: Duration,
+    /// From a drain's SIGKILL of the tasks still running to the end of
+    /// `termination_grace_period`: time to report them interrupted and deregister before the
+    /// pod is killed (with `0s`, their results may not reach the master, and they end `lost`).
+    pub drain_report_period: Duration,
+    /// How often the watchdog samples each task's memory.
+    pub memory_check_interval: Duration,
+    /// How long a peer has to complete the TLS handshake. Raise it for slow clients; lower it to
+    /// drop stalled connections sooner.
+    pub handshake_timeout: Duration,
+    /// The `SCHEDR_HIDDEN__*` variables set, each warned about when starting.
+    pub overridden: Vec<String>,
+}
+
+impl Default for Timings {
+    /// The values every deployment runs with.
+    fn default() -> Self {
+        Self {
+            tick_interval: Duration::from_secs(1),
+            heartbeat_interval: Duration::from_secs(10),
+            lease_timeout: Duration::from_secs(60),
+            lease_period: Duration::from_secs(30),
+            read_back_window: Duration::from_secs(3),
+            read_back_interval: Duration::from_millis(500),
+            query_timeout: Duration::from_secs(10),
+            loop_stall_timeout: Duration::from_secs(120),
+            set_aside: Duration::from_mins(1),
+            listen_retry: Duration::from_mins(30),
+            quiet_dag_after: Duration::from_mins(1),
+            quiet_dag_wake_ahead: Duration::from_mins(1),
+            quiet_dag_full_pass_interval: Duration::from_mins(1),
+            refresh_interval: Duration::from_secs(15),
+            worker_connect_timeout: Duration::from_secs(5),
+            drain_report_period: Duration::from_secs(2),
+            memory_check_interval: Duration::from_secs(1),
+            handshake_timeout: Duration::from_secs(10),
+            overridden: Vec::new(),
+        }
+    }
+}
+
 /// The whole configuration, after loading and validation.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -69,6 +167,9 @@ pub struct Config {
     /// one (e.g. `project venv`); `None` when `python` is configured.
     #[serde(skip)]
     pub builtin_python: Option<String>,
+    /// The fixed timings, as `SCHEDR_HIDDEN__*` left them.
+    #[serde(skip)]
+    pub timings: Timings,
 }
 
 /// The JSON Schema of the configuration file: every key with its doc comment, type and
@@ -257,15 +358,6 @@ pub struct DatabaseSection {
     /// secrets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// The longest a query (or waiting for a connection) may take; a write's transaction, a
-    /// few of these. Shorter than `[ops] loop_stall_timeout`, so one hung query doesn't look
-    /// like a stuck loop, and at most a third of `[master] lease_period`.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub query_timeout: Duration,
     /// Whether the master listens for new commands on Postgres (`LISTEN`), applying them at
     /// once rather than at its next round. A connection pooler in transaction mode (`PgBouncer`
     /// or similar) can't carry it: the master checks the connection it listens through, and
@@ -280,7 +372,7 @@ pub struct DatabaseSection {
     /// Whether the writes announce what changed, for the web UI's live pages (triggers in the
     /// database; about 2-3% of the master's throughput under heavy load, measured by stress
     /// scenarios 15 and 15b). Applied by `schedr db migrate` and `--migrate`, not by a running
-    /// master. Off: the pages refresh every `[webserver] refresh_interval` instead.
+    /// master. Off: the pages refresh every `refresh_interval` instead.
     pub change_notifications: bool,
 }
 
@@ -290,7 +382,6 @@ impl Default for DatabaseSection {
     fn default() -> Self {
         Self {
             url: None,
-            query_timeout: Duration::from_secs(10),
             notifications: true,
             notifications_url: None,
             change_notifications: true,
@@ -319,14 +410,6 @@ pub struct OpsSection {
     pub bind: IpAddr,
     /// The plain-HTTP port for `/healthz`, `/readyz` and `/metrics`.
     pub port: u16,
-    /// The master's liveness fails when its scheduling loop hasn't started an iteration for
-    /// this long.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub loop_stall_timeout: Duration,
 }
 
 impl Default for OpsSection {
@@ -335,7 +418,6 @@ impl Default for OpsSection {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8090,
-            loop_stall_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -377,27 +459,6 @@ pub struct MasterSection {
     )]
     #[schemars(with = "SizeText")]
     pub grpc_max_message_size: u64,
-    /// How often the master's loop runs (scheduler, commands, dispatching).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub tick_interval: Duration,
-    /// How often workers send `Heartbeat` (the master's setting, sent to every worker).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub heartbeat_interval: Duration,
-    /// A worker silent for this long is lost.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub lease_timeout: Duration,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     #[serde(
         deserialize_with = "deserialize_duration",
@@ -413,103 +474,35 @@ pub struct MasterSection {
     )]
     #[schemars(with = "DurationText")]
     pub code_wait: Duration,
-    /// How long the master's lease lasts (one master per database: a second one waits as a
-    /// standby, and takes over at most this long after the first dies); renewed every third
-    /// of it. At least three `[database] query_timeout`s, shorter than `[ops]
-    /// loop_stall_timeout`.
+    /// How long a worker has for a parse job before it goes to another worker (or the same one
+    /// again, if no other has that code). Raise it for DAG folders so large that parsing one
+    /// takes longer; each file still has `[dags] parse_file_timeout`.
     #[serde(
         deserialize_with = "deserialize_duration",
         serialize_with = "serialize_duration"
     )]
     #[schemars(with = "DurationText")]
-    pub lease_period: Duration,
-    /// How long a task whose assignment fails on its own (its data won't read, the database
-    /// refuses it) is left out of the rounds, so the others go on, before it is tried again.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub set_aside: Duration,
-    /// How often a master whose listening for commands failed to start (the database too slow
-    /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub listen_retry: Duration,
-    /// After a commit cut off by the time limit or a lost connection, how long the master reads
-    /// back whether it was stored (holding its lock: rounds and worker messages wait). Not seen
-    /// by then: taken as not stored.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub read_back_window: Duration,
-    /// How often it reads back within `read_back_window` (zero is taken as 1 ms).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub read_back_interval: Duration,
+    pub parse_job_timeout: Duration,
     /// Whether rounds visit only busy DAGs and the quiet ones they wake (a run queued or
     /// ended, a command, a new version, a fire time coming up), instead of every DAG every
     /// round. `false` visits every DAG every round.
     pub quiet_dags: bool,
-    /// A DAG that had a run in progress turns quiet this long after the last one (a DAG found
-    /// idle otherwise is quiet at once), unless a fire time is within `quiet_dag_wake_ahead`:
-    /// rounds then skip it until something wakes it.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub quiet_dag_after: Duration,
-    /// How long before its next fire time a quiet DAG is woken (it is busy from then on).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub quiet_dag_wake_ahead: Duration,
-    /// Every quiet DAG is visited within this long, spread over the rounds (each visits a
-    /// slice, those visited longest ago), and every DAG's ID and version are checked against
-    /// memory this often: about the longest a missed wake can delay a DAG.
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub quiet_dag_full_pass_interval: Duration,
 }
 
 impl Default for MasterSection {
-    /// All interfaces, port 8070, messages up to 64 MiB, a tick every second, heartbeats every 10 s, lost after
-    /// 60 s, 30 s grace, 10 min for missing code, a 30 s lease; a task set aside for 60 s,
-    /// listening tried again every 30 min, a commit read back for 3 s every 500 ms; quiet DAGs
-    /// on, quiet 60 s after a run, woken 60 s ahead, every DAG visited within 60 s.
+    /// All interfaces, port 8070, messages up to 64 MiB, 30 s grace, 10 min for missing code,
+    /// 10 min for a parse job; a
+    /// task set aside for 60 s, listening tried again every 30 min; quiet DAGs on, quiet 60 s
+    /// after a run, woken 60 s ahead, every DAG visited within 60 s.
     fn default() -> Self {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             grpc_port: 8070,
             grpc_max_message_size: 64 * 1024 * 1024,
-            tick_interval: Duration::from_secs(1),
-            heartbeat_interval: Duration::from_secs(10),
-            lease_timeout: Duration::from_secs(60),
             cancel_grace: Duration::from_secs(30),
+            parse_job_timeout: Duration::from_mins(10),
             code_wait: Duration::from_mins(10),
-            lease_period: Duration::from_secs(30),
-            set_aside: Duration::from_mins(1),
-            listen_retry: Duration::from_mins(30),
-            read_back_window: Duration::from_secs(3),
-            read_back_interval: Duration::from_millis(500),
             quiet_dags: true,
-            quiet_dag_after: Duration::from_mins(1),
-            quiet_dag_wake_ahead: Duration::from_mins(1),
-            quiet_dag_full_pass_interval: Duration::from_mins(1),
         }
     }
 }
@@ -523,15 +516,6 @@ pub struct WebserverSection {
     pub bind: IpAddr,
     /// The HTTP port of the REST API (and later the UI).
     pub port: u16,
-    /// How often the web UI's live pages are told to read themselves again when the
-    /// database's changes can't be followed (`[database] change_notifications = false`, or no
-    /// listening connection).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub refresh_interval: Duration,
     /// The port serving the whole API to `schedr ui` alone, its calls there passing the user's
     /// name on (decision 36): in `[tls] mode = "app"` over mTLS (its certificate must name
     /// `[tls] ui_name`); in `mesh` mode only with `ui_port_in_mesh`. Elsewhere the UI proves
@@ -547,6 +531,22 @@ pub struct WebserverSection {
     /// Secret. None: no caller is trusted that way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_token_file: Option<PathBuf>,
+    /// How long a whole request to a worker may take, to fetch a task's log. Raise it when
+    /// large logs come slowly; a user waits this long at most for a worker that hangs.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub worker_request_timeout: Duration,
+    /// How long a connection test may take when the request doesn't say. Raise it for
+    /// connections slow to open; `schedr connections test --timeout` sets it for one test.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub connection_test_timeout: Duration,
     /// `[webserver.auth]`: who the user is.
     pub auth: AuthSection,
 }
@@ -558,7 +558,8 @@ impl Default for WebserverSection {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 8080,
-            refresh_interval: Duration::from_secs(15),
+            worker_request_timeout: Duration::from_secs(30),
+            connection_test_timeout: Duration::from_mins(1),
             ui_port: 8083,
             ui_port_in_mesh: false,
             ui_token_file: None,
@@ -701,15 +702,6 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "DurationText")]
     pub drain_terminate_period: Duration,
-    /// From a drain's SIGKILL of the tasks still running to the end of
-    /// `termination_grace_period`: time to report them interrupted and deregister before the
-    /// pod is killed (with `0s`, their results may not reach the master, and they end `lost`).
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
-    )]
-    #[schemars(with = "DurationText")]
-    pub drain_report_period: Duration,
     /// The address the log endpoint listens on (all interfaces by default; `schedr
     /// standalone` always listens on 127.0.0.1).
     pub log_bind: IpAddr,
@@ -748,13 +740,32 @@ pub struct WorkerSection {
     /// `memory_budget` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_reserve: Option<MemoryReserve>,
-    /// How often the watchdog samples each task's memory.
+    /// How long a started Python runner has to say hello. Raise it where the interpreter is
+    /// slow to start (cold storage, a loaded machine); a runner that can't start is noticed
+    /// this much later.
     #[serde(
         deserialize_with = "deserialize_duration",
         serialize_with = "serialize_duration"
     )]
     #[schemars(with = "DurationText")]
-    pub memory_check_interval: Duration,
+    pub runner_start_timeout: Duration,
+    /// How long a fork server may take to import its preloaded libraries. Raise it for large
+    /// preload lists or slow storage; until it is up, tasks are spawned instead.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub fork_server_preload_timeout: Duration,
+    /// How long one try of a cleanup may run, for a task that doesn't set `cleanup_timeout`.
+    /// The attempt holds its slot meanwhile: raise it if your cleanups wait on slow systems,
+    /// lower it to free slots sooner.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub cleanup_timeout: Duration,
     /// How long a fork server whose preloaded library fails to import is retried (with
     /// backoff, from the first failure), for what isn't ready when the pod starts (a
     /// sidecar's network, a mount); `0s`: not retried. Threads after preloading and a version
@@ -771,7 +782,8 @@ impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
     /// (Kubernetes' default) of which the last 5 s stop and report what still runs (3 s to
     /// SIGKILL, 2 s to report), the log endpoint on port 8081 of every interface, logs kept for
-    /// 30 days, the memory budget from the pod's limit, sampled every second, a fork server's
+    /// 30 days, the memory budget from the pod's limit, sampled every second, 30 s for a runner
+    /// to start, 5 minutes for a fork server to preload and for a cleanup's try, a fork server's
     /// failing import retried for 20 minutes.
     fn default() -> Self {
         Self {
@@ -783,7 +795,6 @@ impl Default for WorkerSection {
             pass_env: Vec::new(),
             termination_grace_period: Duration::from_secs(30),
             drain_terminate_period: Duration::from_secs(3),
-            drain_report_period: Duration::from_secs(2),
             master_url: None,
             log_bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             log_port: 8081,
@@ -792,7 +803,9 @@ impl Default for WorkerSection {
             log_max_size: None,
             memory_budget: None,
             memory_reserve: None,
-            memory_check_interval: Duration::from_secs(1),
+            runner_start_timeout: Duration::from_secs(30),
+            fork_server_preload_timeout: Duration::from_mins(5),
+            cleanup_timeout: Duration::from_mins(5),
             fork_server_import_retry: Duration::from_mins(20),
         }
     }
@@ -842,7 +855,7 @@ pub struct TlsSection {
 
 impl Default for TlsSection {
     /// `app` mode, no files yet, workers named `schedr-worker`, the UI `schedr-ui`, files read
-    /// every 30 s.
+    /// every 30 s, 10 s for a handshake.
     fn default() -> Self {
         Self {
             mode: TlsMode::App,
@@ -923,6 +936,23 @@ pub struct SecretStorageConfig {
     /// `SCHEDR_CONFIG__SECRET_STORAGE__<NAME>__TOKEN`, never the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// How long one request to Vault may take (`vault`). Raise it for a slow or distant Vault;
+    /// a task reading a secret waits this long at most for one that hangs.
+    #[serde(
+        default = "default_vault_request_timeout",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub request_timeout: Duration,
+    /// How long connecting to Vault may take (`vault`). Raise it on a slow network.
+    #[serde(
+        default = "default_vault_connect_timeout",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub connect_timeout: Duration,
     /// How long a fetched value is kept in the agent's memory (never on disk); `0s` fetches
     /// every time.
     #[serde(
@@ -948,6 +978,8 @@ impl std::fmt::Debug for SecretStorageConfig {
             .field("ca_cert", &self.ca_cert)
             .field("auth", &self.auth)
             .field("token", &self.token.as_ref().map(|_| crate::masked::MASK))
+            .field("request_timeout", &self.request_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .field("cache_ttl", &self.cache_ttl)
             .field("unmasked_prefixes", &self.unmasked_prefixes)
             .finish()
@@ -981,6 +1013,14 @@ pub struct VaultAuthConfig {
     /// `/var/run/secrets/kubernetes.io/serviceaccount/token`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_file: Option<PathBuf>,
+}
+
+const fn default_vault_request_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+const fn default_vault_connect_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 const fn default_cache_ttl() -> Duration {

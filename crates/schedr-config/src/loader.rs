@@ -8,14 +8,14 @@ use figment::value::{Dict, Map};
 use figment::{Figment, Metadata, Profile, Provider};
 
 use crate::config::{
-    BUILTIN_PYTHON, BUILTIN_PYTHON_ORIGIN, Config, DEFAULT_DAG_INTERPRETER, Interpreter,
-    url_has_password,
+    BUILTIN_PYTHON, BUILTIN_PYTHON_ORIGIN, Config, DEFAULT_DAG_INTERPRETER, HIDDEN_PREFIX,
+    Interpreter, Timings, url_has_password,
 };
 use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
     FileSource, Override, SourceError, env_provider, file_metadata, override_provider,
 };
-use crate::units::{format_duration, format_size};
+use crate::units::{format_duration, format_size, parse_duration};
 
 /// The smallest `[master] grpc_max_message_size`: gRPC's default, which workers rely on.
 const MIN_MESSAGE_SIZE: u64 = 4 * 1024 * 1024;
@@ -33,6 +33,14 @@ pub enum ConfigError {
     /// key and where the value came from.
     #[error("{0}")]
     Invalid(String),
+    /// A `SCHEDR_HIDDEN__*` variable that isn't a timing, or not a duration.
+    #[error("{name}: {reason}")]
+    BadHiddenTiming {
+        /// The variable.
+        name: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// An environment variable can't be used.
     #[error(transparent)]
     Source(#[from] SourceError),
@@ -48,6 +56,12 @@ pub enum ConfigError {
         key: &'static str,
         /// The environment variable to use instead.
         env: &'static str,
+    },
+    /// A timing that can't work at zero is set to it.
+    #[error("{key} must be longer than 0s")]
+    ZeroTiming {
+        /// The key, with its section.
+        key: String,
     },
     /// The drain's terminate and report periods don't fit in the termination grace period.
     #[error(
@@ -132,6 +146,7 @@ pub fn load(
         .merge(env_provider(env)?)
         .merge(override_provider(overrides));
     let mut config: Config = figment.extract()?;
+    config.timings = hidden_timings(env)?;
     let from_file = |key: &str| {
         figment
             .find_metadata(key)
@@ -156,11 +171,11 @@ pub fn load(
     let worker = &config.worker;
     let drain_end = worker
         .drain_terminate_period
-        .checked_add(worker.drain_report_period);
+        .checked_add(config.timings.drain_report_period);
     if drain_end.is_none_or(|end| end > worker.termination_grace_period) {
         return Err(ConfigError::DrainPeriods {
             terminate_period: format_duration(worker.drain_terminate_period),
-            report_period: format_duration(worker.drain_report_period),
+            report_period: format_duration(config.timings.drain_report_period),
             grace: format_duration(worker.termination_grace_period),
         });
     }
@@ -172,6 +187,7 @@ pub fn load(
     if config.mapping.max_instances == 0 {
         return Err(ConfigError::NoInstances);
     }
+    check_not_zero(&config)?;
     check_secret_storage(&config.secret_storage)?;
     for name in config.secret_storage.storages.keys() {
         // As every credential: from the environment, never the file.
@@ -210,6 +226,101 @@ pub fn load(
         &config.scripts.roots,
     )?;
     Ok(config)
+}
+
+/// The timings a zero would break everything with: every task timed out at once, a panicking
+/// interval, or every log deleted. Where zero means something (no wait, no retry) it stays allowed.
+fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
+    let fixed = [
+        ("[dags] poll_interval", config.dags.poll_interval),
+        ("[dags] parse_file_timeout", config.dags.parse_file_timeout),
+        (
+            "[master] parse_job_timeout",
+            config.master.parse_job_timeout,
+        ),
+        (
+            "[webserver] worker_request_timeout",
+            config.webserver.worker_request_timeout,
+        ),
+        ("[worker] log_retention", config.worker.log_retention),
+        (
+            "[worker] runner_start_timeout",
+            config.worker.runner_start_timeout,
+        ),
+        (
+            "[worker] fork_server_preload_timeout",
+            config.worker.fork_server_preload_timeout,
+        ),
+        ("[worker] cleanup_timeout", config.worker.cleanup_timeout),
+    ]
+    .map(|(key, timing)| (key.to_owned(), timing));
+    let storages = config
+        .secret_storage
+        .storages
+        .iter()
+        .flat_map(|(name, storage)| {
+            [
+                ("request_timeout", storage.request_timeout),
+                ("connect_timeout", storage.connect_timeout),
+            ]
+            .map(|(key, timing)| (format!("[secret_storage.{name}] {key}"), timing))
+        });
+    match fixed
+        .into_iter()
+        .chain(storages)
+        .find(|(_, timing)| timing.is_zero())
+    {
+        Some((key, _)) => Err(ConfigError::ZeroTiming { key }),
+        None => Ok(()),
+    }
+}
+
+/// The fixed timings, with what `SCHEDR_HIDDEN__*` variables set.
+fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError> {
+    let mut timings = Timings::default();
+    for (name, text) in env {
+        let Some(key) = name.strip_prefix(HIDDEN_PREFIX) else {
+            continue;
+        };
+        let timing = match key {
+            "MASTER__TICK_INTERVAL" => &mut timings.tick_interval,
+            "MASTER__HEARTBEAT_INTERVAL" => &mut timings.heartbeat_interval,
+            "MASTER__LEASE_TIMEOUT" => &mut timings.lease_timeout,
+            "MASTER__LEASE_PERIOD" => &mut timings.lease_period,
+            "MASTER__READ_BACK_WINDOW" => &mut timings.read_back_window,
+            "MASTER__READ_BACK_INTERVAL" => &mut timings.read_back_interval,
+            "DATABASE__QUERY_TIMEOUT" => &mut timings.query_timeout,
+            "OPS__LOOP_STALL_TIMEOUT" => &mut timings.loop_stall_timeout,
+            "MASTER__SET_ASIDE" => &mut timings.set_aside,
+            "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
+            "MASTER__QUIET_DAG_AFTER" => &mut timings.quiet_dag_after,
+            "MASTER__QUIET_DAG_WAKE_AHEAD" => &mut timings.quiet_dag_wake_ahead,
+            "MASTER__QUIET_DAG_FULL_PASS_INTERVAL" => &mut timings.quiet_dag_full_pass_interval,
+            "WEBSERVER__REFRESH_INTERVAL" => &mut timings.refresh_interval,
+            "WEBSERVER__WORKER_CONNECT_TIMEOUT" => &mut timings.worker_connect_timeout,
+            "WORKER__DRAIN_REPORT_PERIOD" => &mut timings.drain_report_period,
+            "WORKER__MEMORY_CHECK_INTERVAL" => &mut timings.memory_check_interval,
+            "TLS__HANDSHAKE_TIMEOUT" => &mut timings.handshake_timeout,
+            _ => {
+                return Err(ConfigError::BadHiddenTiming {
+                    name: name.clone(),
+                    reason: "no such timing".to_owned(),
+                });
+            }
+        };
+        *timing = parse_duration(text).map_err(|e| ConfigError::BadHiddenTiming {
+            name: name.clone(),
+            reason: e.to_string(),
+        })?;
+        if timing.is_zero() {
+            return Err(ConfigError::BadHiddenTiming {
+                name: name.clone(),
+                reason: "must be longer than zero".to_owned(),
+            });
+        }
+        timings.overridden.push(name.clone());
+    }
+    Ok(timings)
 }
 
 /// The secret storage name every standalone has (`[secret_storage]`'s `db`).

@@ -13,7 +13,7 @@
 //!   shared pages between the processes sharing them, so a tree isn't counted many times. Not
 //!   for a forked task: its RSS counts the pages it shares with its fork server, so a sample
 //!   without every PSS is skipped (no kill on it).
-//! - **Sampling** every `[worker] memory_check_interval` (1 s); over the budget the group is
+//! - **Sampling** every `memory_check_interval` (1 s); over the budget the group is
 //!   killed at once (SIGKILL: a spike can't wait for a grace period), and the attempt ends
 //!   `oom_killed`. The highest sample is the attempt's peak memory.
 

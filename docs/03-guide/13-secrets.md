@@ -169,7 +169,7 @@ Reads never wait for a renewal while the token is still good.
 
 **Answers:** a 404 on a secret is `secret_not_found`; 400, 401 and 403, and a 404 on a login
 (a wrong auth mount), are `secret_denied`, with Vault's own message; anything else, an
-answer that isn't a KV v2 secret, a timeout (30 s a request) or no connection is
+answer that isn't a KV v2 secret, a timeout (`[secret_storage.<name>] request_timeout`, 30 s by default) or no connection is
 `secret_unavailable`, which is retried. The client follows no redirect: the next host would
 get the token.
 

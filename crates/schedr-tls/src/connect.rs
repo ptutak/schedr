@@ -11,7 +11,6 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tonic::transport::{Channel, Endpoint, Uri};
 
-use crate::incoming::HANDSHAKE_TIMEOUT;
 use crate::reload::Tls;
 
 #[cfg(test)]
@@ -46,7 +45,7 @@ pub async fn channel(url: &str, tls: Option<&Tls>) -> Result<Channel, String> {
             let tcp = TcpStream::connect((host, port)).await?;
             let _ = tcp.set_nodelay(true);
             let handshake = TlsConnector::from(tls.grpc_client()).connect(name, tcp);
-            let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
+            let stream = tokio::time::timeout(tls.handshake_timeout(), handshake)
                 .await
                 .map_err(|_| {
                     std::io::Error::new(

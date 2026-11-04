@@ -209,6 +209,28 @@ impl AttemptSpec {
     }
 }
 
+/// How long what a worker starts may take (`[worker]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerTimeouts {
+    /// A runner's hello (`runner_start_timeout`).
+    pub runner_start: Duration,
+    /// A fork server's preloading (`fork_server_preload_timeout`).
+    pub fork_preload: Duration,
+    /// One try of a cleanup that sets no timeout of its own (`cleanup_timeout`).
+    pub cleanup: Duration,
+}
+
+impl Default for WorkerTimeouts {
+    /// 30 s for a runner, 5 minutes for preloading and for a cleanup's try.
+    fn default() -> Self {
+        Self {
+            runner_start: crate::launch::RUNNER_START_TIMEOUT,
+            fork_preload: crate::fork::PRELOAD_TIMEOUT,
+            cleanup: Duration::from_mins(5),
+        }
+    }
+}
+
 /// What the worker knows to run tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerSetup {
@@ -230,6 +252,8 @@ pub struct WorkerSetup {
     pub connection_dir: PathBuf,
     /// How the memory watchdog watches tasks and parse runners.
     pub memory: crate::memory::MemoryWatch,
+    /// How long what it starts may take.
+    pub timeouts: WorkerTimeouts,
     /// The DAG interpreter's fork servers, when it has `fork_server = true`.
     pub fork_server: Option<crate::fork::ForkConfig>,
 }
@@ -349,6 +373,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     log_file,
                     max_output_size,
                     mask: spec.mask.clone(),
+                    start_timeout: setup.timeouts.runner_start,
                 },
                 request: Box::new(TaskRequest {
                     dag_file: DagFile {
@@ -407,6 +432,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                 log_file,
                 max_output_size,
                 mask: spec.mask.clone(),
+                start_timeout: setup.timeouts.runner_start,
             }))
         }
         TaskKind::Empty => Err(NotRun::Rejected {

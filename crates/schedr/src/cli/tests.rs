@@ -285,3 +285,19 @@ fn milestones_say_when_a_command_starts_working(
 ) {
     assert_eq!(parse(args).unwrap().command.milestone(), expected);
 }
+
+#[test]
+fn a_connection_test_without_a_timeout_leaves_it_to_the_webserver() {
+    let timeout_of = |args: &[&str]| match parse(args).unwrap().command {
+        Command::Connections {
+            command: ConnectionsCommand::Test { timeout, .. },
+            ..
+        } => timeout,
+        other => panic!("expected a connection test, got {other:?}"),
+    };
+    assert_eq!(timeout_of(&["connections", "test", "db"]), None);
+    assert_eq!(
+        timeout_of(&["connections", "test", "db", "--timeout", "2m"]),
+        Some(std::time::Duration::from_mins(2))
+    );
+}

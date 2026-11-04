@@ -25,9 +25,6 @@ pub const DEFAULT_MAX_OUTPUT_SIZE: u64 = 1024 * 1024;
 /// The default delay between attempts in milliseconds (5 minutes).
 pub const DEFAULT_RETRY_DELAY_MS: u64 = 5 * 60 * 1000;
 
-/// How long one try of a cleanup may run by default, in milliseconds (5 minutes).
-pub const DEFAULT_CLEANUP_TIMEOUT_MS: u64 = 5 * 60 * 1000;
-
 /// How many times a failed cleanup is retried by default (decision 217).
 pub const DEFAULT_CLEANUP_RETRIES: u32 = 3;
 
@@ -213,8 +210,9 @@ pub enum CleanupRun {
 pub struct TaskCleanup {
     /// What it runs.
     pub run: CleanupRun,
-    /// How long one try may run, in milliseconds.
-    pub timeout_ms: u64,
+    /// How long one try may run, in milliseconds; `None`: `[worker] cleanup_timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
     /// How many times it is retried after a failed try, on the same worker.
     pub retries: u32,
     /// The delay before each retry, in milliseconds.

@@ -173,11 +173,8 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, root: &str, c: &ConnectionInf
         test_title: format!("Test {} of {}?", c.name, deployment.name),
         test_text: format!(
             "It opens {} on a worker of {} and runs its check: a real login to the system it \
-             names, with {}'s secrets, for up to {} s.",
-            c.name,
-            deployment.name,
-            deployment.name,
-            schedr_api::routes::CONNECTION_TEST_TIMEOUT_MS / 1000
+             names, with {}'s secrets.",
+            c.name, deployment.name, deployment.name,
         ),
     }
 }

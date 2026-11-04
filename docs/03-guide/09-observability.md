@@ -10,7 +10,7 @@ for all its parts.
 
 | Endpoint | Answers 200 when | Otherwise |
 |---|---|---|
-| `/healthz` (liveness) | every loop the role watches has turned within `[ops] loop_stall_timeout` (2 min) | 503, "the scheduling loop hasn't turned for 150 s (limit 120 s)" |
+| `/healthz` (liveness) | every loop the role watches has turned within the [loop stall limit](14-timings.md#fixed-timings) (2 min) | 503, "the scheduling loop hasn't turned for 150 s (limit 120 s)" |
 | `/readyz` (readiness) | every part of the role has started | 503, "starting: master" |
 | `/metrics` | always | |
 
