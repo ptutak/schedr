@@ -29,6 +29,8 @@ struct Fake {
     dirs: Arc<Mutex<Vec<PathBuf>>>,
     /// The handles of each cleanup left by an earlier agent.
     cleanups: Arc<Mutex<Vec<Vec<CleanupHandle>>>>,
+    /// Why each task named `wait` was stopped.
+    stops: Arc<Mutex<Vec<StopReason>>>,
 }
 
 impl Executor for Fake {
@@ -58,7 +60,9 @@ impl Executor for Fake {
         // A task named `forked` stands for one forked from a fork server.
         spawned(NO_PROCESS, spec.task.id.as_str() == "forked");
         let status = if spec.task.id.as_str() == "wait" {
-            match stop.next_reason().await {
+            let reason = stop.next_reason().await;
+            self.stops.lock().unwrap().push(reason);
+            match reason {
                 StopReason::Interrupted => pb::AttemptStatus::Interrupted,
                 _ => pb::AttemptStatus::Cancelled,
             }
@@ -401,6 +405,8 @@ struct Scripted {
     during_uploads: Arc<Mutex<Vec<usize>>>,
     /// Each parse result uploaded, put back together.
     uploads: Arc<Mutex<Vec<pb::ParseResult>>>,
+    /// `FetchInputs` never answers.
+    inputs_stuck: bool,
 }
 
 #[tonic::async_trait]
@@ -463,6 +469,9 @@ impl pb::master_server::Master for Scripted {
         &self,
         _request: tonic::Request<pb::FetchInputsRequest>,
     ) -> Result<tonic::Response<Self::FetchInputsStream>, tonic::Status> {
+        if self.inputs_stuck {
+            std::future::pending::<()>().await;
+        }
         let (sender, receiver) = mpsc::channel(1);
         sender
             .send(Ok(pb::InputChunk {
@@ -2903,6 +2912,132 @@ async fn a_moved_cleanup_runs_alone_with_the_handles_it_came_with() {
     );
     assert_eq!(*cleanups.lock().unwrap(), [vec![one_handle()]]);
     assert!(result_in(&seen).cleanup.is_some());
+}
+
+/// A `Registered` with a lease of 50 ms and `wait`, with a cleanup, `anywhere` as said.
+fn silent_master(anywhere: bool) -> Vec<pb::MasterMessage> {
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 50,
+            cancel_grace_ms: 1000,
+        }),
+        ..pb::Registered::default()
+    }));
+    let mut task = task_with_cleanup(1000);
+    task["id"] = json!("wait");
+    task["cleanup"]["anywhere"] = json!(anywhere);
+    vec![registered, assign("a1", &task, "sync.py", false)]
+}
+
+#[tokio::test]
+async fn a_master_gone_silent_stops_a_task_whose_cleanup_may_move() {
+    let stops = Arc::new(Mutex::new(Vec::new()));
+    let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
+    let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
+    against_script_with(2, Start::With(vec![]), silent_master(true), done, |agent| {
+        agent.executor.stops = seen_stops;
+    })
+    .await;
+    assert_eq!(*stops.lock().unwrap(), [StopReason::CutOff]);
+}
+
+#[tokio::test]
+async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
+    let stops = Arc::new(Mutex::new(Vec::new()));
+    let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
+    let mut script = silent_master(true);
+    let mut other = assign(
+        "a2",
+        &task_json(&json!({"kind": "python"})),
+        "sync.py",
+        false,
+    );
+    let Some(master_message::Message::AssignTask(assigned)) = &mut other.message else {
+        panic!("expected an assignment")
+    };
+    assigned.inputs_external = true;
+    script.push(other);
+    let master = Scripted {
+        script,
+        inputs_stuck: true,
+        ..Scripted::default()
+    };
+    let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.stops = seen_stops;
+    })
+    .await;
+    assert_eq!(*stops.lock().unwrap(), [StopReason::CutOff]);
+    let beats = seen
+        .iter()
+        .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+        .count();
+    assert!(beats >= 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn an_answer_older_than_the_lease_starts_no_cleanup() {
+    // A lease of a millisecond: the answer is too late by the time it arrives.
+    let mut registered = decided("old-1", pb::AttemptDecision::Continue);
+    let Some(master_message::Message::Registered(answer)) = &mut registered.message else {
+        panic!("expected a registration")
+    };
+    answer.timing = Some(pb::Timing {
+        heartbeat_interval_ms: 20,
+        lease_timeout_ms: 1,
+        cancel_grace_ms: 1000,
+    });
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(200);
+    let cleanups = Arc::new(Mutex::new(Vec::new()));
+    let seen_cleanups = Arc::clone(&cleanups);
+    let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
+    against_script_with(2, start, vec![registered], done, |agent| {
+        agent.executor.cleanups = seen_cleanups;
+    })
+    .await;
+    assert_eq!(*cleanups.lock().unwrap(), Vec::<Vec<CleanupHandle>>::new());
+}
+
+#[tokio::test]
+async fn a_drain_doesnt_wait_for_a_held_cleanup_but_does_for_its_task() {
+    let done = |_: &[pb::WorkerMessage]| true;
+    against_script_with(2, Start::With(vec![]), vec![], done, |agent| {
+        let (stop, _) = Stops::new();
+        agent.running.insert("a1".to_owned(), stop);
+        let (gate, _passes) = watch::channel(Gate::Held);
+        agent.gates.insert("a1".to_owned(), gate);
+        assert_eq!(agent.drain_running(), 1, "its task is still being stopped");
+        let ended = pb::Finished::default();
+        agent.cleaning.insert("a1".to_owned(), ended);
+        assert_eq!(agent.drain_running(), 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_master_gone_silent_leaves_other_tasks_running() {
+    let stops = Arc::new(Mutex::new(Vec::new()));
+    let seen_stops = Arc::clone(&stops);
+    let beats = |m: &[pb::WorkerMessage]| {
+        m.iter()
+            .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+            .count()
+    };
+    // Ten heartbeats are four leases.
+    let done = move |m: &[pb::WorkerMessage]| beats(m) >= 10;
+    against_script_with(
+        2,
+        Start::With(vec![]),
+        silent_master(false),
+        done,
+        |agent| {
+            agent.executor.stops = seen_stops;
+        },
+    )
+    .await;
+    assert_eq!(*stops.lock().unwrap(), Vec::<StopReason>::new());
 }
 
 #[tokio::test]

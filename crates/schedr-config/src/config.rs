@@ -65,6 +65,9 @@ pub struct Timings {
     /// How long a task whose assignment fails on its own (its data won't read, the database
     /// refuses it) is left out of the rounds, so the others go on, before it is tried again.
     pub set_aside: Duration,
+    /// How long a lost worker's cleanup waits, on top of the cancel grace, before it moves: a
+    /// worker only cut off has stopped the task by then (decision 256).
+    pub cleanup_move_wait: Duration,
     /// How often a master whose listening for commands failed to start (the database too slow
     /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
     pub listen_retry: Duration,
@@ -207,6 +210,7 @@ impl Default for Timings {
             query_timeout: Duration::from_secs(10),
             loop_stall_timeout: Duration::from_secs(120),
             set_aside: Duration::from_mins(1),
+            cleanup_move_wait: Duration::from_secs(10),
             listen_retry: Duration::from_mins(30),
             quiet_dag_after: Duration::from_mins(1),
             quiet_dag_wake_ahead: Duration::from_mins(1),

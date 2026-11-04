@@ -33,6 +33,39 @@ use crate::supervise::Supervised;
 #[cfg(test)]
 mod tests;
 
+/// Whether a task's cleanup may start here, with `cleanup_anywhere`: while the worker is cut
+/// off, the cleanup may be on another worker already.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// It may.
+    Open,
+    /// Not until the master's answer.
+    Held,
+    /// Never: the master answered `Kill`.
+    Dropped,
+}
+
+/// The agent's [`Gate`] for one attempt.
+#[derive(Debug, Clone)]
+pub struct CleanupGate(pub tokio::sync::watch::Receiver<Gate>);
+
+/// Compared by what it says now, for a spec's equality.
+impl PartialEq for CleanupGate {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0.borrow() == *other.0.borrow()
+    }
+}
+
+impl CleanupGate {
+    /// Waits while held. Returns whether the cleanup may start.
+    pub async fn passes(mut self) -> bool {
+        self.0
+            .wait_for(|gate| *gate != Gate::Held)
+            .await
+            .is_ok_and(|gate| *gate == Gate::Open)
+    }
+}
+
 /// The error kind of a command whose templates can't be rendered (a missing or truncated
 /// input, a value with no text form).
 pub const RENDER_FAILED: &str = "render_failed";
@@ -83,6 +116,8 @@ pub struct AttemptSpec {
     pub journal: Option<crate::journal::Journal>,
     /// Told each handle, to send it on to the master; `None` keeps them here.
     pub handle_sink: Option<crate::handles::HandleSink>,
+    /// Passed between the task's end and its cleanup, with `cleanup_anywhere` (decision 253).
+    pub cleanup_gate: Option<CleanupGate>,
 }
 
 /// Why an assignment can't be read.
@@ -172,6 +207,7 @@ impl AttemptSpec {
             cleanup_handles: None,
             journal: None,
             handle_sink: None,
+            cleanup_gate: None,
         })
     }
 

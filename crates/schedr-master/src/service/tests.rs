@@ -478,6 +478,35 @@ async fn a_stalled_master_doesnt_declare_a_worker_lost_whose_heartbeats_kept_arr
 }
 
 #[tokio::test]
+async fn a_heartbeat_is_answered_as_it_arrives_while_the_master_leads() {
+    let (hub, _db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut next = async || stream.message().await.unwrap().unwrap().message;
+    while !matches!(next().await, Some(master_message::Message::Registered(_))) {}
+    let heartbeat = || wrap(worker_message::Message::Heartbeat(pb::Heartbeat::default()));
+    // A master stuck behind its lock still answers: busy isn't lost.
+    let stuck = hub.core().lock_owned().await;
+    to_master.send(heartbeat()).await.unwrap();
+    loop {
+        if matches!(next().await, Some(master_message::Message::HeartbeatAck(_))) {
+            break;
+        }
+    }
+    drop(stuck);
+    // A paused one doesn't: another may lead, and count the worker lost.
+    hub.leading.send_replace(false);
+    to_master.send(heartbeat()).await.unwrap();
+    let silence = tokio::time::timeout(Duration::from_millis(200), next()).await;
+    assert!(silence.is_err(), "{silence:?}");
+}
+
+#[tokio::test]
 async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives() {
     // B6, the reconnect: a worker whose connection dropped registers again within its lease
     // while the master is stuck; its `Register` waits for the lock behind a round, which must

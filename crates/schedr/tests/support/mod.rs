@@ -243,6 +243,7 @@ impl Cluster {
             .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", &self.tick)
             .env("SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL", "1s")
             .env("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "4s")
+            .env("SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT", "1s")
             .env("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "15s")
             .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "5s")
             .env("SCHEDR_DAG_PATH", self.root());

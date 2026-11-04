@@ -166,6 +166,7 @@ pub fn test_spec(
         cleanup_handles: None,
         journal: None,
         handle_sink: None,
+        cleanup_gate: None,
     })
 }
 

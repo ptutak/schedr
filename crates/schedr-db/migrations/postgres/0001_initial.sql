@@ -210,6 +210,7 @@ CREATE TABLE attempts (
     cleanup_moves     INTEGER NOT NULL DEFAULT 0,
     -- When the moved cleanup was assigned, until its `Started`.
     moved_at          TIMESTAMPTZ,
+    cleanup_not_before TIMESTAMPTZ,
     UNIQUE (task_instance_id, try_number)
 );
 

@@ -50,6 +50,8 @@ pub struct Settings {
     pub code_wait: Duration,
     /// How long a task whose assignment fails on its own is set aside.
     pub set_aside: Duration,
+    /// How long a lost worker's cleanup waits before it moves, on top of `cancel_grace`.
+    pub cleanup_move_wait: Duration,
     /// How a commit cut off is read back (see [`crate::dispatch::ReadBack`]).
     pub read_back: crate::dispatch::ReadBack,
     /// How often to try listening for commands again after it failed to start.
@@ -109,6 +111,7 @@ impl Default for Settings {
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
+            cleanup_move_wait: Duration::from_secs(10),
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
             timings: MasterTimings::default(),
@@ -332,6 +335,11 @@ impl MasterCore {
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
             .with_code_wait(settings.code_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
+            .with_cleanup_move_wait(
+                settings
+                    .cancel_grace
+                    .saturating_add(settings.cleanup_move_wait),
+            )
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
         dispatcher.set_max_instances(settings.max_instances);

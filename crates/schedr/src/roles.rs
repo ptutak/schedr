@@ -133,6 +133,7 @@ pub fn master_settings(config: &Config) -> Settings {
         parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,
         set_aside: config.timings.set_aside,
+        cleanup_move_wait: config.timings.cleanup_move_wait,
         timings: schedr_master::core::MasterTimings {
             round_gap: config.timings.round_gap,
             notification_retry: config.timings.notification_retry,
@@ -1662,6 +1663,13 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         health: &health,
         ready,
     };
-    run_worker(agent, config.dags.parse_file_timeout, links, observed, stop).await;
+    Box::pin(run_worker(
+        agent,
+        config.dags.parse_file_timeout,
+        links,
+        observed,
+        stop,
+    ))
+    .await;
     Ok(())
 }

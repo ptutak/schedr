@@ -493,13 +493,19 @@ impl Database {
     /// # Errors
     ///
     /// [`DbError`] if the write fails.
-    pub async fn move_cleanup(&self, attempt_id: &str, result: &[u8]) -> Result<(), DbError> {
+    pub async fn move_cleanup(
+        &self,
+        attempt_id: &str,
+        result: &[u8],
+        not_before: Timestamp,
+    ) -> Result<(), DbError> {
         const MOVE: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL, \
-            cleanup_moves = cleanup_moves + 1, task_result = COALESCE(task_result, $1) \
-            WHERE id = $2{uuid} AND status IS NULL";
+            cleanup_moves = cleanup_moves + 1, task_result = COALESCE(task_result, $1), \
+            cleanup_not_before = $2{ts} WHERE id = $3{uuid} AND status IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, MOVE))
                 .bind(result)
+                .bind(db_time(not_before))
                 .bind(attempt_id)
                 .execute(&mut *tx)
                 .await?;
@@ -584,7 +590,10 @@ impl Database {
     /// # Errors
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
-    pub async fn waiting_cleanups(&self) -> Result<Vec<(String, ReadyInstance)>, DbError> {
+    pub async fn waiting_cleanups(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<(String, ReadyInstance)>, DbError> {
         const WAITING: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
             t.queued_reason, p.schedr_version, t.map_index FROM attempts a \
@@ -592,11 +601,13 @@ impl Database {
             JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
-            WHERE a.status IS NULL AND a.worker_id IS NULL ORDER BY a.assigned_at, a.id";
+            WHERE a.status IS NULL AND a.worker_id IS NULL AND a.cleanup_not_before <= $1{ts} \
+            ORDER BY a.assigned_at, a.id";
         const IDS: &str = "SELECT a.id{text}, a.task_instance_id{text} FROM attempts a \
             WHERE a.status IS NULL AND a.worker_id IS NULL";
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WAITING))
+                .bind(db_time(now))
                 .fetch_all(pool)
                 .await?
         });

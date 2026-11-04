@@ -63,6 +63,10 @@ pub const START_TIMEOUT: SignedDuration = SignedDuration::from_secs(10);
 /// tried again, unless set otherwise (see [`Dispatcher::assign_into`]).
 pub const DEFAULT_SET_ASIDE: Duration = Duration::from_mins(1);
 
+/// How long a lost worker's cleanup waits before it moves, by default: the default cancel
+/// grace and some slack (decision 256).
+const DEFAULT_CLEANUP_MOVE_WAIT: Duration = Duration::from_secs(40);
+
 /// The acknowledgement of `attempt_id`'s `Finished`, for `worker_id`: its result is stored.
 #[must_use]
 pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
@@ -254,6 +258,8 @@ pub struct Dispatcher {
     set_aside: BTreeMap<String, Timestamp>,
     /// How long they are left out.
     set_aside_for: SignedDuration,
+    /// How long a lost worker's cleanup waits before it moves (decision 256).
+    cleanup_move_wait: SignedDuration,
     /// How a commit cut off is read back.
     read_back: ReadBack,
     /// `CancelAttempt`s for running instances whose mapped task's step failed (75a), sent
@@ -319,6 +325,8 @@ impl Dispatcher {
             arrivals: Arrivals::default(),
             adopted_unrecorded: BTreeSet::new(),
             set_aside: BTreeMap::new(),
+            cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
+                .unwrap_or(SignedDuration::MAX),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
             read_back: ReadBack::default(),
@@ -404,6 +412,13 @@ impl Dispatcher {
     #[must_use]
     pub fn with_arrivals(mut self, arrivals: Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// The dispatcher waiting `wait` before a lost worker's cleanup moves.
+    #[must_use]
+    pub fn with_cleanup_move_wait(mut self, wait: Duration) -> Self {
+        self.cleanup_move_wait = SignedDuration::try_from(wait).unwrap_or(SignedDuration::MAX);
         self
     }
 
@@ -1475,8 +1490,12 @@ impl Dispatcher {
             error_summary_json: summary.as_bytes().to_vec(),
             ..pb::Finished::default()
         };
+        // A worker only cut off is stopping the task meanwhile.
+        let not_before = now
+            .checked_add(self.cleanup_move_wait)
+            .unwrap_or(Timestamp::MAX);
         self.db
-            .move_cleanup(&attempt.id, &lost.encode_to_vec())
+            .move_cleanup(&attempt.id, &lost.encode_to_vec(), not_before)
             .await?;
         self.execution
             .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
@@ -1508,7 +1527,7 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         let mut reasons = Vec::new();
-        for (attempt_id, ready) in self.db.waiting_cleanups().await? {
+        for (attempt_id, ready) in self.db.waiting_cleanups(now).await? {
             if self.set_aside.contains_key(&ready.instance_id) {
                 continue;
             }

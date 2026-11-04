@@ -26,6 +26,9 @@ pub enum StopReason {
     Cancelled,
     /// A draining worker's grace period ended.
     Interrupted,
+    /// The worker has had no word from the master for the worker lease, and the task's cleanup
+    /// may run on another worker (decision 252): `lost`.
+    CutOff,
     /// It exceeded its memory budget (the watchdog, see [`crate::memory`]).
     OomKilled,
 }
@@ -58,6 +61,7 @@ pub fn attempt_status(
         (Some(StopReason::TimedOut), _) => AttemptStatus::TimedOut,
         (Some(StopReason::Cancelled), _) => AttemptStatus::Cancelled,
         (Some(StopReason::Interrupted), _) => AttemptStatus::Interrupted,
+        (Some(StopReason::CutOff), _) => AttemptStatus::Lost,
         (Some(StopReason::OomKilled), _) => AttemptStatus::OomKilled,
         (None, Termination::Exited(code)) if success_codes.contains(&code) => {
             AttemptStatus::Success

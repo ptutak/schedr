@@ -255,8 +255,13 @@ message MasterMessage {
     CancelAttempt cancel_attempt = 4;
     FinishedAck finished_ack = 5;
     ConnectionJob connection_job = 6;
+    HeartbeatAck heartbeat_ack = 7;
   }
 }
+
+// Sent as a heartbeat arrives, while this master leads: how a worker tells a silent network from
+// a quiet master, with no other message due.
+message HeartbeatAck {}
 
 // Timing is owned by the master's configuration so all workers behave the same.
 message Timing {

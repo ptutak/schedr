@@ -47,13 +47,19 @@ Use it when the cleanup can work with the registered handles and the other worke
 resources. Do not use it for worker-local files or processes that another pod cannot access:
 idempotence alone does not make a cleanup safe on another pod.
 
-A worker cut off from the master keeps running its task. After the worker lease expires, the
-master counts it lost and cannot distinguish it from a dead pod. With `cleanup_anywhere=True`,
-cleanup can therefore start on another worker **while the task is still running**. The old
-worker can run the same cleanup too, when its task ends there or when it reconnects, receives
-`Kill` and its task is cancelled. The cleanup must be safe to run during the task, not only
-safe to repeat. For example, deleting a shared temporary directory is unsafe if the task may
-still be writing to it, even if deleting an already absent directory is harmless.
+A worker that hears nothing from the master for the [worker lease](../03-guide/14-timings.md#fixed-timings)
+(60 s by default) stops its running tasks with `cleanup_anywhere`. They end `lost` and use a
+retry. A master outage longer than the lease therefore stops these tasks. When the connection
+is lost, their cleanup waits for the master's answer, including when a task ends by itself
+while disconnected: `Continue` runs it here; `Kill` drops it. The cleanup normally runs once,
+here or on another worker. After the master marks the worker lost, it waits the cancel grace
+(30 s by default) plus 10 s before moving cleanup.
+
+A cleanup already running when the connection is lost continues and can overlap one moved to
+another worker. A frozen VM cannot stop its task at all. The cleanup must therefore still be
+safe during the task as well as safe to repeat. For example, deleting a shared temporary
+directory is unsafe if the task may still be writing to it, even if deleting an already absent
+directory is harmless.
 
 The moved cleanup uses the task's queue and the receiving worker's current code; it is
 assigned ahead of waiting tasks and is not held by limits. The master keeps the task result

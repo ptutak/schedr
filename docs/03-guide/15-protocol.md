@@ -14,6 +14,7 @@ sequenceDiagram
         W->>M: Warnings (current complete list)
         loop Heartbeat interval: 10 s default
             W->>M: Heartbeat (free slots, running attempts)
+            M-->>W: HeartbeatAck (while leading)
         end
         Note over W,M: Worker lease: 60 s default without any message; master marks worker lost
     else Incompatible version or duplicate live stream
@@ -21,7 +22,11 @@ sequenceDiagram
     end
 ```
 
-Any received message renews the worker lease at arrival, even if it waits to be handled.
+Any worker message renews the master's worker lease at arrival, even if it waits to be handled.
+The master answers heartbeats before they wait for its lock, while it leads. The worker notes
+messages from the master as word from it. With a cleanup gate or recovered cleanup waiting, a
+`Registered` received at least a lease after opening the stream is ignored and the worker
+registers again: its decisions may have become stale.
 
 ## A normal run
 
@@ -205,7 +210,7 @@ sequenceDiagram
     else Unstarted assignment
         M->>M: End assignment_expired; retry without using a task retry
     else Started task with cleanup_anywhere and moves remaining
-        M->>M: Keep task result or mark task lost; move cleanup
+        M->>M: Keep task result or mark task lost; queue cleanup to move
     else Cleanup has exhausted its moves
         M->>M: End cleanup worker_lost
     end
@@ -222,7 +227,8 @@ sequenceDiagram
     participant W as Another worker
     O->>M: HandlesAdded (journaled handles)
     Note over M: Worker lease expires; original worker is lost
-    M->>M: Keep task result or mark task lost; move cleanup
+    M->>M: Keep task result or mark task lost; queue cleanup to move
+    Note over M: Wait cancel_grace + cleanup_move_wait (30 s + 10 s default) after worker lost
     alt No eligible worker
         M->>M: Remain cleaning_up; no worker for the cleanup
     else Worker available
@@ -248,22 +254,31 @@ Each move counts as a cleanup try; if the receiving worker is lost after
 when no other is available. A handle not delivered before the original worker is lost cannot
 accompany the cleanup.
 
-A lost worker may only be cut off from the master. Its task continues, so the moved cleanup
-can run concurrently with it. On reconnect, `Kill` cancels the old task, whose worker may also
-run cleanup. See [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
+A lost worker may only be cut off from the master. A cleanup already running when the cut
+starts can overlap a moved one, and a frozen VM cannot stop its task. See
+[Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
 
 ```{mermaid}
 sequenceDiagram
     participant O as Cut-off worker
     participant M as Master
     participant W as Another worker
-    Note over O: Task continues running
-    Note over M: Lease expires; worker counted lost
-    M->>W: AssignTask (cleanup_only)
-    W->>W: Cleanup runs while original task runs
-    O->>M: Register (running attempt)
-    M-->>O: Registered (Kill)
-    O->>O: Cancel task; run its cleanup
+    Note over O: Task runs; connection lost, cleanup held
+    Note over O: No word for worker lease (60 s default)
+    O->>O: CutOff stops task (lost); cleanup waits
+    alt Master has counted worker lost
+        Note over M: Worker lease expires; worker counted lost
+        Note over M: Wait cancel_grace + cleanup_move_wait (30 s + 10 s default)
+        M->>W: AssignTask (cleanup_only)
+        W->>W: Run cleanup
+        O->>M: Register (attempt)
+        M-->>O: Registered (Kill)
+        O->>O: Drop held cleanup
+    else Master still owns the attempt
+        O->>M: Register (attempt)
+        M-->>O: Registered (Continue)
+        O->>O: Run held cleanup
+    end
 ```
 
 ## Drain
@@ -384,7 +399,8 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `Registered` | Master after `Register` | Apply timing and journal decisions | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; with `cleanup_anywhere` tasks running, silence for the worker lease stops them | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `Registered` | Master after `Register` | Apply timing and journal decisions; with cleanup waiting, ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, leave cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |

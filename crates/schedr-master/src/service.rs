@@ -524,6 +524,10 @@ impl Hub {
             self.arrivals.clone(),
             self.clock,
             queue,
+            HeartbeatAcks {
+                stream: stream.downgrade(),
+                leading: self.leading.subscribe(),
+            },
         ));
         let mut unhandled = false;
         while let Some(first) = queued.recv().await {
@@ -629,6 +633,26 @@ impl Hub {
     }
 }
 
+/// Answers a worker's heartbeats as they arrive, before they wait for the lock: a busy master
+/// isn't a lost one. Not while paused: another master may be leading, and may count the worker
+/// lost. The stream is held weakly, for this reader not to keep it open.
+struct HeartbeatAcks {
+    stream: mpsc::WeakSender<Result<pb::MasterMessage, Status>>,
+    leading: watch::Receiver<bool>,
+}
+
+impl HeartbeatAcks {
+    fn answer(&self) {
+        if *self.leading.borrow()
+            && let Some(stream) = self.stream.upgrade()
+        {
+            let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+            // Full, the worker isn't reading: the next heartbeat tries again.
+            let _ = stream.try_send(Ok(pb::MasterMessage { message: Some(ack) }));
+        }
+    }
+}
+
 /// Reads a worker's stream until it ends: records when each message arrived and queues it
 /// for handling.
 async fn read_stream(
@@ -637,11 +661,15 @@ async fn read_stream(
     arrivals: Arrivals,
     clock: fn() -> Timestamp,
     queue: mpsc::UnboundedSender<worker_message::Message>,
+    acks: HeartbeatAcks,
 ) {
     loop {
         match inbound.message().await {
             Ok(Some(message)) => {
                 arrivals.arrived(&worker_id, clock());
+                if matches!(message.message, Some(worker_message::Message::Heartbeat(_))) {
+                    acks.answer();
+                }
                 if let Some(
                     worker_message::Message::Started(pb::Started { attempt_id, .. })
                     | worker_message::Message::Finished(pb::Finished { attempt_id, .. }),

@@ -178,7 +178,7 @@ pub async fn supervise<P: Process>(
                     kill_at = kill_at.min(hurried);
                 }
                 StopReason::OomKilled => break,
-                StopReason::TimedOut | StopReason::Cancelled => {}
+                StopReason::TimedOut | StopReason::Cancelled | StopReason::CutOff => {}
             },
             termination = process.wait() => {
                 let termination = termination?;
@@ -216,7 +216,7 @@ async fn left_after_leader<P: Process>(
                     kill_at = kill_at.min(arrived + limits.interrupt_grace);
                 }
                 StopReason::OomKilled => return process.signal(Signal::Kill),
-                StopReason::TimedOut | StopReason::Cancelled => {}
+                StopReason::TimedOut | StopReason::Cancelled | StopReason::CutOff => {}
             },
             () = tokio::time::sleep_until((now + limits.poll).min(kill_at)) => {}
         }

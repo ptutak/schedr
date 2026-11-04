@@ -1478,7 +1478,8 @@ fn a_killed_workers_cleanup_runs_on_another_with_cleanup_anywhere() {
     std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
-    for role in ["master", "webserver", "worker"] {
+    cluster.start_with("master", &[("SCHEDR_CONFIG__MASTER__CANCEL_GRACE", "1s")]);
+    for role in ["webserver", "worker"] {
         cluster.start(role);
     }
     cluster.start_as("worker-2", "worker", &[("SCHEDR_CONFIG__WORKER__ID", "w2")]);
@@ -1553,5 +1554,60 @@ fn a_restarted_agent_runs_the_cleanup_of_the_task_it_lost() {
         "{}",
         cluster.logs()
     );
+    assert_eq!(cluster.attempts(&run_id, "work")[0]["status"], "lost");
+}
+
+/// As [`left_behind`], the task taking `seconds`.
+fn left_behind_for(marker: &std::path::Path, seconds: u32) -> String {
+    left_behind(marker, true).replace("time.sleep(10)", &format!("time.sleep({seconds})"))
+}
+
+/// A cluster on Postgres with `dag` as its only DAG, one worker, and a run of it under way.
+fn running(dag: &str) -> (Cluster, String) {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("left_behind.py"), dag).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.wait("the worker", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("left_behind");
+    cluster.wait("the task to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    (cluster, run_id)
+}
+
+#[test]
+fn a_task_whose_cleanup_may_move_outlives_the_lease_while_the_master_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("cleaned");
+    // Longer than the cluster's worker lease.
+    let (cluster, run_id) = running(&left_behind_for(&marker, 7));
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "success");
+    assert_eq!(cluster.attempts(&run_id, "work")[0]["status"], "success");
+}
+
+#[test]
+fn a_master_gone_stops_a_task_whose_cleanup_may_move_and_the_cleanup_waits_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("cleaned");
+    let (mut cluster, run_id) = running(&left_behind_for(&marker, 30));
+    // Time for its handle to reach the master.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    cluster.kill("master");
+    // Past the lease, and the stop: with nobody to ask, the cleanup hasn't started.
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    assert!(!marker.exists(), "{}", cluster.logs());
+    cluster.start("master");
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap_or_default(), "j-1");
     assert_eq!(cluster.attempts(&run_id, "work")[0]["status"], "lost");
 }

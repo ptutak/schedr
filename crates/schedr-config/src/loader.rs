@@ -292,6 +292,7 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
             "DATABASE__QUERY_TIMEOUT" => &mut timings.query_timeout,
             "OPS__LOOP_STALL_TIMEOUT" => &mut timings.loop_stall_timeout,
             "MASTER__SET_ASIDE" => &mut timings.set_aside,
+            "MASTER__CLEANUP_MOVE_WAIT" => &mut timings.cleanup_move_wait,
             "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
             "MASTER__QUIET_DAG_AFTER" => &mut timings.quiet_dag_after,
             "MASTER__QUIET_DAG_WAKE_AHEAD" => &mut timings.quiet_dag_wake_ahead,

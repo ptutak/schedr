@@ -47,7 +47,8 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{
-    AttemptSpec, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished, plan, plan_at,
+    AttemptSpec, CleanupGate, Gate, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished,
+    plan, plan_at,
 };
 use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
@@ -453,7 +454,14 @@ impl ProcessExecutor {
             && started.load(Ordering::SeqCst)
         {
             ended(finished.clone());
-            finished.cleanup = Some(self.run_cleanup(&spec, cleanup, shared).await);
+            // Dropped, the attempt is no longer this worker's: what it reports here is ignored.
+            let may_run = match spec.cleanup_gate.clone() {
+                Some(gate) => gate.passes().await,
+                None => true,
+            };
+            if may_run {
+                finished.cleanup = Some(self.run_cleanup(&spec, cleanup, shared).await);
+            }
         }
         let log = self.setup.log_file(&spec.attempt_id);
         // Read on demand while it ran: too short to mask, warned now.
@@ -883,6 +891,14 @@ pub struct Agent<E> {
     cleanup_room: BTreeMap<String, Duration>,
     /// The attempts a drain has stopped.
     stopped: std::collections::BTreeSet<String>,
+    /// The gate of each running attempt with `cleanup_anywhere`.
+    gates: BTreeMap<String, watch::Sender<Gate>>,
+    /// When the master was last heard from.
+    heard: tokio::time::Instant,
+    /// The master's worker lease, once it has told it.
+    lease: Option<Duration>,
+    /// The tasks with `cleanup_anywhere` were stopped; till the next registration.
+    cut_off: bool,
     /// The tasks warned of a `cleanup_timeout` that doesn't fit the grace period (decision 250).
     warned_room: std::collections::BTreeSet<(String, String)>,
     unacked: BTreeMap<String, pb::Finished>,
@@ -1003,6 +1019,10 @@ impl<E: Executor> Agent<E> {
             waiting: BTreeMap::new(),
             cleanup_room: BTreeMap::new(),
             stopped: std::collections::BTreeSet::new(),
+            gates: BTreeMap::new(),
+            heard: tokio::time::Instant::now(),
+            lease: None,
+            cut_off: false,
             warned_room: std::collections::BTreeSet::new(),
             unacked: BTreeMap::new(),
             unsent_answers: std::collections::VecDeque::new(),
@@ -1080,6 +1100,7 @@ impl<E: Executor> Agent<E> {
                 SessionEnd::Stopped => return,
                 SessionEnd::Lost(reason) => {
                     tracing::warn!(reason, "master connection lost; connecting again");
+                    self.hold_cleanups();
                 }
             }
             if self.registered {
@@ -1110,8 +1131,10 @@ impl<E: Executor> Agent<E> {
         let mut tick = tokio::time::interval(timeouts.drain_tick);
         let mut alive = tokio::time::interval(timeouts.alive);
         loop {
+            let cut_off_at = self.cut_off_at();
             tokio::select! {
                 _ = alive.tick() => self.alive(),
+                () = at(cut_off_at) => self.stop_cut_off(),
                 out = &mut work => return Some(out),
                 Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
                 count = next_request(&mut self.shutdown) => {
@@ -1123,6 +1146,144 @@ impl<E: Executor> Agent<E> {
                     }
                 }
             }
+        }
+    }
+
+    /// Fetches an attempt's inputs, which can take long, with the session's timers going on:
+    /// its loop waits for this. A chunk is word from the master.
+    async fn fetch_with_timers(
+        &mut self,
+        client: &mut MasterClient<Channel>,
+        attempt_id: &str,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        heartbeat: &mut tokio::time::Interval,
+    ) -> Result<Vec<u8>, String> {
+        let (heard, seen) = watch::channel(self.heard);
+        let fetching = fetch_inputs(client, attempt_id, &heard);
+        tokio::pin!(fetching);
+        loop {
+            self.heard = self.heard.max(*seen.borrow());
+            let cut_off_at = self.cut_off_at();
+            tokio::select! {
+                fetched = &mut fetching => return fetched,
+                _ = heartbeat.tick() => {
+                    let _ = to_master.send(self.heartbeat_message());
+                }
+                () = at(cut_off_at) => {
+                    self.heard = self.heard.max(*seen.borrow());
+                    if self.cut_off_at() <= Some(tokio::time::Instant::now()) {
+                        self.stop_cut_off();
+                        return Err(NO_WORD.to_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether this is a `Registered` older than the lease it states, with a cleanup waiting
+    /// for it: the master may have counted this worker lost since, and moved the cleanup, so
+    /// its decisions no longer stand. Asked again, it answers as things are now.
+    fn answer_too_late(&self, message: &master_message::Message, age: Duration) -> bool {
+        let master_message::Message::Registered(registered) = message else {
+            return false;
+        };
+        let holding = !self.gates.is_empty() || !self.waiting.is_empty();
+        holding
+            && registered.timing.as_ref().is_some_and(|t| {
+                t.lease_timeout_ms > 0 && age.as_millis() >= u128::from(t.lease_timeout_ms)
+            })
+    }
+
+    /// The attempts a drain waits for: not a cleanup waiting for the master, with none to
+    /// ask. The journal keeps it.
+    fn drain_running(&self) -> usize {
+        let held = self
+            .gates
+            .iter()
+            .filter(|(id, gate)| *gate.borrow() == Gate::Held && self.cleaning.contains_key(*id))
+            .count();
+        self.running
+            .len()
+            .saturating_sub(self.waiting.len().saturating_add(held))
+    }
+
+    /// What the master hears at once on a new stream.
+    fn send_state(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        if self.drain.is_some() {
+            let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
+        }
+        // All of them, after every registration: each report replaces the master's record.
+        let warnings = self.warnings.borrow_and_update().clone();
+        let _ = to_master.send(wrap(worker_message::Message::Warnings(pb::Warnings {
+            warnings,
+        })));
+    }
+
+    /// The `Register` opening a session.
+    fn register_message(&self, roots: Vec<pb::RootHash>) -> pb::Register {
+        pb::Register {
+            worker_id: self.settings.worker_id.clone(),
+            incarnation_id: self.incarnation.clone(),
+            protocol: Some(PROTOCOL_VERSION),
+            schedr_version: AGENT_VERSION.to_owned(),
+            queues: self.settings.queues.clone(),
+            slots: self.settings.slots,
+            log_endpoint: self.settings.log_endpoint.clone(),
+            roots,
+            secret_storages: self.settings.secrets.names(),
+            journal: self.journal_entries(),
+            process_id: self.settings.node.process_id.clone(),
+            config_json: self.settings.node.config_json.clone(),
+        }
+    }
+
+    /// A task with `cleanup_anywhere` gets a gate before its cleanup.
+    fn set_gate(&mut self, spec: &mut AttemptSpec) {
+        if spec.task.cleanup.as_ref().is_some_and(|c| c.anywhere) {
+            let (gate, passes) = watch::channel(Gate::Open);
+            self.gates.insert(spec.attempt_id.clone(), gate);
+            spec.cleanup_gate = Some(CleanupGate(passes));
+        }
+    }
+
+    /// When the tasks with `cleanup_anywhere` are stopped, with no word from the master: the
+    /// worker lease after the last, as the master counts it lost (decision 252).
+    fn cut_off_at(&self) -> Option<tokio::time::Instant> {
+        if self.cut_off || self.gates.is_empty() {
+            return None;
+        }
+        self.lease.map(|lease| self.heard + lease)
+    }
+
+    /// Stops the tasks whose cleanup may move: it mustn't run during them. Their cleanups wait
+    /// for the master's answer.
+    fn stop_cut_off(&mut self) {
+        self.cut_off = true;
+        self.hold_cleanups();
+        for id in self.gates.keys() {
+            if !self.cleaning.contains_key(id)
+                && let Some(stop) = self.running.get(id)
+            {
+                tracing::warn!(
+                    attempt_id = id,
+                    "no word from the master: stopping the task"
+                );
+                let _ = stop.send(StopReason::CutOff);
+            }
+        }
+    }
+
+    /// With no master to ask, a cleanup with `cleanup_anywhere` doesn't start here: it may be
+    /// moved (decision 254). One under way goes on (decision 255).
+    fn hold_cleanups(&self) {
+        for gate in self.gates.values() {
+            gate.send_if_modified(|gate| {
+                let open = *gate == Gate::Open;
+                if open {
+                    *gate = Gate::Held;
+                }
+                open
+            });
         }
     }
 
@@ -1153,12 +1314,11 @@ impl<E: Executor> Agent<E> {
 
     /// The drain's next step; stops the attempts still running when their time is up.
     fn drain_step(&mut self, connected: bool) -> DrainStep {
+        let running = self.drain_running();
         let Some(drain) = &mut self.drain else {
             return DrainStep::Wait;
         };
         let now = Instant::now();
-        // A cleanup waiting for the master isn't worth staying for: the journal keeps it.
-        let running = self.running.len().saturating_sub(self.waiting.len());
         let step = drain.step(now, running, self.unacked.len(), connected);
         // Each early enough for one try of its cleanup; one in its cleanup isn't stopped. Also
         // those already being stopped (cancelled, timed out): their SIGKILL comes no later than
@@ -1413,39 +1573,27 @@ impl<E: Executor> Agent<E> {
         // Unbounded: the loop never waits on the master (its liveness is the agent's own); the
         // messages are few and small (heartbeats, results, reports).
         let (to_master, outbound) = mpsc::unbounded_channel::<pb::WorkerMessage>();
-        let journal = self.journal_entries();
-        let register = pb::Register {
-            worker_id: self.settings.worker_id.clone(),
-            incarnation_id: self.incarnation.clone(),
-            protocol: Some(PROTOCOL_VERSION),
-            schedr_version: AGENT_VERSION.to_owned(),
-            queues: self.settings.queues.clone(),
-            slots: self.settings.slots,
-            log_endpoint: self.settings.log_endpoint.clone(),
-            roots,
-            secret_storages: self.settings.secrets.names(),
-            journal,
-            process_id: self.settings.node.process_id.clone(),
-            config_json: self.settings.node.config_json.clone(),
-        };
+        let register = self.register_message(roots);
         if to_master
             .send(wrap(worker_message::Message::Register(register)))
             .is_err()
         {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
-        let mut inbound = match client.control(UnboundedReceiverStream::new(outbound)).await {
+        let opened = tokio::time::Instant::now();
+        let cut_off_at = self.cut_off_at();
+        let control = tokio::select! {
+            control = client.control(UnboundedReceiverStream::new(outbound)) => control,
+            () = at(cut_off_at) => {
+                self.stop_cut_off();
+                return SessionEnd::Lost(NO_WORD.to_owned());
+            }
+        };
+        let mut inbound = match control {
             Ok(response) => response.into_inner(),
             Err(status) => return SessionEnd::Lost(status.to_string()),
         };
-        if self.drain.is_some() {
-            let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
-        }
-        // All of them, after every registration: each report replaces the master's record.
-        let warnings = self.warnings.borrow_and_update().clone();
-        let _ = to_master.send(wrap(worker_message::Message::Warnings(pb::Warnings {
-            warnings,
-        })));
+        self.send_state(&to_master);
         let mut warnings_open = true;
         let mut heartbeat = heartbeat_timer(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
@@ -1456,7 +1604,12 @@ impl<E: Executor> Agent<E> {
         // the stream).
         let mut resends = Resends::default();
         loop {
+            let cut_off_at = self.cut_off_at();
             tokio::select! {
+                () = at(cut_off_at) => {
+                    self.stop_cut_off();
+                    return SessionEnd::Lost(NO_WORD.to_owned());
+                }
                 count = next_request(&mut self.shutdown) => {
                     if self.on_shutdown(count) {
                         let draining = worker_message::Message::Draining(pb::Draining {});
@@ -1482,7 +1635,15 @@ impl<E: Executor> Agent<E> {
                 }
                 message = inbound.message() => match message {
                     Ok(Some(pb::MasterMessage { message: Some(message) })) => {
+                        if self.answer_too_late(&message, opened.elapsed()) {
+                            return SessionEnd::Lost(TOO_LATE.to_owned());
+                        }
+                        self.heard = tokio::time::Instant::now();
                         self.on_master(message, &to_master, &mut client, &mut heartbeat).await;
+                        // Past the lease while handling it (a slow fetch of inputs).
+                        if self.cut_off {
+                            return SessionEnd::Lost(NO_WORD.to_owned());
+                        }
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => return SessionEnd::Lost("the master ended the stream".to_owned()),
@@ -1514,16 +1675,19 @@ impl<E: Executor> Agent<E> {
 
     /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
     /// if one was sent too often already.
+    fn heartbeat_message(&self) -> pb::WorkerMessage {
+        wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
+            free_slots: self.free_slots(),
+            running_attempt_ids: self.running(),
+        }))
+    }
+
     fn send_heartbeat(
         &self,
         resends: &mut Resends,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
     ) -> Option<SessionEnd> {
-        let message = worker_message::Message::Heartbeat(pb::Heartbeat {
-            free_slots: self.free_slots(),
-            running_attempt_ids: self.running(),
-        });
-        let _ = to_master.send(wrap(message));
+        let _ = to_master.send(self.heartbeat_message());
         let Some(due) = resends.due(self.unacked.keys()) else {
             return Some(SessionEnd::Lost(format!(
                 "a result is still unacknowledged after {MAX_RESENDS} sends; reconnecting, so \
@@ -1553,7 +1717,10 @@ impl<E: Executor> Agent<E> {
                 if let Some(timing) = registered.timing.filter(|t| t.heartbeat_interval_ms > 0) {
                     self.heartbeat = Duration::from_millis(timing.heartbeat_interval_ms);
                     *heartbeat = heartbeat_timer(self.heartbeat);
+                    self.lease = (timing.lease_timeout_ms > 0)
+                        .then(|| Duration::from_millis(timing.lease_timeout_ms));
                 }
+                self.cut_off = false;
                 for decision in registered.decisions {
                     self.decide(&decision, to_master).await;
                 }
@@ -1562,9 +1729,11 @@ impl<E: Executor> Agent<E> {
                 }
             }
             master_message::Message::AssignTask(assign) => {
-                self.assign(assign, to_master, client).await;
+                self.assign(assign, to_master, client, heartbeat).await;
             }
             master_message::Message::AssignParse(job) => self.parse(job),
+            // Heard: that is all it says.
+            master_message::Message::HeartbeatAck(_) => {}
             master_message::Message::ConnectionJob(job) => self.connection_job(job),
             master_message::Message::CancelAttempt(cancel) => {
                 // It stays running (its slot taken) until its process has ended and reported;
@@ -1597,6 +1766,9 @@ impl<E: Executor> Agent<E> {
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
+                if let Some(gate) = self.gates.get(id) {
+                    gate.send_replace(Gate::Dropped);
+                }
                 if self.waiting.remove(id).is_some() {
                     // The master ended it, or it moved: its cleanup isn't run here.
                     self.running.remove(id);
@@ -1609,6 +1781,9 @@ impl<E: Executor> Agent<E> {
                 }
             }
             _ => {
+                if let Some(gate) = self.gates.get(id) {
+                    gate.send_replace(Gate::Open);
+                }
                 if self.running.contains_key(id) {
                     self.send_handles(id, to_master).await;
                 }
@@ -1665,6 +1840,7 @@ impl<E: Executor> Agent<E> {
         assign: pb::AssignTask,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
         client: &mut MasterClient<Channel>,
+        heartbeat: &mut tokio::time::Interval,
     ) {
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
@@ -1688,7 +1864,10 @@ impl<E: Executor> Agent<E> {
             return;
         }
         let external = if assign.inputs_external {
-            match fetch_inputs(client, &assign.attempt_id).await {
+            let fetched = self
+                .fetch_with_timers(client, &assign.attempt_id, to_master, heartbeat)
+                .await;
+            match fetched {
                 Ok(bytes) => Some(bytes),
                 Err(error) => {
                     let _ = to_master.send(reject(pb::RejectReason::InvalidSpecification, error));
@@ -1760,6 +1939,7 @@ impl<E: Executor> Agent<E> {
             Ok(plan) => {
                 let (stop, stopped) = Stops::new();
                 self.running.insert(spec.attempt_id.clone(), stop);
+                self.set_gate(&mut spec);
                 let _ = to_master.send(started);
                 self.launch(spec, plan, stopped);
             }
@@ -2206,6 +2386,7 @@ impl<E: Executor> Agent<E> {
                 self.cleaning.remove(&finished.attempt_id);
                 self.cleanup_room.remove(&finished.attempt_id);
                 self.stopped.remove(&finished.attempt_id);
+                self.gates.remove(&finished.attempt_id);
                 self.unacked
                     .insert(finished.attempt_id.clone(), finished.clone());
                 if let Some((to_master, _)) = link {
@@ -2451,6 +2632,7 @@ fn code_folder(name: &str) -> String {
 async fn fetch_inputs(
     client: &mut MasterClient<Channel>,
     attempt_id: &str,
+    heard: &watch::Sender<tokio::time::Instant>,
 ) -> Result<Vec<u8>, String> {
     let mut stream = client
         .fetch_inputs(pb::FetchInputsRequest {
@@ -2461,6 +2643,7 @@ async fn fetch_inputs(
         .into_inner();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.message().await.map_err(|s| s.to_string())? {
+        heard.send_replace(tokio::time::Instant::now());
         bytes.extend(chunk.data);
     }
     Ok(bytes)
@@ -2573,6 +2756,20 @@ fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
     wrap(worker_message::Message::TaskEnded(pb::TaskEnded {
         result: Some(result),
     }))
+}
+
+/// Why a session ends when the master has gone silent.
+const NO_WORD: &str = "no word from the master for the worker lease";
+
+/// Why a session ends when the answer to its `Register` no longer stands.
+const TOO_LATE: &str = "the master's answer came after the worker lease; asking again";
+
+/// Waits until `when`; forever without one.
+async fn at(when: Option<tokio::time::Instant>) {
+    match when {
+        Some(when) => tokio::time::sleep_until(when).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The handles a moved cleanup came with.

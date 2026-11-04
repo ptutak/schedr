@@ -506,3 +506,19 @@ fn a_commands_exit_code_names_its_outcome() {
     assert_eq!(other.status, i32::from(pb::AttemptStatus::Failed));
     assert_eq!(other.outcome, "");
 }
+
+#[tokio::test]
+async fn a_cleanup_gate_waits_while_held_and_says_what_the_master_answered() {
+    let (gate, passes) = tokio::sync::watch::channel(Gate::Open);
+    assert!(CleanupGate(passes.clone()).passes().await);
+    gate.send_replace(Gate::Held);
+    let waiting = tokio::spawn(CleanupGate(passes.clone()).passes());
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    gate.send_replace(Gate::Open);
+    assert!(waiting.await.unwrap());
+    gate.send_replace(Gate::Dropped);
+    assert!(!CleanupGate(passes.clone()).passes().await);
+    drop(gate);
+    assert!(!CleanupGate(passes).passes().await);
+}

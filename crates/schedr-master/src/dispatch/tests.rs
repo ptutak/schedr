@@ -85,7 +85,8 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
         .await
         .unwrap()
         .unwrap();
-    let mut dispatcher = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE);
+    let mut dispatcher =
+        Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE).with_cleanup_move_wait(Duration::ZERO);
     dispatcher
         .register("w1", "i1", &[], 2, ts(NOW))
         .await
@@ -813,7 +814,7 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
     assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), Vec::new());
     let extract = extract_instance(&db, &run_id).await;
     assert_eq!(extract.state, TaskInstanceState::CleaningUp);
-    let waiting = db.waiting_cleanups().await.unwrap();
+    let waiting = db.waiting_cleanups(ts(NOW)).await.unwrap();
     assert_eq!(
         waiting[0].1.queued_reason.as_deref(),
         Some(NO_CLEANUP_WORKER)
@@ -959,6 +960,25 @@ async fn moved_to_w2(dispatcher: &mut Dispatcher) -> String {
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     assert_eq!(out.len(), 1);
     attempt
+}
+
+#[tokio::test]
+async fn a_lost_workers_cleanup_waits_for_a_task_it_cant_see_to_stop() {
+    let (dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let mut dispatcher = dispatcher.with_cleanup_move_wait(Duration::from_secs(40));
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(later(39)).await.unwrap(), Vec::new());
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "");
+    assert_eq!(dispatcher.step(later(40)).await.unwrap().len(), 1);
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
 
 #[tokio::test]

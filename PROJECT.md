@@ -6960,6 +6960,26 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   default (with the 30 s default grace it would fire on nearly every start).
 - **251. M4.8b is two commits:** M4.8b the journal, restarts, the result kept, `worker_lost` and
   the drain; M4.8b2 handles to the master and `cleanup_anywhere`. Not chosen: one commit.
+- **252. A worker cut off from the master stops its tasks with `cleanup_anywhere`, and only
+  those:** at the worker lease with no word from the master. Their cleanup could otherwise run
+  elsewhere during the task. Not chosen: every task (a long master or database outage would kill
+  all running work); docs only (the risk stays, on every author).
+- **253. The cleanup of a task stopped so waits for the master's answer:** `Continue` runs it,
+  `Kill` drops it, as after a restart (decision 248): it runs once, here or on the other worker.
+  Not chosen: at once (it could run on both).
+- **254. A task with `cleanup_anywhere` ending by itself with no master waits the same way.**
+  Not chosen: its cleanup at once, as other tasks'.
+- **255. A cleanup under way when the master goes is left running,** and may overlap a moved one:
+  the docs say so. Not chosen: stopped at the same deadline (half a cleanup is often worse).
+- **256. The worker stops the task at the lease; the master moves the cleanup 40 s later:** the
+  cancel grace (30 s by default) and `SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT` (10 s), so raising
+  the grace can't outrun it. Stored with the attempt, so a failover keeps it. Not chosen: a public
+  key.
+- **257. A task stopped so is `lost`, using a retry,** as after a restart. Not chosen: a status of
+  its own.
+- **258. The master answers each `Heartbeat` with `HeartbeatAck`,** as it arrives, not behind its
+  lock, and not while paused. Heartbeats went one way: a silent network cut showed nowhere. Not
+  chosen: HTTP/2 keepalive (under Istio the sidecar answers the ping, so a real cut goes unseen).
 
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before
@@ -6986,7 +7006,16 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   cut off from the master keeps running; after the lease the master can't tell it from a dead pod.
   So a cleanup with `cleanup_anywhere` can start on another worker while the task still runs, and
   the old worker runs it too when the task ends there or `Kill` cancels it: such a cleanup must be
-  safe during the task, not only safe to repeat.
+  safe during the task, not only safe to repeat. M4.8b3 narrows this.
+- **Built (M4.8b3; decisions 252-258):** `HeartbeatAck`; the agent notes when it last heard from
+  the master and, with tasks with `cleanup_anywhere` running, at the lease stops them (`CutOff`,
+  `lost`) and ends the session, so that the answer to its `Register` settles each one. A per-attempt
+  gate between the task's end and its cleanup holds from the session's loss till that answer. The
+  master keeps `cleanup_not_before` on the attempt. A `Registered` older than the lease is dropped
+  and asked again: the cleanup may have moved since. A fetch of inputs keeps the heartbeats and the
+  stop going (the session's loop waits for it; its heartbeats used to stop). A held cleanup doesn't
+  hold up a drain. A hidden value, 62 in all. What stays: a frozen
+  VM can't stop anything, so the cleanup must still be safe during the task.
 
 ### Timings: public keys and hidden ones
 

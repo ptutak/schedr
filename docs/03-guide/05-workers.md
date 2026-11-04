@@ -10,7 +10,7 @@ database. All it needs is `[worker] master_url`.
 The agent runs one event loop per session with the master. Each turn handles one of these:
 
 - a message from the master: `Registered`, `AssignTask`, `AssignParse`, `CancelAttempt`,
-  `FinishedAck`;
+  `FinishedAck`, `HeartbeatAck`;
 - a task or parse job that ended (its result goes to the journal, then to the master);
 - the heartbeat timer (the 10 s [heartbeat interval](14-timings.md#fixed-timings), sent by the master): free slots and
   running attempts;
@@ -32,8 +32,11 @@ masked before it is sent (no secret leaves the process in clear). It
 then sends `Warnings`, the whole list of its warnings, and sends that list again whenever
 the warnings change (see [The fork server](#the-fork-server)).
 
-If the connection drops, **running tasks keep running**. The agent journals what ends
-meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
+If the connection drops, running tasks initially keep running. After a worker lease (60 s
+by default) without word from the master, the agent stops those with `cleanup_anywhere` as
+`lost`, using a retry. Their cleanup waits for the master's decision, including if a task
+ends on its own while disconnected. A master outage longer than the lease has the same effect.
+The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
 workers that lost the master together don't come back in step. After a session in which it
 was registered, the backoff starts from 200 ms again.
 
@@ -94,7 +97,7 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    `[master] cancel_grace` (30 s), or after `[worker] drain_terminate_period` (3 s) when a
    drain's time is up (see Draining below), also for a task already being stopped then: its
    SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
-   (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
+   (`timed_out`, `cancelled`, `interrupted`, or `lost` on cut-off), however the process then exits.
 5. **Cleanup.** If the task process started and has a cleanup, the agent reports `TaskEnded`
    and runs it on the same worker. The attempt holds its slot through the cleanup and its
    retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain
@@ -453,8 +456,8 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 | − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
 | until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, sends `Deregister` and exits 0. |
 
-A cleanup may outlast the grace period: the agent waits for it, but a pod killed meanwhile
-is lost. The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must fit in the grace period, else the worker doesn't start. A second
+A running cleanup may outlast the grace period: the agent waits for it, but a pod killed meanwhile
+is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it. The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must fit in the grace period, else the worker doesn't start. A second
 SIGTERM interrupts at once.
 
 **For maintenance**, `schedr workers drain <id>` is a command. The worker gets no new tasks or
