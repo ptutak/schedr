@@ -85,6 +85,14 @@ impl Drain {
         self.end
     }
 
+    /// Whether an attempt whose cleanup needs `room` must be stopped now, leaving that room
+    /// for one try of it (see PROJECT.md, Per-task cleanup).
+    #[must_use]
+    pub fn stop_due(&self, now: Instant, room: Duration) -> bool {
+        now.checked_add(room)
+            .is_none_or(|latest| latest >= self.deadline)
+    }
+
     /// A second shutdown request: the remaining attempts are stopped at once.
     pub fn force(&mut self, now: Instant) {
         self.deadline = self.deadline.min(now);

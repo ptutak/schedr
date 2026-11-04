@@ -8,6 +8,7 @@ use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
 use schedr_model::runner::CleanupHandle;
 use schedr_model::task::TaskCleanup;
 
+use crate::journal::Journal;
 use crate::mask::MaskSet;
 
 #[cfg(test)]
@@ -42,6 +43,9 @@ pub enum HandleError {
         /// The types it takes.
         taken: String,
     },
+    /// It can't be journaled: a restart would lose it.
+    #[error("the handle can't be written to the journal: {0}")]
+    NotJournaled(String),
     /// Over [`MAX_HANDLES_SIZE`].
     #[error(
         "the attempt's handles would take {size} bytes, over the limit of {MAX_HANDLES_SIZE}: \
@@ -77,6 +81,10 @@ pub struct AttemptHandles {
     /// The types its cleanup takes (empty: any); `None`: the task has no cleanup.
     taken: Taken,
     mask: Arc<MaskSet>,
+    /// Where each is on disk before the task hears it is registered, and under which attempt.
+    journal: Option<(Journal, String)>,
+    /// Held from a handle's place in the list to its line in the journal: one order in both.
+    adding: tokio::sync::Mutex<()>,
     registered: Mutex<Registered>,
 }
 
@@ -94,16 +102,41 @@ impl AttemptHandles {
                 }) => Taken::Only(types.clone()),
             },
             mask,
+            journal: None,
+            adding: tokio::sync::Mutex::new(()),
             registered: Mutex::default(),
         }
     }
 
-    /// Registers a handle.
+    /// These handles journaled, as `attempt_id`'s.
+    #[must_use]
+    pub fn journaled(mut self, journal: Journal, attempt_id: String) -> Self {
+        self.journal = Some((journal, attempt_id));
+        self
+    }
+
+    /// The handles read back from the journal, for a cleanup after a restart: closed.
+    #[must_use]
+    pub fn restored(handles: Vec<CleanupHandle>, mask: Arc<MaskSet>) -> Self {
+        Self {
+            taken: Taken::Any,
+            mask,
+            journal: None,
+            adding: tokio::sync::Mutex::new(()),
+            registered: Mutex::new(Registered {
+                handles,
+                size: 0,
+                closed: true,
+            }),
+        }
+    }
+
+    /// Registers a handle; journaled, if the attempt's handles are, when this returns.
     ///
     /// # Errors
     ///
     /// [`HandleError`] if it can't be: the attempt then fails where it registered it.
-    pub fn add(&self, handle: CleanupHandle) -> Result<(), HandleError> {
+    pub async fn add(&self, handle: CleanupHandle) -> Result<(), HandleError> {
         match &self.taken {
             Taken::NoCleanup => return Err(HandleError::NoCleanup),
             Taken::Only(types) if types.is_empty() => return Err(HandleError::NoneTaken),
@@ -121,19 +154,30 @@ impl AttemptHandles {
         };
         // As listed: the whole handle and a comma.
         let added = serde_json::to_string(&handle).map_or(usize::MAX, |json| json.len() + 1);
-        let mut registered = self
-            .registered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if registered.closed {
-            return Err(HandleError::InCleanup);
+        let _adding = self.adding.lock().await;
+        {
+            let mut registered = self
+                .registered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if registered.closed {
+                return Err(HandleError::InCleanup);
+            }
+            let size = registered.size.saturating_add(added);
+            if size > MAX_HANDLES_SIZE {
+                return Err(HandleError::TooLarge { size });
+            }
+            registered.size = size;
+            registered.handles.push(handle.clone());
         }
-        let size = registered.size.saturating_add(added);
-        if size > MAX_HANDLES_SIZE {
-            return Err(HandleError::TooLarge { size });
+        if let Some((journal, attempt_id)) = &self.journal {
+            let (journal, attempt_id) = (journal.clone(), attempt_id.clone());
+            tokio::task::spawn_blocking(move || journal.add_handle(&attempt_id, &handle))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(|written| written)
+                .map_err(|error| HandleError::NotJournaled(error.to_string()))?;
         }
-        registered.size = size;
-        registered.handles.push(handle);
         Ok(())
     }
 

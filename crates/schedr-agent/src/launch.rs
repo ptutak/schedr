@@ -380,7 +380,10 @@ async fn task_conversation(
                 }
             }
             Ok(RunnerMessage::HandleAdd { handle }) => {
-                let added = handles.map_or(Err(HandleError::NoCleanup), |h| h.add(handle));
+                let added = match handles {
+                    Some(handles) => handles.add(handle).await,
+                    None => Err(HandleError::NoCleanup),
+                };
                 let answer = added.map_or_else(
                     |error| AgentMessage::HandleRefused {
                         message: error.to_string(),

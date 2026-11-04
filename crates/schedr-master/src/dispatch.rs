@@ -27,12 +27,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use prost::Message as _;
 use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
 use schedr_model::connection::Registry;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
 use schedr_model::{
-    AttemptStatus, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
+    AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, cleanup_result_from_proto, reject_reaction,
@@ -69,6 +70,16 @@ pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
             })),
         },
     }
+}
+
+/// What is done with the task results kept for a worker's attempts as it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptResults {
+    /// They end the attempts.
+    Used,
+    /// The database refused one: left out, the attempts fail instead (else the worker could
+    /// never be retired, nor the workers after it).
+    Refused,
 }
 
 /// How a commit cut off by the time limit or a lost connection is read back: whether the work
@@ -185,6 +196,18 @@ pub enum DispatchError {
         /// What is wrong.
         reason: String,
     },
+}
+
+impl DispatchError {
+    /// Whether it is about the data of a write, which would be refused again
+    /// ([`DbError::is_data_fault`]).
+    #[must_use]
+    pub fn is_data_fault(&self) -> bool {
+        match self {
+            Self::Db(error) | Self::Execution(ExecutionError::Db(error)) => error.is_data_fault(),
+            _ => false,
+        }
+    }
 }
 
 impl DispatchError {
@@ -1094,7 +1117,8 @@ impl Dispatcher {
     }
 
     /// A worker's task ended and its cleanup starts: the instance is `cleaning_up`, its
-    /// attempt open until `Finished` (only from the worker it was assigned to, B46).
+    /// attempt open until `Finished`, and the task's result kept, for a worker lost meanwhile
+    /// (decision 229). Only from the worker it was assigned to (B46).
     ///
     /// # Errors
     ///
@@ -1102,13 +1126,16 @@ impl Dispatcher {
     pub async fn task_ended(
         &mut self,
         worker_id: &str,
-        attempt_id: &str,
+        result: &pb::Finished,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        if let Some(attempt) = self.db.attempt(attempt_id).await?
+        if let Some(attempt) = self.db.attempt(&result.attempt_id).await?
             && attempt.worker_id == worker_id
             && attempt.status.is_none()
         {
+            self.db
+                .set_task_result(&attempt.id, &result.encode_to_vec())
+                .await?;
             self.execution
                 .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
                 .await?;
@@ -1145,9 +1172,6 @@ impl Dispatcher {
                 );
                 return Ok(finished_ack(worker_id, &finished.attempt_id));
             }
-            let output = (status == AttemptStatus::Success)
-                .then(|| serde_json::from_slice(&finished.output_json).ok())
-                .flatten();
             let mut error_summary = (!finished.error_summary_json.is_empty())
                 .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned());
             // Only for a result not stored yet (a repeated one is dropped anyway).
@@ -1162,35 +1186,7 @@ impl Dispatcher {
                 .as_ref()
                 .map(|c| cleanup_end(c, worker_id))
                 .transpose()?;
-            let end = AttemptEnd {
-                status,
-                exit_code: finished.exit_code,
-                signal: finished.signal,
-                // 0: not measured (a worker without `/proc`, or before 2.8).
-                peak_memory_bytes: (finished.peak_memory_bytes > 0)
-                    .then_some(finished.peak_memory_bytes),
-                usage: finished.usage.map(|u| ProcessUsage {
-                    user_cpu_micros: u.user_cpu_micros,
-                    system_cpu_micros: u.system_cpu_micros,
-                    peak_rss_bytes: u.peak_rss_bytes,
-                    major_faults: u.major_faults,
-                    voluntary_context_switches: u.voluntary_context_switches,
-                    involuntary_context_switches: u.involuntary_context_switches,
-                }),
-                core_dumped: finished.core_dumped,
-                duration_ms: finished.duration_ms,
-                error_kind: non_empty(&finished.error_kind),
-                error_summary,
-                code_hash: non_empty(&finished.code_hash),
-                cleanup,
-            };
-            let result = AttemptResult {
-                status,
-                error_kind: end.error_kind.clone(),
-                output,
-                outcome: non_empty(&finished.outcome),
-                cleanup: end.cleanup.as_ref().map(|c| c.result),
-            };
+            let (end, result) = ended(finished, status, error_summary, cleanup);
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
@@ -1249,24 +1245,38 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<usize, DispatchError> {
         // Whole or not at all, memory with it (B49).
-        self.whole(async |dispatcher| dispatcher.end_unreported(worker_id, reported, now).await)
-            .await
+        let ended = self
+            .whole(async |dispatcher| {
+                dispatcher
+                    .end_unreported(worker_id, reported, KeptResults::Used, now)
+                    .await
+            })
+            .await;
+        match ended {
+            Err(error) if error.is_data_fault() => {
+                tracing::error!(worker_id, %error, "a kept result the database refuses");
+                self.whole(async |dispatcher| {
+                    dispatcher
+                        .end_unreported(worker_id, reported, KeptResults::Refused, now)
+                        .await
+                })
+                .await
+            }
+            ended => ended,
+        }
     }
 
     async fn end_unreported(
         &mut self,
         worker_id: &str,
         reported: &BTreeSet<&str>,
+        results: KeptResults,
         now: Timestamp,
     ) -> Result<usize, DispatchError> {
         let mut ended = 0;
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
             if attempt.started && !reported.contains(attempt.id.as_str()) {
-                let end = AttemptEnd {
-                    error_summary: Some(restarted_summary(worker_id)),
-                    ..AttemptEnd::by_master(AttemptStatus::Lost)
-                };
-                self.record(&attempt, &end, &by_master(AttemptStatus::Lost), now)
+                self.end_lost(&attempt, restarted_summary(worker_id), results, now)
                     .await?;
                 ended += 1;
             }
@@ -1284,37 +1294,120 @@ impl Dispatcher {
     pub async fn worker_lost(
         &mut self,
         worker_id: &str,
+        results: KeptResults,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         // Whole or not at all, memory with it (B49): the worker is forgotten in memory first.
-        self.whole(async |dispatcher| dispatcher.forget_worker(worker_id, now).await)
+        self.whole(async |dispatcher| dispatcher.forget_worker(worker_id, results, now).await)
             .await
     }
 
     async fn forget_worker(
         &mut self,
         worker_id: &str,
+        results: KeptResults,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         self.workers.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
+            if attempt.started {
+                self.end_lost(&attempt, lost_summary(worker_id), results, now)
+                    .await?;
+                continue;
+            }
             // One it never started (sent as it began draining, say) never ran there: taken
             // back like an expired assignment, queued again without using a retry (B17).
-            let (status, summary) = if attempt.started {
-                (AttemptStatus::Lost, lost_summary(worker_id))
-            } else {
-                (
-                    AttemptStatus::AssignmentExpired,
-                    not_started_summary(worker_id),
-                )
-            };
+            let status = AttemptStatus::AssignmentExpired;
             let end = AttemptEnd {
-                error_summary: Some(summary),
+                error_summary: Some(not_started_summary(worker_id)),
                 ..AttemptEnd::by_master(status)
             };
             self.record(&attempt, &end, &by_master(status), now).await?;
         }
         Ok(())
+    }
+
+    /// Ends a started attempt whose worker can't report it any more: with the task's result if
+    /// its process's end was reported (decision 229: it isn't run again), else `lost`, with
+    /// `summary`. Its cleanup, if the task has one, didn't run (decision 220).
+    async fn end_lost(
+        &mut self,
+        attempt: &StoredAttempt,
+        summary: String,
+        results: KeptResults,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if results == KeptResults::Refused && attempt.result_kept {
+            return self.end_refused(attempt, now).await;
+        }
+        let cleanup = self
+            .has_cleanup(attempt)
+            .await?
+            .then(|| cleanup_not_run(&attempt.worker_id));
+        let kept = self
+            .db
+            .task_result(&attempt.id)
+            .await?
+            .and_then(|bytes| pb::Finished::decode(bytes.as_slice()).ok())
+            .and_then(|finished| {
+                let status = attempt_status_from_proto(finished.status).ok()?;
+                Some((finished, status))
+            });
+        let (end, result) = if let Some((finished, status)) = kept {
+            let error_summary = (!finished.error_summary_json.is_empty())
+                .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned());
+            ended(&finished, status, error_summary, cleanup)
+        } else {
+            let result = AttemptResult {
+                cleanup: cleanup.as_ref().map(|c| c.result),
+                ..by_master(AttemptStatus::Lost)
+            };
+            let end = AttemptEnd {
+                error_summary: Some(summary),
+                cleanup,
+                ..AttemptEnd::by_master(AttemptStatus::Lost)
+            };
+            (end, result)
+        };
+        self.record(attempt, &end, &result, now).await
+    }
+
+    /// Ends an attempt whose kept result the database refuses, as a refused `Finished` is
+    /// (B106): failed, not retried, the same data would be refused again.
+    async fn end_refused(
+        &mut self,
+        attempt: &StoredAttempt,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        let cleanup = cleanup_not_run(&attempt.worker_id);
+        let kind = "result_not_stored".to_owned();
+        let result = AttemptResult {
+            error_kind: Some(kind.clone()),
+            cleanup: Some(cleanup.result),
+            ..by_master(AttemptStatus::Failed)
+        };
+        let end = AttemptEnd {
+            error_kind: Some(kind),
+            error_summary: Some(ErrorSummary::json(
+                "ResultNotStored",
+                "the task's result couldn't be stored, and its worker is gone",
+            )),
+            cleanup: Some(cleanup),
+            ..AttemptEnd::by_master(AttemptStatus::Failed)
+        };
+        self.record(attempt, &end, &result, now).await
+    }
+
+    /// Whether the attempt's task has a cleanup.
+    async fn has_cleanup(&self, attempt: &StoredAttempt) -> Result<bool, DispatchError> {
+        let run = self.db.run_tasks(&attempt.run_id).await?;
+        Ok(run
+            .and_then(|run| {
+                run.dag
+                    .task(&attempt.task_id)
+                    .map(|task| task.cleanup.is_some())
+            })
+            .unwrap_or(false))
     }
 
     /// Runs `work` in one transaction; if it fails, the memory it changed is put back as it
@@ -1767,6 +1860,62 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
         output: None,
         outcome: None,
         cleanup: None,
+    }
+}
+
+/// An attempt's end and result as `finished` says, with `error_summary` and `cleanup` as read.
+fn ended(
+    finished: &pb::Finished,
+    status: AttemptStatus,
+    error_summary: Option<String>,
+    cleanup: Option<CleanupEnd>,
+) -> (AttemptEnd, AttemptResult) {
+    let output = (status == AttemptStatus::Success)
+        .then(|| serde_json::from_slice(&finished.output_json).ok())
+        .flatten();
+    let end = AttemptEnd {
+        status,
+        exit_code: finished.exit_code,
+        signal: finished.signal,
+        // 0: not measured (a worker without `/proc`, or before 2.8).
+        peak_memory_bytes: (finished.peak_memory_bytes > 0).then_some(finished.peak_memory_bytes),
+        usage: finished.usage.map(|u| ProcessUsage {
+            user_cpu_micros: u.user_cpu_micros,
+            system_cpu_micros: u.system_cpu_micros,
+            peak_rss_bytes: u.peak_rss_bytes,
+            major_faults: u.major_faults,
+            voluntary_context_switches: u.voluntary_context_switches,
+            involuntary_context_switches: u.involuntary_context_switches,
+        }),
+        core_dumped: finished.core_dumped,
+        duration_ms: finished.duration_ms,
+        error_kind: non_empty(&finished.error_kind),
+        error_summary,
+        code_hash: non_empty(&finished.code_hash),
+        cleanup,
+    };
+    let result = AttemptResult {
+        status,
+        error_kind: end.error_kind.clone(),
+        output,
+        outcome: non_empty(&finished.outcome),
+        cleanup: end.cleanup.as_ref().map(|c| c.result),
+    };
+    (end, result)
+}
+
+/// The cleanup of an attempt whose worker is gone: it didn't run, or not to its end, and that
+/// fails the run (decision 220).
+fn cleanup_not_run(worker_id: &str) -> CleanupEnd {
+    CleanupEnd {
+        result: CleanupResult::WorkerLost,
+        tries: 0,
+        duration_ms: 0,
+        error_kind: Some("worker_lost".to_owned()),
+        error_summary: Some(ErrorSummary::json(
+            "WorkerLost",
+            &format!("the cleanup didn't run to its end: worker `{worker_id}` is gone"),
+        )),
     }
 }
 

@@ -79,6 +79,8 @@ pub struct AttemptSpec {
     pub connection_test: Option<String>,
     /// Set for a Python task's cleanup: the attempt's handles, for its function.
     pub cleanup_handles: Option<Vec<CleanupHandle>>,
+    /// The journal its handles go to; `None` keeps them in memory only.
+    pub journal: Option<crate::journal::Journal>,
 }
 
 /// Why an assignment can't be read.
@@ -166,6 +168,7 @@ impl AttemptSpec {
             connection_env: BTreeMap::new(),
             connection_test: None,
             cleanup_handles: None,
+            journal: None,
         })
     }
 

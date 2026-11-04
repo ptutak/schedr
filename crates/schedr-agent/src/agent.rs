@@ -33,7 +33,9 @@ use std::time::{Duration, Instant};
 use schedr_model::TaskKind;
 use schedr_model::beat::Beat;
 use schedr_model::connection::Registry;
-use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
+use schedr_model::runner::{
+    CleanupHandle, DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile,
+};
 use schedr_model::task::{CleanupRun, TaskCleanup, default_outcomes};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::attempt_status_from_proto;
@@ -53,7 +55,7 @@ use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
 use crate::handles::AttemptHandles;
 use crate::journal::{
-    Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
+    Journal, JournalRecord, KeptAttempt, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, PythonTask, run_command, run_python};
 use crate::mask::Mask;
@@ -133,8 +135,8 @@ pub struct NodeIdentity {
 }
 
 /// Told the identity of an attempt's process once it is spawned, and whether it was forked
-/// from a fork server.
-pub type Spawned = Box<dyn FnOnce(ProcessIdentity, bool) + Send>;
+/// from a fork server: the task's, then each try of its cleanup's.
+pub type Spawned = Arc<dyn Fn(ProcessIdentity, bool) + Send + Sync>;
 
 /// Told a task's result when its process has ended and its cleanup starts (decision 229).
 pub type TaskEnded = Box<dyn FnOnce(pb::Finished) + Send>;
@@ -146,6 +148,8 @@ struct Shared<'a> {
     handles: &'a Arc<AttemptHandles>,
     /// Set when a process starts.
     started: &'a AtomicBool,
+    /// Told each process.
+    spawned: &'a Spawned,
 }
 
 /// Runs attempts and parse jobs.
@@ -161,6 +165,16 @@ pub trait Executor: Clone + Send + Sync + 'static {
         stop: Stops,
         spawned: Spawned,
         ended: TaskEnded,
+    ) -> impl Future<Output = pb::Finished> + Send;
+
+    /// Runs the cleanup of an attempt an earlier agent left, whose task ended as `ended`, with
+    /// the `handles` the journal kept; returns `ended` with the cleanup's result.
+    fn cleanup(
+        &self,
+        spec: AttemptSpec,
+        ended: pb::Finished,
+        handles: Vec<CleanupHandle>,
+        spawned: Spawned,
     ) -> impl Future<Output = pb::Finished> + Send;
 
     /// What is wrong with the worker now, as it changes (sent to the master); none by default.
@@ -294,6 +308,20 @@ impl Executor for ProcessExecutor {
         finished
     }
 
+    async fn cleanup(
+        &self,
+        mut spec: AttemptSpec,
+        mut ended: pb::Finished,
+        handles: Vec<CleanupHandle>,
+        spawned: Spawned,
+    ) -> pb::Finished {
+        let connection_dir = self.setup.connection_dir.join(&spec.attempt_id);
+        let result = Box::pin(self.kept_cleanup(&mut spec, handles, &spawned)).await;
+        ended.cleanup = Some(result);
+        remove_connection_files(&connection_dir).await;
+        ended
+    }
+
     async fn connection_job(
         &self,
         job: ConnectionJob,
@@ -403,19 +431,20 @@ impl ProcessExecutor {
             return stopped_before_start(&spec, StopReason::TimedOut, elapsed);
         }
         let python = matches!(plan, Plan::Python { .. });
-        let handles = Arc::new(AttemptHandles::new(
-            spec.task.cleanup.as_ref(),
-            Arc::clone(&secrets.mask),
-        ));
+        let mut handles =
+            AttemptHandles::new(spec.task.cleanup.as_ref(), Arc::clone(&secrets.mask));
+        if let Some(journal) = &spec.journal {
+            handles = handles.journaled(journal.clone(), spec.attempt_id.clone());
+        }
+        let handles = Arc::new(handles);
         let started = AtomicBool::new(false);
         let shared = Shared {
             secrets: &secrets,
             handles: &handles,
             started: &started,
+            spawned: &spawned,
         };
-        let mut finished = self
-            .run_planned(&spec, plan, timeout, stop, spawned, shared)
-            .await;
+        let mut finished = self.run_planned(&spec, plan, timeout, stop, shared).await;
         ended_with_secrets(&mut finished, &secrets, python);
         if let Some(cleanup) = &spec.task.cleanup
             && started.load(Ordering::SeqCst)
@@ -480,6 +509,75 @@ impl ProcessExecutor {
         Ok(Arc::new(secrets))
     }
 
+    /// The cleanup of an attempt an earlier agent left: with its kept code (a missing copy is
+    /// a failed cleanup) and its secrets fetched again.
+    async fn kept_cleanup(
+        &self,
+        spec: &mut AttemptSpec,
+        handles: Vec<CleanupHandle>,
+        spawned: &Spawned,
+    ) -> pb::CleanupResult {
+        let failed = |kind: &str, summary: Vec<u8>| pb::CleanupResult {
+            status: pb::CleanupStatus::Failed.into(),
+            error_kind: kind.to_owned(),
+            error_summary_json: summary,
+            ..pb::CleanupResult::default()
+        };
+        let Some(cleanup) = spec.task.cleanup.clone() else {
+            return pb::CleanupResult {
+                status: pb::CleanupStatus::NotNeeded.into(),
+                ..pb::CleanupResult::default()
+            };
+        };
+        if let Some(dir) = spec.code_dir.as_ref().filter(|dir| !dir.exists()) {
+            let message = format!("the attempt's code is gone from `{}`", dir.display());
+            let summary = ErrorSummary::json("CodeGone", &message).into_bytes();
+            return failed(DAG_FILE_MISSING, summary);
+        }
+        let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
+        spec.stand_in_secrets();
+        let planned = match &spec.code_dir {
+            Some(dir) => plan_at(spec, &self.setup, dir),
+            None => crate::attempt::plan(spec, &self.setup),
+        };
+        let mut plan = match planned {
+            Ok(plan) => plan,
+            Err(NotRun::Failed { kind, message }) => {
+                return failed(
+                    &kind,
+                    ErrorSummary::json("CleanupNotRun", &message).into_bytes(),
+                );
+            }
+            Err(NotRun::Rejected { detail, .. }) => {
+                let summary = ErrorSummary::json("CleanupNotRun", &detail).into_bytes();
+                return failed(DAG_FILE_MISSING, summary);
+            }
+        };
+        // A slow storage can't hold the slot for ever: this is the cleanup's time.
+        let timeout = cleanup
+            .timeout_ms
+            .map_or(self.setup.timeouts.cleanup, Duration::from_millis);
+        let secrets = match tokio::time::timeout(timeout, self.fetch_secrets(spec, &mut plan)).await
+        {
+            Ok(Ok(secrets)) => secrets,
+            Ok(Err(finished)) => return failed(&finished.error_kind, finished.error_summary_json),
+            Err(_) => {
+                let message = "the cleanup's secrets weren't read within its timeout";
+                let summary = ErrorSummary::json("CleanupNotRun", message).into_bytes();
+                return failed("timed_out", summary);
+            }
+        };
+        let handles = Arc::new(AttemptHandles::restored(handles, Arc::clone(&secrets.mask)));
+        let started = AtomicBool::new(true);
+        let shared = Shared {
+            secrets: &secrets,
+            handles: &handles,
+            started: &started,
+            spawned,
+        };
+        self.run_cleanup(spec, &cleanup, shared).await
+    }
+
     /// Runs the attempt's cleanup, in a fresh process each try, with the same budget and
     /// watchdog as the task. Nothing stops it but its own timeout: a cancel doesn't (decision
     /// 219). The slot stays taken through its tries and delays.
@@ -528,9 +626,8 @@ impl ProcessExecutor {
             let mut ended = match planned {
                 Ok(plan) => {
                     let python = matches!(plan, Plan::Python { .. });
-                    let spawned: Spawned = Box::new(|_, _| {});
                     let mut ended = self
-                        .run_planned(&spec, plan, Some(timeout), stops, spawned, shared)
+                        .run_planned(&spec, plan, Some(timeout), stops, shared)
                         .await;
                     ended_with_secrets(&mut ended, shared.secrets, python);
                     ended
@@ -563,13 +660,13 @@ impl ProcessExecutor {
         plan: Plan,
         timeout: Option<Duration>,
         stop: Stops,
-        spawned: Spawned,
         shared: Shared<'_>,
     ) -> pb::Finished {
         let Shared {
             secrets,
             handles,
             started,
+            spawned,
         } = shared;
         let limits = Limits {
             timeout,
@@ -746,6 +843,15 @@ enum Done {
     },
 }
 
+/// An attempt an earlier agent left, its cleanup still to run.
+#[derive(Debug)]
+struct WaitingCleanup {
+    spec: AttemptSpec,
+    handles: Vec<CleanupHandle>,
+    /// The task's result; `None`: it was running, and is `lost`.
+    ended: Option<pb::Finished>,
+}
+
 /// How many connections jobs' answers the agent keeps while no master listens.
 const UNSENT_ANSWERS: usize = 16;
 
@@ -759,6 +865,17 @@ pub struct Agent<E> {
     watchers: BTreeMap<String, RootWatcher>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
+    /// The attempts in their cleanup, with the task's result (sent again on a reconnect).
+    cleaning: BTreeMap<String, pb::Finished>,
+    /// Attempts an earlier agent left, whose cleanups wait for the master's `Continue`
+    /// (decision 248); in `running` too, for their slots.
+    waiting: BTreeMap<String, WaitingCleanup>,
+    /// What each running task's cleanup needs of a drain (one try's timeout).
+    cleanup_room: BTreeMap<String, Duration>,
+    /// The attempts a drain has stopped.
+    stopped: std::collections::BTreeSet<String>,
+    /// The tasks warned of a `cleanup_timeout` that doesn't fit the grace period (decision 250).
+    warned_room: std::collections::BTreeSet<(String, String)>,
     unacked: BTreeMap<String, pb::Finished>,
     /// Connections jobs' answers made while no master listened, sent once one does (the
     /// newest [`UNSENT_ANSWERS`]; the master calls an unanswered job lost in time anyway).
@@ -873,6 +990,11 @@ impl<E: Executor> Agent<E> {
             journal,
             watchers,
             running: BTreeMap::new(),
+            cleaning: BTreeMap::new(),
+            waiting: BTreeMap::new(),
+            cleanup_room: BTreeMap::new(),
+            stopped: std::collections::BTreeSet::new(),
+            warned_room: std::collections::BTreeSet::new(),
             unacked: BTreeMap::new(),
             unsent_answers: std::collections::VecDeque::new(),
             code_hashes: BTreeMap::new(),
@@ -1025,22 +1147,27 @@ impl<E: Executor> Agent<E> {
         let Some(drain) = &mut self.drain else {
             return DrainStep::Wait;
         };
-        let step = drain.step(
-            Instant::now(),
-            self.running.len(),
-            self.unacked.len(),
-            connected,
-        );
+        let now = Instant::now();
+        // A cleanup waiting for the master isn't worth staying for: the journal keeps it.
+        let running = self.running.len().saturating_sub(self.waiting.len());
+        let step = drain.step(now, running, self.unacked.len(), connected);
+        // Each early enough for one try of its cleanup; one in its cleanup isn't stopped. Also
+        // those already being stopped (cancelled, timed out): their SIGKILL comes no later than
+        // the drain's (B9).
+        for (id, stop) in &self.running {
+            let room = self.cleanup_room.get(id).copied().unwrap_or_default();
+            if !self.cleaning.contains_key(id)
+                && drain.stop_due(now, room)
+                && self.stopped.insert(id.clone())
+            {
+                let _ = stop.send(StopReason::Interrupted);
+            }
+        }
         if step == DrainStep::Interrupt {
             tracing::warn!(
                 running = self.running.len(),
                 "the grace period is ending: interrupting the running tasks"
             );
-            // Also to attempts already being stopped (cancelled, timed out): their SIGKILL
-            // comes no later than the drain's (B9).
-            for stop in self.running.values() {
-                let _ = stop.send(StopReason::Interrupted);
-            }
         }
         step
     }
@@ -1063,45 +1190,55 @@ impl<E: Executor> Agent<E> {
             }
         };
         let mut orphans = tokio::task::JoinSet::new();
+        let mut ended = BTreeMap::new();
         for (attempt_id, record) in records {
-            match record {
+            let process = match record {
                 JournalRecord::Finished(finished) => {
                     self.unacked.insert(attempt_id, finished);
+                    continue;
                 }
-                JournalRecord::Running(process) => {
-                    let timeouts = self.settings.setup.timeouts;
-                    orphans.spawn(async move {
-                        let Some(identity) = process else {
-                            return Ok(attempt_id);
-                        };
-                        match stop_orphan(identity, timeouts.orphan_grace, timeouts.orphan).await {
-                            Ok(Orphan::Gone) => {}
-                            Ok(how) => tracing::warn!(
-                                attempt_id,
-                                pgid = identity.pgid,
-                                ?how,
-                                "stopped a task process left by the previous agent"
-                            ),
-                            Err(error) => {
-                                // Kept in the journal: the next start tries again.
-                                tracing::error!(
-                                    attempt_id,
-                                    pgid = identity.pgid,
-                                    %error,
-                                    "can't stop a task process left by the previous agent"
-                                );
-                                return Err(attempt_id);
-                            }
-                        }
-                        Ok(attempt_id)
-                    });
+                JournalRecord::Running(process) => process,
+                JournalRecord::Cleaning(finished, process) => {
+                    ended.insert(attempt_id.clone(), finished);
+                    process
                 }
-            }
+            };
+            let timeouts = self.settings.setup.timeouts;
+            orphans.spawn(async move {
+                let Some(identity) = process else {
+                    return Ok(attempt_id);
+                };
+                match stop_orphan(identity, timeouts.orphan_grace, timeouts.orphan).await {
+                    Ok(Orphan::Gone) => {}
+                    Ok(how) => tracing::warn!(
+                        attempt_id,
+                        pgid = identity.pgid,
+                        ?how,
+                        "stopped a task process left by the previous agent"
+                    ),
+                    Err(error) => {
+                        // Kept in the journal: the next start tries again.
+                        tracing::error!(
+                            attempt_id,
+                            pgid = identity.pgid,
+                            %error,
+                            "can't stop a task process left by the previous agent"
+                        );
+                        return Err(attempt_id);
+                    }
+                }
+                Ok(attempt_id)
+            });
         }
         let mut alive = std::collections::BTreeSet::new();
         while let Some(stopped) = orphans.join_next().await {
             match stopped {
-                Ok(Ok(attempt_id)) => self.forget(&attempt_id).await,
+                Ok(Ok(attempt_id)) => {
+                    let ended = ended.remove(&attempt_id);
+                    if !self.wait_for_cleanup(&attempt_id, ended).await {
+                        self.forget(&attempt_id).await;
+                    }
+                }
                 Ok(Err(attempt_id)) => {
                     alive.insert(attempt_id);
                 }
@@ -1109,6 +1246,102 @@ impl<E: Executor> Agent<E> {
             }
         }
         sweep_connection_files(&self.settings.setup.connection_dir, &alive).await;
+    }
+
+    /// Sets aside the cleanup of an attempt the previous agent left, if the journal kept what
+    /// it needs: it runs on the master's `Continue` (decision 248). Returns whether it did.
+    async fn wait_for_cleanup(&mut self, attempt_id: &str, ended: Option<pb::Finished>) -> bool {
+        let journal = self.journal.clone();
+        let id = attempt_id.to_owned();
+        let read = tokio::task::spawn_blocking(move || {
+            Ok::<_, std::io::Error>((journal.kept(&id)?, journal.handles(&id)?))
+        })
+        .await;
+        let (kept, handles) = match read {
+            Ok(Ok((Some(kept), handles))) => (kept, handles),
+            Ok(Ok((None, _))) => return false,
+            // Run without what it needs, it could report success and leave them behind: the
+            // master ends its cleanup as not run, which fails the run.
+            Ok(Err(error)) => {
+                tracing::error!(attempt_id, %error, "can't read a kept attempt; no cleanup here");
+                return false;
+            }
+            Err(error) => {
+                tracing::error!(attempt_id, %error, "reading a kept attempt failed");
+                return false;
+            }
+        };
+        let mut spec = match AttemptSpec::from_assign(&kept.assign, None) {
+            Ok(spec) if spec.task.cleanup.is_some() => spec,
+            Ok(_) => return false,
+            Err(error) => {
+                tracing::warn!(attempt_id, %error, "can't read a kept attempt; its cleanup is lost");
+                return false;
+            }
+        };
+        spec.code_dir = kept.code_dir;
+        if let Some(hash) = kept.code_hash {
+            self.code_hashes.insert(attempt_id.to_owned(), hash);
+        }
+        let (stop, _) = Stops::new();
+        self.running.insert(attempt_id.to_owned(), stop);
+        let waiting = WaitingCleanup {
+            spec,
+            handles,
+            ended,
+        };
+        self.waiting.insert(attempt_id.to_owned(), waiting);
+        true
+    }
+
+    /// The master said `Continue`: a cleanup the previous agent left starts; the task's end is
+    /// reported first (`lost`, if it hadn't ended).
+    async fn start_waiting(
+        &mut self,
+        attempt_id: &str,
+        waiting: WaitingCleanup,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
+        let ended = waiting.ended.unwrap_or_else(|| restarted(attempt_id));
+        let done = self.done_tx.clone();
+        let on_spawn = self.done_tx.clone();
+        let id = attempt_id.to_owned();
+        let spawned: Spawned = Arc::new(move |identity, forked| {
+            let _ = on_spawn.send(Done::Spawned {
+                attempt_id: id.clone(),
+                identity,
+                forked,
+            });
+        });
+        self.task_ended(ended.clone(), Some(to_master)).await;
+        let executor = self.executor.clone();
+        let (spec, handles) = (waiting.spec, waiting.handles);
+        tokio::spawn(async move {
+            let finished = executor.cleanup(spec, ended, handles, spawned).await;
+            let _ = done.send(Done::Attempt(finished));
+        });
+    }
+
+    /// A task with a cleanup ended: on disk, then reported.
+    async fn task_ended(
+        &mut self,
+        mut finished: pb::Finished,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        fit_result(&mut finished, self.master_limit);
+        if let Some(hash) = self.code_hashes.get(&finished.attempt_id) {
+            finished.code_hash.clone_from(hash);
+        }
+        let id = finished.attempt_id.clone();
+        self.cleanup_room.remove(&id);
+        let record = JournalRecord::Cleaning(finished.clone(), None);
+        if let Err(error) = self.record(&id, record).await {
+            tracing::warn!(attempt_id = id, %error, "can't record the task's end");
+        }
+        self.cleaning.insert(id, finished.clone());
+        if let Some(to_master) = to_master {
+            let _ = to_master.send(task_ended_message(finished));
+        }
     }
 
     /// Records `record` for an attempt in the journal.
@@ -1346,11 +1579,30 @@ impl<E: Executor> Agent<E> {
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
+                if self.waiting.remove(id).is_some() {
+                    // The master ended it, or it moved: its cleanup isn't run here.
+                    self.running.remove(id);
+                    self.code_hashes.remove(id);
+                    self.forget(id).await;
+                    self.collect_code();
+                }
                 if let Some(stop) = self.running.get(id) {
                     let _ = stop.send(StopReason::Cancelled);
                 }
             }
-            _ => self.send_again(id, to_master),
+            _ => {
+                if let Some(waiting) = self.waiting.remove(id) {
+                    self.start_waiting(id, waiting, to_master).await;
+                } else if let Some(ended) = self.cleaning.get(id) {
+                    // Its report may have gone with the old stream; fitted to the limit now,
+                    // as a result sent again is (B47).
+                    let mut ended = ended.clone();
+                    fit_result(&mut ended, self.master_limit);
+                    let _ = to_master.send(task_ended_message(ended));
+                } else {
+                    self.send_again(id, to_master);
+                }
+            }
         }
     }
 
@@ -1422,9 +1674,7 @@ impl<E: Executor> Agent<E> {
         spec.stand_in_secrets();
         let planned = self.plan(&mut spec, &assign);
         if !matches!(planned, Err(NotRun::Rejected { .. }))
-            && let Err(error) = self
-                .record(&spec.attempt_id, JournalRecord::Running(None))
-                .await
+            && let Err(error) = self.record_start(&spec, &assign, external.as_deref()).await
         {
             let detail = format!(
                 "can't write the journal in `{}`: {error}; check the worker's data directory",
@@ -1434,6 +1684,7 @@ impl<E: Executor> Agent<E> {
             return;
         }
         self.remember_code(&assign, &spec.attempt_id);
+        self.note_cleanup(&mut spec, &assign);
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
@@ -1457,15 +1708,84 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// Journals an attempt about to start: first what its cleanup would need after a restart.
+    async fn record_start(
+        &self,
+        spec: &AttemptSpec,
+        assign: &pb::AssignTask,
+        external: Option<&[u8]>,
+    ) -> std::io::Result<()> {
+        if spec.task.cleanup.is_some() {
+            let mut assign = assign.clone();
+            if let Some(inputs) = external {
+                assign.inputs_json = inputs.to_vec();
+                assign.inputs_external = false;
+            }
+            let kept = KeptAttempt {
+                assign,
+                code_dir: spec.code_dir.clone(),
+                code_hash: self.code_hash_of(spec),
+            };
+            let journal = self.journal.clone();
+            let id = spec.attempt_id.clone();
+            tokio::task::spawn_blocking(move || journal.keep(&id, &kept))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(|kept| kept)?;
+        }
+        self.record(&spec.attempt_id, JournalRecord::Running(None))
+            .await
+    }
+
+    /// The hash of the code `spec` was planned against.
+    fn code_hash_of(&self, spec: &AttemptSpec) -> Option<String> {
+        self.watchers
+            .get(&spec.dag_root)
+            .and_then(RootWatcher::hash)
+            .map(str::to_owned)
+    }
+
+    /// A task with a cleanup: its handles go to the journal, a drain leaves room for one try,
+    /// and a timeout too long for the grace period is warned of, once per task (decision 250).
+    fn note_cleanup(&mut self, spec: &mut AttemptSpec, assign: &pb::AssignTask) {
+        let Some(cleanup) = &spec.task.cleanup else {
+            return;
+        };
+        spec.journal = Some(self.journal.clone());
+        let room = cleanup
+            .timeout_ms
+            .map_or(self.settings.setup.timeouts.cleanup, Duration::from_millis);
+        self.cleanup_room.insert(spec.attempt_id.clone(), room);
+        let drain = self.settings.drain;
+        let fits = room
+            .saturating_add(drain.terminate_period)
+            .saturating_add(drain.report_period)
+            <= drain.grace;
+        let dag = assign.run.as_ref().map_or("", |run| run.dag_id.as_str());
+        if !fits
+            && self
+                .warned_room
+                .insert((dag.to_owned(), assign.task_id.clone()))
+        {
+            tracing::warn!(
+                dag,
+                task = assign.task_id.as_str(),
+                cleanup_timeout = ?room,
+                grace = ?drain.grace,
+                "the task's cleanup doesn't fit in `termination_grace_period`: a drain may kill it"
+            );
+        }
+    }
+
     /// Runs a started attempt in the background; what happens is reported on `done_tx`.
     fn launch(&self, spec: AttemptSpec, plan: Plan, stopped: Stops) {
         let executor = self.executor.clone();
         let done = self.done_tx.clone();
         let on_spawn = self.done_tx.clone();
         let attempt_id = spec.attempt_id.clone();
-        let spawned: Spawned = Box::new(move |identity, forked| {
+        let spawned: Spawned = Arc::new(move |identity, forked| {
             let _ = on_spawn.send(Done::Spawned {
-                attempt_id,
+                attempt_id: attempt_id.clone(),
                 identity,
                 forked,
             });
@@ -1687,9 +2007,9 @@ impl<E: Executor> Agent<E> {
         let done = self.done_tx.clone();
         let on_spawn = self.done_tx.clone();
         // Recorded as an attempt's process: a worker killed meanwhile stops it on its start.
-        let spawned: Spawned = Box::new(move |identity, _| {
+        let spawned: Spawned = Arc::new(move |identity, _| {
             let _ = on_spawn.send(Done::Spawned {
-                attempt_id,
+                attempt_id: attempt_id.clone(),
                 identity,
                 forked: false,
             });
@@ -1738,30 +2058,27 @@ impl<E: Executor> Agent<E> {
             } => {
                 // `Started` went before the process existed, as `spawn`; a repeat sets the
                 // method (the master keeps the first start time).
-                if forked && let Some((to_master, _)) = &link {
+                let ended = self.cleaning.get(&attempt_id).cloned();
+                if forked
+                    && ended.is_none()
+                    && let Some((to_master, _)) = &link
+                {
                     let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
                         attempt_id: attempt_id.clone(),
                         start_method: pb::StartMethod::Fork.into(),
                     })));
                 }
-                if let Err(error) = self
-                    .record(&attempt_id, JournalRecord::Running(Some(identity)))
-                    .await
-                {
+                let record = match ended {
+                    Some(ended) => JournalRecord::Cleaning(ended, Some(identity)),
+                    None => JournalRecord::Running(Some(identity)),
+                };
+                if let Err(error) = self.record(&attempt_id, record).await {
                     tracing::warn!(attempt_id, %error, "can't record the task's process");
                 }
             }
-            Done::TaskEnded(mut finished) => {
-                fit_result(&mut finished, self.master_limit);
-                if let Some(hash) = self.code_hashes.get(&finished.attempt_id) {
-                    finished.code_hash.clone_from(hash);
-                }
-                if let Some((to_master, _)) = link {
-                    let ended = pb::TaskEnded {
-                        result: Some(finished),
-                    };
-                    let _ = to_master.send(wrap(worker_message::Message::TaskEnded(ended)));
-                }
+            Done::TaskEnded(finished) => {
+                self.task_ended(finished, link.map(|(to_master, _)| to_master))
+                    .await;
             }
             Done::Attempt(mut finished) => {
                 fit_result(&mut finished, self.master_limit);
@@ -1787,6 +2104,9 @@ impl<E: Executor> Agent<E> {
                     );
                 }
                 self.running.remove(&finished.attempt_id);
+                self.cleaning.remove(&finished.attempt_id);
+                self.cleanup_room.remove(&finished.attempt_id);
+                self.stopped.remove(&finished.attempt_id);
                 self.unacked
                     .insert(finished.attempt_id.clone(), finished.clone());
                 if let Some((to_master, _)) = link {
@@ -2135,6 +2455,25 @@ async fn next_request(shutdown: &mut Option<watch::Receiver<u32>>) -> u32 {
         return *requests.borrow();
     }
     std::future::pending().await
+}
+
+/// A task's end, as the master hears of it.
+fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
+    wrap(worker_message::Message::TaskEnded(pb::TaskEnded {
+        result: Some(result),
+    }))
+}
+
+/// The result of a task the agent's restart stopped: `lost`, as the master would end it, and
+/// using a retry (the crash may have been its own).
+fn restarted(attempt_id: &str) -> pb::Finished {
+    let message = "the worker's agent restarted while the attempt ran (possibly out of memory)";
+    pb::Finished {
+        attempt_id: attempt_id.to_owned(),
+        status: pb::AttemptStatus::Lost.into(),
+        error_summary_json: ErrorSummary::json("WorkerRestarted", message).into_bytes(),
+        ..pb::Finished::default()
+    }
 }
 
 const fn wrap(message: worker_message::Message) -> pb::WorkerMessage {

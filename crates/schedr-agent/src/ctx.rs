@@ -344,10 +344,10 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                 },
             },
             Some(Ok(CtxRequest::HandleAdd { handle })) => {
-                let added = info
-                    .handles
-                    .as_ref()
-                    .map_or(Err(HandleError::NoCleanup), |h| h.add(handle));
+                let added = match info.handles.as_ref() {
+                    Some(handles) => handles.add(handle).await,
+                    None => Err(HandleError::NoCleanup),
+                };
                 match added {
                     Ok(()) => CtxAnswer::HandleAdded,
                     Err(error) => CtxAnswer::HandleRefused {

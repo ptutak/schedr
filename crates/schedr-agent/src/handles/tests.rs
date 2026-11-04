@@ -23,42 +23,43 @@ fn handles(taken: &[&str]) -> AttemptHandles {
     AttemptHandles::new(Some(&cleanup(taken)), Arc::new(MaskSet::new(4)))
 }
 
-#[test]
-fn handles_are_kept_in_registration_order() {
+#[tokio::test]
+async fn handles_are_kept_in_registration_order() {
     let handles = handles(&[]);
-    handles.add(handle("B", json!({"n": 1}))).unwrap();
-    handles.add(handle("A", json!({"n": 2}))).unwrap();
+    handles.add(handle("B", json!({"n": 1}))).await.unwrap();
+    handles.add(handle("A", json!({"n": 2}))).await.unwrap();
     let types: Vec<String> = handles.list().into_iter().map(|h| h.handle_type).collect();
     assert_eq!(types, ["B", "A"]);
 }
 
-#[test]
-fn a_task_without_a_cleanup_takes_no_handle() {
+#[tokio::test]
+async fn a_task_without_a_cleanup_takes_no_handle() {
     let handles = AttemptHandles::new(None, Arc::new(MaskSet::new(4)));
     assert_eq!(
-        handles.add(handle("A", json!({}))),
+        handles.add(handle("A", json!({}))).await,
         Err(HandleError::NoCleanup)
     );
 }
 
-#[test]
-fn a_type_the_cleanup_does_not_take_is_refused() {
+#[tokio::test]
+async fn a_type_the_cleanup_does_not_take_is_refused() {
     let handles = handles(&["ExportJob", "TempDir"]);
-    handles.add(handle("TempDir", json!({}))).unwrap();
-    let error = handles.add(handle("Other", json!({}))).unwrap_err();
+    handles.add(handle("TempDir", json!({}))).await.unwrap();
+    let error = handles.add(handle("Other", json!({}))).await.unwrap_err();
     assert_eq!(
         error.to_string(),
         "handle type `Other` isn't one its cleanup takes (ExportJob, TempDir)"
     );
 }
 
-#[test]
-fn a_secret_in_a_handle_is_masked_before_it_is_kept() {
+#[tokio::test]
+async fn a_secret_in_a_handle_is_masked_before_it_is_kept() {
     let mask = Arc::new(MaskSet::new(4));
     mask.add("etl/db#password", "hunter22");
     let handles = AttemptHandles::new(Some(&cleanup(&[])), mask);
     handles
         .add(handle("Job", json!({"token": "hunter22", "id": "j-1"})))
+        .await
         .unwrap();
     assert_eq!(
         handles.list()[0].value,
@@ -66,42 +67,42 @@ fn a_secret_in_a_handle_is_masked_before_it_is_kept() {
     );
 }
 
-#[test]
-fn handles_over_the_limit_in_all_are_refused_and_the_rest_kept() {
+#[tokio::test]
+async fn handles_over_the_limit_in_all_are_refused_and_the_rest_kept() {
     let handles = handles(&[]);
     let big = "x".repeat(MAX_HANDLES_SIZE / 2);
-    handles.add(handle("A", json!(big))).unwrap();
-    let error = handles.add(handle("A", json!(big))).unwrap_err();
+    handles.add(handle("A", json!(big))).await.unwrap();
+    let error = handles.add(handle("A", json!(big))).await.unwrap_err();
     assert!(matches!(error, HandleError::TooLarge { .. }), "{error}");
     assert_eq!(handles.list().len(), 1);
-    handles.add(handle("A", json!("small"))).unwrap();
+    handles.add(handle("A", json!("small"))).await.unwrap();
 }
 
-#[test]
-fn a_cleanup_registers_no_handle() {
+#[tokio::test]
+async fn a_cleanup_registers_no_handle() {
     let handles = handles(&[]);
     handles.close();
     assert_eq!(
-        handles.add(handle("A", json!({}))),
+        handles.add(handle("A", json!({}))).await,
         Err(HandleError::InCleanup)
     );
 }
 
-#[test]
-fn a_cleanup_taking_no_handles_refuses_them() {
+#[tokio::test]
+async fn a_cleanup_taking_no_handles_refuses_them() {
     let cleanup = TaskCleanup {
         handles: Some(Vec::new()),
         ..cleanup(&[])
     };
     let handles = AttemptHandles::new(Some(&cleanup), Arc::new(MaskSet::new(4)));
     assert_eq!(
-        handles.add(handle("A", json!({}))),
+        handles.add(handle("A", json!({}))).await,
         Err(HandleError::NoneTaken)
     );
 }
 
-#[test]
-fn all_that_was_accepted_can_be_read_back_in_one_message() {
+#[tokio::test]
+async fn all_that_was_accepted_can_be_read_back_in_one_message() {
     let handles = handles(&[]);
     let field = "x".repeat(1000);
     let mut accepted = 0;
@@ -110,6 +111,7 @@ fn all_that_was_accepted_can_be_read_back_in_one_message() {
             "A",
             json!({"long_field_name": field, "n": accepted}),
         ))
+        .await
         .is_ok()
     {
         accepted += 1;
@@ -123,4 +125,21 @@ fn all_that_was_accepted_can_be_read_back_in_one_message() {
         size <= schedr_model::ctx::MAX_CTX_MESSAGE_SIZE as usize,
         "{size}"
     );
+}
+
+#[tokio::test]
+async fn handles_keep_one_order_in_memory_and_in_the_journal() {
+    // Registered at once from several connections: a restart must not change the order.
+    let dir = tempfile::TempDir::new().unwrap();
+    let journal = Journal::new(dir.path().to_path_buf());
+    let handles = Arc::new(handles(&[]).journaled(journal.clone(), "a1".to_owned()));
+    let mut adding = tokio::task::JoinSet::new();
+    for n in 0..32 {
+        let handles = Arc::clone(&handles);
+        adding.spawn(async move { handles.add(handle("A", json!({"n": n}))).await });
+    }
+    while let Some(added) = adding.join_next().await {
+        added.unwrap().unwrap();
+    }
+    assert_eq!(journal.handles("a1").unwrap(), handles.list());
 }

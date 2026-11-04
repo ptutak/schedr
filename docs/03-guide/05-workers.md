@@ -98,8 +98,8 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
 5. **Cleanup.** If the task process started and has a cleanup, the agent reports `TaskEnded`
    and runs it on the same worker. The attempt holds its slot through the cleanup and its
    retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain
-   available. Handles are in agent memory, so they do not survive an agent restart; a lost
-   worker does not run its cleanup. See [Cleaning up after a task](../02-dags/15-cleanup.md).
+   available. Handles are journaled locally and survive an agent restart with the journal disk;
+   a lost worker does not run its cleanup. See [Cleaning up after a task](../02-dags/15-cleanup.md).
 6. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`: again on a reconnect, and while the connection stays up
    (the master may have failed to store it) after one heartbeat interval, then ever less often
@@ -392,18 +392,21 @@ resident set size when PSS cannot be read (see [Memory](#memory)).
 
 ## The journal
 
-One file per attempt under `<data_dir>/journal/<worker ID>/`, written atomically (a temporary
-file, fsync, rename) before the message it backs is sent. It holds `running` attempts, with
-their process group, and `finished` results not yet acknowledged.
+Under `<data_dir>/journal/<worker ID>/`, an attempt's record holds its process group, its
+`cleaning` task result and cleanup process, or its unacknowledged `finished` result. Records
+are written atomically (temporary file, fsync, rename). An attempt with cleanup also keeps
+`<attempt_id>.attempt` (assignment, inputs, code copy and hash) and `<attempt_id>.handles`
+(one handle per line). Handles stay on the worker; the master does not receive them.
 
-When the agent starts, it reads the journal before connecting:
-
-- **Finished results** are reported in `Register` and sent again. Nothing a task produced is
-  lost to an agent restart.
-- **Running attempts** belonged to the previous incarnation, and their processes can no
-  longer report to this agent. So it stops their process groups (SIGTERM, SIGKILL after 10 s)
-  and leaves them out of `Register`. The master then ends them `lost` (using a retry), with
-  the summary "worker restarted while the attempt ran (possibly out of memory)".
+At startup the agent stops orphaned process groups (SIGTERM, SIGKILL after 10 s). A finished
+result is reported in `Register`: `Ack` removes it, `Continue` sends it again, and `Kill`
+discards it. A running attempt without recoverable cleanup is left out of `Register`; the
+master ends it lost. With recoverable cleanup, the agent holds a slot and reports it as running.
+It waits for `Continue` before reporting `TaskEnded` and restarting cleanup with its handles,
+all tries and freshly read secrets. A task interrupted while running gets a `lost` result; one
+already cleaning keeps its task result. `Kill` discards the waiting cleanup. Even a record
+without a process identity gets cleanup, since the agent cannot tell whether it started. A
+journal write failure is logged; a result not written can be lost on restart before its ack.
 
 A process group is identified by its ID and its leader's start time, so a recycled PID is
 never signalled. Without `/proc` (macOS) that start time can't be read: the agent warns once
@@ -445,12 +448,13 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 
 | From the end of the grace period | What happens |
 |---|---|
-| − the termination and report periods, 5 s by default | Whatever still runs gets SIGTERM. |
+| Earlier, by one cleanup try | A task with cleanup gets SIGTERM early enough to leave room for that try, when possible. |
+| − the termination and report periods, 5 s by default | Other tasks still running get SIGTERM. Cleanups already running are left alone. |
 | − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
 | until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, sends `Deregister` and exits 0. |
 
-So the worker is gone before the pod is killed, and no task ends `lost` because it was slow
-to stop. The two times must fit in the grace period, else the worker doesn't start. A second
+A cleanup may outlast the grace period: the agent waits for it, but a pod killed meanwhile
+is lost. The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must fit in the grace period, else the worker doesn't start. A second
 SIGTERM interrupts at once.
 
 **For maintenance**, `schedr workers drain <id>` is a command. The worker gets no new tasks or

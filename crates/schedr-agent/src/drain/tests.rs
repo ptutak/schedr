@@ -106,3 +106,15 @@ fn waiting_for_acknowledgements_never_runs_past_the_end_of_the_grace_period() {
     assert_eq!(drain.step(start + secs(29), 0, 1, true), DrainStep::Wait);
     assert_eq!(drain.step(start + secs(30), 0, 1, true), DrainStep::Finish);
 }
+
+#[test]
+fn a_task_is_stopped_early_enough_for_one_try_of_its_cleanup() {
+    // A grace of 100 s, less the 5 s of the terminate and report periods: 95 s.
+    let start = Instant::now();
+    let drain = Drain::new(start, periods_of(100, 3, 2));
+    assert!(!drain.stop_due(start + secs(74), secs(20)));
+    assert!(drain.stop_due(start + secs(75), secs(20)));
+    assert!(!drain.stop_due(start + secs(94), Duration::ZERO));
+    assert!(drain.stop_due(start, secs(1000)), "too long: at once");
+    assert!(drain.stop_due(start, Duration::MAX), "no overflow");
+}

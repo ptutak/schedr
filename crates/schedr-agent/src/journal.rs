@@ -15,17 +15,25 @@
 //!   `/proc/<pid>/stat`), so a recycled PID isn't taken for the task. Without `/proc` the
 //!   agent warns once and nothing is stopped; once the leader is gone, nothing is stopped.
 //!
+//! - **Cleanups:** an attempt of a task with a cleanup also keeps `<attempt_id>.attempt`, what
+//!   its cleanup needs to run after a restart (the assignment and where its code is), written
+//!   before `Started`, and `<attempt_id>.handles`, its handles, a line each, on disk before
+//!   the task hears they are registered. Its record is `cleaning` from the task's end, with the
+//!   task's result: the cleanup runs again from there (see PROJECT.md, Per-task cleanup).
+//!
 //! - **One agent per journal:** it holds a lock (see [`Journal::lock`]).
 //!
 //! Its operations block (fsync); the agent runs them off its event loop.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use prost::Message;
 use rustix::process::{Pid, Signal, kill_process_group};
+use schedr_model::runner::CleanupHandle;
 use schedr_proto::pb;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +42,12 @@ mod tests;
 
 /// The prefix of a file being written; such files are removed on start.
 const TEMP_PREFIX: &str = ".tmp-";
+
+/// What a cleanup needs after a restart: `<attempt_id>.attempt`.
+const KEPT_EXTENSION: &str = "attempt";
+
+/// An attempt's handles, a line each: `<attempt_id>.handles`.
+const HANDLES_EXTENSION: &str = "handles";
 
 /// The lock file: one agent per journal.
 pub const LOCK_FILE: &str = ".lock";
@@ -55,15 +69,34 @@ pub struct ProcessIdentity {
 
 /// What the journal knows about an attempt.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one record per attempt, written once: boxing would only add an allocation"
-)]
 pub enum JournalRecord {
     /// Started; its process, once spawned and identified.
     Running(Option<ProcessIdentity>),
     /// Ended with this result, not yet acknowledged.
     Finished(pb::Finished),
+    /// The task ended with this result and its cleanup runs, in this process once identified.
+    Cleaning(pb::Finished, Option<ProcessIdentity>),
+}
+
+/// What a task's cleanup needs to run after an agent restart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeptAttempt {
+    /// Its assignment, the inputs inside it however they came.
+    pub assign: pb::AssignTask,
+    /// The copy of the code it ran with; `None`: the configured root.
+    pub code_dir: Option<PathBuf>,
+    /// The hash of that code.
+    pub code_hash: Option<String>,
+}
+
+/// A [`KeptAttempt`] as stored.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAttempt {
+    /// The `AssignTask` message, protobuf-encoded, as hex.
+    assign: String,
+    code_dir: Option<PathBuf>,
+    code_hash: Option<String>,
 }
 
 /// A journal file as stored.
@@ -78,6 +111,12 @@ enum Stored {
         attempt_id: String,
         /// The `Finished` message, protobuf-encoded, as hex.
         finished: String,
+    },
+    Cleaning {
+        attempt_id: String,
+        /// The task's `Finished` message, protobuf-encoded, as hex.
+        finished: String,
+        process: Option<ProcessIdentity>,
     },
 }
 
@@ -136,16 +175,114 @@ impl Journal {
                 attempt_id: attempt_id.to_owned(),
                 finished: to_hex(&finished.encode_to_vec()),
             },
+            JournalRecord::Cleaning(finished, process) => Stored::Cleaning {
+                attempt_id: attempt_id.to_owned(),
+                finished: to_hex(&finished.encode_to_vec()),
+                process: *process,
+            },
         };
         let json = serde_json::to_vec(&stored).map_err(io::Error::other)?;
+        self.replace(attempt_id, &path, &json)
+    }
+
+    /// Replaces `path` with `content`, atomically; on disk when this returns.
+    fn replace(&self, attempt_id: &str, path: &Path, content: &[u8]) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let temp = self.dir.join(format!("{TEMP_PREFIX}{attempt_id}"));
-        let mut file = File::create(&temp)?;
-        file.write_all(&json)?;
+        let mut file = private_file().truncate(true).open(&temp)?;
+        file.write_all(content)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temp, &path)?;
+        fs::rename(&temp, path)?;
         self.sync_dir()
+    }
+
+    /// Keeps what an attempt's cleanup needs to run after a restart; on disk when this
+    /// returns.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if it can't be written, or `InvalidInput` for an attempt ID that isn't a
+    /// safe file name.
+    pub fn keep(&self, attempt_id: &str, kept: &KeptAttempt) -> io::Result<()> {
+        let path = self.path(attempt_id)?.with_extension(KEPT_EXTENSION);
+        let stored = StoredAttempt {
+            assign: to_hex(&kept.assign.encode_to_vec()),
+            code_dir: kept.code_dir.clone(),
+            code_hash: kept.code_hash.clone(),
+        };
+        let json = serde_json::to_vec(&stored).map_err(io::Error::other)?;
+        self.replace(attempt_id, &path, &json)
+    }
+
+    /// What was kept for an attempt's cleanup; `None` if nothing was.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if it can't be read, `InvalidData` if it doesn't read as what was written,
+    /// or `InvalidInput` for an attempt ID that isn't a safe file name.
+    pub fn kept(&self, attempt_id: &str) -> io::Result<Option<KeptAttempt>> {
+        let path = self.path(attempt_id)?.with_extension(KEPT_EXTENSION);
+        let Some(bytes) = read_if_there(&path)? else {
+            return Ok(None);
+        };
+        let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
+        let stored: StoredAttempt =
+            serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+        let assign = from_hex(&stored.assign).ok_or_else(|| invalid("not hex".to_owned()))?;
+        Ok(Some(KeptAttempt {
+            assign: pb::AssignTask::decode(assign.as_slice())
+                .map_err(|e| invalid(e.to_string()))?,
+            code_dir: stored.code_dir,
+            code_hash: stored.code_hash,
+        }))
+    }
+
+    /// Adds a handle to an attempt's; on disk when this returns.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if it can't be written, or `InvalidInput` for an attempt ID that isn't a
+    /// safe file name.
+    pub fn add_handle(&self, attempt_id: &str, handle: &CleanupHandle) -> io::Result<()> {
+        let path = self.path(attempt_id)?.with_extension(HANDLES_EXTENSION);
+        let mut line = serde_json::to_vec(handle).map_err(io::Error::other)?;
+        line.push(b'\n');
+        fs::create_dir_all(&self.dir)?;
+        let new = !path.exists();
+        let mut file = private_file().append(true).open(&path)?;
+        file.write_all(&line)?;
+        file.sync_all()?;
+        if new {
+            self.sync_dir()?;
+        }
+        Ok(())
+    }
+
+    /// An attempt's handles, in registration order. A last line with no end, cut off by a
+    /// crash, was never acknowledged to the task, and is left out.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if they can't be read, `InvalidData` if a complete line doesn't read, or
+    /// `InvalidInput` for an attempt ID that isn't a safe file name.
+    pub fn handles(&self, attempt_id: &str) -> io::Result<Vec<CleanupHandle>> {
+        let path = self.path(attempt_id)?.with_extension(HANDLES_EXTENSION);
+        let bytes = read_if_there(&path)?.unwrap_or_default();
+        let complete = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(&[][..], |end| &bytes[..end]);
+        if complete.is_empty() {
+            return Ok(Vec::new());
+        }
+        complete
+            .split(|byte| *byte == b'\n')
+            .map(|line| {
+                serde_json::from_slice(line)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            })
+            .collect()
     }
 
     /// Forgets an attempt; one that isn't recorded is fine.
@@ -155,7 +292,15 @@ impl Journal {
     /// An I/O error if the file can't be removed, or `InvalidInput` for an attempt ID that
     /// isn't a safe file name.
     pub fn remove(&self, attempt_id: &str) -> io::Result<()> {
-        match fs::remove_file(self.path(attempt_id)?) {
+        let path = self.path(attempt_id)?;
+        // The record last: what is left of a crash here is removed on the next start.
+        for extension in [KEPT_EXTENSION, HANDLES_EXTENSION] {
+            match fs::remove_file(path.with_extension(extension)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+        }
+        match fs::remove_file(path) {
             Ok(()) => self.sync_dir(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
@@ -221,7 +366,25 @@ impl Journal {
             }
         }
         records.sort_by(|a, b| a.0.cmp(&b.0));
+        if clean {
+            self.remove_strays(&records)?;
+        }
         Ok(records)
+    }
+
+    /// Removes the kept files of attempts with no record (a crash between the two).
+    fn remove_strays(&self, records: &[(String, JournalRecord)]) -> io::Result<()> {
+        for entry in fs::read_dir(&self.dir)? {
+            let path = entry?.path();
+            let extension = path.extension().and_then(|e| e.to_str());
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if matches!(extension, Some(KEPT_EXTENSION | HANDLES_EXTENSION))
+                && !records.iter().any(|(id, _)| id == stem)
+            {
+                remove_logged(&path, "journal file with no record");
+            }
+        }
+        Ok(())
     }
 
     fn path(&self, attempt_id: &str) -> io::Result<PathBuf> {
@@ -241,6 +404,22 @@ impl Journal {
 
     fn sync_dir(&self) -> io::Result<()> {
         File::open(&self.dir)?.sync_all()
+    }
+}
+
+/// A journal file being opened: only its owner reads it, what it holds being the task's own.
+fn private_file() -> fs::OpenOptions {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true).mode(0o600);
+    options
+}
+
+/// A file's content; `None` if it isn't there.
+fn read_if_there(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -269,6 +448,16 @@ fn read(path: &Path, attempt_id: &str) -> io::Result<JournalRecord> {
             let finished =
                 pb::Finished::decode(bytes.as_slice()).map_err(|e| invalid(e.to_string()))?;
             (attempt_id, JournalRecord::Finished(finished))
+        }
+        Stored::Cleaning {
+            attempt_id,
+            finished,
+            process,
+        } => {
+            let bytes = from_hex(&finished).ok_or_else(|| invalid("not hex".to_owned()))?;
+            let finished =
+                pb::Finished::decode(bytes.as_slice()).map_err(|e| invalid(e.to_string()))?;
+            (attempt_id, JournalRecord::Cleaning(finished, process))
         }
     };
     if id == attempt_id {

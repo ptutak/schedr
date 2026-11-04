@@ -6930,6 +6930,51 @@ cleanup try, not its retries; after an agent restart cleanups run from the journ
 attempt's kept code, the attempt stays `lost` and its instance `cleaning_up` until they end, a
 missing copy being a failed cleanup; each mapped instance has its own cleanup.
 
+Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b:
+
+- **242. `cleanup add` doesn't wait for the master:** it returns once the handle is journaled and
+  sent, and it is sent again on reconnect. A pod lost in that gap loses the handle for
+  `cleanup_anywhere`. Not chosen: waiting for an acknowledgement (a master outage would stall
+  tasks).
+- **243. A cleanup on another worker is the same attempt, moved:** its row goes to the new
+  worker, so limits and slots stay right; the old worker's name stays in the log and the error
+  summary. Not chosen: a separate row or table (new slot, limit and ownership handling).
+- **244. A cleanup with no worker keeps its instance `cleaning_up`,** with the reason "no worker
+  for the cleanup", shown as `unschedulable` (how decision 221 is shown). Not chosen: a real
+  `unschedulable` state (it would be requeued as a new try).
+- **245. On another worker a cleanup runs that worker's current code,** like any assignment; a
+  cleanup function gone from it is a failed cleanup. Not chosen: only the original hash (it could
+  wait forever after a deploy).
+- **246. A moved cleanup uses the task's queue, ahead of waiting tasks, not held by limits** (as
+  decision 225). Not chosen: normal order (a leak waits behind queued work).
+- **247. Each move of a cleanup counts as a try:** after `retries + 1` it ends `worker_lost`. Not
+  chosen: no limit (a cleanup running out of memory would take down pod after pod).
+- **248. A cleanup from the journal starts only on the master's `Continue`,** the answer to
+  `Register`, so it never runs alongside a moved one; a master outage delays it. Not chosen: at
+  once, reporting later (it could run twice).
+- **249. A cleanup outlasting the grace period runs until the pod is killed:** a lost worker;
+  outside Kubernetes the agent waits for it. Not chosen: killing it at the end of the grace period
+  (leaves behind what it was cleaning, as decision 219).
+- **250. "`cleanup_timeout` doesn't fit" is logged at assignment, once per task,** not at startup
+  as first written: the agent doesn't know its tasks then. Not chosen: at startup for the server
+  default (with the 30 s default grace it would fire on nearly every start).
+- **251. M4.8b is two commits:** M4.8b the journal, restarts, the result kept, `worker_lost` and
+  the drain; M4.8b2 handles to the master and `cleanup_anywhere`. Not chosen: one commit.
+
+- **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
+  `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before
+  `Started`) and `<attempt_id>.handles` (a line each, on disk before the task hears of it) in the
+  journal, and a `cleaning` record from the task's end, with the result and the cleanup's process.
+  After a restart the agent stops what is left, holds a slot and waits for `Continue`: a task that
+  was running is `lost`, its end reported with `TaskEnded`, one in its cleanup keeps its result, and
+  the cleanup starts over with all its tries and its secrets read again. `Kill` drops it. An entry
+  stays `running` in `Register`: the master's answer is the same, so no new journal state was
+  needed. A record with no process yet still gets its cleanup: the agent can't tell whether one
+  started. The master keeps `TaskEnded`'s result in `attempts.task_result`; an attempt whose worker
+  is lost, or isn't reported after a restart, ends with it (else `lost`), with `worker_lost` as its
+  cleanup result. A drain stops each task at the deadline less one try of its cleanup, and never
+  touches one in its cleanup. No new configuration value.
+
 ### Timings: public keys and hidden ones
 
 - **Built (M4.8t; decisions 231-238):** what a deployment may need to tune is a key, the rest

@@ -33,8 +33,9 @@ Do not register something that must outlive the attempt.
 Handles are masked like task output, so a secret value in a handle may be replaced by its
 mask. Declare a secret separately if the cleanup needs it. All handles together are limited
 to about 1 MiB per attempt; exceeding the limit fails the registration and the attempt.
-Handles live in the agent's memory and are not kept across an agent restart. If the worker is
-lost, its cleanup does not run.
+Handles are journaled on the worker before registration returns and survive an agent restart
+when its journal disk survives. They are not sent to the master. After a restart the cleanup
+waits for the master's `Continue`; if the worker is lost, its cleanup does not run.
 
 ## A command
 

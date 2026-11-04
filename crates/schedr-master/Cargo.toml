@@ -12,6 +12,7 @@ prometheus-client.workspace = true
 croner.workspace = true
 jiff.workspace = true
 jsonschema.workspace = true
+prost.workspace = true
 prost-types.workspace = true
 schedr-db.workspace = true
 schedr-model.workspace = true

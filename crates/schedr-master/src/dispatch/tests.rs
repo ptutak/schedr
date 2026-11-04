@@ -627,7 +627,10 @@ async fn a_lost_workers_attempts_use_a_retry() {
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
-    dispatcher.worker_lost("w1", ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(dispatcher.workers().get("w1"), None);
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
@@ -643,6 +646,109 @@ async fn a_lost_workers_attempts_use_a_retry() {
     assert_eq!(summary.exception, "WorkerLost");
 }
 
+/// [`dag`], `extract` with a cleanup.
+fn dag_with_cleanup(retries: u32) -> Dag {
+    let mut dag = serde_json::to_value(dag(retries)).unwrap();
+    dag["tasks"][0]["cleanup"] = json!({"run": "python", "retries": 0, "retry_delay_ms": 0});
+    serde_json::from_value(dag).unwrap()
+}
+
+async fn extract_instance(db: &Database, run_id: &str) -> schedr_db::instances::StoredInstance {
+    let run = db.run_tasks(run_id).await.unwrap().unwrap();
+    run.instances
+        .into_iter()
+        .find(|i| i.task_id == id("extract"))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_worker_lost_during_the_cleanup_leaves_the_tasks_result() {
+    // Decision 229: a finished task isn't run again; its cleanup counts as failed.
+    let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
+    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    assert_eq!(
+        extract_instance(&db, &run_id).await.state,
+        TaskInstanceState::CleaningUp
+    );
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        (extract.state, extract.retries_used, extract.cleanup_result),
+        (
+            TaskInstanceState::Success,
+            0,
+            Some(CleanupResult::WorkerLost)
+        )
+    );
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Success)
+    );
+    let outputs = db.run_outputs(&run_id).await.unwrap();
+    assert_eq!(outputs.get(&id("extract")), Some(&json!(7)));
+    assert_eq!(db.task_result(&attempt).await.unwrap(), None, "let go");
+}
+
+#[tokio::test]
+async fn a_task_lost_with_its_worker_has_a_failed_cleanup_and_its_retry() {
+    // Decision 220: the master can't know what the attempt did.
+    let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        (extract.state, extract.cleanup_result),
+        (
+            TaskInstanceState::UpForRetry,
+            Some(CleanupResult::WorkerLost)
+        )
+    );
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Lost)
+    );
+}
+
+#[tokio::test]
+async fn an_attempt_a_restarted_agent_doesnt_report_keeps_its_tasks_result() {
+    let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
+    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .incarnation_replaced("w1", &BTreeSet::new(), ts(NOW))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        (extract.state, extract.cleanup_result),
+        (TaskInstanceState::Success, Some(CleanupResult::WorkerLost))
+    );
+}
+
 #[tokio::test]
 async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
     // B17: a worker draining and leaving (or lost) ended every open attempt `lost`, using a
@@ -651,7 +757,10 @@ async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
-    dispatcher.worker_lost("w1", ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::AssignmentExpired)
@@ -1162,7 +1271,10 @@ async fn a_task_every_remaining_worker_rejected_says_so() {
     let attempt = assignment(&out[0]).attempt_id.clone();
     let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
     dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
-    dispatcher.worker_lost("w2", ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w2", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
@@ -1598,7 +1710,11 @@ mod faults {
             Self(Running::new(true).await)
         }
         async fn run(&mut self) {
-            let _ = self.0.dispatcher.worker_lost("w1", ts(NOW)).await;
+            let _ = self
+                .0
+                .dispatcher
+                .worker_lost("w1", KeptResults::Used, ts(NOW))
+                .await;
         }
         fn db(&self) -> &Database {
             &self.0.db
@@ -1689,7 +1805,10 @@ mod faults {
         }
         async fn run(&mut self) {
             let lost = self.lost.clone();
-            let _ = self.dispatcher.worker_lost(&lost, ts(NOW)).await;
+            let _ = self
+                .dispatcher
+                .worker_lost(&lost, KeptResults::Used, ts(NOW))
+                .await;
         }
         fn db(&self) -> &Database {
             &self.db

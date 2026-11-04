@@ -51,3 +51,34 @@ fn the_master_service_has_a_client_and_a_server() {
         "schedr.protocol.v1.Master"
     );
 }
+
+/// Every name of `master.proto`'s control messages and rpcs, as the protocol page must have them.
+fn protocol_names(proto: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_oneof = false;
+    for line in proto.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("rpc ") {
+            names.extend(rest.split('(').next().map(str::to_owned));
+        } else if line.starts_with("oneof message") {
+            in_oneof = true;
+        } else if in_oneof && line == "}" {
+            in_oneof = false;
+        } else if in_oneof {
+            names.extend(line.split_whitespace().next().map(str::to_owned));
+        }
+    }
+    names
+}
+
+#[test]
+fn the_protocol_page_names_every_message_and_rpc() {
+    let proto = include_str!("../proto/schedr/protocol/v1/master.proto");
+    let page = include_str!("../../../docs/03-guide/15-protocol.md");
+    let names = protocol_names(proto);
+    assert!(names.len() >= 20, "{names:?}");
+    let missing: Vec<&String> = names
+        .iter()
+        .filter(|name| !page.contains(&format!("`{name}`")))
+        .collect();
+    assert_eq!(missing, Vec::<&String>::new());
+}

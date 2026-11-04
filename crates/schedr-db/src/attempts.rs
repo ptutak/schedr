@@ -101,6 +101,8 @@ pub struct StoredAttempt {
     pub started: bool,
     /// Its task instance's place among a mapped task's instances; -1 for an unmapped task.
     pub map_index: i32,
+    /// Whether the task's result is kept while its cleanup runs.
+    pub result_kept: bool,
 }
 
 /// How an attempt ended.
@@ -190,16 +192,17 @@ type AttemptRow = (
     Option<String>,
     bool,
     i32,
+    bool,
 );
 
 /// The attempt queries (sqlx needs `'static` text, so the shared columns are written out).
 const ATTEMPT_BY_ID: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.id = $1{uuid}";
 const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
 const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.task_id \
@@ -207,7 +210,7 @@ const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.ta
     JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL ORDER BY a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+    t.map_index, a.task_result IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.started_at IS NULL AND a.assigned_at < $1{ts} \
     ORDER BY a.assigned_at, a.id LIMIT $2";
 
@@ -365,6 +368,40 @@ impl Database {
         rows.into_iter().map(stored_attempt).collect()
     }
 
+    /// Keeps the task's result of an open attempt while its cleanup runs (decision 229).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the write fails.
+    pub async fn set_task_result(&self, attempt_id: &str, result: &[u8]) -> Result<(), DbError> {
+        const SET: &str = "UPDATE attempts SET task_result = $1 \
+            WHERE id = $2{uuid} AND status IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(result)
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// The task's result kept for an attempt, if its process's end was reported.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn task_result(&self, attempt_id: &str) -> Result<Option<Vec<u8>>, DbError> {
+        const GET: &str = "SELECT task_result FROM attempts WHERE id = $1{uuid}";
+        let row: Option<(Option<Vec<u8>>,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, GET))
+                .bind(attempt_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(row.and_then(|(result,)| result))
+    }
+
     /// Every open attempt (no end recorded) with its DAG, run and task: what the concurrency
     /// limits count (decision 88A), read when the master starts dispatching.
     ///
@@ -506,7 +543,7 @@ impl Database {
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
             ended_at = $8{ts}, duration_ms = $9, usage = $10{json}, core_dumped = $11, \
             cleanup_result = $12, cleanup_tries = $13, cleanup_duration_ms = $14, \
-            cleanup_error_kind = $15, cleanup_error_summary = $16{json} \
+            cleanup_error_kind = $15, cleanup_error_summary = $16{json}, task_result = NULL \
             WHERE id = $17{uuid} AND status IS NULL";
         let cleanup = end.cleanup.as_ref();
         let updated = in_tx!(self, |tx, backend| {
@@ -770,7 +807,8 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
 }
 
 fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
-    let (id, instance_id, run_id, task_id, try_number, worker_id, status, started, map_index) = row;
+    let (id, instance_id, run_id, task_id, try_number, worker_id, status, started, map_index, kept) =
+        row;
     Ok(StoredAttempt {
         id,
         instance_id,
@@ -783,5 +821,6 @@ fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
             .transpose()?,
         started,
         map_index,
+        result_kept: kept,
     })
 }

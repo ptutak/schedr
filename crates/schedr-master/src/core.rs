@@ -24,7 +24,7 @@ use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
 use crate::commands::{Applied, CommandError, Commander, parse_connection_job_id};
 use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
-    DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, Outgoing,
+    DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, KeptResults, Outgoing,
 };
 use crate::execution::ExecutionError;
 use crate::metrics::MasterMetrics;
@@ -160,6 +160,12 @@ impl CoreError {
             _ => false,
         }
     }
+}
+
+/// Whether a `TaskEnded` cut off at its commit stored what it was for: the result kept, or the
+/// attempt over (nothing to keep it for).
+fn result_landed(attempt: Option<&schedr_db::attempts::StoredAttempt>) -> bool {
+    attempt.is_none_or(|a| a.result_kept || a.status.is_some())
 }
 
 /// A `Finished` whose result the database refused, as the attempt's failure: kind
@@ -625,8 +631,8 @@ impl MasterCore {
         Ok(moved.into_iter().map(assign_parse).collect())
     }
 
-    /// A task's process ended and its cleanup starts: only a state shown, `Finished` settles
-    /// the attempt either way.
+    /// A task's process ended and its cleanup starts: the result is kept for a worker lost
+    /// meanwhile (decision 229); `Finished` settles the attempt otherwise.
     async fn task_ended(
         &mut self,
         worker_id: &str,
@@ -638,8 +644,9 @@ impl MasterCore {
         };
         let (db, memory) = (self.db.clone(), self.dispatcher.memory());
         let id = result.attempt_id.as_str();
-        let handled = Box::pin(db.atomically(self.dispatcher.task_ended(worker_id, id, now))).await;
-        self.settle(handled, memory, id, |_| true).await?;
+        let handled =
+            Box::pin(db.atomically(self.dispatcher.task_ended(worker_id, &result, now))).await;
+        self.settle(handled, memory, id, result_landed).await?;
         Ok(())
     }
 
@@ -1243,6 +1250,34 @@ impl MasterCore {
         })
     }
 
+    /// A worker's state and the end of its attempts, in one transaction, memory put back if it
+    /// fails.
+    async fn store_gone(
+        &mut self,
+        worker_id: &str,
+        state: WorkerState,
+        results: KeptResults,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        let stored = Box::pin(db.atomically(async {
+            self.db.set_worker_state(worker_id, state, now).await?;
+            self.dispatcher.worker_lost(worker_id, results, now).await?;
+            Ok::<(), CoreError>(())
+        }))
+        .await;
+        if let Err(error) = stored {
+            self.dispatcher.restore(memory);
+            if matches!(error, CoreError::Db(DbError::CommitUnknown))
+                || matches!(&error, CoreError::Dispatch(e) if e.commit_unknown())
+            {
+                self.dispatcher.recount();
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// A worker deregistered (`Offline`) or is lost (`Lost`): its attempts end `lost`, its
     /// parse jobs move on, and the registry keeps it listed in that state.
     async fn forget(
@@ -1257,21 +1292,18 @@ impl MasterCore {
         // anywhere is retried whole by the next tick's lease check, which looks only at
         // connections (B42); each step can be done again. (`worker_lost` joins this
         // transaction; the snapshot here covers its memory too.)
-        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
-        let stored = Box::pin(db.atomically(async {
-            self.db.set_worker_state(worker_id, state, now).await?;
-            self.dispatcher.worker_lost(worker_id, now).await?;
-            Ok::<(), CoreError>(())
-        }))
-        .await;
-        if let Err(error) = stored {
-            self.dispatcher.restore(memory);
-            if matches!(error, CoreError::Db(DbError::CommitUnknown))
-                || matches!(&error, CoreError::Dispatch(e) if e.commit_unknown())
-            {
-                self.dispatcher.recount();
+        let stored = self
+            .store_gone(worker_id, state, KeptResults::Used, now)
+            .await;
+        match stored {
+            // A kept result the database refuses would hold the worker, and those after it,
+            // for ever: this time without it.
+            Err(error) if error.is_data_fault() => {
+                tracing::error!(worker_id, %error, "a kept result the database refuses");
+                self.store_gone(worker_id, state, KeptResults::Refused, now)
+                    .await?;
             }
-            return Err(error);
+            stored => stored?,
         }
         // Moved in memory: sent whatever fails after (B7).
         let moved = self.discovery.jobs_mut().worker_lost(worker_id, now);

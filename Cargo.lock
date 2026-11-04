@@ -3310,6 +3310,7 @@ dependencies = [
  "pretty_assertions",
  "prometheus-client",
  "proptest",
+ "prost",
  "prost-types",
  "rstest",
  "schedr-config",

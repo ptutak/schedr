@@ -202,6 +202,9 @@ CREATE TABLE attempts (
     cleanup_duration_ms BIGINT,
     cleanup_error_kind TEXT,
     cleanup_error_summary JSONB,
+    -- The task's result (a protobuf `Finished`), kept from its process's end until the attempt
+    -- ends: a worker lost during the cleanup doesn't lose it (decision 229).
+    task_result       BYTEA,
     UNIQUE (task_instance_id, try_number)
 );
 

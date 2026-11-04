@@ -27,6 +27,8 @@ struct Fake {
     parsed: Arc<Mutex<Vec<Vec<String>>>>,
     /// The directory of each parse, and each Python task's working directory.
     dirs: Arc<Mutex<Vec<PathBuf>>>,
+    /// The handles of each cleanup left by an earlier agent.
+    cleanups: Arc<Mutex<Vec<Vec<CleanupHandle>>>>,
 }
 
 impl Executor for Fake {
@@ -36,10 +38,22 @@ impl Executor for Fake {
         plan: Plan,
         mut stop: Stops,
         spawned: Spawned,
-        _ended: TaskEnded,
+        ended: TaskEnded,
     ) -> pb::Finished {
         if let Plan::Python { process, .. } = &plan {
             self.dirs.lock().unwrap().push(process.working_dir.clone());
+        }
+        // A task named `cleaning` ends, and stays in its cleanup.
+        if spec.task.id.as_str() == "cleaning" {
+            spawned(NO_PROCESS, false);
+            ended(pb::Finished {
+                attempt_id: spec.attempt_id.clone(),
+                status: pb::AttemptStatus::Success.into(),
+                output_json: b"7".to_vec(),
+                ..pb::Finished::default()
+            });
+            spawned(NO_PROCESS, false);
+            std::future::pending::<()>().await;
         }
         // A task named `forked` stands for one forked from a fork server.
         spawned(NO_PROCESS, spec.task.id.as_str() == "forked");
@@ -57,6 +71,23 @@ impl Executor for Fake {
             output_json: b"null".to_vec(),
             ..pb::Finished::default()
         }
+    }
+
+    async fn cleanup(
+        &self,
+        _spec: AttemptSpec,
+        mut ended: pb::Finished,
+        handles: Vec<CleanupHandle>,
+        _spawned: Spawned,
+    ) -> pb::Finished {
+        tokio::task::yield_now().await; // a real cleanup starts a process
+        self.cleanups.lock().unwrap().push(handles);
+        ended.cleanup = Some(pb::CleanupResult {
+            status: pb::CleanupStatus::Ok.into(),
+            tries: 1,
+            ..pb::CleanupResult::default()
+        });
+        ended
     }
 
     async fn parse(
@@ -493,10 +524,42 @@ fn task_json(kind: &serde_json::Value) -> serde_json::Value {
     task
 }
 
+/// A task with a cleanup of `timeout_ms`.
+fn task_with_cleanup(timeout_ms: u64) -> serde_json::Value {
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["cleanup"] = json!({
+        "run": "python", "retries": 0, "retry_delay_ms": 0, "timeout_ms": timeout_ms,
+    });
+    task
+}
+
+/// What the journal keeps of an attempt of [`task_with_cleanup`].
+fn kept(attempt_id: &str) -> KeptAttempt {
+    let task = task_with_cleanup(1000);
+    let message = assign(attempt_id, &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assign)) = message.message else {
+        panic!("expected an assignment")
+    };
+    KeptAttempt {
+        assign,
+        code_dir: None,
+        code_hash: None,
+    }
+}
+
+fn one_handle() -> CleanupHandle {
+    CleanupHandle {
+        handle_type: "Job".to_owned(),
+        value: json!({"id": "j-1"}),
+    }
+}
+
 /// The journal an agent starts with.
 enum Start {
     /// These records (none: a new worker).
     With(Vec<(&'static str, JournalRecord)>),
+    /// These records, each of an attempt of a task with a cleanup, and its one handle.
+    Kept(Vec<(&'static str, JournalRecord)>),
     /// A journal that can't be written.
     Unwritable,
 }
@@ -541,6 +604,13 @@ async fn against_master(
         Start::With(records) => {
             for (attempt_id, record) in records {
                 journal.write(attempt_id, &record).unwrap();
+            }
+        }
+        Start::Kept(records) => {
+            for (attempt_id, record) in records {
+                journal.write(attempt_id, &record).unwrap();
+                journal.keep(attempt_id, &kept(attempt_id)).unwrap();
+                journal.add_handle(attempt_id, &one_handle()).unwrap();
             }
         }
         Start::Unwritable => std::fs::write(journal.dir(), "a file").unwrap(),
@@ -1870,7 +1940,7 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
         }
         let started = std::time::Instant::now();
         let finished = executor
-            .run(spec, plan, stops, Box::new(|_, _| {}), Box::new(|_| {}))
+            .run(spec, plan, stops, Arc::new(|_, _| {}), Box::new(|_| {}))
             .await;
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
@@ -1897,7 +1967,7 @@ async fn the_timeout_covers_the_secret_read_and_the_command_together() {
                 spec,
                 plan,
                 stops,
-                Box::new(move |_, _| assert!(files.join("db/DB/pgpass").is_file())),
+                Arc::new(move |_, _| assert!(files.join("db/DB/pgpass").is_file())),
                 Box::new(|_| {}),
             )
             .await;
@@ -1935,7 +2005,7 @@ async fn a_fetch_finishing_with_no_time_left_does_not_start_and_removes_connecti
             spec,
             plan,
             stops,
-            Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+            Arc::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
             Box::new(|_| {}),
         )
         .await;
@@ -1990,7 +2060,7 @@ fn the_timeout_covers_a_commands_slow_start() {
                 spec,
                 plan,
                 stops,
-                Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+                Arc::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
                 Box::new(|_| {}),
             )
             .await;
@@ -2086,7 +2156,7 @@ async fn command_with_connection(
     let plan = crate::attempt::plan(&spec, &setup).unwrap();
     let (_sender, stops) = Stops::new();
     let finished = executor
-        .run(spec, plan, stops, Box::new(|_, _| {}), Box::new(|_| {}))
+        .run(spec, plan, stops, Arc::new(|_, _| {}), Box::new(|_| {}))
         .await;
     let out = std::fs::read_to_string(dir.path().join("etl/out")).unwrap_or_default();
     (finished, out, dir)
@@ -2385,7 +2455,7 @@ async fn run_with_cleanup(
             spec,
             plan,
             stops,
-            Box::new(|_, _| {}),
+            Arc::new(|_, _| {}),
             Box::new(move |ended| *telling.lock().unwrap() = Some(ended)),
         )
         .await;
@@ -2552,4 +2622,236 @@ time.sleep(30)
     assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
     let summary = String::from_utf8(cleanup.error_summary_json).unwrap();
     assert!(summary.contains(MEMORY_EXCEPTION), "{summary}");
+}
+
+/// The answer to `Register`: `decision` for `attempt_id`.
+fn decided(attempt_id: &str, decision: pb::AttemptDecision) -> pb::MasterMessage {
+    to_worker(master_message::Message::Registered(pb::Registered {
+        max_message_size: 0,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![pb::JournalDecision {
+            attempt_id: attempt_id.to_owned(),
+            decision: decision.into(),
+        }],
+    }))
+}
+
+/// The `Finished` among `seen`.
+fn result_in(seen: &[pb::WorkerMessage]) -> &pb::Finished {
+    seen.iter()
+        .find_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Finished(finished) => Some(finished),
+            _ => None,
+        })
+        .expect("a result")
+}
+
+#[tokio::test]
+async fn a_task_cut_off_by_a_restart_is_lost_and_its_cleanup_runs_on_continue() {
+    let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
+    let script = vec![decided("old-1", pb::AttemptDecision::Continue)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: failed");
+    let cleanups = Arc::new(Mutex::new(Vec::new()));
+    let seen_cleanups = Arc::clone(&cleanups);
+    let (seen, left) = against_script_with(2, start, script, done, |agent| {
+        agent.executor.cleanups = seen_cleanups;
+    })
+    .await;
+    assert_eq!(kinds(&seen), ["register", "task ended", "finished: failed"]);
+    let finished = result_in(&seen);
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Lost));
+    let cleanup = finished.cleanup.as_ref().unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Ok));
+    assert_eq!(*cleanups.lock().unwrap(), [vec![one_handle()]]);
+    assert_eq!(left, ["old-1"], "unacknowledged, it stays in the journal");
+}
+
+#[tokio::test]
+async fn a_cleanup_cut_off_by_a_restart_runs_again_and_keeps_the_tasks_result() {
+    let ended = pb::Finished {
+        attempt_id: "old-1".to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: b"7".to_vec(),
+        ..pb::Finished::default()
+    };
+    let start = Start::Kept(vec![(
+        "old-1",
+        JournalRecord::Cleaning(ended, Some(NO_PROCESS)),
+    )]);
+    let script = vec![decided("old-1", pb::AttemptDecision::Continue)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: success");
+    let (seen, _) = against_script_with(2, start, script, done, |_| {}).await;
+    let finished = result_in(&seen);
+    assert_eq!(finished.output_json, b"7");
+    assert!(finished.cleanup.is_some());
+}
+
+#[tokio::test]
+async fn a_cleanup_the_master_ended_isnt_run_after_a_restart() {
+    // Decision 248: it may have been moved, or its attempt ended: its slot goes too.
+    let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
+    let script = vec![decided("old-1", pb::AttemptDecision::Kill)];
+    let free = |m: &pb::WorkerMessage| {
+        matches!(
+            m.message.as_ref(),
+            Some(worker_message::Message::Heartbeat(pb::Heartbeat {
+                free_slots: 2,
+                ..
+            }))
+        )
+    };
+    let done = |m: &[pb::WorkerMessage]| m.iter().any(free);
+    let cleanups = Arc::new(Mutex::new(Vec::new()));
+    let seen_cleanups = Arc::clone(&cleanups);
+    let (seen, left) = against_script_with(2, start, script, done, |agent| {
+        agent.executor.cleanups = seen_cleanups;
+    })
+    .await;
+    assert_eq!(kinds(&seen), ["register"]);
+    assert_eq!(cleanups.lock().unwrap().len(), 0);
+    assert_eq!(left, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_cleanup_left_by_an_agent_waits_for_the_masters_word_in_a_slot() {
+    let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
+    let done = |m: &[pb::WorkerMessage]| heartbeats(m) >= 2;
+    let registered = decided("other", pb::AttemptDecision::Ack);
+    let (seen, left) = against_script(2, start, vec![registered], done).await;
+    assert_eq!(kinds(&seen), ["register"]);
+    let beat = seen
+        .iter()
+        .find_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Heartbeat(beat) => Some(beat),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(beat.free_slots, 1);
+    assert_eq!(beat.running_attempt_ids, ["old-1"]);
+    assert_eq!(left, ["old-1"]);
+}
+
+#[tokio::test]
+async fn a_drain_stops_a_task_early_enough_for_one_try_of_its_cleanup() {
+    // A grace of 30 s and a cleanup of 60 s: stopped at once. The other task has until 25 s.
+    let mut with_cleanup = task_with_cleanup(60_000);
+    with_cleanup["id"] = json!("wait");
+    let mut plain = task_json(&json!({"kind": "python"}));
+    plain["id"] = json!("wait");
+    let script = vec![
+        assign("a1", &with_cleanup, "sync.py", false),
+        assign("a2", &plain, "sync.py", false),
+    ];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: interrupted");
+    let (seen, _) = against_script_with(2, Start::With(vec![]), script, done, |agent| {
+        let (requests, shutdown) = watch::channel(0);
+        agent.shutdown = Some(shutdown);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = requests.send(1);
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+    })
+    .await;
+    assert_eq!(result_in(&seen).attempt_id, "a1");
+}
+
+#[tokio::test]
+async fn a_task_in_its_cleanup_is_journaled_with_its_result_and_the_cleanups_process() {
+    let mut task = task_with_cleanup(1000);
+    task["id"] = json!("cleaning");
+    let script = vec![assign("a1", &task, "sync.py", false)];
+    let journal = Arc::new(Mutex::new(None));
+    let seen_journal = Arc::clone(&journal);
+    let done = |m: &[pb::WorkerMessage]| {
+        let journal = journal.lock().unwrap();
+        let journal: &Journal = journal.as_ref().unwrap();
+        kinds(m).contains(&"task ended")
+            && journal.kept("a1").unwrap().is_some()
+            && matches!(
+                journal.record("a1").unwrap(),
+                Some(JournalRecord::Cleaning(ended, Some(_))) if ended.output_json == b"7"
+            )
+    };
+    let (seen, _) = against_script_with(2, Start::With(vec![]), script, done, |agent| {
+        *seen_journal.lock().unwrap() = Some(agent.journal.clone());
+    })
+    .await;
+    assert_eq!(kinds(&seen), ["register", "started", "task ended"]);
+}
+
+#[tokio::test]
+async fn a_cleanup_after_a_restart_runs_with_its_handles_and_fetches_its_secrets_again() {
+    let attempt = attempt_with_cleanup("exit 0", "echo cleanup >> $OUT", 0);
+    let (executor, spec, _plan, dir) = attempt;
+    let ended = pb::Finished {
+        attempt_id: spec.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    };
+    let finished = executor
+        .cleanup(spec, ended, vec![one_handle()], Arc::new(|_, _| {}))
+        .await;
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Success));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(
+        cleanup.status,
+        i32::from(pb::CleanupStatus::Ok),
+        "{cleanup:?}"
+    );
+    let out = std::fs::read_to_string(dir.path().join("out")).unwrap();
+    assert_eq!(out, "cleanup\n");
+}
+
+#[tokio::test]
+async fn a_cleanup_whose_code_copy_is_gone_fails() {
+    let attempt = attempt_with_cleanup("exit 0", "echo cleanup >> $OUT", 0);
+    let (executor, mut spec, _plan, dir) = attempt;
+    spec.code_dir = Some(dir.path().join("gone"));
+    let ended = pb::Finished {
+        attempt_id: spec.attempt_id.clone(),
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    };
+    let finished = executor
+        .cleanup(spec, ended, Vec::new(), Arc::new(|_, _| {}))
+        .await;
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    assert_eq!(cleanup.tries, 0);
+    assert!(!dir.path().join("out").exists());
+}
+
+#[tokio::test]
+async fn a_task_end_sent_again_fits_the_limit_the_master_has_now() {
+    // As B47: a result kept under a larger limit, to a master accepting less, would end the
+    // stream on every reconnect.
+    let big = pb::Finished {
+        attempt_id: "a1".to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        output_json: vec![b'7'; 1 << 20],
+        ..pb::Finished::default()
+    };
+    let limit = 64 << 10;
+    let mut registered = decided("a1", pb::AttemptDecision::Continue);
+    if let Some(master_message::Message::Registered(answer)) = &mut registered.message {
+        answer.max_message_size = limit;
+    }
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"task ended");
+    let (seen, _) = against_script_with(2, Start::With(vec![]), vec![registered], done, |agent| {
+        agent.cleaning.insert("a1".to_owned(), big);
+    })
+    .await;
+    let sent = seen
+        .iter()
+        .find_map(|m| match m.message.as_ref()? {
+            worker_message::Message::TaskEnded(ended) => ended.result.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert!(prost::Message::encoded_len(sent) <= usize::try_from(limit).unwrap());
 }

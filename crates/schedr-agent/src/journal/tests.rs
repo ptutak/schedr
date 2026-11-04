@@ -297,3 +297,113 @@ fn the_group_of_init_or_of_everything_is_never_an_orphan() {
     assert_eq!(orphan_group(-7), None);
     assert_eq!(orphan_group(4242), Pid::from_raw(4242));
 }
+
+fn handle(id: &str) -> CleanupHandle {
+    CleanupHandle {
+        handle_type: "Job".to_owned(),
+        value: serde_json::json!({"id": id}),
+    }
+}
+
+fn kept() -> KeptAttempt {
+    KeptAttempt {
+        assign: pb::AssignTask {
+            attempt_id: "a1".to_owned(),
+            inputs_json: b"{}".to_vec(),
+            ..pb::AssignTask::default()
+        },
+        code_dir: Some(PathBuf::from("/code/h1")),
+        code_hash: Some("h1".to_owned()),
+    }
+}
+
+#[test]
+fn a_cleaning_record_keeps_the_tasks_result_and_the_process() {
+    let (_dir, journal) = journal();
+    let process = ProcessIdentity {
+        pgid: 7,
+        start_time: 9,
+    };
+    let record = JournalRecord::Cleaning(finished("a1"), Some(process));
+    journal.write("a1", &record).unwrap();
+    assert_eq!(journal.record("a1").unwrap(), Some(record));
+}
+
+#[test]
+fn what_a_cleanup_needs_is_kept_and_goes_with_the_attempt() {
+    let (_dir, journal) = journal();
+    journal.write("a1", &JournalRecord::Running(None)).unwrap();
+    journal.keep("a1", &kept()).unwrap();
+    journal.add_handle("a1", &handle("j-1")).unwrap();
+    journal.add_handle("a1", &handle("j-2")).unwrap();
+    assert_eq!(journal.kept("a1").unwrap(), Some(kept()));
+    assert_eq!(
+        journal.handles("a1").unwrap(),
+        [handle("j-1"), handle("j-2")]
+    );
+    assert_eq!(journal.recover().unwrap().len(), 1, "they aren't records");
+    journal.remove("a1").unwrap();
+    assert_eq!(names(&journal), Vec::<String>::new());
+    assert_eq!(journal.kept("a1").unwrap(), None);
+}
+
+#[test]
+fn a_handle_cut_off_by_a_crash_is_left_out() {
+    // Never acknowledged: the task didn't go on believing it registered.
+    let (_dir, journal) = journal();
+    journal.add_handle("a1", &handle("j-1")).unwrap();
+    let path = journal.dir().join("a1.handles");
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(br#"{"handle_type":"Jo"#).unwrap();
+    assert_eq!(journal.handles("a1").unwrap(), [handle("j-1")]);
+}
+
+#[test]
+fn kept_files_with_no_record_are_removed_on_start() {
+    let (_dir, journal) = journal();
+    journal.keep("a1", &kept()).unwrap();
+    journal.add_handle("a1", &handle("j-1")).unwrap();
+    journal.write("a2", &JournalRecord::Running(None)).unwrap();
+    journal.keep("a2", &kept()).unwrap();
+    journal.recover().unwrap();
+    assert_eq!(names(&journal), ["a2.attempt", "a2.json"]);
+}
+
+#[test]
+fn a_handles_file_that_cant_be_read_is_an_error_not_an_empty_list() {
+    // Read as none, a cleanup could report success and leave the resources behind.
+    let (_dir, journal) = journal();
+    fs::create_dir_all(journal.dir().join("a1.handles")).unwrap();
+    assert!(journal.handles("a1").is_err());
+    fs::create_dir_all(journal.dir().join("a1.attempt")).unwrap();
+    assert!(journal.kept("a1").is_err());
+}
+
+#[test]
+fn a_damaged_complete_handle_line_is_an_error() {
+    let (_dir, journal) = journal();
+    journal.add_handle("a1", &handle("j-1")).unwrap();
+    let path = journal.dir().join("a1.handles");
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(b"not json\n").unwrap();
+    assert_eq!(
+        journal.handles("a1").unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+}
+
+#[test]
+fn the_journals_files_are_its_owners_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, journal) = journal();
+    journal.write("a1", &JournalRecord::Running(None)).unwrap();
+    journal.keep("a1", &kept()).unwrap();
+    journal.add_handle("a1", &handle("j-1")).unwrap();
+    for name in names(&journal) {
+        let mode = fs::metadata(journal.dir().join(&name))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
+}

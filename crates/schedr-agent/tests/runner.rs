@@ -615,7 +615,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
         deadline: tokio::time::Instant::now() + allowed,
     };
     let fine = executor
-        .connection_job(job("fine", Duration::from_secs(30)), Box::new(|_, _| {}))
+        .connection_job(job("fine", Duration::from_secs(30)), Arc::new(|_, _| {}))
         .await;
     assert_eq!(
         (fine[0].ok, fine[0].error.as_deref()),
@@ -624,7 +624,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
     );
     let started = std::time::Instant::now();
     let slow = executor
-        .connection_job(job("slow", Duration::from_secs(2)), Box::new(|_, _| {}))
+        .connection_job(job("slow", Duration::from_secs(2)), Arc::new(|_, _| {}))
         .await;
     assert!(
         started.elapsed() < Duration::from_secs(15),

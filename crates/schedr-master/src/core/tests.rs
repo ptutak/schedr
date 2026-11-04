@@ -1583,3 +1583,52 @@ async fn a_connections_job_goes_to_no_disconnected_worker() {
         )
     );
 }
+
+#[tokio::test]
+async fn a_kept_result_the_database_refuses_doesnt_hold_its_worker_for_ever() {
+    // Stored as bytes it passes; written out when the worker goes, Postgres refuses the NUL.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let started = pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    };
+    core.handle("w1", worker_message::Message::Started(started), ts(NOW))
+        .await
+        .unwrap();
+    refuse(&core, "attempts", "instr(NEW.code_hash, char(0)) > 0").await;
+    let ended = worker_message::Message::TaskEnded(pb::TaskEnded {
+        result: Some(pb::Finished {
+            attempt_id: assign.attempt_id.clone(),
+            status: pb::AttemptStatus::Success.into(),
+            code_hash: "sha256-ab\0cd".to_owned(),
+            ..pb::Finished::default()
+        }),
+    });
+    core.handle("w1", ended, ts(NOW)).await.unwrap();
+    let gone = worker_message::Message::Deregister(pb::Deregister::default());
+    core.handle("w1", gone, ts(NOW)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Failed));
+}
+
+#[tokio::test]
+async fn a_task_end_cut_off_at_its_commit_counts_only_if_its_result_was_kept() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let id = assign.attempt_id.clone();
+    let open = core.db.attempt(&id).await.unwrap();
+    assert!(!result_landed(open.as_ref()));
+    core.db.set_task_result(&id, b"kept").await.unwrap();
+    let kept = core.db.attempt(&id).await.unwrap();
+    assert!(result_landed(kept.as_ref()));
+    assert!(result_landed(None));
+}

@@ -7,7 +7,7 @@
 | DAG versions, runs, task instances, attempts, results, commands, the worker registry, each root's current hash | the database | everything but losing the database |
 | Connected workers, their slots and code, parse jobs | the master's memory | nothing; rebuilt as workers reconnect |
 | Attempts running on a worker, results not yet acknowledged | the worker's journal (its disk) | agent restarts |
-| Cleanup handles | the agent's memory | only while the agent runs |
+| Cleanup handles | the worker's journal disk | agent restart while that disk survives |
 | Task logs | the worker's disk | agent restarts, until retention deletes them |
 
 The database is the source of truth. The master can restart at any time and read everything
@@ -21,7 +21,7 @@ back, and workers fill in the rest when they reconnect.
 | **The webserver restarts** | The CLI's request fails, and a command it had stored is still applied. A page opened while the webserver is down shows that deployment unavailable. A page already open keeps what it was showing; the UI opens the events stream again and the page reads itself once the webserver answers (see [Live updates](12-ui.md#live-updates)). The master and the workers carry on. |
 | **A worker stops while assignments are on their way** (drained by SIGTERM, deregistered) | Tasks it started and didn't finish end `lost`, using a retry; tasks assigned to it that it never started end `assignment_expired` and run again without using one. |
 | **A worker's connection drops** | Its tasks keep running. The master marks it `disconnected`, and if it reconnects within the [worker lease](14-timings.md#fixed-timings) (60 s, same incarnation) nothing is lost: a task it still runs counts as started even if its start report was lost with the connection, and a cancel of its run or of the task sent while it was away is sent again. Once it has registered again, only the new connection counts: an old one still open changes nothing, and its end doesn't disconnect the worker. Otherwise a round marks it `lost` and ends its attempts `lost`, each using a retry; those it never started (`assignment_expired`) run again without one. If it comes back after that, it is told to kill them. |
-| **A worker's agent restarts** (crash, out of memory, new pod) | The new incarnation stops the process groups the old one left (they can't report any more) and reports the results it had. The master ends the attempts that were running `lost`, using a retry, with "worker restarted while the attempt ran (possibly out of memory)". |
+| **A worker's agent restarts** (crash, out of memory, new pod) | The new incarnation stops orphaned process groups and reports saved results. An attempt with recoverable cleanup holds a slot and waits for `Continue`: a running task becomes `lost`, while a task already in cleanup keeps its result; cleanup starts again with its saved handles. `Kill` discards it. Without recoverable cleanup, the master ends the missing attempt. |
 | **A task uses too much memory** | Only that task is killed (`oom_killed`), before the kernel would kill the whole pod (see [Workers](05-workers.md)). |
 | **A worker is drained** (SIGTERM) | Running tasks get the grace period; what still runs then is `interrupted` (SIGTERM, then SIGKILL `[worker] drain_terminate_period` later, still before the pod's deadline) and runs again elsewhere without using a retry. |
 | **An assignment gets no `Started`** | After 10 s the master takes it back (`assignment_expired`) and queues the task again, without using a retry. A `Started` that arrived in time but waits behind a busy master counts as arrived. |
@@ -33,8 +33,9 @@ back, and workers fill in the rest when they reconnect.
 | **A DAG's file fails to import** (anything but a timeout or a runner that died) | Every DAG of that file is held. No new run is created, a fire time during the hold is missed as while the DAG is paused, a manual trigger is rejected with the reason, and a queued run is not started. A run that has already started is not cancelled. When the file imports, the fire times the hold missed follow the DAG's `catchup`. See [A held DAG](06-parsing.md#a-held-dag). |
 | **A file's import times out, or its runner dies** | Nothing is held, and the file's DAGs keep their last version that imported. The parse is tried again, first after 30 seconds, then after twice as long each time, up to 10 minutes, with no limit on the tries. It goes to another worker that has the code, and to the worker that failed only when that worker is the only one. The master replaces only the files that failed this way and whose new result differs. See [Parsed again](06-parsing.md#parsed-again). |
 
-A cleanup does not run when its worker is lost, and handles are not kept across an agent
-restart. A cleanup that runs and exhausts its retries fails the run, even when the task
+A cleanup does not run when its worker is lost. The master keeps a result reported in
+`TaskEnded` and ends the cleanup with `worker_lost`; without that result the task ends `lost`.
+Handles survive an agent restart only when its journal disk survives. A cleanup that runs and exhausts its retries fails the run, even when the task
 succeeded. See [Cleaning up after a task](../02-dags/15-cleanup.md).
 
 ## Connection jobs
