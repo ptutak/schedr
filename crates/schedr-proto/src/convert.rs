@@ -2,7 +2,7 @@
 //! rejection reason.
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::{AttemptStatus, RunKind};
+use schedr_model::{AttemptStatus, CleanupResult, RunKind};
 
 use crate::pb;
 
@@ -197,6 +197,26 @@ pub const fn attempt_status_to_proto(status: AttemptStatus) -> pb::AttemptStatus
         AttemptStatus::Lost => pb::AttemptStatus::Lost,
         AttemptStatus::AssignmentExpired => pb::AttemptStatus::AssignmentExpired,
     }
+}
+
+/// The model result for a raw protocol value (as found in `CleanupResult.status`).
+///
+/// # Errors
+///
+/// Returns [`ConversionError::UnknownEnumValue`] for `UNSPECIFIED` or an unknown value.
+pub fn cleanup_result_from_proto(value: i32) -> Result<CleanupResult, ConversionError> {
+    let unknown = ConversionError::UnknownEnumValue {
+        field: "CleanupResult.status",
+        value,
+    };
+    Ok(
+        match pb::CleanupStatus::try_from(value).map_err(|_| unknown.clone())? {
+            pb::CleanupStatus::Unspecified => return Err(unknown),
+            pb::CleanupStatus::Ok => CleanupResult::Ok,
+            pb::CleanupStatus::Failed => CleanupResult::Failed,
+            pb::CleanupStatus::NotNeeded => CleanupResult::NotNeeded,
+        },
+    )
 }
 
 /// The model status for a raw protocol value (as found in `Finished.status`).

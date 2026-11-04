@@ -9,15 +9,16 @@ Rust/Python integration).
 
 import contextlib
 import dataclasses
+import inspect
 import sys
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, is_typeddict
 from urllib.parse import quote
 
-from schedr._model import SecretRef
+from schedr._model import SecretRef, registry
 from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
 from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
@@ -34,12 +35,15 @@ from schedr._serialization.codec import escaped
 from schedr._templates import as_text
 from schedr.connections import Connection, ConnectionDeniedError, ConnectionNotFoundError
 from schedr.context import (
+    HANDLES_PARAMETER,
     ConnectionEnter,
     ConnectionOpener,
+    HandleAdder,
     RunValues,
     SecretError,
     SecretReader,
     TaskValues,
+    handle_classes,
     running,
 )
 from schedr.outcomes import from_return_type, outcome_enum
@@ -539,6 +543,24 @@ def find_task_of_dag(
     Raises:
         TaskSetupError: If the DAG or the task isn't in the file.
     """
+    entry = find_entry(request)
+    task_id = request["task"]["id"]
+    downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
+    return entry.functions[task_id], downstream, entry.params_class
+
+
+def find_entry(request: Mapping[str, Any]) -> registry.DefinedDag:
+    """The DAG of a task request, its file imported, with the task's function in it.
+
+    Args:
+        request: The ``task`` message.
+
+    Returns:
+        The DAG.
+
+    Raises:
+        TaskSetupError: If the DAG or the task isn't in the file.
+    """
     dag_file = request["dag_file"]
     entries = import_dag_entries(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
     task_id = request["task"]["id"]
@@ -548,8 +570,7 @@ def find_task_of_dag(
                 raise TaskSetupError(
                     f"DAG `{request['dag_id']}` has no Python task `{task_id}` (any more?)"
                 )
-            downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
-            return entry.functions[task_id], downstream, entry.params_class
+            return entry
     raise TaskSetupError(
         f"`{dag_file['path']}` doesn't define DAG `{request['dag_id']}` (any more?)"
     )
@@ -608,7 +629,7 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
     return {"type": "task_failed", "error": summary, "kind": kind}
 
 
-def execute(  # noqa: PLR0911 (a result for each way a task ends)
+def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
     request: Mapping[str, Any],
     imported: Callable[[], None] = lambda: None,
     secrets: SecretReader | None = None,
@@ -636,13 +657,18 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     outcomes = request.get("outcomes", {})
     task_id = task["id"]
     try:
-        function, downstream, params_class = find_task_of_dag(request)
+        entry = find_entry(request)
+        function, params_class = entry.functions[task_id], entry.params_class
+        downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
         hints = type_hints(function, f"task `{task_id}`")
         arguments = {
             name: build(value, hints.get(name, Any), inputs, run, outcomes)
             for name, value in task.get("arguments", {}).items()
         }
         arguments.update(mapped_arguments(inputs, hints, run, outcomes))
+        handles = request.get("cleanup")
+        if handles is not None:
+            function, arguments = cleanup_call(entry, function, task_id, arguments, handles)
     except TaskSetupError as e:
         return failure(e, "task_not_found")
     except (TaskInputError, TypeModelError) as e:
@@ -652,8 +678,9 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     imported()
     try:
         opener = connection_opener(channel) if channel is not None else None
+        adder = handle_adder(channel) if channel is not None else None
         own = TaskValues(
-            task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener
+            task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
         )
         with running(run_values(run, params_class), own):
             result = function(**arguments)
@@ -665,6 +692,8 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
         return failure(e, CONNECTION_DENIED)
     except (Exception, SystemExit) as e:
         return failure(e, None)
+    if request.get("cleanup") is not None:
+        return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
     if not task.get("branch"):
         return _stored(result, hints.get("return", Any), task)
     try:
@@ -672,6 +701,82 @@ def execute(  # noqa: PLR0911 (a result for each way a task ends)
     except CodecError as e:
         return failure(e, "output_not_serializable", f"`{task_id}`: {e.reason}")
     return _stored(chosen, list[str], task)
+
+
+def cleanup_call(
+    entry: registry.DefinedDag,
+    function: Callable[..., Any],
+    task_id: str,
+    arguments: Mapping[str, object],
+    handles: Sequence[Mapping[str, Any]],
+) -> tuple[Callable[..., Any], dict[str, object]]:
+    """The cleanup of a task, with the task's inputs it names and the attempt's handles.
+
+    Args:
+        entry: The task's DAG.
+        function: The task's function, for the defaults of parameters no call gives.
+        task_id: The task's ID.
+        arguments: The task's arguments, built.
+        handles: The attempt's handles, in registration order.
+
+    Returns:
+        The cleanup function and its arguments.
+
+    Raises:
+        TaskSetupError: If the task has no cleanup function (any more).
+        TaskInputError: If a handle's type isn't one the cleanup takes.
+    """
+    cleanup = entry.cleanups.get(task_id)
+    if cleanup is None:
+        raise TaskSetupError(f"task `{task_id}` has no `cleanup=` function (any more?)")
+    defaults = inspect.signature(function).parameters
+    given: dict[str, object] = {}
+    for name in inspect.signature(cleanup).parameters:
+        if name == HANDLES_PARAMETER:
+            continue
+        if name in arguments:
+            given[name] = arguments[name]
+        elif name in defaults and defaults[name].default is not inspect.Parameter.empty:
+            given[name] = defaults[name].default
+    hints = type_hints(cleanup, f"the cleanup of task `{task_id}`")
+    if HANDLES_PARAMETER in inspect.signature(cleanup).parameters:
+        classes = {cls.__name__: cls for cls in handle_classes(hints.get(HANDLES_PARAMETER))}
+        given[HANDLES_PARAMETER] = [_handle(h, classes, task_id) for h in handles]
+    return cleanup, given
+
+
+def _handle(handle: Mapping[str, Any], classes: Mapping[str, type], task_id: str) -> object:
+    """A registered handle as its class's instance."""
+    name = str(handle["handle_type"])
+    if name not in classes:
+        raise TaskInputError(
+            f"the cleanup of task `{task_id}` doesn't take handles of type `{name}` (any more?)"
+        )
+    try:
+        return decode(handle["value"], classes[name])
+    except CodecError as e:
+        raise TaskInputError(f"a `{name}` handle of task `{task_id}`: {e.reason}") from None
+
+
+def handle_adder(channel: Channel) -> HandleAdder:
+    """Registers cleanup handles with the agent (``handle_add``), one request at a time.
+
+    Args:
+        channel: The channel to the agent.
+
+    Returns:
+        The adder ``cleanup_handle`` calls.
+    """
+
+    def add(_handle: object, handle_type: str, value: object) -> None:
+        handle = {"handle_type": handle_type, "value": value}
+        answer = channel.ask({"type": "handle_add", "handle": handle})
+        if answer.get("type") == "handle_refused":
+            raise RuntimeError(f"cleanup_handle: {answer['message']}")
+        if answer.get("type") != "handle_added":
+            raise RuntimeError(f"cleanup_handle: unexpected answer {answer.get('type')!r}")
+
+    return add
 
 
 def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)

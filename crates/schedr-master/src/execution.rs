@@ -11,7 +11,8 @@ use jiff::Timestamp;
 use schedr_db::instances::{InstanceUpdate, NewlyRunning, RunTasks};
 use schedr_db::{Database, DbError};
 use schedr_model::{
-    AttemptStatus, Dag, DagId, Reference, RunState, TaskId, TaskInstanceState, TaskKind,
+    AttemptStatus, CleanupResult, Dag, DagId, Reference, RunState, TaskId, TaskInstanceState,
+    TaskKind,
 };
 
 use crate::mapping::{self, Dim};
@@ -74,6 +75,8 @@ pub struct AttemptResult {
     pub output: Option<serde_json::Value>,
     /// The outcome on success, as the worker reported it (`SUCCESS` when it named none).
     pub outcome: Option<String>,
+    /// How its cleanup ended, if the task has one.
+    pub cleanup: Option<CleanupResult>,
 }
 
 /// What recording an attempt's result did.
@@ -237,23 +240,38 @@ impl Execution {
         result: &AttemptResult,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
-        let run = self.run(run_id).await?;
+        let mut run = self.run(run_id).await?;
         let unknown = || ExecutionError::UnknownTask {
             run_id: run_id.to_owned(),
             task_id: task_id.clone(),
         };
         let instance = run
             .instances
-            .iter()
+            .iter_mut()
             .find(|i| &i.task_id == task_id && i.map_index == map_index)
             .ok_or_else(unknown)?;
-        if instance.state != TaskInstanceState::Running {
+        if !matches!(
+            instance.state,
+            TaskInstanceState::Running | TaskInstanceState::CleaningUp
+        ) {
             return Ok(Recorded {
                 state: None,
                 run_result: None,
                 stops: Vec::new(),
             });
         }
+        if let Some(cleanup) = result.cleanup {
+            self.db
+                .set_cleanup_result(&instance.id, cleanup, now)
+                .await?;
+            if !instance
+                .cleanup_result
+                .is_some_and(CleanupResult::fails_the_run)
+            {
+                instance.cleanup_result = Some(cleanup);
+            }
+        }
+        let instance = instance.clone();
         let task = run.dag.task(task_id).ok_or_else(unknown)?;
         let next = after_attempt(
             result.status,
@@ -303,6 +321,24 @@ impl Execution {
             run_result,
             stops,
         })
+    }
+
+    /// A running instance's task ended and its cleanup runs: its attempt stays open, and
+    /// nothing downstream moves, until the attempt's result.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::Db`] if the database fails.
+    pub async fn cleaning_up(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        map_index: i32,
+        now: Timestamp,
+    ) -> Result<(), ExecutionError> {
+        let cleaning = update(task_id, map_index, TaskInstanceState::CleaningUp);
+        self.db.update_instances(run_id, &[cleaning], now).await?;
+        Ok(())
     }
 
     /// Queues the task instances whose retry delay has passed. Returns how many.
@@ -848,6 +884,11 @@ fn progress_of(run: &RunTasks) -> RunProgress<'_> {
         }
     }
     RunProgress::new(&run.dag, states_of(run))
+        .with_failed_cleanup(
+            run.instances
+                .iter()
+                .any(|i| i.cleanup_result.is_some_and(CleanupResult::fails_the_run)),
+        )
         .with_outcomes(outcomes_of(run))
         .with_instances(instances)
 }

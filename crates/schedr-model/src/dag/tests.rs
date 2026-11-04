@@ -21,6 +21,7 @@ fn empty_task(name: &str) -> Task {
         expand: None,
         secrets: Vec::new(),
         connections: Vec::new(),
+        cleanup: None,
     }
 }
 
@@ -106,6 +107,7 @@ fn round_trips_through_json() {
         expand: None,
         secrets: Vec::new(),
         connections: Vec::new(),
+        cleanup: None,
     });
     let json = serde_json::to_string(&original).unwrap();
     assert_eq!(serde_json::from_str::<Dag>(&json).unwrap(), original);

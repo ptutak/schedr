@@ -37,9 +37,9 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 7. **Present a short summary and wait:** what was built, the decisions made (so I can
    overrule them), anything surprising (new bugs, inconsistencies, coverage close to the
    floor), and the proposed commit.
-8. **Commit only when I say so** ("commit", "accepted, commit and go on"). Never push: I push
-   myself, often without saying so, so don't claim CI hasn't run. To know CI's state, ask me
-   (I may not have `gh` installed).
+8. **Commit only when I say so** ("commit", "accepted, commit and go on"). Don't push unless I
+   accepted it beforehand: I push myself, often without saying so, so don't claim CI hasn't
+   run. To know CI's state, use `gh run list`.
 
 ## Working with second agents (Grok and Codex)
 
@@ -54,7 +54,7 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   | Designing and implementing important changes (the step's core) | **you** |
   | **Independent code review** of the step's diff: bugs, races, async and distributed edge cases, performance, security | **Grok and Codex**, each on the same diff, independently, read-only; compared after. They replace the code-review skill (that one only when neither is available) |
   | **Bug hunting:** root-cause analysis, reproductions | **Grok or Codex** |
-  | **Bug fixing** (a reproducing test first, as Bugs says) | **Grok** (Codex doesn't code) |
+  | **Bug fixing** | **Grok or Codex** propose the fix (a reproducing test, the change as a patch or text, in their own worktree); **you** review it and implement it in the code |
   | **Documentation:** the guide and Writing DAGs kept up with the code, after the step's code is reviewed | **Grok or Codex** |
   | **The whole-repository review**, section by section | **Codex**, read-only, about half its week |
   | Exploring the code: call sites, dependencies, affected files, before a change | **Grok**, read-only |
@@ -63,9 +63,10 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   | Small well-scoped implementation, mechanical refactors and migrations | **Grok** |
   | A second opinion on architecture | **Codex** (or Grok), read-only, before I decide |
 
-  **Codex doesn't code:** no implementation, refactors or code fixes (my experience with it:
-  strong on design opinions, reviews and finding bugs). Its tasks are read-only, but for
-  docs rounds.
+  **Grok and Codex have the same status:** reviews on a high effort, docs on a medium one
+  (Codex on `gpt-6.1-terra`), bugs on a high one. **They never change the code base:** they
+  find bugs and propose fixes; you review those and write the code yourself, so it stays
+  consistent. Features stay yours.
 
 - **Ask for independent analysis, never confirmation:** give a colleague the diff, the code or the
   question, not your hypothesis or your conclusions. "Review this diff" or "find why X

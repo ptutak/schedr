@@ -1,5 +1,23 @@
 {
   "$defs": {
+    "CleanupHandle": {
+      "additionalProperties": false,
+      "description": "A handle registered by an attempt: what its cleanup needs that only existed in it.",
+      "properties": {
+        "handle_type": {
+          "description": "Its type's name (a dataclass's name, or `schedr task-ctx cleanup add`'s first argument).",
+          "type": "string"
+        },
+        "value": {
+          "description": "Its fields, as stored JSON."
+        }
+      },
+      "required": [
+        "handle_type",
+        "value"
+      ],
+      "type": "object"
+    },
     "CtxAnswer": {
       "description": "The agent's answer to a [`CtxRequest`].",
       "oneOf": [
@@ -104,6 +122,58 @@
             "type",
             "kind",
             "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The handle is registered.",
+          "properties": {
+            "type": {
+              "const": "handle_added",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the handle isn't registered; the connection stays open.",
+          "properties": {
+            "reason": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "handle_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The attempt's handles, in registration order.",
+          "properties": {
+            "handles": {
+              "description": "The handles.",
+              "items": {
+                "$ref": "#/$defs/CleanupHandle"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "handles",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "handles"
           ],
           "type": "object"
         },
@@ -259,6 +329,37 @@
           "required": [
             "type",
             "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Registers a cleanup handle (`schedr task-ctx cleanup add`).",
+          "properties": {
+            "handle": {
+              "$ref": "#/$defs/CleanupHandle",
+              "description": "The handle."
+            },
+            "type": {
+              "const": "handle_add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "handle"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The attempt's handles, in registration order (`schedr task-ctx cleanup list`).",
+          "properties": {
+            "type": {
+              "const": "handle_list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },

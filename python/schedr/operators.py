@@ -158,6 +158,68 @@ def _connection_env(
     return names
 
 
+def _command_line(
+    command: object, name: str, where: str, upstream: list[_build.Upstream]
+) -> ShellCommand | ArgvCommand:
+    """A command line as written: a shell string, or a list of arguments, without secrets.
+
+    Args:
+        command: The value given.
+        name: The argument it was given in, for messages.
+        where: The task, for messages.
+        upstream: Takes the outputs it references.
+
+    Returns:
+        The command line.
+
+    Raises:
+        TypeError: For a value of the wrong type, or a secret in it.
+    """
+    line: ShellCommand | ArgvCommand
+    if isinstance(command, str):
+        line = ShellCommand(Template([command]))
+    elif is_tstring(command):
+        line = ShellCommand(Template([shell_text(command, where)]))  # type: ignore[arg-type]
+    elif isinstance(command, Sequence):
+        line = ArgvCommand(
+            [
+                _build.to_template(arg, f"{where}, {name}[{i}]", upstream)
+                for i, arg in enumerate(command)
+            ]
+        )
+    else:
+        raise TypeError(f"{where}: {name} must be a string, a t-string or a list")
+    for template in line.templates():
+        for reference in template.references():
+            if isinstance(reference, SecretRef):
+                raise TypeError(
+                    f"{where}: `{reference.label()}` in the {name} line (anyone on the "
+                    "machine could read it in the process list): pass it in `env=`, or "
+                    "declare it in `secrets=` and read it with `schedr task-ctx secret get`"
+                )
+    return line
+
+
+def _cleanup_wanted(
+    cleanup: object,
+    handles: Sequence[str] | None,
+    where: str,
+    upstream: list[_build.Upstream],
+) -> _build.CleanupWanted | None:
+    """A command task's cleanup, from ``cleanup=`` and ``cleanup_handles=``."""
+    if cleanup is None:
+        if handles is not None:
+            raise TypeError(f"{where}: `cleanup_handles` without `cleanup=`")
+        return None
+    if isinstance(handles, str):
+        raise TypeError(f"{where}: cleanup_handles must be a list of type names")
+    names = None if handles is None else tuple(handles)
+    for name in names or ():
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{where}: cleanup_handles: {name!r} isn't a type name")
+    return _build.CleanupWanted(_command_line(cleanup, "cleanup", where, upstream), names)
+
+
 class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     """Runs an inline command.
 
@@ -193,6 +255,13 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             each the ``@connection`` function or its name; or a dict of prefix to connection
             (``{"DB": warehouse}``), each given as variables (``DB_URL``, ...) and the files
             its tools read, written for the attempt and removed after it.
+        cleanup: A command run after each attempt, whatever its end, like ``finally``: the
+            same rules as ``command``, the same environment. It reads what the attempt
+            registered (``schedr task-ctx cleanup add``) with ``schedr task-ctx cleanup list``.
+        cleanup_timeout: How long one try of the cleanup may run (default 5 minutes).
+        cleanup_retries: How many times a failed cleanup is retried (default 3).
+        cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
+        cleanup_handles: The handle types the attempt may register; default: any.
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -200,7 +269,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         ValueError: For an empty argument list or an invalid environment variable name.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (the task's options, by keyword)
         self,
         task_id: str,
         command: str | TString | Sequence[object],
@@ -217,6 +286,11 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
         connections: ConnectionsArg | Mapping[str, Connection[object] | str] = None,
+        cleanup: str | TString | Sequence[object] | None = None,
+        cleanup_timeout: timedelta | None = None,
+        cleanup_retries: int | None = None,
+        cleanup_retry_delay: timedelta | None = None,
+        cleanup_handles: Sequence[str] | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
@@ -225,34 +299,15 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         self._dag = builder
         upstream: list[_build.Upstream] = []
         where = f"task `{task_id}`"
-        line: ShellCommand | ArgvCommand
-        if isinstance(command, str):
-            line = ShellCommand(Template([command]))
-        elif is_tstring(command):
-            line = ShellCommand(Template([shell_text(command, where)]))  # type: ignore[arg-type]
-        elif isinstance(command, Sequence):
-            line = ArgvCommand(
-                [
-                    _build.to_template(arg, f"{where}, command[{i}]", upstream)
-                    for i, arg in enumerate(command)
-                ]
-            )
-        else:
-            raise TypeError(f"{where}: command must be a string, a t-string or a list")
-        for template in line.templates():
-            for reference in template.references():
-                if isinstance(reference, SecretRef):
-                    raise TypeError(
-                        f"{where}: `{reference.label()}` in the command line (anyone on the "
-                        "machine could read it in the process list): pass it in `env=`, or "
-                        "declare it in `secrets=` and read it with `schedr task-ctx secret get`"
-                    )
+        line = _command_line(command, "command", where, upstream)
+        wanted = _cleanup_wanted(cleanup, cleanup_handles, where, upstream)
         variables: dict[str, Template] = {}
         for name, value in (env or {}).items():
             if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
                 raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
             variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
-        for template in [*line.templates(), *variables.values()]:
+        cleanup_templates = wanted.line.templates() if wanted and wanted.line else []
+        for template in [*line.templates(), *variables.values(), *cleanup_templates]:
             _build.check_template_references(builder, template, where)
         connection_env: dict[str, str] = {}
         if isinstance(connections, Mapping):
@@ -269,6 +324,9 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             max_active_per_run=max_active_per_run,
             secrets=_secrets.declared(secrets, where),
             connections=declared_connections(connections, where),
+            cleanup_timeout=cleanup_timeout,
+            cleanup_retries=cleanup_retries,
+            cleanup_retry_delay=cleanup_retry_delay,
         )
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)
@@ -278,6 +336,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             ScalarType("process_result"),
             options,
             spec,
+            cleanup=wanted,
         )
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)

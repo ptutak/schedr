@@ -25,6 +25,15 @@ pub const DEFAULT_MAX_OUTPUT_SIZE: u64 = 1024 * 1024;
 /// The default delay between attempts in milliseconds (5 minutes).
 pub const DEFAULT_RETRY_DELAY_MS: u64 = 5 * 60 * 1000;
 
+/// How long one try of a cleanup may run by default, in milliseconds (5 minutes).
+pub const DEFAULT_CLEANUP_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+
+/// How many times a failed cleanup is retried by default (decision 217).
+pub const DEFAULT_CLEANUP_RETRIES: u32 = 3;
+
+/// The default delay between a cleanup's tries in milliseconds (decision 217).
+pub const DEFAULT_CLEANUP_RETRY_DELAY_MS: u64 = 30 * 1000;
+
 /// A task's settings, resolved from its own arguments and the defaults that apply to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -187,6 +196,35 @@ pub enum TaskKind {
     Empty,
 }
 
+/// What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CleanupRun {
+    /// The function given to `@task(cleanup=...)`, found with the task's when the runner
+    /// imports the DAG file.
+    Python,
+    /// A command, with the task's environment.
+    Command(CommandLine),
+}
+
+/// A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCleanup {
+    /// What it runs.
+    pub run: CleanupRun,
+    /// How long one try may run, in milliseconds.
+    pub timeout_ms: u64,
+    /// How many times it is retried after a failed try, on the same worker.
+    pub retries: u32,
+    /// The delay before each retry, in milliseconds.
+    pub retry_delay_ms: u64,
+    /// The handle types it takes: `None` any, none listed none (a function without a `handles`
+    /// parameter would never see them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handles: Option<Vec<String>>,
+}
+
 /// What a mapped task's instances vary over (decision 69): one instance per element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -241,6 +279,9 @@ pub struct Task {
     /// before it starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<String>,
+    /// Its cleanup, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<TaskCleanup>,
 }
 
 impl Task {
@@ -255,6 +296,15 @@ impl Task {
 }
 
 impl Task {
+    /// Its cleanup's command line, if it has one.
+    #[must_use]
+    pub fn cleanup_command(&self) -> Option<&CommandLine> {
+        match self.cleanup.as_ref().map(|c| &c.run) {
+            Some(CleanupRun::Command(command)) => Some(command),
+            Some(CleanupRun::Python) | None => None,
+        }
+    }
+
     /// Every reference the task uses (arguments, command line, environment, what it is
     /// mapped over), in order.
     #[must_use]
@@ -295,6 +345,11 @@ impl Task {
             TaskKind::Command { command, env, .. } => command
                 .templates()
                 .into_iter()
+                .chain(
+                    self.cleanup_command()
+                        .into_iter()
+                        .flat_map(CommandLine::templates),
+                )
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),

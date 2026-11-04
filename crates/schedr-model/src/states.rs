@@ -51,6 +51,28 @@ impl RunState {
     }
 }
 
+/// How a task's cleanup ended: an attribute beside its state, not a state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupResult {
+    /// It ran and succeeded.
+    Ok,
+    /// It failed after its last retry: the run fails.
+    Failed,
+    /// It didn't run, its worker being lost: counts as failed.
+    WorkerLost,
+    /// The attempt's process never started (decision 216).
+    NotNeeded,
+}
+
+impl CleanupResult {
+    /// Whether it fails the run (see PROJECT.md, Run result).
+    #[must_use]
+    pub const fn fails_the_run(self) -> bool {
+        matches!(self, Self::Failed | Self::WorkerLost)
+    }
+}
+
 /// Where a task stands in its run, decided by the master.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -180,6 +202,7 @@ display_as_serialized!(
     RunKind,
     RunState,
     TaskInstanceState,
+    CleanupResult,
     AttemptStatus,
     WorkerState
 );

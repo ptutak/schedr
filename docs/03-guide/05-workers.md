@@ -95,7 +95,12 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    drain's time is up (see Draining below), also for a task already being stopped then: its
    SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
    (`timed_out`, `cancelled`, `interrupted`), however the process then exits.
-5. **Result.** It is written to the journal, then sent as `Finished` until the master
+5. **Cleanup.** If the task process started and has a cleanup, the agent reports `TaskEnded`
+   and runs it on the same worker. The attempt holds its slot through the cleanup and its
+   retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain
+   available. Handles are in agent memory, so they do not survive an agent restart; a lost
+   worker does not run its cleanup. See [Cleaning up after a task](../02-dags/15-cleanup.md).
+6. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`: again on a reconnect, and while the connection stays up
    (the master may have failed to store it) after one heartbeat interval, then ever less often
    (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's

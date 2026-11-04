@@ -80,6 +80,16 @@
           "additionalProperties": false,
           "description": "A task attempt.",
           "properties": {
+            "cleanup": {
+              "description": "Set for a cleanup: the task's cleanup function is called with the task's inputs and\nthese handles, in registration order, instead of the task.",
+              "items": {
+                "$ref": "#/$defs/CleanupHandle"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "connection_test": {
               "description": "Set for `schedr connections test` (decision 174): no task is run; the file is\nimported, and this connection opened and checked (decision 198).",
               "type": [
@@ -225,6 +235,39 @@
         },
         {
           "additionalProperties": false,
+          "description": "The handle of a [`RunnerMessage::HandleAdd`] is registered.",
+          "properties": {
+            "type": {
+              "const": "handle_added",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the handle of a [`RunnerMessage::HandleAdd`] isn't registered.",
+          "properties": {
+            "message": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "handle_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Why the secret a [`RunnerMessage::SecretGet`] asked for can't be read.",
           "properties": {
             "kind": {
@@ -288,6 +331,47 @@
             "type",
             "kind",
             "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CleanupHandle": {
+      "additionalProperties": false,
+      "description": "A handle registered by an attempt: what its cleanup needs that only existed in it.",
+      "properties": {
+        "handle_type": {
+          "description": "Its type's name (a dataclass's name, or `schedr task-ctx cleanup add`'s first argument).",
+          "type": "string"
+        },
+        "value": {
+          "description": "Its fields, as stored JSON."
+        }
+      },
+      "required": [
+        "handle_type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "CleanupRun": {
+      "description": "What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).",
+      "oneOf": [
+        {
+          "const": "python",
+          "description": "The function given to `@task(cleanup=...)`, found with the task's when the runner\nimports the DAG file.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A command, with the task's environment.",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/CommandLine"
+            }
+          },
+          "required": [
+            "command"
           ],
           "type": "object"
         }
@@ -1299,6 +1383,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "A running task registers a cleanup handle (`cleanup_handle(x)`); the agent answers\n[`AgentMessage::HandleAdded`] or [`AgentMessage::HandleRefused`].",
+          "properties": {
+            "handle": {
+              "$ref": "#/$defs/CleanupHandle",
+              "description": "The handle."
+            },
+            "type": {
+              "const": "handle_add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "handle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The task failed: an exception, or an output that can't be stored.",
           "properties": {
             "error": {
@@ -1702,6 +1805,17 @@
         }
       ],
       "properties": {
+        "cleanup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskCleanup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its cleanup, if it has one."
+        },
         "connections": {
           "description": "The connections it opens (`connections=`, decision 179), by name: only these, opened\nbefore it starts.",
           "items": {
@@ -1758,6 +1872,51 @@
         "id",
         "settings",
         "output_type"
+      ],
+      "type": "object"
+    },
+    "TaskCleanup": {
+      "additionalProperties": false,
+      "description": "A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).",
+      "properties": {
+        "handles": {
+          "description": "The handle types it takes: `None` any, none listed none (a function without a `handles`\nparameter would never see them).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "retries": {
+          "description": "How many times it is retried after a failed try, on the same worker.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_delay_ms": {
+          "description": "The delay before each retry, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "$ref": "#/$defs/CleanupRun",
+          "description": "What it runs."
+        },
+        "timeout_ms": {
+          "description": "How long one try may run, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run",
+        "timeout_ms",
+        "retries",
+        "retry_delay_ms"
       ],
       "type": "object"
     },

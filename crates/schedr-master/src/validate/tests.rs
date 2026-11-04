@@ -758,3 +758,38 @@ fn a_connection_given_by_prefix_must_be_declared_under_a_variables_prefix() {
     }
     assert!(!found.iter().any(|p| p.contains("`DB`")), "{found:#?}");
 }
+
+#[test]
+fn a_cleanup_of_another_kind_than_its_task_is_refused() {
+    let settings = task("x", &json!({}))["settings"].clone();
+    let python_cleanup =
+        json!({"run": "python", "timeout_ms": 1000, "retries": 0, "retry_delay_ms": 0});
+    let mut command_cleanup = python_cleanup.clone();
+    command_cleanup["run"] = json!({"command": {"shell": [{"text": "true"}]}});
+    let mut python = task("python_task", &json!({}));
+    python["cleanup"] = command_cleanup.clone();
+    let command = json!({
+        "id": "command_task", "kind": "command", "command": {"shell": [{"text": "true"}]},
+        "settings": settings, "output_type": {"type": "process_result"},
+        "cleanup": python_cleanup,
+    });
+    let empty = json!({
+        "id": "empty_task", "kind": "empty", "settings": settings,
+        "output_type": {"type": "none"}, "cleanup": command_cleanup,
+    });
+    let matching = {
+        let mut python = task("fine", &json!({}));
+        python["cleanup"] = command["cleanup"].clone();
+        python
+    };
+    let found = problems(&json!({"tasks": [python, command, empty, matching], "edges": []}));
+    let expected = [
+        "task `python_task`: a Python task's cleanup is a function",
+        "task `command_task`: a command task's cleanup is a command",
+        "task `empty_task`: an empty task has nothing to clean up",
+    ];
+    assert_eq!(found.len(), expected.len(), "{found:?}");
+    for text in expected {
+        assert!(found.iter().any(|p| p.contains(text)), "{found:?}");
+    }
+}

@@ -53,6 +53,13 @@ pub enum CtxRequest {
         /// Which secret.
         secret: crate::secret::SecretName,
     },
+    /// Registers a cleanup handle (`schedr task-ctx cleanup add`).
+    HandleAdd {
+        /// The handle.
+        handle: crate::runner::CleanupHandle,
+    },
+    /// The attempt's handles, in registration order (`schedr task-ctx cleanup list`).
+    HandleList,
     /// A connection's values, rendered (decision 174): any connection of the task's root.
     ConnectionGet {
         /// The connection's name.
@@ -99,6 +106,18 @@ pub enum CtxAnswer {
         kind: String,
         /// What went wrong, naming the secret (never a value).
         reason: String,
+    },
+    /// The handle is registered.
+    HandleAdded,
+    /// Why the handle isn't registered; the connection stays open.
+    HandleRefused {
+        /// What went wrong.
+        reason: String,
+    },
+    /// The attempt's handles, in registration order.
+    Handles {
+        /// The handles.
+        handles: Vec<crate::runner::CleanupHandle>,
     },
     /// The values of the connection asked for, by parameter, as stored JSON (tagged).
     Connection {

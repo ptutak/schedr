@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
+use schedr_model::task::{CleanupRun, Task};
 use schedr_model::{
     CommandLine, Dag, EdgeKind, Expand, Reference, SchedrVersion, SecretDecl, TaskId, TaskKind,
     Template, TemplatePart, Value,
@@ -112,6 +113,25 @@ fn shell_problems(dag: &Dag, problems: &mut Vec<String>) {
     }
 }
 
+/// A cleanup of another kind than its task: run as it is, it would run the task again.
+fn cleanup_problem(task: &Task) -> Option<String> {
+    let id = &task.id;
+    let run = &task.cleanup.as_ref()?.run;
+    match (&task.kind, run) {
+        (TaskKind::Python { .. }, CleanupRun::Python)
+        | (TaskKind::Command { .. }, CleanupRun::Command(_)) => None,
+        (TaskKind::Python { .. }, CleanupRun::Command(_)) => Some(format!(
+            "task `{id}`: a Python task's cleanup is a function, not a command"
+        )),
+        (TaskKind::Command { .. }, CleanupRun::Python) => Some(format!(
+            "task `{id}`: a command task's cleanup is a command, not `python`"
+        )),
+        (TaskKind::Empty, _) => Some(format!(
+            "task `{id}`: an empty task has nothing to clean up"
+        )),
+    }
+}
+
 /// Secrets (see PROJECT.md, Secret storage): each name well formed, none in a command line
 /// (it would show in the process list) nor mapped over, a whole secret only where a value
 /// goes (an argument), not in text.
@@ -123,6 +143,7 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                 problems.push(format!("task `{id}`: {error}"));
             }
         }
+        problems.extend(cleanup_problem(task));
         for declared in &task.secrets {
             if let Err(error) = declared.check() {
                 problems.push(format!("task `{id}`: secrets=: {error}"));
@@ -151,7 +172,12 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                         ));
                     }
                 }
-                for template in command.templates() {
+                let cleanup = task.cleanup_command().into_iter();
+                for template in command
+                    .templates()
+                    .into_iter()
+                    .chain(cleanup.flat_map(CommandLine::templates))
+                {
                     for reference in template.references() {
                         if let Reference::Secret(name) = reference {
                             problems.push(format!(

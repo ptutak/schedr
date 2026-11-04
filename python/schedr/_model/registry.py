@@ -30,11 +30,13 @@ class DefinedDag:
         model: The DAG as DAG JSON types.
         functions: The function of each Python task, by task ID (the runner calls them).
         params_class: The class its run parameters are declared with; ``None``: none.
+        cleanups: The ``cleanup=`` function of each Python task with one, by task ID.
     """
 
     model: Dag
     functions: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
     params_class: type | None = None
+    cleanups: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
 
 
 _DEFINED: list[DefinedDag] = []
@@ -116,6 +118,7 @@ def register(
     functions: Mapping[str, Callable[..., Any]] | None = None,
     filename: str | None = None,
     params_class: type | None = None,
+    cleanups: Mapping[str, Callable[..., Any]] | None = None,
 ) -> None:
     """Records a DAG whose ``with Dag(...)`` block finished.
 
@@ -124,8 +127,9 @@ def register(
         functions: The function of each of its Python tasks, by task ID.
         filename: The file defining it (``__file__``), remembered for :func:`defined_in`.
         params_class: The class its run parameters are declared with.
+        cleanups: The ``cleanup=`` function of each Python task with one, by task ID.
     """
-    entry = DefinedDag(dag, dict(functions or {}), params_class)
+    entry = DefinedDag(dag, dict(functions or {}), params_class, dict(cleanups or {}))
     _DEFINED.append(entry)
     if filename is not None:
         _BY_FILE[Path(filename).resolve(), dag.id] = entry

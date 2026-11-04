@@ -2031,9 +2031,6 @@ SchedrScriptOperator(
   - **The worker's identity and capacity:** `[worker] id` (else the host name), `slots` (2),
     `queues` (none: `default`), `pass_env`; `[dags] parse_file_timeout` (60 s) per file.
 - **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
-  default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30). A root's
-  parse upload is one message (every DAG of the root) and a `Finished` carries the output,
-- **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
   default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30), announced
   to each worker in `Registered` (`max_message_size`). Not chosen for 58: B a fixed 64 MiB
   (nothing to raise for a very large root); C the upload split per DAG (a protocol change,
@@ -2562,7 +2559,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   running; the slot is still taken and downstream tasks wait), `up_for_retry`, `success`,
   `failed`, `cancelled`, `skipped`, `upstream_failed`.
   - Two **attributes** next to the state instead of more states: the **outcome** (on success)
-    and the **cleanup result** (`ok`, `failed`, `didn't run: worker lost`), shown together, e.g.
+    and the **cleanup result** (`ok`, `failed`, `didn't run: worker lost`, `not needed`), shown together, e.g.
     "success · `Unavailable` · cleanup failed".
   - **Resources** have their own instance per run, with their own states: `waiting for users`,
     `cleaning_up`, `cleaned`, `cleanup_failed`, `not needed` (the setup didn't succeed).
@@ -2819,7 +2816,8 @@ permission to create pods.
   - Not chosen: a socket file in a short directory (`$XDG_RUNTIME_DIR` / `/tmp`, mode
     `0700`): a file to clean up, a writable `/tmp` needed, and any process of the same user
     could connect while it exists; an abstract socket (Linux): no file, but no permissions
-    either, safe only with a check of the peer's process ID, and Linux only.- **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
+    either, safe only with a check of the peer's process ID, and Linux only.
+- **Encoding on the socket: length-prefixed JSON.** Simple to write from Python with no
   dependencies; messages are small. (Protobuf would add a dependency to the Python package.)
   - **Framing:** a 4-byte big-endian length, then that many bytes of UTF-8 JSON: an object
     tagged by `type`. Either side refuses a message over **64 MiB** (the cap on inputs per
@@ -3652,7 +3650,7 @@ list) and likewise has no Python.
   answers. **Readiness**: each part (master, webserver, worker) says when it has started (the
   master after its schema check, registry restore and gRPC listening; the worker after its
   journal is recovered).
-- **Query time limits:** **`[database] query_timeout`** (30 s) is Postgres's
+- **Query time limits:** **`[database] query_timeout`** (10 s) is Postgres's
   `statement_timeout` (set with `SET` on each new connection, which poolers such as PgBouncer
   accept, unlike the `options` startup parameter; **but only in session pooling**: in
   transaction pooling the `SET` lands on a server connection other clients then get;
@@ -3928,7 +3926,7 @@ list) and likewise has no Python.
     (`secrets['connections/my_db']['host']`), a typed native `Connection` not needed. **Being
     reworked** (2026-10-25): the user wants connections the same DAG uses unchanged across
     environments (dev, preprod, prod), with shapes of their own, not Airflow's fixed fields: see
-    Open questions, "Connections (draft)". Airflow's format becomes one shape among others.
+    Connections below. Airflow's format becomes one shape among others.
 - **Airflow Variables** are secrets too.
   - **Layout:** one KV v2 secret per Variable at `<mount>/<variables_path>/<key>`, field
     `value` (Airflow's format); `variables_path` is configurable per storage, default
@@ -4165,6 +4163,611 @@ list) and likewise has no Python.
       `secret_denied` with Vault's words, not `secret_not_found`; a storage name with `__`
       is refused (its environment variables would split there), in the configuration and
       the chart.
+
+### Connections
+
+**Status:** built in M4.7 (sub-steps below); the sections keep the order they were decided in, so a later decision can replace an earlier sketch.
+
+**The need (the user's):** the same DAG moves between environments (dev, preprod, prod)
+without code changes, so it names what it uses (`mongodb_default`), and each environment
+supplies its own values. Connections to MongoDB, HTTP APIs, SSH hosts and network devices
+differ too much for one fixed set of fields.
+
+**Not wanted** (the user, 2026-10-25): Airflow's fixed fields (`conn_type`, `host`, `login`,
+`password`, `schema`, `port`, `extra`) as the native structure ("defined in a limiting way").
+Proposals rejected or replaced on the way: a typed `Connection` with those fields read from
+`task_ctx.connections[...]`; a free-form mapping `connection("name")` checked against an
+optional dataclass; a class decorated with `@connection("name")` whose fields are the entry's
+shape, injected by a task parameter's type, with a contract of methods (`open`, `close`,
+`check`, `get`, `redacted`, `env`) and built-in classes (`HTTP`, `SSH`, `Mongo`). The last was
+replaced by the user's function-based design.
+
+**The direction: `@connection` on a generator function, as `contextlib.contextmanager`.**
+
+```python
+# connections.py, in the DAG repository: written once, used by every DAG
+from collections.abc import Iterator
+from schedr import connection, secrets
+import pymongo
+
+@connection(
+    uri=t"{secrets['mongo/default#uri']}",       # resolved per environment
+    database="orders",                           # plain values too
+)
+def mongodb_default(uri: str, database: str) -> Iterator[pymongo.database.Database]:
+    client = pymongo.MongoClient(uri)
+    try:
+        yield client[database]                   # what the task gets
+    finally:
+        client.close()                           # always runs, as with contextmanager
+
+# a DAG
+@task
+def count() -> int:
+    with mongodb_default() as db:
+        return db.orders.count_documents({})
+```
+
+- **The function's parameters are the shape;** the decorator's keyword arguments are their
+  values: t-strings with secret placeholders (`secrets['path#key']`, the syntax decided in
+  Secret storage) or plain values. The same code reads other values in each environment
+  because each deployment has its own secret storage (or a shared Vault with another path).
+- **Defining** (import, parse time included): the arguments are checked against the
+  function's parameters (each without a default given, nothing extra) and the templates'
+  syntax; mistakes are parse errors. The connection's name is the function's. No secret is
+  read.
+- **Entering `with mongodb_default()`:** the runner asks the agent to render the templates;
+  the agent fetches the secrets from that environment's storage (never through the master)
+  and registers their values for masking in the task's log; the function runs up to
+  `yield`. **Leaving:** the code after `yield` runs, also on errors.
+- **A secret that doesn't exist:** the attempt fails as `secret_not_found`, naming the
+  connection and the path, without using a retry.
+- **Testing:** `mongodb_default.fn(uri=..., database=...)` calls the bare function without
+  templates; `task_context(connections={"mongodb_default": fake})` and
+  `run_dag(..., connections=...)` swap a connection for a test double.
+
+**Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
+- **Declaring:** `@task(connections=[mongodb_default])` (the function or its name; the
+  operators too); **required since decision 179**: a task opens only what it declares, each
+  rendered before it starts.
+- **Checking an environment** before moving DAGs there: `schedr connections check` renders
+  every connection the DAGs define against that environment's storage (all secrets present?)
+  without running the functions.
+- **A "does it work?" hook:** an optional second function, `@mongodb_default.check` (e.g. a
+  Mongo `ping`), run on a worker by `schedr connections test mongodb_default`.
+- **Arguments besides secrets:** literals; **not run values** (decision 180: a connection
+  is defined at module level, outside any DAG). Per-deployment settings that aren't secrets (a `[connections]` table
+  in the configuration): later, secrets and literals cover them.
+- **A missing secret:** both ways stay, `schedr connections check` before moving DAGs and a
+  default in the template (`secrets.value('path#key', default='')`, decision 176).
+- **Async:** `@connection` on an `async def` generator gives `async with` (with M4's async
+  task functions).
+- **Airflow (M5):** `schedr.airflow`'s `Connection.get(conn_id)` and
+  `BaseHook.get_connection` read Airflow-format entries from the same storage, a shape of
+  their own beside the native connections.
+
+**Bash, decided by the user:** a script choosing a connection while it runs uses M4's in-task
+CLI: `schedr task-ctx connection mongodb_default --env MONGO` prints `export MONGO_URI=…`
+lines for `eval`; `--json` prints the rendered arguments as an object.
+
+**Built (M4.7a; decisions 174, 179-182):**
+- **The registry:** parsing a file records each `@connection` it defines itself
+  (`file_parsed`'s `connections`: its name and values as DAG JSON values, secrets by name,
+  never a value); a file defining one name twice fails its import. The master keeps each
+  root's registry from its current parse (`Registry`; a name defined in two files is refused,
+  naming both) and sends with each assignment the connections its task declares
+  (`AssignTask.connections_json`; the agent serves no other). A file that failed to import
+  counts for nothing; one the master refused after it imported keeps its connections
+  (decision 182). A connection over 1 MiB as JSON fails its file's import (decision 181).
+- **Opening:** the agent renders each connection the task declares before it starts (its
+  secrets fetched and masked from then on; a default stands in for a missing one, decision
+  176; t-strings filled in), so a missing connection or secret fails the attempt before its
+  code runs. In a Python task `with name():` asks the agent (`connection_get`, answered
+  `connection` or `connection_failed`) and calls the function with the values decoded by its
+  parameters' types. A command reads them with `schedr task-ctx connection NAME [--env PREFIX
+  | --json]` over its context channel: the values as one line of JSON (the form `--params`
+  takes), or `export PREFIX_PARAM='…'` lines, each value single-quoted for `eval`.
+- **Error kinds:** `connection_not_found` (not in the folder, or defined twice; retried, as
+  `task_not_found`: new code can fix it), `connection_denied` (not declared; not retried), a
+  secret's own kinds. Python raises `ConnectionNotFoundError` and `ConnectionDeniedError`.
+- **Checked when the folder loads:** the master can't refuse a DAG at upload (a retried parse
+  uploads only the files that failed), so a DAG whose tasks declare a connection its root's
+  current parse lacks shows a warning on its page (`DagView.warnings`, worked out when read);
+  `schedr dags check DIR` reports it as an error.
+- **Doubles:** `task_context(connections={name: obj})` (a `@task` function called in it opens
+  only what it declares); `run_dag(connections={name: {param: value}})`, `dags test
+  --connection name=JSON`: the real function runs with those values, its own never rendered.
+- **Decisions:**
+  - **179. A task declares the connections it opens** (the user's, 2026-11-03, on a side
+    agent's note): `connections=` on `@task` and the operators, required; the agent serves
+    only declared ones and renders them before the start. Why: opening by name inside the
+    function is a read at run time, as `task_ctx.secret` is, which `secrets=` guards; without
+    it any task of a folder could read every connection's secrets unseen. A declared name the
+    folder lacks is a warning on the DAG when it loads (the user's), fails the attempt before
+    its code runs, and fails `schedr dags check`. Not chosen: optional declaring (decision
+    53's, as first built); optional but logged per attempt; refusing the DAG when it loads
+    (one file failing to import would refuse every DAG using its connections).
+  - **180. A connection's values are secrets and plain values** (the user's, 2026-11-03):
+    `@connection(...)` runs when its module loads, outside any DAG, where `dag_ctx` gives
+    nothing; a run's values go to the task's own arguments, or the function reads `dag_ctx`
+    while it runs in the task. Not chosen: `dag_ctx` references filled from the run opening
+    it (a special case of `dag_ctx` outside a DAG; it can be added later).
+  - **181. A connection's values take at most 1 MiB** (the user's, 2026-11-03, on Grok's
+    security review): the file defining a bigger one fails to import, in the SDK and again
+    in the master's validation (a DAG file can change the SDK it imports). Why: they travel
+    with each assignment of a task opening it, within the worker's 4 MiB gRPC message
+    (`schedr-config`'s `MIN_MESSAGE_SIZE`); a bigger assignment ends the worker's stream and
+    the task is offered again every start timeout, never starting. A connection's values are
+    a few short strings; bigger data goes to the task. Not chosen: failing the attempt (a new
+    error kind, found only when a run comes); leaving it (only the declared ones go now).
+  - **182. A file the master refused keeps its connections** (the user's, 2026-11-03, on a
+    side agent's note): one that imported but whose DAG is invalid (`max_active_runs: 0`)
+    still defines its connections for the root; one that failed to import defines none (the
+    master clears what it reported). Why: one bad DAG in a shared connections file would
+    otherwise fail every task of other files using them (`connection_not_found`), the reason
+    decision 179 doesn't refuse DAGs at load. The worker, the DAG page's warning and `schedr
+    dags check` use the same registry. Not chosen: any error dropping the file's connections.
+- **Built (M4.7b1; decisions 174, 183, 185-189):** `schedr.connections`' `HTTP`, `SSH`,
+  `Mongo`, `SQL` and `Generic`, each a connection as `@connection` makes one around a
+  built-in generator function (the same checks, defaults recorded, the 1 MiB limit, test
+  doubles), recorded with its `type` (`ConnectionDef.kind`; M4.7b2 maps it to a command's
+  variables and files). The clients: `httpx.Client` (a bearer token or basic auth, headers,
+  a CA and a client certificate as PEM text, loaded into an `ssl.SSLContext`), a connected
+  paramiko `SSHClient` (`RejectPolicy` against `known_hosts`, or `AutoAddPolicy` with
+  `insecure_skip_host_check=True`; `known_hosts` read as OpenSSH writes it, comments too, a
+  line it can't read or a marker refused; the key read through an anonymous memory file,
+  never on a disk, so a killed task leaves none), a pymongo `Database` (documents as dicts; TLS by decision 189),
+  a psycopg 3 or PyMySQL connection by URL scheme (TLS by decision 187, credentials by 188;
+  committed when the block ends, rolled back on an error; PyMySQL 1.2.3's broken MySQL 8 first
+  login without TLS worked around through its `auth_plugin_map`, PyMySQL #1275 being
+  unreleased), a `dict` of one's own keys. HTTP's
+  `check_path` must be a path under `base_url` (an absolute one would get the token). Each
+  library an extra imported on use, the error naming it. A check per type (`run_check()`; a
+  `@connection` of one's own takes `@name.check`), run by M4.7c's `connections test`. Type
+  checkers see each client's type (aliases under `TYPE_CHECKING`, `object` at run time so
+  schedr's annotation reading works without the extras); `Connection` stays covariant (its
+  attributes `Final`, its type variable declared covariant, `@name.check` typed on a `self`
+  of its own so a check taking another type than the client is refused), so
+  `connections=[billing_api]` type-checks. Tested against real servers: HTTP served by the test, Postgres, MySQL 8.4,
+  Mongo 8.0 and an OpenSSH server in containers.
+  - **183. A typed connection's name is its first argument** (the user's, 2026-11-03):
+    `billing_api = HTTP("billing_api", base_url=...)`, as operators take their task ID.
+    Explicit, and it works in loops and under aliases. Not chosen: the module variable's
+    name found by the parser (no clear name for one bound twice or made in a function);
+    `name=` as a keyword.
+  - **184. A command gets a connection both ways** (the user's, 2026-11-03): a dict
+    `CommandOperator(connections={"API": billing_api})` gives `API_*` variables at the start,
+    the files written by the agent (mode 0600, in the attempt's folder, removed when it
+    ends); the list form stays for a script choosing at run time, and `schedr task-ctx
+    connection NAME --env P` then writes the type's files too and prints their paths. Not
+    chosen: the dict form only at the start (the CLI values only); the CLI only.
+  - **185. The clients are tested against real servers** (the user's, 2026-11-03): HTTP
+    against a local server, Postgres in the tests' container, MySQL, Mongo and an OpenSSH
+    server as podman containers in the integration tests (service containers in CI, pinned
+    by digest). Not chosen: real only where cheap (an in-process SSH server, Mongo and MySQL
+    unconnected); unit tests with mocked libraries.
+  - **186. M4.7b in two commits** (the user's, 2026-11-03): M4.7b1 the five types, their
+    Python clients, `check()` and the extras; M4.7b2 what commands get (variables, files,
+    `<PREFIX>_JSON`, a custom connection in the dict form).
+  - **187. SQL verifies TLS unless told not to** (the user's, 2026-11-03, on Codex's review
+    finding that PyMySQL ignored the URL's query: a MySQL connection never checked the
+    server's certificate). One vocabulary for both databases, libpq's `sslmode` in the URL
+    (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`), mapped to
+    PyMySQL for MySQL (an `ssl.SSLContext`, so a server without TLS is refused before
+    authenticating); `ca_cert` (PEM text, as HTTP's) for both, else the system's CAs
+    (`sslrootcert=system`); any other key of a `mysql://` URL refused at load. The default,
+    with no `sslmode`, is `verify-full`, as HTTP verifies and SSH needs `known_hosts`; a
+    server without TLS needs `?sslmode=disable`, written in the definition. Not chosen:
+    `prefer`, the drivers' own (TLS when offered, unchecked); `require` (TLS, unchecked).
+  - **188. A typed connection's credentials: apart, or encoded in its URL** (the user's,
+    2026-11-03, on Grok's security review: a secret filled into `t"postgresql://etl:{...}@db/etl"`
+    unencoded could change the host or turn TLS off, and an `@` in a password broke the URL,
+    libpq splitting at the first, Python at the last). Both: `SQL` and `Mongo` take `user` and
+    `password` values passed to the drivers as keywords, never in the URL (the docs' lead form;
+    M4.7b2 maps them to `PGPASSWORD`, `MYSQL_PWD`, off a command line); and each value a
+    t-string fills into their URL is percent-encoded (RFC 3986's unreserved kept), recorded
+    as the reference's `encode: "url"` and applied by the agent's renderer, the masker masking
+    the encoded form too. A value that is structure (a whole URL, `host:port`) is given whole.
+    One given in both places is refused at load. Not chosen: encoding only (a command would get
+    the password inside the URL); the separate values only (a t-string URL still open to a
+    value's structure); comparing the rendered URL's structure to the template's at open (an
+    `@` in a password refused, not fixed).
+  - **189. Mongo verifies TLS by default** (the user's, 2026-11-03, on Grok's review: pymongo
+    uses TLS only when the URI says `tls=true`). As SQL (decision 187): TLS with the
+    certificate and name checked unless the URI says `tls=false` (or `ssl=false`); the URI's
+    own TLS options as written; `ca_cert` (PEM text) for a private CA, else the system's. Not
+    chosen: pymongo's default, plaintext unless written.
+  - **190. What a command gets of a connection's secrets: files and variables** (the user's,
+    2026-11-03): a secret goes into the file its tool reads (curl's `-K` config, the SSH key,
+    Postgres's `.pgpass`, a MySQL option file) and into a prefixed variable for scripts
+    (`API_TOKEN`, `DB_PASSWORD`), masked in the log; a URL variable never holds a password,
+    which is moved out to the file, so `psql "$DB_URL"` puts none on a command line. Not
+    chosen: files only (no secret in a variable; less convenient for scripts); the sketch's
+    table as it stood (`_URL` with its password).
+  - **191. Commands get the Python clients' TLS defaults** (the user's, 2026-11-03): SQL's
+    `_URL` carries `sslmode=verify-full` and `sslrootcert` (the system's, or the `ca_cert`
+    file) unless written otherwise; MySQL's option file `ssl-mode=VERIFY_IDENTITY`; Mongo's
+    `_URI` `tls=true`; curl's config `--cacert` when a CA is given; SSH's config
+    `StrictHostKeyChecking yes` with only its `known_hosts`. Not chosen: values as written,
+    each tool's own defaults (psql `prefer`, mongosh plaintext).
+  - **192. Prefixed variables only** (the user's, 2026-11-03): `<PREFIX>_...`, never the tools'
+    own names (`PGHOST`, `MYSQL_PWD`); the docs show the mapping
+    (`PGPASSFILE="$DB_PGPASSFILE" psql "$DB_URL"`). Two of a type in a task never clash. Not
+    chosen: the tools' names opt-in per entry, or automatic with one connection of a type.
+  - **193. `connections check` and `test` run on any worker, or `--worker`** (the user's,
+    2026-11-03; M4.7c): the master picks a connected worker having the connection's root at
+    its current code, as for a task; `--worker NAME` picks one. `check` without a name covers
+    every connection of a root. Not chosen: every worker having the root (slower, more load);
+    `--worker` required.
+  - **194. Mongo commands: a database tools' file, mongosh through the variables** (the
+    user's, 2026-11-03): mongosh reads no password from a file, so a command gets
+    `<PREFIX>_TOOLS_CONFIG`, a 0600 YAML file with the `uri` (the user, no password) and the
+    `password`, for `mongodump --config` (and mongorestore, mongoexport, mongoimport); the
+    docs show mongosh logging in from the environment
+    (`--eval 'db.auth(process.env.DB_USER, process.env.DB_PASSWORD)'`). `<PREFIX>_URI` names no
+    user: mongosh would prompt for its password, hanging the task. Not chosen: a docs note
+    only; a `_URI_WITH_PASSWORD` variable (against decision 190).
+  - **195. One MySQL option file for MySQL's and MariaDB's clients** (the user's,
+    2026-11-03): MariaDB's client refuses MySQL's `ssl-mode` ("unknown variable"), so
+    `[client]` holds the login and MySQL's TLS as `loose-ssl-mode` (MySQL's client honours it;
+    MariaDB's skips it with one warning line), and `[client-mariadb]`, which only MariaDB's
+    programs read, holds MariaDB's (`ssl` / `skip-ssl`, `ssl-verify-server-cert`). TLS reaches
+    every program of both (`mysqldump`, `mariadb-dump`), so it isn't in `[mysql]`. A CA path in
+    `[client]` can't be unset for MariaDB's client: without `ca_cert`, the verify modes check
+    against the system's CAs with every client, a self-made certificate needing
+    `?sslmode=require`. Not chosen: two files (the author must know the worker's client); a
+    dialect per URL scheme (wrong when client and server differ).
+  - **196. MariaDB supported** (the user's, 2026-11-03): `SQL` takes `mariadb://` as
+    `mysql://`, through PyMySQL; a MariaDB 11.8 server in `make test-integration` and CI
+    (logins, TLS modes, a command through the option file with both vendors' clients); the
+    docs say MariaDB 11.4+'s self-made certificate can't pass `verify-*` (a real certificate,
+    or `?sslmode=require`). Not chosen: PyNaCl in `schedr[mysql]` for the `ed25519` login (a
+    dependency, for an opt-in plugin); tests only.
+  - **197. A Postgres URL names its `.pgpass` file** (the user's, 2026-11-03; Claude's
+    proposal, from the end-to-end test): psql reads only an unprefixed `PGPASSFILE`, so
+    `<PREFIX>_URL` carries `passfile=<the file's path>` (never the password) and
+    `psql "$DB_URL"` logs in as written. Not chosen: a bare URL, mapped by hand
+    (`PGPASSFILE="$DB_PGPASSFILE"`).
+  - **198. `connections test` of a connection without a check opens it** (the user's,
+    2026-11-03; M4.7c): `with name():` entered and left, an exception failing the test; a
+    `Generic` renders its values. Not chosen: refusing; the values only.
+  - **199. A connection test takes no task slot** (the user's, 2026-11-03; M4.7c): it runs
+    beside the tasks, one at a time per worker. Not chosen: a slot like a task.
+  - **200. A connection test is stopped after 60 s** (the user's, 2026-11-03; M4.7c),
+    `--timeout` to change it. Not chosen: the connection's own `timeout` only; a fixed 30 s.
+  - **201. Commands' connection files in memory** (the user's, 2026-11-03, on a side agent's
+    note): they hold passwords and keys in plain text, so they go under `/dev/shm` (a tmpfs;
+    in containers too), `/dev/shm/schedr-<uid>/<a hash of the data directory>/<worker>/`,
+    never on a disk, gone at a reboot or a pod's restart, still swept at start; `[worker]
+    connection_dir` overrides it, the data directory the fallback without `/dev/shm`. The
+    hash keeps workers of one user apart as their data directories did (a standalone's and a
+    worker's, both named after the host). `/dev/shm` is writable by every user: the worker
+    makes the folder and the one holding it itself, and refuses to start when either isn't a
+    real folder of its user's, mode 0700 (another user's made first, or a link). Not chosen:
+    memory files the command inherits (`/proc/self/fd/N`; `task-ctx --env` can't pass them to
+    a running process, and tools closing inherited files would break); the data directory,
+    with the docs recommending a memory-backed volume.
+  - **202. A connections demo, all in compose** (the user's, 2026-11-03; M4.7d): a compose
+    file runs the servers of every connection type (Postgres, MySQL, MariaDB, Mongo, SSH,
+    HTTP), schedr standalones without a UI and one `schedr ui` over them, as `make
+    standalone-separate-ui` does locally; a demo image FROM the base image adds the client
+    tools and the connection extras; `make demo` builds the images and runs `podman-compose
+    up`, so anyone runs it without Rust or uv. Not chosen: only the servers in compose,
+    schedr from a local build; both, by compose profile.
+  - **203. The demo shows two deployments, dev and prod** (the user's, 2026-11-03): the same
+    DAG folder, each standalone's own secrets pointing at other databases and users, under
+    one `schedr ui`: M4.7's acceptance (the same DAG reads a connection's values from two
+    environments' storages). Not chosen: one standalone.
+  - **204. The demo's HTTP server is go-httpbin, pinned** (the user's, 2026-11-03): its
+    `/bearer` checks the token, `/headers` echoes what was sent. Not chosen: a server of our
+    own.
+  - **205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
+    `schedr connections check` and `test` too. Not chosen: before M4.7c; in M4.7b2.
+  - **206. A Mongo user logs in where Mongo's own clients log in** (the user's, 2026-11-03,
+    found running the demo): the URI's `authSource`, else the database in its path, else
+    `admin`, in Python and in the tools' files alike; `database=` is only the database the
+    task gets, and `Mongo`'s docstring says so. Not chosen: `database=` as the login
+    database when the URI names none (friendlier for a user made in the app's database, but
+    unlike every Mongo client, and it would break users made in `admin`).
+  - **207. Connections in the UI: Check and Test buttons** (the user's, 2026-11-04; M4.7e):
+    a DAG page gets a Connections section, a row per connection its tasks declare (Python
+    tasks' and `CommandOperator(connections=)`'s): name, type, the tasks using it, the last
+    result; **Check all** on top (renders them on a worker: secrets there or not, nothing
+    contacted) and **Test** on each row (opens it and runs its check: a real login). Not
+    chosen: Check only (no side effects, but a wrong password or a firewall goes unseen);
+    Test only (one login per connection to learn what a check says at once).
+  - **208. The DAG page's Check is the root's check, its rows shown** (the user's,
+    2026-11-04): `POST /api/v1/connections/check` as it is, the page showing the DAG's
+    connections of the answer. Not chosen: a `names` filter in the API (an API change for
+    rows a page can pick).
+  - **209. Results live on the page** (the user's, 2026-11-04): a row says "running" when
+    pressed and is filled in when the worker answers (the command polled, as the UI's other
+    actions are), kept until the page is left. Not chosen: results stored and shown on later
+    visits (a history of checks to keep).
+  - **210. Anyone signed in may press Test, after a confirm dialog** (the user's,
+    2026-11-04): as with the CLI and the API (no roles yet); the dialog names the connection
+    and says it logs in to the real system with this deployment's secrets. Not chosen:
+    waiting for roles.
+  - **211. A Connections page, now** (the user's, 2026-11-04): `/connections`, in the
+    navigation beside Workers and Import errors, over every deployment the UI shows, as
+    those pages are: grouped by deployment, a heading per root (`dev · dags`) with its own
+    Check all, a row per connection (name, type, file, the DAGs and tasks declaring it, the
+    last result, Test); every connection of the root, used by a DAG or not. The UI has no
+    roots page: a root is a heading. It reads a new `GET /api/v1/connections`: each root's
+    connections in its current code, name, type, file and who declares them, no values. Not
+    chosen: later, after the DAG section; a section of each deployment's page (about its
+    nodes, so harder to find); the DAG section only.
+  - **212. Every connection type works in the base image** (the user's, 2026-11-04, in
+    M4.7e: "we have http, mongo and paramiko by default, but no postgres/mysql"): its
+    libraries gain `psycopg[binary]` and `pymysql[rsa]` (with httpx, pymongo and paramiko,
+    every type's client), and `schedr[connections]` installs them all outside it; it also
+    carries the command-line clients commands use their connections with: `postgresql18-client`,
+    `mariadb-client` with `mariadb-connector-c` (MySQL 8's `caching_sha2_password`),
+    `mongodb-tools`, `openssh-client`, `curl` (477 MB to about 670 MB: mongodb-tools 104 MB,
+    the MariaDB client 37 MB, the rest about 5 MB; "650MB image is not big"). The demo's
+    image keeps only its start scripts (its requirements and `make demo-requirements` gone).
+    Alpine has no mongosh (a Node.js program). Not chosen: only curl, ssh and psql in the
+    base (5 MB; Claude's pick), the rest in an image of one's own; none, the demo's
+    Containerfile as the recipe; the SQL drivers through the extras only (two standards in
+    one image).
+    Later, if someone needs it (the user's): a slim image beside it (schedr, Python and
+    its own dependencies only), the full one staying the default.
+- **Built (M4.7b2; decisions 184, 190-197, 201):** a command's connections as variables and
+  files. `CommandOperator(connections={"DB": warehouse})` records `connection_env` (prefix to
+  name) with the task, its names declared; the master refuses a prefix that can't start a
+  variable's name (or starts with `SCHEDR`) or names an undeclared connection, the Python
+  operator the same at load, plus an `env=` name under a prefix. The agent's
+  `connection_env` module maps a rendered connection by type: curl's `-K` config (quoted,
+  the token as a header), an SSH config with one `target` host (values quoted, `%` escaped, a
+  quote or a line break refused), its key (with its last line break) and `known_hosts`,
+  Postgres's `.pgpass` named in the URL (`passfile`), one MySQL option file for both vendors'
+  clients, Mongo's tools' YAML (values as JSON strings), a `Generic`'s or `@connection`'s
+  parameters one variable each; every one `<PREFIX>_JSON`. URLs parsed by hand (Mongo's lists
+  several hosts), the password moved out, the user put in, the TLS defaults added unless
+  written. Files written in `<connection dir>/<worker>/<attempt>/<name>/<prefix>/`
+  (0700, files 0600; in memory, decision 201), removed when the attempt ends, and swept when an agent starts (all but
+  the folders of processes it couldn't stop). The variables merged into the command's
+  environment, a name in both refused (`render_failed`), as two connections giving one name.
+  `task-ctx connection --env` asks the agent (`connection_env_get`), which writes the same
+  files. `SQL` takes `mariadb://`. Tested: unit tests per type, the agent running a command
+  with them (mode bits, cleanup, clashes), and against real servers psql, mysql (MySQL's
+  client, and MariaDB's in its container), ssh, curl and `--env`; MariaDB 11.8 joins the
+  integration servers. From the reviews (Codex's 10 findings, Grok's 5, all confirmed): every
+  folder on the connection path checked (the user's or root's, closed to others' writes
+  unless sticky, a link only root's), files written beside and renamed into place; a password
+  in a URL's query (libpq's `password=`) or an HTTP URL's user part moved out, other secret
+  query keys (`sslpassword`, MySQL's `password`) refused; the forms a file writes (a password
+  taken out of a secret URL, `.pgpass`'s and the option file's escapes) masked as their
+  source is; a line break refused where curl's config or `.pgpass` would split on it, a NUL
+  in the option file (MySQL's client skipped the next line, the TLS mode, which now comes
+  first); `protocol = TCP` (`localhost` was the socket); Mongo's database in the URI's path
+  with `authSource` (`<PREFIX>_AUTH_SOURCE` for mongosh's login). The DAG page says
+  `mysql --defaults-file` and `curl -q -K`: the tools read `~/.my.cnf` after
+  `--defaults-extra-file`, and `~/.curlrc` unless `-q` comes first, and those could turn
+  the TLS check off.
+- **Built (M4.7c; decisions 174, 193, 198-200):** `schedr connections check [ROOT]
+  [--name N] [--worker W]` and `schedr connections test NAME [--root R] [--worker W]
+  [--timeout 60s]`, commands (`check_connections`, `test_connection`) through
+  `POST /api/v1/connections/check` and `/connections/{name}/test`. Applying one, the master
+  picks per root a connected, active worker having the root at its current hash (the fewest
+  attempts, then by name; or the one named) and sends it a `ConnectionJob` (the root's
+  registry as JSON, the test's name and timeout). The command's `result` is
+  `{"jobs": [{root, worker, state: running|done|lost, reason?, connections: [...]}]}`,
+  filled in from each worker's `ConnectionJobDone` (only from the worker it went to, only
+  while running; a job is `lost` when its worker is forgotten). A check fetches each secret
+  from the storages without the cache (a fixed secret shows at once), says present,
+  default, missing, denied or unavailable, and renders the connection, its error masked. A
+  test is a one-off Python attempt of the connection's file (`TaskRequest.connection_test`):
+  the runner imports the file, finds the `Connection` by name in its globals and runs
+  `run_test()` (its check, or `with conn(): pass`), under the test's timeout, in no slot;
+  one connections job at a time per worker. The CLI waits for the decision, then for every
+  job, past the timeout and a 60 s margin; exit 1 on a failure, a lost job or no answer.
+  Codex's review (11 findings, all confirmed and fixed): a job is sent only once its
+  command's decision is stored (sent before, a failed decision sent it again next round);
+  it goes to a connected worker having the root at its current parse's hash exactly (a
+  newer hash's code with the older registry mixed two versions); its time (a check's 30 s,
+  a test's timeout) counts from its arrival, its wait for its turn and its secrets' reads
+  included, the test's process stopped at the end; a test's process is journalled as an
+  attempt's (a worker killed mid-test stops it when it starts again) and planned at the
+  copy of the code it was sent for; an answer made while no master listened is sent after
+  the next registration; the master marks a job lost when its worker restarts, when it
+  doesn't answer within its time and 30 s, and at its own start for an earlier master's
+  jobs, and keeps tracking a job until its answer is stored; a check is ok only when every
+  secret it names is there. B160 logged (a task's own timeout restarting after its secrets
+  are read). Grok's security review (5 findings; 2 were Codex's too): a parsed file whose
+  path leaves the root keeps no connections either (a test imports by that path, and the
+  agent refuses such a path itself); a test refuses a file holding two `Connection`s by
+  the name (it could run one the parse never recorded, passing for the other); a named
+  worker draining or drained is refused, as the automatic pick does.
+- **Built (M4.7d; decisions 202-206):** the connections demo, `examples/demo`. A compose
+  file (`podman-compose`, or `docker compose`) runs Postgres, MySQL, MariaDB, Mongo, an
+  OpenSSH server and go-httpbin, two `schedr standalone --no-ui` deployments `dev` and
+  `prod` over one DAG folder, and `schedr ui` over both on 127.0.0.1:8082. Its image is FROM
+  the base image, adding the servers' clients (MariaDB's for both MySQL and MariaDB, with
+  the connector's `caching_sha2_password` plugin; `mongoexport`, Alpine having no mongosh)
+  and the connection extras (pinned, hashed). Every password, token and key is generated
+  once into a volume by a one-off container (`keys.sh`; podman-compose 1.0.6 ignores
+  `depends_on` conditions); each deployment fills its own `db` secret storage from it at
+  start and names its SQLite file for `db migrate` and `secrets set`. The DAG opens each
+  connection from Python and from the server's own client. `make demo` runs it; `make
+  demo-check` runs both deployments' DAG, every task required to succeed, then `connections
+  check` and a `test` of all seven connections in both. The pin check also reads the
+  examples' compose files and Containerfiles. Found running it: Mongo users log in on the
+  URI's `authSource`, else its path's database, else `admin` (decision 206, documented);
+  OpenSSH 10's `ssh-keyscan` writes comments on standard output (the SSH integration test
+  failing on Ubuntu 26.04's runners, fixed); B161 logged (`No` masked in a client's error);
+  the schedr services set `NO_PROXY=*` (podman passes the machine's `HTTP_PROXY` on, which
+  took the UI's calls to a proxy). Codex's review, security included (9 findings, all
+  fixed): one volume per reader (each deployment's own, 0700 for user 1001; the servers'
+  passwords; the SSH server's public keys; its host key), so `dev` reads nothing of
+  `prod`'s or the administrator password; no password on a command line in the servers'
+  first start (psql reads it, the MySQL clients from an option file); shared SELinux labels
+  (`:z`) on mounts two containers share; `demo-check` requires each task's own result,
+  naming its deployment (a Python task's output, a command's log), and the Mongo and SSH
+  tasks fail rather than return nothing; the pin check follows YAML merges and checks a
+  `${VAR:-default}` image's default; compose follows `CONTAINER` (podman-compose with
+  podman, `docker compose` with docker); a half-done key step starts over; a base image
+  named with its registry is pulled. Decision 202's "without Rust or uv" holds once a
+  release has connections: until then the first run builds the base image (README).
+- **Built (M4.7e; decisions 207-212):** connections in the web UI. `GET /api/v1/connections`
+  lists each root's connections in its current code (`ConnectionList::of`: the registry and
+  the current DAGs' tasks): name, type, file, why one is refused, and the DAGs and tasks
+  declaring it (a name a task declares that no file defines too, refused); no secret's
+  value (a refusal's reason may quote a secret reference as the code writes it: its name,
+  a literal default, public as the code is). The UI's `/connections` page (in the navigation after Workers) asks every
+  deployment at once and shows a table per deployment and root; a DAG's page shows its root's
+  rows its tasks declare, above its runs (which grow; the user's). The rows are read again
+  with the live part (the code may have changed); a row's check result, its test result and
+  the check's line each have a place of their own, kept as they are (`hx-preserve`, by their
+  IDs: a result shown, or a poll still running, stays), so a check never replaces a test
+  still being read. Check all posts `check_connections` for the root's rows (not the
+  refused), under a key kept in the browser until a definite answer (B140), as a dialog's
+  form; Test, from a confirmation dialog (named by its title) naming the real login,
+  `test_connection`. Each answer reads its command every second until the job answered or
+  was lost, and a second after a read that failed (`data-poll`, also an action's command):
+  a check's line under its button and each row's check place, out of band
+  (`hx-swap-oob="innerHTML:#cell-check"`; `check: running` meanwhile); a test's in its row's
+  test place: `check: ok`, `test: failed (1.2 s)` with the masked error, and each secret not
+  plainly there. A connection asked about that the worker didn't report: `no answer`,
+  failed. No answer from the webserver: `may have arrived` (never "not sent"). A webserver
+  without the list (404) shows no section. Browser tests: Check all on the page, a Test from
+  a DAG's page, a result kept across a live reload. The base image (decision 212):
+  `psycopg[binary]` and `pymysql[rsa]` in `requirements.in` (3 pins more: cryptography was
+  there), the clients by `apk`; `schedr[connections]` in `pyproject.toml`; the demo's image
+  `FROM` it with its scripts only.
+
+**Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
+CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`
+function (no Python, or no schedr), and the native tools they call (`ssh`, `curl`,
+`mongosh`, `psql`) each want their values in a form of their own, some only as files. So
+schedr has **built-in connection types**, each a fixed shape with a fixed mapping to
+variables and files:
+
+```python
+# connections.py, anywhere in the DAG folder
+from schedr.connections import HTTP, SSH
+
+billing_api = HTTP("billing_api", base_url="https://billing.example.com", token=t"{secrets['billing#token']}")
+router = SSH("router", host="10.0.0.1", user="netops", private_key=t"{secrets['router#key']}")
+
+# a DAG
+CommandOperator(
+    "fetch",
+    command='curl -q -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"; ssh -F "$R_SSH_CONFIG" target "show version"',
+    connections={"API": billing_api, "R": router},     # prefix -> connection
+)
+
+@task
+def version() -> str:
+    with router() as client:                          # paramiko, imported only here
+        return client.exec_command("show version")[1].read().decode()
+```
+
+- **One definition, every kind of task.** A typed connection is defined once, in any `.py`
+  file of the DAG folder. Python tasks (and plain scripts with `schedr.script`) enter it with
+  `with router() as client:`, getting the type's client (`httpx.Client`, a paramiko
+  `SSHClient`, a pymongo `Database`, …; the library imported only on use, so `import
+  schedr` stays dependency-free). Commands and scripts get the type's variables and files.
+  **Custom `@connection` functions stay** for shapes of one's own, Python first; given to a
+  command or script, they deliver their rendered arguments as `PREFIX_PARAM` variables and
+  the JSON file. Not chosen: types only for Bash with `@connection` functions for Python (the
+  same host defined twice, drifting apart); no types, only rendered arguments in the
+  environment (the draft's candidate A: no key files, no curl or ssh configuration, so
+  secrets end up on command lines).
+- **What a process gets** (the prefix comes from where it is used, so two of one type in a
+  task don't clash: `SRC_URI`, `DST_URI`): **variables for plain values, files for what
+  tools read from files, and one JSON file with everything** (`<PREFIX>_JSON`). Files go in
+  a folder of the attempt's own, mode 0600, removed when the attempt ends; values rendered
+  from secrets are masked in the log. Secrets never reach a command line: `curl` reads its
+  header from `-K`, `ssh` its key and options from `-F`. Not chosen: JSON only (needs `jq`,
+  and `ssh` still needs a key file); variables only (`ssh` can't take a key from a variable,
+  and keys would sit in the environment).
+- **Finding a connection:** by object in Python (`from connections import router`: a typo
+  is an import error, at parse time) and by name from Bash (`schedr task-ctx connection
+  router --env R`). Names are unique across the DAG folder: two definitions of one name are
+  a parse error (the parser already imports every file, so it builds the registry). Not
+  chosen: names as strings everywhere (`connections={"R": "router"}`; a typo found only when
+  the registry is checked).
+- **The first types:**
+
+  | Type | Variables | Files | Python client |
+  |---|---|---|---|
+  | `HTTP` | `_BASE_URL`, `_TOKEN` if any | `_CURL_CONFIG` (headers, CA), `_CA_FILE` if given | `httpx.Client` / `httpx.AsyncClient` |
+  | `SSH` | `_HOST`, `_PORT`, `_USER` | `_KEY_FILE`, `_KNOWN_HOSTS`, `_SSH_CONFIG` (host `target`) | paramiko `SSHClient` |
+  | `Mongo` | `_URI`, `_DATABASE` | | pymongo `Database` |
+  | `SQL` (a URL: Postgres, MySQL) | `_URL` | `_PGPASSFILE` for Postgres | a DB-API connection |
+  | `Generic` (keys of one's own) | `_<KEY>` per key | | a dict |
+
+  Network devices go through `SSH`. Exact names are settled when built; the table is the
+  shape.
+- **Sync and async, and `check()`** (decision 53, the user's, 2026-10-28): one connection
+  definition gives the sync client with `with` and the async one with `async with`, where
+  the type has both. `Mongo`: pymongo for both (`MongoClient`, and `AsyncMongoClient`, in
+  pymongo since 4.10, replacing the deprecated motor). `HTTP`: httpx for both
+  (`httpx.Client` / `httpx.AsyncClient`, one API in both modes; the table's
+  `requests.Session` becomes `httpx.Client`). `SSH` (paramiko) and `SQL` (DB-API; async
+  drivers differ per database) sync only for now: `async with` on them is a parse error
+  saying so. `Generic` is a dict, either way. Every built-in type has a `check()`: Mongo
+  `ping`, HTTP a request to `check_path` (else connecting), SSH connecting and closing, SQL
+  `SELECT 1`; a `@connection` of one's own may add `@its_name.check`; `schedr connections
+  test <name>` runs it on a worker, sync or async as the type allows. Not chosen:
+  `requests` for sync with httpx for async (two libraries, two APIs). Not chosen: fewer types (HTTP, SSH, Generic), with Mongo and SQL as Generic
+  (losing the clients and the `.pgpass` file).
+
+**Decided besides (2026-10-25):**
+- **A custom connection's arguments, given to a command or script:** one variable per
+  parameter; a simple value as itself (`C_TOKEN=…`), a nested one as JSON
+  (`C_OPTIONS='{"tls":true,"timeout":5}'`), and everything in `C_JSON`. Not chosen:
+  flattening (`C_OPTIONS_TLS`: keys clash, `{"a_b": 1}` and `{"a": {"b": 1}}` both give
+  `C_OPTIONS_A_B`; case is lost; an empty list gives no variable); nested values only in
+  the JSON file (a script expecting `C_HOSTS` silently gets nothing).
+- **Parameters that change while an environment's secrets lag behind** (a parameter added,
+  or moved to another path, before its secret is stored there): `schedr connections check`
+  against the target environment lists every missing secret, run before deploying (in CI
+  or the chart's pre-upgrade hook); a parameter may fall back to a default
+  (`t"{secrets.value('billing#client_id', default='')}"`, decision 176) where an empty value is acceptable. Without
+  either, tasks fail with `secret_not_found` (no retry used); a removed parameter is
+  harmless; a value changed in the storage is read at the next attempt. Not chosen:
+  versioned connections (versions everywhere for a gap a check catches); nothing (found in
+  production).
+- **The name stays `connection`** (`@connection`, `schedr.connections`, `schedr connections
+  check`): it is what the thing is. Airflow uses the same word, and that is no reason to
+  avoid it; schedr's names follow what describes the API best, the same rule that made
+  Airflow's setup and teardown schedr's resources. `schedr.airflow`'s `Connection` (M5) maps
+  onto it, and its docs say so once. Not chosen: `@service` (clashes with Kubernetes
+  Services); `@endpoint` (odd for a database or an SSH host).
+
+**174. M4.7's open questions** (the user's, 2026-11-03; the options were Claude's):
+- **Client libraries as optional extras:** `schedr[http]` (httpx), `schedr[mongo]`
+  (pymongo), `schedr[ssh]` (paramiko), `schedr[postgres]` (psycopg 3), `schedr[mysql]`
+  (PyMySQL), as `schedr[pydantic]`; imported on use, the error naming the extra when it is
+  missing. Not chosen: no extras (the error naming the package); hard dependencies.
+- **SQL:** Postgres through psycopg 3 and MySQL through PyMySQL. Not chosen: Postgres only
+  for now; an SQLAlchemy engine as the client.
+- **SSH host keys:** `known_hosts` (text, or a secret) required, with a loud opt-out
+  `insecure_skip_host_check=True`. Not chosen: no opt-out; accepting a host's key the first
+  time.
+- **HTTP authentication:** a bearer token, a user and password, extra headers, a CA file, a
+  client certificate and key. Not chosen: a token and headers only.
+- **The registry:** the parser records every connection in a DAG folder (its name, type and
+  templates, never a value) per root, as it records DAGs. Not chosen: only the connections
+  DAGs declare.
+- **`schedr connections check`** runs on a worker: the CLI asks the master, the master a
+  worker, and only present or missing comes back, never a value. Not chosen: in the CLI with
+  its own storage configuration (Vault credentials on an operator's machine).
+- **`schedr connections test NAME`** runs `check()` as a one-off job of a worker's agent,
+  not a run, its result back to the CLI. Not chosen: a generated run shown in the UI;
+  leaving it for later.
+- **Test doubles:** `task_context(connections={"name": fake})` takes objects (the task runs
+  in the test's process); `run_dag(connections={"name": {"param": value}})` takes the
+  connection's argument values, run by the real `@connection` function (each task is a
+  process of its own). Not chosen: `task_context` only (`run_dag`'s `secrets=` does the
+  same, by secret paths); doubles named by import path (later, if wanted).
+- **Async:** `async with` comes with M4.10's async tasks. Not chosen: building it in M4.7,
+  tested alone.
+- **Sub-steps:** M4.7a `@connection`, its Python use, `schedr task-ctx connection`, the
+  doubles; M4.7b the typed connections and their files; M4.7c `connections check` and
+  `test`.
 
 ## State storage
 
@@ -6021,8 +6624,9 @@ def export(day: date) -> Exported:
   cleanup command for a `command` / `script` task), with the same memory budget and watchdog.
   The slot is freed only after the cleanup. Same worker, so the same local disk.
 - **The attempt finishes after its cleanup,** as a function call returns only after its
-  `finally` block: one `Finished` message carries the task's and the cleanup's results;
-  downstream tasks and retries start only then (task instance state `cleaning_up` meanwhile).
+  `finally` block: downstream tasks and retries start only then (task instance state
+  `cleaning_up` meanwhile). The worker reports the task's result when its process ends and
+  the cleanup's in `Finished` (decision 229).
   Not chosen: reporting the task's result at once and cleaning up in parallel (a retry or
   downstream task could meet the previous attempt's resources, e.g. a lock not yet released).
 - **`cleanup_timeout`** per task (and in `TaskDefaults`), server default **5 minutes**. On
@@ -6140,7 +6744,7 @@ with Dag("etl", trigger=DAILY):
   return type is a parse error for now.
 - **`@cleanup(resource)`** marks the cleanup; it receives **the setup's output** and the run
   information, nothing else (no other outputs, no statuses). Options: timeout, retries, retry
-  delay, queue. Exactly one cleanup per resource (parse error otherwise).
+  delay, queue, `secrets`, `connections` (decision 226). Exactly one cleanup per resource (parse error otherwise).
 - **Users:** a task **taking a resource's output** as data is a user (only a resource's output
   counts; not general inference from data flow); a task needing the resource but not its data
   declares **`uses=[cluster]`** (also on operators and groups, not in `TaskDefaults`: too easy
@@ -6246,6 +6850,85 @@ with Dag("etl", trigger=DAILY):
 - Not chosen: a setup–cleanup pair with a scope computed from the graph between two tasks; a
   cleanup for a group, the whole run or an explicit task list (none of them knows whether
   anything was created); a `Resource(...)` object with a handle list.
+
+- **Built (M4.8a; decisions 216-219, 221-226, 228-230):** cleanups on the same worker.
+  `@task(cleanup=fn)` and `CommandOperator(cleanup=...)`, with `cleanup_timeout`,
+  `cleanup_retries`, `cleanup_retry_delay` (also in `TaskDefaults`), `cleanup_handles=` for a
+  command; `cleanup_handle(x)` and `schedr task-ctx cleanup add|list`; `TaskEnded` when the
+  process ends, moving the instance to `cleaning_up`, and `Finished` with the task's result and
+  the cleanup's. Small decisions: a cleanup is a task request with `cleanup` set, as a
+  connection test is, not a separate runner mode, so it runs through the fork server unchanged;
+  the attempt stays open during its cleanup, so slots, limits and a lost worker's handling need
+  nothing new; handles live only in the agent's memory until M4.8b; the cleanup's parameters are
+  built with the task's annotations, so one of another type is refused at parse time; a
+  parameter the DAG left at its default gets the task's default. `task_context` yields
+  `.handles`, what `cleanup_handle` registered.
+
+#### Decided for M4.8
+
+Decisions 214-230 (the user's, 2026-11-04; the options were Claude's). 215 and 227 were dropped
+when laid out: each sub-step commits on the user's word anyway, and `ctx.handles` above only
+records (a test calls the cleanup itself).
+
+- **214. Five sub-steps:** M4.8a cleanups on the same worker; M4.8b surviving failures (agent
+  restart, lost worker, `cleanup_anywhere`, drain); M4.8c Python resources; M4.8d command and
+  script resources; M4.8e the UI and test doubles. Not chosen: two steps (diffs too large to
+  review well).
+- **216. An attempt whose process never started has no cleanup** (rejected, a missing secret, a
+  timeout during the reads): cleanup result `not needed`. Not chosen: running it anyway (nothing
+  to clean, and it would fail on the same missing secret).
+- **217. Cleanups retry 3 times, 30 s apart, by default:** `cleanup_retries`,
+  `cleanup_retry_delay`, on the task and in `TaskDefaults`. A stuck cleanup can hold its slot
+  about 21 minutes. Not chosen: 0 (one network blip fails a run).
+- **218. A cleanup gets the connections its task declared,** as it gets its `secrets`: a
+  command's variables and files stay until the cleanup ends. Not chosen: none (cancelling remote
+  work, the main use, needs them); `cleanup_connections=` (usually a copy of the task's list).
+- **219. A cancel doesn't stop a running cleanup:** it ends by itself or at `cleanup_timeout`.
+  Not chosen: killing it (leaves behind what it was cleaning).
+- **220. A lost worker without `cleanup_anywhere` fails the run even with no handle
+  registered:** the master can't know what the attempt did, and a cleanup may work from its
+  inputs alone. The failure's message points to `cleanup_anywhere`. Not chosen: `not needed`
+  without handles (a real leak would give a green run).
+- **221. A `cleanup_anywhere` cleanup with no worker to take it waits,** shown `unschedulable`;
+  the task's retry waits too. Not chosen: giving up after `cleanup_timeout` (a short outage
+  would fail a cleanup that could have run).
+- **222. Handles are masked as outputs are** (decision 167), before the journal and the master:
+  no secret on the worker's disk or in the database, the same list on any worker, a warning in
+  the log. A cleanup needing a secret declares it. A resource's value is an output, so the same
+  holds. Not chosen: real in the journal, masked for the master (a secret on disk, and
+  `cleanup_anywhere` gets different data); refusing at registration (a common value like
+  `admin` would kill a healthy task).
+- **223. A setup called twice in a DAG is a parse error.** Not chosen: an instance per call
+  (every reference would need an instance name).
+- **224. `.expand` on a setup is a parse error.** Not chosen: a resource per instance (users,
+  "done" and the UI all per index).
+- **225. A resource's cleanup goes ahead of waiting tasks** and isn't held by DAG limits; it
+  needs a worker slot. Not chosen: oldest-ready order (a paid cluster runs on behind queued
+  work).
+- **226. A resource's cleanup inherits its setup's `secrets` and `connections` and may add its
+  own** (`@cleanup(cluster, secrets=[...])`; a static `Resource("tmp")` has only its own);
+  `queue` defaults to the setup's. A forgotten declaration would surface only when the cleanup
+  runs and leak what it should delete. Not chosen: only its own (that risk); only inherited
+  (nothing for a resource without setup code).
+- **228. Handles take at most 1 MiB in total per attempt;** going over fails the attempt, naming
+  the limit. They travel in an assignment with `cleanup_anywhere`, within the worker's 4 MiB
+  message (as decision 181). Not chosen: 64 KiB each and 1000 per attempt, sent in chunks (more
+  code and larger rows for a rare case).
+- **229. The task's result is reported when its process ends, the cleanup's in `Finished`:**
+  the master learns `cleaning_up` from it, and a worker lost during the cleanup leaves the task
+  `success` with `didn't run: worker lost`, not run again. Replaces "one `Finished` carries
+  both". Not chosen: a bare `CleanupStarted` with the result in `Finished` (a finished task
+  would run twice).
+- **230. No flag to skip waiting for a per-task cleanup;** a slow cleanup that needn't hold
+  anything up is a resource's. It can be added later without breaking anything. Not chosen:
+  `cleanup_wait=False` for downstream tasks (`cleaning_up` would stop meaning "downstream
+  waits", and a failed cleanup would be reported after downstream acted).
+
+**Followed as designed** (laid out with them): a resource cleanup missing from newer code is a
+failed cleanup; the slot stays held during cleanup retry delays; a drain leaves room for one
+cleanup try, not its retries; after an agent restart cleanups run from the journal with the
+attempt's kept code, the attempt stays `lost` and its instance `cleaning_up` until they end, a
+missing copy being a failed cleanup; each mapped instance has its own cleanup.
 
 ### Output serialization
 
@@ -7932,610 +8615,4 @@ gRPC, journal) come before breadth of features.
 Questions still open. Once decided, they move into the sections above. Deliberately deferred
 items ("possibly later") are noted where they belong.
 
-### Connections (draft, M4; to be worked on further)
-
-**Status:** a draft for M4, with the secret storage it builds on. Decided so far: the
-direction for Python tasks (a decorator in the manner of `contextlib.contextmanager`, the
-user's), the in-task CLI for Bash, and **typed connections for tasks without Python**
-(2026-10-25, below). The rest is still to be worked on.
-
-**The need (the user's):** the same DAG moves between environments (dev, preprod, prod)
-without code changes, so it names what it uses (`mongodb_default`), and each environment
-supplies its own values. Connections to MongoDB, HTTP APIs, SSH hosts and network devices
-differ too much for one fixed set of fields.
-
-**Not wanted** (the user, 2026-10-25): Airflow's fixed fields (`conn_type`, `host`, `login`,
-`password`, `schema`, `port`, `extra`) as the native structure ("defined in a limiting way").
-Proposals rejected or replaced on the way: a typed `Connection` with those fields read from
-`task_ctx.connections[...]`; a free-form mapping `connection("name")` checked against an
-optional dataclass; a class decorated with `@connection("name")` whose fields are the entry's
-shape, injected by a task parameter's type, with a contract of methods (`open`, `close`,
-`check`, `get`, `redacted`, `env`) and built-in classes (`HTTP`, `SSH`, `Mongo`). The last was
-replaced by the user's function-based design.
-
-**The direction: `@connection` on a generator function, as `contextlib.contextmanager`.**
-
-```python
-# connections.py, in the DAG repository: written once, used by every DAG
-from collections.abc import Iterator
-from schedr import connection, secrets
-import pymongo
-
-@connection(
-    uri=t"{secrets['mongo/default#uri']}",       # resolved per environment
-    database="orders",                           # plain values too
-)
-def mongodb_default(uri: str, database: str) -> Iterator[pymongo.database.Database]:
-    client = pymongo.MongoClient(uri)
-    try:
-        yield client[database]                   # what the task gets
-    finally:
-        client.close()                           # always runs, as with contextmanager
-
-# a DAG
-@task
-def count() -> int:
-    with mongodb_default() as db:
-        return db.orders.count_documents({})
-```
-
-- **The function's parameters are the shape;** the decorator's keyword arguments are their
-  values: t-strings with secret placeholders (`secrets['path#key']`, the syntax decided in
-  Secret storage) or plain values. The same code reads other values in each environment
-  because each deployment has its own secret storage (or a shared Vault with another path).
-- **Defining** (import, parse time included): the arguments are checked against the
-  function's parameters (each without a default given, nothing extra) and the templates'
-  syntax; mistakes are parse errors. The connection's name is the function's. No secret is
-  read.
-- **Entering `with mongodb_default()`:** the runner asks the agent to render the templates;
-  the agent fetches the secrets from that environment's storage (never through the master)
-  and registers their values for masking in the task's log; the function runs up to
-  `yield`. **Leaving:** the code after `yield` runs, also on errors.
-- **A secret that doesn't exist:** the attempt fails as `secret_not_found`, naming the
-  connection and the path, without using a retry.
-- **Testing:** `mongodb_default.fn(uri=..., database=...)` calls the bare function without
-  templates; `task_context(connections={"mongodb_default": fake})` and
-  `run_dag(..., connections=...)` swap a connection for a test double.
-
-**Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
-- **Declaring:** `@task(connections=[mongodb_default])` (the function or its name; the
-  operators too); **required since decision 179**: a task opens only what it declares, each
-  rendered before it starts.
-- **Checking an environment** before moving DAGs there: `schedr connections check` renders
-  every connection the DAGs define against that environment's storage (all secrets present?)
-  without running the functions.
-- **A "does it work?" hook:** an optional second function, `@mongodb_default.check` (e.g. a
-  Mongo `ping`), run on a worker by `schedr connections test mongodb_default`.
-- **Arguments besides secrets:** literals; **not run values** (decision 180: a connection
-  is defined at module level, outside any DAG). Per-deployment settings that aren't secrets (a `[connections]` table
-  in the configuration): later, secrets and literals cover them.
-- **A missing secret:** both ways stay, `schedr connections check` before moving DAGs and a
-  default in the template (`secrets.value('path#key', default='')`, decision 176).
-- **Async:** `@connection` on an `async def` generator gives `async with` (with M4's async
-  task functions).
-- **Airflow (M5):** `schedr.airflow`'s `Connection.get(conn_id)` and
-  `BaseHook.get_connection` read Airflow-format entries from the same storage, a shape of
-  their own beside the native connections.
-
-**Bash, decided by the user:** a script choosing a connection while it runs uses M4's in-task
-CLI: `schedr task-ctx connection mongodb_default --env MONGO` prints `export MONGO_URI=…`
-lines for `eval`; `--json` prints the rendered arguments as an object.
-
-**Built (M4.7a; decisions 174, 179-182):**
-- **The registry:** parsing a file records each `@connection` it defines itself
-  (`file_parsed`'s `connections`: its name and values as DAG JSON values, secrets by name,
-  never a value); a file defining one name twice fails its import. The master keeps each
-  root's registry from its current parse (`Registry`; a name defined in two files is refused,
-  naming both) and sends with each assignment the connections its task declares
-  (`AssignTask.connections_json`; the agent serves no other). A file that failed to import
-  counts for nothing; one the master refused after it imported keeps its connections
-  (decision 182). A connection over 1 MiB as JSON fails its file's import (decision 181).
-- **Opening:** the agent renders each connection the task declares before it starts (its
-  secrets fetched and masked from then on; a default stands in for a missing one, decision
-  176; t-strings filled in), so a missing connection or secret fails the attempt before its
-  code runs. In a Python task `with name():` asks the agent (`connection_get`, answered
-  `connection` or `connection_failed`) and calls the function with the values decoded by its
-  parameters' types. A command reads them with `schedr task-ctx connection NAME [--env PREFIX
-  | --json]` over its context channel: the values as one line of JSON (the form `--params`
-  takes), or `export PREFIX_PARAM='…'` lines, each value single-quoted for `eval`.
-- **Error kinds:** `connection_not_found` (not in the folder, or defined twice; retried, as
-  `task_not_found`: new code can fix it), `connection_denied` (not declared; not retried), a
-  secret's own kinds. Python raises `ConnectionNotFoundError` and `ConnectionDeniedError`.
-- **Checked when the folder loads:** the master can't refuse a DAG at upload (a retried parse
-  uploads only the files that failed), so a DAG whose tasks declare a connection its root's
-  current parse lacks shows a warning on its page (`DagView.warnings`, worked out when read);
-  `schedr dags check DIR` reports it as an error.
-- **Doubles:** `task_context(connections={name: obj})` (a `@task` function called in it opens
-  only what it declares); `run_dag(connections={name: {param: value}})`, `dags test
-  --connection name=JSON`: the real function runs with those values, its own never rendered.
-- **Decisions:**
-  - **179. A task declares the connections it opens** (the user's, 2026-11-03, on a side
-    agent's note): `connections=` on `@task` and the operators, required; the agent serves
-    only declared ones and renders them before the start. Why: opening by name inside the
-    function is a read at run time, as `task_ctx.secret` is, which `secrets=` guards; without
-    it any task of a folder could read every connection's secrets unseen. A declared name the
-    folder lacks is a warning on the DAG when it loads (the user's), fails the attempt before
-    its code runs, and fails `schedr dags check`. Not chosen: optional declaring (decision
-    53's, as first built); optional but logged per attempt; refusing the DAG when it loads
-    (one file failing to import would refuse every DAG using its connections).
-  - **180. A connection's values are secrets and plain values** (the user's, 2026-11-03):
-    `@connection(...)` runs when its module loads, outside any DAG, where `dag_ctx` gives
-    nothing; a run's values go to the task's own arguments, or the function reads `dag_ctx`
-    while it runs in the task. Not chosen: `dag_ctx` references filled from the run opening
-    it (a special case of `dag_ctx` outside a DAG; it can be added later).
-  - **181. A connection's values take at most 1 MiB** (the user's, 2026-11-03, on Grok's
-    security review): the file defining a bigger one fails to import, in the SDK and again
-    in the master's validation (a DAG file can change the SDK it imports). Why: they travel
-    with each assignment of a task opening it, within the worker's 4 MiB gRPC message
-    (`schedr-config`'s `MIN_MESSAGE_SIZE`); a bigger assignment ends the worker's stream and
-    the task is offered again every start timeout, never starting. A connection's values are
-    a few short strings; bigger data goes to the task. Not chosen: failing the attempt (a new
-    error kind, found only when a run comes); leaving it (only the declared ones go now).
-  - **182. A file the master refused keeps its connections** (the user's, 2026-11-03, on a
-    side agent's note): one that imported but whose DAG is invalid (`max_active_runs: 0`)
-    still defines its connections for the root; one that failed to import defines none (the
-    master clears what it reported). Why: one bad DAG in a shared connections file would
-    otherwise fail every task of other files using them (`connection_not_found`), the reason
-    decision 179 doesn't refuse DAGs at load. The worker, the DAG page's warning and `schedr
-    dags check` use the same registry. Not chosen: any error dropping the file's connections.
-- **Built (M4.7b1; decisions 174, 183, 185-189):** `schedr.connections`' `HTTP`, `SSH`,
-  `Mongo`, `SQL` and `Generic`, each a connection as `@connection` makes one around a
-  built-in generator function (the same checks, defaults recorded, the 1 MiB limit, test
-  doubles), recorded with its `type` (`ConnectionDef.kind`; M4.7b2 maps it to a command's
-  variables and files). The clients: `httpx.Client` (a bearer token or basic auth, headers,
-  a CA and a client certificate as PEM text, loaded into an `ssl.SSLContext`), a connected
-  paramiko `SSHClient` (`RejectPolicy` against `known_hosts`, or `AutoAddPolicy` with
-  `insecure_skip_host_check=True`; `known_hosts` read as OpenSSH writes it, comments too, a
-  line it can't read or a marker refused; the key read through an anonymous memory file,
-  never on a disk, so a killed task leaves none), a pymongo `Database` (documents as dicts; TLS by decision 189),
-  a psycopg 3 or PyMySQL connection by URL scheme (TLS by decision 187, credentials by 188;
-  committed when the block ends, rolled back on an error; PyMySQL 1.2.3's broken MySQL 8 first
-  login without TLS worked around through its `auth_plugin_map`, PyMySQL #1275 being
-  unreleased), a `dict` of one's own keys. HTTP's
-  `check_path` must be a path under `base_url` (an absolute one would get the token). Each
-  library an extra imported on use, the error naming it. A check per type (`run_check()`; a
-  `@connection` of one's own takes `@name.check`), run by M4.7c's `connections test`. Type
-  checkers see each client's type (aliases under `TYPE_CHECKING`, `object` at run time so
-  schedr's annotation reading works without the extras); `Connection` stays covariant (its
-  attributes `Final`, its type variable declared covariant, `@name.check` typed on a `self`
-  of its own so a check taking another type than the client is refused), so
-  `connections=[billing_api]` type-checks. Tested against real servers: HTTP served by the test, Postgres, MySQL 8.4,
-  Mongo 8.0 and an OpenSSH server in containers.
-  - **183. A typed connection's name is its first argument** (the user's, 2026-11-03):
-    `billing_api = HTTP("billing_api", base_url=...)`, as operators take their task ID.
-    Explicit, and it works in loops and under aliases. Not chosen: the module variable's
-    name found by the parser (no clear name for one bound twice or made in a function);
-    `name=` as a keyword.
-  - **184. A command gets a connection both ways** (the user's, 2026-11-03): a dict
-    `CommandOperator(connections={"API": billing_api})` gives `API_*` variables at the start,
-    the files written by the agent (mode 0600, in the attempt's folder, removed when it
-    ends); the list form stays for a script choosing at run time, and `schedr task-ctx
-    connection NAME --env P` then writes the type's files too and prints their paths. Not
-    chosen: the dict form only at the start (the CLI values only); the CLI only.
-  - **185. The clients are tested against real servers** (the user's, 2026-11-03): HTTP
-    against a local server, Postgres in the tests' container, MySQL, Mongo and an OpenSSH
-    server as podman containers in the integration tests (service containers in CI, pinned
-    by digest). Not chosen: real only where cheap (an in-process SSH server, Mongo and MySQL
-    unconnected); unit tests with mocked libraries.
-  - **186. M4.7b in two commits** (the user's, 2026-11-03): M4.7b1 the five types, their
-    Python clients, `check()` and the extras; M4.7b2 what commands get (variables, files,
-    `<PREFIX>_JSON`, a custom connection in the dict form).
-  - **187. SQL verifies TLS unless told not to** (the user's, 2026-11-03, on Codex's review
-    finding that PyMySQL ignored the URL's query: a MySQL connection never checked the
-    server's certificate). One vocabulary for both databases, libpq's `sslmode` in the URL
-    (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`), mapped to
-    PyMySQL for MySQL (an `ssl.SSLContext`, so a server without TLS is refused before
-    authenticating); `ca_cert` (PEM text, as HTTP's) for both, else the system's CAs
-    (`sslrootcert=system`); any other key of a `mysql://` URL refused at load. The default,
-    with no `sslmode`, is `verify-full`, as HTTP verifies and SSH needs `known_hosts`; a
-    server without TLS needs `?sslmode=disable`, written in the definition. Not chosen:
-    `prefer`, the drivers' own (TLS when offered, unchecked); `require` (TLS, unchecked).
-  - **188. A typed connection's credentials: apart, or encoded in its URL** (the user's,
-    2026-11-03, on Grok's security review: a secret filled into `t"postgresql://etl:{...}@db/etl"`
-    unencoded could change the host or turn TLS off, and an `@` in a password broke the URL,
-    libpq splitting at the first, Python at the last). Both: `SQL` and `Mongo` take `user` and
-    `password` values passed to the drivers as keywords, never in the URL (the docs' lead form;
-    M4.7b2 maps them to `PGPASSWORD`, `MYSQL_PWD`, off a command line); and each value a
-    t-string fills into their URL is percent-encoded (RFC 3986's unreserved kept), recorded
-    as the reference's `encode: "url"` and applied by the agent's renderer, the masker masking
-    the encoded form too. A value that is structure (a whole URL, `host:port`) is given whole.
-    One given in both places is refused at load. Not chosen: encoding only (a command would get
-    the password inside the URL); the separate values only (a t-string URL still open to a
-    value's structure); comparing the rendered URL's structure to the template's at open (an
-    `@` in a password refused, not fixed).
-  - **189. Mongo verifies TLS by default** (the user's, 2026-11-03, on Grok's review: pymongo
-    uses TLS only when the URI says `tls=true`). As SQL (decision 187): TLS with the
-    certificate and name checked unless the URI says `tls=false` (or `ssl=false`); the URI's
-    own TLS options as written; `ca_cert` (PEM text) for a private CA, else the system's. Not
-    chosen: pymongo's default, plaintext unless written.
-  - **190. What a command gets of a connection's secrets: files and variables** (the user's,
-    2026-11-03): a secret goes into the file its tool reads (curl's `-K` config, the SSH key,
-    Postgres's `.pgpass`, a MySQL option file) and into a prefixed variable for scripts
-    (`API_TOKEN`, `DB_PASSWORD`), masked in the log; a URL variable never holds a password,
-    which is moved out to the file, so `psql "$DB_URL"` puts none on a command line. Not
-    chosen: files only (no secret in a variable; less convenient for scripts); the sketch's
-    table as it stood (`_URL` with its password).
-  - **191. Commands get the Python clients' TLS defaults** (the user's, 2026-11-03): SQL's
-    `_URL` carries `sslmode=verify-full` and `sslrootcert` (the system's, or the `ca_cert`
-    file) unless written otherwise; MySQL's option file `ssl-mode=VERIFY_IDENTITY`; Mongo's
-    `_URI` `tls=true`; curl's config `--cacert` when a CA is given; SSH's config
-    `StrictHostKeyChecking yes` with only its `known_hosts`. Not chosen: values as written,
-    each tool's own defaults (psql `prefer`, mongosh plaintext).
-  - **192. Prefixed variables only** (the user's, 2026-11-03): `<PREFIX>_...`, never the tools'
-    own names (`PGHOST`, `MYSQL_PWD`); the docs show the mapping
-    (`PGPASSFILE="$DB_PGPASSFILE" psql "$DB_URL"`). Two of a type in a task never clash. Not
-    chosen: the tools' names opt-in per entry, or automatic with one connection of a type.
-  - **193. `connections check` and `test` run on any worker, or `--worker`** (the user's,
-    2026-11-03; M4.7c): the master picks a connected worker having the connection's root at
-    its current code, as for a task; `--worker NAME` picks one. `check` without a name covers
-    every connection of a root. Not chosen: every worker having the root (slower, more load);
-    `--worker` required.
-  - **194. Mongo commands: a database tools' file, mongosh through the variables** (the
-    user's, 2026-11-03): mongosh reads no password from a file, so a command gets
-    `<PREFIX>_TOOLS_CONFIG`, a 0600 YAML file with the `uri` (the user, no password) and the
-    `password`, for `mongodump --config` (and mongorestore, mongoexport, mongoimport); the
-    docs show mongosh logging in from the environment
-    (`--eval 'db.auth(process.env.DB_USER, process.env.DB_PASSWORD)'`). `<PREFIX>_URI` names no
-    user: mongosh would prompt for its password, hanging the task. Not chosen: a docs note
-    only; a `_URI_WITH_PASSWORD` variable (against decision 190).
-  - **195. One MySQL option file for MySQL's and MariaDB's clients** (the user's,
-    2026-11-03): MariaDB's client refuses MySQL's `ssl-mode` ("unknown variable"), so
-    `[client]` holds the login and MySQL's TLS as `loose-ssl-mode` (MySQL's client honours it;
-    MariaDB's skips it with one warning line), and `[client-mariadb]`, which only MariaDB's
-    programs read, holds MariaDB's (`ssl` / `skip-ssl`, `ssl-verify-server-cert`). TLS reaches
-    every program of both (`mysqldump`, `mariadb-dump`), so it isn't in `[mysql]`. A CA path in
-    `[client]` can't be unset for MariaDB's client: without `ca_cert`, the verify modes check
-    against the system's CAs with every client, a self-made certificate needing
-    `?sslmode=require`. Not chosen: two files (the author must know the worker's client); a
-    dialect per URL scheme (wrong when client and server differ).
-  - **196. MariaDB supported** (the user's, 2026-11-03): `SQL` takes `mariadb://` as
-    `mysql://`, through PyMySQL; a MariaDB 11.8 server in `make test-integration` and CI
-    (logins, TLS modes, a command through the option file with both vendors' clients); the
-    docs say MariaDB 11.4+'s self-made certificate can't pass `verify-*` (a real certificate,
-    or `?sslmode=require`). Not chosen: PyNaCl in `schedr[mysql]` for the `ed25519` login (a
-    dependency, for an opt-in plugin); tests only.
-  - **197. A Postgres URL names its `.pgpass` file** (the user's, 2026-11-03; Claude's
-    proposal, from the end-to-end test): psql reads only an unprefixed `PGPASSFILE`, so
-    `<PREFIX>_URL` carries `passfile=<the file's path>` (never the password) and
-    `psql "$DB_URL"` logs in as written. Not chosen: a bare URL, mapped by hand
-    (`PGPASSFILE="$DB_PGPASSFILE"`).
-  - **198. `connections test` of a connection without a check opens it** (the user's,
-    2026-11-03; M4.7c): `with name():` entered and left, an exception failing the test; a
-    `Generic` renders its values. Not chosen: refusing; the values only.
-  - **199. A connection test takes no task slot** (the user's, 2026-11-03; M4.7c): it runs
-    beside the tasks, one at a time per worker. Not chosen: a slot like a task.
-  - **200. A connection test is stopped after 60 s** (the user's, 2026-11-03; M4.7c),
-    `--timeout` to change it. Not chosen: the connection's own `timeout` only; a fixed 30 s.
-  - **201. Commands' connection files in memory** (the user's, 2026-11-03, on a side agent's
-    note): they hold passwords and keys in plain text, so they go under `/dev/shm` (a tmpfs;
-    in containers too), `/dev/shm/schedr-<uid>/<a hash of the data directory>/<worker>/`,
-    never on a disk, gone at a reboot or a pod's restart, still swept at start; `[worker]
-    connection_dir` overrides it, the data directory the fallback without `/dev/shm`. The
-    hash keeps workers of one user apart as their data directories did (a standalone's and a
-    worker's, both named after the host). `/dev/shm` is writable by every user: the worker
-    makes the folder and the one holding it itself, and refuses to start when either isn't a
-    real folder of its user's, mode 0700 (another user's made first, or a link). Not chosen:
-    memory files the command inherits (`/proc/self/fd/N`; `task-ctx --env` can't pass them to
-    a running process, and tools closing inherited files would break); the data directory,
-    with the docs recommending a memory-backed volume.
-  - **202. A connections demo, all in compose** (the user's, 2026-11-03; M4.7d): a compose
-    file runs the servers of every connection type (Postgres, MySQL, MariaDB, Mongo, SSH,
-    HTTP), schedr standalones without a UI and one `schedr ui` over them, as `make
-    standalone-separate-ui` does locally; a demo image FROM the base image adds the client
-    tools and the connection extras; `make demo` builds the images and runs `podman-compose
-    up`, so anyone runs it without Rust or uv. Not chosen: only the servers in compose,
-    schedr from a local build; both, by compose profile.
-  - **203. The demo shows two deployments, dev and prod** (the user's, 2026-11-03): the same
-    DAG folder, each standalone's own secrets pointing at other databases and users, under
-    one `schedr ui`: M4.7's acceptance (the same DAG reads a connection's values from two
-    environments' storages). Not chosen: one standalone.
-  - **204. The demo's HTTP server is go-httpbin, pinned** (the user's, 2026-11-03): its
-    `/bearer` checks the token, `/headers` echoes what was sent. Not chosen: a server of our
-    own.
-  - **205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
-    `schedr connections check` and `test` too. Not chosen: before M4.7c; in M4.7b2.
-  - **206. A Mongo user logs in where Mongo's own clients log in** (the user's, 2026-11-03,
-    found running the demo): the URI's `authSource`, else the database in its path, else
-    `admin`, in Python and in the tools' files alike; `database=` is only the database the
-    task gets, and `Mongo`'s docstring says so. Not chosen: `database=` as the login
-    database when the URI names none (friendlier for a user made in the app's database, but
-    unlike every Mongo client, and it would break users made in `admin`).
-  - **207. Connections in the UI: Check and Test buttons** (the user's, 2026-11-04; M4.7e):
-    a DAG page gets a Connections section, a row per connection its tasks declare (Python
-    tasks' and `CommandOperator(connections=)`'s): name, type, the tasks using it, the last
-    result; **Check all** on top (renders them on a worker: secrets there or not, nothing
-    contacted) and **Test** on each row (opens it and runs its check: a real login). Not
-    chosen: Check only (no side effects, but a wrong password or a firewall goes unseen);
-    Test only (one login per connection to learn what a check says at once).
-  - **208. The DAG page's Check is the root's check, its rows shown** (the user's,
-    2026-11-04): `POST /api/v1/connections/check` as it is, the page showing the DAG's
-    connections of the answer. Not chosen: a `names` filter in the API (an API change for
-    rows a page can pick).
-  - **209. Results live on the page** (the user's, 2026-11-04): a row says "running" when
-    pressed and is filled in when the worker answers (the command polled, as the UI's other
-    actions are), kept until the page is left. Not chosen: results stored and shown on later
-    visits (a history of checks to keep).
-  - **210. Anyone signed in may press Test, after a confirm dialog** (the user's,
-    2026-11-04): as with the CLI and the API (no roles yet); the dialog names the connection
-    and says it logs in to the real system with this deployment's secrets. Not chosen:
-    waiting for roles.
-  - **211. A Connections page, now** (the user's, 2026-11-04): `/connections`, in the
-    navigation beside Workers and Import errors, over every deployment the UI shows, as
-    those pages are: grouped by deployment, a heading per root (`dev · dags`) with its own
-    Check all, a row per connection (name, type, file, the DAGs and tasks declaring it, the
-    last result, Test); every connection of the root, used by a DAG or not. The UI has no
-    roots page: a root is a heading. It reads a new `GET /api/v1/connections`: each root's
-    connections in its current code, name, type, file and who declares them, no values. Not
-    chosen: later, after the DAG section; a section of each deployment's page (about its
-    nodes, so harder to find); the DAG section only.
-  - **212. Every connection type works in the base image** (the user's, 2026-11-04, in
-    M4.7e: "we have http, mongo and paramiko by default, but no postgres/mysql"): its
-    libraries gain `psycopg[binary]` and `pymysql[rsa]` (with httpx, pymongo and paramiko,
-    every type's client), and `schedr[connections]` installs them all outside it; it also
-    carries the command-line clients commands use their connections with: `postgresql18-client`,
-    `mariadb-client` with `mariadb-connector-c` (MySQL 8's `caching_sha2_password`),
-    `mongodb-tools`, `openssh-client`, `curl` (477 MB to about 670 MB: mongodb-tools 104 MB,
-    the MariaDB client 37 MB, the rest about 5 MB; "650MB image is not big"). The demo's
-    image keeps only its start scripts (its requirements and `make demo-requirements` gone).
-    Alpine has no mongosh (a Node.js program). Not chosen: only curl, ssh and psql in the
-    base (5 MB; Claude's pick), the rest in an image of one's own; none, the demo's
-    Containerfile as the recipe; the SQL drivers through the extras only (two standards in
-    one image).
-    Later, if someone needs it (the user's): a slim image beside it (schedr, Python and
-    its own dependencies only), the full one staying the default.
-- **Built (M4.7b2; decisions 184, 190-197, 201):** a command's connections as variables and
-  files. `CommandOperator(connections={"DB": warehouse})` records `connection_env` (prefix to
-  name) with the task, its names declared; the master refuses a prefix that can't start a
-  variable's name (or starts with `SCHEDR`) or names an undeclared connection, the Python
-  operator the same at load, plus an `env=` name under a prefix. The agent's
-  `connection_env` module maps a rendered connection by type: curl's `-K` config (quoted,
-  the token as a header), an SSH config with one `target` host (values quoted, `%` escaped, a
-  quote or a line break refused), its key (with its last line break) and `known_hosts`,
-  Postgres's `.pgpass` named in the URL (`passfile`), one MySQL option file for both vendors'
-  clients, Mongo's tools' YAML (values as JSON strings), a `Generic`'s or `@connection`'s
-  parameters one variable each; every one `<PREFIX>_JSON`. URLs parsed by hand (Mongo's lists
-  several hosts), the password moved out, the user put in, the TLS defaults added unless
-  written. Files written in `<connection dir>/<worker>/<attempt>/<name>/<prefix>/`
-  (0700, files 0600; in memory, decision 201), removed when the attempt ends, and swept when an agent starts (all but
-  the folders of processes it couldn't stop). The variables merged into the command's
-  environment, a name in both refused (`render_failed`), as two connections giving one name.
-  `task-ctx connection --env` asks the agent (`connection_env_get`), which writes the same
-  files. `SQL` takes `mariadb://`. Tested: unit tests per type, the agent running a command
-  with them (mode bits, cleanup, clashes), and against real servers psql, mysql (MySQL's
-  client, and MariaDB's in its container), ssh, curl and `--env`; MariaDB 11.8 joins the
-  integration servers. From the reviews (Codex's 10 findings, Grok's 5, all confirmed): every
-  folder on the connection path checked (the user's or root's, closed to others' writes
-  unless sticky, a link only root's), files written beside and renamed into place; a password
-  in a URL's query (libpq's `password=`) or an HTTP URL's user part moved out, other secret
-  query keys (`sslpassword`, MySQL's `password`) refused; the forms a file writes (a password
-  taken out of a secret URL, `.pgpass`'s and the option file's escapes) masked as their
-  source is; a line break refused where curl's config or `.pgpass` would split on it, a NUL
-  in the option file (MySQL's client skipped the next line, the TLS mode, which now comes
-  first); `protocol = TCP` (`localhost` was the socket); Mongo's database in the URI's path
-  with `authSource` (`<PREFIX>_AUTH_SOURCE` for mongosh's login). The DAG page says
-  `mysql --defaults-file` and `curl -q -K`: the tools read `~/.my.cnf` after
-  `--defaults-extra-file`, and `~/.curlrc` unless `-q` comes first, and those could turn
-  the TLS check off.
-- **Built (M4.7c; decisions 174, 193, 198-200):** `schedr connections check [ROOT]
-  [--name N] [--worker W]` and `schedr connections test NAME [--root R] [--worker W]
-  [--timeout 60s]`, commands (`check_connections`, `test_connection`) through
-  `POST /api/v1/connections/check` and `/connections/{name}/test`. Applying one, the master
-  picks per root a connected, active worker having the root at its current hash (the fewest
-  attempts, then by name; or the one named) and sends it a `ConnectionJob` (the root's
-  registry as JSON, the test's name and timeout). The command's `result` is
-  `{"jobs": [{root, worker, state: running|done|lost, reason?, connections: [...]}]}`,
-  filled in from each worker's `ConnectionJobDone` (only from the worker it went to, only
-  while running; a job is `lost` when its worker is forgotten). A check fetches each secret
-  from the storages without the cache (a fixed secret shows at once), says present,
-  default, missing, denied or unavailable, and renders the connection, its error masked. A
-  test is a one-off Python attempt of the connection's file (`TaskRequest.connection_test`):
-  the runner imports the file, finds the `Connection` by name in its globals and runs
-  `run_test()` (its check, or `with conn(): pass`), under the test's timeout, in no slot;
-  one connections job at a time per worker. The CLI waits for the decision, then for every
-  job, past the timeout and a 60 s margin; exit 1 on a failure, a lost job or no answer.
-  Codex's review (11 findings, all confirmed and fixed): a job is sent only once its
-  command's decision is stored (sent before, a failed decision sent it again next round);
-  it goes to a connected worker having the root at its current parse's hash exactly (a
-  newer hash's code with the older registry mixed two versions); its time (a check's 30 s,
-  a test's timeout) counts from its arrival, its wait for its turn and its secrets' reads
-  included, the test's process stopped at the end; a test's process is journalled as an
-  attempt's (a worker killed mid-test stops it when it starts again) and planned at the
-  copy of the code it was sent for; an answer made while no master listened is sent after
-  the next registration; the master marks a job lost when its worker restarts, when it
-  doesn't answer within its time and 30 s, and at its own start for an earlier master's
-  jobs, and keeps tracking a job until its answer is stored; a check is ok only when every
-  secret it names is there. B160 logged (a task's own timeout restarting after its secrets
-  are read). Grok's security review (5 findings; 2 were Codex's too): a parsed file whose
-  path leaves the root keeps no connections either (a test imports by that path, and the
-  agent refuses such a path itself); a test refuses a file holding two `Connection`s by
-  the name (it could run one the parse never recorded, passing for the other); a named
-  worker draining or drained is refused, as the automatic pick does.
-- **Built (M4.7d; decisions 202-206):** the connections demo, `examples/demo`. A compose
-  file (`podman-compose`, or `docker compose`) runs Postgres, MySQL, MariaDB, Mongo, an
-  OpenSSH server and go-httpbin, two `schedr standalone --no-ui` deployments `dev` and
-  `prod` over one DAG folder, and `schedr ui` over both on 127.0.0.1:8082. Its image is FROM
-  the base image, adding the servers' clients (MariaDB's for both MySQL and MariaDB, with
-  the connector's `caching_sha2_password` plugin; `mongoexport`, Alpine having no mongosh)
-  and the connection extras (pinned, hashed). Every password, token and key is generated
-  once into a volume by a one-off container (`keys.sh`; podman-compose 1.0.6 ignores
-  `depends_on` conditions); each deployment fills its own `db` secret storage from it at
-  start and names its SQLite file for `db migrate` and `secrets set`. The DAG opens each
-  connection from Python and from the server's own client. `make demo` runs it; `make
-  demo-check` runs both deployments' DAG, every task required to succeed, then `connections
-  check` and a `test` of all seven connections in both. The pin check also reads the
-  examples' compose files and Containerfiles. Found running it: Mongo users log in on the
-  URI's `authSource`, else its path's database, else `admin` (decision 206, documented);
-  OpenSSH 10's `ssh-keyscan` writes comments on standard output (the SSH integration test
-  failing on Ubuntu 26.04's runners, fixed); B161 logged (`No` masked in a client's error);
-  the schedr services set `NO_PROXY=*` (podman passes the machine's `HTTP_PROXY` on, which
-  took the UI's calls to a proxy). Codex's review, security included (9 findings, all
-  fixed): one volume per reader (each deployment's own, 0700 for user 1001; the servers'
-  passwords; the SSH server's public keys; its host key), so `dev` reads nothing of
-  `prod`'s or the administrator password; no password on a command line in the servers'
-  first start (psql reads it, the MySQL clients from an option file); shared SELinux labels
-  (`:z`) on mounts two containers share; `demo-check` requires each task's own result,
-  naming its deployment (a Python task's output, a command's log), and the Mongo and SSH
-  tasks fail rather than return nothing; the pin check follows YAML merges and checks a
-  `${VAR:-default}` image's default; compose follows `CONTAINER` (podman-compose with
-  podman, `docker compose` with docker); a half-done key step starts over; a base image
-  named with its registry is pulled. Decision 202's "without Rust or uv" holds once a
-  release has connections: until then the first run builds the base image (README).
-- **Built (M4.7e; decisions 207-212):** connections in the web UI. `GET /api/v1/connections`
-  lists each root's connections in its current code (`ConnectionList::of`: the registry and
-  the current DAGs' tasks): name, type, file, why one is refused, and the DAGs and tasks
-  declaring it (a name a task declares that no file defines too, refused); no secret's
-  value (a refusal's reason may quote a secret reference as the code writes it: its name,
-  a literal default, public as the code is). The UI's `/connections` page (in the navigation after Workers) asks every
-  deployment at once and shows a table per deployment and root; a DAG's page shows its root's
-  rows its tasks declare, above its runs (which grow; the user's). The rows are read again
-  with the live part (the code may have changed); a row's check result, its test result and
-  the check's line each have a place of their own, kept as they are (`hx-preserve`, by their
-  IDs: a result shown, or a poll still running, stays), so a check never replaces a test
-  still being read. Check all posts `check_connections` for the root's rows (not the
-  refused), under a key kept in the browser until a definite answer (B140), as a dialog's
-  form; Test, from a confirmation dialog (named by its title) naming the real login,
-  `test_connection`. Each answer reads its command every second until the job answered or
-  was lost, and a second after a read that failed (`data-poll`, also an action's command):
-  a check's line under its button and each row's check place, out of band
-  (`hx-swap-oob="innerHTML:#cell-check"`; `check: running` meanwhile); a test's in its row's
-  test place: `check: ok`, `test: failed (1.2 s)` with the masked error, and each secret not
-  plainly there. A connection asked about that the worker didn't report: `no answer`,
-  failed. No answer from the webserver: `may have arrived` (never "not sent"). A webserver
-  without the list (404) shows no section. Browser tests: Check all on the page, a Test from
-  a DAG's page, a result kept across a live reload. The base image (decision 212):
-  `psycopg[binary]` and `pymysql[rsa]` in `requirements.in` (3 pins more: cryptography was
-  there), the clients by `apk`; `schedr[connections]` in `pyproject.toml`; the demo's image
-  `FROM` it with its scripts only.
-
-**Typed connections, for every kind of task (decided 2026-10-25, the user's idea).**
-CommandOperator tasks, Bash scripts and plain Python scripts can't run a `@connection`
-function (no Python, or no schedr), and the native tools they call (`ssh`, `curl`,
-`mongosh`, `psql`) each want their values in a form of their own, some only as files. So
-schedr has **built-in connection types**, each a fixed shape with a fixed mapping to
-variables and files:
-
-```python
-# connections.py, anywhere in the DAG folder
-from schedr.connections import HTTP, SSH
-
-billing_api = HTTP(base_url="https://billing.example.com", token=t"{secrets['billing#token']}")
-router = SSH(host="10.0.0.1", user="netops", private_key=t"{secrets['router#key']}")
-
-# a DAG
-CommandOperator(
-    "fetch",
-    command='curl -q -K "$API_CURL_CONFIG" "$API_BASE_URL/invoices"; ssh -F "$R_SSH_CONFIG" target "show version"',
-    connections={"API": billing_api, "R": router},     # prefix -> connection
-)
-
-@task
-def version() -> str:
-    with router() as client:                          # paramiko, imported only here
-        return client.exec_command("show version")[1].read().decode()
-```
-
-- **One definition, every kind of task.** A typed connection is defined once, in any `.py`
-  file of the DAG folder. Python tasks (and plain scripts with `schedr.script`) enter it with
-  `with router() as client:`, getting the type's client (`httpx.Client`, a paramiko
-  `SSHClient`, a pymongo `Database`, …; the library imported only on use, so `import
-  schedr` stays dependency-free). Commands and scripts get the type's variables and files.
-  **Custom `@connection` functions stay** for shapes of one's own, Python first; given to a
-  command or script, they deliver their rendered arguments as `PREFIX_PARAM` variables and
-  the JSON file. Not chosen: types only for Bash with `@connection` functions for Python (the
-  same host defined twice, drifting apart); no types, only rendered arguments in the
-  environment (the draft's candidate A: no key files, no curl or ssh configuration, so
-  secrets end up on command lines).
-- **What a process gets** (the prefix comes from where it is used, so two of one type in a
-  task don't clash: `SRC_URI`, `DST_URI`): **variables for plain values, files for what
-  tools read from files, and one JSON file with everything** (`<PREFIX>_JSON`). Files go in
-  a folder of the attempt's own, mode 0600, removed when the attempt ends; values rendered
-  from secrets are masked in the log. Secrets never reach a command line: `curl` reads its
-  header from `-K`, `ssh` its key and options from `-F`. Not chosen: JSON only (needs `jq`,
-  and `ssh` still needs a key file); variables only (`ssh` can't take a key from a variable,
-  and keys would sit in the environment).
-- **Finding a connection:** by object in Python (`from connections import router`: a typo
-  is an import error, at parse time) and by name from Bash (`schedr task-ctx connection
-  router --env R`). Names are unique across the DAG folder: two definitions of one name are
-  a parse error (the parser already imports every file, so it builds the registry). Not
-  chosen: names as strings everywhere (`connections={"R": "router"}`; a typo found only when
-  the registry is checked).
-- **The first types:**
-
-  | Type | Variables | Files | Python client |
-  |---|---|---|---|
-  | `HTTP` | `_BASE_URL`, `_TOKEN` if any | `_CURL_CONFIG` (headers, CA), `_CA_FILE` if given | `httpx.Client` / `httpx.AsyncClient` |
-  | `SSH` | `_HOST`, `_PORT`, `_USER` | `_KEY_FILE`, `_KNOWN_HOSTS`, `_SSH_CONFIG` (host `target`) | paramiko `SSHClient` |
-  | `Mongo` | `_URI`, `_DATABASE` | | pymongo `Database` |
-  | `SQL` (a URL: Postgres, MySQL) | `_URL` | `_PGPASSFILE` for Postgres | a DB-API connection |
-  | `Generic` (keys of one's own) | `_<KEY>` per key | | a dict |
-
-  Network devices go through `SSH`. Exact names are settled when built; the table is the
-  shape.
-- **Sync and async, and `check()`** (decision 53, the user's, 2026-10-28): one connection
-  definition gives the sync client with `with` and the async one with `async with`, where
-  the type has both. `Mongo`: pymongo for both (`MongoClient`, and `AsyncMongoClient`, in
-  pymongo since 4.10, replacing the deprecated motor). `HTTP`: httpx for both
-  (`httpx.Client` / `httpx.AsyncClient`, one API in both modes; the table's
-  `requests.Session` becomes `httpx.Client`). `SSH` (paramiko) and `SQL` (DB-API; async
-  drivers differ per database) sync only for now: `async with` on them is a parse error
-  saying so. `Generic` is a dict, either way. Every built-in type has a `check()`: Mongo
-  `ping`, HTTP a request to `check_path` (else connecting), SSH connecting and closing, SQL
-  `SELECT 1`; a `@connection` of one's own may add `@its_name.check`; `schedr connections
-  test <name>` runs it on a worker, sync or async as the type allows. Not chosen:
-  `requests` for sync with httpx for async (two libraries, two APIs). Not chosen: fewer types (HTTP, SSH, Generic), with Mongo and SQL as Generic
-  (losing the clients and the `.pgpass` file).
-
-**Decided besides (2026-10-25):**
-- **A custom connection's arguments, given to a command or script:** one variable per
-  parameter; a simple value as itself (`C_TOKEN=…`), a nested one as JSON
-  (`C_OPTIONS='{"tls":true,"timeout":5}'`), and everything in `C_JSON`. Not chosen:
-  flattening (`C_OPTIONS_TLS`: keys clash, `{"a_b": 1}` and `{"a": {"b": 1}}` both give
-  `C_OPTIONS_A_B`; case is lost; an empty list gives no variable); nested values only in
-  the JSON file (a script expecting `C_HOSTS` silently gets nothing).
-- **Parameters that change while an environment's secrets lag behind** (a parameter added,
-  or moved to another path, before its secret is stored there): `schedr connections check`
-  against the target environment lists every missing secret, run before deploying (in CI
-  or the chart's pre-upgrade hook); a parameter may fall back to a default
-  (`t"{secrets.value('billing#client_id', default='')}"`, decision 176) where an empty value is acceptable. Without
-  either, tasks fail with `secret_not_found` (no retry used); a removed parameter is
-  harmless; a value changed in the storage is read at the next attempt. Not chosen:
-  versioned connections (versions everywhere for a gap a check catches); nothing (found in
-  production).
-- **The name stays `connection`** (`@connection`, `schedr.connections`, `schedr connections
-  check`): it is what the thing is. Airflow uses the same word, and that is no reason to
-  avoid it; schedr's names follow what describes the API best, the same rule that made
-  Airflow's setup and teardown schedr's resources. `schedr.airflow`'s `Connection` (M5) maps
-  onto it, and its docs say so once. Not chosen: `@service` (clashes with Kubernetes
-  Services); `@endpoint` (odd for a database or an SSH host).
-
-**174. M4.7's open questions** (the user's, 2026-11-03; the options were Claude's):
-- **Client libraries as optional extras:** `schedr[http]` (httpx), `schedr[mongo]`
-  (pymongo), `schedr[ssh]` (paramiko), `schedr[postgres]` (psycopg 3), `schedr[mysql]`
-  (PyMySQL), as `schedr[pydantic]`; imported on use, the error naming the extra when it is
-  missing. Not chosen: no extras (the error naming the package); hard dependencies.
-- **SQL:** Postgres through psycopg 3 and MySQL through PyMySQL. Not chosen: Postgres only
-  for now; an SQLAlchemy engine as the client.
-- **SSH host keys:** `known_hosts` (text, or a secret) required, with a loud opt-out
-  `insecure_skip_host_check=True`. Not chosen: no opt-out; accepting a host's key the first
-  time.
-- **HTTP authentication:** a bearer token, a user and password, extra headers, a CA file, a
-  client certificate and key. Not chosen: a token and headers only.
-- **The registry:** the parser records every connection in a DAG folder (its name, type and
-  templates, never a value) per root, as it records DAGs. Not chosen: only the connections
-  DAGs declare.
-- **`schedr connections check`** runs on a worker: the CLI asks the master, the master a
-  worker, and only present or missing comes back, never a value. Not chosen: in the CLI with
-  its own storage configuration (Vault credentials on an operator's machine).
-- **`schedr connections test NAME`** runs `check()` as a one-off job of a worker's agent,
-  not a run, its result back to the CLI. Not chosen: a generated run shown in the UI;
-  leaving it for later.
-- **Test doubles:** `task_context(connections={"name": fake})` takes objects (the task runs
-  in the test's process); `run_dag(connections={"name": {"param": value}})` takes the
-  connection's argument values, run by the real `@connection` function (each task is a
-  process of its own). Not chosen: `task_context` only (`run_dag`'s `secrets=` does the
-  same, by secret paths); doubles named by import path (later, if wanted).
-- **Async:** `async with` comes with M4.10's async tasks. Not chosen: building it in M4.7,
-  tested alone.
-- **Sub-steps:** M4.7a `@connection`, its Python use, `schedr task-ctx connection`, the
-  doubles; M4.7b the typed connections and their files; M4.7c `connections check` and
-  `test`.
+Nothing is open at the moment.

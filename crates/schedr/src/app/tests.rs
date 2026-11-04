@@ -182,7 +182,7 @@ async fn execute_dispatches_db_commands() {
 }
 
 #[rstest]
-#[case(&["schedr", "task-ctx", "cleanup", "list"], "task-ctx", "M4")]
+#[case(&["schedr", "task-ctx", "resource", "get"], "task-ctx", "M4")]
 #[tokio::test]
 async fn execute_reports_later_milestones(
     #[case] args: &[&str],

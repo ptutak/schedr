@@ -48,7 +48,7 @@ from schedr._serialization import (
 )
 from schedr._serialization.annotations import label, type_hints
 from schedr.connections import ConnectionsArg, declared_connections
-from schedr.context import declaring
+from schedr.context import HANDLES_PARAMETER, declaring, handle_classes
 from schedr.outcomes import Done, Outcome
 
 _VALUE_IN_DAG_BODY = (
@@ -436,6 +436,75 @@ def _check_function(fn: Callable[..., Any]) -> inspect.Signature:
     return signature
 
 
+def _check_cleanup_function(cleanup: Callable[..., object], task_id: str) -> None:
+    """Checks that ``cleanup`` is a plain function taking its arguments by name."""
+    where = f"task `{task_id}`: cleanup="
+    if not inspect.isfunction(cleanup):
+        raise TypeError(f"{where} needs a function, got {type(cleanup).__name__}")
+    if inspect.iscoroutinefunction(cleanup) or inspect.isasyncgenfunction(cleanup):
+        raise TypeError(f"{where} `{cleanup.__name__}` must not be async")
+    if inspect.isgeneratorfunction(cleanup):
+        raise TypeError(f"{where} `{cleanup.__name__}` must not be a generator: it wouldn't run")
+    signature = inspect.signature(cleanup, annotation_format=annotationlib.Format.FORWARDREF)
+    for parameter in signature.parameters.values():
+        if parameter.kind in _STARS or parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
+            raise TypeError(
+                f"{where} `{cleanup.__name__}`: `{parameter.name}`: arguments are passed by "
+                "name, so declare each parameter"
+            )
+
+
+def _cleanup_handles(
+    cleanup: Callable[..., object],
+    task_parameters: Mapping[str, object],
+    task_hints: Mapping[str, object],
+    where: str,
+) -> tuple[str, ...]:
+    """The handle types a cleanup takes; its parameters checked against the task's.
+
+    Args:
+        cleanup: The cleanup function.
+        task_parameters: The task's parameters, by name.
+        task_hints: The task's resolved annotations.
+        where: The task, for messages.
+
+    Returns:
+        The class names of its ``handles``; empty when it takes none.
+
+    Raises:
+        TypeError: For a parameter that isn't the task's, or isn't of the same type.
+    """
+    name = cleanup.__name__
+    hints = type_hints(cleanup, f"{where}: cleanup `{name}`")
+    handles: tuple[str, ...] = ()
+    for parameter in inspect.signature(
+        cleanup, annotation_format=annotationlib.Format.FORWARDREF
+    ).parameters.values():
+        if parameter.name == HANDLES_PARAMETER:
+            try:
+                classes = handle_classes(hints.get(parameter.name))
+            except TypeError as e:
+                raise TypeError(f"{where}: cleanup `{name}`: {e}") from None
+            handles = tuple(cls.__name__ for cls in classes)
+        elif parameter.name not in task_parameters:
+            if parameter.default is inspect.Parameter.empty:
+                raise TypeError(
+                    f"{where}: cleanup `{name}`: `{parameter.name}` isn't a parameter of the "
+                    "task: a cleanup takes the task's parameters and `handles`"
+                )
+        elif (
+            parameter.name in hints
+            and parameter.name in task_hints
+            and hints[parameter.name] != task_hints[parameter.name]
+        ):
+            raise TypeError(
+                f"{where}: cleanup `{name}`: `{parameter.name}` is "
+                f"`{label(hints[parameter.name])}`, the task's is "
+                f"`{label(task_hints[parameter.name])}`"
+            )
+    return handles
+
+
 class TaskFunction[**P, R]:
     """A function decorated with ``@task``.
 
@@ -444,7 +513,12 @@ class TaskFunction[**P, R]:
     """
 
     def __init__(
-        self, fn: Callable[P, R], task_id: str, options: _build.TaskOptions, branch: bool = False
+        self,
+        fn: Callable[P, R],
+        task_id: str,
+        options: _build.TaskOptions,
+        branch: bool = False,
+        cleanup: Callable[..., object] | None = None,
     ) -> None:
         """Wraps ``fn`` as a task.
 
@@ -453,11 +527,15 @@ class TaskFunction[**P, R]:
             task_id: The task's ID.
             options: The task's own options.
             branch: A ``@branch`` task (its output: the downstream tasks it chose).
+            cleanup: Its ``cleanup=`` function.
 
         Raises:
-            TypeError: If ``fn`` can't be a task (see ``@task``).
+            TypeError: If ``fn`` can't be a task (see ``@task``), or ``cleanup`` a cleanup.
         """
         self._signature = _check_function(fn)
+        self._cleanup = cleanup
+        if cleanup is not None:
+            _check_cleanup_function(cleanup, task_id)
         self._fn = fn
         self._task_id = task_id
         self._options = options
@@ -625,6 +703,11 @@ class TaskFunction[**P, R]:
             )
             if expand is None:
                 _build.hint_unmapped_per_run(self._options, task_id, stacklevel=3)
+            wanted = None
+            if (cleanup := self._cleanup) is not None:
+                parameters = self._signature.parameters
+                handles = _cleanup_handles(cleanup, parameters, hints, where)
+                wanted = _build.CleanupWanted(None, handles)
             builder.add_task(
                 task_id,
                 PythonKind(arguments, branch=self._branch),
@@ -633,11 +716,14 @@ class TaskFunction[**P, R]:
                 spec,
                 outcome_types,
                 mapped,
+                wanted,
             )
         except BaseException:
             del builder.none_checks[checks:]
             raise
         builder.functions[task_id] = self._fn
+        if self._cleanup is not None:
+            builder.cleanups[task_id] = self._cleanup
         for up, on in dict.fromkeys(upstream):
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
         # A reference, which type checkers read as the value (see above).
@@ -754,7 +840,7 @@ class TaskFunction[**P, R]:
                 raise TypeError(f"{where}: {e.reason}") from None
         return converted
 
-    def override(
+    def override(  # noqa: PLR0913 (the task's options, by keyword)
         self,
         *,
         task_id: str | None = None,
@@ -770,6 +856,10 @@ class TaskFunction[**P, R]:
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
         connections: ConnectionsArg = None,
+        cleanup: Callable[..., object] | None = None,
+        cleanup_timeout: timedelta | None = None,
+        cleanup_retries: int | None = None,
+        cleanup_retry_delay: timedelta | None = None,
     ) -> TaskFunction[P, R]:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -787,6 +877,10 @@ class TaskFunction[**P, R]:
             max_active_per_run: Overrides its limit within a run.
             secrets: Overrides the secrets it declares.
             connections: Overrides the connections it declares.
+            cleanup: Overrides its cleanup.
+            cleanup_timeout: Overrides how long one try of its cleanup may run.
+            cleanup_retries: Overrides how many times a failed cleanup is retried.
+            cleanup_retry_delay: Overrides the delay before each cleanup retry.
 
         Returns:
             A new task function; this one is unchanged.
@@ -806,9 +900,16 @@ class TaskFunction[**P, R]:
             if secrets is None
             else _secrets.declared(secrets, f"task `{task_id or self._task_id}`"),
             connections=declared_connections(connections, f"task `{task_id or self._task_id}`"),
+            cleanup_timeout=cleanup_timeout,
+            cleanup_retries=cleanup_retries,
+            cleanup_retry_delay=cleanup_retry_delay,
         )
         return TaskFunction(
-            self._fn, task_id or self._task_id, changes.over(self._options), self._branch
+            self._fn,
+            task_id or self._task_id,
+            changes.over(self._options),
+            self._branch,
+            self._cleanup if cleanup is None else cleanup,
         )
 
 
@@ -948,15 +1049,22 @@ def _refuse_whole_mapped(
 class TaskDecorator:
     """What ``@task(...)`` with arguments gives: makes a function a task, as ``@task`` does."""
 
-    def __init__(self, task_id: str | None, options: _build.TaskOptions) -> None:
-        """Remembers the task's own ID and options.
+    def __init__(
+        self,
+        task_id: str | None,
+        options: _build.TaskOptions,
+        cleanup: Callable[..., object] | None = None,
+    ) -> None:
+        """Remembers the task's own ID, options and cleanup.
 
         Args:
             task_id: The task's ID; the function's name when ``None``.
             options: The task's own options.
+            cleanup: Its ``cleanup=`` function.
         """
         self._task_id = task_id
         self._options = options
+        self._cleanup = cleanup
 
     @overload
     def __call__[**Q](self, fn: Callable[Q, None], /) -> TaskFunction[Q, Done]: ...
@@ -972,7 +1080,7 @@ class TaskDecorator:
             The task function.
         """
         name: str = getattr(fn, "__name__", "")
-        return TaskFunction(fn, self._task_id or name, self._options)
+        return TaskFunction(fn, self._task_id or name, self._options, cleanup=self._cleanup)
 
 
 @overload
@@ -999,10 +1107,14 @@ def task(
     max_active_per_run: int | None = None,
     secrets: SecretsArg = None,
     connections: ConnectionsArg = None,
+    cleanup: Callable[..., object] | None = None,
+    cleanup_timeout: timedelta | None = None,
+    cleanup_retries: int | None = None,
+    cleanup_retry_delay: timedelta | None = None,
 ) -> TaskDecorator: ...
 
 
-def task[**P, R](
+def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
     fn: Callable[P, R] | None = None,
     /,
     *,
@@ -1019,6 +1131,10 @@ def task[**P, R](
     max_active_per_run: int | None = None,
     secrets: SecretsArg = None,
     connections: ConnectionsArg = None,
+    cleanup: Callable[..., object] | None = None,
+    cleanup_timeout: timedelta | None = None,
+    cleanup_retries: int | None = None,
+    cleanup_retry_delay: timedelta | None = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -1053,6 +1169,13 @@ def task[**P, R](
         connections: The connections it opens (``with mongodb_default() as db:``), each the
             ``@connection`` function or its name: only these open, each rendered before the
             task starts (a missing one or an unreadable secret fails it before it runs).
+        cleanup: A function run after each attempt, whatever its end, like ``finally``, in
+            the attempt's slot and before its retry or downstream tasks. It takes any of the
+            task's parameters, and ``handles: list[A | B]``: the attempt's ``cleanup_handle``
+            values. It must be idempotent; a cleanup that keeps failing fails the run.
+        cleanup_timeout: How long one try of the cleanup may run (default 5 minutes).
+        cleanup_retries: How many times a failed cleanup is retried (default 3).
+        cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
 
     Returns:
         The task function, or a decorator making one.
@@ -1077,9 +1200,12 @@ def task[**P, R](
         connections=declared_connections(
             connections, f"task `{task_id}`" if task_id else "`@task(...)`"
         ),
+        cleanup_timeout=cleanup_timeout,
+        cleanup_retries=cleanup_retries,
+        cleanup_retry_delay=cleanup_retry_delay,
     )
 
-    decorator = TaskDecorator(task_id, options)
+    decorator = TaskDecorator(task_id, options, cleanup)
     return decorator if fn is None else decorator(fn)
 
 

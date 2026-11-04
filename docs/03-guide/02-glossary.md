@@ -11,6 +11,10 @@ The names used across the documentation, the API and the logs.
   component unless renamed. A DAG file is referenced as root and relative path, e.g.
   `etl:team_a/sync.py`, so references are the same on every worker.
 
+**Cleanup**
+: Work run after a task attempt on the same worker, before its slot is released and before
+  downstream tasks or a retry proceed. See [Cleaning up after a task](../02-dags/15-cleanup.md).
+
 **Connection**
 : A named set of values for a task to connect to a database, API or host. A task declares
   which it uses. See [Connections](../02-dags/14-connections.md).
@@ -35,8 +39,7 @@ The names used across the documentation, the API and the logs.
 
 **Task instance**
 : One task of one run. States: `scheduled`, `queued`, `unschedulable`, `running`,
-  `cleaning_up` (its process ended and its own cleanup runs; it still holds the slot; comes
-  with cleanups), `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`,
+  `cleaning_up` (its process ended and its cleanup runs; it still holds the slot), `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`,
   `upstream_failed`. On success it has an **outcome**.
 
 **Outcome**

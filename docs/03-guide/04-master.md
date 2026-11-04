@@ -204,8 +204,9 @@ reconnects), never an ended attempt with its run left behind.
 | `Heartbeat` | Nothing more: any message renews the lease when it arrives (below). The registry's "last seen" is written at most once per heartbeat interval. |
 | `CodeVersionChanged` | Records the root's new hash, which can make it the current code and create a parse job. |
 | `Started` | Marks the task `running` and stores `start_method` (`spawn`, or `fork`). A later `Started` for the same attempt, while it has not ended, replaces `start_method` and keeps the first start time. |
+| `TaskEnded` | Records that the task process ended and its cleanup is running: the instance is `cleaning_up` and the attempt remains open. |
 | `Rejected` | Puts the task back to wait, or tries another worker, depending on the reason. A rejection never uses a retry. |
-| `Finished` | Stores the result once, including the outcome on success, `usage` and `core_dumped`, moves the run forward (downstream tasks become ready, skipped or `upstream_failed` by their edges and `run_if`), finishes the run when every task has, and answers `FinishedAck`. `usage` is null when the worker did not read it. |
+| `Finished` | Stores the result once, including the cleanup result, the outcome on success, `usage` and `core_dumped`, moves the run forward (downstream tasks become ready, skipped or `upstream_failed` by their edges and `run_if`), finishes the run when every task has, and answers `FinishedAck`. `usage` is null when the worker did not read it. |
 | `Draining`, `Deregister` | Stops assigning to the worker; records it `draining`, then `offline`. |
 
 **The lease counts from when a message arrives, not when it is handled.** Each worker's stream

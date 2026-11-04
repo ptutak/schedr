@@ -132,7 +132,13 @@ shares with the fork server.
 
 ## 6. The result comes back
 
-The agent records the result in its journal, then sends `Finished`: the status, the output,
+If the task has a [cleanup](../02-dags/15-cleanup.md) and its process started, the agent
+first reports `TaskEnded` with the task result and runs the cleanup on the same worker. The
+instance is `cleaning_up`, and the attempt keeps its slot; downstream tasks and retries wait.
+The cleanup gets its own tries and timeout.
+
+Once cleanup ends, the agent records the result in its journal, then sends `Finished`: the
+cleanup result as well as the status, the output,
 the outcome (on success), the duration, the peak memory, `usage` and `core_dumped`. The
 master handles it as soon as it arrives, between rounds:
 
@@ -140,6 +146,7 @@ master handles it as soon as it arrives, between rounds:
   `failed` by the retry rules);
 - on success it stores the output with its outcome (the name the worker reported, or
   `SUCCESS` when the worker named none);
+- a failed cleanup fails the run, even if the task succeeded;
 - it moves the run forward: each downstream task is decided by its incoming edges and
   `run_if`, as soon as that result is certain, so `load` becomes `queued`;
 - it answers `FinishedAck`, and the agent deletes the journal file.

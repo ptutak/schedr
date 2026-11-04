@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use schedr_db::attempts::{AttemptEnd, ReadyInstance, StoredAttempt};
+use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
 use schedr_db::{Database, DbError};
 use schedr_model::connection::Registry;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND};
@@ -35,7 +35,8 @@ use schedr_model::{
     AttemptStatus, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
 use schedr_proto::convert::{
-    RejectReaction, attempt_status_from_proto, reject_reaction, run_kind_to_proto,
+    RejectReaction, attempt_status_from_proto, cleanup_result_from_proto, reject_reaction,
+    run_kind_to_proto,
 };
 use schedr_proto::pb;
 
@@ -1092,6 +1093,29 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// A worker's task ended and its cleanup starts: the instance is `cleaning_up`, its
+    /// attempt open until `Finished` (only from the worker it was assigned to, B46).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn task_ended(
+        &mut self,
+        worker_id: &str,
+        attempt_id: &str,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if let Some(attempt) = self.db.attempt(attempt_id).await?
+            && attempt.worker_id == worker_id
+            && attempt.status.is_none()
+        {
+            self.execution
+                .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// A worker reported `Finished`: stored once (only from the worker the attempt was assigned
     /// to, B46), and always acknowledged.
     ///
@@ -1133,6 +1157,11 @@ impl Dispatcher {
             {
                 error_summary = Some(with_context(error_summary.as_deref(), &context));
             }
+            let cleanup = finished
+                .cleanup
+                .as_ref()
+                .map(|c| cleanup_end(c, worker_id))
+                .transpose()?;
             let end = AttemptEnd {
                 status,
                 exit_code: finished.exit_code,
@@ -1153,12 +1182,14 @@ impl Dispatcher {
                 error_kind: non_empty(&finished.error_kind),
                 error_summary,
                 code_hash: non_empty(&finished.code_hash),
+                cleanup,
             };
             let result = AttemptResult {
                 status,
                 error_kind: end.error_kind.clone(),
                 output,
                 outcome: non_empty(&finished.outcome),
+                cleanup: end.cleanup.as_ref().map(|c| c.result),
             };
             self.record(&attempt, &end, &result, now).await?;
         }
@@ -1435,6 +1466,7 @@ impl Dispatcher {
             error_kind: end.error_kind.clone(),
             output: None,
             outcome: None,
+            cleanup: None,
         };
         self.active.remove(attempt_id);
         if self.db.end_attempt(attempt_id, &end, now).await? {
@@ -1709,6 +1741,7 @@ fn as_sent(task: &schedr_model::Task) -> schedr_model::Task {
         outcomes: task.outcomes.clone(),
         group: task.group.clone(),
         expand: None,
+        cleanup: task.cleanup.clone(),
         secrets: task.secrets.clone(),
         connections: task.connections.clone(),
     }
@@ -1733,7 +1766,25 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
         error_kind: None,
         output: None,
         outcome: None,
+        cleanup: None,
     }
+}
+
+/// A `Finished`'s cleanup, read.
+fn cleanup_end(cleanup: &pb::CleanupResult, worker_id: &str) -> Result<CleanupEnd, DispatchError> {
+    Ok(CleanupEnd {
+        result: cleanup_result_from_proto(cleanup.status).map_err(|e| {
+            DispatchError::BadMessage {
+                worker_id: worker_id.to_owned(),
+                reason: e.to_string(),
+            }
+        })?,
+        tries: cleanup.tries,
+        duration_ms: cleanup.duration_ms,
+        error_kind: non_empty(&cleanup.error_kind),
+        error_summary: (!cleanup.error_summary_json.is_empty())
+            .then(|| String::from_utf8_lossy(&cleanup.error_summary_json).into_owned()),
+    })
 }
 
 /// The error summary of an attempt that was running when its worker's agent restarted (the

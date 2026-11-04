@@ -23,6 +23,7 @@ use crate::attempt::{Ran, StartTimes};
 use crate::channel::{ChannelError, accept_runner, read_message, write_message};
 use crate::ctx::CtxInfo;
 use crate::fork::{ForkServers, Forked, ForkedProcess, GroupHold};
+use crate::handles::{AttemptHandles, HandleError};
 use crate::memory::{GroupWatch, MemoryWatch, SharedSeen, over_budget_message, watch_group};
 use crate::output::TailBuffer;
 use crate::parse::{ParseRunner, ParseSession};
@@ -335,6 +336,8 @@ pub struct PythonTask {
     pub request: TaskRequest,
     /// The attempt's secrets; none for a task without any.
     pub secrets: Option<Arc<AttemptSecrets>>,
+    /// The attempt's cleanup handles; none outside an attempt.
+    pub handles: Option<Arc<AttemptHandles>>,
 }
 
 impl From<TaskRequest> for PythonTask {
@@ -342,6 +345,7 @@ impl From<TaskRequest> for PythonTask {
         Self {
             request,
             secrets: None,
+            handles: None,
         }
     }
 }
@@ -353,6 +357,7 @@ async fn task_conversation(
     stream: &mut UnixStream,
     request: TaskRequest,
     secrets: Option<&AttemptSecrets>,
+    handles: Option<&AttemptHandles>,
 ) -> (Option<RunnerMessage>, Option<Duration>) {
     let request = AgentMessage::Task(Box::new(request));
     if write_message(stream, &request).await.is_err() {
@@ -370,6 +375,18 @@ async fn task_conversation(
             // Served in turn: the runner waits for each answer.
             Ok(RunnerMessage::SecretGet { secret }) => {
                 let answer = secret_answer(secrets, &secret).await;
+                if write_message(stream, &answer).await.is_err() {
+                    return (None, import);
+                }
+            }
+            Ok(RunnerMessage::HandleAdd { handle }) => {
+                let added = handles.map_or(Err(HandleError::NoCleanup), |h| h.add(handle));
+                let answer = added.map_or_else(
+                    |error| AgentMessage::HandleRefused {
+                        message: error.to_string(),
+                    },
+                    |()| AgentMessage::HandleAdded,
+                );
                 if write_message(stream, &answer).await.is_err() {
                     return (None, import);
                 }
@@ -404,7 +421,11 @@ pub async fn run_python(
     hold: &mut Option<GroupHold>,
     spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
-    let PythonTask { request, secrets } = task.into();
+    let PythonTask {
+        request,
+        secrets,
+        handles,
+    } = task.into();
     let started = Instant::now();
     // The remaining timeout includes the runner's start (B56, B160).
     let deadline = limits
@@ -470,7 +491,7 @@ pub async fn run_python(
     };
     let forked = matches!(process, TaskProcess::Forked(_));
     // Sent while supervised: a runner that doesn't read is stopped on time all the same (B56).
-    let result = task_conversation(&mut stream, request, secrets.as_deref());
+    let result = task_conversation(&mut stream, request, secrets.as_deref(), handles.as_deref());
     let ((runner_result, import), supervised) = {
         // Boxed: the attempt's future stays small.
         let mut result = Box::pin(result);

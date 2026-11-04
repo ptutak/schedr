@@ -226,6 +226,8 @@ pub struct RunProgress<'a> {
     /// Mapped tasks ready to expand: the master resolves what they map over, then
     /// [`Self::expand`].
     to_expand: BTreeSet<TaskId>,
+    /// Whether a cleanup of the run failed.
+    failed_cleanup: bool,
     /// Running instances to stop: their step failed (decision 75a).
     stops: Vec<(TaskId, usize)>,
     /// Why mapped tasks failed without an attempt.
@@ -253,6 +255,7 @@ impl<'a> RunProgress<'a> {
             instances: BTreeMap::new(),
             to_expand: BTreeSet::new(),
             stops: Vec::new(),
+            failed_cleanup: false,
             reasons: BTreeMap::new(),
             instance_moved: false,
         }
@@ -579,7 +582,20 @@ impl<'a> RunProgress<'a> {
                     .flat_map(|i| i.states.iter().copied()),
             )
             .collect();
-        run_result(&all)
+        run_result(&all).map(|result| {
+            if self.failed_cleanup {
+                RunState::Failed
+            } else {
+                result
+            }
+        })
+    }
+
+    /// Notes that a cleanup failed: the run ends `failed` (see PROJECT.md, Run result).
+    #[must_use]
+    pub const fn with_failed_cleanup(mut self, failed: bool) -> Self {
+        self.failed_cleanup = failed;
+        self
     }
 
     /// A mapped task's next state as a whole, if it changes: expansion asked for, instances

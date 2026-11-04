@@ -67,6 +67,19 @@ def _aware(value: datetime, name: str) -> datetime:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class TestRunValues(RunValues):
+    """The values of a ``task_context``.
+
+    Attributes:
+        handles: The handles the block registered (``cleanup_handle``), in order.
+    """
+
+    __test__ = False  # not a test class, for pytest
+
+    handles: list[object] = field(default_factory=list)
+
+
 @contextlib.contextmanager
 def task_context(
     *,
@@ -81,7 +94,7 @@ def task_context(
     task_id: str = "test",
     try_number: int = 1,
     map_index: int | None = None,
-) -> Iterator[RunValues]:
+) -> Iterator[TestRunValues]:
     """Gives ``dag_ctx`` values inside the block, as while the runner calls a task.
 
     For unit tests of task functions: ``with task_context(planned_for=...): extract()``.
@@ -107,7 +120,7 @@ def task_context(
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
 
     Yields:
-        The values ``dag_ctx`` gives.
+        The values ``dag_ctx`` gives, and ``.handles``: what ``cleanup_handle`` registered.
 
     Raises:
         TypeError: For a time that isn't a ``datetime``.
@@ -121,11 +134,16 @@ def task_context(
     if start > planned:
         raise ValueError(f"since ({start}) must not be after planned_for ({planned})")
     stored, params_class = _given_params(params)
-    values = RunValues(
+    values = TestRunValues(
         dag_id, run_id or str(uuid.uuid7()), kind, planned, start, stored, params_class
     )
     opener = _doubles(connections) if connections is not None else None
-    with running(values, TaskValues(task_id, try_number, map_index, reader, opener)):
+
+    def add_handle(handle: object, _handle_type: str, _value: object) -> None:
+        values.handles.append(handle)
+
+    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle)
+    with running(values, own):
         yield values
 
 

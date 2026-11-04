@@ -169,7 +169,9 @@ Both times must be aware datetimes, and `since` must not be after `planned_for`.
 `secrets` is a mapping of `"path#key"` to values for `task_ctx.secret(...)`; a `@task`
 function called in the block reads only what its `secrets=` declares
 ([Secrets](13-secrets.md#testing)). `params` does not ask the master: the block reads the
-instance you give.
+instance you give. The context manager yields an object whose `.handles` list contains the
+dataclass instances registered with `cleanup_handle` in the block. The test can call the
+[cleanup](15-cleanup.md) itself.
 
 ## `run_dag`
 

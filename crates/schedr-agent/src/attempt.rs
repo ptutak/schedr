@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_model::connection::Registry;
+use schedr_model::runner::CleanupHandle;
 use schedr_model::runner::{
     DagFile, ErrorSummary, RunInfo, RunnerMessage, SecretValue, TaskRequest,
 };
@@ -76,6 +77,8 @@ pub struct AttemptSpec {
     pub connection_env: BTreeMap<String, String>,
     /// Set for a connection test (decision 174): the runner opens and checks it, no task.
     pub connection_test: Option<String>,
+    /// Set for a Python task's cleanup: the attempt's handles, for its function.
+    pub cleanup_handles: Option<Vec<CleanupHandle>>,
 }
 
 /// Why an assignment can't be read.
@@ -162,6 +165,7 @@ impl AttemptSpec {
             }),
             connection_env: BTreeMap::new(),
             connection_test: None,
+            cleanup_handles: None,
         })
     }
 
@@ -367,6 +371,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                         })
                         .collect(),
                     connection_test: spec.connection_test.clone(),
+                    cleanup: spec.cleanup_handles.clone(),
                 }),
             })
         }

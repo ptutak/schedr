@@ -1,5 +1,28 @@
 {
   "$defs": {
+    "CleanupRun": {
+      "description": "What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).",
+      "oneOf": [
+        {
+          "const": "python",
+          "description": "The function given to `@task(cleanup=...)`, found with the task's when the runner\nimports the DAG file.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A command, with the task's environment.",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/CommandLine"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "CommandLine": {
       "description": "What a `command` task runs.",
       "oneOf": [
@@ -608,6 +631,17 @@
         }
       ],
       "properties": {
+        "cleanup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskCleanup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its cleanup, if it has one."
+        },
         "connections": {
           "description": "The connections it opens (`connections=`, decision 179), by name: only these, opened\nbefore it starts.",
           "items": {
@@ -664,6 +698,51 @@
         "id",
         "settings",
         "output_type"
+      ],
+      "type": "object"
+    },
+    "TaskCleanup": {
+      "additionalProperties": false,
+      "description": "A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).",
+      "properties": {
+        "handles": {
+          "description": "The handle types it takes: `None` any, none listed none (a function without a `handles`\nparameter would never see them).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "retries": {
+          "description": "How many times it is retried after a failed try, on the same worker.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_delay_ms": {
+          "description": "The delay before each retry, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "$ref": "#/$defs/CleanupRun",
+          "description": "What it runs."
+        },
+        "timeout_ms": {
+          "description": "How long one try may run, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run",
+        "timeout_ms",
+        "retries",
+        "retry_delay_ms"
       ],
       "type": "object"
     },

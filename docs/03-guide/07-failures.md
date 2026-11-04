@@ -7,6 +7,7 @@
 | DAG versions, runs, task instances, attempts, results, commands, the worker registry, each root's current hash | the database | everything but losing the database |
 | Connected workers, their slots and code, parse jobs | the master's memory | nothing; rebuilt as workers reconnect |
 | Attempts running on a worker, results not yet acknowledged | the worker's journal (its disk) | agent restarts |
+| Cleanup handles | the agent's memory | only while the agent runs |
 | Task logs | the worker's disk | agent restarts, until retention deletes them |
 
 The database is the source of truth. The master can restart at any time and read everything
@@ -31,6 +32,10 @@ back, and workers fill in the rest when they reconnect.
 | **`schedr db migrate` while a master runs** (by hand, or two migrations at once) | Refused: migrating takes the master's lease, and a master or another migration holds it. `--wait` waits for it instead (the chart's init container does, so it waits out the lease of a master that died). |
 | **A DAG's file fails to import** (anything but a timeout or a runner that died) | Every DAG of that file is held. No new run is created, a fire time during the hold is missed as while the DAG is paused, a manual trigger is rejected with the reason, and a queued run is not started. A run that has already started is not cancelled. When the file imports, the fire times the hold missed follow the DAG's `catchup`. See [A held DAG](06-parsing.md#a-held-dag). |
 | **A file's import times out, or its runner dies** | Nothing is held, and the file's DAGs keep their last version that imported. The parse is tried again, first after 30 seconds, then after twice as long each time, up to 10 minutes, with no limit on the tries. It goes to another worker that has the code, and to the worker that failed only when that worker is the only one. The master replaces only the files that failed this way and whose new result differs. See [Parsed again](06-parsing.md#parsed-again). |
+
+A cleanup does not run when its worker is lost, and handles are not kept across an agent
+restart. A cleanup that runs and exhausts its retries fails the run, even when the task
+succeeded. See [Cleaning up after a task](../02-dags/15-cleanup.md).
 
 ## Connection jobs
 

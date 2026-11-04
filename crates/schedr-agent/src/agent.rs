@@ -34,6 +34,7 @@ use schedr_model::TaskKind;
 use schedr_model::beat::Beat;
 use schedr_model::connection::Registry;
 use schedr_model::runner::{DAG_FILE_MISSING, ErrorSummary, ParseRequest, ParsedFile};
+use schedr_model::task::{CleanupRun, TaskCleanup, default_outcomes};
 use schedr_proto::PROTOCOL_VERSION;
 use schedr_proto::convert::attempt_status_from_proto;
 use schedr_proto::convert::{parse_upload_parts, parsed_file_to_proto};
@@ -50,6 +51,7 @@ use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
 use crate::drain::{Drain, DrainPeriods, DrainStep};
 use crate::fork::ForkServers;
+use crate::handles::AttemptHandles;
 use crate::journal::{
     Journal, JournalRecord, Orphan, ProcessIdentity, process_identity, stop_orphan,
 };
@@ -134,17 +136,31 @@ pub struct NodeIdentity {
 /// from a fork server.
 pub type Spawned = Box<dyn FnOnce(ProcessIdentity, bool) + Send>;
 
+/// Told a task's result when its process has ended and its cleanup starts (decision 229).
+pub type TaskEnded = Box<dyn FnOnce(pb::Finished) + Send>;
+
+/// What an attempt's processes share: the task's and each try of its cleanup.
+#[derive(Clone, Copy)]
+struct Shared<'a> {
+    secrets: &'a Arc<AttemptSecrets>,
+    handles: &'a Arc<AttemptHandles>,
+    /// Set when a process starts.
+    started: &'a AtomicBool,
+}
+
 /// Runs attempts and parse jobs.
 pub trait Executor: Clone + Send + Sync + 'static {
     /// Runs a planned attempt until it ends or `stop` says why to stop it (a later reason
     /// may hurry a stop under way, see [`crate::supervise::supervise`]), telling `spawned` its
-    /// process; returns its `Finished`.
+    /// process, and `ended` the task's result before its cleanup starts; returns its
+    /// `Finished`.
     fn run(
         &self,
         spec: AttemptSpec,
         plan: Plan,
         stop: Stops,
         spawned: Spawned,
+        ended: TaskEnded,
     ) -> impl Future<Output = pb::Finished> + Send;
 
     /// What is wrong with the worker now, as it changes (sent to the master); none by default.
@@ -260,10 +276,19 @@ impl Executor for ProcessExecutor {
         plan: Plan,
         stop: Stops,
         spawned: Spawned,
+        ended: TaskEnded,
     ) -> pb::Finished {
         let connection_dir = self.setup.connection_dir.join(&spec.attempt_id);
+        let has_cleanup = spec.task.cleanup.is_some();
         // Boxed: the attempt's future is large, and every caller would hold it.
-        let finished = Box::pin(self.run_attempt(spec, plan, stop, spawned)).await;
+        let mut finished = Box::pin(self.run_attempt(spec, plan, stop, spawned, ended)).await;
+        // Its process never started: nothing to clean up after (decision 216).
+        if has_cleanup && finished.cleanup.is_none() {
+            finished.cleanup = Some(pb::CleanupResult {
+                status: pb::CleanupStatus::NotNeeded.into(),
+                ..pb::CleanupResult::default()
+            });
+        }
         // Its connections' files go with it (decision 190): whichever way it ended.
         remove_connection_files(&connection_dir).await;
         finished
@@ -315,7 +340,7 @@ impl Executor for ProcessExecutor {
             secrets,
             ..self.clone()
         };
-        let run = fresh.run(spec, plan, stops, spawned);
+        let run = fresh.run(spec, plan, stops, spawned, Box::new(|_| {}));
         tokio::pin!(run);
         // The job's deadline also covers planning and waiting for its turn; the attempt's
         // timeout covers its secret reads and process together.
@@ -352,6 +377,7 @@ impl ProcessExecutor {
         mut plan: Plan,
         stop: Stops,
         spawned: Spawned,
+        ended: TaskEnded,
     ) -> pb::Finished {
         let fetching = Instant::now();
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
@@ -377,10 +403,26 @@ impl ProcessExecutor {
             return stopped_before_start(&spec, StopReason::TimedOut, elapsed);
         }
         let python = matches!(plan, Plan::Python { .. });
+        let handles = Arc::new(AttemptHandles::new(
+            spec.task.cleanup.as_ref(),
+            Arc::clone(&secrets.mask),
+        ));
+        let started = AtomicBool::new(false);
+        let shared = Shared {
+            secrets: &secrets,
+            handles: &handles,
+            started: &started,
+        };
         let mut finished = self
-            .run_planned(&spec, plan, timeout, stop, spawned, &secrets)
+            .run_planned(&spec, plan, timeout, stop, spawned, shared)
             .await;
         ended_with_secrets(&mut finished, &secrets, python);
+        if let Some(cleanup) = &spec.task.cleanup
+            && started.load(Ordering::SeqCst)
+        {
+            ended(finished.clone());
+            finished.cleanup = Some(self.run_cleanup(&spec, cleanup, shared).await);
+        }
         let log = self.setup.log_file(&spec.attempt_id);
         // Read on demand while it ran: too short to mask, warned now.
         let short = too_short_lines(&secrets, self.secrets.min_mask_length);
@@ -438,6 +480,81 @@ impl ProcessExecutor {
         Ok(Arc::new(secrets))
     }
 
+    /// Runs the attempt's cleanup, in a fresh process each try, with the same budget and
+    /// watchdog as the task. Nothing stops it but its own timeout: a cancel doesn't (decision
+    /// 219). The slot stays taken through its tries and delays.
+    async fn run_cleanup(
+        &self,
+        spec: &AttemptSpec,
+        cleanup: &TaskCleanup,
+        shared: Shared<'_>,
+    ) -> pb::CleanupResult {
+        shared.handles.close();
+        let mut spec = spec.clone();
+        spec.task.outcomes = default_outcomes();
+        match (&mut spec.task.kind, &cleanup.run) {
+            (TaskKind::Command { command, .. }, CleanupRun::Command(line)) => {
+                command.clone_from(line);
+            }
+            (TaskKind::Python { .. }, CleanupRun::Python) => {
+                spec.cleanup_handles = Some(shared.handles.list());
+            }
+            // Refused when the DAG is stored; run as it is, it would run the task again.
+            _ => {
+                let message = "the task's cleanup doesn't match its kind";
+                return pb::CleanupResult {
+                    status: pb::CleanupStatus::Failed.into(),
+                    error_kind: "invalid_cleanup".to_owned(),
+                    error_summary_json: ErrorSummary::json("InvalidCleanup", message).into_bytes(),
+                    ..pb::CleanupResult::default()
+                };
+            }
+        }
+        let log = self.setup.log_file(&spec.attempt_id);
+        let timeout = Duration::from_millis(cleanup.timeout_ms);
+        let mut result = pb::CleanupResult::default();
+        for try_number in 1..=cleanup.retries.saturating_add(1) {
+            if try_number > 1 {
+                tokio::time::sleep(Duration::from_millis(cleanup.retry_delay_ms)).await;
+            }
+            append_log(&log, &format!("cleanup: try {try_number}\n")).await;
+            let planned = match &spec.code_dir {
+                Some(dir) => plan_at(&spec, &self.setup, dir),
+                None => crate::attempt::plan(&spec, &self.setup),
+            };
+            let (_sender, stops) = Stops::new();
+            let mut ended = match planned {
+                Ok(plan) => {
+                    let python = matches!(plan, Plan::Python { .. });
+                    let spawned: Spawned = Box::new(|_, _| {});
+                    let mut ended = self
+                        .run_planned(&spec, plan, Some(timeout), stops, spawned, shared)
+                        .await;
+                    ended_with_secrets(&mut ended, shared.secrets, python);
+                    ended
+                }
+                Err(NotRun::Failed { kind, message }) => {
+                    failed_before_start(&spec.attempt_id, &kind, &message)
+                }
+                Err(NotRun::Rejected { detail, .. }) => {
+                    failed_before_start(&spec.attempt_id, DAG_FILE_MISSING, &detail)
+                }
+            };
+            result.tries = try_number;
+            result.duration_ms += ended.duration_ms.unwrap_or(0);
+            if ended.status == i32::from(pb::AttemptStatus::Success) {
+                result.status = pb::CleanupStatus::Ok.into();
+                result.error_kind.clear();
+                result.error_summary_json.clear();
+                return result;
+            }
+            result.status = pb::CleanupStatus::Failed.into();
+            result.error_kind = std::mem::take(&mut ended.error_kind);
+            result.error_summary_json = std::mem::take(&mut ended.error_summary_json);
+        }
+        result
+    }
+
     async fn run_planned(
         &self,
         spec: &AttemptSpec,
@@ -445,8 +562,13 @@ impl ProcessExecutor {
         timeout: Option<Duration>,
         stop: Stops,
         spawned: Spawned,
-        secrets: &Arc<AttemptSecrets>,
+        shared: Shared<'_>,
     ) -> pb::Finished {
+        let Shared {
+            secrets,
+            handles,
+            started,
+        } = shared;
         let limits = Limits {
             timeout,
             grace: spec.cancel_grace,
@@ -460,6 +582,7 @@ impl ProcessExecutor {
         let mut hold = None;
         let mut watching = None;
         let spawned = |pid, forked| {
+            started.store(true, Ordering::SeqCst);
             // The task's process leads its own group; watched from its first moment.
             watching = Some(watch_group(
                 self.setup.memory.clone(),
@@ -480,12 +603,14 @@ impl ProcessExecutor {
                 let task = PythonTask {
                     request: *request,
                     secrets: Some(Arc::clone(secrets)),
+                    handles: Some(Arc::clone(handles)),
                 };
                 run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
                 let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
                 ctx.secrets = Some(Arc::clone(secrets));
+                ctx.handles = Some(Arc::clone(handles));
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
@@ -598,6 +723,8 @@ enum Done {
         identity: ProcessIdentity,
         forked: bool,
     },
+    /// A task with a cleanup: its process ended and the cleanup starts.
+    TaskEnded(pb::Finished),
     Attempt(pb::Finished),
     Parse {
         job_id: String,
@@ -1334,8 +1461,12 @@ impl<E: Executor> Agent<E> {
                 forked,
             });
         });
+        let on_end = self.done_tx.clone();
+        let ended: TaskEnded = Box::new(move |finished| {
+            let _ = on_end.send(Done::TaskEnded(finished));
+        });
         tokio::spawn(async move {
-            let finished = executor.run(spec, plan, stopped, spawned).await;
+            let finished = executor.run(spec, plan, stopped, spawned, ended).await;
             let _ = done.send(Done::Attempt(finished));
         });
     }
@@ -1608,6 +1739,18 @@ impl<E: Executor> Agent<E> {
                     .await
                 {
                     tracing::warn!(attempt_id, %error, "can't record the task's process");
+                }
+            }
+            Done::TaskEnded(mut finished) => {
+                fit_result(&mut finished, self.master_limit);
+                if let Some(hash) = self.code_hashes.get(&finished.attempt_id) {
+                    finished.code_hash.clone_from(hash);
+                }
+                if let Some((to_master, _)) = link {
+                    let ended = pb::TaskEnded {
+                        result: Some(finished),
+                    };
+                    let _ = to_master.send(wrap(worker_message::Message::TaskEnded(ended)));
                 }
             }
             Done::Attempt(mut finished) => {
@@ -1910,12 +2053,28 @@ const MESSAGE_OVERHEAD: usize = 64 << 10;
 
 /// A result that can't reach the master (bigger than its message `limit`) becomes a failed
 /// attempt, `output_too_large` (not retried), before it is journalled: sent as it was, it
-/// would end the worker's stream, and again on every `Register` (B33).
+/// would end the worker's stream, and again on every `Register` (B33). The cleanup's error
+/// gives way first: it must not cost the task its result.
 fn fit_result(finished: &mut pb::Finished, limit: usize) {
-    let size = prost::Message::encoded_len(finished);
-    if size.saturating_add(MESSAGE_OVERHEAD) <= limit {
+    let fits = |finished: &pb::Finished| {
+        prost::Message::encoded_len(finished).saturating_add(MESSAGE_OVERHEAD) <= limit
+    };
+    if fits(finished) {
         return;
     }
+    if let Some(cleanup) = finished.cleanup.as_mut()
+        && !cleanup.error_summary_json.is_empty()
+    {
+        let message = format!(
+            "the cleanup's error took {} bytes, too many to report",
+            cleanup.error_summary_json.len()
+        );
+        cleanup.error_summary_json = ErrorSummary::json("ResultTooLarge", &message).into_bytes();
+        if fits(finished) {
+            return;
+        }
+    }
+    let size = prost::Message::encoded_len(finished);
     let message = format!(
         "the result is {size} bytes, more than the master accepts ({limit} bytes, [master] \
          grpc_max_message_size): lower the task's max_output_size, or raise the setting"

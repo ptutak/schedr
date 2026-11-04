@@ -45,6 +45,9 @@ class TaskDefaults:
             runs.
         max_active_per_run: At most this many instances of each task running at once within
             one run (for mapped tasks).
+        cleanup_timeout: How long one try of a task's cleanup may run (default 5 minutes).
+        cleanup_retries: How many times a failed cleanup is retried (default 3).
+        cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
     """
 
     retries: int | None = None
@@ -57,6 +60,9 @@ class TaskDefaults:
     run_if: RunIf | None = None
     max_active: int | None = None
     max_active_per_run: int | None = None
+    cleanup_timeout: timedelta | None = None
+    cleanup_retries: int | None = None
+    cleanup_retry_delay: timedelta | None = None
 
     def options(self) -> _build.TaskOptions:
         """These defaults as task options.
@@ -75,6 +81,9 @@ class TaskDefaults:
             run_if=self.run_if,
             max_active=self.max_active,
             max_active_per_run=self.max_active_per_run,
+            cleanup_timeout=self.cleanup_timeout,
+            cleanup_retries=self.cleanup_retries,
+            cleanup_retry_delay=self.cleanup_retry_delay,
         )
 
 
@@ -212,7 +221,9 @@ class Dag:
             groups=[Group(g.id, g.parent) for g in builder.groups.values()],
             params=self._params,
         )
-        registry.register(self.model, builder.functions, self._filename, self.params)
+        registry.register(
+            self.model, builder.functions, self._filename, self.params, builder.cleanups
+        )
 
     def _check_since(self, builder: _build.DagBuilder) -> None:
         if self.initial_since is not None or isinstance(self.trigger, Cron | Every):

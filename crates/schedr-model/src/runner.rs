@@ -175,6 +175,12 @@ pub enum RunnerMessage {
         /// The connection's name.
         name: String,
     },
+    /// A running task registers a cleanup handle (`cleanup_handle(x)`); the agent answers
+    /// [`AgentMessage::HandleAdded`] or [`AgentMessage::HandleRefused`].
+    HandleAdd {
+        /// The handle.
+        handle: CleanupHandle,
+    },
     /// The task failed: an exception, or an output that can't be stored.
     TaskFailed {
         /// What went wrong.
@@ -333,6 +339,20 @@ pub struct TaskRequest {
     /// imported, and this connection opened and checked (decision 198).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_test: Option<String>,
+    /// Set for a cleanup: the task's cleanup function is called with the task's inputs and
+    /// these handles, in registration order, instead of the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<Vec<CleanupHandle>>,
+}
+
+/// A handle registered by an attempt: what its cleanup needs that only existed in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupHandle {
+    /// Its type's name (a dataclass's name, or `schedr task-ctx cleanup add`'s first argument).
+    pub handle_type: String,
+    /// Its fields, as stored JSON.
+    pub value: serde_json::Value,
 }
 
 /// A secret's value, fetched by the agent for an attempt.
@@ -395,6 +415,13 @@ pub enum AgentMessage {
     Secret {
         /// A key's value as a string; a whole secret as an object of key to value.
         value: serde_json::Value,
+    },
+    /// The handle of a [`RunnerMessage::HandleAdd`] is registered.
+    HandleAdded,
+    /// Why the handle of a [`RunnerMessage::HandleAdd`] isn't registered.
+    HandleRefused {
+        /// What went wrong.
+        message: String,
     },
     /// Why the secret a [`RunnerMessage::SecretGet`] asked for can't be read.
     SecretFailed {

@@ -27,7 +27,9 @@ pub use connection::ConnectionDef;
 pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params};
 pub use ids::{DagId, IdError, TaskId};
 pub use secret::{SecretDecl, SecretName};
-pub use states::{AttemptStatus, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState};
+pub use states::{
+    AttemptStatus, CleanupResult, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState,
+};
 pub use task::{
     CommandLine, DEFAULT_OUTCOME, Expand, Mapped, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,
     default_outcomes,

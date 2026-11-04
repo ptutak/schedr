@@ -157,6 +157,7 @@ pub fn test_spec(
         connections: Arc::clone(&job.registry),
         connection_env: std::collections::BTreeMap::new(),
         connection_test: Some(name.to_owned()),
+        cleanup_handles: None,
     })
 }
 

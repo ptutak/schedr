@@ -20,8 +20,9 @@ use schedr_model::ctx::{CTX_FD_ENV, CTX_PROTOCOL, CtxAnswer, CtxRequest, MAX_CTX
 use serde_json::Value;
 
 use schedr_model::SecretName;
+use schedr_model::runner::CleanupHandle;
 
-use crate::cli::{ConnectionArgs, DagCtxCommand, GetCommand, SecretCommand};
+use crate::cli::{CleanupCommand, ConnectionArgs, DagCtxCommand, GetCommand, SecretCommand};
 
 #[cfg(test)]
 mod tests;
@@ -145,6 +146,116 @@ pub fn run_task_ctx_connection(
         .map_err(|e| format!("can't write output: {e}"))
 }
 
+/// Runs `schedr task-ctx cleanup add|list`: registers a handle before the work it cleans up
+/// after, or, in a cleanup, prints the attempt's handles in registration order: one line of
+/// JSON each, or with `--field` one field's raw value each; the error is the message for
+/// stderr.
+///
+/// # Errors
+///
+/// Outside a task, when the channel is gone, when a field or `--json` can't be read, when the
+/// agent refuses the handle (no cleanup declared, a type not declared, too large, already in
+/// the cleanup) or the list (not in a cleanup), or when a handle lacks the field asked for.
+pub fn run_task_ctx_cleanup(
+    command: &CleanupCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    match command {
+        CleanupCommand::Add {
+            handle_type,
+            fields,
+            json,
+        } => {
+            let value = handle_value(fields, json.as_deref())?;
+            let mut stream = connect(env, Ctx::Task)?;
+            let request = CtxRequest::HandleAdd {
+                handle: CleanupHandle {
+                    handle_type: handle_type.clone(),
+                    value,
+                },
+            };
+            match call(&mut stream, version, &request)? {
+                CtxAnswer::HandleAdded => Ok(()),
+                CtxAnswer::HandleRefused { reason }
+                | CtxAnswer::Error { reason }
+                | CtxAnswer::Refused { reason } => Err(reason),
+                _ => Err("the agent answered with something else than the handle".to_owned()),
+            }
+        }
+        CleanupCommand::List { handle_type, field } => {
+            let mut stream = connect(env, Ctx::Task)?;
+            let handles = match call(&mut stream, version, &CtxRequest::HandleList)? {
+                CtxAnswer::Handles { handles } => handles,
+                CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => return Err(reason),
+                _ => return Err("the agent answered with something else than handles".to_owned()),
+            };
+            let text = listed(&handles, handle_type.as_deref(), field.field.as_deref())?;
+            out.write_all(text.as_bytes())
+                .map_err(|e| format!("can't write output: {e}"))
+        }
+    }
+}
+
+/// A handle's value from `key=value` and `key:=json` fields, or from `--json`.
+fn handle_value(fields: &[String], json: Option<&str>) -> Result<Value, String> {
+    if let Some(text) = json {
+        if !fields.is_empty() {
+            return Err("give the handle as fields or as --json, not both".to_owned());
+        }
+        let value: Value =
+            serde_json::from_str(text).map_err(|e| format!("--json isn't JSON: {e}"))?;
+        if !value.is_object() {
+            return Err("--json must be one JSON object".to_owned());
+        }
+        return Ok(value);
+    }
+    let mut object = serde_json::Map::new();
+    for field in fields {
+        let Some((name, text)) = field.split_once('=') else {
+            return Err(format!("`{field}` isn't `key=value` or `key:=json`"));
+        };
+        let (name, value) = match name.strip_suffix(':') {
+            Some(name) => {
+                let value = serde_json::from_str(text)
+                    .map_err(|e| format!("the value of `{name}` isn't JSON: {e}"))?;
+                (name, value)
+            }
+            None => (name, Value::String(text.to_owned())),
+        };
+        if name.is_empty() {
+            return Err(format!("`{field}` has no key"));
+        }
+        if object.insert(name.to_owned(), value).is_some() {
+            return Err(format!("the field `{name}` is given twice"));
+        }
+    }
+    Ok(Value::Object(object))
+}
+
+/// The handles as printed, of one type if asked: each as a line of JSON, or its field's raw
+/// value.
+fn listed(
+    handles: &[CleanupHandle],
+    handle_type: Option<&str>,
+    field: Option<&str>,
+) -> Result<String, String> {
+    let mut text = String::new();
+    let wanted = handles
+        .iter()
+        .filter(|handle| handle_type.is_none_or(|name| name == handle.handle_type));
+    for handle in wanted {
+        if field.is_some() {
+            text.push_str(&printed(&handle.value, field)?);
+        } else {
+            let line = serde_json::to_string(handle).map_err(|e| e.to_string())?;
+            let _ = writeln!(text, "{line}");
+        }
+    }
+    Ok(text)
+}
+
 /// `export NAME='value'` lines, one per variable, in order, single-quoted for the shell (a
 /// `'` written `'\''`): the agent named them, its files written already.
 fn exports(variables: &BTreeMap<String, String>) -> String {
@@ -163,6 +274,9 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         CtxAnswer::Run(run) => serde_json::to_value(run).map_err(|e| e.to_string()),
         CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => Err(reason),
         CtxAnswer::Welcome => Err("the agent answered `welcome` to a request".to_owned()),
+        CtxAnswer::HandleAdded | CtxAnswer::HandleRefused { .. } | CtxAnswer::Handles { .. } => {
+            Err("the agent answered with a cleanup handle to another request".to_owned())
+        }
         // Never printed in a message: it may hold a value.
         CtxAnswer::Secret { .. }
         | CtxAnswer::SecretFailed { .. }

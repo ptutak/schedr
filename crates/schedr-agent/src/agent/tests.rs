@@ -36,6 +36,7 @@ impl Executor for Fake {
         plan: Plan,
         mut stop: Stops,
         spawned: Spawned,
+        _ended: TaskEnded,
     ) -> pb::Finished {
         if let Plan::Python { process, .. } = &plan {
             self.dirs.lock().unwrap().push(process.working_dir.clone());
@@ -633,6 +634,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_) => None,
             worker_message::Message::CodeVersionChanged(_) => Some("code"),
             worker_message::Message::Started(_) => Some("started"),
+            worker_message::Message::TaskEnded(_) => Some("task ended"),
             worker_message::Message::Rejected(r) => {
                 Some(match pb::RejectReason::try_from(r.reason) {
                     Ok(pb::RejectReason::NoFreeSlot) => "rejected: no slot",
@@ -1861,7 +1863,9 @@ async fn a_cancel_or_the_timeout_ends_an_attempt_waiting_for_its_secrets() {
             });
         }
         let started = std::time::Instant::now();
-        let finished = executor.run(spec, plan, stops, Box::new(|_, _| {})).await;
+        let finished = executor
+            .run(spec, plan, stops, Box::new(|_, _| {}), Box::new(|_| {}))
+            .await;
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",
@@ -1888,6 +1892,7 @@ async fn the_timeout_covers_the_secret_read_and_the_command_together() {
                 plan,
                 stops,
                 Box::new(move |_, _| assert!(files.join("db/DB/pgpass").is_file())),
+                Box::new(|_| {}),
             )
             .await;
         assert_eq!(finished.status, i32::from(status), "{finished:?}");
@@ -1925,6 +1930,7 @@ async fn a_fetch_finishing_with_no_time_left_does_not_start_and_removes_connecti
             plan,
             stops,
             Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+            Box::new(|_| {}),
         )
         .await;
     assert_eq!(
@@ -1979,6 +1985,7 @@ fn the_timeout_covers_a_commands_slow_start() {
                 plan,
                 stops,
                 Box::new(move |_, _| saw_spawn.store(true, Ordering::SeqCst)),
+                Box::new(|_| {}),
             )
             .await;
         assert!(spawned.load(Ordering::SeqCst), "{finished:?}");
@@ -2071,7 +2078,9 @@ async fn command_with_connection(
     spec.stand_in_secrets();
     let plan = crate::attempt::plan(&spec, &setup).unwrap();
     let (_sender, stops) = Stops::new();
-    let finished = executor.run(spec, plan, stops, Box::new(|_, _| {})).await;
+    let finished = executor
+        .run(spec, plan, stops, Box::new(|_, _| {}), Box::new(|_| {}))
+        .await;
     let out = std::fs::read_to_string(dir.path().join("etl/out")).unwrap_or_default();
     (finished, out, dir)
 }
@@ -2261,4 +2270,230 @@ async fn a_connections_job_waiting_past_its_time_for_its_turn_says_so() {
         report["error"],
         "its time was up during its wait for its turn (one connections job at a time per worker)"
     );
+}
+
+/// A real executor and a command attempt with a cleanup; both commands get `OUT`, a file in
+/// the returned directory, in their environment.
+fn attempt_with_cleanup(
+    script: &str,
+    cleanup: &str,
+    retries: u32,
+) -> (ProcessExecutor, AttemptSpec, Plan, TempDir) {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("etl")).unwrap();
+    std::fs::write(dir.path().join("etl/sync.py"), "").unwrap();
+    let setup = WorkerSetup {
+        roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
+        parse_only: BTreeMap::new(),
+        python: PathBuf::from("/usr/bin/python3"),
+        agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
+        pass_env: vec![],
+        log_dir: dir.path().join("logs"),
+        connection_dir: dir.path().join("connections"),
+        memory: crate::memory::MemoryWatch::default(),
+        fork_server: None,
+    };
+    let executor = ProcessExecutor {
+        setup: setup.clone(),
+        parse_file_timeout: Duration::from_secs(5),
+        metrics: AgentMetrics::default(),
+        drain_terminate_period: Duration::from_secs(1),
+        forks: None,
+        secrets: Arc::new(crate::secrets::SecretStores::none()),
+    };
+    let line = |text: &str| json!({"argv": [[{"text": "sh"}], [{"text": "-c"}], [{"text": text}]]});
+    let out = dir.path().join("out").display().to_string();
+    let task = json!({
+        "id": "load",
+        "kind": "command",
+        "command": line(script),
+        "env": {"OUT": [{"text": out}]},
+        "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": 20_000,
+                     "queue": "default", "max_output_size": 1024, "preload": true,
+                     "fresh_process": false},
+        "output_type": {"type": "process_result"},
+        "cleanup": {"run": {"command": line(cleanup)}, "timeout_ms": 5_000,
+                    "retries": retries, "retry_delay_ms": 1},
+    });
+    let assign = pb::AssignTask {
+        attempt_id: "a1".to_owned(),
+        task_id: "load".to_owned(),
+        map_index: -1,
+        try_number: 1,
+        run: Some(pb::RunInfo {
+            params_json: Vec::new(),
+            run_id: "r1".to_owned(),
+            kind: "manual".to_owned(),
+            planned_for: Some(prost_types::Timestamp {
+                seconds: 1_792_036_800,
+                nanos: 0,
+            }),
+            since: Some(prost_types::Timestamp {
+                seconds: 1_791_950_400,
+                nanos: 0,
+            }),
+            dag_id: "sync".to_owned(),
+        }),
+        task_json: serde_json::to_vec(&task).unwrap(),
+        dag_file: Some(pb::DagFileRef {
+            root: "etl".to_owned(),
+            path: "sync.py".to_owned(),
+        }),
+        expected_code_hash: String::new(),
+        inputs_json: b"{}".to_vec(),
+        inputs_external: false,
+        cancel_grace_ms: 1_000,
+        memory_budget_bytes: 0,
+        setrlimit: false,
+        upstream_outcomes: std::collections::HashMap::new(),
+        connections_json: Vec::new(),
+    };
+    let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
+    spec.stand_in_secrets();
+    let plan = crate::attempt::plan(&spec, &setup).unwrap();
+    (executor, spec, plan, dir)
+}
+
+/// Runs an attempt to its end: what it finished with, what `ended` was told, and `OUT`.
+async fn run_with_cleanup(
+    (executor, spec, plan, dir): (ProcessExecutor, AttemptSpec, Plan, TempDir),
+    stops: Stops,
+) -> (pb::Finished, Option<pb::Finished>, String) {
+    let told = Arc::new(std::sync::Mutex::new(None));
+    let telling = Arc::clone(&told);
+    let finished = executor
+        .run(
+            spec,
+            plan,
+            stops,
+            Box::new(|_, _| {}),
+            Box::new(move |ended| *telling.lock().unwrap() = Some(ended)),
+        )
+        .await;
+    let out = std::fs::read_to_string(dir.path().join("out")).unwrap_or_default();
+    let ended = told.lock().unwrap().take();
+    (finished, ended, out)
+}
+
+#[tokio::test]
+async fn a_cleanup_runs_after_a_failed_task_and_leaves_its_result() {
+    let attempt = attempt_with_cleanup("echo task >> $OUT; exit 3", "echo cleanup >> $OUT", 0);
+    let (_sender, stops) = Stops::new();
+    let (finished, ended, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "task\ncleanup\n");
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Failed));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Ok));
+    assert_eq!(cleanup.tries, 1);
+    let ended = ended.expect("the task's end is reported before its cleanup");
+    assert_eq!(ended.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!(ended.cleanup, None);
+}
+
+#[tokio::test]
+async fn a_failed_cleanup_is_retried_until_it_succeeds() {
+    let attempt = attempt_with_cleanup("true", "echo try >> $OUT; [ $(wc -l < $OUT) -ge 3 ]", 5);
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "try\ntry\ntry\n");
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Success));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Ok));
+    assert_eq!(cleanup.tries, 3);
+    assert_eq!(cleanup.error_kind, "");
+}
+
+#[tokio::test]
+async fn a_cleanup_out_of_retries_fails_but_the_task_keeps_its_success() {
+    let attempt = attempt_with_cleanup("true", "echo try >> $OUT; exit 1", 1);
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "try\ntry\n");
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Success));
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    assert_eq!(cleanup.tries, 2);
+}
+
+#[tokio::test]
+async fn a_cancel_stops_the_task_but_not_its_cleanup() {
+    let attempt = attempt_with_cleanup("sleep 20", "sleep 0.3; echo cleaned >> $OUT", 0);
+    let (sender, stops) = Stops::new();
+    let cancelling = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = sender.send(StopReason::Cancelled);
+        // Kept open past the cleanup: a stop still in force mustn't reach it.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        drop(sender);
+    });
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    cancelling.abort();
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Cancelled));
+    assert_eq!(out, "cleaned\n");
+    assert_eq!(
+        finished.cleanup.unwrap().status,
+        i32::from(pb::CleanupStatus::Ok)
+    );
+}
+
+#[tokio::test]
+async fn an_attempt_that_never_started_needs_no_cleanup() {
+    let attempt = attempt_with_cleanup("true", "echo cleaned >> $OUT", 0);
+    // Its working directory gone: the process can't be spawned.
+    std::fs::remove_dir_all(attempt.3.path().join("etl")).unwrap();
+    let (_sender, stops) = Stops::new();
+    let (finished, ended, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "");
+    assert_eq!(ended.map(|e| e.status), None);
+    assert_eq!(
+        finished.cleanup.unwrap().status,
+        i32::from(pb::CleanupStatus::NotNeeded)
+    );
+}
+
+#[tokio::test]
+async fn a_cleanup_of_another_kind_never_runs_the_task_again() {
+    let (executor, mut spec, plan, dir) = attempt_with_cleanup("echo task >> $OUT", "true", 2);
+    spec.task.cleanup.as_mut().unwrap().run = schedr_model::task::CleanupRun::Python;
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup((executor, spec, plan, dir), stops).await;
+    assert_eq!(out, "task\n");
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    assert_eq!(cleanup.error_kind, "invalid_cleanup");
+}
+
+fn finished_with(output: usize, cleanup_error: usize) -> pb::Finished {
+    pb::Finished {
+        status: pb::AttemptStatus::Success.into(),
+        output_json: vec![b'x'; output],
+        cleanup: Some(pb::CleanupResult {
+            status: pb::CleanupStatus::Failed.into(),
+            error_summary_json: vec![b'y'; cleanup_error],
+            ..pb::CleanupResult::default()
+        }),
+        ..pb::Finished::default()
+    }
+}
+
+#[test]
+fn a_large_cleanup_error_gives_way_to_the_tasks_result() {
+    let limit = 4 << 20;
+    let mut finished = finished_with(2 << 20, 3 << 20);
+    fit_result(&mut finished, limit);
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Success));
+    assert_eq!(finished.output_json.len(), 2 << 20);
+    let cleanup = finished.cleanup.as_ref().unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Failed));
+    assert!(prost::Message::encoded_len(&finished) <= limit);
+}
+
+#[test]
+fn a_result_too_large_by_itself_fails_and_fits_with_its_cleanup_error() {
+    let limit = 4 << 20;
+    let mut finished = finished_with(5 << 20, 5 << 20);
+    fit_result(&mut finished, limit);
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!(finished.error_kind, "output_too_large");
+    assert!(prost::Message::encoded_len(&finished) <= limit);
 }

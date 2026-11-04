@@ -20,6 +20,7 @@ fn info() -> CtxInfo {
         params: json!({"region": "eu", "day": {"$date": "2026-10-01"}}),
         version: "1.2.3".into(),
         secrets: None,
+        handles: None,
     }
 }
 

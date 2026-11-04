@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use schedr_model::{AttemptStatus, Dag, DagId, RunKind, TaskId, TaskInstanceState};
+use schedr_model::{AttemptStatus, CleanupResult, Dag, DagId, RunKind, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
@@ -127,6 +127,23 @@ pub struct AttemptEnd {
     pub error_summary: Option<String>,
     /// The content hash the code ran with.
     pub code_hash: Option<String>,
+    /// How its cleanup ended; `None` for a task without one.
+    pub cleanup: Option<CleanupEnd>,
+}
+
+/// How an attempt's cleanup ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupEnd {
+    /// Its result.
+    pub result: CleanupResult,
+    /// How many tries it took.
+    pub tries: u32,
+    /// How long its tries ran, in milliseconds.
+    pub duration_ms: u64,
+    /// The error kind of its last try.
+    pub error_kind: Option<String>,
+    /// The error summary of its last try, as JSON text.
+    pub error_summary: Option<String>,
 }
 
 impl AttemptEnd {
@@ -144,6 +161,7 @@ impl AttemptEnd {
             error_kind: None,
             error_summary: None,
             code_hash: None,
+            cleanup: None,
         }
     }
 }
@@ -486,8 +504,11 @@ impl Database {
     ) -> Result<bool, DbError> {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
-            ended_at = $8{ts}, duration_ms = $9, usage = $10{json}, core_dumped = $11 \
-            WHERE id = $12{uuid} AND status IS NULL";
+            ended_at = $8{ts}, duration_ms = $9, usage = $10{json}, core_dumped = $11, \
+            cleanup_result = $12, cleanup_tries = $13, cleanup_duration_ms = $14, \
+            cleanup_error_kind = $15, cleanup_error_summary = $16{json} \
+            WHERE id = $17{uuid} AND status IS NULL";
+        let cleanup = end.cleanup.as_ref();
         let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, END))
                 .bind(end.status.to_string())
@@ -507,6 +528,15 @@ impl Database {
                 )
                 .bind(end.usage.as_ref().map(crate::query::to_json))
                 .bind(end.core_dumped)
+                .bind(cleanup.map(|c| c.result.to_string()))
+                .bind(cleanup.map(|c| i64::from(c.tries)))
+                .bind(cleanup.map(|c| i64::try_from(c.duration_ms).unwrap_or(i64::MAX)))
+                .bind(cleanup.and_then(|c| c.error_kind.as_deref()))
+                .bind(
+                    cleanup
+                        .and_then(|c| c.error_summary.clone())
+                        .map(crate::query::storable_json),
+                )
                 .bind(attempt_id)
                 .execute(&mut *tx)
                 .await?

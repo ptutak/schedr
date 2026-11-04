@@ -16,6 +16,7 @@ from types import FrameType
 from typing import Any, Protocol, get_args, get_origin, is_typeddict
 
 from schedr._model import (
+    CommandLine,
     DagCtxField,
     DagCtxRef,
     DictType,
@@ -38,6 +39,7 @@ from schedr._model import (
     SecretDecl,
     SecretRef,
     Task,
+    TaskCleanup,
     TaskKind,
     TaskSettings,
     Template,
@@ -101,6 +103,19 @@ def is_reference(value: object) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class CleanupWanted:
+    """What a task's cleanup runs and takes, before its settings are resolved.
+
+    Attributes:
+        line: The command it runs; ``None``: the task's ``cleanup=`` function.
+        handles: The handle types it takes: ``None`` any, empty none.
+    """
+
+    line: CommandLine | None = None
+    handles: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TaskOptions:
     """Settings given on a task or in ``TaskDefaults``; ``None`` means "not set here".
 
@@ -131,6 +146,9 @@ class TaskOptions:
     max_active_per_run: int | None = None
     secrets: tuple[SecretDecl, ...] | None = None
     connections: tuple[str, ...] | None = None
+    cleanup_timeout: timedelta | None = None
+    cleanup_retries: int | None = None
+    cleanup_retry_delay: timedelta | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -160,6 +178,61 @@ class TaskOptions:
             ),
             secrets=base.secrets if self.secrets is None else self.secrets,
             connections=base.connections if self.connections is None else self.connections,
+            cleanup_timeout=(
+                base.cleanup_timeout if self.cleanup_timeout is None else self.cleanup_timeout
+            ),
+            cleanup_retries=(
+                base.cleanup_retries if self.cleanup_retries is None else self.cleanup_retries
+            ),
+            cleanup_retry_delay=(
+                base.cleanup_retry_delay
+                if self.cleanup_retry_delay is None
+                else self.cleanup_retry_delay
+            ),
+        )
+
+    def cleanup_set(self) -> str | None:
+        """The first ``cleanup_*`` option set, which only a task with a cleanup can have.
+
+        Returns:
+            Its name, or ``None``.
+        """
+        for name in ("cleanup_timeout", "cleanup_retries", "cleanup_retry_delay"):
+            if getattr(self, name) is not None:
+                return name
+        return None
+
+    def cleanup(self, wanted: CleanupWanted) -> TaskCleanup:
+        """A task's cleanup, with the built-in defaults where nothing is set.
+
+        Args:
+            wanted: What it runs and takes.
+
+        Returns:
+            The cleanup in DAG JSON.
+
+        Raises:
+            ValueError: If a duration isn't a whole number of milliseconds or is out of range,
+                or the retries are negative.
+        """
+        defaults = TaskCleanup()
+        retries = defaults.retries if self.cleanup_retries is None else self.cleanup_retries
+        if retries < 0:
+            raise ValueError(f"cleanup_retries must not be negative, got {retries}")
+        return TaskCleanup(
+            wanted.line,
+            (
+                defaults.timeout_ms
+                if self.cleanup_timeout is None
+                else to_ms(self.cleanup_timeout, "cleanup_timeout")
+            ),
+            retries,
+            (
+                defaults.retry_delay_ms
+                if self.cleanup_retry_delay is None
+                else to_ms(self.cleanup_retry_delay, "cleanup_retry_delay")
+            ),
+            wanted.handles,
         )
 
     def settings(self) -> TaskSettings:
@@ -274,6 +347,7 @@ class DagBuilder:
         self.tasks: dict[str, Task] = {}
         self.edges: list[Edge] = []
         self.functions: dict[str, Callable[..., Any]] = {}
+        self.cleanups: dict[str, Callable[..., Any]] = {}
         self.outcomes: dict[str, OutcomeSpec] = {}
         self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
         # Arguments that take a reference, checked once the DAG is complete (check_nones).
@@ -445,6 +519,7 @@ class DagBuilder:
         outcomes: OutcomeSpec = DEFAULT,
         outcome_types: Mapping[str, TypeDesc] | None = None,
         expand: Expand | None = None,
+        cleanup: CleanupWanted | None = None,
     ) -> None:
         """Adds a task with its settings resolved against its groups' and the DAG's defaults.
 
@@ -457,11 +532,16 @@ class DagBuilder:
             outcome_types: For an outcome union, each outcome's type (what ``.on()`` narrows
                 to).
             expand: What a mapped task's instances vary over (``.expand()``).
+            cleanup: What runs after each of its attempts (``cleanup=``), if anything.
 
         Raises:
             IdError: If a task with this ID already exists, or the ID is invalid.
+            TypeError: For a ``cleanup_*`` option of its own without a cleanup.
         """
         validate_task_id(task_id)
+        unused = options.cleanup_set()
+        if cleanup is None and unused is not None:
+            raise TypeError(f"task `{task_id}`: `{unused}` without `cleanup=`")
         if task_id in self.tasks:
             raise IdError(
                 f"task ID `{task_id}` is defined twice in DAG `{self.dag_id}`; give one a "
@@ -474,7 +554,8 @@ class DagBuilder:
             options = options.over(scope.options)
             for group in self.open_groups:
                 group.members.append(task_id)
-        settings = options.over(self.defaults).settings()
+        resolved = options.over(self.defaults)
+        settings = resolved.settings()
         self.tasks[task_id] = Task(
             task_id,
             kind,
@@ -485,6 +566,7 @@ class DagBuilder:
             expand=expand,
             secrets=options.secrets or (),
             connections=options.connections or (),
+            cleanup=None if cleanup is None else resolved.cleanup(cleanup),
         )
         if expand is not None:
             self.mapped.add(task_id)

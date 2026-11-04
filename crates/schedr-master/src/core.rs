@@ -147,6 +147,7 @@ fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
         code_hash: finished.code_hash.replace('\0', "\u{fffd}"),
         usage: finished.usage,
         core_dumped: finished.core_dumped,
+        cleanup: finished.cleanup.clone(),
     }
 }
 
@@ -570,6 +571,38 @@ impl MasterCore {
         Ok((registered, outgoing))
     }
 
+    /// A worker is draining: its parsing moves to the others.
+    async fn worker_draining(
+        &mut self,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        self.dispatcher.draining(worker_id);
+        self.db
+            .set_worker_state(worker_id, WorkerState::Draining, now)
+            .await?;
+        let moved = self.discovery.stop_parsing(worker_id, now);
+        Ok(moved.into_iter().map(assign_parse).collect())
+    }
+
+    /// A task's process ended and its cleanup starts: only a state shown, `Finished` settles
+    /// the attempt either way.
+    async fn task_ended(
+        &mut self,
+        worker_id: &str,
+        ended: pb::TaskEnded,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let Some(result) = ended.result else {
+            return Ok(());
+        };
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        let id = result.attempt_id.as_str();
+        let handled = Box::pin(db.atomically(self.dispatcher.task_ended(worker_id, id, now))).await;
+        self.settle(handled, memory, id, |_| true).await?;
+        Ok(())
+    }
+
     /// A message on a registered worker's stream.
     ///
     /// # Errors
@@ -682,14 +715,11 @@ impl MasterCore {
                 }
                 vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
             }
-            worker_message::Message::Draining(_) => {
-                self.dispatcher.draining(worker_id);
-                self.db
-                    .set_worker_state(worker_id, WorkerState::Draining, now)
-                    .await?;
-                let moved = self.discovery.stop_parsing(worker_id, now);
-                moved.into_iter().map(assign_parse).collect()
+            worker_message::Message::TaskEnded(ended) => {
+                self.task_ended(worker_id, ended, now).await?;
+                Vec::new()
             }
+            worker_message::Message::Draining(_) => self.worker_draining(worker_id, now).await?,
             worker_message::Message::Deregister(_) => self.deregistered(worker_id, now).await,
             worker_message::Message::ConnectionJobDone(done) => {
                 self.connection_job_done(worker_id, done).await?;

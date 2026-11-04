@@ -163,6 +163,8 @@ CREATE TABLE task_instances (
     -- A mapped task as a whole (map_index -1) once expanded: the size of each dimension of
     -- its instances (a JSON array), for an instance's place in each.
     map_sizes     JSONB,
+    -- How its cleanups ended: the last, unless one failed, which stays (it fails the run).
+    cleanup_result TEXT CHECK (cleanup_result IN ('ok', 'failed', 'worker_lost', 'not_needed')),
     updated_at    TIMESTAMPTZ NOT NULL,
     UNIQUE (run_id, task_id, map_index)
 );
@@ -194,6 +196,12 @@ CREATE TABLE attempts (
     assigned_at       TIMESTAMPTZ NOT NULL,
     started_at        TIMESTAMPTZ,
     ended_at          TIMESTAMPTZ,
+    -- How its cleanup ended; NULL for a task without one.
+    cleanup_result    TEXT CHECK (cleanup_result IN ('ok', 'failed', 'worker_lost', 'not_needed')),
+    cleanup_tries     INTEGER,
+    cleanup_duration_ms BIGINT,
+    cleanup_error_kind TEXT,
+    cleanup_error_summary JSONB,
     UNIQUE (task_instance_id, try_number)
 );
 

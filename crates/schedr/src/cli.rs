@@ -569,7 +569,10 @@ impl Command {
             | Self::Connections { .. }
             | Self::DagCtx { .. }
             | Self::TaskCtx {
-                command: TaskCtxCommand::Secret { .. } | TaskCtxCommand::Connection(_),
+                command:
+                    TaskCtxCommand::Secret { .. }
+                    | TaskCtxCommand::Connection(_)
+                    | TaskCtxCommand::Cleanup { .. },
             } => None,
             Self::TaskCtx { .. } => Some("M4"),
         }

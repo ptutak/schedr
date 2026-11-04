@@ -243,6 +243,13 @@ pub async fn execute(
             None,
         ) => crate::ctx::run_task_ctx_connection(command, env, crate::VERSION, out)
             .map_err(AppError::Failed),
+        (
+            Command::TaskCtx {
+                command: crate::cli::TaskCtxCommand::Cleanup { command },
+            },
+            None,
+        ) => crate::ctx::run_task_ctx_cleanup(command, env, crate::VERSION, out)
+            .map_err(AppError::Failed),
         (other, milestone) => Err(AppError::NotImplemented {
             command: other.name(),
             milestone: milestone.unwrap_or("unknown"),

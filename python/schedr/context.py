@@ -12,6 +12,9 @@ inside a schedr task"); tests set values with ``schedr.testing.task_context(...)
 """
 
 import contextlib
+import dataclasses
+import types
+import typing
 from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -21,7 +24,7 @@ from typing import Any, overload
 from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference, SecretDecl, SecretRef
 from schedr._secrets import parse_secret
-from schedr._serialization.codec import CodecError, decode, decode_any
+from schedr._serialization.codec import CodecError, decode, decode_any, encode
 
 _VALUE_IN_DAG_BODY = (
     "a reference can't be used as a value in the DAG file (it is known only at run time); "
@@ -141,6 +144,10 @@ type ConnectionOpener = Callable[[str, ConnectionEnter], contextlib.AbstractCont
 test's double."""
 
 
+type HandleAdder = Callable[[object, str, object], None]
+"""Registers a cleanup handle: the handle, its type's name and its encoded value."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskValues:
     """The running task's own context (decision 84).
@@ -152,6 +159,8 @@ class TaskValues:
         secrets: Reads a secret the task declares (``task_ctx.secret(...)``); ``None``: it
             can read none.
         connections: Opens a connection (``with name():``); ``None``: none here.
+        handles: Registers a cleanup handle (``cleanup_handle``); ``None``: it can register
+            none.
     """
 
     task_id: str
@@ -159,6 +168,7 @@ class TaskValues:
     map_index: int | None
     secrets: SecretReader | None = None
     connections: ConnectionOpener | None = None
+    handles: HandleAdder | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)
@@ -563,6 +573,69 @@ def _task() -> TaskValues:
     if values is None:
         raise RuntimeError(_TASK_OUTSIDE)
     return values
+
+
+HANDLES_PARAMETER = "handles"
+"""The cleanup parameter that takes the attempt's handles."""
+
+
+def handle_classes(annotation: object) -> tuple[type, ...]:
+    """The classes a cleanup's ``handles`` declares: ``list[A]`` or ``list[A | B]``.
+
+    Args:
+        annotation: The parameter's resolved annotation.
+
+    Returns:
+        The dataclasses, in the order written.
+
+    Raises:
+        TypeError: For any other annotation, or two classes of one name (handles are stored
+            with their class's name).
+    """
+    shape = "`handles` must be annotated `list[A | B]`, of dataclasses"
+    if typing.get_origin(annotation) is not list:
+        raise TypeError(shape)
+    (element,) = typing.get_args(annotation)
+    if isinstance(element, typing.TypeAliasType):
+        element = element.__value__
+    is_union = typing.get_origin(element) in {typing.Union, types.UnionType}
+    classes = typing.get_args(element) if is_union else (element,)
+    names: set[str] = set()
+    for cls in classes:
+        if not (isinstance(cls, type) and dataclasses.is_dataclass(cls)):
+            raise TypeError(f"{shape}, not `{cls!r}`")
+        if cls.__name__ in names:
+            raise TypeError(f"`handles` names two classes called `{cls.__name__}`")
+        names.add(cls.__name__)
+    return classes
+
+
+def cleanup_handle(handle: object) -> None:
+    """Registers what this attempt's cleanup must clean up, like Go's ``defer``.
+
+    Call it before the work it stands for: it reaches the agent before this returns, so an
+    attempt killed right after still has it. The cleanup gets every handle of the attempt, in
+    this order, however the attempt ended; a handle is never released.
+
+    Args:
+        handle: A dataclass instance, of a type the cleanup's ``handles`` declares. Its
+            values are masked like the task's logs.
+
+    Raises:
+        TypeError: For anything but a dataclass instance.
+        RuntimeError: Outside a running task, or when the agent refuses it (no ``cleanup=``,
+            a type the cleanup doesn't take, too many handles, in a cleanup).
+    """
+    if not dataclasses.is_dataclass(handle) or isinstance(handle, type):
+        raise TypeError(f"a cleanup handle is a dataclass instance, not {handle!r}")
+    values = _TASK.get()
+    if values is None or values.handles is None:
+        raise RuntimeError(
+            "`cleanup_handle` must be run inside a schedr task; in tests, set one with "
+            "`schedr.testing.task_context(...)`"
+        )
+    cls = type(handle)
+    values.handles(handle, cls.__name__, encode(handle, cls))
 
 
 class TaskContext:

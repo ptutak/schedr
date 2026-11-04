@@ -22,6 +22,7 @@ from schedr._model.tasks import (
     PythonKind,
     ShellCommand,
     Task,
+    TaskCleanup,
     TaskKind,
     TaskSettings,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "SecretRef",
     "ShellCommand",
     "Task",
+    "TaskCleanup",
     "TaskKind",
     "TaskSettings",
     "Template",

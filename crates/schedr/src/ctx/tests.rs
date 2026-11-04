@@ -2,9 +2,13 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+
 use schedr_agent::ctx::{CtxInfo, channel, serve};
+use schedr_agent::handles::AttemptHandles;
 use schedr_model::ctx::CtxRun;
 use schedr_model::states::RunKind;
+use schedr_model::task::{CleanupRun, TaskCleanup};
 use serde_json::json;
 
 use super::*;
@@ -28,6 +32,7 @@ fn info(version: &str) -> CtxInfo {
         }),
         version: version.into(),
         secrets: None,
+        handles: None,
     }
 }
 
@@ -353,4 +358,127 @@ async fn a_connection_not_declared_or_a_bad_prefix_is_an_error() {
         .await
         .unwrap();
     assert_eq!(json, "{\"HOST\":\"upper\",\"host\":\"lower\"}\n");
+}
+
+/// Runs a `task-ctx cleanup` command against a served channel with `handles`.
+async fn cleanup_against_agent(
+    command: CleanupCommand,
+    handles: Arc<AttemptHandles>,
+) -> Result<String, String> {
+    let (ours, theirs) = channel().unwrap();
+    let served = CtxInfo {
+        handles: Some(handles),
+        ..info("1.2.3")
+    };
+    let _serving = serve(ours, served);
+    let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let result = run_task_ctx_cleanup(&command, &env, "1.2.3", &mut out);
+        drop(theirs);
+        result.map(|()| String::from_utf8(out).unwrap())
+    })
+    .await
+    .unwrap()
+}
+
+fn cleanup_of(handles: &[&str]) -> Arc<AttemptHandles> {
+    let cleanup = TaskCleanup {
+        run: CleanupRun::Python,
+        timeout_ms: 1000,
+        retries: 0,
+        retry_delay_ms: 0,
+        handles: (!handles.is_empty()).then(|| handles.iter().map(ToString::to_string).collect()),
+    };
+    Arc::new(AttemptHandles::new(
+        Some(&cleanup),
+        Arc::new(schedr_agent::mask::MaskSet::new(4)),
+    ))
+}
+
+fn add(handle_type: &str, fields: &[&str]) -> CleanupCommand {
+    CleanupCommand::Add {
+        handle_type: handle_type.to_owned(),
+        fields: fields.iter().map(|f| (*f).to_owned()).collect(),
+        json: None,
+    }
+}
+
+fn list(handle_type: Option<&str>, field: Option<&str>) -> CleanupCommand {
+    CleanupCommand::List {
+        handle_type: handle_type.map(str::to_owned),
+        field: FieldArg {
+            field: field.map(str::to_owned),
+        },
+    }
+}
+
+#[tokio::test]
+async fn handles_added_are_listed_in_order_as_json_lines_or_one_field() {
+    let handles = cleanup_of(&[]);
+    for (name, fields) in [
+        ("ExportJob", vec!["job_id=j-1", "rows:=3"]),
+        ("TempDir", vec!["path=/tmp/a"]),
+        ("ExportJob", vec!["job_id=j-2", "rows:=4"]),
+    ] {
+        let added = cleanup_against_agent(add(name, &fields), Arc::clone(&handles));
+        assert_eq!(added.await.unwrap(), "");
+    }
+    let early = cleanup_against_agent(list(None, None), Arc::clone(&handles)).await;
+    assert_eq!(
+        early.unwrap_err(),
+        "`cleanup list` works only inside a cleanup"
+    );
+    handles.close();
+    let all = cleanup_against_agent(list(None, None), Arc::clone(&handles)).await;
+    assert_eq!(
+        all.unwrap().lines().collect::<Vec<_>>(),
+        [
+            r#"{"handle_type":"ExportJob","value":{"job_id":"j-1","rows":3}}"#,
+            r#"{"handle_type":"TempDir","value":{"path":"/tmp/a"}}"#,
+            r#"{"handle_type":"ExportJob","value":{"job_id":"j-2","rows":4}}"#,
+        ]
+    );
+    let ids = list(Some("ExportJob"), Some("job_id"));
+    let ids = cleanup_against_agent(ids, Arc::clone(&handles)).await;
+    assert_eq!(ids.unwrap(), "j-1\nj-2\n");
+    let missing = list(Some("TempDir"), Some("job_id"));
+    let missing = cleanup_against_agent(missing, handles).await;
+    assert_eq!(missing.unwrap_err(), "there is no field `job_id`");
+}
+
+#[tokio::test]
+async fn a_handle_of_another_type_or_in_a_cleanup_is_refused() {
+    let handles = cleanup_of(&["ExportJob"]);
+    let refused = cleanup_against_agent(add("TempDir", &[]), Arc::clone(&handles)).await;
+    assert!(refused.unwrap_err().contains("TempDir"));
+    handles.close();
+    let closed = cleanup_against_agent(add("ExportJob", &[]), handles).await;
+    assert!(closed.unwrap_err().contains("a cleanup can't register"));
+}
+
+#[rstest::rstest]
+#[case(&["job"], None, "isn't `key=value`")]
+#[case(&["=v"], None, "has no key")]
+#[case(&["a:={"], None, "isn't JSON")]
+#[case(&["a=1", "a=2"], None, "given twice")]
+#[case(&["a=1"], Some("{}"), "not both")]
+#[case(&[], Some("[1]"), "one JSON object")]
+#[case(&[], Some("{"), "isn't JSON")]
+fn a_handle_that_cant_be_read_is_an_error(
+    #[case] fields: &[&str],
+    #[case] json: Option<&str>,
+    #[case] message: &str,
+) {
+    let fields: Vec<_> = fields.iter().map(|f| (*f).to_owned()).collect();
+    let error = handle_value(&fields, json).unwrap_err();
+    assert!(error.contains(message), "{error}");
+}
+
+#[test]
+fn a_handle_may_be_given_whole_as_json() {
+    assert_eq!(
+        handle_value(&[], Some(r#"{"a": [1]}"#)).unwrap(),
+        json!({"a": [1]})
+    );
 }

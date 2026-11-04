@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use schedr_model::{Dag, RunState, TaskId, TaskInstanceState};
+use schedr_model::{CleanupResult, Dag, RunState, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
@@ -50,6 +50,8 @@ pub struct StoredInstance {
     pub reason: Option<String>,
     /// A mapped task as a whole, once expanded: the size of each dimension of its instances.
     pub map_sizes: Option<Vec<usize>>,
+    /// How its cleanups ended, if it has any: the last, unless one failed.
+    pub cleanup_result: Option<CleanupResult>,
 }
 
 /// A run with its task instances.
@@ -98,6 +100,7 @@ type InstanceRow = (
     bool,
     Option<String>,
     i32,
+    Option<String>,
     Option<String>,
     Option<String>,
 );
@@ -220,7 +223,8 @@ impl Database {
             JOIN parse_results p ON p.id = v.parse_result_id WHERE r.id = $1{uuid}";
         const INSTANCES: &str = "SELECT id{text}, task_id, state, try_number, retries_used, \
             {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome, map_index, reason, \
-            map_sizes{text} FROM task_instances WHERE run_id = $1{uuid} ORDER BY task_id, map_index";
+            map_sizes{text}, cleanup_result FROM task_instances WHERE run_id = $1{uuid} \
+            ORDER BY task_id, map_index";
         let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
             let run = sqlx::query_as(sql(backend, RUN))
                 .bind(run_id)
@@ -243,6 +247,32 @@ impl Database {
             parse_version,
             instances: rows.into_iter().map(instance).collect::<Result<_, _>>()?,
         }))
+    }
+
+    /// Records how a cleanup of an instance ended. A failure stays: a later attempt's
+    /// cleanup succeeding doesn't undo it (it fails the run, see PROJECT.md, Run result).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_cleanup_result(
+        &self,
+        instance_id: &str,
+        result: CleanupResult,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const SET: &str = "UPDATE task_instances SET cleanup_result = $1, updated_at = $2{ts} \
+            WHERE id = $3{uuid} AND (cleanup_result IS NULL \
+            OR cleanup_result NOT IN ('failed', 'worker_lost'))";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(result.to_string())
+                .bind(db_time(now))
+                .bind(instance_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
     }
 
     /// Stores changes to a run's task instances, all or none.
@@ -585,6 +615,7 @@ fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
         map_index,
         reason,
         map_sizes,
+        cleanup_result,
     ) = row;
     Ok(StoredInstance {
         id,
@@ -601,6 +632,9 @@ fn instance(row: InstanceRow) -> Result<StoredInstance, DbError> {
         reason,
         map_sizes: map_sizes
             .map(|s| from_json("task_instances.map_sizes", &s))
+            .transpose()?,
+        cleanup_result: cleanup_result
+            .map(|name| from_name("task_instances.cleanup_result", name))
             .transpose()?,
     })
 }

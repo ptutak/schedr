@@ -670,3 +670,135 @@ fn a_secret_read_that_fails_fails_the_task_with_its_kind() {
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("isn't declared"), "{out}");
 }
+
+/// A Python task that registers handles and fails, its cleanup writing what it got to `{out}`.
+const CLEANED_UP: &str = r#"
+from dataclasses import dataclass
+from pathlib import Path
+
+from schedr import Dag, cleanup_handle, task
+
+@dataclass
+class ExportJob:
+    job_id: str
+
+@dataclass
+class TempDir:
+    path: str
+
+def undo(day: str, handles: list[ExportJob | TempDir]) -> None:
+    Path("{out}").write_text(f"{day} {handles}")
+
+@task(cleanup=undo)
+def export(day: str, rows: int = 3) -> None:
+    cleanup_handle(TempDir("/tmp/a"))
+    cleanup_handle(ExportJob("j-1"))
+    raise ValueError("no rows")
+
+with Dag("cleaned"):
+    export("2026-11-04")
+"#;
+
+const CLEANUP_FAILS: &str = r#"
+from schedr import Dag, task
+
+def undo() -> None:
+    raise ValueError("can't clean")
+
+@task(cleanup=undo, cleanup_retries=1, cleanup_retry_delay=__import__("datetime").timedelta(0))
+def works() -> int:
+    return 1
+
+with Dag("unclean"):
+    works()
+"#;
+
+/// A command registering a handle with the binary, its cleanup listing it into `{out}`.
+const COMMAND_CLEANED_UP: &str = r#"
+from schedr import CommandOperator, Dag
+
+with Dag("command_cleaned"):
+    CommandOperator(
+        "export",
+        "{schedr} task-ctx cleanup add ExportJob job_id=j-1 && exit 3",
+        cleanup="{schedr} task-ctx cleanup list ExportJob --field job_id > {out}",
+    )
+"#;
+
+/// A task that registers a handle its cleanup doesn't declare.
+const OTHER_HANDLE: &str = r#"
+from dataclasses import dataclass
+
+from schedr import Dag, cleanup_handle, task
+
+@dataclass
+class ExportJob:
+    job_id: str
+
+@dataclass
+class TempDir:
+    path: str
+
+def undo(handles: list[ExportJob]) -> None:
+    pass
+
+@task(cleanup=undo)
+def export() -> None:
+    cleanup_handle(TempDir("/tmp/a"))
+
+with Dag("other_handle"):
+    export()
+"#;
+
+#[test]
+fn a_python_cleanup_gets_the_inputs_and_handles_of_a_failed_attempt() {
+    let out = TempDir::new().unwrap();
+    let file = out.path().join("cleaned");
+    let text = CLEANED_UP.replace("{out}", path_str(&file));
+    let local = Local::new(&[("cleaned.py", &text)]);
+    let (code, stdout, stderr) = local.test("cleaned", &[]);
+    assert_ne!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "2026-11-04 [TempDir(path='/tmp/a'), ExportJob(job_id='j-1')]"
+    );
+}
+
+#[test]
+fn a_failed_cleanup_fails_the_run_of_a_task_that_worked() {
+    let local = Local::new(&[("unclean.py", CLEANUP_FAILS)]);
+    let (code, stdout, stderr) = local.test("unclean", &[]);
+    assert_ne!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.trim_end().ends_with(": failed"), "{stdout}");
+    assert!(stdout.contains("cleanup: try 2"), "{stdout}");
+}
+
+#[test]
+fn a_command_registers_and_its_cleanup_reads_handles_with_the_binary() {
+    let out = TempDir::new().unwrap();
+    let file = out.path().join("cleaned");
+    let text = COMMAND_CLEANED_UP
+        .replace("{schedr}", BINARY)
+        .replace("{out}", path_str(&file));
+    let local = Local::new(&[("command_cleaned.py", &text)]);
+    let (code, stdout, stderr) = local.test("command_cleaned", &[]);
+    assert_ne!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "j-1\n");
+}
+
+#[test]
+fn a_handle_of_a_type_the_cleanup_doesnt_take_fails_the_attempt() {
+    let local = Local::new(&[("other_handle.py", OTHER_HANDLE)]);
+    let (code, stdout, stderr) = local.test("other_handle", &[]);
+    assert_ne!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("TempDir"), "{stdout}");
+}
+
+#[test]
+fn a_handle_for_a_cleanup_without_a_handles_parameter_fails_the_attempt() {
+    let text = OTHER_HANDLE.replace("def undo(handles: list[ExportJob])", "def undo()");
+    let local = Local::new(&[("other_handle.py", &text)]);
+    let (code, stdout, stderr) = local.test("other_handle", &[]);
+    assert_ne!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("takes no handles"), "{stdout}");
+}

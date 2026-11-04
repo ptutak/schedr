@@ -24,6 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Re
 use tokio::net::{UnixDatagram, UnixStream};
 use tokio::task::JoinSet;
 
+use crate::handles::{AttemptHandles, HandleError};
 use crate::secrets::{AttemptSecrets, ConnectionError, SecretError};
 
 #[cfg(test)]
@@ -50,6 +51,8 @@ pub struct CtxInfo {
     pub version: String,
     /// The attempt's secrets (`schedr task-ctx secret get`); none for a task without any.
     pub secrets: Option<Arc<AttemptSecrets>>,
+    /// The attempt's cleanup handles (`schedr task-ctx cleanup`); none outside an attempt.
+    pub handles: Option<Arc<AttemptHandles>>,
 }
 
 impl CtxInfo {
@@ -67,6 +70,7 @@ impl CtxInfo {
             params: run.params.clone(),
             version: version.to_owned(),
             secrets: None,
+            handles: None,
         }
     }
 }
@@ -337,6 +341,26 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                 None => CtxAnswer::SecretFailed {
                     kind: SecretError::Denied(String::new()).kind().to_owned(),
                     reason: format!("`{secret}` isn't declared in the task's `secrets=`"),
+                },
+            },
+            Some(Ok(CtxRequest::HandleAdd { handle })) => {
+                let added = info
+                    .handles
+                    .as_ref()
+                    .map_or(Err(HandleError::NoCleanup), |h| h.add(handle));
+                match added {
+                    Ok(()) => CtxAnswer::HandleAdded,
+                    Err(error) => CtxAnswer::HandleRefused {
+                        reason: error.to_string(),
+                    },
+                }
+            }
+            Some(Ok(CtxRequest::HandleList)) => match info.handles.as_ref() {
+                Some(handles) if handles.in_cleanup() => CtxAnswer::Handles {
+                    handles: handles.list(),
+                },
+                _ => CtxAnswer::Error {
+                    reason: "`cleanup list` works only inside a cleanup".to_owned(),
                 },
             },
             Some(Ok(CtxRequest::ConnectionGet { name })) => {

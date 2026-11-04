@@ -131,6 +131,7 @@ fn ended(status: AttemptStatus) -> AttemptResult {
         error_kind: None,
         output: None,
         outcome: None,
+        cleanup: None,
     }
 }
 
@@ -1195,5 +1196,79 @@ async fn an_expansion_narrowed_to_an_outcome_sees_the_outcome_just_reported() {
             S::Failed,
             Some("mapped argument `path`: expected a list, got null")
         )
+    );
+}
+
+fn cleaned(status: AttemptStatus, cleanup: CleanupResult) -> AttemptResult {
+    AttemptResult {
+        cleanup: Some(cleanup),
+        ..ended(status)
+    }
+}
+
+async fn finish(execution: &Execution, run_id: &str, name: &str, result: &AttemptResult) {
+    execution
+        .attempt_finished(run_id, &id(name), -1, result, ts(NOW))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_task_in_its_cleanup_is_cleaning_up_until_it_finishes() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "extract").await;
+    execution
+        .cleaning_up(&run_id, &id("extract"), -1, ts(NOW))
+        .await
+        .unwrap();
+    assert!(
+        states(&db, &run_id)
+            .await
+            .contains(&("extract".to_owned(), S::CleaningUp))
+    );
+    let result = cleaned(AttemptStatus::Success, CleanupResult::Ok);
+    finish(&execution, &run_id, "extract", &result).await;
+    assert!(
+        states(&db, &run_id)
+            .await
+            .contains(&("extract".to_owned(), S::Success))
+    );
+}
+
+#[tokio::test]
+async fn a_failed_cleanup_fails_the_run_though_every_task_succeeded() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "extract").await;
+    let failed = cleaned(AttemptStatus::Success, CleanupResult::Failed);
+    finish(&execution, &run_id, "extract", &failed).await;
+    start(&db, &run_id, "load").await;
+    finish(&execution, &run_id, "load", &ended(AttemptStatus::Success)).await;
+    assert_eq!(run_state(&db, &run_id).await, RunState::Failed);
+}
+
+#[tokio::test]
+async fn a_failed_cleanup_stays_after_a_retry_whose_cleanup_worked() {
+    let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "extract").await;
+    let first = cleaned(AttemptStatus::Failed, CleanupResult::Failed);
+    finish(&execution, &run_id, "extract", &first).await;
+    let stored = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let instance = stored.instances.iter().find(|i| i.task_id == id("extract"));
+    assert_eq!(
+        instance.unwrap().cleanup_result,
+        Some(CleanupResult::Failed)
+    );
+    let instance_id = instance.unwrap().id.clone();
+    db.set_cleanup_result(&instance_id, CleanupResult::Ok, ts(NOW))
+        .await
+        .unwrap();
+    let stored = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let instance = stored.instances.iter().find(|i| i.task_id == id("extract"));
+    assert_eq!(
+        instance.unwrap().cleanup_result,
+        Some(CleanupResult::Failed)
     );
 }

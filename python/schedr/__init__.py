@@ -14,7 +14,7 @@ from schedr.connections import (
     ConnectionNotFoundError,
     connection,
 )
-from schedr.context import SecretError, dag_ctx, task_ctx
+from schedr.context import SecretError, cleanup_handle, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator
@@ -58,6 +58,7 @@ __all__ = [
     "TypingHint",
     "branch",
     "chain",
+    "cleanup_handle",
     "connection",
     "dag_ctx",
     "group",

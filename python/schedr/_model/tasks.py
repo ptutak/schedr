@@ -329,6 +329,66 @@ type Expand = ExpandProduct | ExpandKwargs
 """What a mapped task's instances vary over (decision 69)."""
 
 
+DEFAULT_CLEANUP_TIMEOUT_MS = 300_000
+"""How long one try of a cleanup may run: ``cleanup_timeout``'s default."""
+
+DEFAULT_CLEANUP_RETRIES = 3
+"""How many times a failed cleanup is retried: ``cleanup_retries``' default."""
+
+DEFAULT_CLEANUP_RETRY_DELAY_MS = 30_000
+"""The delay before each cleanup retry: ``cleanup_retry_delay``'s default."""
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCleanup:
+    """A task's cleanup: ``finally`` for each of its attempts.
+
+    Attributes:
+        line: The command it runs; ``None``: the task's ``cleanup=`` function.
+        timeout_ms: How long one try may run.
+        retries: How many times it is retried after a failed try, on the same worker.
+        retry_delay_ms: The delay before each retry.
+        handles: The handle types it takes: ``None`` any, empty none (a function without a
+            ``handles`` parameter would never see them).
+    """
+
+    line: CommandLine | None = None
+    timeout_ms: int = DEFAULT_CLEANUP_TIMEOUT_MS
+    retries: int = DEFAULT_CLEANUP_RETRIES
+    retry_delay_ms: int = DEFAULT_CLEANUP_RETRY_DELAY_MS
+    handles: tuple[str, ...] | None = None
+
+    def references(self) -> list[Reference]:
+        """The references of its command line.
+
+        Returns:
+            They, in order; none for a function.
+        """
+        if self.line is None:
+            return []
+        return [r for template in self.line.templates() for r in template.references()]
+
+    def to_json(self) -> dict[str, Any]:
+        """The cleanup as DAG JSON.
+
+        Returns:
+            Its ``run`` (``"python"`` or ``{"command": ...}``), ``timeout_ms``, ``retries`` and
+            ``retry_delay_ms``, with ``handles`` when they are limited.
+        """
+        run: str | dict[str, Any] = (
+            "python" if self.line is None else {"command": self.line.to_json()}
+        )
+        result: dict[str, Any] = {
+            "run": run,
+            "timeout_ms": self.timeout_ms,
+            "retries": self.retries,
+            "retry_delay_ms": self.retry_delay_ms,
+        }
+        if self.handles is not None:
+            result["handles"] = list(self.handles)
+        return result
+
+
 @dataclass(frozen=True, slots=True)
 class Task:
     """A task of a DAG.
@@ -343,6 +403,7 @@ class Task:
         expand: What its instances vary over, for a mapped task.
         secrets: The secrets it declares (``secrets=``), read on demand.
         connections: The connections it opens (``connections=``), by name (decision 179).
+        cleanup: What runs after each of its attempts (``cleanup=``), if anything.
     """
 
     id: str
@@ -354,6 +415,7 @@ class Task:
     expand: Expand | None = None
     secrets: tuple[SecretDecl, ...] = ()
     connections: tuple[str, ...] = ()
+    cleanup: TaskCleanup | None = None
 
     def __post_init__(self) -> None:
         """Validates the task ID.
@@ -367,10 +429,11 @@ class Task:
         """Every reference the task uses.
 
         Returns:
-            The kind's references, then those of what it is mapped over.
+            The kind's references, those of what it is mapped over, then its cleanup's.
         """
         mapped = self.expand.references() if self.expand is not None else []
-        return [*self.kind.references(), *mapped]
+        cleanup = self.cleanup.references() if self.cleanup is not None else []
+        return [*self.kind.references(), *mapped, *cleanup]
 
     def to_json(self) -> dict[str, Any]:
         """The task as DAG JSON (the kind's fields are flattened into it).
@@ -399,4 +462,6 @@ class Task:
             result["secrets"] = [declared.to_json() for declared in self.secrets]
         if self.connections:
             result["connections"] = list(self.connections)
+        if self.cleanup is not None:
+            result["cleanup"] = self.cleanup.to_json()
         return result
