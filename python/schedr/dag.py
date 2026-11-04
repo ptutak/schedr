@@ -202,7 +202,9 @@ class Dag:
         try:
             # While the DAG is still the active one: a group's ends are read through it.
             if exc_type is None and builder is not None:
+                resources = builder.finish_resources()
                 builder.make_group_dependencies()
+                builder.wait_for_cleanups(resources)
         finally:
             _build.pop()
         if exc_type is not None or builder is None:
@@ -225,6 +227,7 @@ class Dag:
             tags=self.tags,
             groups=[Group(g.id, g.parent) for g in builder.groups.values()],
             params=self._params,
+            resources=resources,
         )
         registry.register(
             self.model, builder.functions, self._filename, self.params, builder.cleanups

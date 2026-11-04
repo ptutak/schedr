@@ -47,6 +47,9 @@ class EdgeKind(StrEnum):
     ORDER = "order"
     """An order-only dependency (``>>``)."""
 
+    REQUIREMENT = "requirement"
+    """A resource's setup to a user: it can stop the user, never make it run."""
+
     SELECTION = "selection"
     """From a ``@branch`` task: taken when the branch chose the downstream task."""
 
@@ -139,6 +142,29 @@ class DagParams:
 
 
 @dataclass(frozen=True, slots=True)
+class Resource:
+    """A resource: one thing of two parts, each a task of the DAG (decision 259).
+
+    Attributes:
+        setup: The task that creates it; its ID is the resource's.
+        cleanup: The task that undoes it, once every user is done.
+        users: The tasks that need it, in the order of the edges.
+    """
+
+    setup: str
+    cleanup: str
+    users: Sequence[str] = ()
+
+    def to_json(self) -> dict[str, Any]:
+        """The resource as DAG JSON.
+
+        Returns:
+            ``{"setup": ..., "cleanup": ..., "users": [...]}``.
+        """
+        return {"setup": self.setup, "cleanup": self.cleanup, "users": list(self.users)}
+
+
+@dataclass(frozen=True, slots=True)
 class Dag:
     """A DAG: its identity, trigger, tasks and dependencies.
 
@@ -172,6 +198,7 @@ class Dag:
     produced_by: SchedrVersion = field(default_factory=SchedrVersion.current)
     groups: Sequence[Group] = ()
     params: DagParams | None = None
+    resources: Sequence[Resource] = ()
 
     def __post_init__(self) -> None:
         """Validates the DAG ID, unique task IDs, edges between known tasks and the limits.
@@ -191,6 +218,10 @@ class Dag:
             for end in (edge.from_, edge.to):
                 if end not in seen:
                     raise ValueError(f"edge {edge.from_} -> {edge.to}: no task `{end}`")
+        for resource in self.resources:
+            for end in (resource.setup, resource.cleanup, *resource.users):
+                if end not in seen:
+                    raise ValueError(f"resource `{resource.setup}`: no task `{end}`")
         if self.max_active_runs is not None and self.max_active_runs <= 0:
             raise ValueError(f"max_active_runs must be positive, got {self.max_active_runs}")
         if self.max_active_tasks is not None and self.max_active_tasks <= 0:
@@ -227,4 +258,6 @@ class Dag:
             result["groups"] = [g.to_json() for g in self.groups]
         if self.params is not None:
             result["params"] = self.params.to_json()
+        if self.resources:
+            result["resources"] = [r.to_json() for r in self.resources]
         return result

@@ -24,7 +24,7 @@ pub mod value;
 pub mod version;
 
 pub use connection::ConnectionDef;
-pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params};
+pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params, Resource};
 pub use ids::{DagId, IdError, TaskId};
 pub use secret::{SecretDecl, SecretName};
 pub use states::{

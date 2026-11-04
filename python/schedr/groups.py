@@ -11,6 +11,7 @@ no upstream task inside it, ``load >> publish`` makes ``publish`` run after ever
 master schedules ordinary tasks and edges and only checks groups.
 """
 
+from collections.abc import Sequence
 from types import TracebackType
 from typing import Self
 
@@ -28,6 +29,7 @@ class Group:
         name: Its name, one ID part (no ``.``): its tasks' IDs start with it.
         defaults: The defaults its tasks get, over the DAG's (a task's own arguments win).
         run_if: Its tasks' trigger rule unless they set their own.
+        uses: The resources its tasks need unless they name their own.
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -35,12 +37,18 @@ class Group:
     """
 
     def __init__(
-        self, name: str, *, defaults: TaskDefaults | None = None, run_if: RunIf | None = None
+        self,
+        name: str,
+        *,
+        defaults: TaskDefaults | None = None,
+        run_if: RunIf | None = None,
+        uses: Sequence[object] | None = None,
     ) -> None:
         """Records the group's settings; it opens when its ``with`` block starts."""
         self._name = name
         own = (defaults or TaskDefaults()).options()
-        self._options = _build.TaskOptions(run_if=run_if).over(own)
+        wanted = None if uses is None else tuple(uses)
+        self._options = _build.TaskOptions(run_if=run_if, uses=wanted).over(own)
         self._scope: _build.GroupScope | None = None
 
     @property

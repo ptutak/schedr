@@ -1627,7 +1627,8 @@ async fn a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(message).await.unwrap();
     let mut stream = tokio::time::timeout(
-        Duration::from_secs(10),
+        // About 4 s alone; only an upper bound, for a loaded machine.
+        Duration::from_secs(60),
         client.control(ReceiverStream::new(outbound)),
     )
     .await

@@ -4,6 +4,35 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, small hours): M4.8c1 committed; the user relogs
+
+- **Done:** M4.8b, b2, b3 (decisions 242-258) and M4.8c1 (decisions 259-269): `@resource`,
+  `Resource(name)`, `@cluster.cleanup`, `uses=`, the `requirement` edge, `Dag.resources`, the
+  master's validation, `docs/02-dags/16-resources.md`. See PROJECT.md's "Built (M4.8c1" entry.
+  Only parsing: the master doesn't run a resource as one yet, and the page says so; remove that
+  note in M4.8c2.
+- **Decisions the user added late:** 266 what follows a group waits for the cleanups in it, unless
+  it or anything after it uses the resource, `blocking=False` to opt out; 267 one cleanup per
+  resource wherever imported; 268 `@cluster.cleanup` as a method; 269 generators for connections,
+  two functions for resources.
+- **Next: M4.8c2** (master's state, cleanup, run result), then M4.8d, M4.8e (caps and rail UI),
+  M4.8z (chaos scenarios, nightly `stress.yml`). Flow per step: finish, Codex review (Sol, high;
+  also the security review until Grok's reset, Friday 9:00), docs by Codex (terra, medium),
+  `make check`, `make docs`, commit, push, remove worktree, branch and env; stop on decisions.
+- **For c2:** `Dag.resources[].users` is what the cleanup waits for: those edges aren't in
+  `Dag.edges`. A requirement edge can only stop a task, never enable it
+  (`crates/schedr-master/src/progress.rs` around 421 and 458 must learn this; `may_skip` and
+  `check_nones` in `_build.py` already did). `RunIf` has no "all done", so the master gates the
+  cleanup itself. An order edge from a cleanup (decision 266): a failed cleanup gives
+  `upstream_failed`. Run cancel keeps resource cleanups. `run_dag` and `schedr dags test` run the
+  example today only as ordinary tasks.
+- **Open, asked 2026-11-05, unanswered at the commit (recommendations in brackets):** clearing a
+  user after the cleanup ended (refused; clearing the setup reruns users and cleanup); a run keeping
+  its `max_active_runs` slot until its cleanups end (yes, `blocking=False` too); `CommandCleanup`
+  after decision 268 (`cluster.cleanup_command([...])`, `cluster.cleanup_script(job=...)`).
+  Claude's small call for M4.8e: `blocking=False` as a dashed link.
+- **Codex:** weekly 24%, 5 h 36%.
+
 ## State (2026-11-04, end of day): M4.7e committed; stopped for the day
 
 - **M4.7e** (decisions 207-211, the user's): connections in the web UI. A Connections page
@@ -487,4 +516,4 @@ the morning, listed below.
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
 
 Resume this session with:
-claude --resume ec69d40f-647d-4828-9fde-d55c783202ee
+claude --resume 7a3fe1e5-0fb5-48ce-a52a-5f177878911e

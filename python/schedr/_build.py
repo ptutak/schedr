@@ -35,6 +35,7 @@ from schedr._model import (
     PythonKind,
     Reference,
     RefValue,
+    Resource,
     ScalarType,
     SecretDecl,
     SecretRef,
@@ -150,6 +151,7 @@ class TaskOptions:
     cleanup_retries: int | None = None
     cleanup_retry_delay: timedelta | None = None
     cleanup_anywhere: bool | None = None
+    uses: tuple[object, ...] | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -193,6 +195,7 @@ class TaskOptions:
             cleanup_anywhere=(
                 base.cleanup_anywhere if self.cleanup_anywhere is None else self.cleanup_anywhere
             ),
+            uses=base.uses if self.uses is None else self.uses,
         )
 
     def cleanup_set(self) -> str | None:
@@ -340,6 +343,41 @@ class GroupScope:
     dag: DagBuilder | None = field(default=None, compare=False, repr=False)
 
 
+class DeclaredResource(Protocol):
+    """A resource as declared, its two parts settled when the DAG is complete."""
+
+    @property
+    def blocking(self) -> bool:
+        """Whether what follows the resource's group waits for its cleanup."""
+        ...
+
+    def finish(self, builder: DagBuilder, setup: str) -> str:
+        """Adds its cleanup to the DAG.
+
+        Args:
+            builder: The DAG.
+            setup: Its setup task.
+
+        Returns:
+            The cleanup task's ID.
+        """
+        ...
+
+
+def _leads_to(following: Mapping[str, set[str]], start: str, goal: str) -> bool:
+    """Whether a path of ``following`` goes from a task to another, or it is that task."""
+    seen = {start}
+    waiting = [start]
+    while waiting:
+        at = waiting.pop()
+        if at == goal:
+            return True
+        fresh = following.get(at, set()) - seen
+        seen |= fresh
+        waiting.extend(fresh)
+    return False
+
+
 class DagBuilder:
     """The tasks and edges of the DAG being defined."""
 
@@ -356,6 +394,10 @@ class DagBuilder:
         self.edges: list[Edge] = []
         self.functions: dict[str, Callable[..., Any]] = {}
         self.cleanups: dict[str, Callable[..., Any]] = {}
+        # Resources by their setup task, and what each task's `uses=` names: both settled once
+        # the DAG is complete, for a cleanup or a setup may come after its users.
+        self.resources: dict[str, DeclaredResource] = {}
+        self.uses: dict[str, tuple[object, ...]] = {}
         self.outcomes: dict[str, OutcomeSpec] = {}
         self.outcome_types: dict[str, dict[str, TypeDesc]] = {}
         # Arguments that take a reference, checked once the DAG is complete (check_nones).
@@ -368,6 +410,8 @@ class DagBuilder:
         # Dependencies on groups, made once the DAG is complete (`make_group_dependencies`),
         # each with where it was written (`file:line`, for its errors).
         self.group_dependencies: list[tuple[object, object, str, str]] = []
+        # Who follows a group, for the cleanups in it to hold (`wait_for_cleanups`).
+        self.after_groups: list[tuple[GroupScope, str]] = []
         # The run parameters it takes (`Dag(params=...)`): their class and type, for
         # `dag_ctx.params` references.
         self.params_class: type | None = None
@@ -513,7 +557,10 @@ class DagBuilder:
         downs = task_ids_of(downstream, what, upstream=False)
         for item in ups:
             on = tuple(getattr(item, "_schedr_on", ()))
-            group_end = isinstance(getattr(item, "_schedr_group", None), GroupScope)
+            scope = getattr(item, "_schedr_group", None)
+            group_end = isinstance(scope, GroupScope)
+            if isinstance(scope, GroupScope):
+                self.after_groups.extend((scope, down) for down in downs)
             for up in task_ids_of(item, what):
                 for down in downs:
                     self.add_edge(up, down, EdgeKind.ORDER, on, plain=group_end)
@@ -563,6 +610,8 @@ class DagBuilder:
             for group in self.open_groups:
                 group.members.append(task_id)
         resolved = options.over(self.defaults)
+        if resolved.uses:
+            self.uses[task_id] = resolved.uses
         settings = resolved.settings()
         self.tasks[task_id] = Task(
             task_id,
@@ -580,6 +629,119 @@ class DagBuilder:
             self.mapped.add(task_id)
         self.outcomes[task_id] = outcomes
         self.outcome_types[task_id] = dict(outcome_types or {})
+
+    def refuse_second_setup(self, setup: str, declared: DeclaredResource) -> None:
+        """Refuses a resource already set up in the DAG (decision 223).
+
+        Args:
+            setup: The setup task about to be added.
+            declared: The resource.
+
+        Raises:
+            TypeError: For a resource set up twice in the DAG.
+        """
+        for task_id, known in self.resources.items():
+            if known is declared:
+                raise TypeError(
+                    f"resource `{task_id}`: a setup runs once in a DAG, and this one is called "
+                    f"again as `{setup}`"
+                )
+
+    def add_resource(self, setup: str, declared: DeclaredResource) -> None:
+        """Records a resource whose setup is in the DAG, for its cleanup and users at the end.
+
+        Args:
+            setup: Its setup task.
+            declared: The resource.
+        """
+        self.resources[setup] = declared
+
+    def resource_setup(self, used: object, where: str) -> str:
+        """The setup task of what ``uses=`` names.
+
+        Args:
+            used: A resource, or the output of its setup.
+            where: The user, for the message.
+
+        Returns:
+            Its setup's ID.
+
+        Raises:
+            TypeError: For anything else, or a resource not set up in this DAG.
+        """
+        for task_id, known in self.resources.items():
+            if known is getattr(used, "_schedr_resource", None):
+                return task_id
+        output_of: object = getattr(used, "_schedr_task_id", None)
+        if isinstance(output_of, str) and output_of in self.resources:
+            return output_of
+        name = getattr(used, "__name__", None) or repr(used)
+        if hasattr(used, "_schedr_resource"):
+            raise TypeError(f"{where}: `uses=`: resource `{name}` isn't set up in this DAG")
+        raise TypeError(f"{where}: `uses=` takes resources, got {name}")
+
+    def finish_resources(self) -> list[Resource]:
+        """Adds each resource's cleanup and the requirement edges to its users.
+
+        Returns:
+            The resources in DAG JSON.
+
+        Raises:
+            TypeError: For what ``uses=`` can't name, or a cleanup that doesn't fit its resource.
+        """
+        for task_id, uses in self.uses.items():
+            for used in uses:
+                setup = self.resource_setup(used, f"task `{task_id}`")
+                if setup != task_id:
+                    self.add_edge(setup, task_id, EdgeKind.REQUIREMENT, plain=True)
+        finished = []
+        for setup, declared in self.resources.items():
+            cleanup = declared.finish(self, setup)
+            # Shown in its setup's group, but no member: the group's ends stay its work, and
+            # `wait_for_cleanups` adds who follows the group (decision 266).
+            self.tasks[cleanup] = dataclasses.replace(
+                self.tasks[cleanup], group=self.tasks[setup].group
+            )
+            users = [
+                edge.to
+                for edge in self.edges
+                if edge.from_ == setup
+                and edge.to != cleanup
+                and edge.kind in (EdgeKind.DATA, EdgeKind.REQUIREMENT)
+            ]
+            users = list(dict.fromkeys(users))
+            if not users:
+                warnings.warn(
+                    DagHint(f"resource `{setup}` has no users: its cleanup runs right after it"),
+                    stacklevel=4,
+                )
+            finished.append(Resource(setup, cleanup, tuple(users)))
+        return finished
+
+    def wait_for_cleanups(self, resources: Sequence[Resource]) -> None:
+        """Makes what follows a group wait for the cleanups in it (decision 266).
+
+        Not a cleanup marked ``blocking=False``, nor one that would then wait for itself: a
+        task that uses the resource, or comes before one that does, needs it still there.
+
+        Args:
+            resources: The DAG's resources, with their users.
+        """
+        following: dict[str, set[str]] = {}
+        for edge in self.edges:
+            following.setdefault(edge.from_, set()).add(edge.to)
+        for resource in resources:
+            for user in resource.users:
+                following.setdefault(user, set()).add(resource.cleanup)
+        for scope, task_id in self.after_groups:
+            for resource in resources:
+                if (
+                    resource.setup in scope.members
+                    and self.resources[resource.setup].blocking
+                    and not _leads_to(following, task_id, resource.cleanup)
+                ):
+                    self.add_edge(resource.cleanup, task_id, EdgeKind.ORDER, plain=True)
+                    following.setdefault(resource.cleanup, set()).add(task_id)
 
     def add_edge(
         self, from_: str, to: str, kind: EdgeKind, on: tuple[str, ...] = (), *, plain: bool = False
@@ -646,14 +808,19 @@ class DagBuilder:
                 incoming = [e for e in self.edges if e.to == task_id]
                 if task_id in skippable or not incoming:
                     continue
+                # A requirement never lets a task run: it can only stop it, whatever the rule.
+                enabling = [e for e in incoming if e.kind != EdgeKind.REQUIREMENT]
+                stopped = any(
+                    e.kind == EdgeKind.REQUIREMENT and e.from_ in skippable for e in incoming
+                )
                 not_taken = [
                     self.narrows(e.from_, e.on)
                     or e.kind == EdgeKind.SELECTION
                     or e.from_ in skippable
-                    for e in incoming
+                    for e in enabling
                 ]
                 every = task.settings.run_if == RunIf.NONE_FAILED
-                if all(not_taken) if every else any(not_taken):
+                if stopped or (enabling and (all(not_taken) if every else any(not_taken))):
                     skippable.add(task_id)
                     changed = True
         return skippable
@@ -682,8 +849,17 @@ class DagBuilder:
             on = tuple(reference.on) if isinstance(reference, OutputRef) else ()
             if not (self.narrows(reference.task, on) or reference.task in skippable):
                 continue
+            # A skipped setup stops its user: the value is there whenever the task runs.
+            if not self.narrows(reference.task, on) and any(
+                e.from_ == reference.task and e.to == task_id and e.kind == EdgeKind.REQUIREMENT
+                for e in self.edges
+            ):
+                continue
             own = (reference.task, on)
-            if not any(e.to == task_id and (e.from_, e.on) != own for e in self.edges):
+            if not any(
+                e.to == task_id and (e.from_, e.on) != own and e.kind != EdgeKind.REQUIREMENT
+                for e in self.edges
+            ):
                 continue
             if not is_assignable(ScalarType("none"), expected):
                 raise TypeError(

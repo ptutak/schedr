@@ -12,7 +12,7 @@ import functools
 import inspect
 import itertools
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
@@ -861,7 +861,8 @@ class TaskFunction[**P, R]:
         cleanup_retries: int | None = None,
         cleanup_retry_delay: timedelta | None = None,
         cleanup_anywhere: bool | None = None,
-    ) -> TaskFunction[P, R]:
+        uses: Sequence[object] | None = None,
+    ) -> Self:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
         Args:
@@ -883,6 +884,7 @@ class TaskFunction[**P, R]:
             cleanup_retries: Overrides how many times a failed cleanup is retried.
             cleanup_retry_delay: Overrides the delay before each cleanup retry.
             cleanup_anywhere: Overrides whether the cleanup may run on another worker.
+            uses: Overrides the resources it needs.
 
         Returns:
             A new task function; this one is unchanged.
@@ -906,14 +908,23 @@ class TaskFunction[**P, R]:
             cleanup_retries=cleanup_retries,
             cleanup_retry_delay=cleanup_retry_delay,
             cleanup_anywhere=cleanup_anywhere,
+            uses=None if uses is None else tuple(uses),
         )
-        return TaskFunction(
-            self._fn,
+        return self._again(
             task_id or self._task_id,
             changes.over(self._options),
-            self._branch,
             self._cleanup if cleanup is None else cleanup,
         )
+
+    def _again(
+        self,
+        task_id: str,
+        options: _build.TaskOptions,
+        cleanup: Callable[..., object] | None,
+    ) -> Self:
+        """The same function with other settings (``.override()``)."""
+        # A subclass gives its own: this is the case of a plain task.
+        return typing.cast("Self", TaskFunction(self._fn, task_id, options, self._branch, cleanup))
 
 
 class PartialTask[**P, R]:
@@ -1115,6 +1126,7 @@ def task(
     cleanup_retries: int | None = None,
     cleanup_retry_delay: timedelta | None = None,
     cleanup_anywhere: bool | None = None,
+    uses: Sequence[object] | None = None,
 ) -> TaskDecorator: ...
 
 
@@ -1140,6 +1152,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
     cleanup_retries: int | None = None,
     cleanup_retry_delay: timedelta | None = None,
     cleanup_anywhere: bool | None = None,
+    uses: Sequence[object] | None = None,
 ) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
@@ -1184,6 +1197,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
         cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost
             (default no: only you know whether it depends on where the task ran).
+        uses: The resources it needs without taking their data (decision 259).
 
     Returns:
         The task function, or a decorator making one.
@@ -1212,6 +1226,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
         cleanup_retries=cleanup_retries,
         cleanup_retry_delay=cleanup_retry_delay,
         cleanup_anywhere=cleanup_anywhere,
+        uses=None if uses is None else tuple(uses),
     )
 
     decorator = TaskDecorator(task_id, options, cleanup)

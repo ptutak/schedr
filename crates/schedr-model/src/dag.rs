@@ -34,6 +34,8 @@ pub enum EdgeKind {
     Order,
     /// From a `@branch` task: taken when the branch chose the downstream task.
     Selection,
+    /// From a resource's setup to a user (`uses=`): it can stop the user, never make it run.
+    Requirement,
 }
 
 /// A dependency: `to` runs after `from`, when `from` ended with one of the outcomes `on`.
@@ -58,6 +60,18 @@ impl Edge {
     pub fn taken_on(&self, outcome: &str) -> bool {
         self.on.is_empty() || self.on.iter().any(|on| on == outcome)
     }
+}
+
+/// A resource: one thing of two parts, each a task of the DAG, both always there (decision 259).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Resource {
+    /// The task that creates it; its ID is the resource's.
+    pub setup: TaskId,
+    /// The task that undoes it, once every user is done.
+    pub cleanup: TaskId,
+    /// The tasks that need it.
+    pub users: Vec<TaskId>,
 }
 
 /// A DAG: its identity, trigger, tasks and dependencies.
@@ -97,6 +111,9 @@ pub struct Dag {
     /// The run parameters it takes (`Dag(params=...)`); none: it takes none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Params>,
+    /// Its resources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<Resource>,
 }
 
 /// The run parameters a DAG takes (`Dag(params=SomeDataclass)`, decision 138).

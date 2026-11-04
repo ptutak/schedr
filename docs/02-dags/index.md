@@ -31,4 +31,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 13-secrets
 14-connections
 15-cleanup
+16-resources
 ```

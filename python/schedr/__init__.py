@@ -19,6 +19,7 @@ from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator
 from schedr.outcomes import DagHint, Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
+from schedr.resources import Resource, resource
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
@@ -49,6 +50,7 @@ __all__ = [
     "Once",
     "Outcome",
     "Output",
+    "Resource",
     "RunIf",
     "SecretError",
     "SecretPrefix",
@@ -63,6 +65,7 @@ __all__ = [
     "dag_ctx",
     "group",
     "on",
+    "resource",
     "secrets",
     "task",
     "task_ctx",

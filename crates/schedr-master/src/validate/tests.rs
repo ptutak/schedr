@@ -254,6 +254,161 @@ fn outputs_are_used_only_along_data_edges() {
     );
 }
 
+/// `extract` as a resource's setup, `load` its user, `drop` its cleanup, changed by `changes`.
+fn resource_problems_of(resource: &Json, edges: &Json) -> Vec<String> {
+    problems(&json!({
+        "tasks": [task("extract", &json!({})), task("load", &json!({})), task("drop", &json!({}))],
+        "edges": edges,
+        "resources": [resource],
+    }))
+}
+
+#[test]
+fn a_resource_joins_its_parts_and_users() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": ["load"]});
+    let edges = json!([
+        edge("extract", "load", "requirement"),
+        edge("extract", "drop", "requirement")
+    ]);
+    assert_eq!(
+        resource_problems_of(&resource, &edges),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_resource_names_tasks_of_the_dag() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": ["nowhere"]});
+    let edges = json!([edge("extract", "drop", "data")]);
+    assert_eq!(
+        resource_problems_of(&resource, &edges),
+        vec![
+            "resource `extract`: `nowhere` isn't a task of the DAG",
+            "resource `extract`: its users and the edges from it differ on `nowhere`",
+        ]
+    );
+}
+
+#[test]
+fn a_task_is_a_part_of_one_resource() {
+    let found = problems(&json!({
+        "resources": [
+            {"setup": "extract", "cleanup": "load", "users": []},
+            {"setup": "extract", "cleanup": "load", "users": []},
+        ],
+        "edges": [edge("extract", "load", "data")],
+    }));
+    assert_eq!(
+        found,
+        vec![
+            "task `extract` is a part of two resources",
+            "task `load` is a part of two resources",
+        ]
+    );
+}
+
+#[test]
+fn a_part_of_a_resource_isnt_its_user() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": ["extract"]});
+    let edges = json!([edge("extract", "drop", "data")]);
+    assert_eq!(
+        resource_problems_of(&resource, &edges),
+        vec!["resource `extract`: a part of it can't be its user"]
+    );
+}
+
+#[test]
+fn a_cleanup_follows_its_setup_along_a_data_or_requirement_edge() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": []});
+    assert_eq!(
+        resource_problems_of(&resource, &json!([edge("extract", "drop", "order")])),
+        vec!["resource `extract`: no data or requirement edge to its cleanup `drop`"]
+    );
+}
+
+#[test]
+fn the_users_and_the_edges_from_the_setup_agree() {
+    let edges = json!([edge("extract", "drop", "data")]);
+    let listed = json!({"setup": "extract", "cleanup": "drop", "users": ["load"]});
+    assert_eq!(
+        resource_problems_of(&listed, &edges),
+        vec!["resource `extract`: its users and the edges from it differ on `load`"]
+    );
+    let edges = json!([
+        edge("extract", "drop", "data"),
+        edge("extract", "load", "requirement")
+    ]);
+    let unlisted = json!({"setup": "extract", "cleanup": "drop", "users": []});
+    assert_eq!(
+        resource_problems_of(&unlisted, &edges),
+        vec!["resource `extract`: its users and the edges from it differ on `load`"]
+    );
+}
+
+#[test]
+fn a_setup_isnt_mapped() {
+    let mut mapped = task("extract", &json!({}));
+    mapped["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
+    let found = problems(&json!({
+        "tasks": [mapped, task("drop", &json!({}))],
+        "edges": [edge("extract", "drop", "requirement")],
+        "resources": [{"setup": "extract", "cleanup": "drop", "users": []}],
+    }));
+    assert!(
+        found.contains(&"resource `extract`: `extract` can't be mapped".to_owned()),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn cleanups_cant_wait_for_each_other() {
+    let found = problems(&json!({
+        "tasks": [
+            task("sa", &json!({})), task("ca", &json!({})),
+            task("sb", &json!({})), task("cb", &json!({})),
+        ],
+        "edges": [
+            edge("sa", "ca", "requirement"), edge("sa", "cb", "requirement"),
+            edge("sb", "cb", "requirement"), edge("sb", "ca", "requirement"),
+        ],
+        "resources": [
+            {"setup": "sa", "cleanup": "ca", "users": ["cb"]},
+            {"setup": "sb", "cleanup": "cb", "users": ["ca"]},
+        ],
+    }));
+    assert_eq!(
+        found,
+        vec!["the tasks `ca`, `cb` depend on each other in a cycle"]
+    );
+}
+
+#[test]
+fn a_user_cant_wait_for_the_cleanup_waiting_for_it() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": ["load"]});
+    let edges = json!([
+        edge("extract", "drop", "requirement"),
+        edge("extract", "load", "requirement"),
+        edge("drop", "load", "order"),
+    ]);
+    assert_eq!(
+        resource_problems_of(&resource, &edges),
+        vec!["the tasks `drop`, `load` depend on each other in a cycle"]
+    );
+}
+
+#[test]
+fn a_task_that_isnt_a_user_may_wait_for_a_cleanup() {
+    let resource = json!({"setup": "extract", "cleanup": "drop", "users": []});
+    let edges = json!([
+        edge("extract", "drop", "requirement"),
+        edge("drop", "load", "order"),
+    ]);
+    assert_eq!(
+        resource_problems_of(&resource, &edges),
+        Vec::<String>::new()
+    );
+}
+
 fn file(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
         path: path.to_owned(),

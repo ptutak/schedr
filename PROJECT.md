@@ -2771,7 +2771,7 @@ permission to create pods.
     function, and sends back the output or a structured error summary; exit code 0 or non-zero.
     Python resource setups (`@resource`) run in this mode too: a setup is a task.
   - `cleanup`: like `task`, for a per-task cleanup (gets the task's inputs and the attempt's
-    handles) or a Python resource cleanup (`@cleanup`, gets the setup's output).
+    handles) or a Python resource cleanup (`@<resource>.cleanup`, gets the setup's output).
   - `watchers`: the worker's **watcher host**, one long-lived asyncio process running every wait
     step and trigger assigned to the worker as coroutines, multiplexed over one socket (see
     Sensors and triggers). The only long-lived runner; the others handle one request and exit.
@@ -6721,7 +6721,7 @@ with Dag("etl", trigger=DAILY):
     def cluster(size: int) -> ClusterInfo:
         return cloud.create_cluster(size)
 
-    @cleanup(cluster)                      # how to clean it up
+    @cluster.cleanup                      # how to clean it up
     def delete_cluster(c: ClusterInfo) -> None:
         cloud.delete_cluster_if_exists(c.cluster_id)
 
@@ -6742,9 +6742,10 @@ with Dag("etl", trigger=DAILY):
 - **`@resource`** marks the setup: an ordinary task (options as for `@task`) whose return value
   is the resource. Its output follows the usual output rules; an outcome union as a setup's
   return type is a parse error for now.
-- **`@cleanup(resource)`** marks the cleanup; it receives **the setup's output** and the run
+- **`@<resource>.cleanup`** marks the cleanup; it receives **the setup's output** and the run
   information, nothing else (no other outputs, no statuses). Options: timeout, retries, retry
-  delay, queue, `secrets`, `connections` (decision 226). Exactly one cleanup per resource (parse error otherwise).
+  delay, queue, `secrets`, `connections` (decision 226). At most one per resource: without one the
+  cleanup is empty (decision 260).
 - **Users:** a task **taking a resource's output** as data is a user (only a resource's output
   counts; not general inference from data flow); a task needing the resource but not its data
   declares **`uses=[cluster]`** (also on operators and groups, not in `TaskDefaults`: too easy
@@ -6757,7 +6758,7 @@ with Dag("etl", trigger=DAILY):
   this, a user skipped by a branch or an untaken `.on()` edge would run under `NoneFailed`
   because the setup succeeded. A **data** edge from the setup (`transform(c)`) stays an
   ordinary edge. Under `AllSucceeded` nothing changes.
-- **Typing:** `@cleanup(cluster)` takes its type from the resource, so mypy checks that the
+- **Typing:** `@cluster.cleanup` takes its type from the resource, so mypy checks that the
   cleanup accepts the setup's return type; parse time checks it too.
 
   ```python
@@ -6786,7 +6787,7 @@ with Dag("etl", trigger=DAILY):
   instances have their own states (see Task assignment: task instance states).
 - **Resources without a value** (a static resource: a fixed lock, a well-known bucket prefix):
   the setup returns `None` (`@resource def lock() -> None`). The cleanup then takes **no
-  parameter** (`@cleanup(lock) def release() -> None`; an overload of `cleanup` for
+  parameter** (`@lock.cleanup def release() -> None`; an overload of `cleanup` for
   `Resource[..., None]` keeps it typed); users declare `uses=[lock]`. No ambiguity with a
   failed setup: the cleanup runs only if the setup succeeded.
 - **A resource without setup code:** `tmp = Resource("tmp-prefix")`; its setup is completed by
@@ -6797,7 +6798,7 @@ with Dag("etl", trigger=DAILY):
   ```python
   tmp = Resource("tmp-prefix")
 
-  @cleanup(tmp)
+  @tmp.cleanup
   def drop_tmp() -> None:
       s3.delete_prefix(f"tmp/{dag_ctx.run.id}/")
 
@@ -6833,7 +6834,7 @@ with Dag("etl", trigger=DAILY):
     `value=`, the resource has no value (type `None`) and nothing is reported.
   - **Users receive the value** (`Output[ClusterInfo]`), not the `ProcessResult` (which stays in
     the log): they can't tell which kind of setup made the resource.
-  - **Cleanup:** `@cleanup(cluster)` (Python, value as a parameter, decoded from the reported
+  - **Cleanup:** `@cluster.cleanup` (Python, value as a parameter, decoded from the reported
     value), **`CommandCleanup(cluster, command=[...])`**, **`ScriptCleanup(cluster, job=...,
     args=[...])`**. Command and script cleanups receive the value **through t-strings**: the
     resource object stands for its value (`t"{cluster.cluster_id}"`, rendered by the agent,
@@ -6906,7 +6907,7 @@ records (a test calls the cleanup itself).
   needs a worker slot. Not chosen: oldest-ready order (a paid cluster runs on behind queued
   work).
 - **226. A resource's cleanup inherits its setup's `secrets` and `connections` and may add its
-  own** (`@cleanup(cluster, secrets=[...])`; a static `Resource("tmp")` has only its own);
+  own** (`@cluster.cleanup( secrets=[...])`; a static `Resource("tmp")` has only its own);
   `queue` defaults to the setup's. A forgotten declaration would surface only when the cleanup
   runs and leak what it should delete. Not chosen: only its own (that risk); only inherited
   (nothing for a resource without setup code).
@@ -6980,6 +6981,68 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
 - **258. The master answers each `Heartbeat` with `HeartbeatAck`,** as it arrives, not behind its
   lock, and not while paused. Heartbeats went one way: a silent network cut showed nowhere. Not
   chosen: HTTP/2 keepalive (under Istio the sidecar answers the ping, so a real cut goes unseen).
+- **259. A resource is not a task with a cleanup: it is one thing of two parts, setup and
+  cleanup, and both always exist.** A task is a set of instructions and may have no cleanup at all,
+  which then runs out of sight; a resource is by definition a setup and its undoing. So the model
+  has resources of their own, each with its two parts, not a task with a flag. Not chosen: a task
+  kind with an optional cleanup.
+- **260. A resource without `@<resource>.cleanup` has an empty cleanup,** there in the graph and the run like
+  any other, finished by the master with a line in its log, no process and no worker. Two cleanups
+  stay a parse error. Replaces "exactly one cleanup per resource". Not chosen: refusing it at parse
+  (the author would write an empty function to say the same).
+- **261. The cleanup is a visible task instance** of kind `resource_cleanup`, ID `<resource>.cleanup`:
+  it reuses attempts, retries, logs, dispatch and the lost-worker path, and shows in the API, the
+  CLI and the graph. A `resource_instances` table holds the resource's state. Not chosen: hidden from
+  task lists; an attempt and dispatch path of its own (most of the dispatcher again).
+- **262. In the graph a resource is two caps joined by a rail:** the setup above its users with a
+  rounded top, the cleanup below with a rounded bottom, one colour, the name on both; the rail a line
+  in the side gutter, on hover or selection at first. Requirement edges reach the cleanup only from
+  the last users. In lists, one row in two parts. The word stays "cleanup". Not chosen: one box (the
+  edges would leave it and come back; no place for it in the layers); bands around the users.
+- **263. A cleanup failed after its last retry fails the run and stays `cleanup_failed`,** shown
+  clearly; a command to retry it comes later. Not chosen: `schedr resources retry` now (reopens a
+  finished run).
+- **264. A paused DAG's resource cleanups still run:** pausing stops new work, not the freeing of
+  what exists (as decision 225). Not chosen: waiting for unpause.
+- **265. M4.8c is two commits:** M4.8c1 the Python API, model and parse rules; M4.8c2 the master's
+  state, the cleanup and the run result. A resource with no users gets a parse warning, its cleanup
+  running right after its setup.
+- **266. What follows a group waits for the cleanups in it:** `g >> after` waits for the cleanup of
+  each resource set up in `g`, by an order edge from the cleanup, unless `after` or anything after
+  it uses that resource: then it keeps the resource alive, and waiting would be a circle. A failed
+  cleanup stops `after` like any failed upstream task (`upstream_failed`). `@res.cleanup(
+  blocking=False)` (default `True`) lets what follows go on, and a failed cleanup then only fails
+  the run. A resource outside any group holds nothing back: a group is how to ask for the wait.
+  The cleanup is shown in its setup's group, but isn't one of the group's ends. Not chosen: nothing
+  ever waits for a cleanup (quiet races with a quota or a check for leftovers; the graph would show
+  the cleanup in a group that doesn't wait for it); an explicit `cluster.cleaned >> after` with no
+  wait by default (more API, and the default surprises). The master's cycle check counts user ->
+  cleanup, so a hand-made DAG can't hang a run. `in_background=`, `detached=`, `wait=` were the
+  other names.
+
+- **267. A resource has one cleanup, wherever it is imported:** like a connection, a resource is
+  shared by the DAGs that import it, and its cleanup is attached to it, not to a DAG. A different
+  cleanup is a different resource.
+
+- **268. The cleanup is a method of its resource:** `@cluster.cleanup`, bare or with options
+  (`@cluster.cleanup(blocking=False)`), on a setup, an override of it and `Resource(name)`. It says
+  what decision 267 says, matches the task ID `cluster.cleanup` and needs no import. Not chosen:
+  `@cleanup(cluster)`, a function of its own, kept nowhere as an alias.
+
+- **269. Generators for one process, two functions across tasks:** a connection stays a generator
+  (open and close in one `with`, sharing their locals, `try/finally` for free); a resource stays a
+  setup and a cleanup, because they are separate tasks, in separate processes, maybe hours apart.
+  Not chosen: a generator `@resource` (it would hold a process for the whole run and lose the
+  cleanup with the worker, or run the code after `yield` with its locals gone); `@conn.close` to
+  match resources (state forced through a return value, for nothing).
+
+- **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
+  tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,
+  users). The cleanup is the task `<setup>.cleanup`, added when the DAG is complete. In skip and
+  None analysis a requirement never lets a task run, it can only stop it. The master checks that
+  a resource's users agree with the edges from its setup, that neither part is mapped, and counts
+  user -> cleanup in its cycle check. A second `@<resource>.cleanup` from the same place is the file imported
+  again and replaces the first; one from elsewhere is refused (decision 267). Only parsing: the master runs a resource from M4.8c2.
 
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before
@@ -7777,14 +7840,14 @@ resources).
 - **`on_kill()`** exists only in custom operators, which aren't supported (see Scope): nothing
   to translate.
 - **Setup / teardown translate onto resources when possible**, the rest is a parse error:
-  `@setup` → `@resource`; `@teardown` / `.as_teardown(setups=s)` → `@cleanup(s)`, receiving the
+  `@setup` → `@resource`; `@teardown` / `.as_teardown(setups=s)` → `@s.cleanup`, receiving the
   setup's output; the tasks between them → users. `all_done_setup_success` is covered by this.
   **Parse errors:** teardowns with tasks downstream of them, teardowns taking other data, a
   teardown for several setups.
 - **A leaf task with `all_done`** (the classic Airflow cleanup task) translates onto a
   `Resource` without setup code, named after the task: **users** = its **direct upstream
   tasks** (exactly what `all_done` waits for; it may run while other parts of the graph still
-  run, as in Airflow); **cleanup** = the task itself (a Python callable → `@cleanup`, a
+  run, as in Airflow); **cleanup** = the task itself (a Python callable → `@<resource>.cleanup`, a
   `BashOperator` → `CommandCleanup`), with the task's `retries`. **Parse errors:** the task has
   downstream tasks; it takes data (e.g. `XComArg`). An `xcom_pull` inside it fails at run time
   ("a cleanup has no upstream outputs").

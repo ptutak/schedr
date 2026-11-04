@@ -265,6 +265,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost
             (default no: only you know whether it depends on where the task ran).
         cleanup_handles: The handle types the attempt may register; default: any.
+        uses: The resources it needs (decision 259).
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
@@ -294,6 +295,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         cleanup_retries: int | None = None,
         cleanup_retry_delay: timedelta | None = None,
         cleanup_anywhere: bool | None = None,
+        uses: Sequence[object] | None = None,
         cleanup_handles: Sequence[str] | None = None,
     ) -> None:
         """Records the command task in the DAG being defined."""
@@ -332,6 +334,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
             cleanup_retries=cleanup_retries,
             cleanup_retry_delay=cleanup_retry_delay,
             cleanup_anywhere=cleanup_anywhere,
+            uses=None if uses is None else tuple(uses),
         )
         _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
         spec = for_command(outcomes, where)
@@ -383,6 +386,7 @@ class EmptyOperator(Operator):
 
     Args:
         task_id: The task's ID.
+        uses: The resources it needs (decision 259).
         run_if: When it completes, from its upstream edges (default ``RunIf.NONE_FAILED``);
             a join of branches that must all succeed takes ``RunIf.ALL_SUCCEEDED``.
 
@@ -390,14 +394,23 @@ class EmptyOperator(Operator):
         RuntimeError: Outside ``with Dag(...)``.
     """
 
-    def __init__(self, task_id: str, *, run_if: RunIf | None = None) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        *,
+        run_if: RunIf | None = None,
+        uses: Sequence[object] | None = None,
+    ) -> None:
         """Records the empty task in the DAG being defined."""
         builder = _build.require_active("EmptyOperator")
         task_id = builder.qualified(task_id)
         self._task_id = task_id
         self._dag = builder
         builder.add_task(
-            task_id, EmptyKind(), ScalarType("none"), _build.TaskOptions(run_if=run_if)
+            task_id,
+            EmptyKind(),
+            ScalarType("none"),
+            _build.TaskOptions(run_if=run_if, uses=None if uses is None else tuple(uses)),
         )
 
     @property

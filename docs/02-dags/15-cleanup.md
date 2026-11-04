@@ -4,6 +4,8 @@ A task can start work outside its own process, such as a warehouse job, or make 
 file. A cleanup removes what the attempt leaves behind, even when schedr stops the task for a
 timeout or cancellation and its own `finally` block cannot run.
 
+For something shared by several tasks, see [Resources](16-resources.md).
+
 ```{literalinclude} ../../examples/docs/cleanup.py
 :language: python
 :caption: examples/docs/cleanup.py

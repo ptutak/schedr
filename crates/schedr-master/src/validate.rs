@@ -84,6 +84,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     secret_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
+    resource_problems(dag, &seen, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
         let names: Vec<String> = cycle.iter().map(|id| format!("`{id}`")).collect();
         problems.push(format!(
@@ -521,6 +522,76 @@ const fn edge_kind_name(kind: EdgeKind) -> &'static str {
         EdgeKind::Data => "data",
         EdgeKind::Order => "order",
         EdgeKind::Selection => "selection",
+        EdgeKind::Requirement => "requirement",
+    }
+}
+
+/// Each resource's parts and users are tasks of the DAG; a task is one resource's part at most.
+fn resource_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String>) {
+    let mut parts = BTreeSet::new();
+    for resource in &dag.resources {
+        for part in [&resource.setup, &resource.cleanup] {
+            if !parts.insert(part) {
+                problems.push(format!("task `{part}` is a part of two resources"));
+            }
+        }
+        for task in [&resource.setup, &resource.cleanup]
+            .into_iter()
+            .chain(&resource.users)
+        {
+            if !tasks.contains(task) {
+                problems.push(format!(
+                    "resource `{}`: `{task}` isn't a task of the DAG",
+                    resource.setup
+                ));
+            }
+        }
+        if resource.users.contains(&resource.setup) || resource.users.contains(&resource.cleanup) {
+            problems.push(format!(
+                "resource `{}`: a part of it can't be its user",
+                resource.setup
+            ));
+        }
+        if !dag.edges.iter().any(|e| {
+            e.from == resource.setup
+                && e.to == resource.cleanup
+                && matches!(e.kind, EdgeKind::Data | EdgeKind::Requirement)
+        }) {
+            problems.push(format!(
+                "resource `{}`: no data or requirement edge to its cleanup `{}`",
+                resource.setup, resource.cleanup
+            ));
+        }
+        // The cleanup waits for `users`: the edges and the list must say the same.
+        let joined: BTreeSet<&TaskId> = dag
+            .edges
+            .iter()
+            .filter(|e| {
+                e.from == resource.setup
+                    && e.to != resource.cleanup
+                    && matches!(e.kind, EdgeKind::Data | EdgeKind::Requirement)
+            })
+            .map(|e| &e.to)
+            .collect();
+        let listed: BTreeSet<&TaskId> = resource
+            .users
+            .iter()
+            .filter(|user| **user != resource.setup && **user != resource.cleanup)
+            .collect();
+        for task in joined.symmetric_difference(&listed) {
+            problems.push(format!(
+                "resource `{}`: its users and the edges from it differ on `{task}`",
+                resource.setup
+            ));
+        }
+        for part in [&resource.setup, &resource.cleanup] {
+            if dag.task(part).is_some_and(|t| t.expand.is_some()) {
+                problems.push(format!(
+                    "resource `{}`: `{part}` can't be mapped",
+                    resource.setup
+                ));
+            }
+        }
     }
 }
 
@@ -557,11 +628,17 @@ fn reference_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<S
 /// The tasks on or behind a cycle, in ID order (Kahn's algorithm leaves them over).
 fn cycle<'a>(dag: &'a Dag, tasks: &BTreeSet<&'a TaskId>) -> Option<Vec<&'a TaskId>> {
     let mut incoming: BTreeMap<&TaskId, usize> = tasks.iter().map(|id| (*id, 0)).collect();
+    // A cleanup waits for its resource's users, with no edge saying so.
+    let waits = dag
+        .resources
+        .iter()
+        .flat_map(|r| r.users.iter().map(move |user| (user, &r.cleanup)));
     let edges: BTreeSet<(&TaskId, &TaskId)> = dag
         .edges
         .iter()
-        .filter(|e| tasks.contains(&e.from) && tasks.contains(&e.to))
         .map(|e| (&e.from, &e.to))
+        .chain(waits)
+        .filter(|(from, to)| tasks.contains(from) && tasks.contains(to))
         .collect();
     for (_, to) in &edges {
         *incoming.entry(to).or_default() += 1;

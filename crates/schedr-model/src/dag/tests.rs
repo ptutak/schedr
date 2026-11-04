@@ -37,6 +37,7 @@ fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
 fn dag() -> Dag {
     Dag {
         params: None,
+        resources: Vec::new(),
         produced_by: SchedrVersion::new(0, 1),
         id: DagId::new("sync").unwrap(),
         location: DagLocation {

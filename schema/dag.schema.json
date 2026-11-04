@@ -160,6 +160,11 @@
           "const": "selection",
           "description": "From a `@branch` task: taken when the branch chose the downstream task.",
           "type": "string"
+        },
+        {
+          "const": "requirement",
+          "description": "From a resource's setup to a user (`uses=`): it can stop the user, never make it run.",
+          "type": "string"
         }
       ]
     },
@@ -465,6 +470,33 @@
           "type": "object"
         }
       ]
+    },
+    "Resource": {
+      "additionalProperties": false,
+      "description": "A resource: one thing of two parts, each a task of the DAG, both always there (decision 259).",
+      "properties": {
+        "cleanup": {
+          "$ref": "#/$defs/TaskId",
+          "description": "The task that undoes it, once every user is done."
+        },
+        "setup": {
+          "$ref": "#/$defs/TaskId",
+          "description": "The task that creates it; its ID is the resource's."
+        },
+        "users": {
+          "description": "The tasks that need it.",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "setup",
+        "cleanup",
+        "users"
+      ],
+      "type": "object"
     },
     "RunIf": {
       "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\nPROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
@@ -1627,6 +1659,13 @@
     "produced_by": {
       "$ref": "#/$defs/SchedrVersion",
       "description": "The schedr version whose runner produced this JSON."
+    },
+    "resources": {
+      "description": "Its resources.",
+      "items": {
+        "$ref": "#/$defs/Resource"
+      },
+      "type": "array"
     },
     "tags": {
       "description": "Tags shown in the UI and used for filtering.",
