@@ -407,6 +407,8 @@ struct Scripted {
     uploads: Arc<Mutex<Vec<pb::ParseResult>>>,
     /// `FetchInputs` never answers.
     inputs_stuck: bool,
+    /// How long the stream takes to open.
+    answer_after: Duration,
 }
 
 #[tonic::async_trait]
@@ -419,6 +421,7 @@ impl pb::master_server::Master for Scripted {
         request: tonic::Request<tonic::Streaming<pb::WorkerMessage>>,
     ) -> Result<tonic::Response<Self::ControlStream>, tonic::Status> {
         let mut inbound = request.into_inner();
+        tokio::time::sleep(self.answer_after).await;
         let (sender, stream) = mpsc::channel(64);
         for message in self.script.clone() {
             sender.send(Ok(message)).await.unwrap();
@@ -2978,14 +2981,14 @@ async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
 
 #[tokio::test]
 async fn an_answer_older_than_the_lease_starts_no_cleanup() {
-    // A lease of a millisecond: the answer is too late by the time it arrives.
+    // The answer takes longer than the lease it states.
     let mut registered = decided("old-1", pb::AttemptDecision::Continue);
     let Some(master_message::Message::Registered(answer)) = &mut registered.message else {
         panic!("expected a registration")
     };
     answer.timing = Some(pb::Timing {
         heartbeat_interval_ms: 20,
-        lease_timeout_ms: 1,
+        lease_timeout_ms: 20,
         cancel_grace_ms: 1000,
     });
     let started = Instant::now();
@@ -2993,7 +2996,12 @@ async fn an_answer_older_than_the_lease_starts_no_cleanup() {
     let cleanups = Arc::new(Mutex::new(Vec::new()));
     let seen_cleanups = Arc::clone(&cleanups);
     let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
-    against_script_with(2, start, vec![registered], done, |agent| {
+    let master = Scripted {
+        script: vec![registered],
+        answer_after: Duration::from_millis(50),
+        ..Scripted::default()
+    };
+    against_master(2, start, master, done, |agent| {
         agent.executor.cleanups = seen_cleanups;
     })
     .await;
