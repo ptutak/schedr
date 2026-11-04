@@ -38,6 +38,7 @@ fn runner(mode: &str, root: &Path, log: &Path) -> ProcessSpec {
         max_output_size: 64 * 1024,
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
+        output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
     }
 }
 
@@ -244,6 +245,7 @@ const LIMITS: Limits = Limits {
     timeout: Some(Duration::from_secs(30)),
     grace: Duration::from_secs(5),
     interrupt_grace: Duration::from_secs(5),
+    poll: schedr_agent::supervise::STOP_POLL,
 };
 
 #[tokio::test]
@@ -347,6 +349,7 @@ async fn task_mode_stops_a_task_past_its_timeout_or_when_cancelled() {
         timeout: Some(Duration::from_millis(1500)),
         grace: Duration::from_secs(2),
         interrupt_grace: Duration::from_secs(2),
+        poll: schedr_agent::supervise::STOP_POLL,
     };
     let ran = run(
         dir.path(),
@@ -413,11 +416,13 @@ async fn a_cancel_or_timeout_during_the_runners_start_stops_it() {
         max_output_size: 1024,
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
+        output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
     };
     let limits = |timeout| Limits {
         timeout,
         grace: Duration::from_secs(1),
         interrupt_grace: Duration::from_secs(1),
+        poll: schedr_agent::supervise::STOP_POLL,
     };
     for (timeout, cancel, reason) in [
         (None, true, StopReason::Cancelled),
@@ -471,11 +476,13 @@ async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
         max_output_size: 1024,
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
+        output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
     };
     let limits = |timeout| Limits {
         timeout,
         grace: Duration::from_secs(1),
         interrupt_grace: Duration::from_secs(1),
+        poll: schedr_agent::supervise::STOP_POLL,
     };
     let start = async |spec: &ProcessSpec, stops, timeout, inputs| {
         let mut hold = None;
@@ -603,6 +610,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
         code_dir: Some(code.clone()),
         registry: Arc::new(registry.clone()),
         test: Some((name.to_owned(), Duration::from_secs(600))),
+        cancel_grace: schedr_agent::connection_jobs::CANCEL_GRACE,
         attempt_id: format!("connection-test-{name}"),
         deadline: tokio::time::Instant::now() + allowed,
     };

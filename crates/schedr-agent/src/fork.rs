@@ -52,7 +52,7 @@ mod tests;
 pub const PRELOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How long a fork server may take to answer a `fork` request.
-const FORK_ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+pub const FORK_ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The first wait before restarting a fork server that died or couldn't start.
 pub const BACKOFF_FIRST: Duration = Duration::from_secs(1);
@@ -84,14 +84,38 @@ pub fn retried(cause: Cause, failing_for: Duration, window: Duration) -> bool {
     cause == Cause::Import && failing_for < window
 }
 
-/// The wait before the next restart: `previous` doubled up to [`BACKOFF_MAX`], or
-/// [`BACKOFF_FIRST`] again after a server that was up for [`BACKOFF_RESET_AFTER`].
-#[must_use]
-pub fn next_backoff(previous: Duration, up_for: Option<Duration>) -> Duration {
-    if up_for.is_some_and(|up| up >= BACKOFF_RESET_AFTER) {
-        BACKOFF_FIRST
-    } else {
-        (previous * 2).min(BACKOFF_MAX)
+/// How a fork server's restarts are spaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkBackoff {
+    /// The first wait (`fork_backoff_first`).
+    pub first: Duration,
+    /// The longest (`fork_backoff_max`).
+    pub max: Duration,
+    /// A server up for this long starts them over (`fork_backoff_reset_after`).
+    pub reset_after: Duration,
+}
+
+impl Default for ForkBackoff {
+    /// [`BACKOFF_FIRST`], [`BACKOFF_MAX`], [`BACKOFF_RESET_AFTER`].
+    fn default() -> Self {
+        Self {
+            first: BACKOFF_FIRST,
+            max: BACKOFF_MAX,
+            reset_after: BACKOFF_RESET_AFTER,
+        }
+    }
+}
+
+impl ForkBackoff {
+    /// The wait before the next restart: `previous` doubled up to `max`, or `first` again after
+    /// a server that was up for `reset_after`.
+    #[must_use]
+    pub fn next(&self, previous: Duration, up_for: Option<Duration>) -> Duration {
+        if up_for.is_some_and(|up| up >= self.reset_after) {
+            self.first
+        } else {
+            (previous * 2).min(self.max)
+        }
     }
 }
 
@@ -280,6 +304,8 @@ impl Server {
 pub struct ForkServers {
     servers: Arc<Vec<Server>>,
     warnings: watch::Receiver<Vec<pb::WorkerWarning>>,
+    /// How long a server may take to answer a request.
+    answer_timeout: Duration,
 }
 
 /// An interpreter's fork server settings (`[interpreters.<name>]` with `fork_server = true`).
@@ -306,8 +332,8 @@ pub struct ForkSetup {
     pub preload: Vec<String>,
     /// How long a failing import is retried (`[worker] fork_server_import_retry`).
     pub import_retry: Duration,
-    /// How long it may take to preload (`[worker] fork_server_preload_timeout`).
-    pub preload_timeout: Duration,
+    /// How long what it does may take.
+    pub timeouts: crate::attempt::WorkerTimeouts,
 }
 
 impl ForkServers {
@@ -342,13 +368,14 @@ impl ForkServers {
             max_output_size: 64 * 1024,
             mask: crate::mask::Mask::default(),
             start_timeout: setup.timeouts.runner_start,
+            output_drain: setup.timeouts.output_drain,
         };
         let setup = ForkSetup {
             interpreter: config.interpreter.clone(),
             process,
             preload: config.preload.clone(),
             import_retry: config.import_retry,
-            preload_timeout: setup.timeouts.fork_preload,
+            timeouts: setup.timeouts,
         };
         Some(Self::start(&setup, metrics))
     }
@@ -391,7 +418,7 @@ impl ForkServers {
             process.log_file = process
                 .log_file
                 .with_file_name(format!("fork-server-{}.log", kind.label()));
-            let preload_timeout = setup.preload_timeout;
+            let timeouts = setup.timeouts;
             let retry = setup.import_retry;
             tokio::spawn(keep_up(
                 Arc::downgrade(&servers),
@@ -399,12 +426,14 @@ impl ForkServers {
                 process,
                 preload,
                 retry,
-                preload_timeout,
+                timeouts.fork_backoff,
+                timeouts.fork_preload,
             ));
         }
         Self {
             servers,
             warnings: watching,
+            answer_timeout: setup.timeouts.fork_answer,
         }
     }
 
@@ -445,7 +474,7 @@ impl ForkServers {
             .iter()
             .filter(|server| preload || server.kind == Kind::Bare);
         for server in tried {
-            match fork_on(server, spec, mode).await {
+            match fork_on(server, spec, mode, self.answer_timeout).await {
                 Ok(forked) => return Ok(forked),
                 Err(fallback) => {
                     server
@@ -473,9 +502,10 @@ async fn keep_up(
     process: ProcessSpec,
     preload: Vec<String>,
     import_retry: Duration,
+    spacing: ForkBackoff,
     preload_timeout: Duration,
 ) {
-    let mut backoff = BACKOFF_FIRST / 2;
+    let mut backoff = spacing.first / 2;
     // Since when its preload has been failing, and the reason last logged.
     let mut failing: Option<(Instant, String)> = None;
     loop {
@@ -547,7 +577,7 @@ async fn keep_up(
                 None
             }
         };
-        backoff = next_backoff(backoff, up_for);
+        backoff = spacing.next(backoff, up_for);
         tokio::time::sleep(backoff).await;
     }
 }
@@ -632,6 +662,7 @@ async fn fork_on(
     server: &Server,
     spec: &ProcessSpec,
     mode: RunnerMode,
+    answer_timeout: Duration,
 ) -> Result<Forked, Fallback> {
     let io = |_| Fallback::ForkFailed;
     let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(io)?;
@@ -681,7 +712,7 @@ async fn fork_on(
                 "the request couldn't be sent",
             ));
         }
-        let answer = tokio::time::timeout(FORK_ANSWER_TIMEOUT, read_message(control)).await;
+        let answer = tokio::time::timeout(answer_timeout, read_message(control)).await;
         if let State::Up { asking, .. } = &mut *state {
             *asking = false;
         }

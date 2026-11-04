@@ -121,17 +121,18 @@ pub fn sweep(
     Ok(swept)
 }
 
-/// Sweeps now and every [`SWEEP_INTERVAL`] until `stop` completes, recording the bytes kept
+/// Sweeps now and every `interval` until `stop` completes, recording the bytes kept
 /// and deleted in `metrics`.
 pub async fn sweep_logs(
     log_dir: PathBuf,
     journal: Journal,
     retention: LogRetention,
     metrics: AgentMetrics,
+    interval: Duration,
     stop: impl Future<Output = ()>,
 ) {
     tokio::pin!(stop);
-    let mut tick = tokio::time::interval(SWEEP_INTERVAL);
+    let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {

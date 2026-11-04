@@ -96,7 +96,16 @@ impl ApiState {
     #[must_use]
     pub fn with_refresh(self, interval: std::time::Duration) -> Self {
         Self {
-            feed: Feed::new(self.db.clone()).with_refresh(interval),
+            feed: self.feed.clone().with_refresh(interval),
+            ..self
+        }
+    }
+
+    /// This state following the database's changes as `timings` say.
+    #[must_use]
+    pub fn with_event_timings(self, timings: crate::events::EventTimings) -> Self {
+        Self {
+            feed: self.feed.clone().with_timings(timings),
             ..self
         }
     }

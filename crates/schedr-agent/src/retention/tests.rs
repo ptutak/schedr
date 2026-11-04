@@ -137,6 +137,7 @@ async fn sweep_logs_sweeps_at_once_and_stops() {
         journal,
         retention,
         metrics.clone(),
+        SWEEP_INTERVAL,
         tokio::time::sleep(Duration::from_millis(300)),
     )
     .await;

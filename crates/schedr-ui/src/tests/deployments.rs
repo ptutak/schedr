@@ -396,6 +396,7 @@ async fn no_secret_a_node_sent_in_clear_is_shown() {
     let app = router(Ui {
         deployments: vec![deployment("etl", with_deployment(view))],
         docs_dir: None,
+        timings: crate::live::UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: json!({"ui": {"deployments": [{"url": "https://u:hunter2@etl:8443"}]}}),
         process_id: String::new(),

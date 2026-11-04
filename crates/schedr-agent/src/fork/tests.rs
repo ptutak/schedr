@@ -11,7 +11,7 @@ fn the_backoff_doubles_up_to_its_cap() {
     let mut backoff = BACKOFF_FIRST / 2;
     let mut waits = Vec::new();
     for _ in 0..12 {
-        backoff = next_backoff(backoff, None);
+        backoff = ForkBackoff::default().next(backoff, None);
         waits.push(backoff.as_secs());
     }
     assert_eq!(waits, [1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]);
@@ -21,9 +21,12 @@ fn the_backoff_doubles_up_to_its_cap() {
 fn a_server_up_long_enough_starts_the_backoff_again() {
     let long = Some(BACKOFF_RESET_AFTER);
     let short = BACKOFF_RESET_AFTER.checked_sub(Duration::from_secs(1));
-    assert_eq!(next_backoff(BACKOFF_MAX, long), BACKOFF_FIRST);
     assert_eq!(
-        next_backoff(Duration::from_secs(8), short),
+        ForkBackoff::default().next(BACKOFF_MAX, long),
+        BACKOFF_FIRST
+    );
+    assert_eq!(
+        ForkBackoff::default().next(Duration::from_secs(8), short),
         Duration::from_secs(16)
     );
 }

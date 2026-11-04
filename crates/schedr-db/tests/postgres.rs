@@ -826,7 +826,11 @@ async fn a_new_command_notifies_the_listener() {
 async fn writes_announce_what_changed_once_per_run_dag_and_the_workers() {
     use schedr_db::changes::Change;
     let (db, version) = with_dag().await;
-    let mut changes = db.changes().await.unwrap().expect("Postgres listens");
+    let mut changes = db
+        .changes(schedr_db::changes::POLL_INTERVAL)
+        .await
+        .unwrap()
+        .expect("Postgres listens");
     let run_id = db
         .insert_run(&run(
             &version,
@@ -880,7 +884,11 @@ async fn the_switch_disables_and_enables_the_change_triggers() {
         "on after the migration"
     );
     assert!(!db.set_change_notifications(true).await.unwrap());
-    let mut changes = db.changes().await.unwrap().expect("Postgres listens");
+    let mut changes = db
+        .changes(schedr_db::changes::POLL_INTERVAL)
+        .await
+        .unwrap()
+        .expect("Postgres listens");
     assert!(db.set_change_notifications(false).await.unwrap());
     assert!(!db.change_notifications().await.unwrap());
     db.insert_run(&run(

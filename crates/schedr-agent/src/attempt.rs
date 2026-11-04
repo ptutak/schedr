@@ -218,15 +218,58 @@ pub struct WorkerTimeouts {
     pub fork_preload: Duration,
     /// One try of a cleanup that sets no timeout of its own (`cleanup_timeout`).
     pub cleanup: Duration,
+    /// How long a stopped process's output may take to reach its log (`output_drain_timeout`).
+    pub output_drain: Duration,
+    /// How long a fork server may take to answer a request (`fork_answer_timeout`).
+    pub fork_answer: Duration,
+    /// How a fork server's restarts are spaced.
+    pub fork_backoff: crate::fork::ForkBackoff,
+    /// How often old logs are swept (`log_sweep_interval`).
+    pub log_sweep: Duration,
+    /// How an orphan is stopped.
+    pub orphan: crate::journal::OrphanWaits,
+    /// How long an orphan gets to end on SIGTERM (`orphan_grace`).
+    pub orphan_grace: Duration,
+    /// The first wait after the master connection drops (`reconnect_backoff_first`).
+    pub reconnect_first: Duration,
+    /// The longest one (`reconnect_backoff_max`).
+    pub reconnect_max: Duration,
+    /// How often the event loop turns at least, however quiet (`alive_interval`).
+    pub alive: Duration,
+    /// How long deregistering may take (`deregister_wait`).
+    pub deregister: Duration,
+    /// How often a drain looks at its state (`drain_tick`).
+    pub drain_tick: Duration,
+    /// How often a stopped process's group is looked at (`stop_poll`).
+    pub stop_poll: Duration,
+    /// How long a connection test's process gets from SIGTERM to SIGKILL
+    /// (`connection_job_cancel_grace`).
+    pub connection_cancel_grace: Duration,
+    /// How long the log endpoint waits after a failed accept (`accept_retry`).
+    pub accept_retry: Duration,
 }
 
 impl Default for WorkerTimeouts {
-    /// 30 s for a runner, 5 minutes for preloading and for a cleanup's try.
+    /// What every worker runs with.
     fn default() -> Self {
         Self {
             runner_start: crate::launch::RUNNER_START_TIMEOUT,
             fork_preload: crate::fork::PRELOAD_TIMEOUT,
             cleanup: Duration::from_mins(5),
+            output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
+            fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,
+            fork_backoff: crate::fork::ForkBackoff::default(),
+            log_sweep: crate::retention::SWEEP_INTERVAL,
+            orphan: crate::journal::OrphanWaits::default(),
+            orphan_grace: crate::agent::ORPHAN_GRACE,
+            reconnect_first: crate::agent::FIRST_BACKOFF,
+            reconnect_max: crate::agent::MAX_BACKOFF,
+            alive: crate::agent::ALIVE_INTERVAL,
+            deregister: crate::agent::DEREGISTER_WAIT,
+            drain_tick: crate::agent::DRAIN_TICK,
+            stop_poll: crate::supervise::STOP_POLL,
+            connection_cancel_grace: crate::connection_jobs::CANCEL_GRACE,
+            accept_retry: Duration::from_millis(100),
         }
     }
 }
@@ -374,6 +417,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     max_output_size,
                     mask: spec.mask.clone(),
                     start_timeout: setup.timeouts.runner_start,
+                    output_drain: setup.timeouts.output_drain,
                 },
                 request: Box::new(TaskRequest {
                     dag_file: DagFile {
@@ -433,6 +477,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                 max_output_size,
                 mask: spec.mask.clone(),
                 start_timeout: setup.timeouts.runner_start,
+                output_drain: setup.timeouts.output_drain,
             }))
         }
         TaskKind::Empty => Err(NotRun::Rejected {

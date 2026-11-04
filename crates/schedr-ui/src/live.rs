@@ -36,6 +36,37 @@ use crate::{Ui, ansi};
 #[cfg(test)]
 mod tests;
 
+/// How the live pages are paced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiTimings {
+    /// How often a stream gets a `ping` (`keep_alive`).
+    pub keep_alive: Duration,
+    /// A stream sends at most one `change` this often (`coalesce`).
+    pub coalesce: Duration,
+    /// How often the log tail reads the log (`tail_interval`).
+    pub tail_interval: Duration,
+    /// How long it tries a log out of reach (`tail_give_up`).
+    pub tail_give_up: Duration,
+    /// The first wait before a relay opens its stream again (`relay_retry_first`).
+    pub retry_first: Duration,
+    /// The longest one (`relay_retry_max`).
+    pub retry_max: Duration,
+}
+
+impl Default for UiTimings {
+    /// What every UI runs with.
+    fn default() -> Self {
+        Self {
+            keep_alive: KEEP_ALIVE,
+            coalesce: COALESCE,
+            tail_interval: TAIL_INTERVAL,
+            tail_give_up: TAIL_GIVE_UP,
+            retry_first: RETRY_FIRST,
+            retry_max: RETRY_MAX,
+        }
+    }
+}
+
 /// How often a page's stream gets a `ping` (and the log tail a comment).
 pub const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
@@ -157,7 +188,8 @@ async fn relay<T: Transport + Send + Sync>(
     changed: Arc<AtomicI64>,
 ) {
     let deployment = &ui.deployments[index];
-    let mut wait = RETRY_FIRST;
+    let timings = ui.timings;
+    let mut wait = timings.retry_first;
     let mut lost = false;
     loop {
         match deployment.client.events().await {
@@ -166,7 +198,7 @@ async fn relay<T: Transport + Send + Sync>(
                     changed.store(now_millis(), Ordering::Relaxed);
                     let _ = sender.send(Change::Refresh);
                 }
-                wait = RETRY_FIRST;
+                wait = timings.retry_first;
                 while let Some(Ok(event)) = events.next().await {
                     if let Some(change) = Change::of(&event) {
                         changed.store(now_millis(), Ordering::Relaxed);
@@ -185,7 +217,7 @@ async fn relay<T: Transport + Send + Sync>(
         }
         lost = true;
         tokio::time::sleep(wait).await;
-        wait = (wait * 2).min(RETRY_MAX);
+        wait = (wait * 2).min(timings.retry_max);
     }
 }
 
@@ -248,9 +280,10 @@ pub async fn events<T: Transport + Send + Sync + 'static>(
             (changes, missed),
             sender.clone(),
             deployment.name.clone(),
+            ui.timings,
         ));
     }
-    streamed(receiver)
+    streamed(receiver, ui.timings.keep_alive)
 }
 
 /// Hands one deployment's changes to a browser's stream until it goes away: a change at once,
@@ -260,6 +293,7 @@ async fn forward(
     (mut changes, missed): (broadcast::Receiver<Change>, bool),
     sender: mpsc::Sender<Result<Event, Infallible>>,
     deployment: String,
+    timings: UiTimings,
 ) {
     // When each change (still held back, or not) was last sent.
     let mut sent: Vec<(Change, tokio::time::Instant)> = Vec::new();
@@ -268,10 +302,13 @@ async fn forward(
     if missed {
         held.push(Change::Refresh);
     }
-    let mut pings = tokio::time::interval_at(tokio::time::Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
+    let mut pings = tokio::time::interval_at(
+        tokio::time::Instant::now() + timings.keep_alive,
+        timings.keep_alive,
+    );
     loop {
         let now = tokio::time::Instant::now();
-        sent.retain(|(_, at)| now.duration_since(*at) < COALESCE);
+        sent.retain(|(_, at)| now.duration_since(*at) < timings.coalesce);
         // Those held back whose time is up, and when the next one's is.
         let (due, waiting): (Vec<Change>, Vec<Change>) = held
             .drain(..)
@@ -289,7 +326,7 @@ async fn forward(
         let next = held
             .iter()
             .filter_map(|change| sent.iter().find(|(c, _)| c == change))
-            .map(|(_, at)| *at + COALESCE)
+            .map(|(_, at)| *at + timings.coalesce)
             .min();
         let ping = tokio::select! {
             () = sender.closed() => return,
@@ -325,10 +362,10 @@ fn now_millis() -> i64 {
 
 /// `receiver`'s events as a server-sent stream, a comment every [`KEEP_ALIVE`], proxies asked
 /// not to buffer it (`X-Accel-Buffering: no`, nginx's).
-fn streamed(receiver: mpsc::Receiver<Result<Event, Infallible>>) -> Response {
+fn streamed(receiver: mpsc::Receiver<Result<Event, Infallible>>, keep_alive: Duration) -> Response {
     (
         [("x-accel-buffering", "no")],
-        Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)),
+        Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::new().interval(keep_alive)),
     )
         .into_response()
 }
@@ -410,7 +447,7 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
         // Out of reach (the worker, or the webserver): tried again for a while.
         Err(error) => {
             let out = query.out.unwrap_or_else(now_millis);
-            let given = i64::try_from(TAIL_GIVE_UP.as_millis()).unwrap_or(i64::MAX);
+            let given = i64::try_from(ui.timings.tail_give_up.as_millis()).unwrap_or(i64::MAX);
             if now_millis().saturating_sub(out) >= given {
                 (gave_up(&error.to_string()), None)
             } else {
@@ -436,7 +473,7 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
         if let Some(out) = out {
             let _ = write!(url, "&out={out}");
         }
-        body.push_str(&tail_reader(&url, now));
+        body.push_str(&tail_reader(&url, now, ui.timings.tail_interval));
     }
     (
         [
@@ -451,8 +488,8 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
 /// The element reading a log's next part from `url` (with the prefix): in [`TAIL_INTERVAL`],
 /// or at once; again a second after the UI didn't answer (`retry`, sent by the page).
 #[must_use]
-pub fn tail_reader(url: &str, now: bool) -> String {
-    let wait = if now { 0 } else { TAIL_INTERVAL.as_millis() };
+pub fn tail_reader(url: &str, now: bool, interval: Duration) -> String {
+    let wait = if now { 0 } else { interval.as_millis() };
     format!(
         "<span class=\"log-tail\" hx-get=\"{}\" hx-trigger=\"load delay:{wait}ms, retry delay:1s\" \
          hx-target=\"this\" hx-swap=\"outerHTML\" hx-disinherit=\"*\"></span>",

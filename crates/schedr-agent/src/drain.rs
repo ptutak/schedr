@@ -25,6 +25,8 @@ pub struct DrainPeriods {
     pub terminate_period: Duration,
     /// From that SIGKILL to the end of the grace period: reporting and deregistering.
     pub report_period: Duration,
+    /// How long the last results may wait for the master's acknowledgement (`drain_ack_wait`).
+    pub ack_wait: Duration,
 }
 
 impl Default for DrainPeriods {
@@ -34,6 +36,7 @@ impl Default for DrainPeriods {
             grace: Duration::from_secs(30),
             terminate_period: Duration::from_secs(3),
             report_period: Duration::from_secs(2),
+            ack_wait: ACK_WAIT,
         }
     }
 }
@@ -59,6 +62,7 @@ pub struct Drain {
     end: Instant,
     interrupted: bool,
     idle_since: Option<Instant>,
+    ack_wait: Duration,
 }
 
 impl Drain {
@@ -71,6 +75,7 @@ impl Drain {
             end: now + periods.grace,
             interrupted: false,
             idle_since: None,
+            ack_wait: periods.ack_wait,
         }
     }
 
@@ -106,7 +111,7 @@ impl Drain {
             return DrainStep::Finish;
         }
         let idle = *self.idle_since.get_or_insert(now);
-        if now.duration_since(idle) >= ACK_WAIT || now >= self.end {
+        if now.duration_since(idle) >= self.ack_wait || now >= self.end {
             DrainStep::Finish
         } else {
             DrainStep::Wait

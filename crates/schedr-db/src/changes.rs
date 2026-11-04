@@ -78,7 +78,11 @@ pub struct Changes {
 #[derive(Debug)]
 enum Source {
     Listen(PgListener),
-    Poll { db: Database, after: i64 },
+    Poll {
+        db: Database,
+        after: i64,
+        interval: Duration,
+    },
 }
 
 impl Database {
@@ -89,7 +93,7 @@ impl Database {
     /// # Errors
     ///
     /// [`DbError`] if the database can't be reached or checked.
-    pub async fn changes(&self) -> Result<Option<Changes>, DbError> {
+    pub async fn changes(&self, poll: Duration) -> Result<Option<Changes>, DbError> {
         match self.checked_listener().await? {
             Listening::NotPostgres => {
                 const LAST: &str = "SELECT COALESCE(MAX(seq), 0) FROM changes";
@@ -102,6 +106,7 @@ impl Database {
                     source: Source::Poll {
                         db: self.clone(),
                         after,
+                        interval: poll,
                     },
                 }))
             }
@@ -226,8 +231,12 @@ impl Changes {
                 }
                 Ok(changes.into_iter().collect())
             }
-            Source::Poll { db, after } => loop {
-                tokio::time::sleep(POLL_INTERVAL).await;
+            Source::Poll {
+                db,
+                after,
+                interval,
+            } => loop {
+                tokio::time::sleep(*interval).await;
                 let changes = read_after(db, after).await?;
                 if !changes.is_empty() {
                     return Ok(changes);

@@ -19,6 +19,10 @@ use crate::secrets::{AttemptSecrets, SecretError, SecretStores};
 #[cfg(test)]
 mod tests;
 
+/// How long a test's process gets from SIGTERM to SIGKILL, unless `connection_job_cancel_grace`
+/// says.
+pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
+
 /// A connections job, as the master sent it.
 #[derive(Debug, Clone)]
 pub struct ConnectionJob {
@@ -30,6 +34,8 @@ pub struct ConnectionJob {
     pub registry: Arc<Registry>,
     /// A test: the connection, and how long it may take.
     pub test: Option<(String, Duration)>,
+    /// How long a test's process gets from SIGTERM to SIGKILL.
+    pub cancel_grace: Duration,
     /// A test's attempt ID (its folders, its journal record).
     pub attempt_id: String,
     /// When its time is up: an answer comes by then (a test's process stopped).
@@ -150,7 +156,7 @@ pub fn test_spec(
         },
         inputs: std::collections::BTreeMap::new(),
         outcomes: std::collections::BTreeMap::new(),
-        cancel_grace: Duration::from_secs(5),
+        cancel_grace: job.cancel_grace,
         secrets: std::collections::BTreeMap::new(),
         mask: crate::mask::Mask::default(),
         code_dir: job.code_dir.clone(),

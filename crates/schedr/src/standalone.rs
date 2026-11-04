@@ -61,6 +61,14 @@ pub struct Standalone {
     pub logs: SocketAddr,
     /// The ops port's address.
     pub ops: SocketAddr,
+    /// How the users and the UI's token are followed.
+    pub auth_timings: schedr_api::auth::AuthTimings,
+    /// How often its row of the deployment's nodes is written.
+    pub node_heartbeat: Duration,
+    /// How long the worker gets to stop once the master failed: its tasks are interrupted at
+    /// once (nothing could record them), so this is only for a worker stuck on its way out
+    /// (B151).
+    pub worker_stop_after_failure: Duration,
     /// How long a loop may go without turning before liveness fails.
     pub loop_stall_timeout: Duration,
     /// The longest a database query may take.
@@ -149,13 +157,18 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         master: master_settings(config),
         tick: config.timings.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
-        secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env),
+        secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env)
+            .renewing(&config.timings),
         parse_file_timeout: config.dags.parse_file_timeout,
         auth: config.webserver.auth.clone(),
         ui_token_file: config.webserver.ui_token_file.clone(),
         api_timings: crate::roles::ApiTimings::of(config),
         change_notifications: config.database.change_notifications,
+        auth_timings: crate::roles::auth_timings(&config.timings),
+        node_heartbeat: config.timings.node_heartbeat,
+        worker_stop_after_failure: config.timings.worker_stop_after_failure,
         ui: Some(LocalUi {
+            timings: crate::roles::ui_timings(&config.timings),
             docs_dir: docs_dir(config),
         }),
         migrate: false,
@@ -216,12 +229,7 @@ pub async fn run(
     schedr_agent::connection_env::prepare(&setup.agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;
     let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
-    let auth = role_auth(
-        "webserver",
-        &setup.auth,
-        addresses.http,
-        setup.ui_token_file.as_deref(),
-    )?;
+    let auth = standalone_auth(&setup, addresses.http)?;
     listening(addresses);
     let mut agent = setup.agent;
     agent.log_endpoint = format!("http://{}", addresses.logs);
@@ -244,7 +252,8 @@ pub async fn run(
         .await?
         .with_notifications(setup.notifications, setup.notifications_url.clone());
     agent.secrets = setup.secret_storage.for_role(Some(&db))?;
-    let (master_id, problems, heartbeat) = heartbeat(&db, &setup.config, &stopped);
+    let (master_id, problems, heartbeat) =
+        heartbeat(&db, (&setup.config, setup.node_heartbeat), &stopped);
     let leading = lead(
         &db,
         &setup.database_url,
@@ -258,7 +267,7 @@ pub async fn run(
     // The worker's stop requests: the signals', and the master's failure (two at once: its
     // tasks interrupted, nothing could record them).
     let (request, requests) = watch::channel(0);
-    // Once the master failed, the worker gets [`WORKER_STOP_AFTER_FAILURE`] to stop (B151).
+    // Once the master failed, the worker gets `worker_stop_after_failure` to stop (B151).
     let (master_failed, failed) = watch::channel(false);
     let forwarding = tokio::spawn(forward_requests(shutdown, request.clone()));
     // Boxed: the roles' futures are large.
@@ -305,7 +314,8 @@ pub async fn run(
         agent_observed,
         requests,
     ));
-    let worker = worker_then_stop(worker, failed, stop);
+    let given = setup.worker_stop_after_failure;
+    let worker = worker_then_stop(worker, failed, stop, given);
     let (master, api, ()) = tokio::join!(master, api, worker);
     forwarding.abort();
     heartbeat.abort();
@@ -316,25 +326,36 @@ pub async fn run(
     api
 }
 
-/// Runs the worker (given [`WORKER_STOP_AFTER_FAILURE`] once `failed`), then stops the master
+/// Who a standalone's requests are from, by `setup`, on `http`.
+fn standalone_auth(
+    setup: &Standalone,
+    http: SocketAddr,
+) -> Result<schedr_api::auth::Auth, AppError> {
+    role_auth(
+        "webserver",
+        &setup.auth,
+        http,
+        setup.ui_token_file.as_deref(),
+        setup.auth_timings,
+    )
+}
+
+/// Runs the worker (given `given` once `failed`), then stops the master
 /// and the API.
 async fn worker_then_stop(
     worker: impl Future<Output = ()>,
     failed: watch::Receiver<bool>,
     stop: watch::Sender<u32>,
+    given: Duration,
 ) {
-    if !ended_within(worker, failed, WORKER_STOP_AFTER_FAILURE).await {
+    if !ended_within(worker, failed, given).await {
         tracing::error!(
             "the worker didn't stop within {}s of the master's failure: stopping anyway",
-            WORKER_STOP_AFTER_FAILURE.as_secs()
+            given.as_secs()
         );
     }
     let _ = stop.send(1);
 }
-
-/// How long the worker gets to stop once the master failed: its tasks are interrupted at once
-/// (nothing could record them), so this is only for a worker stuck on its way out (B151).
-pub const WORKER_STOP_AFTER_FAILURE: Duration = Duration::from_secs(10);
 
 /// Runs `work` to its end, or until `bound` after `failed` turned true: whether it ended.
 /// `failed` closing without turning true bounds nothing.
@@ -360,7 +381,7 @@ pub async fn ended_within(
 /// writing task.
 fn heartbeat(
     db: &Database,
-    config: &serde_json::Value,
+    (config, beat): (&serde_json::Value, Duration),
     stopped: &watch::Receiver<u32>,
 ) -> (String, Problems, tokio::task::JoinHandle<()>) {
     let problems = Problems::default();
@@ -368,6 +389,7 @@ fn heartbeat(
         master_id: new_master_id(),
         config: config.clone(),
         problems: problems.clone(),
+        heartbeat: beat,
     };
     let master_id = identity.master_id.clone();
     let task = tokio::spawn(heartbeat_master(db.clone(), identity, stopped.clone()));
@@ -508,7 +530,7 @@ pub async fn command(
         setup.ops.set_ip(address);
     }
     let shown = setup.clone();
-    run(
+    Box::pin(run(
         setup,
         |listening| {
             if shown.auth.mode == AuthMode::None
@@ -521,6 +543,6 @@ pub async fn command(
             tracing::info!("{}", memory_text(&shown.agent.setup.memory));
         },
         stop,
-    )
+    ))
     .await
 }

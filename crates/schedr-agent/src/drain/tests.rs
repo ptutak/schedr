@@ -73,6 +73,7 @@ fn the_terminate_and_report_periods_are_configurable() {
         grace: secs(60),
         terminate_period: secs(10),
         report_period: secs(5),
+        ack_wait: ACK_WAIT,
     };
     let mut drain = Drain::new(start, periods);
     assert_eq!(drain.end(), start + secs(60));
@@ -89,6 +90,7 @@ fn periods_of(grace: u64, terminate_period: u64, report_period: u64) -> DrainPer
         grace: secs(grace),
         terminate_period: secs(terminate_period),
         report_period: secs(report_period),
+        ack_wait: ACK_WAIT,
     }
 }
 

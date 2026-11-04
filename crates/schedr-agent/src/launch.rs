@@ -103,7 +103,7 @@ pub async fn start_runner(
             hello_after: starting.elapsed(),
         }),
         Handshake::Said(Err(error)) => {
-            abandon(process).await;
+            abandon(process, spec.output_drain).await;
             Err(error)
         }
         // Without stops, the handshake isn't cut short.
@@ -198,15 +198,15 @@ async fn unless_stopped<T>(
 /// How long a stopped runner's output may take to reach its log. A process it started in a
 /// session of its own outlives the kill and can hold the pipes open; the log is then left
 /// as it is rather than waiting forever.
-const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+pub const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Stops a runner (one that failed to start, or a finished parse session) and waits until
 /// what it printed is in its log (the caller may show it), for at most
-/// [`OUTPUT_DRAIN_TIMEOUT`].
-async fn abandon(mut process: OsProcess) {
+/// `output_drain`.
+async fn abandon(mut process: OsProcess, output_drain: Duration) {
     let _ = process.signal(Signal::Kill);
     let _ = process.wait().await;
-    let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+    let _ = tokio::time::timeout(output_drain, process.output()).await;
 }
 
 /// A task's runner process: spawned, or forked from a fork server.
@@ -324,7 +324,7 @@ async fn start_task_runner(
     };
     let _ = process.signal(Signal::Kill);
     let _ = process.wait().await;
-    let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+    let _ = tokio::time::timeout(spec.output_drain, process.output()).await;
     Err(error)
 }
 
@@ -421,6 +421,7 @@ pub async fn run_python(
     hold: &mut Option<GroupHold>,
     spawned: impl FnOnce(i32, bool),
 ) -> Result<Ran, LaunchError> {
+    let output_drain = process.output_drain;
     let PythonTask {
         request,
         secrets,
@@ -472,7 +473,7 @@ pub async fn run_python(
                 .map_err(LaunchError::Supervise)?;
             let ended = process.ended();
             // A process it started in a session of its own may hold the pipes open.
-            let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+            let _ = tokio::time::timeout(output_drain, process.output()).await;
             return Ok(Ran {
                 supervised,
                 runner_result: None,
@@ -501,7 +502,7 @@ pub async fn run_python(
         tokio::select! {
             conversation = &mut result => (conversation, supervised.await),
             supervised = &mut supervised => {
-                let conversation = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, result)
+                let conversation = tokio::time::timeout(output_drain, result)
                     .await
                     .unwrap_or((None, None));
                 (conversation, supervised)
@@ -605,6 +606,7 @@ pub struct ProcessParseSession {
     hold: Option<GroupHold>,
     seen: SharedSeen,
     budget: Option<u64>,
+    output_drain: Duration,
 }
 
 impl ParseSession for ProcessParseSession {
@@ -628,11 +630,12 @@ impl ParseSession for ProcessParseSession {
             mut process,
             watching,
             hold,
+            output_drain,
             ..
         } = self;
         let _ = process.signal(Signal::Kill);
         let _ = process.wait().await;
-        let _ = tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, process.output()).await;
+        let _ = tokio::time::timeout(output_drain, process.output()).await;
         // The watchdog stops first; then the hold goes, and a fork server's shim reaps it.
         drop(watching);
         drop(hold);
@@ -692,6 +695,7 @@ impl ParseRunner for ProcessParseRunner {
             hold,
             seen,
             budget: self.memory.budget,
+            output_drain: self.process.output_drain,
         };
         if let Err(error) = write_message(&mut session.stream, &AgentMessage::Parse(request)).await
         {

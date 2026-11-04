@@ -29,6 +29,9 @@ use crate::reload::Tls;
 /// How long a client has to complete the TLS handshake, unless `handshake_timeout` says.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a listener waits after a failed accept, unless `accept_retry` says.
+pub const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
 /// How many handshakes may run at once; beyond that, accepting waits (a flood of connections
 /// that never finish holds this many sockets, not all of them).
 pub const MAX_HANDSHAKES: usize = 256;
@@ -137,10 +140,17 @@ pub fn incoming(
     listener: TcpListener,
     tls: Option<Tls>,
     protocol: Protocol,
+    accept_retry: Duration,
 ) -> io::Result<Incoming> {
     let local = listener.local_addr()?;
     let (accepted_tx, accepted) = mpsc::channel(64);
-    let task = tokio::spawn(accept_loop(listener, tls, protocol, accepted_tx));
+    let task = tokio::spawn(accept_loop(
+        listener,
+        tls,
+        protocol,
+        accept_retry,
+        accepted_tx,
+    ));
     Ok(Incoming {
         accepted,
         local,
@@ -152,6 +162,7 @@ async fn accept_loop(
     listener: TcpListener,
     tls: Option<Tls>,
     protocol: Protocol,
+    accept_retry: Duration,
     accepted: mpsc::Sender<(Conn, SocketAddr)>,
 ) {
     let handshakes = Arc::new(Semaphore::new(MAX_HANDSHAKES));
@@ -165,7 +176,7 @@ async fn accept_loop(
             Err(error) => {
                 // E.g. too many open files: wait instead of spinning.
                 tracing::warn!(%error, "can't accept a connection");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(accept_retry).await;
                 continue;
             }
         };

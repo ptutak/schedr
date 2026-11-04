@@ -137,7 +137,16 @@ pub async fn run_local(
                 secrets,
                 connections,
             };
-            test_dag(dag, &run, path.as_deref(), config, env, client.json, out).await
+            Box::pin(test_dag(
+                dag,
+                &run,
+                path.as_deref(),
+                config,
+                env,
+                client.json,
+                out,
+            ))
+            .await
         }
         _ => Err(AppError::BadArgument("not a local command".to_owned())),
     }
@@ -209,6 +218,7 @@ pub async fn check_root(
             max_output_size: 64 * 1024,
             mask: schedr_agent::mask::Mask::default(),
             start_timeout: config.worker.runner_start_timeout,
+            output_drain: config.timings.output_drain_timeout,
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),

@@ -23,7 +23,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::core::{Arrivals, CoreError, MasterCore};
 use crate::dispatch::Outgoing;
 use crate::lease::{Leadership, Renewal};
-use crate::metrics::{GAUGE_REFRESH, MasterMetrics};
+use crate::metrics::MasterMetrics;
 use crate::problems::{ProblemKind, Problems};
 
 #[cfg(test)]
@@ -69,12 +69,28 @@ pub struct Hub {
     finished: Arc<tokio::sync::Notify>,
     /// Its problems now, written with its row (decision 129).
     problems: Problems,
+    /// How its loop is paced.
+    timings: crate::core::MasterTimings,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("another master took the lease over: this one stops (restarted, it waits as a standby)")]
 pub struct LeaseLost;
+
+/// What woke the master's loop.
+enum Wake {
+    Stop,
+    Tick,
+    Command,
+    Finished,
+    RoundDue,
+    NotificationsFailed(DbError),
+    Alive,
+    Refresh,
+    LeaseLost,
+    ListenAgain,
+}
 
 impl Hub {
     /// A hub over `core`, with the system clock.
@@ -90,6 +106,7 @@ impl Hub {
             beat: Beat::default(),
             refresh_limit: DEFAULT_REFRESH_LIMIT,
             max_message_size: core.settings().max_message_size,
+            timings: core.settings().timings,
             metrics: core.metrics().clone(),
             db: core.db().clone(),
             arrivals: core.arrivals(),
@@ -270,14 +287,14 @@ impl Hub {
         tracing::warn!(
             %error,
             "command notifications failed; polling, trying again in {}s",
-            NOTIFICATION_RETRY.as_secs()
+            self.timings.notification_retry.as_secs()
         );
         self.problems.set(
             ProblemKind::Notifications,
             false,
             format!("its command notifications failed ({error}): polling"),
         );
-        tokio::time::Instant::now() + NOTIFICATION_RETRY
+        tokio::time::Instant::now() + self.timings.notification_retry
     }
 
     async fn run_with(
@@ -287,17 +304,6 @@ impl Hub {
         leadership: Option<Leadership>,
         stop: impl Future<Output = ()>,
     ) -> Result<(), LeaseLost> {
-        enum Wake {
-            Stop,
-            Tick,
-            Command,
-            Finished,
-            NotificationsFailed(DbError),
-            Alive,
-            Refresh,
-            LeaseLost,
-            ListenAgain,
-        }
         let (release, released) = tokio::sync::oneshot::channel();
         let mut keeper = leadership.map(|leadership| {
             self.set_leading(leadership.leads(std::time::Instant::now()));
@@ -306,11 +312,14 @@ impl Hub {
         });
         let mut ticks = tokio::time::interval(interval);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
-        let mut refresh = tokio::time::interval(GAUGE_REFRESH);
+        let mut alive = tokio::time::interval(self.timings.alive);
+        let mut refresh = tokio::time::interval(self.timings.gauge_refresh);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut paused_until: Option<tokio::time::Instant> = None;
         let mut last_round: Option<tokio::time::Instant> = None;
+        // A round finished tasks asked for, held back by the gap after the last one: waited for
+        // here, so a stop or a lost lease doesn't wait for it.
+        let mut round_due: Option<tokio::time::Instant> = None;
         let mut listen_again = self
             .listen_retry
             .filter(|_| notifications.is_none())
@@ -321,6 +330,8 @@ impl Hub {
                 () = &mut stop => Wake::Stop,
                 _ = ticks.tick() => Wake::Tick,
                 () = self.finished.notified() => Wake::Finished,
+                () = async { tokio::time::sleep_until(round_due.expect("guarded")).await },
+                    if round_due.is_some() => Wake::RoundDue,
                 listened = next_command(notifications.as_mut(), &mut paused_until, &self.problems) => {
                     match listened {
                         Listened::Command => Wake::Command,
@@ -356,7 +367,10 @@ impl Hub {
                     continue;
                 }
                 // Paused: no rounds until the lease is renewed.
-                Wake::Tick | Wake::Command | Wake::Finished if !leads => continue,
+                Wake::Tick | Wake::Command | Wake::Finished | Wake::RoundDue if !leads => {
+                    round_due = None;
+                    continue;
+                }
                 Wake::Refresh => {
                     self.refresh_gauges().await;
                     continue;
@@ -377,14 +391,18 @@ impl Hub {
                     // At most one round every ROUND_GAP: under a stream of finishes each
                     // round takes what arrived meanwhile, and the lease's renewals and the
                     // workers' messages get their turns.
-                    if let Some(ended) = last_round {
-                        tokio::time::sleep_until(ended + ROUND_GAP).await;
+                    let due = last_round.map(|ended| ended + self.timings.round_gap);
+                    if let Some(due) = due.filter(|due| *due > tokio::time::Instant::now()) {
+                        round_due = Some(due);
+                        continue;
                     }
                     ticks.reset();
                 }
+                Wake::RoundDue => ticks.reset(),
                 Wake::Tick => {}
             }
             self.timed_tick().await;
+            round_due = None;
             last_round = Some(tokio::time::Instant::now());
         }
     }

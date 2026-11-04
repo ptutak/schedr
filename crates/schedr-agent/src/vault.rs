@@ -61,6 +61,28 @@ impl fmt::Debug for VaultAuth {
     }
 }
 
+/// How a Vault token is kept renewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultRenewal {
+    /// A renewal never comes sooner than this (`vault_min_renew_wait`).
+    pub min_wait: Duration,
+    /// How often a session with nothing to renew is looked at again (`vault_renew_check`).
+    pub check: Duration,
+    /// How soon a failed renewal is tried again (`vault_renew_retry`).
+    pub retry: Duration,
+}
+
+impl Default for VaultRenewal {
+    /// 1 s, a minute and 10 s.
+    fn default() -> Self {
+        Self {
+            min_wait: MIN_RENEW_WAIT,
+            check: Duration::from_mins(1),
+            retry: Duration::from_secs(10),
+        }
+    }
+}
+
 /// One Vault storage's settings.
 #[derive(Debug, Clone)]
 pub struct VaultSettings {
@@ -79,6 +101,8 @@ pub struct VaultSettings {
     pub request_timeout: Duration,
     /// How long connecting may take.
     pub connect_timeout: Duration,
+    /// How a token is kept renewed.
+    pub renewal: VaultRenewal,
 }
 
 /// The agent's Vault token and when to renew it.
@@ -237,7 +261,12 @@ impl VaultStorage {
                 let body = answer(response, "the token's lookup").await?;
                 let ttl = body["data"]["ttl"].as_u64().unwrap_or(0);
                 let renewable = body["data"]["renewable"].as_bool().unwrap_or(false);
-                Ok(self::session(token.clone(), ttl, renewable))
+                Ok(self::session(
+                    token.clone(),
+                    ttl,
+                    renewable,
+                    self.settings.renewal,
+                ))
             }
             VaultAuth::Kubernetes {
                 role,
@@ -265,7 +294,12 @@ impl VaultStorage {
                 })?;
                 let ttl = auth["lease_duration"].as_u64().unwrap_or(0);
                 let renewable = auth["renewable"].as_bool().unwrap_or(false);
-                Ok(self::session(token.to_owned(), ttl, renewable))
+                Ok(self::session(
+                    token.to_owned(),
+                    ttl,
+                    renewable,
+                    self.settings.renewal,
+                ))
             }
         }
     }
@@ -276,6 +310,7 @@ impl VaultStorage {
             return;
         }
         let me = self.me.clone();
+        let check = self.settings.renewal.check;
         tokio::spawn(async move {
             loop {
                 let Some(storage) = me.upgrade() else { return };
@@ -283,7 +318,7 @@ impl VaultStorage {
                 drop(storage);
                 let Some(renew_at) = renew_at else {
                     // Nothing to renew until a new session: checked again later.
-                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    tokio::time::sleep(check).await;
                     continue;
                 };
                 tokio::time::sleep_until(renew_at.into()).await;
@@ -318,7 +353,7 @@ impl VaultStorage {
                 let mut session = self.session();
                 // Replaced meanwhile (a login after a refused read): that one stays.
                 if session.as_ref().is_some_and(|s| s.token == token) {
-                    *session = Some(self::session(token, ttl, renewable));
+                    *session = Some(self::session(token, ttl, renewable, self.settings.renewal));
                 }
             }
             Err(error) => {
@@ -335,7 +370,7 @@ impl VaultStorage {
                 }
                 // Tried again shortly, while the token lasts.
                 if let Some(current) = self.session().as_mut() {
-                    current.renew_at = Some(Instant::now() + Duration::from_secs(10));
+                    current.renew_at = Some(Instant::now() + self.settings.renewal.retry);
                     if current.expires.is_some_and(|at| at <= Instant::now()) {
                         current.renew_at = None;
                     }
@@ -411,7 +446,7 @@ impl SecretStorage for VaultStorage {
 }
 
 /// A session for `token`, renewed at [`RENEW_AT`] of `ttl` seconds if `renewable`.
-fn session(token: String, ttl: u64, renewable: bool) -> Session {
+fn session(token: String, ttl: u64, renewable: bool, renewal: VaultRenewal) -> Session {
     let now = Instant::now();
     if ttl == 0 {
         return Session {
@@ -421,7 +456,7 @@ fn session(token: String, ttl: u64, renewable: bool) -> Session {
         };
     }
     let ttl = Duration::from_secs(ttl);
-    let renew_at = renewable.then(|| now + ttl.mul_f64(RENEW_AT).max(MIN_RENEW_WAIT));
+    let renew_at = renewable.then(|| now + ttl.mul_f64(RENEW_AT).max(renewal.min_wait));
     Session {
         token,
         renew_at,

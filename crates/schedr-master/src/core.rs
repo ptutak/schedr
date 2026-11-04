@@ -54,12 +54,48 @@ pub struct Settings {
     pub read_back: crate::dispatch::ReadBack,
     /// How often to try listening for commands again after it failed to start.
     pub listen_retry: Duration,
+    /// How its loop and its parse jobs are paced.
+    pub timings: MasterTimings,
     /// Which DAGs a round visits (`[master] quiet_dag*`).
     pub quiet: QuietSettings,
     /// The largest message a worker may send (`[master] grpc_max_message_size`).
     pub max_message_size: usize,
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub max_instances: usize,
+}
+
+/// How the master's loop and its parse jobs are paced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MasterTimings {
+    /// At most one extra round every this long (`round_gap`).
+    pub round_gap: Duration,
+    /// How long until failed notifications are tried again (`notification_retry`).
+    pub notification_retry: Duration,
+    /// How often its loop turns at least while it waits (`alive_interval`).
+    pub alive: Duration,
+    /// How often its gauges are read (`gauge_refresh`).
+    pub gauge_refresh: Duration,
+    /// The first wait before a failed parse job is tried again (`parse_retry_first`).
+    pub parse_retry_first: Duration,
+    /// The longest one (`parse_retry_max`).
+    pub parse_retry_max: Duration,
+    /// How long its listener waits after a failed accept (`accept_retry`).
+    pub accept_retry: Duration,
+}
+
+impl Default for MasterTimings {
+    /// What every master runs with.
+    fn default() -> Self {
+        Self {
+            round_gap: crate::service::ROUND_GAP,
+            notification_retry: crate::service::NOTIFICATION_RETRY,
+            alive: crate::service::ALIVE_INTERVAL,
+            gauge_refresh: crate::metrics::GAUGE_REFRESH,
+            parse_retry_first: crate::parse_jobs::FIRST_RETRY_DELAY,
+            parse_retry_max: crate::parse_jobs::MAX_RETRY_DELAY,
+            accept_retry: Duration::from_millis(100),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -75,6 +111,7 @@ impl Default for Settings {
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
+            timings: MasterTimings::default(),
             quiet: QuietSettings::default(),
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
@@ -279,7 +316,10 @@ impl MasterCore {
         let mut discovery = Discovery::new(
             db.clone(),
             SchedrVersion::current(),
-            ParseJobs::new(settings.parse_job_timeout),
+            ParseJobs::new(settings.parse_job_timeout).with_retry(
+                settings.timings.parse_retry_first,
+                settings.timings.parse_retry_max,
+            ),
         )
         .with_max_message_size(settings.max_message_size);
         discovery.set_wakes(wakes.clone());

@@ -67,6 +67,8 @@ struct FollowedFile<T> {
     /// What it holds, for the logs (`users`, `the UI's token`).
     what: &'static str,
     parse: fn(&str) -> Result<T, String>,
+    /// How often it is looked at, at most.
+    recheck: std::time::Duration,
     /// When it was last looked at, and how it was when last read.
     looked: Mutex<(Instant, Option<Stamp>)>,
 }
@@ -107,6 +109,7 @@ impl<T> Followed<T> {
         path: &Path,
         what: &'static str,
         parse: fn(&str) -> Result<T, String>,
+        recheck: std::time::Duration,
     ) -> Result<Self, String> {
         let looked = stamp(path);
         let value = read_file(path)
@@ -116,6 +119,7 @@ impl<T> Followed<T> {
                 path: path.to_owned(),
                 what,
                 parse,
+                recheck,
                 looked: Mutex::new((Instant::now(), looked)),
             }),
             current: RwLock::new((Arc::new(value), 0)),
@@ -138,7 +142,7 @@ impl<T> Followed<T> {
         let now_stamp = {
             let mut looked = lock(&file.looked);
             let now = Instant::now();
-            if now.duration_since(looked.0) < RECHECK {
+            if now.duration_since(looked.0) < file.recheck {
                 return;
             }
             // Others don't look meanwhile.
@@ -189,8 +193,8 @@ pub const MIN_UI_TOKEN: usize = 16;
 /// # Errors
 ///
 /// Why it can't be read, or a token shorter than [`MIN_UI_TOKEN`].
-pub fn read_ui_token(path: &Path) -> Result<UiToken, String> {
-    Followed::read(path, "the UI's token", |text| {
+pub fn read_ui_token(path: &Path, recheck: std::time::Duration) -> Result<UiToken, String> {
+    let parse = |text: &str| {
         let token = text.trim();
         if token.len() < MIN_UI_TOKEN {
             return Err(format!(
@@ -198,8 +202,8 @@ pub fn read_ui_token(path: &Path) -> Result<UiToken, String> {
             ));
         }
         Ok(token.to_owned())
-    })
-    .map(Arc::new)
+    };
+    Followed::read(path, "the UI's token", parse, recheck).map(Arc::new)
 }
 
 /// Users of `basic` mode: names and their bcrypt hashes.
@@ -216,6 +220,28 @@ pub fn read_ui_token(path: &Path) -> Result<UiToken, String> {
 pub struct Users {
     loaded: Arc<Followed<Loaded>>,
     passed: Arc<Mutex<Passed>>,
+    timings: AuthTimings,
+}
+
+/// How the users and the UI's token are followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthTimings {
+    /// How often their files are looked at, at most (`auth_recheck`): what a change takes to
+    /// count.
+    pub recheck: std::time::Duration,
+    /// How long a check that passed is remembered (`auth_remembered`). A change of the users
+    /// forgets them all.
+    pub remembered: std::time::Duration,
+}
+
+impl Default for AuthTimings {
+    /// [`RECHECK`] and [`REMEMBERED`].
+    fn default() -> Self {
+        Self {
+            recheck: RECHECK,
+            remembered: REMEMBERED,
+        }
+    }
 }
 
 /// How long a check that passed is remembered.
@@ -358,9 +384,15 @@ impl Users {
     /// # Errors
     ///
     /// Why it can't be read or doesn't read.
-    pub fn read(path: &Path) -> Result<Self, String> {
+    pub fn read(path: &Path, timings: AuthTimings) -> Result<Self, String> {
         Ok(Self {
-            loaded: Arc::new(Followed::read(path, "its users", parse_users)?),
+            loaded: Arc::new(Followed::read(
+                path,
+                "its users",
+                parse_users,
+                timings.recheck,
+            )?),
+            timings,
             ..Self::default()
         })
     }
@@ -408,7 +440,7 @@ impl Users {
             {
                 passed.until.remove(&oldest);
             }
-            passed.until.insert(digest, now + REMEMBERED);
+            passed.until.insert(digest, now + self.timings.remembered);
         }
         valid
     }
@@ -466,7 +498,11 @@ impl Auth {
     ///
     /// Why they can't be used: `basic` without a readable users file, or with no users; a
     /// header name that isn't one.
-    pub fn from_config(section: &AuthSection, ui_token: Option<UiToken>) -> Result<Self, String> {
+    pub fn from_config(
+        section: &AuthSection,
+        ui_token: Option<UiToken>,
+        timings: AuthTimings,
+    ) -> Result<Self, String> {
         let header = |name: &str| {
             HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| format!("`{name}` isn't a header name"))
@@ -481,7 +517,7 @@ impl Auth {
                 .users_file
                 .as_deref()
                 .ok_or("`basic` needs `users_file` (`name:bcrypt-hash` lines)")?;
-            let users = Users::read(path)?;
+            let users = Users::read(path, timings)?;
             if users.is_empty() {
                 return Err(format!("{}: no users", path.display()));
             }

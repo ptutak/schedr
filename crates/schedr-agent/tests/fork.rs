@@ -88,6 +88,7 @@ fn spec(program: PathBuf, args: &[&str], dir: &Path, log: &str) -> ProcessSpec {
         max_output_size: 64 * 1024,
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
+        output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
     }
 }
 
@@ -120,7 +121,7 @@ fn retrying_servers(
         ),
         preload: preload.iter().map(|p| (*p).to_owned()).collect(),
         import_retry,
-        preload_timeout: schedr_agent::fork::PRELOAD_TIMEOUT,
+        timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
     };
     setup
         .process
@@ -227,6 +228,7 @@ fn limits(timeout: Option<Duration>) -> Limits {
         timeout,
         grace: Duration::from_secs(1),
         interrupt_grace: Duration::from_secs(1),
+        poll: schedr_agent::supervise::STOP_POLL,
     }
 }
 
@@ -844,7 +846,7 @@ async fn the_fork_servers_start_before_the_log_directory_exists() {
         ),
         preload: vec!["json".to_owned()],
         import_retry: Duration::ZERO,
-        preload_timeout: schedr_agent::fork::PRELOAD_TIMEOUT,
+        timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
     };
     let _forks = ForkServers::start(&setup, &metrics);
     until("both servers are up", || {

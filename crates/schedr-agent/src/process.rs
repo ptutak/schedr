@@ -48,6 +48,8 @@ pub struct ProcessSpec {
     pub mask: Mask,
     /// How long a runner has to say hello, if it is one (`[worker] runner_start_timeout`).
     pub start_timeout: Duration,
+    /// How long its output may take to reach its log once it is stopped.
+    pub output_drain: Duration,
 }
 
 /// A started task process.

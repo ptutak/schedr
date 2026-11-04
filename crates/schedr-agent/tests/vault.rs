@@ -55,6 +55,7 @@ fn settings(auth: VaultAuth) -> VaultSettings {
         auth,
         request_timeout: std::time::Duration::from_secs(30),
         connect_timeout: std::time::Duration::from_secs(10),
+        renewal: schedr_agent::vault::VaultRenewal::default(),
     }
 }
 

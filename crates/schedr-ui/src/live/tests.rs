@@ -79,6 +79,7 @@ fn app(streams: Streams) -> axum::Router {
             proof: "none",
         }],
         docs_dir: None,
+        timings: UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
         process_id: String::new(),
@@ -243,6 +244,7 @@ async fn a_closed_browsers_follower_ends_without_waiting_for_a_change() {
         (changes.subscribe(), false),
         sender,
         "etl".to_owned(),
+        UiTimings::default(),
     ));
     tokio::task::yield_now().await;
     assert_eq!(changes.receiver_count(), 1);

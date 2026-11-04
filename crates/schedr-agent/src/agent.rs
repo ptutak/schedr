@@ -575,6 +575,7 @@ impl ProcessExecutor {
             timeout,
             grace: spec.cancel_grace,
             interrupt_grace: self.drain_terminate_period,
+            poll: self.setup.timeouts.stop_poll,
         };
         let seen = SharedSeen::default();
         // The watchdog's kill is one more reason to stop, in the same channel.
@@ -665,6 +666,7 @@ impl ProcessExecutor {
                 max_output_size: 64 * 1024,
                 mask: crate::mask::Mask::default(),
                 start_timeout: self.setup.timeouts.runner_start,
+                output_drain: self.setup.timeouts.output_drain,
             },
             memory: self.setup.memory.clone(),
             kills: self.metrics.watchdog_kills.clone(),
@@ -932,7 +934,8 @@ impl<E: Executor> Agent<E> {
         self.shutdown = Some(shutdown);
         self.recover().await;
         self.on_shutdown(requested);
-        let mut backoff = FIRST_BACKOFF;
+        let timeouts = self.settings.setup.timeouts;
+        let mut backoff = timeouts.reconnect_first;
         loop {
             self.registered = false;
             let Some(connected) = self.offline(connect()).await else {
@@ -949,7 +952,7 @@ impl<E: Executor> Agent<E> {
                 }
             }
             if self.registered {
-                backoff = FIRST_BACKOFF;
+                backoff = timeouts.reconnect_first;
             }
             // The clock's nanoseconds (below 10^9), spread over all of u32 by a
             // multiplicative hash, so the jitter covers its whole range.
@@ -964,7 +967,7 @@ impl<E: Executor> Agent<E> {
             {
                 return;
             }
-            backoff = (backoff * 2).min(MAX_BACKOFF);
+            backoff = (backoff * 2).min(timeouts.reconnect_max);
         }
     }
 
@@ -972,8 +975,9 @@ impl<E: Executor> Agent<E> {
     /// are reported in the next `Register`), and a drain goes on. `None` once drained.
     async fn offline<T>(&mut self, work: impl Future<Output = T>) -> Option<T> {
         tokio::pin!(work);
-        let mut tick = tokio::time::interval(DRAIN_TICK);
-        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
+        let timeouts = self.settings.setup.timeouts;
+        let mut tick = tokio::time::interval(timeouts.drain_tick);
+        let mut alive = tokio::time::interval(timeouts.alive);
         loop {
             tokio::select! {
                 _ = alive.tick() => self.alive(),
@@ -1065,11 +1069,12 @@ impl<E: Executor> Agent<E> {
                     self.unacked.insert(attempt_id, finished);
                 }
                 JournalRecord::Running(process) => {
+                    let timeouts = self.settings.setup.timeouts;
                     orphans.spawn(async move {
                         let Some(identity) = process else {
                             return Ok(attempt_id);
                         };
-                        match stop_orphan(identity, ORPHAN_GRACE).await {
+                        match stop_orphan(identity, timeouts.orphan_grace, timeouts.orphan).await {
                             Ok(Orphan::Gone) => {}
                             Ok(how) => tracing::warn!(
                                 attempt_id,
@@ -1193,8 +1198,9 @@ impl<E: Executor> Agent<E> {
         let mut warnings_open = true;
         let mut heartbeat = heartbeat_timer(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
-        let mut tick = tokio::time::interval(DRAIN_TICK);
-        let mut alive = tokio::time::interval(ALIVE_INTERVAL);
+        let timeouts = self.settings.setup.timeouts;
+        let mut tick = tokio::time::interval(timeouts.drain_tick);
+        let mut alive = tokio::time::interval(timeouts.alive);
         // The unacknowledged results' resends (B41: the master failed to store one and kept
         // the stream).
         let mut resends = Resends::default();
@@ -1213,10 +1219,10 @@ impl<E: Executor> Agent<E> {
                         // Our side ends; the master's ends once it has handled everything
                         // (not waited for past the end of the grace period).
                         drop(to_master);
-                        let left = self.drain.map_or(DEREGISTER_WAIT, |drain| {
+                        let left = self.drain.map_or(timeouts.deregister, |drain| {
                             drain.end().saturating_duration_since(Instant::now())
                         });
-                        let _ = tokio::time::timeout(DEREGISTER_WAIT.min(left), async {
+                        let _ = tokio::time::timeout(timeouts.deregister.min(left), async {
                             while let Ok(Some(_)) = inbound.message().await {}
                         })
                         .await;
@@ -1673,6 +1679,7 @@ impl<E: Executor> Agent<E> {
             code_dir,
             registry: Arc::new(registry),
             test,
+            cancel_grace: self.settings.setup.timeouts.connection_cancel_grace,
             attempt_id: attempt_id.clone(),
             deadline,
         };
@@ -2115,10 +2122,10 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
 }
 
 /// How long a deregistered agent waits for the master to end the stream.
-const DEREGISTER_WAIT: Duration = Duration::from_secs(5);
+pub const DEREGISTER_WAIT: Duration = Duration::from_secs(5);
 
 /// How often a drain checks its deadline and whether it is done.
-const DRAIN_TICK: Duration = Duration::from_millis(100);
+pub const DRAIN_TICK: Duration = Duration::from_millis(100);
 
 /// The next change of the shutdown request count; never, without one (or once it is gone).
 async fn next_request(shutdown: &mut Option<watch::Receiver<u32>>) -> u32 {

@@ -70,6 +70,8 @@ struct Job {
 #[derive(Debug, Clone)]
 pub struct ParseJobs {
     timeout: Duration,
+    retry_first: Duration,
+    retry_max: Duration,
     jobs: BTreeMap<ParseKey, Job>,
     metrics: MasterMetrics,
 }
@@ -80,9 +82,19 @@ impl ParseJobs {
     pub fn new(timeout: Duration) -> Self {
         Self {
             timeout,
+            retry_first: FIRST_RETRY_DELAY,
+            retry_max: MAX_RETRY_DELAY,
             jobs: BTreeMap::new(),
             metrics: MasterMetrics::default(),
         }
+    }
+
+    /// These jobs, a failed one tried again after `first`, doubling up to `max`.
+    #[must_use]
+    pub const fn with_retry(mut self, first: Duration, max: Duration) -> Self {
+        self.retry_first = first;
+        self.retry_max = max;
+        self
     }
 
     /// Counts jobs and their durations in `metrics`.
@@ -155,9 +167,10 @@ impl ParseJobs {
             .filter(|job| job.not_before.is_some())
             .map_or(0, |job| job.retries + 1);
         self.finish(&key);
-        let delay = FIRST_RETRY_DELAY
+        let delay = self
+            .retry_first
             .saturating_mul(2_u32.saturating_pow(retries.min(16)))
-            .min(MAX_RETRY_DELAY);
+            .min(self.retry_max);
         let delay = jiff::SignedDuration::try_from(delay).unwrap_or(jiff::SignedDuration::MAX);
         let mut job = new_job(&self.metrics);
         job.candidates = candidates;

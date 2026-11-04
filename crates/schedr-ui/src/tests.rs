@@ -110,6 +110,7 @@ fn ui(deployments: Vec<Deployment<Scripted>>) -> axum::Router {
     router(Ui {
         deployments,
         docs_dir: None,
+        timings: crate::live::UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
         process_id: String::new(),
@@ -322,6 +323,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     let app = router(Ui {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
+        timings: crate::live::UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
         process_id: String::new(),
@@ -460,6 +462,7 @@ async fn every_deployment_is_asked_at_once() {
     let app = router(Ui {
         deployments: vec![slow("a"), slow("b"), slow("c")],
         docs_dir: None,
+        timings: crate::live::UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
         process_id: String::new(),
@@ -483,6 +486,7 @@ async fn every_answer_varies_with_the_prefix_and_docs_redirect_temporarily() {
     let app = router(Ui {
         deployments: vec![deployment("etl", etl())],
         docs_dir: Some(site.path().to_path_buf()),
+        timings: crate::live::UiTimings::default(),
         auth: schedr_api::auth::Auth::default(),
         config: serde_json::json!({}),
         process_id: String::new(),
@@ -546,7 +550,13 @@ async fn the_ui_signs_people_in_and_passes_their_name_on() {
             proof: "none",
         }],
         docs_dir: None,
-        auth: schedr_api::auth::Auth::from_config(&section, None).unwrap(),
+        timings: crate::live::UiTimings::default(),
+        auth: schedr_api::auth::Auth::from_config(
+            &section,
+            None,
+            schedr_api::auth::AuthTimings::default(),
+        )
+        .unwrap(),
         config: serde_json::json!({}),
         process_id: String::new(),
         host: String::new(),

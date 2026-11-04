@@ -94,6 +94,102 @@ pub struct Timings {
     /// How long a peer has to complete the TLS handshake. Raise it for slow clients; lower it to
     /// drop stalled connections sooner.
     pub handshake_timeout: Duration,
+    /// How long a stopped process's output may take to reach its log (a process it started in a
+    /// session of its own can hold the pipes open).
+    pub output_drain_timeout: Duration,
+    /// How long a fork server may take to answer a request; then it is restarted, and the task
+    /// spawned.
+    pub fork_answer_timeout: Duration,
+    /// The first wait before a fork server is restarted; it doubles up to `fork_backoff_max`.
+    pub fork_backoff_first: Duration,
+    /// The longest wait before a fork server is restarted.
+    pub fork_backoff_max: Duration,
+    /// A fork server up for this long starts its restarts' waits over.
+    pub fork_backoff_reset_after: Duration,
+    /// How often old task logs are swept.
+    pub log_sweep_interval: Duration,
+    /// How often an orphan found at start is looked at while it stops.
+    pub orphan_poll: Duration,
+    /// How long an orphan may take to go after SIGKILL.
+    pub orphan_kill_wait: Duration,
+    /// How long an orphan found at start gets from SIGTERM to SIGKILL.
+    pub orphan_grace: Duration,
+    /// The first wait after the master connection drops; it doubles up to
+    /// `reconnect_backoff_max`, with jitter.
+    pub reconnect_backoff_first: Duration,
+    /// The longest wait between tries to reach the master.
+    pub reconnect_backoff_max: Duration,
+    /// How often the agent's loop turns at least, however quiet. Shorter than
+    /// `loop_stall_timeout`, or a quiet agent looks stuck.
+    pub worker_alive_interval: Duration,
+    /// How long a stopping worker waits for the master to take its deregistering.
+    pub deregister_wait: Duration,
+    /// How often a drain looks at what is left.
+    pub drain_tick: Duration,
+    /// How long a drained worker waits for the master to acknowledge its last results.
+    pub drain_ack_wait: Duration,
+    /// How often a stopped task's process group is looked at until it is gone.
+    pub stop_poll: Duration,
+    /// How long a connection test's process gets from SIGTERM to SIGKILL.
+    pub connection_job_cancel_grace: Duration,
+    /// A Vault token's renewal never comes sooner than this.
+    pub vault_min_renew_wait: Duration,
+    /// How often a Vault session with nothing to renew is looked at again.
+    pub vault_renew_check: Duration,
+    /// How soon a failed Vault renewal is tried again, while the token lasts.
+    pub vault_renew_retry: Duration,
+    /// At most one extra round every this long, under a stream of finished tasks.
+    pub round_gap: Duration,
+    /// After notifications failed, how long until they are tried again; polling goes on
+    /// meanwhile.
+    pub notification_retry: Duration,
+    /// How often the master's loop turns at least while it waits. Shorter than
+    /// `loop_stall_timeout`, or a waiting master looks stuck.
+    pub master_alive_interval: Duration,
+    /// How often the master's gauges are read from the database.
+    pub gauge_refresh: Duration,
+    /// The first wait before a failed parse job is tried again; it doubles up to
+    /// `parse_retry_max`.
+    pub parse_retry_first: Duration,
+    /// The longest wait before a failed parse job is tried again.
+    pub parse_retry_max: Duration,
+    /// How often a master writes its row of the deployment's nodes.
+    pub node_heartbeat: Duration,
+    /// How often changes are read where they aren't announced (`SQLite`).
+    pub changes_poll_interval: Duration,
+    /// How often the webserver looks at whether the database announces its changes.
+    pub events_recheck: Duration,
+    /// How often an event stream gets a comment, keeping idle connections open through proxies.
+    pub events_keep_alive: Duration,
+    /// How soon following the database's changes is tried again after a failure.
+    pub events_retry: Duration,
+    /// How often the users and token files are looked at for a change. A removed user or a
+    /// changed password keeps working this long: raising it delays revocation.
+    pub auth_recheck: Duration,
+    /// How long a password check that passed is remembered, instead of running bcrypt again. A
+    /// change of the users file forgets them all.
+    pub auth_remembered: Duration,
+    /// How long running requests get once the server stops; then they are cut.
+    pub requests_grace: Duration,
+    /// How often a webserver started before the migration looks again.
+    pub schema_retry: Duration,
+    /// How often a page's stream gets a `ping`, and the log tail a comment.
+    pub ui_keep_alive: Duration,
+    /// A page's stream sends at most one `change` this often, per deployment.
+    pub ui_coalesce: Duration,
+    /// How often the log tail reads the log.
+    pub ui_tail_interval: Duration,
+    /// How long the log tail keeps trying a log out of reach before it says so and stops.
+    pub ui_tail_give_up: Duration,
+    /// The first wait before a relay opens its stream again; it doubles up to `relay_retry_max`.
+    pub ui_relay_retry_first: Duration,
+    /// The longest wait between a relay's tries.
+    pub ui_relay_retry_max: Duration,
+    /// Once a standalone's master failed, how long its worker gets to stop.
+    pub worker_stop_after_failure: Duration,
+    /// How long a listener waits after a failed accept (too many open files), instead of
+    /// spinning.
+    pub accept_retry: Duration,
     /// The `SCHEDR_HIDDEN__*` variables set, each warned about when starting.
     pub overridden: Vec<String>,
 }
@@ -120,6 +216,49 @@ impl Default for Timings {
             drain_report_period: Duration::from_secs(2),
             memory_check_interval: Duration::from_secs(1),
             handshake_timeout: Duration::from_secs(10),
+            output_drain_timeout: Duration::from_secs(5),
+            fork_answer_timeout: Duration::from_secs(30),
+            fork_backoff_first: Duration::from_secs(1),
+            fork_backoff_max: Duration::from_mins(5),
+            fork_backoff_reset_after: Duration::from_mins(10),
+            log_sweep_interval: Duration::from_hours(1),
+            orphan_poll: Duration::from_millis(50),
+            orphan_kill_wait: Duration::from_secs(5),
+            orphan_grace: Duration::from_secs(10),
+            reconnect_backoff_first: Duration::from_millis(200),
+            reconnect_backoff_max: Duration::from_secs(30),
+            worker_alive_interval: Duration::from_secs(5),
+            deregister_wait: Duration::from_secs(5),
+            drain_tick: Duration::from_millis(100),
+            drain_ack_wait: Duration::from_secs(5),
+            stop_poll: Duration::from_millis(100),
+            connection_job_cancel_grace: Duration::from_secs(5),
+            vault_min_renew_wait: Duration::from_secs(1),
+            vault_renew_check: Duration::from_mins(1),
+            vault_renew_retry: Duration::from_secs(10),
+            round_gap: Duration::from_millis(50),
+            notification_retry: Duration::from_secs(30),
+            master_alive_interval: Duration::from_secs(5),
+            gauge_refresh: Duration::from_secs(15),
+            parse_retry_first: Duration::from_secs(30),
+            parse_retry_max: Duration::from_mins(10),
+            node_heartbeat: Duration::from_secs(10),
+            changes_poll_interval: Duration::from_secs(1),
+            events_recheck: Duration::from_mins(1),
+            events_keep_alive: Duration::from_secs(15),
+            events_retry: Duration::from_secs(1),
+            auth_recheck: Duration::from_secs(5),
+            auth_remembered: Duration::from_mins(5),
+            requests_grace: Duration::from_secs(3),
+            schema_retry: Duration::from_secs(5),
+            ui_keep_alive: Duration::from_secs(15),
+            ui_coalesce: Duration::from_secs(1),
+            ui_tail_interval: Duration::from_secs(1),
+            ui_tail_give_up: Duration::from_secs(30),
+            ui_relay_retry_first: Duration::from_secs(1),
+            ui_relay_retry_max: Duration::from_secs(30),
+            worker_stop_after_failure: Duration::from_secs(10),
+            accept_retry: Duration::from_millis(100),
             overridden: Vec::new(),
         }
     }

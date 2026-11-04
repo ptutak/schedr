@@ -56,7 +56,12 @@ pub struct Limits {
     /// The same for a draining worker's interrupt, which must end before the pod is killed
     /// (`[worker] drain_terminate_period`).
     pub interrupt_grace: Duration,
+    /// How often a stopped process's group is looked at, until it is gone.
+    pub poll: Duration,
 }
+
+/// How often a stopped process's group is looked at, unless `stop_poll` says.
+pub const STOP_POLL: Duration = Duration::from_millis(100);
 
 /// The reasons to stop an attempt, in the order they come: the first decides its status;
 /// a drain's interrupt after it only hurries its SIGKILL (B9). The agent keeps a
@@ -197,7 +202,6 @@ async fn left_after_leader<P: Process>(
     limits: Limits,
     mut kill_at: tokio::time::Instant,
 ) -> io::Result<()> {
-    const POLL: Duration = Duration::from_millis(100);
     while process.group_alive() {
         let now = tokio::time::Instant::now();
         if now >= kill_at {
@@ -214,7 +218,7 @@ async fn left_after_leader<P: Process>(
                 StopReason::OomKilled => return process.signal(Signal::Kill),
                 StopReason::TimedOut | StopReason::Cancelled => {}
             },
-            () = tokio::time::sleep_until((now + POLL).min(kill_at)) => {}
+            () = tokio::time::sleep_until((now + limits.poll).min(kill_at)) => {}
         }
     }
     Ok(())

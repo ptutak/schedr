@@ -342,13 +342,36 @@ pub enum Orphan {
     Killed,
 }
 
+/// How an orphan is waited for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrphanWaits {
+    /// How often it is looked at (`orphan_poll`).
+    pub poll: Duration,
+    /// How long it may take to go after SIGKILL (`orphan_kill_wait`).
+    pub kill_wait: Duration,
+}
+
+impl Default for OrphanWaits {
+    /// 50 ms and 5 s.
+    fn default() -> Self {
+        Self {
+            poll: ORPHAN_POLL,
+            kill_wait: ORPHAN_KILL_WAIT,
+        }
+    }
+}
+
 /// Stops the process group `identity` names, if its leader still runs: SIGTERM, and SIGKILL
 /// if the group hasn't ended after `grace`, then waits for it to go (at most 5 s).
 ///
 /// # Errors
 ///
 /// An I/O error from signalling the group.
-pub async fn stop_orphan(identity: ProcessIdentity, grace: Duration) -> io::Result<Orphan> {
+pub async fn stop_orphan(
+    identity: ProcessIdentity,
+    grace: Duration,
+    waits: OrphanWaits,
+) -> io::Result<Orphan> {
     if process_identity(identity.pgid).ok() != Some(identity) {
         return Ok(Orphan::Gone);
     }
@@ -360,11 +383,11 @@ pub async fn stop_orphan(identity: ProcessIdentity, grace: Duration) -> io::Resu
         Err(error) => Err(io::Error::from(error)),
     };
     signal(Signal::TERM)?;
-    if gone_within(group, grace).await {
+    if gone_within(group, grace, waits.poll).await {
         return Ok(Orphan::Stopped);
     }
     signal(Signal::KILL)?;
-    if !gone_within(group, ORPHAN_KILL_WAIT).await {
+    if !gone_within(group, waits.kill_wait, waits.poll).await {
         tracing::warn!(
             pgid = identity.pgid,
             "a killed task process group hasn't gone yet"
@@ -374,15 +397,16 @@ pub async fn stop_orphan(identity: ProcessIdentity, grace: Duration) -> io::Resu
 }
 
 /// Whether the process group goes within `wait`.
-async fn gone_within(group: Pid, wait: Duration) -> bool {
+async fn gone_within(group: Pid, wait: Duration, poll: Duration) -> bool {
     let deadline = Instant::now() + wait;
     loop {
         if !crate::process::group_running(group) {
             return true;
         }
-        if Instant::now() >= deadline {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
             return false;
         }
-        tokio::time::sleep(ORPHAN_POLL).await;
+        tokio::time::sleep(poll.min(left)).await;
     }
 }

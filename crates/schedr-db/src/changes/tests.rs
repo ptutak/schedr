@@ -85,7 +85,11 @@ async fn add_run(db: &Database, version: &str, planned_for: &str) -> String {
 async fn sqlite_changes_are_read_from_now_on_each_once() {
     let (db, version) = with_dag().await;
     // From now on: the DAG defined before isn't reported.
-    let mut changes = db.changes().await.unwrap().expect("SQLite is polled");
+    let mut changes = db
+        .changes(POLL_INTERVAL)
+        .await
+        .unwrap()
+        .expect("SQLite is polled");
     let first = add_run(&db, &version, "2026-10-14T03:00:00Z").await;
     db.start_run(&first, ts("2026-10-14T03:00:01Z"))
         .await
@@ -111,7 +115,7 @@ async fn sqlite_changes_are_read_from_now_on_each_once() {
 #[tokio::test]
 async fn rows_pruned_unread_are_reported_missed() {
     let (db, _) = with_dag().await;
-    let mut changes = db.changes().await.unwrap().unwrap();
+    let mut changes = db.changes(POLL_INTERVAL).await.unwrap().unwrap();
     let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };
@@ -142,7 +146,7 @@ async fn rows_pruned_unread_from_an_empty_table_are_reported_missed_too() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     // Nothing written yet: the cursor is 0.
-    let mut changes = db.changes().await.unwrap().unwrap();
+    let mut changes = db.changes(POLL_INTERVAL).await.unwrap().unwrap();
     let crate::database::Pool::Sqlite(pool) = db.pool() else {
         panic!("expected SQLite")
     };

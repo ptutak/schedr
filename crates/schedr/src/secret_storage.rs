@@ -22,6 +22,7 @@ mod tests;
 #[derive(Debug, Clone)]
 pub struct SecretPlan {
     section: SecretStorageSection,
+    renewal: schedr_agent::vault::VaultRenewal,
     key: Result<SecretKey, String>,
     /// Storages given whole instead (`dags test --secret`: values in memory).
     given: Option<Arc<SecretStores>>,
@@ -34,9 +35,21 @@ impl SecretPlan {
     pub fn new(section: &SecretStorageSection, env: &BTreeMap<String, String>) -> Self {
         Self {
             section: section.clone(),
+            renewal: schedr_agent::vault::VaultRenewal::default(),
             key: SecretKey::from_env(env).map_err(|e| e.to_string()),
             given: None,
         }
+    }
+
+    /// The plan, Vault tokens renewed as `timings` say.
+    #[must_use]
+    pub const fn renewing(mut self, timings: &schedr_config::config::Timings) -> Self {
+        self.renewal = schedr_agent::vault::VaultRenewal {
+            min_wait: timings.vault_min_renew_wait,
+            check: timings.vault_renew_check,
+            retry: timings.vault_renew_retry,
+        };
+        self
     }
 
     /// These storages, whatever is configured (a test run's values in memory).
@@ -74,7 +87,7 @@ impl SecretPlan {
                         db.ok_or_else(|| standalone_only(&format!("[secret_storage.{name}]")))?;
                     Arc::new(DbStorage::with_key(db.clone(), self.key.clone()))
                 }
-                SecretStorageType::Vault => vault(name, configured)?,
+                SecretStorageType::Vault => vault(name, configured, self.renewal)?,
             };
             storages.insert(
                 name.clone(),
@@ -116,6 +129,7 @@ const SERVICE_ACCOUNT_TOKEN: &str = "/var/run/secrets/kubernetes.io/serviceaccou
 fn vault(
     name: &str,
     configured: &schedr_config::config::SecretStorageConfig,
+    renewal: schedr_agent::vault::VaultRenewal,
 ) -> Result<Arc<dyn schedr_agent::secrets::SecretStorage>, AppError> {
     use schedr_agent::vault::{VaultAuth, VaultSettings, VaultStorage};
     use schedr_config::config::VaultAuthMethod;
@@ -160,6 +174,7 @@ fn vault(
         auth,
         request_timeout: configured.request_timeout,
         connect_timeout: configured.connect_timeout,
+        renewal,
     };
     let storage = VaultStorage::new(settings).map_err(bad)?;
     Ok(storage)

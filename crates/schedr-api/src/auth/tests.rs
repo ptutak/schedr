@@ -48,6 +48,7 @@ fn auth(mode: AuthMode, identity_header: Option<&str>, token: Option<&str>) -> A
     Auth::from_config(
         &section,
         token.map(|t| Arc::new(Followed::fixed(t.to_owned()))),
+        AuthTimings::default(),
     )
     .unwrap()
 }
@@ -153,7 +154,7 @@ fn basic_needs_its_users() {
         mode: AuthMode::Basic,
         ..AuthSection::default()
     };
-    let error = Auth::from_config(&section, None).unwrap_err();
+    let error = Auth::from_config(&section, None, AuthTimings::default()).unwrap_err();
     assert!(error.contains("users_file"), "{error}");
     let dir = tempfile::tempdir().unwrap();
     let empty = dir.path().join("users");
@@ -164,7 +165,7 @@ fn basic_needs_its_users() {
         ..AuthSection::default()
     };
     assert!(
-        Auth::from_config(&section, None)
+        Auth::from_config(&section, None, AuthTimings::default())
             .unwrap_err()
             .contains("no users")
     );
@@ -264,7 +265,7 @@ async fn the_users_follow_their_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("users");
     std::fs::write(&path, users_text()).unwrap();
-    let users = Users::read(&path).unwrap();
+    let users = Users::read(&path, AuthTimings::default()).unwrap();
     assert!(users.verify("anna", "secret").await);
     // Anna's password changed and Ben removed: the old password (remembered) and Ben refused.
     let hash = bcrypt::hash("changed", 4).unwrap();
@@ -421,7 +422,7 @@ async fn a_users_file_is_read_again_once_it_can_be_read() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("users");
     std::fs::write(&path, users_text()).unwrap();
-    let users = Users::read(&path).unwrap();
+    let users = Users::read(&path, AuthTimings::default()).unwrap();
     // Anna's password changed, but the one read after it fails.
     let hash = bcrypt::hash("changed", 4).unwrap();
     std::fs::write(&path, format!("anna:{hash}\n")).unwrap();
@@ -443,8 +444,13 @@ async fn the_uis_token_follows_its_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("token");
     std::fs::write(&path, "0123456789abcdef\n").unwrap();
-    let token = read_ui_token(&path).unwrap();
-    let auth = Auth::from_config(&AuthSection::default(), Some(Arc::clone(&token))).unwrap();
+    let token = read_ui_token(&path, RECHECK).unwrap();
+    let auth = Auth::from_config(
+        &AuthSection::default(),
+        Some(Arc::clone(&token)),
+        AuthTimings::default(),
+    )
+    .unwrap();
     let named = |token: &str| headers(&[("x-schedr-ui-token", token), ("x-schedr-user", "anna")]);
     assert_eq!(
         auth.user(&named("0123456789abcdef"), false).await,
@@ -466,7 +472,7 @@ async fn the_uis_token_follows_its_file() {
     due(&token);
     assert_eq!(token.current().0.as_str(), "fedcba9876543210-new");
     assert!(
-        read_ui_token(&path)
+        read_ui_token(&path, RECHECK)
             .unwrap_err()
             .contains("shorter than 16")
     );

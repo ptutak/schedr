@@ -47,17 +47,17 @@ async fn connected_on(
     db: Database,
     clock: fn() -> Timestamp,
 ) -> (Hub, Database, MasterClient<Channel>) {
-    connected_on_with(db, clock, Settings::default()).await
+    connected_on_with(db, clock, &Settings::default()).await
 }
 
 /// As [`connected_on`], the master with `settings`.
 async fn connected_on_with(
     db: Database,
     clock: fn() -> Timestamp,
-    settings: Settings,
+    settings: &Settings,
 ) -> (Hub, Database, MasterClient<Channel>) {
     db.migrate().await.unwrap();
-    let hub = Hub::with_clock(MasterCore::new(db.clone(), settings), clock);
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), *settings), clock);
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     let service = hub.service();
     tokio::spawn(async move {
@@ -285,7 +285,7 @@ async fn a_parse_upload_past_the_configured_limit_is_refused() {
     let (_hub, _db, mut client) = connected_on_with(
         Database::connect("sqlite::memory:").await.unwrap(),
         fixed_now,
-        Settings {
+        &Settings {
             max_message_size: 4 << 20,
             ..Settings::default()
         },
@@ -1143,6 +1143,54 @@ async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
 }
 
 #[tokio::test]
+async fn a_stop_doesnt_wait_for_the_gap_after_a_round() {
+    let settings = Settings {
+        timings: crate::core::MasterTimings {
+            round_gap: Duration::from_mins(1),
+            ..crate::core::MasterTimings::default()
+        },
+        ..Settings::default()
+    };
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let (hub, _db, mut client) = connected_on_with(db, fixed_now, &settings).await;
+    let (to_master, outbound) = mpsc::channel(64);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            hub.run(Duration::from_mins(10), None, async {
+                let _ = stopped.await;
+            })
+            .await;
+        }
+    });
+    // Its first round ends, then a finish asks for the next one, a minute from it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: "unknown".to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    });
+    to_master.send(wrap(finished)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = stop.send(());
+    tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("stopped during the gap")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
     let (hub, _db, mut client) = connected().await;
     let mut registry = prometheus_client::registry::Registry::default();
@@ -1208,7 +1256,7 @@ async fn a_root_past_the_limit_is_stored_when_each_file_fits() {
     let (hub, db, mut client) = connected_on_with(
         Database::connect("sqlite::memory:").await.unwrap(),
         fixed_now,
-        Settings {
+        &Settings {
             max_message_size: 4 << 20,
             ..Settings::default()
         },

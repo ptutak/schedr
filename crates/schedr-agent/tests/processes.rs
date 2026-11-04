@@ -25,6 +25,7 @@ fn shell(dir: &Path, script: &str, max_output_size: usize) -> ProcessSpec {
         max_output_size,
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
+        output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
     }
 }
 
@@ -32,6 +33,7 @@ const NO_LIMITS: Limits = Limits {
     timeout: None,
     grace: Duration::from_secs(5),
     interrupt_grace: Duration::from_secs(5),
+    poll: schedr_agent::supervise::STOP_POLL,
 };
 
 /// A process whose output can be collected once it ended.
@@ -91,6 +93,7 @@ async fn a_process_past_its_timeout_is_stopped_with_sigterm() {
         timeout: Some(Duration::from_millis(200)),
         grace: Duration::from_secs(5),
         interrupt_grace: Duration::from_secs(5),
+        poll: schedr_agent::supervise::STOP_POLL,
     };
     let supervised = supervise(&mut process, limits, never()).await.unwrap();
     assert_eq!(supervised.stopped, Some(StopReason::TimedOut));
@@ -108,6 +111,7 @@ async fn a_process_ignoring_sigterm_is_killed_after_the_grace_time() {
         timeout: Some(Duration::from_millis(200)),
         grace: Duration::from_millis(300),
         interrupt_grace: Duration::from_millis(300),
+        poll: schedr_agent::supervise::STOP_POLL,
     };
     let started = std::time::Instant::now();
     let supervised = supervise(&mut process, limits, never()).await.unwrap();

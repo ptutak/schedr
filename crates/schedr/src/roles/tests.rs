@@ -689,16 +689,40 @@ fn sign_in_modes_are_refused_where_they_would_be_unsafe() {
         ..AuthSection::default()
     };
     // Beyond loopback, a proxy's header could be forged by anyone reaching it around the proxy.
-    let error = role_auth("webserver", &proxy, open, None)
-        .unwrap_err()
-        .to_string();
+    let error = role_auth(
+        "webserver",
+        &proxy,
+        open,
+        None,
+        schedr_api::auth::AuthTimings::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("could name any user"), "{error}");
-    assert!(role_auth("webserver", &proxy, loopback(), None).is_ok());
+    assert!(
+        role_auth(
+            "webserver",
+            &proxy,
+            loopback(),
+            None,
+            schedr_api::auth::AuthTimings::default()
+        )
+        .is_ok()
+    );
     let trusted = AuthSection {
         allow_remote: true,
         ..proxy
     };
-    assert!(role_auth("webserver", &trusted, open, None).is_ok());
+    assert!(
+        role_auth(
+            "webserver",
+            &trusted,
+            open,
+            None,
+            schedr_api::auth::AuthTimings::default()
+        )
+        .is_ok()
+    );
     // Basic over plain HTTP beyond loopback: refused unless TLS is ended in front.
     let dir = TempDir::new().unwrap();
     let users = dir.path().join("users");
@@ -712,14 +736,31 @@ fn sign_in_modes_are_refused_where_they_would_be_unsafe() {
         users_file: Some(users),
         ..AuthSection::default()
     };
-    let error = role_auth("ui", &basic, open, None).unwrap_err().to_string();
+    let error = role_auth(
+        "ui",
+        &basic,
+        open,
+        None,
+        schedr_api::auth::AuthTimings::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("[ui.auth] mode = \"basic\""), "{error}");
     assert!(error.contains("in the clear"), "{error}");
     let behind = AuthSection {
         behind_tls_proxy: true,
         ..basic
     };
-    assert!(role_auth("ui", &behind, open, None).is_ok());
+    assert!(
+        role_auth(
+            "ui",
+            &behind,
+            open,
+            None,
+            schedr_api::auth::AuthTimings::default()
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -728,16 +769,37 @@ fn the_uis_token_is_read_and_must_be_long_enough() {
     let token = dir.path().join("token");
     std::fs::write(&token, "short\n").unwrap();
     let section = schedr_config::AuthSection::default();
-    let error = role_auth("webserver", &section, loopback(), Some(&token))
-        .unwrap_err()
-        .to_string();
+    let error = role_auth(
+        "webserver",
+        &section,
+        loopback(),
+        Some(&token),
+        schedr_api::auth::AuthTimings::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("shorter than 16 characters"), "{error}");
     std::fs::write(&token, "0123456789abcdef0123\n").unwrap();
-    assert!(role_auth("webserver", &section, loopback(), Some(&token)).is_ok());
+    assert!(
+        role_auth(
+            "webserver",
+            &section,
+            loopback(),
+            Some(&token),
+            schedr_api::auth::AuthTimings::default()
+        )
+        .is_ok()
+    );
     let missing = dir.path().join("missing");
-    let error = role_auth("webserver", &section, loopback(), Some(&missing))
-        .unwrap_err()
-        .to_string();
+    let error = role_auth(
+        "webserver",
+        &section,
+        loopback(),
+        Some(&missing),
+        schedr_api::auth::AuthTimings::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("ui_token_file"), "{error}");
 }
 
@@ -770,7 +832,8 @@ async fn standalones_pages_want_a_sign_in_and_its_api_no_other_sites_writes() {
     std::fs::write(&token_file, format!("{token}\n")).unwrap();
     let auth = schedr_api::auth::Auth::from_config(
         &section,
-        Some(schedr_api::auth::read_ui_token(&token_file).unwrap()),
+        Some(schedr_api::auth::read_ui_token(&token_file, schedr_api::auth::RECHECK).unwrap()),
+        schedr_api::auth::AuthTimings::default(),
     )
     .unwrap();
     let listener = listen(loopback()).await.unwrap();
@@ -788,7 +851,10 @@ async fn standalones_pages_want_a_sign_in_and_its_api_no_other_sites_writes() {
             ),
             (listener, None),
             None,
-            Some(LocalUi { docs_dir: None }),
+            Some(LocalUi {
+                docs_dir: None,
+                timings: schedr_ui::live::UiTimings::default(),
+            }),
             Observed {
                 metrics: ApiMetrics::default(),
                 health: &health,
@@ -975,7 +1041,10 @@ async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
             ),
             (listener, None),
             None,
-            Some(LocalUi { docs_dir: None }),
+            Some(LocalUi {
+                docs_dir: None,
+                timings: schedr_ui::live::UiTimings::default(),
+            }),
             Observed {
                 metrics: ApiMetrics::default(),
                 health: &health,
@@ -995,4 +1064,64 @@ async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
         .unwrap()
         .unwrap();
     drop(stream);
+}
+
+#[test]
+fn the_fixed_timings_defaults_are_each_crates_own() {
+    let config = Config::default();
+    assert_eq!(
+        worker_timeouts(&config),
+        schedr_agent::attempt::WorkerTimeouts::default()
+    );
+    assert_eq!(
+        master_settings(&config).timings,
+        schedr_master::core::MasterTimings::default()
+    );
+    assert_eq!(
+        ui_timings(&config.timings),
+        schedr_ui::live::UiTimings::default()
+    );
+    assert_eq!(
+        auth_timings(&config.timings),
+        schedr_api::auth::AuthTimings::default()
+    );
+    let api = ApiTimings::of(&config);
+    assert_eq!(api.events, schedr_api::events::EventTimings::default());
+    assert_eq!(api.requests_grace, REQUESTS_GRACE);
+    assert_eq!(api.accept_retry, schedr_tls::incoming::ACCEPT_RETRY);
+    assert_eq!(config.timings.schema_retry, SCHEMA_RETRY);
+    assert_eq!(config.timings.node_heartbeat, crate::node::MASTER_HEARTBEAT);
+}
+
+#[test]
+fn a_hidden_timing_reaches_what_uses_it() {
+    let mut config = Config::default();
+    let timings = &mut config.timings;
+    timings.fork_backoff_max = Duration::from_secs(1001);
+    timings.orphan_kill_wait = Duration::from_secs(1002);
+    timings.worker_alive_interval = Duration::from_secs(1003);
+    timings.master_alive_interval = Duration::from_secs(1004);
+    timings.parse_retry_max = Duration::from_secs(1005);
+    timings.ui_coalesce = Duration::from_secs(1006);
+    timings.auth_remembered = Duration::from_secs(1007);
+    timings.events_keep_alive = Duration::from_secs(1008);
+    let worker = worker_timeouts(&config);
+    assert_eq!(worker.fork_backoff.max, Duration::from_secs(1001));
+    assert_eq!(worker.orphan.kill_wait, Duration::from_secs(1002));
+    assert_eq!(worker.alive, Duration::from_secs(1003));
+    let master = master_settings(&config).timings;
+    assert_eq!(master.alive, Duration::from_secs(1004));
+    assert_eq!(master.parse_retry_max, Duration::from_secs(1005));
+    assert_eq!(
+        ui_timings(&config.timings).coalesce,
+        Duration::from_secs(1006)
+    );
+    assert_eq!(
+        auth_timings(&config.timings).remembered,
+        Duration::from_secs(1007)
+    );
+    assert_eq!(
+        ApiTimings::of(&config).events.keep_alive,
+        Duration::from_secs(1008)
+    );
 }

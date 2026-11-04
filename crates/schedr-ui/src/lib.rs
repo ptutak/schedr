@@ -53,6 +53,8 @@ pub struct Ui<T> {
     pub docs_dir: Option<PathBuf>,
     /// Who the person using it is (`[ui.auth]`; standalone's: `[webserver.auth]`, one port).
     pub auth: schedr_api::auth::Auth,
+    /// How its live pages are paced.
+    pub timings: live::UiTimings,
     /// Its own configuration, masked (its node's panel on the Deployments page; standalone's:
     /// the process's).
     pub config: serde_json::Value,

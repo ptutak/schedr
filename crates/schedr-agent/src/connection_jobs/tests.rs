@@ -127,6 +127,7 @@ fn job() -> ConnectionJob {
         code_dir: None,
         registry: registry(),
         test: None,
+        cancel_grace: CANCEL_GRACE,
         attempt_id: "t0".to_owned(),
         deadline: tokio::time::Instant::now() + Duration::from_secs(60),
     }

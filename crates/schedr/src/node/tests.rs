@@ -26,6 +26,7 @@ async fn a_master_heartbeats_its_row_until_stopped() {
     let beating = tokio::spawn(heartbeat_master(
         db.clone(),
         MasterIdentity {
+            heartbeat: MASTER_HEARTBEAT,
             master_id: "m-1".to_owned(),
             config: config.clone(),
             problems: problems.clone(),

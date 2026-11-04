@@ -28,7 +28,13 @@ fn tls(ca: &TestCa, dir: &TempDir, prefix: &str, names: &[&str]) -> Tls {
 /// A gRPC server with no services on a free port, over `tls`: its address.
 async fn grpc_server(tls: Option<Tls>) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let incoming = incoming(listener, tls, Protocol::Grpc).unwrap();
+    let incoming = incoming(
+        listener,
+        tls,
+        Protocol::Grpc,
+        schedr_tls::incoming::ACCEPT_RETRY,
+    )
+    .unwrap();
     let address = incoming.local_addr();
     tokio::spawn(
         tonic::transport::Server::builder()
@@ -41,7 +47,13 @@ async fn grpc_server(tls: Option<Tls>) -> std::net::SocketAddr {
 /// An HTTP endpoint answering `ok` on a free port, over `tls`: its address.
 async fn http_server(tls: Option<Tls>) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let incoming = incoming(listener, tls, Protocol::Http).unwrap();
+    let incoming = incoming(
+        listener,
+        tls,
+        Protocol::Http,
+        schedr_tls::incoming::ACCEPT_RETRY,
+    )
+    .unwrap();
     let address = incoming.local_addr();
     tokio::spawn(async move {
         axum::serve(incoming, Router::new().route("/", get(|| async { "ok" })))
@@ -271,7 +283,13 @@ async fn a_master_that_never_answers_the_handshake_times_out() {
 /// An HTTP endpoint answering `ok` on a free port, over `tls`'s UI port configuration.
 async fn ui_port(tls: Tls) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let incoming = incoming(listener, Some(tls), Protocol::Ui).unwrap();
+    let incoming = incoming(
+        listener,
+        Some(tls),
+        Protocol::Ui,
+        schedr_tls::incoming::ACCEPT_RETRY,
+    )
+    .unwrap();
     let address = incoming.local_addr();
     tokio::spawn(async move {
         axum::serve(incoming, Router::new().route("/", get(|| async { "ok" })))

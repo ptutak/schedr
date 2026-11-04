@@ -59,7 +59,33 @@ pub enum Live {
 pub struct Feed {
     db: Database,
     refresh: Duration,
+    timings: EventTimings,
     sender: Arc<OnceLock<broadcast::Sender<Live>>>,
+}
+
+/// How the webserver follows the database's changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventTimings {
+    /// How often whether they are announced is looked at (`events_recheck`).
+    pub recheck: Duration,
+    /// How often a stream gets a comment (`events_keep_alive`).
+    pub keep_alive: Duration,
+    /// How soon a failure is tried again (`events_retry`).
+    pub retry: Duration,
+    /// How often changes are read where they aren't announced (`changes_poll_interval`).
+    pub changes_poll: Duration,
+}
+
+impl Default for EventTimings {
+    /// What every webserver runs with.
+    fn default() -> Self {
+        Self {
+            recheck: RECHECK,
+            keep_alive: KEEP_ALIVE,
+            retry: RETRY,
+            changes_poll: schedr_db::changes::POLL_INTERVAL,
+        }
+    }
 }
 
 impl Feed {
@@ -69,8 +95,21 @@ impl Feed {
         Self {
             db,
             refresh: REFRESH_INTERVAL,
+            timings: EventTimings::default(),
             sender: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// How often a stream gets a comment.
+    #[must_use]
+    pub const fn keep_alive(&self) -> Duration {
+        self.timings.keep_alive
+    }
+
+    /// This feed, following changes as `timings` say.
+    #[must_use]
+    pub fn with_timings(self, timings: EventTimings) -> Self {
+        Self { timings, ..self }
     }
 
     /// This feed sending `refresh` every `interval` when changes can't be followed.
@@ -88,7 +127,12 @@ impl Feed {
         self.sender
             .get_or_init(|| {
                 let (sender, _) = broadcast::channel(BACKLOG);
-                tokio::spawn(follow(self.db.clone(), sender.clone(), self.refresh));
+                tokio::spawn(follow(
+                    self.db.clone(),
+                    sender.clone(),
+                    self.refresh,
+                    self.timings,
+                ));
                 sender
             })
             .subscribe()
@@ -98,21 +142,32 @@ impl Feed {
 /// Reads the database's changes for as long as the webserver runs, sending each; when they
 /// can't be followed, `refresh` every [`REFRESH_INTERVAL`] instead. A failure is `refresh`, then
 /// another try.
-async fn follow(db: Database, sender: broadcast::Sender<Live>, refresh: Duration) {
+async fn follow(
+    db: Database,
+    sender: broadcast::Sender<Live>,
+    refresh: Duration,
+    timings: EventTimings,
+) {
     loop {
         let on = match db.change_notifications().await {
             Ok(on) => on,
             Err(error) => {
                 tracing::warn!(%error, "can't read whether the database announces its changes");
-                tokio::time::sleep(RETRY).await;
+                tokio::time::sleep(timings.retry).await;
                 continue;
             }
         };
-        let changes = if on { db.changes().await } else { Ok(None) };
+        let changes = if on {
+            db.changes(timings.changes_poll).await
+        } else {
+            Ok(None)
+        };
         match changes {
             Ok(Some(mut changes)) => {
-                let mut check =
-                    tokio::time::interval_at(tokio::time::Instant::now() + RECHECK, RECHECK);
+                let mut check = tokio::time::interval_at(
+                    tokio::time::Instant::now() + timings.recheck,
+                    timings.recheck,
+                );
                 loop {
                     tokio::select! {
                         batch = changes.next() => match batch {
@@ -129,7 +184,7 @@ async fn follow(db: Database, sender: broadcast::Sender<Live>, refresh: Duration
                             Err(error) => {
                                 tracing::warn!(%error, "following the database's changes failed");
                                 let _ = sender.send(Live::Refresh);
-                                tokio::time::sleep(RETRY).await;
+                                tokio::time::sleep(timings.retry).await;
                                 break;
                             }
                         },
@@ -171,7 +226,7 @@ async fn follow(db: Database, sender: broadcast::Sender<Live>, refresh: Duration
             }
             Err(error) => {
                 tracing::warn!(%error, "can't follow the database's changes; trying again");
-                tokio::time::sleep(RETRY).await;
+                tokio::time::sleep(timings.retry).await;
             }
         }
     }
@@ -221,6 +276,7 @@ pub async fn events(State(state): State<ApiState>) -> impl axum::response::IntoR
     // Proxies asked not to buffer it (nginx's header; others may anyway: the UI then polls).
     (
         [("x-accel-buffering", "no")],
-        Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)),
+        Sse::new(ReceiverStream::new(receiver))
+            .keep_alive(KeepAlive::new().interval(state.feed.keep_alive())),
     )
 }

@@ -228,7 +228,7 @@ fn group(script: &str) -> (ProcessIdentity, std::thread::JoinHandle<()>) {
 async fn an_orphan_is_stopped_with_sigterm_and_killed_if_it_ignores_it() {
     let (identity, reaper) = group("exec sleep 30");
     assert_eq!(
-        stop_orphan(identity, Duration::from_secs(10))
+        stop_orphan(identity, Duration::from_secs(10), OrphanWaits::default())
             .await
             .unwrap(),
         Orphan::Stopped
@@ -238,10 +238,29 @@ async fn an_orphan_is_stopped_with_sigterm_and_killed_if_it_ignores_it() {
     let (identity, reaper) = group("trap '' TERM; while :; do sleep 0.05; done");
     tokio::time::sleep(Duration::from_millis(100)).await; // the trap is set
     assert_eq!(
-        stop_orphan(identity, Duration::from_millis(200))
+        stop_orphan(identity, Duration::from_millis(200), OrphanWaits::default())
             .await
             .unwrap(),
         Orphan::Killed
+    );
+    reaper.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_slow_poll_doesnt_outlast_the_grace_and_the_kill_wait() {
+    let (identity, reaper) = group("trap '' TERM; while :; do sleep 0.05; done");
+    tokio::time::sleep(Duration::from_millis(100)).await; // the trap is set
+    let waits = OrphanWaits {
+        poll: Duration::from_secs(30),
+        kill_wait: Duration::from_millis(200),
+    };
+    let started = std::time::Instant::now();
+    let stopped = stop_orphan(identity, Duration::from_millis(100), waits).await;
+    assert_eq!(stopped.unwrap(), Orphan::Killed);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
     );
     reaper.join().unwrap();
 }
@@ -252,7 +271,9 @@ async fn a_gone_or_recycled_process_is_left_alone() {
     let mut identity = process_identity(pid).unwrap();
     identity.start_time += 1;
     assert_eq!(
-        stop_orphan(identity, Duration::ZERO).await.unwrap(),
+        stop_orphan(identity, Duration::ZERO, OrphanWaits::default())
+            .await
+            .unwrap(),
         Orphan::Gone
     );
     let gone = ProcessIdentity {
@@ -260,7 +281,9 @@ async fn a_gone_or_recycled_process_is_left_alone() {
         start_time: 1,
     };
     assert_eq!(
-        stop_orphan(gone, Duration::ZERO).await.unwrap(),
+        stop_orphan(gone, Duration::ZERO, OrphanWaits::default())
+            .await
+            .unwrap(),
         Orphan::Gone
     );
 }

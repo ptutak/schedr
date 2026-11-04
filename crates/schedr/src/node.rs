@@ -63,9 +63,11 @@ pub struct MasterIdentity {
     pub config: serde_json::Value,
     /// Its problems now (decision 129), written with each beat.
     pub problems: Problems,
+    /// How often its row is written (`node_heartbeat`).
+    pub heartbeat: std::time::Duration,
 }
 
-/// Writes `master`'s row every [`MASTER_HEARTBEAT`] on `db` (not fenced: a standby writes too)
+/// Writes `master`'s row every `master.heartbeat` on `db` (not fenced: a standby writes too)
 /// until `stop`. A write that fails is logged once, until one succeeds; not while the schema
 /// isn't usable yet (it is being migrated).
 pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch::Receiver<u32>) {
@@ -97,7 +99,7 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
                     }
                 }
             }
-            tokio::time::sleep(MASTER_HEARTBEAT).await;
+            tokio::time::sleep(master.heartbeat).await;
         }
     };
     tokio::select! {

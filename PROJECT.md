@@ -6975,6 +6975,16 @@ Decisions 231-238 (the user's, 2026-11-04; the options were Claude's).
   `cleanup_timeout`, Vault storages' `request_timeout` and `connect_timeout`. Where zero means
   something (`settle_time`, `cancel_grace`, `code_wait`, `drain_terminate_period`,
   `fork_server_import_retry`, `cache_ttl`) it stays allowed.
+- **Built (M4.8u; decisions 239-241):** every server-side timing on the hidden route, 61 in all.
+- **239. The auth timings go hidden too.** Checked for decision 236: a change of the users file
+  forgets every remembered check, so `auth_remembered` has no effect on revocation and only
+  saves bcrypt runs; `auth_recheck` is how long a change takes to count, and the docs say so.
+  Neither has a reason to stay a constant (decision 237).
+- **240. The inline timings count as well:** Vault's two renewal waits, a stopped group's poll,
+  a connection test's cancel grace, the listeners' retry after a failed accept.
+- **241. What stays a constant, and why:** the gauge refresh limit (derived in production, half
+  of `loop_stall_timeout`), the connection for migrating (no `query_timeout`, so no limit to
+  tie to), and what the client, `task-ctx` and the CLI use (they don't load this configuration).
 
 ### Output serialization
 

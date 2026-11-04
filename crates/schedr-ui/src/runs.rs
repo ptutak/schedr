@@ -542,11 +542,14 @@ pub async fn run<T: Transport>(
         path_segment(&deployment.name),
         path_segment(&run_id)
     );
+    let tail = ui.timings.tail_interval;
     let panel = match &query.task {
-        Some(task) => match task_panel(&page, deployment, &run_id, &run_href, task, &query).await {
-            Ok(html) => html,
-            Err(failure) => return failure.page(&page),
-        },
+        Some(task) => {
+            match task_panel(&page, deployment, &run_id, &run_href, task, &query, tail).await {
+                Ok(html) => html,
+                Err(failure) => return failure.page(&page),
+            }
+        }
         None => String::new(),
     };
     let (whole, tasks) = task_rows(&page, &run_href, &detail.tasks);
@@ -1187,7 +1190,17 @@ pub async fn panel<T: Transport>(
         }
         return axum::response::Redirect::to(&to).into_response();
     }
-    match task_panel(&page, deployment, &run_id, &run_href, &task_id, &query).await {
+    match task_panel(
+        &page,
+        deployment,
+        &run_id,
+        &run_href,
+        &task_id,
+        &query,
+        ui.timings.tail_interval,
+    )
+    .await
+    {
         Ok(html) => (
             [(header::CACHE_CONTROL, "no-store")],
             axum::response::Html(html),
@@ -1253,6 +1266,7 @@ async fn task_panel<T: Transport>(
     run_href: &str,
     task_id: &str,
     query: &RunQuery,
+    tail_interval: std::time::Duration,
 ) -> Result<String, Failure> {
     let client = &deployment.client;
     let missing = || Failure::missing(format!("There is no task `{task_id}` in run `{run_id}`."));
@@ -1285,7 +1299,7 @@ async fn task_panel<T: Transport>(
     let body = match tab {
         "instances" => TabBody::Instances(instance_rows(&detail.tasks, &at)),
         "output" => output_tab(deployment, run_id, &at).await?,
-        "logs" => log_tab(deployment, run_id, &at, query).await?,
+        "logs" => log_tab(deployment, run_id, &at, query, tail_interval).await?,
         "cleanup" => TabBody::Cleanup,
         _ => {
             let attempts = client
@@ -1443,6 +1457,7 @@ async fn log_tab<T: Transport>(
     run_id: &str,
     at: &Instance<'_>,
     query: &RunQuery,
+    tail_interval: std::time::Duration,
 ) -> Result<TabBody, Failure> {
     let (task_id, panel_href, run_href) = (at.task_id, at.panel_href, at.run_href);
     let instance = at.query();
@@ -1522,6 +1537,7 @@ async fn log_tab<T: Transport>(
                     part.next
                 ),
                 false,
+                tail_interval,
             )
         }),
     })

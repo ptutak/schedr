@@ -66,6 +66,7 @@ const LIMITS: Limits = Limits {
     timeout: Some(Duration::from_secs(60)),
     grace: Duration::from_secs(30),
     interrupt_grace: Duration::from_secs(3),
+    poll: crate::supervise::STOP_POLL,
 };
 
 /// No reason to stop, ever.
@@ -197,6 +198,7 @@ async fn without_a_timeout_only_a_stop_ends_supervision() {
         timeout: None,
         grace: Duration::from_secs(1),
         interrupt_grace: Duration::from_secs(1),
+        poll: crate::supervise::STOP_POLL,
     };
     let drain = stopping_after(3600, StopReason::Interrupted);
     let result = supervise(&mut fake, limits, drain).await.unwrap();

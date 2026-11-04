@@ -35,6 +35,7 @@ use schedr_api::auth::Auth;
 use schedr_api::logs::HttpLogSource;
 use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
+use schedr_config::config::Timings;
 use schedr_config::{AuthMode, AuthSection, Config, MemoryReserve, TlsMode};
 use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
@@ -65,7 +66,7 @@ pub async fn until(mut stop: watch::Receiver<u32>) {
 pub const REQUESTS_GRACE: Duration = Duration::from_secs(3);
 
 /// `server` (shutting down gracefully on `stop`) until it ends; once `stop` asks, its open
-/// requests get [`REQUESTS_GRACE`] and are then cut.
+/// requests get `grace` and are then cut.
 ///
 /// # Errors
 ///
@@ -73,6 +74,7 @@ pub const REQUESTS_GRACE: Duration = Duration::from_secs(3);
 pub async fn served(
     server: impl std::future::IntoFuture<Output = std::io::Result<()>>,
     stop: watch::Receiver<u32>,
+    grace: Duration,
 ) -> std::io::Result<()> {
     let server = server.into_future();
     tokio::pin!(server);
@@ -80,14 +82,45 @@ pub async fn served(
         done = &mut server => return done,
         () = until(stop) => {}
     }
-    if let Ok(done) = tokio::time::timeout(REQUESTS_GRACE, server).await {
+    if let Ok(done) = tokio::time::timeout(grace, server).await {
         return done;
     }
     tracing::info!(
         "open requests (the pages' event streams) cut {}s after the stop",
-        REQUESTS_GRACE.as_secs()
+        grace.as_secs()
     );
     Ok(())
+}
+
+/// How long what a worker starts may take, and how it is paced.
+#[must_use]
+pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts {
+    schedr_agent::attempt::WorkerTimeouts {
+        runner_start: config.worker.runner_start_timeout,
+        fork_preload: config.worker.fork_server_preload_timeout,
+        cleanup: config.worker.cleanup_timeout,
+        output_drain: config.timings.output_drain_timeout,
+        fork_answer: config.timings.fork_answer_timeout,
+        fork_backoff: schedr_agent::fork::ForkBackoff {
+            first: config.timings.fork_backoff_first,
+            max: config.timings.fork_backoff_max,
+            reset_after: config.timings.fork_backoff_reset_after,
+        },
+        log_sweep: config.timings.log_sweep_interval,
+        orphan: schedr_agent::journal::OrphanWaits {
+            poll: config.timings.orphan_poll,
+            kill_wait: config.timings.orphan_kill_wait,
+        },
+        orphan_grace: config.timings.orphan_grace,
+        reconnect_first: config.timings.reconnect_backoff_first,
+        reconnect_max: config.timings.reconnect_backoff_max,
+        alive: config.timings.worker_alive_interval,
+        deregister: config.timings.deregister_wait,
+        drain_tick: config.timings.drain_tick,
+        stop_poll: config.timings.stop_poll,
+        connection_cancel_grace: config.timings.connection_job_cancel_grace,
+        accept_retry: config.timings.accept_retry,
+    }
 }
 
 /// The master's timing, from the configuration.
@@ -100,6 +133,15 @@ pub fn master_settings(config: &Config) -> Settings {
         parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,
         set_aside: config.timings.set_aside,
+        timings: schedr_master::core::MasterTimings {
+            round_gap: config.timings.round_gap,
+            notification_retry: config.timings.notification_retry,
+            alive: config.timings.master_alive_interval,
+            gauge_refresh: config.timings.gauge_refresh,
+            parse_retry_first: config.timings.parse_retry_first,
+            parse_retry_max: config.timings.parse_retry_max,
+            accept_retry: config.timings.accept_retry,
+        },
         read_back: schedr_master::dispatch::ReadBack {
             window: config.timings.read_back_window,
             interval: config.timings.read_back_interval,
@@ -203,11 +245,7 @@ pub fn agent_settings(
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
         setup: WorkerSetup {
-            timeouts: schedr_agent::attempt::WorkerTimeouts {
-                runner_start: config.worker.runner_start_timeout,
-                fork_preload: config.worker.fork_server_preload_timeout,
-                cleanup: config.worker.cleanup_timeout,
-            },
+            timeouts: worker_timeouts(config),
             roots: config
                 .dag_roots
                 .iter()
@@ -245,6 +283,7 @@ pub fn agent_settings(
             grace: config.worker.termination_grace_period,
             terminate_period: config.worker.drain_terminate_period,
             report_period: config.timings.drain_report_period,
+            ack_wait: config.timings.drain_ack_wait,
         },
         // Known once the log endpoint listens (see [`log_endpoint`]).
         log_endpoint: String::new(),
@@ -465,7 +504,7 @@ pub async fn serve_master(
         holder = leadership.holder(),
         "schedr master: leading (the lease is this master's)"
     );
-    let connections = incoming(listener, tls, Protocol::Grpc)
+    let connections = incoming(listener, tls, Protocol::Grpc, settings.timings.accept_retry)
         .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
     let listen_retry = settings.listen_retry;
     let (notifications, retry) = match db.command_notifications().await {
@@ -565,12 +604,13 @@ pub fn ui_deployments(
             let mut transport =
                 schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None);
             if let Some(path) = &d.token_file {
-                let token = schedr_api::auth::read_ui_token(path).map_err(|e| {
-                    AppError::BadArgument(format!(
-                        "[ui] deployments: `{}`'s token_file: {e}",
-                        d.name
-                    ))
-                })?;
+                let token = schedr_api::auth::read_ui_token(path, config.timings.auth_recheck)
+                    .map_err(|e| {
+                        AppError::BadArgument(format!(
+                            "[ui] deployments: `{}`'s token_file: {e}",
+                            d.name
+                        ))
+                    })?;
                 transport = transport.with_ui_token(token);
             }
             if d.url.starts_with("https://") {
@@ -627,7 +667,13 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let address = SocketAddr::new(config.ui.bind, config.ui.port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);
-    let auth = role_auth("ui", &config.ui.auth, bound, None)?;
+    let auth = role_auth(
+        "ui",
+        &config.ui.auth,
+        bound,
+        None,
+        auth_timings(&config.timings),
+    )?;
     if config.ui.auth.mode == AuthMode::None
         && let Some(warning) =
             no_auth_warning_for("the web UI", bound, "set [ui] bind = \"127.0.0.1\"")
@@ -642,6 +688,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let app = schedr_ui::router(schedr_ui::Ui {
         deployments,
         docs_dir: docs_dir(config),
+        timings: ui_timings(&config.timings),
         auth,
         config: masked(config),
         process_id: crate::node::process_id().to_owned(),
@@ -649,7 +696,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     });
     ready.ready();
     let server = axum::serve(listener, app).with_graceful_shutdown(until(stop.clone()));
-    served(server, stop)
+    served(server, stop, config.timings.requests_grace)
         .await
         .map_err(|e| AppError::BadArgument(format!("HTTP server: {e}")))
 }
@@ -659,6 +706,30 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
 pub struct LocalUi {
     /// The documentation site, when there is one (see [`docs_dir`]).
     pub docs_dir: Option<PathBuf>,
+    /// How its live pages are paced.
+    pub timings: schedr_ui::live::UiTimings,
+}
+
+/// How a UI's live pages are paced, by `timings`.
+#[must_use]
+pub const fn ui_timings(timings: &Timings) -> schedr_ui::live::UiTimings {
+    schedr_ui::live::UiTimings {
+        keep_alive: timings.ui_keep_alive,
+        coalesce: timings.ui_coalesce,
+        tail_interval: timings.ui_tail_interval,
+        tail_give_up: timings.ui_tail_give_up,
+        retry_first: timings.ui_relay_retry_first,
+        retry_max: timings.ui_relay_retry_max,
+    }
+}
+
+/// How the users and the UI's token are followed, by `timings`.
+#[must_use]
+pub const fn auth_timings(timings: &Timings) -> schedr_api::auth::AuthTimings {
+    schedr_api::auth::AuthTimings {
+        recheck: timings.auth_recheck,
+        remembered: timings.auth_remembered,
+    }
 }
 
 /// The name of the deployment `schedr standalone`'s UI shows (in its URLs).
@@ -671,9 +742,15 @@ pub fn docs_dir(config: &Config) -> Option<PathBuf> {
     (!dir.as_os_str().is_empty() && dir.is_dir()).then(|| dir.clone())
 }
 
-/// How long the webserver waits and refreshes (`[webserver]`).
+/// How long the webserver waits and refreshes.
 #[derive(Debug, Clone, Copy)]
 pub struct ApiTimings {
+    /// How the database's changes are followed.
+    pub events: schedr_api::events::EventTimings,
+    /// How long open requests get once a stop is asked for (`requests_grace`).
+    pub requests_grace: Duration,
+    /// How long its listener waits after a failed accept (`accept_retry`).
+    pub accept_retry: Duration,
     /// `refresh_interval`.
     pub refresh: Duration,
     /// `worker_connect_timeout`.
@@ -689,6 +766,14 @@ impl ApiTimings {
     #[must_use]
     pub const fn of(config: &Config) -> Self {
         Self {
+            requests_grace: config.timings.requests_grace,
+            accept_retry: config.timings.accept_retry,
+            events: schedr_api::events::EventTimings {
+                recheck: config.timings.events_recheck,
+                keep_alive: config.timings.events_keep_alive,
+                retry: config.timings.events_retry,
+                changes_poll: config.timings.changes_poll_interval,
+            },
             refresh: config.timings.refresh_interval,
             worker_connect: config.timings.worker_connect_timeout,
             worker_request: config.webserver.worker_request_timeout,
@@ -720,6 +805,7 @@ pub async fn serve_api(
     let (ui_process, ui_host) = (node.process_id.clone(), node.host.clone());
     let state = ApiState::new(db, None)
         .with_auth(auth)
+        .with_event_timings(timings.events)
         .with_refresh(timings.refresh)
         .with_node(node)
         .with_logs(std::sync::Arc::new(
@@ -746,6 +832,7 @@ pub async fn serve_api(
             api.clone().merge(schedr_ui::router(schedr_ui::Ui {
                 deployments,
                 docs_dir: local.docs_dir,
+                timings: local.timings,
                 auth: ui_auth,
                 config: ui_config,
                 process_id: ui_process,
@@ -758,6 +845,7 @@ pub async fn serve_api(
     let public = served(
         axum::serve(listener, app).with_graceful_shutdown(until(stop.clone())),
         stop.clone(),
+        timings.requests_grace,
     );
     // The UI port: the same API, its requests marked proven (decision 36): in `app` mode only
     // `schedr ui`'s certificate gets through the handshake; in `mesh` mode
@@ -771,10 +859,12 @@ pub async fn serve_api(
             request
         },
     ));
-    let connections = incoming(ui_listener, tls, Protocol::Ui).map_err(http)?;
+    let connections =
+        incoming(ui_listener, tls, Protocol::Ui, timings.accept_retry).map_err(http)?;
     let ui_server = served(
         axum::serve(connections, proven).with_graceful_shutdown(until(stop.clone())),
         stop,
+        timings.requests_grace,
     );
     tokio::try_join!(public, ui_server).map_err(http)?;
     Ok(())
@@ -821,13 +911,19 @@ pub async fn run_worker(
         log_listener,
         retention,
     } = links;
+    let timeouts = agent.setup.timeouts;
     let endpoint = LogEndpoint {
         worker_id: agent.worker_id.clone(),
         log_dir: agent.setup.log_dir.clone(),
         journal: Journal::new(agent.journal_dir.clone()),
     };
     let (done, finished) = watch::channel(0);
-    let logs = match incoming(log_listener, tls.clone(), Protocol::Http) {
+    let logs = match incoming(
+        log_listener,
+        tls.clone(),
+        Protocol::Http,
+        timeouts.accept_retry,
+    ) {
         Ok(connections) => Some(tokio::spawn(
             axum::serve(connections, schedr_agent::logs::router(endpoint.clone()))
                 .with_graceful_shutdown(until(finished.clone()))
@@ -843,6 +939,7 @@ pub async fn run_worker(
         endpoint.journal,
         retention,
         observed.metrics.clone(),
+        timeouts.log_sweep,
         until(finished),
     ));
     let executor = ProcessExecutor {
@@ -971,6 +1068,7 @@ pub fn role_auth(
     section: &AuthSection,
     address: SocketAddr,
     ui_token_file: Option<&std::path::Path>,
+    timings: schedr_api::auth::AuthTimings,
 ) -> Result<Auth, AppError> {
     let remote = !address.ip().is_loopback();
     match section.mode {
@@ -993,11 +1091,11 @@ pub fn role_auth(
     }
     let token = ui_token_file
         .map(|path| {
-            schedr_api::auth::read_ui_token(path)
+            schedr_api::auth::read_ui_token(path, timings.recheck)
                 .map_err(|e| AppError::BadArgument(format!("[webserver] ui_token_file: {e}")))
         })
         .transpose()?;
-    Auth::from_config(section, token)
+    Auth::from_config(section, token, timings)
         .map_err(|e| AppError::BadArgument(format!("[{what}.auth] {e}")))
 }
 
@@ -1280,6 +1378,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
         master_id: new_master_id(),
         config: masked(config),
         problems: problems.clone(),
+        heartbeat: config.timings.node_heartbeat,
     };
     let master_id = identity.master_id.clone();
     tokio::spawn(heartbeat_master(db.clone(), identity, stop.clone()));
@@ -1416,7 +1515,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     )
     .await?;
     let db = connect_database(config, "webserver").await?;
-    let waiting = wait_for_schema(&db, "webserver", SCHEMA_RETRY);
+    let waiting = wait_for_schema(&db, "webserver", config.timings.schema_retry);
     if until_stopped(waiting, stop.clone()).await.is_none() {
         return Ok(());
     }
@@ -1428,6 +1527,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         &config.webserver.auth,
         bound,
         config.webserver.ui_token_file.as_deref(),
+        auth_timings(&config.timings),
     )?;
     if config.webserver.auth.mode == AuthMode::None
         && let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"")
@@ -1531,7 +1631,9 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .map_err(AppError::BadArgument)?;
     // No database here: never the `db` storage.
     agent.secrets = std::sync::Arc::new(
-        crate::secret_storage::SecretPlan::new(&config.secret_storage, env).stores(None)?,
+        crate::secret_storage::SecretPlan::new(&config.secret_storage, env)
+            .renewing(&config.timings)
+            .stores(None)?,
     );
     let _lock = lock_journal(&agent)?;
     let address = SocketAddr::new(config.worker.log_bind, config.worker.log_port);
