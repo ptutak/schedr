@@ -211,19 +211,23 @@ pub enum TaskKind {
         env: BTreeMap<String, Template>,
         /// Where it runs, relative to the script root (`schedr.toml`'s directory by default).
         working_dir: String,
+        /// Its part in a resource (`ScriptResource`, `cleanup_script`), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<ResourceRole>,
     },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
 }
 
-/// A command's part in a resource, for `schedr task-ctx resource set|get`.
+/// A command's or a script's part in a resource, for `schedr task-ctx resource set|get`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceRole {
-    /// A `CommandResource`'s setup: its output is the value it reports with `resource set`,
+    /// A `CommandResource`'s or `ScriptResource`'s setup: its output is the value it reports with `resource set`,
     /// of the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.
     Setup,
-    /// A resource's `cleanup_command`: it reads the setup's value with `resource get`.
+    /// A resource's `cleanup_command` or `cleanup_script`: it reads the setup's value with
+    /// `resource get`.
     Cleanup {
         /// The resource's setup task.
         setup: TaskId,
@@ -239,6 +243,17 @@ pub enum CleanupRun {
     Python,
     /// A command, with the task's environment.
     Command(CommandLine),
+    /// A script of the task's script root (`[jobs.<name>.cleanup]`), with the task's
+    /// environment and working directory.
+    Script {
+        /// The script, relative to the script root.
+        script: String,
+        /// The interpreter: an `[interpreters]` entry of the worker that runs it.
+        interpreter: String,
+        /// Its arguments, each one argument (never a shell string).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<Template>,
+    },
 }
 
 /// A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).
@@ -339,7 +354,16 @@ impl Task {
     pub fn cleanup_command(&self) -> Option<&CommandLine> {
         match self.cleanup.as_ref().map(|c| &c.run) {
             Some(CleanupRun::Command(command)) => Some(command),
-            Some(CleanupRun::Python) | None => None,
+            Some(CleanupRun::Python | CleanupRun::Script { .. }) | None => None,
+        }
+    }
+
+    /// Its cleanup script's arguments, if it has one.
+    #[must_use]
+    pub fn cleanup_script_args(&self) -> &[Template] {
+        match self.cleanup.as_ref().map(|c| &c.run) {
+            Some(CleanupRun::Script { args, .. }) => args,
+            _ => &[],
         }
     }
 
@@ -393,6 +417,7 @@ impl Task {
                 .collect(),
             TaskKind::Script { args, env, .. } => args
                 .iter()
+                .chain(self.cleanup_script_args())
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),

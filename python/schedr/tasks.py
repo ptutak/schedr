@@ -200,7 +200,13 @@ class Output[T]:
             raise TypeError(f"{self!r}.outcome: take it from the whole output")
         builder = _build.require_active("`.outcome`")
         _build.check_same_dag(self._dag, self._task)
-        if builder.outcomes.get(self._task, _outcomes.DEFAULT).is_union:
+        spec = builder.outcomes.get(self._task, _outcomes.DEFAULT)
+        if spec.codes and spec.names != _outcomes.DEFAULT.names:
+            raise TypeError(
+                f"`{self._task}.outcome`: its `schedr.toml` declares {', '.join(spec.names)}; "
+                "to read it as data, give the task `outcomes=` an `Outcome` enum"
+            )
+        if spec.is_union:
             raise TypeError(
                 f"`{self._task}.outcome`: its outcomes are a union of classes; the value's "
                 f"class says which, so pass `{self._task}` (or narrow with `.on(...)`)"

@@ -25,7 +25,7 @@ from schedr._serialization.annotations import type_hints, unwrap
 from schedr._serialization.describe import describe
 from schedr._templates import is_tstring
 from schedr.connections import Connection, ConnectionsArg, declared_connections
-from schedr.operators import CommandSettings, Operator, add_command
+from schedr.operators import CommandSettings, Operator, ScriptSettings, add_command, add_script
 from schedr.outcomes import RunIf
 from schedr.tasks import Output, TaskFunction, task
 
@@ -100,10 +100,19 @@ class _Command:
 
 
 @dataclass(frozen=True, slots=True)
-class _Cleanup:
-    """What ``.cleanup`` or ``.cleanup_command`` declared."""
+class _Script:
+    """What ``cleanup_script`` declared: a declaration, its value references resolved."""
 
-    run: Callable[..., object] | _Command
+    job: str
+    args: Sequence[object] | None
+    env: Mapping[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Cleanup:
+    """What ``.cleanup``, ``.cleanup_command`` or ``.cleanup_script`` declared."""
+
+    run: Callable[..., object] | _Command | _Script
     origin: tuple[object, object]
     timeout: timedelta | None
     retries: int | None
@@ -259,7 +268,7 @@ class _Declared:
 
     def _declare(
         self,
-        run: Callable[..., object] | _Command,
+        run: Callable[..., object] | _Command | _Script,
         origin: tuple[object, object],
         options: CleanupOptions,
     ) -> None:
@@ -336,21 +345,47 @@ class _Declared:
             secrets=tuple(dict.fromkeys((*made.secrets, *declared.secrets))),
             connections=tuple(dict.fromkeys((*made.connections, *declared.connections))),
         )
-        if isinstance(declared.run, _Command):
+        if isinstance(declared.run, _Command | _Script):
             where = f"task `{task_id}`"
             env = declared.run.env
-            add_command(
-                builder,
-                task_id,
-                _resolved(declared.run.command, builder, where),  # type: ignore[arg-type]
-                CommandSettings(
-                    env=None
-                    if env is None
-                    else {name: _resolved(v, builder, where) for name, v in env.items()},
-                    options=options,
-                    resource=ResourceRole(setup),
-                ),
+            resolved_env = (
+                None
+                if env is None
+                else {name: _resolved(v, builder, where) for name, v in env.items()}
             )
+            if isinstance(declared.run, _Command):
+                add_command(
+                    builder,
+                    task_id,
+                    _resolved(declared.run.command, builder, where),  # type: ignore[arg-type]
+                    CommandSettings(
+                        env=resolved_env,
+                        options=options,
+                        resource=ResourceRole(setup),
+                    ),
+                )
+            else:
+                args = declared.run.args
+                add_script(
+                    builder,
+                    task_id,
+                    declared.run.job,
+                    ScriptSettings(
+                        # The declaration's settings win over these defaults (decision 313).
+                        options=_build.TaskOptions(
+                            declared.retries,
+                            declared.retry_delay,
+                            declared.timeout,
+                            declared.queue,
+                            secrets=options.secrets,
+                            connections=options.connections,
+                        ),
+                        args=None if args is None else _resolved(args, builder, where),  # type: ignore[arg-type]
+                        env=resolved_env,
+                        fallback=options,
+                        resource=ResourceRole(setup),
+                    ),
+                )
             if not any(
                 e.from_ == setup and e.to == task_id and e.kind == EdgeKind.DATA
                 for e in builder.edges
@@ -377,6 +412,25 @@ class _Declared:
     ) -> None:
         """What ``.cleanup_command`` does, called from the resource object's method."""
         self.attach_command(_Command(command, env), options, _call_site(2))
+
+    def script_cleanup(
+        self,
+        job: str,
+        args: Sequence[object] | None,
+        env: Mapping[str, object] | None,
+        options: CleanupOptions,
+    ) -> None:
+        """What ``.cleanup_script`` does, called from the resource object's method.
+
+        Raises:
+            TypeError: For a second cleanup, or a reference that isn't a string.
+        """
+        if not isinstance(job, str):
+            raise TypeError(
+                f"resource `{self.name}`: `cleanup_script` takes a declaration's reference, "
+                "`<root>:<path>#<job>`"
+            )
+        self._declare(_Script(job, args, env), _call_site(2), options)
 
 
 class ResourceFunction[**P, T](TaskFunction[P, T]):
@@ -467,6 +521,34 @@ class ResourceFunction[**P, T](TaskFunction[P, T]):
             TypeError: For a second cleanup, or a command of the wrong type.
         """
         self._schedr_resource.command_cleanup(command, env, options)
+
+    def cleanup_script(
+        self,
+        job: str,
+        /,
+        *,
+        args: Sequence[object] | None = None,
+        env: Mapping[str, object] | None = None,
+        **options: Unpack[CleanupOptions],
+    ) -> None:
+        """Gives the resource a declared script as its cleanup (decision 271).
+
+        It reads the value with ``schedr task-ctx resource get``, or takes it in its arguments
+        or ``env``: ``t"{cluster.value.cluster_id}"``.
+
+        Its options win over the declaration's settings, which win over a cleanup's defaults.
+
+        Args:
+            job: The declaration: ``"<root>:<path>/schedr.toml#<name>"``. One with
+                ``[outcomes]`` or ``[cleanup]`` is refused.
+            args: Its arguments instead of the declared ones.
+            env: Environment variables added to (or replacing) the declared ones.
+            **options: See ``CleanupOptions``.
+
+        Raises:
+            TypeError: For a second cleanup, or a reference that isn't a string.
+        """
+        self._schedr_resource.script_cleanup(job, args, env, options)
 
     def _again(
         self,
@@ -561,6 +643,53 @@ class Resource:
         """
         self._schedr_resource.command_cleanup(command, env, options)
 
+    def cleanup_script(
+        self,
+        job: str,
+        /,
+        *,
+        args: Sequence[object] | None = None,
+        env: Mapping[str, object] | None = None,
+        **options: Unpack[CleanupOptions],
+    ) -> None:
+        """Gives the resource a declared script as its cleanup (decision 271).
+
+        It takes no value: the resource has none.
+
+        Its options win over the declaration's settings, which win over a cleanup's defaults.
+
+        Args:
+            job: The declaration: ``"<root>:<path>/schedr.toml#<name>"``. One with
+                ``[outcomes]`` or ``[cleanup]`` is refused.
+            args: Its arguments instead of the declared ones.
+            env: Environment variables added to (or replacing) the declared ones.
+            **options: See ``CleanupOptions``.
+
+        Raises:
+            TypeError: For a second cleanup, or a reference that isn't a string.
+        """
+        self._schedr_resource.script_cleanup(job, args, env, options)
+
+
+class ScriptResourceOptions(TypedDict, total=False):
+    """``ScriptResource``'s options besides its value: as for ``ScriptOperator``."""
+
+    args: Sequence[object] | None
+    env: Mapping[str, object] | None
+    retries: int | None
+    retry_delay: timedelta | None
+    timeout: timedelta | None
+    queue: str | None
+    max_output_size: int | None
+    run_if: RunIf | None
+    max_active: int | None
+    secrets: SecretsArg
+    cleanup_timeout: timedelta | None
+    cleanup_retries: int | None
+    cleanup_retry_delay: timedelta | None
+    cleanup_anywhere: bool | None
+    uses: Sequence[object] | None
+
 
 class CommandResourceOptions(TypedDict, total=False):
     """``CommandResource``'s options besides its value: as for ``CommandOperator``."""
@@ -584,7 +713,108 @@ class CommandResourceOptions(TypedDict, total=False):
     uses: Sequence[object] | None
 
 
-class CommandResource[T = None](Operator):
+class _ReportingResource[T = None](Operator):
+    """A resource whose setup is a process, which reports the value (decision 271)."""
+
+    _schedr_resource: _Declared
+
+    @property
+    def value(self) -> T:
+        """The value it reports: a reference, read by type checkers as the value."""
+        return Output[T](self._task_id, dag=self._dag)  # type: ignore[return-value]
+
+    def __getattr__(self, name: str) -> Output[object]:
+        """References a field of the value, as ``Output`` does: ``t"{cluster.cluster_id}"``.
+
+        Raises:
+            AttributeError: For names starting with ``_``.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return Output(self._task_id, (name,), dag=self._dag)
+
+    @overload
+    def cleanup(
+        self: _ReportingResource[None], fn: Callable[[], object], /
+    ) -> Callable[[], object]: ...
+    @overload
+    def cleanup(self, fn: Callable[[T], object], /) -> Callable[[T], object]: ...
+    @overload
+    def cleanup(
+        self: _ReportingResource[None], /, **options: Unpack[CleanupOptions]
+    ) -> _WithoutValue: ...
+    @overload
+    def cleanup(self, /, **options: Unpack[CleanupOptions]) -> _WithValue[T]: ...
+    def cleanup(
+        self, fn: Callable[..., object] | None = None, /, **options: Unpack[CleanupOptions]
+    ) -> Callable[..., object]:
+        """Marks a function as the resource's cleanup: it gets the reported value.
+
+        Args:
+            fn: The function, when used bare.
+            **options: See ``CleanupOptions``.
+
+        Returns:
+            The function as it is, or a decorator keeping it so.
+
+        Raises:
+            TypeError: For a second cleanup.
+        """
+        return self._schedr_resource.decorator(fn, options)
+
+    def cleanup_command(
+        self,
+        command: str | TString | Sequence[object],
+        /,
+        *,
+        env: Mapping[str, object] | None = None,
+        **options: Unpack[CleanupOptions],
+    ) -> None:
+        """Gives the resource a command as its cleanup (decision 271).
+
+        It reads the value with ``schedr task-ctx resource get``, or takes it in its command
+        line or ``env``: ``t"{cluster.cluster_id}"``.
+
+        Args:
+            command: A shell string, or a list of arguments.
+            env: Extra environment variables for the process.
+            **options: See ``CleanupOptions``.
+
+        Raises:
+            TypeError: For a second cleanup, or a command of the wrong type.
+        """
+        self._schedr_resource.command_cleanup(command, env, options)
+
+    def cleanup_script(
+        self,
+        job: str,
+        /,
+        *,
+        args: Sequence[object] | None = None,
+        env: Mapping[str, object] | None = None,
+        **options: Unpack[CleanupOptions],
+    ) -> None:
+        """Gives the resource a declared script as its cleanup (decision 271).
+
+        It reads the value with ``schedr task-ctx resource get``, or takes it in its arguments
+        or ``env``: ``t"{cluster.cluster_id}"``.
+
+        Its options win over the declaration's settings, which win over a cleanup's defaults.
+
+        Args:
+            job: The declaration: ``"<root>:<path>/schedr.toml#<name>"``. One with
+                ``[outcomes]`` or ``[cleanup]`` is refused.
+            args: Its arguments instead of the declared ones.
+            env: Environment variables added to (or replacing) the declared ones.
+            **options: See ``CleanupOptions``.
+
+        Raises:
+            TypeError: For a second cleanup, or a reference that isn't a string.
+        """
+        self._schedr_resource.script_cleanup(job, args, env, options)
+
+
+class CommandResource[T = None](_ReportingResource[T]):
     """A resource whose setup is a command (decision 271).
 
     The command reports the value with ``schedr task-ctx resource set``, checked against
@@ -692,72 +922,110 @@ class CommandResource[T = None](Operator):
         self._dag = builder
         builder.add_resource(task_id, self._schedr_resource)
 
-    @property
-    def value(self) -> T:
-        """The value it reports: a reference, read by type checkers as the value."""
-        return Output[T](self._task_id, dag=self._dag)  # type: ignore[return-value]
 
-    def __getattr__(self, name: str) -> Output[object]:
-        """References a field of the value, as ``Output`` does: ``t"{cluster.cluster_id}"``.
+class ScriptResource[T = None](_ReportingResource[T]):
+    """A resource whose setup is a script declared in a ``schedr.toml`` (decision 271).
 
-        Raises:
-            AttributeError: For names starting with ``_``.
-        """
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return Output(self._task_id, (name,), dag=self._dag)
+    The script reports the value with ``schedr task-ctx resource set``, checked against
+    ``value=`` at once. The setup succeeds only if it exits with 0 and, with ``value=``,
+    reported the value; its output is that value, not its ``ProcessResult``. Its users take
+    ``cluster.value`` (or ``uses=[cluster]``). A declared ``[cleanup]`` is the setup's own, for
+    a setup failing halfway; ``.cleanup_script`` and the others free the resource.
+
+    Args:
+        name: Its name: the ID of its setup.
+        job: The declaration: ``"<root>:<path>/schedr.toml#<name>"``. One with ``[outcomes]``
+            is refused.
+        value: The type of the value it reports; none: the resource has no value.
+        args: Its arguments instead of the declared ones.
+        env: Environment variables added to (or replacing) the declared ones.
+        retries: How many times a failed attempt is retried.
+        retry_delay: The delay before each retry.
+        timeout: The attempt's timeout.
+        queue: The queue the task goes to.
+        max_output_size: The output size limit in bytes (per stream).
+        run_if: When it runs, from its upstream edges.
+        max_active: At most this many running at once, across all runs.
+        secrets: Secrets declared besides the declared ones.
+        cleanup_timeout: How long one try of the declared cleanup may run.
+        cleanup_retries: How many times it is retried.
+        cleanup_retry_delay: The delay before each retry.
+        cleanup_anywhere: Whether it may run on another worker when this one is lost.
+        uses: The resources it needs.
+
+    Raises:
+        RuntimeError: Outside ``with Dag(...)``.
+        TypeError: For a value type that can't be stored, or a declaration with ``[outcomes]``.
+        LookupError: For a declaration the worker parsing the file doesn't have.
+    """
 
     @overload
-    def cleanup(
-        self: CommandResource[None], fn: Callable[[], object], /
-    ) -> Callable[[], object]: ...
-    @overload
-    def cleanup(self, fn: Callable[[T], object], /) -> Callable[[T], object]: ...
-    @overload
-    def cleanup(
-        self: CommandResource[None], /, **options: Unpack[CleanupOptions]
-    ) -> _WithoutValue: ...
-    @overload
-    def cleanup(self, /, **options: Unpack[CleanupOptions]) -> _WithValue[T]: ...
-    def cleanup(
-        self, fn: Callable[..., object] | None = None, /, **options: Unpack[CleanupOptions]
-    ) -> Callable[..., object]:
-        """Marks a function as the resource's cleanup: it gets the reported value.
-
-        Args:
-            fn: The function, when used bare.
-            **options: See ``CleanupOptions``.
-
-        Returns:
-            The function as it is, or a decorator keeping it so.
-
-        Raises:
-            TypeError: For a second cleanup.
-        """
-        return self._schedr_resource.decorator(fn, options)
-
-    def cleanup_command(
+    def __init__(
         self,
-        command: str | TString | Sequence[object],
-        /,
+        name: str,
+        job: str,
         *,
-        env: Mapping[str, object] | None = None,
-        **options: Unpack[CleanupOptions],
+        value: type[T],
+        **options: Unpack[ScriptResourceOptions],
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        name: str,
+        job: str,
+        *,
+        value: object = None,
+        **options: Unpack[ScriptResourceOptions],
+    ) -> None: ...
+    def __init__(
+        self,
+        name: str,
+        job: str,
+        *,
+        value: object = None,
+        **options: Unpack[ScriptResourceOptions],
     ) -> None:
-        """Gives the resource a command as its cleanup (decision 271).
-
-        It reads the value with ``schedr task-ctx resource get``, or takes it in its command
-        line or ``env``: ``t"{cluster.cluster_id}"``.
-
-        Args:
-            command: A shell string, or a list of arguments.
-            env: Extra environment variables for the process.
-            **options: See ``CleanupOptions``.
-
-        Raises:
-            TypeError: For a second cleanup, or a command of the wrong type.
-        """
-        self._schedr_resource.command_cleanup(command, env, options)
+        """Adds its setup to the DAG being defined."""
+        builder = _build.require_active("ScriptResource")
+        task_id = builder.qualified(name)
+        where = f"resource `{task_id}`"
+        try:
+            output_type = describe(value)
+        except TypeError as e:
+            raise TypeError(f"{where}: `value={value!r}`: {e}") from None
+        self._schedr_resource = _Declared(
+            task_id, has_value=value is not None and unwrap(value) not in NO_VALUE
+        )
+        builder.refuse_second_setup(task_id, self._schedr_resource)
+        uses = options.get("uses")
+        self._task_id = add_script(
+            builder,
+            task_id,
+            job,
+            ScriptSettings(
+                options=_build.TaskOptions(
+                    options.get("retries"),
+                    options.get("retry_delay"),
+                    options.get("timeout"),
+                    options.get("queue"),
+                    options.get("max_output_size"),
+                    run_if=options.get("run_if"),
+                    max_active=options.get("max_active"),
+                    cleanup_timeout=options.get("cleanup_timeout"),
+                    cleanup_retries=options.get("cleanup_retries"),
+                    cleanup_retry_delay=options.get("cleanup_retry_delay"),
+                    cleanup_anywhere=options.get("cleanup_anywhere"),
+                    uses=None if uses is None else tuple(uses),
+                ),
+                args=options.get("args"),
+                env=options.get("env"),
+                secrets=options.get("secrets"),
+                output_type=output_type,
+                resource=ResourceRole(),
+            ),
+        )
+        self._dag = builder
+        builder.add_resource(task_id, self._schedr_resource)
 
 
 @overload

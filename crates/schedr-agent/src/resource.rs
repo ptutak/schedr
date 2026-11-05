@@ -26,10 +26,10 @@ mod tests;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ResourceError {
     /// `resource set` outside a `CommandResource` setup.
-    #[error("`resource set` works only in a `CommandResource`'s setup command")]
+    #[error("`resource set` works only in a `CommandResource`'s or `ScriptResource`'s setup")]
     NotSetup,
     /// `resource get` outside a resource's command cleanup.
-    #[error("`resource get` works only in a resource's `cleanup_command`")]
+    #[error("`resource get` works only in a resource's `cleanup_command` or `cleanup_script`")]
     NotCleanup,
     /// The resource has no value (declared without `value=`).
     #[error("the resource has no value: it was declared without one")]
@@ -72,10 +72,14 @@ impl AttemptResource {
     /// task that is neither a command setup nor a command cleanup.
     #[must_use]
     pub fn of(task: &Task, inputs: &BTreeMap<String, Value>, mask: Arc<MaskSet>) -> Option<Self> {
-        let TaskKind::Command {
+        let (TaskKind::Command {
             resource: Some(role),
             ..
-        } = &task.kind
+        }
+        | TaskKind::Script {
+            resource: Some(role),
+            ..
+        }) = &task.kind
         else {
             return None;
         };

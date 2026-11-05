@@ -20,6 +20,41 @@
             "command"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A script of the task's script root (`[jobs.<name>.cleanup]`), with the task's\nenvironment and working directory.",
+          "properties": {
+            "script": {
+              "additionalProperties": false,
+              "properties": {
+                "args": {
+                  "description": "Its arguments, each one argument (never a shell string).",
+                  "items": {
+                    "$ref": "#/$defs/Template"
+                  },
+                  "type": "array"
+                },
+                "interpreter": {
+                  "description": "The interpreter: an `[interpreters]` entry of the worker that runs it.",
+                  "type": "string"
+                },
+                "script": {
+                  "description": "The script, relative to the script root.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "script",
+                "interpreter"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "script"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -512,11 +547,11 @@
       "type": "object"
     },
     "ResourceRole": {
-      "description": "A command's part in a resource, for `schedr task-ctx resource set|get`.",
+      "description": "A command's or a script's part in a resource, for `schedr task-ctx resource set|get`.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A `CommandResource`'s setup: its output is the value it reports with `resource set`,\nof the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.",
+          "description": "A `CommandResource`'s or `ScriptResource`'s setup: its output is the value it reports with `resource set`,\nof the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.",
           "properties": {
             "role": {
               "const": "setup",
@@ -530,7 +565,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A resource's `cleanup_command`: it reads the setup's value with `resource get`.",
+          "description": "A resource's `cleanup_command` or `cleanup_script`: it reads the setup's value with\n`resource get`.",
           "properties": {
             "role": {
               "const": "cleanup",
@@ -738,6 +773,17 @@
             "kind": {
               "const": "script",
               "type": "string"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourceRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Its part in a resource (`ScriptResource`, `cleanup_script`), if any."
             },
             "script": {
               "description": "The script, relative to the script root.",

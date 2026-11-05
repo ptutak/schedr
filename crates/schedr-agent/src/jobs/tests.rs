@@ -89,6 +89,7 @@ fn a_scheduled_job_is_a_one_task_dag_named_by_its_reference() {
         args,
         env,
         working_dir,
+        ..
     } = &task.kind
     else {
         panic!("a script task")
@@ -239,23 +240,230 @@ fn unknown_keys_are_errors_at_the_top_and_in_a_job() {
 }
 
 #[test]
-fn notify_and_the_keys_of_later_steps_arent_available_yet() {
-    for key in [
-        "notify = [\"ops\"]",
-        "params = { a = 1 }",
-        "outcomes = { OK = 0 }",
-        "cleanup_handles = [\"Job\"]",
+fn notify_isnt_available_yet() {
+    let text = "[jobs.x]\nscript = \"run.sh\"\ninterpreter = \"bash\"\nschedule = \"@daily\"\n\
+                notify = [\"ops\"]\n";
+    assert_eq!(problem(text), "job `x`: `notify` isn't available yet");
+}
+
+/// A scheduled job in `team_a` with `rest` after its keys.
+fn job_with(rest: &str) -> String {
+    format!("[jobs.x]\nscript = \"run.sh\"\ninterpreter = \"bash\"\nschedule = \"@daily\"\n{rest}")
+}
+
+#[test]
+fn declared_outcomes_are_the_tasks_exit_codes_and_the_operators() {
+    let declared = read_team(&job_with("[jobs.x.outcomes]\nSUCCESS = 0\nNO_DATA = 3\n")).unwrap();
+    let names: Vec<_> = declared[0]
+        .task
+        .outcomes
+        .iter()
+        .map(|o| (o.name.as_str(), o.exit_code))
+        .collect();
+    assert_eq!(names, [("NO_DATA", Some(3)), ("SUCCESS", Some(0))]);
+    assert_eq!(
+        declared[0].for_operator().outcomes,
+        declared[0].task.outcomes
+    );
+}
+
+#[test]
+fn outcomes_need_names_and_distinct_exit_codes() {
+    for (outcomes, expected) in [
+        ("A = 256\n", "`outcomes`: `A` is an exit code, 0 to 255"),
+        ("A = -1\n", "`outcomes`: `A` is an exit code, 0 to 255"),
+        ("A = \"0\"\n", "`outcomes`: `A` is an exit code, 0 to 255"),
+        (
+            "A = 1\nB = 1\n",
+            "`outcomes`: `B` and `A` share the exit code 1",
+        ),
+        (
+            "\"a b\" = 1\n",
+            "`outcomes`: `a b` isn't a name: letters, digits and `_`, not starting with a digit",
+        ),
+        ("", "`outcomes` is at least one name and its exit code"),
     ] {
-        let text = format!(
-            "[jobs.x]\nscript = \"run.sh\"\ninterpreter = \"bash\"\nschedule = \"@daily\"\n{key}\n"
-        );
-        let name = key.split(' ').next().unwrap();
         assert_eq!(
-            problem(&text),
-            format!("job `x`: `{name}` isn't available yet"),
-            "{key}"
+            problem(&job_with(&format!("[jobs.x.outcomes]\n{outcomes}"))),
+            format!("job `x`: {expected}"),
         );
     }
+}
+
+#[test]
+fn params_take_their_types_from_their_defaults() {
+    let text = job_with(
+        "[jobs.x.params]\nregion = \"eu\"\nlimit = 100\nratio = 0.5\nfull = false\n\
+         day = 2026-01-02\nat = 2026-01-02T03:04:05\nnames = [\"a\", \"b\"]\n\
+         [jobs.x.params.nested]\nsize = 8\n",
+    )
+    .replace(
+        "schedule = \"@daily\"",
+        "schedule = \"@daily\"\ntimezone = \"Europe/Warsaw\"",
+    );
+    let declared = read_team(&text).unwrap();
+    let location = DagLocation {
+        root: "etl".to_owned(),
+        path: "team_a/schedr.toml".to_owned(),
+    };
+    let params = declared[0].dag(&location).unwrap().params.unwrap();
+    let TypeDesc::Dataclass { fields, .. } = &params.ty else {
+        panic!("a dataclass: {:?}", params.ty)
+    };
+    let of = |name: &str| &fields.iter().find(|f| f.name == name).unwrap().ty;
+    assert_eq!(of("region"), &TypeDesc::Str);
+    assert_eq!(of("limit"), &TypeDesc::Int);
+    assert_eq!(of("ratio"), &TypeDesc::Float);
+    assert_eq!(of("full"), &TypeDesc::Bool);
+    assert_eq!(of("day"), &TypeDesc::Date);
+    assert_eq!(of("at"), &TypeDesc::Datetime);
+    assert_eq!(
+        of("names"),
+        &TypeDesc::List {
+            item: Box::new(TypeDesc::Str)
+        }
+    );
+    assert!(
+        matches!(of("nested"), TypeDesc::TypedDict { .. }),
+        "{:?}",
+        of("nested")
+    );
+    assert!(
+        fields.iter().all(|f| !f.required),
+        "every field has its default"
+    );
+    assert_eq!(params.defaults["region"], "eu");
+    assert_eq!(params.defaults["day"], "2026-01-02");
+    // Without an offset, in the job's time zone (+01:00 in January).
+    assert_eq!(params.defaults["at"], "2026-01-02T02:04:05Z");
+    assert_eq!(params.defaults["nested"]["size"], 8);
+    let properties = &params.schema["properties"];
+    assert_eq!(properties["day"]["format"], "date");
+    assert_eq!(properties["limit"]["default"], 100);
+    assert_eq!(properties["names"]["items"]["type"], "string");
+    assert_eq!(params.schema["additionalProperties"], false);
+}
+
+#[test]
+fn a_param_whose_type_cant_be_told_is_refused() {
+    for (default, why) in [
+        (
+            "[]",
+            "an empty list has no type to take: give a default with an item",
+        ),
+        ("[1, \"a\"]", "a list mixing types has no type to take"),
+        ("[1, 1.5]", "a list mixing types has no type to take"),
+        ("{}", "an empty table has no type to take"),
+        ("nan", "a number that isn't finite can't be stored"),
+        ("03:04:05", "`03:04:05` has no date"),
+    ] {
+        assert_eq!(
+            problem(&job_with(&format!("[jobs.x.params]\nthe = {default}\n"))),
+            format!("job `x`: `params`: `the`: {why}"),
+        );
+    }
+    assert_eq!(
+        problem(&job_with("[jobs.x.params]\n\"a-b\" = 1\n")),
+        "job `x`: `params`: `a-b` isn't a name: letters, digits and `_`, not starting with a digit",
+    );
+}
+
+#[test]
+fn a_cleanup_is_a_script_of_the_same_root_with_its_settings() {
+    let text = job_with(
+        "cleanup_handles = [\"Job\"]\n[jobs.x.cleanup]\nscript = \"reports/daily.py\"\n\
+         interpreter = \"python\"\nargs = [\"--all\"]\ntimeout = \"5m\"\nretries = 1\n\
+         retry_delay = \"10s\"\nanywhere = true\n",
+    );
+    let declared = read_team(&text).unwrap();
+    let cleanup = declared[0].task.cleanup.as_ref().unwrap();
+    assert_eq!(
+        cleanup.run,
+        CleanupRun::Script {
+            script: "team_a/reports/daily.py".to_owned(),
+            interpreter: "python".to_owned(),
+            args: vec![Template::text("--all".to_owned())],
+        }
+    );
+    assert_eq!(cleanup.timeout_ms, Some(300_000));
+    assert_eq!(cleanup.retries, 1);
+    assert_eq!(cleanup.retry_delay_ms, 10_000);
+    assert_eq!(cleanup.handles.as_deref(), Some(&["Job".to_owned()][..]));
+    assert!(cleanup.anywhere);
+    let given = declared[0].for_operator().cleanup.unwrap();
+    assert_eq!(given.retries, Some(1));
+    assert_eq!(given.handles, cleanup.handles);
+}
+
+#[test]
+fn a_cleanup_without_settings_has_a_cleanups_defaults_and_the_operator_none() {
+    let text = job_with("[jobs.x.cleanup]\nscript = \"run.sh\"\ninterpreter = \"bash\"\n");
+    let declared = read_team(&text).unwrap();
+    let cleanup = declared[0].task.cleanup.as_ref().unwrap();
+    assert_eq!(cleanup.retries, DEFAULT_CLEANUP_RETRIES);
+    assert_eq!(cleanup.retry_delay_ms, DEFAULT_CLEANUP_RETRY_DELAY_MS);
+    assert_eq!(cleanup.handles, None);
+    assert!(!cleanup.anywhere);
+    // The DAG's defaults apply to a `ScriptOperator`'s.
+    assert_eq!(declared[0].for_operator().cleanup.unwrap().retries, None);
+}
+
+#[test]
+fn a_cleanup_follows_the_rules_of_a_jobs_script() {
+    for (cleanup, expected) in [
+        (
+            "interpreter = \"bash\"\n",
+            "`cleanup`: `script` is required",
+        ),
+        (
+            "script = \"run.sh\"\n",
+            "`cleanup`: `interpreter` is required",
+        ),
+        (
+            "script = \"gone.sh\"\ninterpreter = \"bash\"\n",
+            "`cleanup`: `script`: `gone.sh` isn't a file in the script root",
+        ),
+        (
+            "script = \"run.sh\"\ninterpreter = \"bash\"\nenv = {}\n",
+            "`cleanup`: unknown key `env`",
+        ),
+    ] {
+        assert_eq!(
+            problem(&job_with(&format!("[jobs.x.cleanup]\n{cleanup}"))),
+            format!("job `x`: {expected}"),
+        );
+    }
+    assert!(
+        read_team(&job_with(
+            "[jobs.x.cleanup]\nscript = \"../top.py\"\ninterpreter = \"bash\"\n"
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        problem(&job_with("cleanup_handles = [\"Job\"]\n")),
+        "job `x`: `cleanup_handles` without `[cleanup]`: nothing would read them",
+    );
+}
+
+#[test]
+fn a_cleanups_unknown_interpreter_is_warned_of_as_the_jobs_is() {
+    let text = job_with("[jobs.x.cleanup]\nscript = \"run.sh\"\ninterpreter = \"other\"\n");
+    let declared = read_team(&text).unwrap();
+    let warnings = unknown_interpreters(&declared, &["bash".to_owned()]);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("`cleanup.interpreter`: `other`"),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn params_on_a_script_for_dags_only_would_do_nothing() {
+    let text = "[jobs.x]\nscript = \"run.sh\"\ninterpreter = \"bash\"\n[jobs.x.params]\na = 1\n";
+    assert!(
+        problem(text).starts_with("job `x`: `params`: a script without"),
+        "{text}"
+    );
 }
 
 #[test]

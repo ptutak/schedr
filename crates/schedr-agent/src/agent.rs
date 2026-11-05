@@ -48,7 +48,7 @@ use tonic::transport::Channel;
 
 use crate::attempt::{
     AttemptSpec, CleanupGate, Gate, NotRun, Pass, Plan, Ran, WorkerSetup, failed_before_start,
-    finished, plan, plan_at, with_resource_value,
+    finished, plan, plan_at, use_cleanup_script, with_resource_value,
 };
 use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
@@ -566,7 +566,13 @@ impl ProcessExecutor {
                 ..pb::CleanupResult::default()
             };
         };
-        if let Some(dir) = spec.code_dir.as_ref().filter(|dir| !dir.exists()) {
+        // Only the cleanup runs: what the task itself needed doesn't matter here.
+        use_cleanup_script(&mut spec.task);
+        if let Some(dir) = [&spec.code_dir, &spec.script_dir]
+            .into_iter()
+            .flatten()
+            .find(|dir| !dir.exists())
+        {
             let message = format!("the attempt's code is gone from `{}`", dir.display());
             let summary = ErrorSummary::json("CodeGone", &message).into_bytes();
             return failed(DAG_FILE_MISSING, summary);
@@ -637,6 +643,9 @@ impl ProcessExecutor {
                 command.clone_from(line);
                 // A setup's own cleanup (for a setup failing halfway) reports no value.
                 *resource = None;
+            }
+            (TaskKind::Script { .. }, CleanupRun::Script { .. }) => {
+                use_cleanup_script(&mut spec.task);
             }
             (TaskKind::Python { .. }, CleanupRun::Python) => {
                 spec.cleanup_handles = Some(shared.handles.list());
@@ -1582,6 +1591,7 @@ impl<E: Executor> Agent<E> {
         };
         spec.code_dir = kept.code_dir;
         spec.root_copies = kept.root_copies;
+        spec.script_dir = kept.script_dir;
         if let Some(hash) = kept.code_hash {
             self.code_hashes.insert(attempt_id.to_owned(), hash);
         }
@@ -2256,6 +2266,7 @@ impl<E: Executor> Agent<E> {
                 code_dir: spec.code_dir.clone(),
                 code_hash: self.code_hash_of(spec),
                 root_copies: spec.root_copies.clone(),
+                script_dir: spec.script_dir.clone(),
             };
             let journal = self.journal.clone();
             let id = spec.attempt_id.clone();
@@ -2416,9 +2427,17 @@ impl<E: Executor> Agent<E> {
                 .and_then(RootWatcher::code_dir)
                 .map(Path::to_path_buf);
         }
+        // A moved cleanup runs only the cleanup: what the task itself needed doesn't matter here.
+        let mut moved = None;
+        if assign.cleanup_only.is_some() {
+            let mut cleanup = spec.clone();
+            use_cleanup_script(&mut cleanup.task);
+            moved = Some(cleanup);
+        }
+        let planning = moved.as_ref().unwrap_or(spec);
         let planned = match code {
-            Some(dir) => plan_at(spec, &self.settings.setup, dir),
-            None => plan(spec, &self.settings.setup),
+            Some(dir) => plan_at(planning, &self.settings.setup, dir),
+            None => plan(planning, &self.settings.setup),
         };
         match planned {
             Err(NotRun::Rejected {

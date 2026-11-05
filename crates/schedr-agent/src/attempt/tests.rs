@@ -723,6 +723,90 @@ fn a_script_without_its_interpreter_root_or_file_here_is_rejected_with_why() {
     assert!(detail.contains("`team/report.py`"), "{detail}");
 }
 
+/// [`script_task`] with `team/undo.sh`, run by `interpreter`, as its cleanup.
+fn script_task_with_cleanup(interpreter: &str) -> serde_json::Value {
+    let mut task = script_task();
+    task["cleanup"] = json!({
+        "run": {"script": {"script": "team/undo.sh", "interpreter": interpreter}},
+        "retries": 0,
+        "retry_delay_ms": 0,
+    });
+    task
+}
+
+#[test]
+fn a_worker_that_couldnt_run_a_scripts_cleanup_rejects_the_task() {
+    let reason = |task: &serde_json::Value, setup: &WorkerSetup| match plan(
+        &AttemptSpec::from_assign(&assign(task), None).unwrap(),
+        setup,
+    ) {
+        Err(NotRun::Rejected { reason, detail }) => (reason, detail),
+        other => panic!("expected a rejection, got {other:?}"),
+    };
+    let (dir, setup) = script_setup();
+    let (why, detail) = reason(&script_task_with_cleanup("other"), &setup);
+    assert_eq!(why, pb::RejectReason::InterpreterUndefined);
+    assert!(detail.contains("interpreter `other`"), "{detail}");
+    let (why, detail) = reason(&script_task_with_cleanup("etl-venv"), &setup);
+    assert_eq!(why, pb::RejectReason::ScriptReferenceNotFound);
+    assert!(detail.contains("`team/undo.sh`"), "{detail}");
+    std::fs::write(dir.path().join("jobs/team/undo.sh"), "").unwrap();
+    let spec =
+        AttemptSpec::from_assign(&assign(&script_task_with_cleanup("etl-venv")), None).unwrap();
+    assert!(matches!(plan(&spec, &setup), Ok(Plan::Command(_))));
+}
+
+#[test]
+fn a_moved_or_recovered_cleanup_needs_only_what_the_cleanup_runs() {
+    let (dir, mut setup) = script_setup();
+    std::fs::write(dir.path().join("jobs/team/undo.sh"), "").unwrap();
+    setup.interpreters.clear();
+    setup
+        .interpreters
+        .insert("bash".to_owned(), PathBuf::from("/bin/bash"));
+    let mut spec =
+        AttemptSpec::from_assign(&assign(&script_task_with_cleanup("bash")), None).unwrap();
+    assert!(matches!(
+        plan(&spec, &setup),
+        Err(NotRun::Rejected {
+            reason: pb::RejectReason::InterpreterUndefined,
+            ..
+        })
+    ));
+    use_cleanup_script(&mut spec.task);
+    let Plan::Command(process) = plan(&spec, &setup).unwrap() else {
+        panic!("expected a process")
+    };
+    assert_eq!(process.program, PathBuf::from("/bin/bash"));
+    assert_eq!(
+        process.args.len(),
+        1,
+        "the cleanup's arguments, not the task's"
+    );
+    assert!(
+        process.args[0].ends_with("team/undo.sh"),
+        "{:?}",
+        process.args
+    );
+    assert_eq!(process.env["MODE"], "full", "the task's environment");
+    assert!(
+        process.working_dir.ends_with("team"),
+        "its working directory"
+    );
+}
+
+#[test]
+fn a_cleanup_script_leaving_its_script_root_isnt_run() {
+    let (_dir, setup) = script_setup();
+    let mut task = script_task_with_cleanup("etl-venv");
+    task["cleanup"]["run"]["script"]["script"] = json!("../secret.sh");
+    let spec = AttemptSpec::from_assign(&assign(&task), None).unwrap();
+    let Err(NotRun::Failed { message, .. }) = plan(&spec, &setup) else {
+        panic!("expected a failure")
+    };
+    assert!(message.contains("cleanup script leaves"), "{message}");
+}
+
 #[test]
 fn a_standalone_jobs_script_comes_from_its_own_root() {
     let (dir, mut setup) = script_setup();

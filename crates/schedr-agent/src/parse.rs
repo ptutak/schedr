@@ -183,7 +183,7 @@ async fn run_session<S: ParseSession>(
                 let (root, found) = crate::jobs::lookup(&reference, scripts);
                 asked.extend(root);
                 let answer = match found {
-                    Ok(declaration) => AgentMessage::ScriptDeclaration(declaration),
+                    Ok(declaration) => AgentMessage::ScriptDeclaration(Box::new(declaration)),
                     Err(message) => AgentMessage::ScriptNotFound { message },
                 };
                 let path = || current.clone().unwrap_or_default();

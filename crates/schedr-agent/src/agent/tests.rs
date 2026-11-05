@@ -99,6 +99,7 @@ impl Executor for Fake {
         let copies = spec
             .root_copies
             .values()
+            .chain(&spec.script_dir)
             .map(|dir| (dir.clone(), dir.is_dir()))
             .collect();
         self.cleanup_copies.lock().unwrap().push(copies);
@@ -591,6 +592,7 @@ fn kept(attempt_id: &str) -> KeptAttempt {
         code_dir: None,
         code_hash: None,
         root_copies: BTreeMap::new(),
+        script_dir: None,
     }
 }
 
@@ -3513,12 +3515,61 @@ async fn a_recovered_cleanup_imports_the_other_roots_from_the_copies_its_task_us
         );
         let mut kept = agent.journal.kept("old-1").unwrap().unwrap();
         kept.root_copies = [("libs".to_owned(), then.clone())].into();
+        // Its script root's copy comes back too, or its cleanup would run newer code.
+        kept.script_dir = Some(then.join("scripts"));
+        std::fs::create_dir_all(then.join("scripts")).unwrap();
         agent.journal.keep("old-1", &kept).unwrap();
         *old_dir.lock().unwrap() = then;
     })
     .await;
     let then = old.lock().unwrap().clone();
-    assert_eq!(*copies.lock().unwrap(), [vec![(then, true)]]);
+    assert_eq!(
+        *copies.lock().unwrap(),
+        [vec![(then.clone(), true), (then.join("scripts"), true)]]
+    );
+}
+
+#[tokio::test]
+async fn a_moved_script_cleanup_is_taken_by_a_worker_lacking_only_the_tasks_interpreter() {
+    let scripts = TempDir::new().unwrap();
+    std::fs::write(scripts.path().join("undo.sh"), "").unwrap();
+    let mut task = task_json(&json!({
+        "kind": "script",
+        "job": "jobs:schedr.toml#work",
+        "script": "work.sh",
+        "interpreter": "special",
+        "working_dir": "",
+    }));
+    task["cleanup"] = json!({
+        "run": {"script": {"script": "undo.sh", "interpreter": "bash"}},
+        "retries": 0,
+        "retry_delay_ms": 0,
+    });
+    let mut message = assign("moved-1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(given)) = &mut message.message else {
+        panic!("expected an assignment")
+    };
+    given.cleanup_only = Some(pb::CleanupOnly::default());
+    let done = |m: &[pb::WorkerMessage]| {
+        kinds(m)
+            .iter()
+            .any(|kind| kind.starts_with("finished") || kind.starts_with("rejected"))
+    };
+    let dir = scripts.path().to_path_buf();
+    let (seen, _) = against_script_with(2, Start::With(Vec::new()), vec![message], done, |agent| {
+        let setup = &mut agent.settings.setup;
+        setup.script_roots.insert("jobs".to_owned(), dir);
+        setup
+            .interpreters
+            .insert("bash".to_owned(), PathBuf::from("/bin/bash"));
+    })
+    .await;
+    let kinds = kinds(&seen);
+    assert!(kinds.contains(&"started"), "{kinds:?}");
+    assert!(
+        !kinds.iter().any(|k| k.starts_with("rejected")),
+        "{kinds:?}"
+    );
 }
 
 #[test]

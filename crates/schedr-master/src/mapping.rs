@@ -373,11 +373,15 @@ pub enum InputsError {
     NotArguments(String),
 }
 
-/// The setup whose value a resource's command cleanup reads (`schedr task-ctx resource get`),
+/// The setup whose value a resource's command or script cleanup reads (`schedr task-ctx resource get`),
 /// whatever its templates name.
 fn resource_setup(task: &Task) -> Option<&TaskId> {
     match &task.kind {
         TaskKind::Command {
+            resource: Some(ResourceRole::Cleanup { setup }),
+            ..
+        }
+        | TaskKind::Script {
             resource: Some(ResourceRole::Cleanup { setup }),
             ..
         } => Some(setup),

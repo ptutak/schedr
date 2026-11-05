@@ -9,9 +9,14 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use jiff::civil::{Date, DateTime};
 use jiff::tz::TimeZone;
-use schedr_model::runner::{ErrorSummary, ParsedFile};
+use schedr_model::dag::Params;
+use schedr_model::runner::{ErrorSummary, ParsedFile, ScriptCleanupDeclaration};
 use schedr_model::secret::{SecretDecl, SecretName};
-use schedr_model::task::{TaskKind, TaskSettings};
+use schedr_model::task::{
+    CleanupRun, DEFAULT_CLEANUP_RETRIES, DEFAULT_CLEANUP_RETRY_DELAY_MS, OutcomeDecl, TaskCleanup,
+    TaskKind, TaskSettings, default_outcomes,
+};
+use schedr_model::types::Field;
 use schedr_model::value::{Reference, Template, TemplatePart, TemplateRef};
 use schedr_model::{Dag, DagId, DagLocation, SchedrVersion, Task, TaskId, Trigger, TypeDesc};
 use toml::Value;
@@ -66,8 +71,19 @@ const DAG_KEYS: [&str; 8] = [
     "params",
 ];
 
-/// The keys of later steps (M4.9c), an error until then rather than ignored.
-const NOT_YET: [&str; 4] = ["cleanup_handles", "outcomes", "params", "cleanup"];
+/// The keys of a job's `[cleanup]`.
+const CLEANUP_KEYS: [&str; 7] = [
+    "script",
+    "interpreter",
+    "args",
+    "timeout",
+    "retries",
+    "retry_delay",
+    "anywhere",
+];
+
+/// The highest exit code a process can have.
+const MAX_EXIT_CODE: i64 = 255;
 
 /// Where a `schedr.toml` is.
 pub struct Source<'a> {
@@ -147,6 +163,10 @@ pub struct Given {
     pub queue: Option<String>,
     /// `max_output_size`.
     pub max_output_size: Option<u64>,
+    /// `[outcomes]`; empty: none given.
+    pub outcomes: Vec<OutcomeDecl>,
+    /// `[cleanup]`.
+    pub cleanup: Option<ScriptCleanupDeclaration>,
 }
 
 impl Declaration {
@@ -160,6 +180,7 @@ impl Declaration {
             args,
             env,
             working_dir,
+            ..
         } = &self.task.kind
         else {
             unreachable!("a declaration's task is a script")
@@ -177,6 +198,8 @@ impl Declaration {
             timeout_ms: self.given.timeout_ms,
             queue: self.given.queue.clone(),
             max_output_size: self.given.max_output_size,
+            outcomes: self.given.outcomes.clone(),
+            cleanup: self.given.cleanup.clone(),
         }
     }
 }
@@ -190,6 +213,8 @@ pub struct Schedule {
     pub initial_since: Option<Timestamp>,
     /// Its runs at once.
     pub max_active_runs: u32,
+    /// Its run parameters (`[params]`).
+    pub params: Option<Params>,
 }
 
 impl Declaration {
@@ -211,7 +236,7 @@ impl Declaration {
             tasks: vec![self.task.clone()],
             edges: Vec::new(),
             groups: Vec::new(),
-            params: None,
+            params: schedule.params.clone(),
             resources: Vec::new(),
         })
     }
@@ -321,7 +346,7 @@ fn job_of(
         task: task?,
         given,
         schedule: match schedule {
-            Scheduling::Scheduled(schedule) => Some(schedule),
+            Scheduling::Scheduled(schedule) => Some(*schedule),
             Scheduling::Unscheduled | Scheduling::Bad => None,
         },
         description,
@@ -333,9 +358,172 @@ fn job_of(
 enum Scheduling {
     /// None of `schedule`, `every` and `once`: the script is for DAGs only.
     Unscheduled,
-    Scheduled(Schedule),
+    Scheduled(Box<Schedule>),
     /// A problem, already reported.
     Bad,
+}
+
+/// A declared `[cleanup]` as its task's.
+fn task_cleanup(declared: ScriptCleanupDeclaration) -> TaskCleanup {
+    TaskCleanup {
+        run: CleanupRun::Script {
+            script: declared.script,
+            interpreter: declared.interpreter,
+            args: declared.args,
+        },
+        timeout_ms: declared.timeout_ms,
+        retries: declared.retries.unwrap_or(DEFAULT_CLEANUP_RETRIES),
+        retry_delay_ms: declared
+            .retry_delay_ms
+            .unwrap_or(DEFAULT_CLEANUP_RETRY_DELAY_MS),
+        handles: declared.handles,
+        anywhere: declared.anywhere.unwrap_or(false),
+    }
+}
+
+/// A `[cleanup]` table, or `None` with its problems added.
+fn cleanup_of(
+    table: &toml::Table,
+    handles: Option<Vec<String>>,
+    source: &Source<'_>,
+    problems: &mut Vec<String>,
+) -> Option<ScriptCleanupDeclaration> {
+    for key in table.keys() {
+        if !CLEANUP_KEYS.contains(&key.as_str()) {
+            problems.push(format!("unknown key `{key}`"));
+        }
+    }
+    let mut keys = Keys { table, problems };
+    let script = keys.path("script", source, true);
+    let interpreter = keys.required_string("interpreter");
+    let args = keys
+        .strings("args")
+        .unwrap_or_default()
+        .into_iter()
+        .map(Template::text)
+        .collect();
+    Some(ScriptCleanupDeclaration {
+        args,
+        timeout_ms: keys.duration_ms("timeout"),
+        retries: keys.whole("retries", 0),
+        retry_delay_ms: keys.duration_ms("retry_delay"),
+        anywhere: keys.boolean("anywhere"),
+        handles,
+        script: script?,
+        interpreter: interpreter?,
+    })
+}
+
+/// A parameter, from its default.
+struct Param {
+    /// The type its default has.
+    ty: TypeDesc,
+    /// Its JSON Schema, as the native API's for that type.
+    schema: serde_json::Value,
+    /// Its default, as JSON.
+    value: serde_json::Value,
+}
+
+/// A parameter's type, schema and default, from its TOML default (decision 310): an empty or
+/// mixed list has no type to take.
+fn param_of(value: &Value, tz: &TimeZone) -> Result<Param, String> {
+    let scalar = |ty: TypeDesc, schema: serde_json::Value, value: serde_json::Value| {
+        Ok(Param { ty, schema, value })
+    };
+    match value {
+        Value::String(text) => scalar(
+            TypeDesc::Str,
+            serde_json::json!({"type": "string"}),
+            text.clone().into(),
+        ),
+        Value::Integer(number) => scalar(
+            TypeDesc::Int,
+            serde_json::json!({"type": "integer"}),
+            (*number).into(),
+        ),
+        Value::Float(number) if number.is_finite() => scalar(
+            TypeDesc::Float,
+            serde_json::json!({"type": "number"}),
+            (*number).into(),
+        ),
+        Value::Float(_) => Err("a number that isn't finite can't be stored".to_owned()),
+        Value::Boolean(flag) => scalar(
+            TypeDesc::Bool,
+            serde_json::json!({"type": "boolean"}),
+            (*flag).into(),
+        ),
+        Value::Datetime(when) if when.time.is_none() && when.date.is_some() => scalar(
+            TypeDesc::Date,
+            serde_json::json!({"type": "string", "format": "date"}),
+            when.to_string().into(),
+        ),
+        Value::Datetime(when) => scalar(
+            TypeDesc::Datetime,
+            serde_json::json!({"type": "string", "format": "date-time"}),
+            moment_of(when, tz)?.to_string().into(),
+        ),
+        Value::Array(items) => {
+            let mut params = items.iter().map(|item| param_of(item, tz));
+            let first = params.next().ok_or(
+                "an empty list has no type to take: give a default with an item".to_owned(),
+            )??;
+            let mut values = vec![first.value];
+            for param in params {
+                let param = param?;
+                if param.ty != first.ty {
+                    return Err("a list mixing types has no type to take".to_owned());
+                }
+                values.push(param.value);
+            }
+            Ok(Param {
+                ty: TypeDesc::List {
+                    item: Box::new(first.ty),
+                },
+                schema: serde_json::json!({"type": "array", "items": first.schema}),
+                value: values.into(),
+            })
+        }
+        Value::Table(table) => {
+            if table.is_empty() {
+                return Err("an empty table has no type to take".to_owned());
+            }
+            let mut fields = Vec::new();
+            let mut properties = serde_json::Map::new();
+            let mut values = serde_json::Map::new();
+            for (name, item) in table {
+                let param = param_of(item, tz).map_err(|why| format!("`{name}`: {why}"))?;
+                fields.push(Field {
+                    name: name.clone(),
+                    ty: param.ty,
+                    required: true,
+                });
+                properties.insert(name.clone(), param.schema);
+                values.insert(name.clone(), param.value);
+            }
+            let required: Vec<&String> = table.keys().collect();
+            Ok(Param {
+                ty: TypeDesc::TypedDict {
+                    name: "Table".to_owned(),
+                    fields,
+                },
+                schema: serde_json::json!({
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": false,
+                }),
+                value: values.into(),
+            })
+        }
+    }
+}
+
+/// A name a script can read a field by, and an outcome's: letters, digits and `_`.
+fn valid_identifier(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A job name: letters, digits, `_` and `-` (decision 300).
@@ -357,8 +545,6 @@ impl Keys<'_> {
         for key in self.table.keys() {
             if !JOB_KEYS.contains(&key.as_str()) {
                 self.problems.push(format!("unknown key `{key}`"));
-            } else if NOT_YET.contains(&key.as_str()) {
-                self.problems.push(format!("`{key}` isn't available yet"));
             } else if key == "notify" {
                 // Decision 298: no channels yet.
                 self.problems
@@ -369,7 +555,7 @@ impl Keys<'_> {
 
     fn none_of(&mut self, keys: &[&str], why: &str) {
         for key in keys {
-            if self.table.contains_key(*key) && !NOT_YET.contains(key) && *key != "notify" {
+            if self.table.contains_key(*key) && *key != "notify" {
                 self.problems.push(format!("`{key}`: {why}"));
             }
         }
@@ -504,8 +690,9 @@ impl Keys<'_> {
         let Some(&kind) = given.first() else {
             return Scheduling::Unscheduled;
         };
-        self.scheduled(kind)
-            .map_or(Scheduling::Bad, Scheduling::Scheduled)
+        self.scheduled(kind).map_or(Scheduling::Bad, |schedule| {
+            Scheduling::Scheduled(Box::new(schedule))
+        })
     }
 
     /// The schedule given by `kind` (`schedule`, `every` or `once`); `None` after a problem.
@@ -545,7 +732,128 @@ impl Keys<'_> {
             trigger,
             initial_since: self.moment("initial_since", &tz),
             max_active_runs: self.whole("max_active_runs", 1).unwrap_or(1),
+            params: self.params(&tz),
         })
+    }
+
+    /// `[params]`: run parameters, each one's type taken from its default (decision 310).
+    fn params(&mut self, tz: &TimeZone) -> Option<Params> {
+        let value = self.table.get("params")?;
+        let Value::Table(table) = value else {
+            self.wrong("params", "a table of defaults");
+            return None;
+        };
+        let mut fields = Vec::new();
+        let mut properties = serde_json::Map::new();
+        let mut defaults = serde_json::Map::new();
+        for (name, value) in table {
+            if !valid_identifier(name) {
+                self.problems.push(format!(
+                    "`params`: `{name}` isn't a name: letters, digits and `_`, not starting with \
+                     a digit"
+                ));
+                continue;
+            }
+            match param_of(value, tz) {
+                Ok(param) => {
+                    let mut schema = param.schema;
+                    schema["default"] = param.value.clone();
+                    fields.push(Field {
+                        name: name.clone(),
+                        ty: param.ty,
+                        required: false,
+                    });
+                    properties.insert(name.clone(), schema);
+                    defaults.insert(name.clone(), param.value);
+                }
+                Err(why) => self.problems.push(format!("`params`: `{name}`: {why}")),
+            }
+        }
+        Some(Params {
+            ty: TypeDesc::Dataclass {
+                name: "Params".to_owned(),
+                fields,
+            },
+            schema: serde_json::json!({
+                "type": "object",
+                "title": "Params",
+                "properties": properties,
+                "required": [],
+                "additionalProperties": false,
+            }),
+            defaults,
+        })
+    }
+
+    /// `[outcomes]`: each name with its exit code; none when not given.
+    fn outcomes(&mut self) -> Vec<OutcomeDecl> {
+        let Some(value) = self.table.get("outcomes") else {
+            return Vec::new();
+        };
+        let Value::Table(table) = value else {
+            self.wrong("outcomes", "a table of exit codes");
+            return Vec::new();
+        };
+        if table.is_empty() {
+            self.wrong("outcomes", "at least one name and its exit code");
+        }
+        let mut outcomes: Vec<OutcomeDecl> = Vec::new();
+        for (name, code) in table {
+            if !valid_identifier(name) {
+                self.problems.push(format!(
+                    "`outcomes`: `{name}` isn't a name: letters, digits and `_`, not starting \
+                     with a digit"
+                ));
+            }
+            let Some(code) = code
+                .as_integer()
+                .filter(|code| (0..=MAX_EXIT_CODE).contains(code))
+                .and_then(|code| i32::try_from(code).ok())
+            else {
+                self.problems
+                    .push(format!("`outcomes`: `{name}` is an exit code, 0 to 255"));
+                continue;
+            };
+            if let Some(same) = outcomes.iter().find(|o| o.exit_code == Some(code)) {
+                self.problems.push(format!(
+                    "`outcomes`: `{name}` and `{}` share the exit code {code}",
+                    same.name
+                ));
+            }
+            outcomes.push(OutcomeDecl {
+                name: name.clone(),
+                exit_code: Some(code),
+            });
+        }
+        outcomes
+    }
+
+    /// `cleanup_handles`: the handle types the attempt may register; `None`: any.
+    fn cleanup_handles(&mut self) -> Option<Vec<String>> {
+        let names = self.strings("cleanup_handles")?;
+        if names.iter().any(String::is_empty) {
+            self.wrong("cleanup_handles", "a list of type names");
+        }
+        if !self.table.contains_key("cleanup") {
+            self.problems
+                .push("`cleanup_handles` without `[cleanup]`: nothing would read them".to_owned());
+        }
+        Some(names)
+    }
+
+    /// `[cleanup]`: a script of the same root, with the same rules as the job's.
+    fn cleanup(&mut self, source: &Source<'_>) -> Option<ScriptCleanupDeclaration> {
+        let handles = self.cleanup_handles();
+        let value = self.table.get("cleanup")?;
+        let Value::Table(table) = value else {
+            self.wrong("cleanup", "a table of keys");
+            return None;
+        };
+        let mut problems = Vec::new();
+        let declared = cleanup_of(table, handles, source, &mut problems);
+        self.problems
+            .extend(problems.into_iter().map(|p| format!("`cleanup`: {p}")));
+        declared
     }
 
     /// The job's task, named after it, and the settings the file gives.
@@ -565,7 +873,11 @@ impl Keys<'_> {
             .collect();
         let env = self.env();
         let secrets = self.secrets();
+        let outcomes = self.outcomes();
+        let declared_cleanup = self.cleanup(source);
         let given = Given {
+            outcomes: outcomes.clone(),
+            cleanup: declared_cleanup.clone(),
             retries: self.whole("retries", 0),
             retry_delay_ms: self.duration_ms("retry_delay"),
             timeout_ms: self.duration_ms("timeout"),
@@ -591,15 +903,20 @@ impl Keys<'_> {
                 args,
                 env,
                 working_dir: working_dir?,
+                resource: None,
             },
             settings,
             output_type: TypeDesc::ProcessResult,
-            outcomes: schedr_model::task::default_outcomes(),
+            outcomes: if outcomes.is_empty() {
+                default_outcomes()
+            } else {
+                outcomes
+            },
             group: None,
             expand: None,
             secrets,
             connections: Vec::new(),
-            cleanup: None,
+            cleanup: declared_cleanup.map(task_cleanup),
         };
         Some((task, given))
     }
@@ -894,13 +1211,26 @@ pub fn stays_inside(path: &str) -> bool {
 fn unknown_interpreters(declared: &[Declaration], known: &[String]) -> Vec<String> {
     declared
         .iter()
-        .filter_map(|declaration| match &declaration.task.kind {
-            TaskKind::Script { interpreter, .. } if !known.contains(interpreter) => Some(format!(
-                "job `{}`: `interpreter`: `{interpreter}` isn't an `[interpreters]` entry here \
-                 (a worker without it rejects the job's tasks)",
-                declaration.name
-            )),
-            _ => None,
+        .flat_map(|declaration| {
+            let own = match &declaration.task.kind {
+                TaskKind::Script { interpreter, .. } => Some(("interpreter", interpreter)),
+                _ => None,
+            };
+            let cleanup = declaration
+                .given
+                .cleanup
+                .as_ref()
+                .map(|cleanup| ("cleanup.interpreter", &cleanup.interpreter));
+            own.into_iter()
+                .chain(cleanup)
+                .filter(|(_, interpreter)| !known.contains(interpreter))
+                .map(|(key, interpreter)| {
+                    format!(
+                        "job `{}`: `{key}`: `{interpreter}` isn't an `[interpreters]` entry here \
+                         (a worker without it rejects the job's tasks)",
+                        declaration.name
+                    )
+                })
         })
         .collect()
 }

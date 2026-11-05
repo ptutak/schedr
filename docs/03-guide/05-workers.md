@@ -12,7 +12,8 @@ The agent runs one event loop per session with the master. Each turn handles one
 - a message from the master: `Registered`, `AssignTask`, `AssignParse`, `CancelAttempt`,
   `FinishedAck`, `HeartbeatAck`;
 - a task or parse job that ended (its result goes to the journal, then to the master);
-- the heartbeat timer (the 10 s [heartbeat interval](14-timings.md#fixed-timings), sent by the master): free slots and
+- the heartbeat timer (the 10 s [heartbeat interval](14-timings.md#fixed-timings), sent by the
+  master): free slots and
   running attempts;
 - the scan timer (`[dags] poll_interval`, 30 s): a root whose files changed and then stayed
   unchanged for `[dags] settle_time` (5 s) gets a new hash, sent as `CodeVersionChanged`;
@@ -42,7 +43,8 @@ the task is not started and no rejection is sent. On its first stream, before it
 lease, it drops a `Registered` at least as old as the lease stated in that reply and registers
 again. The master takes back an unstarted assignment only after the same lease.
 
-The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
+The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms
+to 30 s, with jitter, so
 workers that lost the master together don't come back in step. After a session in which it
 was registered, the backoff starts from 200 ms again. Once the worker knows its lease, each
 reconnect wait is capped at half that lease. A restarted master gives it a fresh lease from
@@ -58,14 +60,16 @@ remaining handles. See [State and failures](07-failures.md).
 For each root, the master picks a connected, active worker that is not drained and has the
 root at the current parse's exact hash. It picks the one running the fewest attempts, then
 by worker name. A worker on older code, or newer code not parsed yet, isn't picked: the
-connection definitions come from that parse. `--worker NAME` asks for a particular one, which must
+connection definitions come from that parse. `--worker NAME` asks for a particular one, which
+must
 meet the same conditions. If no suitable worker is found, the command is rejected.
 
 A worker runs one connection check or test at a time. Its time starts when the job arrives,
 including its wait for its turn and secret reads: 30 s for a check, or the test's `--timeout`
 (60 s by default). A test is a one-off attempt of the connection's file beside the tasks; it
 uses no task slot. Its process is journalled like an attempt's, so an agent restarted after
-being killed stops the process it left behind. See [Secret storage](13-secrets.md#checking-a-deployments-connections)
+being killed stops the process it left behind. See [Secret
+storage](13-secrets.md#checking-a-deployments-connections)
 and [State and failures](07-failures.md#connection-jobs).
 
 ## Running a task
@@ -82,8 +86,11 @@ The worker image also needs CA certificates: HTTP, SQL and Mongo use the system'
 default. Give a private CA as the connection's `ca_cert` (PEM text).
 
 1. **Checks** (before anything starts): a free slot, not draining, the root and file present,
-   the code at the hash the master expects, the interpreter defined. A failed check is a
-   `Rejected` with a reason; most reasons are temporary, and the master tries again.
+   the code at the hash the master expects, the interpreter defined. For a script with a
+   script cleanup, the cleanup script and its interpreter must also be available. A moved or
+   recovered cleanup is planned for what the cleanup runs, without requiring the task's
+   interpreter. A failed check is a `Rejected` with a reason; most reasons are temporary, and
+   the master tries again.
 2. **Journal, then `Started`.** The attempt is written to the journal before `Started` is
    sent. That way a restarted agent always knows about an attempt the master believes is
    running. `Started` carries `start_method`: `spawn` for a new process (the interpreter, or
@@ -94,7 +101,8 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    [The fork server](#the-fork-server)). A command, and a Python task that was spawned, stay
    `spawn`.
 3. **The process.** A Python task runs `python -m schedr.runner task`, forked from a fork
-   server when the task allows it and a server can, otherwise in a new process. A command runs through
+   server when the task allows it and a server can, otherwise in a new process. A command runs
+   through
    the shell when it is a string, or directly when it is a list of arguments. It inherits
    the attempt's context channel, `SCHEDR_CTX_FD`
    ([A command's context channel](#a-commands-context-channel)). Each starts in
@@ -109,18 +117,22 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    a cancel or a drain can stop it. Stopping is SIGTERM to the group, then SIGKILL after
    `[master] cancel_grace` (30 s), or after `[worker] drain_terminate_period` (3 s) when a
    drain's time is up (see Draining below), also for a task already being stopped then: its
-   SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's status
-   (`timed_out`, `cancelled`, `interrupted`, or `lost` on cut-off), however the process then exits.
+   SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's
+   status
+   (`timed_out`, `cancelled`, `interrupted`, or `lost` on cut-off), however the process then
+   exits.
 5. **Cleanup.** If the task process started and has a cleanup, the agent reports `TaskEnded`
    and runs it on the same worker. The attempt holds its slot through the cleanup and its
    retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain
    available. Handles are journaled locally and survive an agent restart with the journal disk;
-   the master also stores them and can move cleanup after worker loss when `cleanup_anywhere` is enabled. See [Cleaning up after a task](../02-dags/15-cleanup.md).
+   the master also stores them and can move cleanup after worker loss when `cleanup_anywhere`
+   is enabled. See [Cleaning up after a task](../02-dags/15-cleanup.md).
 6. **Result.** It is written to the journal, then sent as `Finished` until the master
    acknowledges it with `FinishedAck`: again on a reconnect, and while the connection stays up
    (the master may have failed to store it) after one heartbeat interval, then ever less often
    (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's
-   answer to its journal settles the result. `Finished` includes `usage` and `core_dumped` (below).
+   answer to its journal settles the result. `Finished` includes `usage` and `core_dumped`
+   (below).
 
 ### Commands' connection files
 
@@ -145,7 +157,7 @@ stop. See [Secret storage](13-secrets.md) for what the files hold.
 
 ### A command's context channel
 
-A command attempt gets one Unix datagram socket. The command inherits one end, and so
+A command or script attempt gets one Unix datagram socket. The process inherits one end, and so
 does every process it starts. The descriptor's number is `SCHEDR_CTX_FD`. There is no
 socket file, so only a process that holds the descriptor can reach the channel. The
 agent serves it until the attempt ends. A call after that is told the task has ended. A
@@ -158,14 +170,16 @@ on that connection, so concurrent calls keep their own answers.
 It serves at most 64 of those connections at once and tells the next caller so. A call
 waits up to 30 s to be taken, and 30 s to be answered.
 
-The same channel carries `resource_set` (a command resource setup reports its typed value
-once) and `resource_get` (a resource's command cleanup reads its setup's value); see
+The same channel carries `resource_set` (a command or script resource setup reports its typed
+value
+once) and `resource_get` (a resource's command or script cleanup reads its setup's value); see
 [Resources](../02-dags/16-resources.md#a-command-setup).
 
 The agent accepts a caller by the protocol it speaks (protocol 1), whatever schedr
 version sent it. Within that protocol a change is a new request or a new field. Either
 side ignores a field it does not know, and a request the agent does not know is answered
-with an error. A new value of `kind` is a new protocol: an older caller cannot read it. What the commands print, and the messages when a call cannot be done, is
+with an error. A new value of `kind` is a new protocol: an older caller cannot read it. What
+the commands print, and the messages when a call cannot be done, is
 [Reading the run from a command](../02-dags/06-context.md#reading-the-run-from-a-command).
 
 ## The fork server
@@ -178,7 +192,8 @@ interpreter has `fork_server = true`, and forks Python tasks and parse jobs from
 Command tasks are always a new process. A Python task can ask for the bare server only,
 or for a new process every time (below).
 
-**Turning it on.** Off by default in the configuration. An interpreter written as a path spawns every task:
+**Turning it on.** Off by default in the configuration. An interpreter written as a path spawns
+every task:
 
 ```toml
 [interpreters]
@@ -415,17 +430,20 @@ resident set size when PSS cannot be read (see [Memory](#memory)).
 Under `<data_dir>/journal/<worker ID>/`, an attempt's record holds its process group, its
 `cleaning` task result and cleanup process, or its unacknowledged `finished` result. Records
 are written atomically (temporary file, fsync, rename). An attempt with cleanup also keeps
-`<attempt_id>.attempt` (assignment, inputs, code copy and hash) and `<attempt_id>.handles`
-(one handle per line). Handles are also sent to and stored by the master.
+`<attempt_id>.attempt` (assignment, inputs, code copies and hash, including the script root
+copy when present) and `<attempt_id>.handles` (one handle per line). Handles are also sent to
+and stored by the master.
 
 At startup the agent stops orphaned process groups (SIGTERM, SIGKILL after 10 s). A finished
 result is reported in `Register`: `Ack` removes it, `Continue` sends it again, and `Kill`
 discards it. A running attempt without recoverable cleanup is left out of `Register`; the
-master ends it lost. With recoverable cleanup, the agent holds a slot and reports it as running.
+master ends it lost. With recoverable cleanup, the agent holds a slot and reports it as
+running.
 It waits for `Continue` before reporting `TaskEnded` and restarting cleanup with its handles,
 all tries and freshly read secrets. A task interrupted while running gets a `lost` result; one
 already cleaning keeps its task result. `Kill` discards the waiting cleanup; `CLEAN_REST`
-stops any still-running task and cleans the handles the moved cleanup did not have. Even a record
+stops any still-running task and cleans the handles the moved cleanup did not have. Even a
+record
 without a process identity gets cleanup, since the agent cannot tell whether it started. A
 journal write failure is logged; a result not written can be lost on restart before its ack.
 
@@ -474,8 +492,11 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 | − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
 | until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, sends `Deregister` and exits 0. |
 
-A running cleanup may outlast the grace period: the agent waits for it, but a pod killed meanwhile
-is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it. The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must fit in the grace period, else the worker doesn't start. A second
+A running cleanup may outlast the grace period: the agent waits for it, but a pod killed
+meanwhile
+is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it.
+The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must
+fit in the grace period, else the worker doesn't start. A second
 SIGTERM interrupts at once.
 
 **For maintenance**, `schedr workers drain <id>` is a command. The worker gets no new tasks or

@@ -1,9 +1,24 @@
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
-from schedr import CommandOperator, Dag, EmptyOperator, ScriptOperator, dag_ctx, task
+from schedr import (
+    CommandOperator,
+    Dag,
+    DefaultOutcome,
+    EmptyOperator,
+    Outcome,
+    Resource,
+    ScriptOperator,
+    ScriptResource,
+    TaskDefaults,
+    dag_ctx,
+    resource,
+    task,
+)
 from schedr._model import (
     ArgvCommand,
     CommandKind,
@@ -352,3 +367,193 @@ def test_a_script_operators_args_are_a_list() -> None:
     with pytest.raises(TypeError, match="args= is a list"), _asking(_DECLARED), Dag("d"):
         ScriptOperator("clean", "jobs:sales/schedr.toml#clean", args="--day")  # type: ignore[arg-type]
     registry.take_defined()
+
+
+# M4.9c: a declaration's outcomes and cleanup (decisions 311-314), a script as a resource.
+
+_RESOURCE_JOB = "jobs:sales/schedr.toml#clean"
+
+
+def _script_task(answer: dict[str, Any], **options: Any) -> dict[str, Any]:
+    with _asking(answer), Dag("d"):
+        ScriptOperator("clean", _RESOURCE_JOB, **options)
+    return only_dag().tasks[0].to_json()
+
+
+_WITH_OUTCOMES = {
+    **_DECLARED,
+    "outcomes": [{"name": "SUCCESS", "exit_code": 0}, {"name": "NO_DATA", "exit_code": 3}],
+}
+
+_CLEANUP = {
+    "script": "sales/undo.sh",
+    "interpreter": "bash",
+    "args": [[{"text": "--all"}]],
+    "retries": 1,
+    "timeout_ms": 5000,
+    "handles": ["Job"],
+}
+
+
+class _Check(Outcome):
+    SUCCESS = 0
+    OTHER = 4
+
+
+def test_declared_outcomes_apply_without_an_enum_and_an_enum_replaces_them() -> None:
+    assert _script_task(_WITH_OUTCOMES)["outcomes"] == _WITH_OUTCOMES["outcomes"]
+    assert _script_task(_WITH_OUTCOMES, outcomes=_Check)["outcomes"] == [
+        {"name": "SUCCESS", "exit_code": 0},
+        {"name": "OTHER", "exit_code": 4},
+    ]
+
+
+def test_routing_on_declared_outcomes_needs_an_enum() -> None:
+    with _asking(_WITH_OUTCOMES), Dag("d"):
+        op = ScriptOperator("clean", _RESOURCE_JOB)
+        assert op.on(DefaultOutcome.SUCCESS) is not None
+        with pytest.raises(TypeError, match=r"give the task `outcomes=` an `Outcome` enum"):
+            op.on(_Check.OTHER)
+        with pytest.raises(TypeError, match=r"`clean.outcome`: its `schedr.toml` declares"):
+            _ = op.outcome
+
+
+def test_success_cant_be_routed_on_when_its_not_declared() -> None:
+    only = {**_DECLARED, "outcomes": [{"name": "NO_DATA", "exit_code": 3}]}
+    with _asking(only), Dag("d"):
+        op = ScriptOperator("clean", _RESOURCE_JOB)
+        with pytest.raises(TypeError, match=r"its `schedr.toml` declares NO_DATA"):
+            op.on(DefaultOutcome.SUCCESS)
+
+
+def test_a_declared_cleanup_comes_with_its_settings() -> None:
+    cleanup = _script_task({**_DECLARED, "cleanup": _CLEANUP})["cleanup"]
+    assert cleanup == {
+        "run": {
+            "script": {
+                "script": "sales/undo.sh",
+                "interpreter": "bash",
+                "args": [[{"text": "--all"}]],
+            }
+        },
+        "retries": 1,
+        "retry_delay_ms": 30000,
+        "timeout_ms": 5000,
+        "handles": ["Job"],
+    }
+
+
+def test_the_operator_changes_a_cleanups_settings_over_the_declared_and_the_defaults() -> None:
+    answer = {**_DECLARED, "cleanup": _CLEANUP}
+    cleanup = _script_task(
+        answer,
+        cleanup_retries=7,
+        cleanup_timeout=timedelta(seconds=9),
+        cleanup_retry_delay=timedelta(seconds=2),
+        cleanup_anywhere=True,
+    )["cleanup"]
+    assert (cleanup["retries"], cleanup["timeout_ms"], cleanup["retry_delay_ms"]) == (7, 9000, 2000)
+    assert cleanup["anywhere"] is True
+    assert cleanup["run"]["script"]["script"] == "sales/undo.sh"
+    defaults = TaskDefaults(cleanup_retries=5, cleanup_retry_delay=timedelta(seconds=1))
+    with _asking(answer), Dag("d", defaults=defaults):
+        ScriptOperator("clean", _RESOURCE_JOB)
+    cleanup = only_dag().tasks[0].to_json()["cleanup"]
+    assert (cleanup["retries"], cleanup["retry_delay_ms"]) == (1, 1000), "declared, then defaults"
+
+
+def test_a_cleanup_setting_without_a_declared_cleanup_is_refused_in_a_parse_only() -> None:
+    with pytest.raises(TypeError, match=r"`cleanup_retries`, but its declaration has no"):
+        _script_task(_DECLARED, cleanup_retries=1)
+    registry.take_defined()
+    with Dag("d"):  # only named: a task's import must not fail (decision 306)
+        ScriptOperator("clean", _RESOURCE_JOB, cleanup_retries=1)
+    assert "cleanup" not in only_dag().tasks[0].to_json()
+
+
+def _resource_tasks(answer: dict[str, Any], build: Any) -> dict[str, dict[str, Any]]:
+    registry.take_defined()
+    with _asking(answer), Dag("d"):
+        build()
+    return {task.id: task.to_json() for task in only_dag().tasks}
+
+
+def test_a_script_resource_reports_its_value_and_keeps_its_setups_cleanup() -> None:
+    @dataclass
+    class Info:
+        cluster_id: str
+
+    tasks = _resource_tasks(
+        {**_DECLARED, "cleanup": _CLEANUP},
+        lambda: ScriptResource("cluster", _RESOURCE_JOB, value=Info),
+    )
+    assert tasks["cluster"]["resource"] == {"role": "setup"}
+    assert tasks["cluster"]["output_type"]["name"] == "Info"
+    assert tasks["cluster"]["cleanup"]["run"]["script"]["script"] == "sales/undo.sh"
+    assert tasks["cluster.cleanup"]["kind"] == "empty"
+
+
+def test_a_resource_refuses_a_declaration_with_outcomes() -> None:
+    with pytest.raises(TypeError, match=r"declares `\[outcomes\]`.*only on exit code 0"):
+        _resource_tasks(_WITH_OUTCOMES, lambda: ScriptResource("cluster", _RESOURCE_JOB))
+
+
+def test_cleanup_script_refuses_outcomes_and_a_cleanup_of_its_own() -> None:
+    def build() -> None:
+        Resource("r").cleanup_script(_RESOURCE_JOB)
+
+    with pytest.raises(TypeError, match=r"declares `\[outcomes\]`"):
+        _resource_tasks(_WITH_OUTCOMES, build)
+    with pytest.raises(TypeError, match=r"declares `\[cleanup\]`.*no cleanup of its own"):
+        _resource_tasks({**_DECLARED, "cleanup": _CLEANUP}, build)
+
+
+def test_cleanup_script_takes_the_setups_value_and_its_settings_in_order() -> None:
+    @resource
+    def cluster() -> str:
+        return "c"
+
+    def build() -> None:
+        made = cluster()
+        cluster.cleanup_script(
+            _RESOURCE_JOB, args=[t"{cluster.value}"], env={"A": "1"}, retries=9, blocking=False
+        )
+        del made
+
+    tasks = _resource_tasks(_DECLARED, build)
+    drop = tasks["cluster.cleanup"]
+    assert drop["kind"] == "script"
+    assert drop["resource"] == {"role": "cleanup", "setup": "cluster"}
+    assert drop["settings"]["retries"] == 9, "its own option over the declared 2"
+    assert drop["settings"]["timeout_ms"] == 60000, "the declaration's"
+    assert drop["settings"]["queue"] == "scripts", "the declaration's over the setup's"
+    assert drop["env"]["A"] == [{"text": "1"}]
+    assert drop["env"]["MODE"] == [{"text": "full"}]
+    assert drop["args"] == [[{"ref": {"kind": "output", "task": "cluster"}}]]
+
+
+def test_cleanup_script_without_settings_takes_a_cleanups_defaults() -> None:
+    bare = {k: v for k, v in _DECLARED.items() if k not in {"retries", "timeout_ms", "queue"}}
+    tasks = _resource_tasks(bare, lambda: Resource("r").cleanup_script(_RESOURCE_JOB))
+    assert tasks["r.cleanup"]["settings"]["retries"] == 3
+
+
+def test_a_resource_has_one_of_the_three_cleanups() -> None:
+    def script_then_command() -> None:
+        made = Resource("r")
+        made.cleanup_script(_RESOURCE_JOB)
+        made.cleanup_command("true")
+
+    def command_then_script() -> None:
+        made = Resource("r")
+        made.cleanup_command("true")
+        made.cleanup_script(_RESOURCE_JOB)
+
+    def function_then_script() -> None:
+        made = Resource("r")
+        made.cleanup(lambda: None)
+        made.cleanup_script(_RESOURCE_JOB)
+
+    for build in (script_then_command, command_then_script, function_then_script):
+        with pytest.raises(TypeError, match=r"resource `r` has a cleanup already"):
+            _resource_tasks(_DECLARED, build)

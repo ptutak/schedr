@@ -1,7 +1,8 @@
 # The DAG context
 
 `dag_ctx` is the current run. In the DAG body each field is a reference, filled in when
-the task runs. Inside a running task the same expression is the value. `examples/daily_report.py`
+the task runs. Inside a running task the same expression is the value.
+`examples/daily_report.py`
 reads the value inside its tasks and fills a command from the reference.
 `examples/docs/context.py` also passes the window into a task.
 
@@ -49,7 +50,8 @@ would fail, because a naive datetime cannot be stored
 inside a task. `dag_ctx.params(ReportParams)` is the whole instance, typed by that class.
 Declaring the class, giving a run its values, and what a field may be are
 [Run parameters](12-params.md). Secrets, given to a task or declared and read inside it, are
-[Secrets](13-secrets.md); an `env` entry on a command is an ordinary environment variable ([Tasks and operators](02-tasks.md#commands)). A
+[Secrets](13-secrets.md); an `env` entry on a command is an ordinary environment variable
+([Tasks and operators](02-tasks.md#commands)). A
 t-string fills a command before it starts. While the command runs, it reads the run with
 `schedr dag-ctx`, and a Python script it starts reads the same values with `schedr.script`
 ([Reading the run from a command](#reading-the-run-from-a-command)).
@@ -59,7 +61,8 @@ A test gives `dag_ctx` its values with `task_context`
 
 ## Reading the run from a command
 
-`schedr dag-ctx` and `from schedr.script import dag_ctx` read the run while a **command**
+`schedr dag-ctx` and `from schedr.script import dag_ctx` read the run while a **command or
+script**
 task runs. Both talk to the worker over that attempt's context channel
 ([A command's context channel](../03-guide/05-workers.md#a-commands-context-channel)).
 It talks only to the task's agent. Those options are also in the
@@ -182,7 +185,8 @@ error: the task has 64 context connections open, the most the agent serves at on
 
 ### A Python script
 
-Import `dag_ctx` from `schedr.script` in a script a command task runs (`python
+Import `dag_ctx` from `schedr.script` in a declared script or a script a command task runs
+(`python
 report.py`, or any process the command starts). That import is what connects `dag_ctx` to
 the channel. `from schedr import dag_ctx` alone leaves the name the DAG file uses, and
 outside a task it still tells you to call `schedr.testing.task_context`.
@@ -270,8 +274,8 @@ already has the descriptor.
 
 | Command | What it does |
 |---|---|
-| `resource set [FIELD ...] [--json JSON]` | Reports the setup's value, checked immediately against `CommandResource(..., value=T)`. Fields are `key=value` (text) or `key:=json`; alternatively, `--json` takes any JSON value. Report once per setup attempt. Only a command resource setup can call it. |
-| `resource get [--field NAME]` | Prints the setup's value in a resource's command cleanup: one line of JSON, in the form `--params` takes. `--field` prints a top-level string as text and other fields as JSON, followed by a newline. A resource with no value returns `null`. |
+| `resource set [FIELD ...] [--json JSON]` | Reports the setup's value, checked immediately against `CommandResource(..., value=T)` or `ScriptResource(..., value=T)`. Fields are `key=value` (text) or `key:=json`; alternatively, `--json` takes any JSON value. Report once per setup attempt. Only a command or script resource setup can call it. |
+| `resource get [--field NAME]` | Prints the setup's value in a resource's command or script cleanup: one line of JSON, in the form `--params` takes. `--field` prints a top-level string as text and other fields as JSON, followed by a newline. A resource with no value returns `null`. |
 
 ## The running task's own context: `task_ctx`
 
@@ -288,4 +292,4 @@ running task, raises `RuntimeError`. A test sets it with `task_context(task_id=.
 try_number=..., map_index=...)` ([Testing a DAG](07-testing.md#one-task-and-its-context)).
 A declared secret is `task_ctx.secret(...)` ([Secrets](13-secrets.md)). Tasks can also use
 [connections](14-connections.md) and register [cleanup handles](15-cleanup.md). Resource
-values for command setups and cleanups use `schedr task-ctx resource` above.
+values for command and script setups and cleanups use `schedr task-ctx resource` above.

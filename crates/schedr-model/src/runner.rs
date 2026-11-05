@@ -56,6 +56,35 @@ pub struct ErrorSummary {
     pub traceback: String,
 }
 
+/// A declaration's `[cleanup]`: what its script runs, and only the settings its `schedr.toml`
+/// gives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptCleanupDeclaration {
+    /// The script, relative to the script root.
+    pub script: String,
+    /// The interpreter's name.
+    pub interpreter: String,
+    /// Its arguments (templates).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<crate::value::Template>,
+    /// `timeout`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// `retries`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+    /// `retry_delay`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_delay_ms: Option<u64>,
+    /// `anywhere`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anywhere: Option<bool>,
+    /// The job's `cleanup_handles`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handles: Option<Vec<String>>,
+}
+
 /// A declared script, as the agent answers a `ScriptOperator` (decision 293): what its task
 /// runs, and only the settings its `schedr.toml` gives (the DAG's defaults apply to the
 /// others).
@@ -94,6 +123,12 @@ pub struct ScriptDeclaration {
     /// `max_output_size`, if given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_size: Option<u64>,
+    /// `[outcomes]`, if given: each name with its exit code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outcomes: Vec<crate::task::OutcomeDecl>,
+    /// `[cleanup]`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<ScriptCleanupDeclaration>,
 }
 
 /// The exception name of the import error the agent records for a file that took longer than
@@ -464,7 +499,7 @@ pub enum AgentMessage {
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
     /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.
-    ScriptDeclaration(ScriptDeclaration),
+    ScriptDeclaration(Box<ScriptDeclaration>),
     /// Why the declaration a [`RunnerMessage::ScriptDeclaration`] asked for can't be used:
     /// its script root isn't on this worker (decision 295), its file or job isn't there, or
     /// the file has problems; the DAG file's import error.

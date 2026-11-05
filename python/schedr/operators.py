@@ -17,6 +17,7 @@ from typing import Any, Self
 from schedr import _build, _secrets
 from schedr._model import (
     ArgvCommand,
+    CleanupScript,
     CommandKind,
     DeclaredTemplate,
     EdgeKind,
@@ -35,7 +36,7 @@ from schedr._model import (
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
 from schedr.connections import Connection, ConnectionsArg, declared_connections
-from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command
+from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command, from_declaration
 from schedr.tasks import Output
 from schedr.types import ProcessResult
 
@@ -500,6 +501,172 @@ def _declaration(reference: str, where: str) -> Mapping[str, Any] | None:
     return answer
 
 
+@dataclass(frozen=True, slots=True)
+class ScriptSettings:
+    """What a script task takes besides its declaration, as given.
+
+    Attributes:
+        options: Its own options: they win over the declaration's.
+        args: Its ``args=``; ``None``: the declared ones.
+        env: Its ``env=``, merged over the declared ones.
+        secrets: Its ``secrets=``, added to the declared ones.
+        outcomes: Its ``outcomes=``, instead of the declared ones.
+        output_type: Its output's type: its ``ProcessResult``, unless it is a resource's setup.
+        fallback: What the declaration leaves out takes from here, then the DAG's defaults.
+        resource: Its part in a resource, if any.
+    """
+
+    options: _build.TaskOptions
+    args: Sequence[object] | None = None
+    env: Mapping[str, object] | None = None
+    secrets: SecretsArg = None
+    outcomes: type[Outcome] | None = None
+    output_type: TypeDesc = field(default_factory=lambda: ScalarType("process_result"))
+    fallback: _build.TaskOptions = field(default_factory=_build.TaskOptions)
+    resource: ResourceRole | None = None
+
+
+def _declared_cleanup(
+    declared: Mapping[str, Any], where: str, given: _build.TaskOptions
+) -> tuple[_build.CleanupWanted | None, _build.TaskOptions]:
+    """A declaration's ``[cleanup]``, and its settings as options."""
+    cleanup = declared.get("cleanup")
+    if cleanup is None:
+        unused = given.cleanup_set()
+        if unused is not None:
+            raise TypeError(f"{where}: `{unused}`, but its declaration has no `[cleanup]`")
+        return None, _build.TaskOptions()
+    handles = cleanup.get("handles")
+    wanted = _build.CleanupWanted(
+        handles=None if handles is None else tuple(handles),
+        script=CleanupScript(
+            cleanup["script"],
+            cleanup["interpreter"],
+            tuple(DeclaredTemplate(arg) for arg in cleanup.get("args", [])),
+        ),
+    )
+    return wanted, _build.TaskOptions(
+        cleanup_timeout=_millis(cleanup.get("timeout_ms")),
+        cleanup_retries=cleanup.get("retries"),
+        cleanup_retry_delay=_millis(cleanup.get("retry_delay_ms")),
+        cleanup_anywhere=cleanup.get("anywhere"),
+    )
+
+
+def _refuse_for_resource(
+    declared: Mapping[str, Any], job: str, where: str, role: ResourceRole | None
+) -> None:
+    """A resource's setup and cleanup succeed only on exit 0, and a cleanup has no cleanup.
+
+    Raises:
+        TypeError: For a declaration that says otherwise (decision 312).
+    """
+    if role is None:
+        return
+    if declared.get("outcomes"):
+        raise TypeError(
+            f"{where}: `{job}` declares `[outcomes]`, but a resource's setup and cleanup succeed "
+            "only on exit code 0: declare the script again without them"
+        )
+    if role.cleanup_of is not None and declared.get("cleanup") is not None:
+        raise TypeError(
+            f"{where}: `{job}` declares `[cleanup]`, but a resource's cleanup has no cleanup of "
+            "its own: declare the script again without it"
+        )
+
+
+def add_script(builder: _build.DagBuilder, task_id: str, job: str, settings: ScriptSettings) -> str:
+    """Adds a script task from its declaration, and the data edges its templates reference.
+
+    Args:
+        builder: The DAG.
+        task_id: Its ID, qualified.
+        job: The declaration's reference.
+        settings: The rest.
+
+    Returns:
+        Its ID.
+
+    Raises:
+        TypeError: For an argument or environment value of the wrong type, or a declaration
+            this use can't take.
+        ValueError: For an invalid environment variable name.
+        LookupError: For a declaration the worker parsing the file doesn't have.
+    """
+    where = f"task `{task_id}`"
+    found = _declaration(job, where)
+    declared = found or {}
+    _refuse_for_resource(declared, job, where, settings.resource)
+    args = settings.args
+    upstream: list[_build.Upstream] = []
+    if isinstance(args, str):
+        raise TypeError(f"{where}: args= is a list of arguments, not a string")
+    given_args = [
+        _build.to_template(arg, f"{where}, args[{i}]", upstream) for i, arg in enumerate(args or ())
+    ]
+    given_env: dict[str, Template] = {}
+    for name, value in (settings.env or {}).items():
+        if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+            raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
+        given_env[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
+    for template in [*given_args, *given_env.values()]:
+        _build.check_template_references(builder, template, where)
+    kind = ScriptKind(
+        job=str(declared.get("job", job)),
+        script=str(declared.get("script", "")),
+        interpreter=str(declared.get("interpreter", "")),
+        args=given_args
+        if args is not None
+        else [DeclaredTemplate(arg) for arg in declared.get("args", [])],
+        env={
+            **{name: DeclaredTemplate(v) for name, v in declared.get("env", {}).items()},
+            **given_env,
+        },
+        working_dir=str(declared.get("working_dir", "")),
+        resource=settings.resource,
+    )
+    given = settings.options
+    if found is None:
+        # Only named (decision 306): what a `cleanup_*` setting would apply to isn't known here.
+        given = dataclasses.replace(
+            given,
+            cleanup_timeout=None,
+            cleanup_retries=None,
+            cleanup_retry_delay=None,
+            cleanup_anywhere=None,
+        )
+    wanted, cleanup_settings = _declared_cleanup(declared, where, given)
+    own = given.secrets if given.secrets is not None else _secrets.declared(settings.secrets, where)
+    both = [*(_declared_secret(item) for item in declared.get("secrets", [])), *own]
+    options = dataclasses.replace(
+        given.over(
+            dataclasses.replace(
+                cleanup_settings,
+                retries=declared.get("retries"),
+                retry_delay=_millis(declared.get("retry_delay_ms")),
+                timeout=_millis(declared.get("timeout_ms")),
+                queue=declared.get("queue"),
+                max_output_size=declared.get("max_output_size"),
+            )
+        ).over(settings.fallback),
+        secrets=tuple(dict.fromkeys(both)),
+    )
+    _build.hint_unmapped_per_run(options, task_id, stacklevel=3)
+    builder.add_task(
+        task_id,
+        kind,
+        settings.output_type,
+        options,
+        for_command(settings.outcomes, where)
+        if settings.outcomes is not None
+        else from_declaration(declared.get("outcomes", [])),
+        cleanup=wanted,
+    )
+    for up, on in dict.fromkeys(upstream):
+        builder.add_edge(up, task_id, EdgeKind.DATA, on)
+    return task_id
+
+
 class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
     """Runs a script declared in a ``schedr.toml`` of a script root (decision 293).
 
@@ -508,6 +675,10 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
     arguments, ``env`` adds variables (and replaces those of the same name), ``secrets`` adds
     declarations; ``retries`` and the other settings win over the declaration's, which win over
     the DAG's defaults. The output is a ``ProcessResult``, as a ``CommandOperator``'s.
+
+    A declared ``[outcomes]`` applies as it is: its exit codes are successes. To route on them,
+    give ``outcomes=`` an enum, which replaces them. A declared ``[cleanup]`` runs after each
+    attempt; the operator may change its settings, not its script.
 
     Args:
         task_id: The task's ID.
@@ -522,16 +693,22 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         timeout: The attempt's timeout.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes (per stream).
-        outcomes: An ``Outcome`` enum of exit codes, as ``CommandOperator``'s.
+        outcomes: An ``Outcome`` enum of exit codes, as ``CommandOperator``'s, instead of the
+            declared ones.
         run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
         max_active: At most this many running at once, across all runs (``None``: no limit).
         max_active_per_run: Accepted for symmetry; an operator isn't mapped (a ``DagHint``
             says so).
+        cleanup_timeout: How long one try of the declared cleanup may run.
+        cleanup_retries: How many times the declared cleanup is retried.
+        cleanup_retry_delay: The delay before each of its retries.
+        cleanup_anywhere: Whether it may run on another worker when this one is lost.
         uses: The resources it needs (decision 259).
 
     Raises:
         RuntimeError: Outside ``with Dag(...)``.
-        TypeError: For an argument or environment value of the wrong type.
+        TypeError: For an argument or environment value of the wrong type, or a ``cleanup_*``
+            setting on a declaration without ``[cleanup]``.
         ValueError: For an invalid environment variable name.
         LookupError: For a declaration the worker parsing the file doesn't have.
     """
@@ -553,64 +730,41 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         run_if: RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        cleanup_timeout: timedelta | None = None,
+        cleanup_retries: int | None = None,
+        cleanup_retry_delay: timedelta | None = None,
+        cleanup_anywhere: bool | None = None,
         uses: Sequence[object] | None = None,
     ) -> None:
         """Records the script task in the DAG being defined."""
         builder = _build.require_active("ScriptOperator")
         task_id = builder.qualified(task_id)
-        where = f"task `{task_id}`"
-        declared = _declaration(job, where) or {}
-        upstream: list[_build.Upstream] = []
-        if isinstance(args, str):
-            raise TypeError(f"{where}: args= is a list of arguments, not a string")
-        given_args = [
-            _build.to_template(arg, f"{where}, args[{i}]", upstream)
-            for i, arg in enumerate(args or ())
-        ]
-        given_env: dict[str, Template] = {}
-        for name, value in (env or {}).items():
-            if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
-                raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
-            given_env[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
-        for template in [*given_args, *given_env.values()]:
-            _build.check_template_references(builder, template, where)
-        kind = ScriptKind(
-            job=str(declared.get("job", job)),
-            script=str(declared.get("script", "")),
-            interpreter=str(declared.get("interpreter", "")),
-            args=given_args
-            if args is not None
-            else [DeclaredTemplate(arg) for arg in declared.get("args", [])],
-            env={
-                **{name: DeclaredTemplate(v) for name, v in declared.get("env", {}).items()},
-                **given_env,
-            },
-            working_dir=str(declared.get("working_dir", "")),
-        )
-        own = _secrets.declared(secrets, where)
-        both = [*(_declared_secret(item) for item in declared.get("secrets", [])), *own]
-        options = _build.TaskOptions(
-            declared.get("retries") if retries is None else retries,
-            _millis(declared.get("retry_delay_ms")) if retry_delay is None else retry_delay,
-            _millis(declared.get("timeout_ms")) if timeout is None else timeout,
-            declared.get("queue") if queue is None else queue,
-            declared.get("max_output_size") if max_output_size is None else max_output_size,
-            run_if=run_if,
-            max_active=max_active,
-            max_active_per_run=max_active_per_run,
-            secrets=tuple(dict.fromkeys(both)),
-            uses=None if uses is None else tuple(uses),
-        )
-        _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
-        builder.add_task(
+        add_script(
+            builder,
             task_id,
-            kind,
-            ScalarType("process_result"),
-            options,
-            for_command(outcomes, where),
+            job,
+            ScriptSettings(
+                args=args,
+                env=env,
+                secrets=secrets,
+                outcomes=outcomes,
+                options=_build.TaskOptions(
+                    retries,
+                    retry_delay,
+                    timeout,
+                    queue,
+                    max_output_size,
+                    run_if=run_if,
+                    max_active=max_active,
+                    max_active_per_run=max_active_per_run,
+                    cleanup_timeout=cleanup_timeout,
+                    cleanup_retries=cleanup_retries,
+                    cleanup_retry_delay=cleanup_retry_delay,
+                    cleanup_anywhere=cleanup_anywhere,
+                    uses=None if uses is None else tuple(uses),
+                ),
+            ),
         )
-        for up, on in dict.fromkeys(upstream):
-            builder.add_edge(up, task_id, EdgeKind.DATA, on)
         self._task_id = task_id
         self._dag = builder
 

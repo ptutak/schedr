@@ -917,6 +917,39 @@ fn a_connection_given_by_prefix_must_be_declared_under_a_variables_prefix() {
 }
 
 #[test]
+fn a_scripts_cleanup_is_a_script() {
+    let settings = task("x", &json!({}))["settings"].clone();
+    let script_cleanup = json!({
+        "run": {"script": {"script": "undo.sh", "interpreter": "bash"}},
+        "retries": 0, "retry_delay_ms": 0,
+    });
+    let script = |id: &str, cleanup: &Json| {
+        json!({
+            "id": id, "kind": "script", "job": "r:schedr.toml#j", "script": "run.sh",
+            "interpreter": "bash", "working_dir": "", "settings": settings,
+            "output_type": {"type": "process_result"}, "cleanup": cleanup,
+        })
+    };
+    let found = problems(&json!({
+        "tasks": [script("fine", &script_cleanup)], "edges": [],
+    }));
+    assert_eq!(found, Vec::<String>::new());
+    let found = problems(&json!({
+        "tasks": [script("wrong", &json!({"run": "python", "retries": 0, "retry_delay_ms": 0}))],
+        "edges": [],
+    }));
+    assert_eq!(found, ["task `wrong`: a script's cleanup is a script"]);
+    let mut python = task("python_task", &json!({}));
+    python["cleanup"] = script_cleanup;
+    let found = problems(&json!({"tasks": [python], "edges": []}));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("a Python task's cleanup is a function"),
+        "{found:?}"
+    );
+}
+
+#[test]
 fn a_cleanup_of_another_kind_than_its_task_is_refused() {
     let settings = task("x", &json!({}))["settings"].clone();
     let python_cleanup =

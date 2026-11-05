@@ -17,7 +17,7 @@ import dataclasses
 import types
 import typing
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from typing import (
@@ -209,12 +209,15 @@ class OutcomeSpec:
             ``"None"``); empty otherwise.
         enum: The declared ``Outcome`` enum (``DefaultOutcome`` for a plain task).
         exit_codes: Whether the names carry exit codes (a command's).
+        codes: A ``schedr.toml``'s ``[outcomes]``, each name with its exit code; empty otherwise
+            (there is no enum to route on: ``outcomes=`` gives one).
     """
 
     names: tuple[str, ...]
     classes: tuple[type, ...] = ()
     enum: type[Outcome] = DefaultOutcome
     exit_codes: bool = False
+    codes: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_union(self) -> bool:
@@ -227,6 +230,8 @@ class OutcomeSpec:
         Returns:
             ``(name, exit_code)`` pairs, ``exit_code`` ``None`` but for commands.
         """
+        if self.codes:
+            return self.codes
         if self.exit_codes:
             return tuple((m.name, int(m.value)) for m in self.enum)
         return tuple((name, None) for name in self.names)
@@ -389,6 +394,21 @@ def for_command(outcomes: type[Outcome] | None, where: str) -> OutcomeSpec:
     return OutcomeSpec(names=tuple(m.name for m in outcomes), enum=outcomes, exit_codes=True)
 
 
+def from_declaration(outcomes: Sequence[Mapping[str, Any]]) -> OutcomeSpec:
+    """A script's outcomes from its ``schedr.toml``'s ``[outcomes]``, as the agent checked them.
+
+    Args:
+        outcomes: Each name with its ``exit_code``.
+
+    Returns:
+        The outcomes; ``DEFAULT`` when none are declared.
+    """
+    if not outcomes:
+        return DEFAULT
+    codes = tuple((str(o["name"]), int(o["exit_code"])) for o in outcomes)
+    return OutcomeSpec(names=tuple(name for name, _ in codes), exit_codes=True, codes=codes)
+
+
 def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str, ...]:
     """The outcome names ``.on(*kinds)`` narrows to, checked against the task's own outcomes.
 
@@ -416,8 +436,13 @@ def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str,
                     f"({', '.join(spec.names)})"
                 )
             names.append(_member_name(member))
-        elif isinstance(kind, Outcome) and type(kind) is spec.enum:
+        elif isinstance(kind, Outcome) and type(kind) is spec.enum and kind.name in spec.names:
             names.append(kind.name)
+        elif spec.codes:
+            raise TypeError(
+                f"{where}.on({_label(kind)}): its `schedr.toml` declares {', '.join(spec.names)}; "
+                "to route on them, give the task `outcomes=` an `Outcome` enum"
+            )
         else:
             raise TypeError(
                 f"{where}.on({_label(kind)}): not one of its outcomes; its outcomes are "

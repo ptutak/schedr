@@ -1,6 +1,8 @@
 # Master–worker protocol
 
-Workers open the `Control` stream; their stable worker ID and per-process incarnation ID distinguish a reconnect from a restart. Times and their settings are in [Timings](14-timings.md).
+Workers open the `Control` stream; their stable worker ID and per-process incarnation ID
+distinguish a reconnect from a restart. Times and their settings are in
+[Timings](14-timings.md).
 
 ## Registering and heartbeats
 
@@ -31,7 +33,8 @@ added to the attempt once; it never represents the whole cleanup.
 Any worker message renews the master's worker lease at arrival, even if it waits to be handled.
 The master answers heartbeats before they wait for its lock, while it leads. The worker notes
 messages from the master as word from it. The worker ends a stream silent for a lease,
-whatever it runs, and ignores messages arriving past that limit. On its first stream, a `Registered` at least as old as the lease it states is
+whatever it runs, and ignores messages arriving past that limit. On its first stream, a
+`Registered` at least as old as the lease it states is
 ignored and the worker registers again. A non-leading master refuses a stream with
 `UNAVAILABLE` ("not leading"), including a `Register` held at its lock as it paused.
 
@@ -59,9 +62,9 @@ sequenceDiagram
     Note over W,M: No ack: resend after one heartbeat interval (10 s default), then back off; reconnect after 8 resends
 ```
 
-A command resource setup reports its value to the agent with `resource_set` over the
+A command or script resource setup reports its value to the agent with `resource_set` over the
 [context channel](05-workers.md#a-commands-context-channel), and on success that value is
-its `Finished` output, which the master passes to the resource's command cleanup for
+its `Finished` output, which the master passes to the resource's command or script cleanup for
 `resource_get`.
 
 ## A rejected assignment
@@ -205,7 +208,8 @@ sequenceDiagram
     end
 ```
 
-A finished entry for an open attempt gets `Continue` and is sent again. Without a recoverable cleanup, an orphaned running entry is omitted and reconciled as missing.
+A finished entry for an open attempt gets `Continue` and is sent again. Without a recoverable
+cleanup, an orphaned running entry is omitted and reconciled as missing.
 
 ## Lost worker
 
@@ -271,9 +275,11 @@ accompany the cleanup. If the original worker returns with more handles while th
 still waits, the master takes the move back and gives cleanup to that worker. If the move
 was assigned elsewhere or ended, the master sends `CLEAN_REST` with its contiguous handle
 count as `cleanup_from`. A handle received past a gap can therefore be cleaned again. The
-rest result can arrive after the run ends; a failure after success makes it a [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end).
+rest result can arrive after the run ends; a failure after success makes it a [yellow
+success](03-life-of-a-run.md#7-the-next-task-and-the-end).
 
-If the worker from which cleanup was first scheduled to move reconnects with a finished cleanup before the
+If the worker from which cleanup was first scheduled to move reconnects with a finished cleanup
+before the
 move takes place, its journaled `Finished` receives `Continue`, so it sends the result again;
 the master stores it and drops the move. A report from a later cleanup-only worker keeps the
 task result already stored.
@@ -374,7 +380,8 @@ including a missing root that caused an import error. During a DAG parse, the ru
 agent `script_declaration` for a reference. The agent answers with the checked declaration
 or an error explaining why it could not resolve it.
 
-A file exceeding the master's message limit is reported as an import error; the upload runs separately from heartbeats.
+A file exceeding the master's message limit is reported as an import error; the upload runs
+separately from heartbeats.
 
 ## Connection job
 
@@ -408,7 +415,9 @@ sequenceDiagram
 
 ## Message reference
 
-The timing links point to [Timings](14-timings.md); a dash means no dedicated message deadline. Repeats are described for the same ID or state, not as a promise that every operation has identical effects.
+The timing links point to [Timings](14-timings.md); a dash means no dedicated message deadline.
+Repeats are described for the same ID or state, not as a promise that every operation has
+identical effects.
 
 ### Worker to master on `Control`
 
@@ -434,7 +443,7 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 | `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
-| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
@@ -442,7 +451,8 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 
 ### RPCs
 
-`UploadParseResult` is client-streaming and `FetchInputs` is server-streaming; they run alongside `Control`, despite being separate calls.
+`UploadParseResult` is client-streaming and `FetchInputs` is server-streaming; they run
+alongside `Control`, despite being separate calls.
 
 | RPC | Caller and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|

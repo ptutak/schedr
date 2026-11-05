@@ -19,7 +19,7 @@ from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
 from schedr.outcomes import DagHint, Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
-from schedr.resources import CommandResource, Resource, resource
+from schedr.resources import CommandResource, Resource, ScriptResource, resource
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
@@ -54,6 +54,7 @@ __all__ = [
     "Resource",
     "RunIf",
     "ScriptOperator",
+    "ScriptResource",
     "SecretError",
     "SecretPrefix",
     "Task",

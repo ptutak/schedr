@@ -121,19 +121,20 @@ fn cleanup_problem(task: &Task) -> Option<String> {
     let run = &task.cleanup.as_ref()?.run;
     match (&task.kind, run) {
         (TaskKind::Python { .. }, CleanupRun::Python)
-        | (TaskKind::Command { .. }, CleanupRun::Command(_)) => None,
-        (TaskKind::Python { .. }, CleanupRun::Command(_)) => Some(format!(
-            "task `{id}`: a Python task's cleanup is a function, not a command"
-        )),
-        (TaskKind::Command { .. }, CleanupRun::Python) => Some(format!(
-            "task `{id}`: a command task's cleanup is a command, not `python`"
-        )),
+        | (TaskKind::Command { .. }, CleanupRun::Command(_))
+        | (TaskKind::Script { .. }, CleanupRun::Script { .. }) => None,
+        (TaskKind::Python { .. }, CleanupRun::Command(_) | CleanupRun::Script { .. }) => Some(
+            format!("task `{id}`: a Python task's cleanup is a function, not a command"),
+        ),
+        (TaskKind::Command { .. }, CleanupRun::Python | CleanupRun::Script { .. }) => Some(
+            format!("task `{id}`: a command task's cleanup is a command, not `python`"),
+        ),
         (TaskKind::Empty, _) => Some(format!(
             "task `{id}`: an empty task has nothing to clean up"
         )),
-        (TaskKind::Script { .. }, _) => Some(format!(
-            "task `{id}`: a script's cleanup isn't available yet"
-        )),
+        (TaskKind::Script { .. }, _) => {
+            Some(format!("task `{id}`: a script's cleanup is a script"))
+        }
     }
 }
 
@@ -233,7 +234,11 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
             in_text.extend(env.values());
         }
         TaskKind::Script { args, env, .. } => {
-            for reference in args.iter().flat_map(Template::references) {
+            for reference in args
+                .iter()
+                .chain(task.cleanup_script_args())
+                .flat_map(Template::references)
+            {
                 if let Reference::Secret(name) = reference {
                     problems.push(format!(
                         "task `{id}`: `{name}` in the arguments (anyone on the machine could \

@@ -329,6 +329,7 @@ class ScriptKind:
         args: Its arguments, each one argument.
         env: Extra environment variables.
         working_dir: Where it runs, relative to its script root.
+        resource: Its part in a resource (``ScriptResource``, ``cleanup_script``).
     """
 
     job: str
@@ -337,6 +338,7 @@ class ScriptKind:
     args: Sequence[Template | DeclaredTemplate] = ()
     env: Mapping[str, Template | DeclaredTemplate] = field(default_factory=dict)
     working_dir: str = ""
+    resource: ResourceRole | None = None
 
     def references(self) -> list[Reference]:
         """The arguments' and the environment's references.
@@ -364,6 +366,8 @@ class ScriptKind:
             result["args"] = [arg.to_json() for arg in self.args]
         if self.env:
             result["env"] = {key: self.env[key].to_json() for key in sorted(self.env)}
+        if self.resource is not None:
+            result["resource"] = self.resource.to_json()
         return result
 
 
@@ -442,6 +446,32 @@ DEFAULT_CLEANUP_RETRY_DELAY_MS = 30_000
 
 
 @dataclass(frozen=True, slots=True)
+class CleanupScript:
+    """A script as a task's cleanup (``[jobs.<name>.cleanup]``).
+
+    Attributes:
+        script: The script, relative to the task's script root.
+        interpreter: The interpreter's name.
+        args: Its arguments, as the declaration gives them.
+    """
+
+    script: str
+    interpreter: str
+    args: Sequence[DeclaredTemplate] = ()
+
+    def to_json(self) -> dict[str, Any]:
+        """The script as DAG JSON.
+
+        Returns:
+            ``{"script": ..., "interpreter": ...}``, with ``args`` when set.
+        """
+        result: dict[str, Any] = {"script": self.script, "interpreter": self.interpreter}
+        if self.args:
+            result["args"] = [arg.to_json() for arg in self.args]
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class TaskCleanup:
     """A task's cleanup: ``finally`` for each of its attempts.
 
@@ -453,6 +483,7 @@ class TaskCleanup:
         handles: The handle types it takes: ``None`` any, empty none (a function without a
             ``handles`` parameter would never see them).
         anywhere: Whether it may run on another worker when its own is lost.
+        script: The script it runs, instead of a command or the function.
     """
 
     line: CommandLine | None = None
@@ -461,6 +492,7 @@ class TaskCleanup:
     retry_delay_ms: int = DEFAULT_CLEANUP_RETRY_DELAY_MS
     handles: tuple[str, ...] | None = None
     anywhere: bool = False
+    script: CleanupScript | None = None
 
     def references(self) -> list[Reference]:
         """The references of its command line.
@@ -476,12 +508,14 @@ class TaskCleanup:
         """The cleanup as DAG JSON.
 
         Returns:
-            Its ``run`` (``"python"`` or ``{"command": ...}``), ``retries`` and
-            ``retry_delay_ms``, with ``timeout_ms`` and ``handles`` when set.
+            Its ``run`` (``"python"``, ``{"command": ...}`` or ``{"script": ...}``), ``retries``
+            and ``retry_delay_ms``, with ``timeout_ms`` and ``handles`` when set.
         """
-        run: str | dict[str, Any] = (
-            "python" if self.line is None else {"command": self.line.to_json()}
-        )
+        run: str | dict[str, Any] = "python"
+        if self.script is not None:
+            run = {"script": self.script.to_json()}
+        elif self.line is not None:
+            run = {"command": self.line.to_json()}
         result: dict[str, Any] = {
             "run": run,
             "retries": self.retries,

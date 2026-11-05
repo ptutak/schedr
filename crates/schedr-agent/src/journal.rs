@@ -89,6 +89,8 @@ pub struct KeptAttempt {
     pub code_hash: Option<String>,
     /// The copies of the other DAG roots on its `sys.path`, by root.
     pub root_copies: std::collections::BTreeMap<String, PathBuf>,
+    /// The copy of the script root its script and cleanup script came from.
+    pub script_dir: Option<PathBuf>,
 }
 
 /// A [`KeptAttempt`] as stored.
@@ -101,6 +103,8 @@ struct StoredAttempt {
     code_hash: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     root_copies: std::collections::BTreeMap<String, PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    script_dir: Option<PathBuf>,
 }
 
 /// A journal file as stored.
@@ -215,6 +219,7 @@ impl Journal {
             code_dir: kept.code_dir.clone(),
             code_hash: kept.code_hash.clone(),
             root_copies: kept.root_copies.clone(),
+            script_dir: kept.script_dir.clone(),
         };
         let json = serde_json::to_vec(&stored).map_err(io::Error::other)?;
         self.replace(attempt_id, &path, &json)
@@ -241,6 +246,7 @@ impl Journal {
             code_dir: stored.code_dir,
             code_hash: stored.code_hash,
             root_copies: stored.root_copies,
+            script_dir: stored.script_dir,
         }))
     }
 

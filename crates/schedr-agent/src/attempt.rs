@@ -17,6 +17,7 @@ use schedr_model::runner::CleanupHandle;
 use schedr_model::runner::{
     DagFile, ErrorSummary, RunInfo, RunnerMessage, SecretValue, TaskRequest,
 };
+use schedr_model::task::CleanupRun;
 use schedr_model::{AttemptStatus, SecretDecl, SecretName, Task, TaskKind};
 use schedr_proto::convert::{attempt_status_to_proto, run_kind_from_proto};
 use schedr_proto::pb;
@@ -614,6 +615,7 @@ fn plan_script(
         args,
         env,
         working_dir,
+        ..
     } = &spec.task.kind
     else {
         unreachable!("planned as a script")
@@ -647,6 +649,7 @@ fn plan_script(
             detail: format!("`{job}`: its script `{script}` isn't on this worker"),
         });
     }
+    can_run_cleanup_script(spec, setup, &script_dir, job)?;
     let ctx = render_context(spec);
     let mut argv = vec![file.to_string_lossy().into_owned()];
     for template in args {
@@ -670,6 +673,72 @@ fn plan_script(
         start_timeout: setup.timeouts.runner_start,
         output_drain: setup.timeouts.output_drain,
     }))
+}
+
+/// Makes a script task run its cleanup script instead (with the task's environment and working
+/// directory); any other task is left as it is. A setup's own cleanup reports no value.
+pub fn use_cleanup_script(task: &mut Task) {
+    let Some(CleanupRun::Script {
+        script: own_script,
+        interpreter: own_interpreter,
+        args: own_args,
+    }) = task.cleanup.as_ref().map(|cleanup| &cleanup.run)
+    else {
+        return;
+    };
+    if let TaskKind::Script {
+        script,
+        interpreter,
+        args,
+        resource,
+        ..
+    } = &mut task.kind
+    {
+        script.clone_from(own_script);
+        interpreter.clone_from(own_interpreter);
+        args.clone_from(own_args);
+        *resource = None;
+    }
+}
+
+/// A worker that couldn't run the task's cleanup script doesn't take the task: its cleanup
+/// would fail after the task, and a moved one should go to a worker that can run it.
+fn can_run_cleanup_script(
+    spec: &AttemptSpec,
+    setup: &WorkerSetup,
+    script_dir: &Path,
+    job: &str,
+) -> Result<(), NotRun> {
+    let Some(CleanupRun::Script {
+        script,
+        interpreter,
+        ..
+    }) = spec.task.cleanup.as_ref().map(|cleanup| &cleanup.run)
+    else {
+        return Ok(());
+    };
+    if !crate::jobs::stays_inside(script) {
+        return Err(NotRun::Failed {
+            kind: RENDER_FAILED.to_owned(),
+            message: format!("`{job}`: its cleanup script leaves its script root"),
+        });
+    }
+    if !setup.interpreters.contains_key(interpreter) {
+        return Err(NotRun::Rejected {
+            reason: pb::RejectReason::InterpreterUndefined,
+            detail: format!(
+                "interpreter `{interpreter}` of `{job}`'s cleanup isn't defined on this worker \
+                 ([interpreters])"
+            ),
+        });
+    }
+    if !script_dir.join(script).is_file() {
+        return Err(NotRun::Rejected {
+            reason: pb::RejectReason::ScriptReferenceNotFound,
+            detail: format!("`{job}`: its cleanup script `{script}` isn't on this worker"),
+        });
+    }
+    Ok(())
 }
 
 /// The variable a Python script finds its root's libraries through.

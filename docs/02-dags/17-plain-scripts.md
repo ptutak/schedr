@@ -47,7 +47,8 @@ interpreter names an `[interpreters]` entry. Job names contain only ASCII letter
 - `script`, `interpreter`, `args`, `env`, `secrets`, `working_dir`;
 - `schedule`, `every`, `once`, `timezone`, `start`, `end`, `initial_since`, `catchup`,
   `max_active_runs`;
-- `queue`, `retries`, `retry_delay`, `timeout`, `max_output_size`, `description`, `tags`.
+- `queue`, `retries`, `retry_delay`, `timeout`, `max_output_size`, `description`, `tags`;
+- `params`, `outcomes`, `cleanup`, `cleanup_handles`.
 
 `args` is a list of strings; `env` maps variable names to strings or secret references, and
 `secrets` declares secrets available to the task. `working_dir` defaults to the directory
@@ -56,8 +57,57 @@ containing `schedr.toml`. Durations use strings such as `"1h30m"` and sizes use 
 (a TOML date or datetime). The default timezone is UTC, `catchup` is false and
 `max_active_runs` is 1. With `once`, `start`, `end` and `catchup` are errors.
 
-Unknown keys are errors. `params`, `outcomes`, `cleanup`, `cleanup_handles` and `notify`
-are not available yet and are errors too.
+Unknown keys are errors. `notify` is not available yet and is an error too.
+
+### Parameters, outcomes and cleanup
+
+```toml
+[jobs.report_daily]
+script = "reports/daily.py"
+interpreter = "etl-venv"
+cleanup_handles = ["Publication"]
+
+[jobs.report_daily.params]
+region = "eu"
+limit = 10
+
+[jobs.report_daily.outcomes]
+SUCCESS = 0
+NO_DATA = 3
+
+[jobs.report_daily.cleanup]
+script = "reports/undo.sh"
+interpreter = "bash"
+args = ["--report"]
+retries = 2
+retry_delay = "30s"
+anywhere = false
+```
+
+Parameter types come from their defaults: strings, integers, floats, booleans, dates,
+datetimes, lists of one type and nested tables are accepted. A datetime without an offset
+uses the job's timezone. Empty or mixed lists, empty tables and times without a date are
+refused; parameter names use letters, digits and `_`. A trigger replaces a nested table as a
+whole. Parameters belong only to a standalone job; a script used in a DAG reads that DAG's
+parameters instead. A Python script reads them with `from schedr.script import dag_ctx` and
+`dag_ctx.params.region`; a script can also call `schedr dag-ctx params get --field region`.
+
+`outcomes` maps names to distinct exit codes from 0 to 255. The declared codes count as
+successful outcomes. Names use letters, digits and `_` and cannot start with a digit.
+
+The cleanup runs after each started attempt, including a successful one. It uses the task's
+environment and working directory. Besides `script`, `interpreter` and `args`, it accepts
+`timeout`, `retries`, `retry_delay` and `anywhere`. To limit the handle types a task can
+register, set `cleanup_handles` in `[jobs.report_daily]` as above. The task and cleanup can use
+the worker's context channel:
+
+```sh
+schedr task-ctx cleanup add Publication id="$id"
+schedr task-ctx cleanup list Publication --field id
+```
+
+Without `cleanup_handles`, any handle type is accepted; the key requires a cleanup. See
+[Cleaning up after a task](15-cleanup.md) for handles and retries.
 
 A scheduled declaration is a standalone one-task DAG, paused when first found. Its ID is
 `<root>:<path to schedr.toml>#<job name>` and its task is named after the job: for example,
@@ -91,7 +141,9 @@ The agent sets `SCHEDR_DAG_ID`, `SCHEDR_RUN_ID`, `SCHEDR_RUN_KIND`, `SCHEDR_TASK
 `SCHEDR_MAP_INDEX`. Times are ISO 8601. A worker lacking the interpreter, the script root
 or the script file rejects the assignment, so it can be tried on another worker; a script
 gone from the code the task expects fails the task, as does a script or `working_dir`
-leaving its script root.
+leaving its script root. A worker also rejects the task if the cleanup script or its
+interpreter is missing there. A moved or recovered cleanup needs only the cleanup script
+and its interpreter, not the task's interpreter.
 
 ## Using a script in a DAG
 
@@ -120,6 +172,12 @@ before deployment.
 and `secrets=` adds to the declared secrets. Arguments and environment values can use
 t-strings and output references. For task settings such as `queue`, `retries`,
 `retry_delay`, `timeout` and `max_output_size`, the operator wins over the declaration,
-which wins over DAG defaults. `outcomes=` takes an `Outcome` enum mapping exit codes, as
-for `CommandOperator`. The output is a `ProcessResult`; use `report.output`, or
+which wins over DAG defaults. Declared outcomes apply without `outcomes=`. To route with
+`.on(...)` or read `.outcome`, give `outcomes=` an `Outcome` enum; it replaces the declared
+outcomes. Without an enum, only `DefaultOutcome.SUCCESS` can be routed on if declared.
+
+`cleanup_timeout`, `cleanup_retries`, `cleanup_retry_delay` and `cleanup_anywhere` override
+the declared cleanup's settings, which override DAG defaults. They require a declared
+cleanup; the operator cannot replace its script. The output is a `ProcessResult`; use
+`report.output`, or
 `report.stdout` and `report.stderr` for its streams.

@@ -226,6 +226,17 @@
               },
               "type": "array"
             },
+            "cleanup": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScriptCleanupDeclaration"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`[cleanup]`, if given."
+            },
             "env": {
               "additionalProperties": {
                 "$ref": "#/$defs/Template"
@@ -249,6 +260,13 @@
                 "integer",
                 "null"
               ]
+            },
+            "outcomes": {
+              "description": "`[outcomes]`, if given: each name with its exit code.",
+              "items": {
+                "$ref": "#/$defs/OutcomeDecl"
+              },
+              "type": "array"
             },
             "queue": {
               "description": "`queue`, if given.",
@@ -489,6 +507,41 @@
           },
           "required": [
             "command"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A script of the task's script root (`[jobs.<name>.cleanup]`), with the task's\nenvironment and working directory.",
+          "properties": {
+            "script": {
+              "additionalProperties": false,
+              "properties": {
+                "args": {
+                  "description": "Its arguments, each one argument (never a shell string).",
+                  "items": {
+                    "$ref": "#/$defs/Template"
+                  },
+                  "type": "array"
+                },
+                "interpreter": {
+                  "description": "The interpreter: an `[interpreters]` entry of the worker that runs it.",
+                  "type": "string"
+                },
+                "script": {
+                  "description": "The script, relative to the script root.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "script",
+                "interpreter"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "script"
           ],
           "type": "object"
         }
@@ -1261,11 +1314,11 @@
       "type": "object"
     },
     "ResourceRole": {
-      "description": "A command's part in a resource, for `schedr task-ctx resource set|get`.",
+      "description": "A command's or a script's part in a resource, for `schedr task-ctx resource set|get`.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A `CommandResource`'s setup: its output is the value it reports with `resource set`,\nof the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.",
+          "description": "A `CommandResource`'s or `ScriptResource`'s setup: its output is the value it reports with `resource set`,\nof the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.",
           "properties": {
             "role": {
               "const": "setup",
@@ -1279,7 +1332,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A resource's `cleanup_command`: it reads the setup's value with `resource get`.",
+          "description": "A resource's `cleanup_command` or `cleanup_script`: it reads the setup's value with\n`resource get`.",
           "properties": {
             "role": {
               "const": "cleanup",
@@ -1833,6 +1886,76 @@
       "pattern": "^[0-9]+\\.[0-9]+$",
       "type": "string"
     },
+    "ScriptCleanupDeclaration": {
+      "additionalProperties": false,
+      "description": "A declaration's `[cleanup]`: what its script runs, and only the settings its `schedr.toml`\ngives.",
+      "properties": {
+        "anywhere": {
+          "description": "`anywhere`, if given.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "args": {
+          "description": "Its arguments (templates).",
+          "items": {
+            "$ref": "#/$defs/Template"
+          },
+          "type": "array"
+        },
+        "handles": {
+          "description": "The job's `cleanup_handles`, if given.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "interpreter": {
+          "description": "The interpreter's name.",
+          "type": "string"
+        },
+        "retries": {
+          "description": "`retries`, if given.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retry_delay_ms": {
+          "description": "`retry_delay`, if given.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "script": {
+          "description": "The script, relative to the script root.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "`timeout`, if given.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "script",
+        "interpreter"
+      ],
+      "type": "object"
+    },
     "SecretDecl": {
       "description": "A secret a task declares in `secrets=`: one it may read on demand (`schedr task-ctx\nsecret get`, `task_ctx.secret(...)`), fetched before its process starts, or a prefix\ncovering every secret under it, fetched when read.",
       "oneOf": [
@@ -2055,6 +2178,17 @@
             "kind": {
               "const": "script",
               "type": "string"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourceRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Its part in a resource (`ScriptResource`, `cleanup_script`), if any."
             },
             "script": {
               "description": "The script, relative to the script root.",

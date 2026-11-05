@@ -4,6 +4,15 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-06, night): finishing M4.9 unattended
+
+- **The user's instruction:** "finish M4.9 with review and fixes stop after that, commit and push
+  as needed". M4.9c is committed; M4.9d (305) next, then stop. Don't start what follows M4.9.
+- **Done: M4.9c** (decisions 310-314, Built M4.9c): `params`, `outcomes`, `[cleanup]`,
+  `cleanup_handles`, `ScriptResource`, `.cleanup_script`, cleanup settings on `ScriptOperator`.
+  Codex's review: 3 findings, 2 fixed with a test each, the third in the docs round.
+- **The user's calls:** 310-313 (A each). 314 is Claude's: tell the user at the next report.
+
 ## State (2026-11-05, late night): B168 and B169 fixed; paused for the user's restart
 
 - **The user's instruction:** pause for their restart; then M4.9c and M4.9d, as "go on until

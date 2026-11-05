@@ -13,6 +13,7 @@ from schedr._model.dag import Dag, DagLocation, DagParams, Edge, EdgeKind, Group
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
 from schedr._model.tasks import (
     ArgvCommand,
+    CleanupScript,
     CommandKind,
     CommandLine,
     DeclaredTemplate,
@@ -74,6 +75,7 @@ from schedr._model.version import SchedrVersion
 
 __all__ = [
     "ArgvCommand",
+    "CleanupScript",
     "CommandKind",
     "CommandLine",
     "CronTrigger",

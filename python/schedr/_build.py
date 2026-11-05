@@ -16,6 +16,7 @@ from types import FrameType
 from typing import Any, Protocol, get_args, get_origin, is_typeddict
 
 from schedr._model import (
+    CleanupScript,
     CommandLine,
     DagCtxField,
     DagCtxRef,
@@ -110,10 +111,12 @@ class CleanupWanted:
     Attributes:
         line: The command it runs; ``None``: the task's ``cleanup=`` function.
         handles: The handle types it takes: ``None`` any, empty none.
+        script: The script it runs (a declaration's ``[cleanup]``).
     """
 
     line: CommandLine | None = None
     handles: tuple[str, ...] | None = None
+    script: CleanupScript | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +247,7 @@ class TaskOptions:
             ),
             wanted.handles,
             bool(self.cleanup_anywhere),
+            wanted.script,
         )
 
     def settings(self) -> TaskSettings:

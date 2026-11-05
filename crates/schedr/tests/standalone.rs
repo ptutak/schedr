@@ -1138,6 +1138,134 @@ fn a_script_runs_as_its_own_job_and_from_a_dag_with_its_library() {
     );
 }
 
+const SCRIPT_REST_DAG: &str = r#"
+from dataclasses import dataclass
+from schedr import Dag, EmptyOperator, Outcome, ScriptOperator, ScriptResource
+
+class Check(Outcome):
+    SUCCESS = 0
+    NO_DATA = 3
+
+@dataclass
+class Info:
+    cluster_id: str
+
+with Dag("rest"):
+    check = ScriptOperator("check", "jobs:team/schedr.toml#check", outcomes=Check)
+    routed = EmptyOperator("routed")
+    check.on(Check.NO_DATA) >> routed
+    plain = ScriptOperator("plain", "jobs:team/schedr.toml#check", cleanup_retries=0)
+    cluster = ScriptResource("cluster", "jobs:team/schedr.toml#make", value=Info)
+    cluster.cleanup_script("jobs:team/schedr.toml#drop", args=[t"{cluster.cluster_id}"])
+    ScriptOperator("load", "jobs:team/schedr.toml#noop", uses=[cluster])
+"#;
+
+/// M4.9c: params, outcomes and a cleanup on a job and from a DAG; a script as a resource.
+#[test]
+fn a_script_has_params_outcomes_a_cleanup_and_can_be_a_resource() {
+    let scripts = TempDir::new().unwrap();
+    let root = scripts.path().join("jobs");
+    std::fs::create_dir_all(root.join("team")).unwrap();
+    let marks = scripts.path().join("marks");
+    let write =
+        |name: &str, body: &str| std::fs::write(root.join("team").join(name), body).unwrap();
+    write(
+        "work.py",
+        "import sys\nfrom schedr.script import dag_ctx\n\
+         print(dag_ctx.params.region, dag_ctx.params.limit)\nsys.exit(3)\n",
+    );
+    write(
+        "mark.py",
+        "import sys\nwith open(sys.argv[1], 'a') as f:\n    print(*sys.argv[2:], file=f)\n",
+    );
+    write("exit3.py", "import sys\nsys.exit(3)\n");
+    write("noop.py", "");
+    write(
+        "make.py",
+        "import os, subprocess, sys\n\
+         fd = int(os.environ['SCHEDR_CTX_FD'])\n\
+         subprocess.run([sys.argv[1], 'task-ctx', 'resource', 'set', 'cluster_id=c-8'],\n\
+         check=True, pass_fds=[fd])\n",
+    );
+    let marks_path = marks.to_str().unwrap();
+    let schedr = env!("CARGO_BIN_EXE_schedr");
+    write(
+        "schedr.toml",
+        &format!(
+            "[jobs.daily]\nscript = \"work.py\"\ninterpreter = \"python\"\n\
+             schedule = \"0 3 * * *\"\n\
+             [jobs.daily.outcomes]\nSUCCESS = 0\nNO_DATA = 3\n\
+             [jobs.daily.params]\nregion = \"eu\"\nlimit = 5\n\
+             [jobs.daily.cleanup]\nscript = \"mark.py\"\ninterpreter = \"python\"\n\
+             args = [\"{marks_path}\", \"daily-cleanup\"]\nretries = 0\n\
+             [jobs.check]\nscript = \"exit3.py\"\ninterpreter = \"python\"\n\
+             [jobs.check.outcomes]\nSUCCESS = 0\nNO_DATA = 3\n\
+             [jobs.check.cleanup]\nscript = \"mark.py\"\ninterpreter = \"python\"\n\
+             args = [\"{marks_path}\", \"check-cleanup\"]\n\
+             [jobs.make]\nscript = \"make.py\"\ninterpreter = \"python\"\n\
+             args = [\"{schedr}\"]\n\
+             [jobs.drop]\nscript = \"mark.py\"\ninterpreter = \"python\"\n\
+             args = [\"{marks_path}\", \"dropped\"]\n\
+             [jobs.noop]\nscript = \"noop.py\"\ninterpreter = \"python\"\n"
+        ),
+    );
+    // `cleanup_script`'s `args=` replaces the declared ones: the marks' path comes first.
+    let dag = SCRIPT_REST_DAG.replace(
+        "args=[t\"{cluster.cluster_id}\"]",
+        &format!("args=[{marks_path:?}, \"dropped\", t\"{{cluster.cluster_id}}\"]"),
+    );
+    let standalone = Standalone::start_configured(
+        &[("rest.py", &dag)],
+        None,
+        &[],
+        "",
+        &[("SCHEDR_SCRIPT_PATH", root.to_str().unwrap())],
+    );
+    let job = "jobs:team/schedr.toml#daily";
+    standalone.wait("the job and the DAG", || {
+        standalone.dag_ids() == [job, "rest"]
+    });
+    let stdout = |run_id: &str, task: &str| {
+        let output = standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap_or_default();
+        output["value"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let marked = || std::fs::read_to_string(&marks).unwrap_or_default();
+
+    // The job: its defaults, a declared exit code a success, and its cleanup.
+    let run_id = standalone.trigger(job);
+    standalone.wait_for_state(&run_id, "success");
+    assert_eq!(stdout(&run_id, "daily"), "eu 5\n");
+    standalone.wait("the job's cleanup", || marked().contains("daily-cleanup"));
+    // A trigger's value, checked against the types the defaults gave.
+    let command =
+        standalone.cli_json(&["runs", "trigger", job, "-p", "region=us", "-p", "limit:=7"]);
+    let run_id = command["result"]["run_id"].as_str().unwrap().to_owned();
+    standalone.wait_for_state(&run_id, "success");
+    assert_eq!(stdout(&run_id, "daily"), "us 7\n");
+    let (code, _, err) = standalone.cli(&["runs", "trigger", job, "-p", "limit=many"]);
+    assert_ne!(code, 0, "a string for an integer: {err}");
+
+    // From a DAG: routed with the enum, the declared exit code a success without it too, each
+    // with its cleanup; the script resource's value reaches its users' cleanup.
+    let run_id = standalone.trigger("rest");
+    let run = standalone.wait_for_state(&run_id, "success");
+    let done = task_states(&run);
+    for task in ["routed", "plain", "load"] {
+        assert!(
+            done.contains(&(task.to_owned(), "success".to_owned())),
+            "{task}: {done:?}"
+        );
+    }
+    let lines = marked();
+    assert_eq!(lines.matches("check-cleanup").count(), 2, "{lines}");
+    assert_eq!(lines.matches("dropped c-8").count(), 1, "{lines}");
+}
+
 #[test]
 fn an_unpaused_dag_gets_scheduled_runs_until_paused() {
     let dag = r#"

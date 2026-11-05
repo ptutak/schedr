@@ -47,17 +47,20 @@ the master's `Continue`.
 
 ## Cleanup on another worker
 
-Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `.override()`, or in
+Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `ScriptOperator`, `.override()`, or
+in
 `TaskDefaults` to let the master move a started attempt's cleanup when its worker is lost.
 Use it when the cleanup can work with the registered handles and the other worker's code and
 resources. Do not use it for worker-local files or processes that another pod cannot access:
 idempotence alone does not make a cleanup safe on another pod.
 
-A worker that hears nothing from the master for the [worker lease](../03-guide/14-timings.md#fixed-timings)
+A worker that hears nothing from the master for the [worker
+lease](../03-guide/14-timings.md#fixed-timings)
 (60 s by default) stops its running tasks with `cleanup_anywhere`. They end `lost` and use a
 retry. A master outage longer than the lease therefore stops these tasks. When the connection
 is lost, their cleanup waits for the master's answer, including when a task ends by itself
-while disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles than the returning
+while disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles
+than the returning
 original worker, a move still waiting is given back to that worker. If the move was assigned
 elsewhere or ended, the original worker cleans the remaining handles (`CLEAN_REST`). The run
 may already have ended; if this late cleanup fails after a success, the run stays successful
@@ -85,20 +88,23 @@ taken back without another move. If no worker is available, the instance remains
 `cleaning_up`, shown as `unschedulable` with the reason "no worker for the cleanup".
 Without `cleanup_anywhere`, a lost worker's cleanup ends `worker_lost`.
 
-## A command
+## A command or script
 
 `CommandOperator` takes a cleanup command as a string or argument list in `cleanup=`. The
-task can register a named handle with fields, and its cleanup can read them:
+task can register a named handle with fields, and its cleanup can read them. A declared
+script can also have a cleanup script; see [Plain scripts](17-plain-scripts.md):
 
 ```sh
 schedr task-ctx cleanup add Publication id="$id"
 schedr task-ctx cleanup list Publication --field id
 ```
 
-`add` accepts `KEY=VALUE` text fields, `KEY:=JSON` fields, or `--json` with an object. `list` runs in the cleanup and
+`add` accepts `KEY=VALUE` text fields, `KEY:=JSON` fields, or `--json` with an object. `list`
+runs in the cleanup and
 prints one JSON object per handle, in registration order; `--field id` prints that field's
 value on each line. `cleanup_handles=["Publication"]` limits the accepted types; without it,
-a command accepts any handle type. The task's declared secrets and connections are available
+a command or script accepts any handle type. The task's declared secrets and connections are
+available
 to the cleanup too. Don't put secrets directly in the cleanup command.
 
 ## Time and retries
@@ -117,11 +123,13 @@ A cleanup that still fails after its retries fails the run, even if the task suc
 ## Seeing cleanup
 
 The run's task status can add `cleanup failed` or `cleanup lost` after the state and outcome.
-The task panel's Cleanup tab shows each attempt's cleanup and handles; see [the UI](../03-guide/12-ui.md#the-task-panel).
+The task panel's Cleanup tab shows each attempt's cleanup and handles; see [the
+UI](../03-guide/12-ui.md#the-task-panel).
 
 ## Testing
 
 `with task_context() as ctx:` records calls to `cleanup_handle` in `ctx.handles`. A test can
-inspect the list and call the cleanup function itself. See [Testing a DAG](07-testing.md#one-task-and-its-context).
+inspect the list and call the cleanup function itself. See [Testing a
+DAG](07-testing.md#one-task-and-its-context).
 
 Use [`run_dag`](07-testing.md#run_dag) to assert the task and attempt cleanup results.

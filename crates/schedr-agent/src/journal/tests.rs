@@ -315,6 +315,7 @@ fn kept() -> KeptAttempt {
         code_dir: Some(PathBuf::from("/code/h1")),
         code_hash: Some("h1".to_owned()),
         root_copies: [("libs".to_owned(), PathBuf::from("/code/libs/h2"))].into(),
+        script_dir: Some(PathBuf::from("/code/jobs/h3")),
     }
 }
 

@@ -2030,6 +2030,41 @@ anywhere = false                   # native cleanup_anywhere
   (`SCHEDR_SCRIPT_PATH`), so a typo is caught before deployment. Not chosen: `schedr.testing`
   checking references itself (an idea for later); a `DagHint` outside a parse (noise in every
   test and task import).
+- **310. `[jobs.<name>.params]`: every TOML value with a clear type (A, the user's,
+  2026-11-05):** a string, an integer, a float, a boolean, a date, a date-time (without an offset,
+  in the job's `timezone`, as `start` is), a list of one such type, a nested table as an object.
+  An empty or mixed list, an empty table, or a time without a date is an import error naming
+  the key: its type can't be told. A trigger replaces a nested table whole. Names are letters,
+  digits and `_`, so `dag_ctx.params.x` reads them. Not chosen: scalars only (jobs taking less
+  than DAGs do).
+- **311. A declaration's outcomes apply; routing on them needs an enum (A, the user's,
+  2026-11-05):** `[jobs.<name>.outcomes]` names exit codes, as an `Outcome` enum does, so a
+  `ScriptOperator` without `outcomes=` still succeeds on them. `.on(...)` and `.outcome` take
+  enum members, and the TOML has none: `outcomes=Check` gives one and replaces the declared ones;
+  without it only `DefaultOutcome.SUCCESS` can be routed on, if declared, and `.on` of anything
+  else or `.outcome` is a parse error saying so. Not chosen: `.on("NO_DATA")` (no type checking,
+  two forms of one thing).
+- **312. A resource refuses a declaration that contradicts it (A, the user's, 2026-11-05):**
+  a resource's setup and cleanup succeed only on exit 0, so `ScriptResource` and `cleanup_script`
+  naming a declaration with `[outcomes]` is an import error; so is `cleanup_script` naming one with
+  `[cleanup]` (a cleanup of a cleanup). A `ScriptResource` setup keeps `[cleanup]`, as
+  `CommandResource(cleanup=)` does: its own, for a setup failing halfway. A script for both uses
+  is declared twice. Not chosen: ignoring those keys (a script exiting 3 fails though its file
+  calls that a success).
+- **313. Settings of a declared cleanup and a `cleanup_script` (A, the user's, 2026-11-05):**
+  a `ScriptOperator` or `ScriptResource` may change a declared `[cleanup]`'s settings
+  (`cleanup_timeout`, `cleanup_retries`, `cleanup_retry_delay`, `cleanup_anywhere`), the operator
+  winning over the declaration, the declaration over the DAG's defaults, as `retries` does; its
+  script stays the declared one, and a `cleanup_*` on a declaration without one is a parse error.
+  A `cleanup_script`'s options win over the declaration's settings, which win over a cleanup's
+  defaults (3 tries, 30 s, the setup's queue). Not chosen: no overrides (`TaskDefaults`' cleanup
+  settings would need a rule of their own).
+- **314. A worker that couldn't run a task's cleanup script rejects the task (2026-11-05):** the
+  cleanup's interpreter or script missing there is rejection 3 or 5, as for the task's own, so the
+  task isn't run where its cleanup would fail, and a moved cleanup goes on to a worker that can.
+  A cleanup script runs with its task's environment and working directory
+  (`[jobs.<name>.cleanup]` has neither key). Not chosen: failing the cleanup when it starts
+  (a failed run for a difference between workers another worker could have covered).
 
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
@@ -7403,6 +7438,13 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   copies, a withdrawn root still accepting a task sent before, the parse timeout restarted by
   each question: fixed with a test each; `job=` (renamed before it) and the guide (the docs
   round).
+- **Built (M4.9c; decisions 310-314):** `params`, `outcomes`, `cleanup_handles` and `[jobs.<name>.cleanup]`
+  in `schedr.toml`; `CleanupRun::Script`; `TaskKind::Script.resource`; `ScriptResource`;
+  `.cleanup_script(job, args=, env=, ...)` on all four resource kinds, one of the three kinds of
+  cleanup as before; the cleanup settings on `ScriptOperator`. Journal: `KeptAttempt.script_dir`, so
+  a recovered cleanup runs its task's copy of the script root and holds it. A moved or recovered
+  cleanup plans only what the cleanup runs (`use_cleanup_script`), so a worker lacking just the
+  task's interpreter can take it. Only `notify` is still not available.
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,

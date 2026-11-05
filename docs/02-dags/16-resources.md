@@ -26,7 +26,8 @@ many retries.
 
 Without a declared cleanup, the resource still has an empty cleanup. The master
 finishes it without an attempt or log, with the reason "no cleanup declared: nothing to clean".
-A resource has one cleanup wherever it is imported; declaring another from a different place is an
+A resource has one cleanup: a function, command or script, whatever its setup. Wherever it is
+imported, declaring another from a different place is an
 error. A different cleanup needs a different resource.
 
 For a resource without setup code, create `tmp = Resource("tmp-prefix")` inside the DAG.
@@ -58,8 +59,8 @@ The agent checks the value against `value=` immediately, without coercing text t
 or other types. A dataclass must give **every field**, including fields with defaults:
 no Python constructor fills them in before a command reads the value. Pydantic model
 validation does not run in the agent; use a dataclass for these checks at report time.
-Report once per setup attempt; a second report is refused. `resource set` works only in
-a `CommandResource` setup.
+Report once per setup attempt; a second report is refused. `resource set` works in a
+`CommandResource` or `ScriptResource` setup.
 
 With `value=`, a successful setup must both report its value and exit 0. Exiting 0 without
 reporting fails with "resource value not reported" (`resource_not_reported`). The setup's
@@ -74,7 +75,8 @@ case, use `schedr task-ctx resource set --json null`; it still needs a report.
 ## A command cleanup
 
 Any resource can use `<resource>.cleanup_command([...])` instead of a Python cleanup:
-an `@resource` function, a `CommandResource`, or a `Resource` without setup code. The
+an `@resource` function, a `CommandResource`, a `ScriptResource`, or a `Resource` without setup
+code. The
 method takes a shell string or argument list, `env=`, and the same cleanup options as
 `@cluster.cleanup(...)`, including `blocking=`. A resource still has only one cleanup.
 
@@ -82,13 +84,40 @@ While that cleanup runs, `schedr task-ctx resource get` reads the setup's value 
 `schedr task-ctx resource get --field cluster_id` reads one top-level field. A string
 field prints as text, other fields as JSON, each followed by a newline. Dates and times
 are ISO 8601 text, durations are ISO 8601 durations, and tuples are lists. `resource get`
-works only in a resource's command cleanup; a resource without a value returns `null`.
+works in a resource's command or script cleanup; a resource without a value returns `null`.
 
 The command line and `env` can also take t-strings, filled before the cleanup starts.
 For a `CommandResource`, `t"{cluster.cluster_id}"` and `t"{cluster.value.cluster_id}"`
 refer to the same field. For an `@resource` setup, use `t"{cluster.value.cluster_id}"`:
 the reference is resolved when that resource is set up in the DAG. The example uses
 both forms, one in an argument and the other in `env`.
+
+## A script setup and cleanup
+
+`ScriptResource` uses a declared script as its setup. Like `CommandResource`, it reports
+its value with `schedr task-ctx resource set`, must exit 0 and, with `value=`, must report
+that value. Any resource can use a declared script as its one resource cleanup:
+
+```python
+from schedr import Dag, ScriptResource
+
+with Dag("reports"):
+    cluster = ScriptResource("cluster", job="etl:schedr.toml#setup", value=str)
+    cluster.cleanup_script("etl:schedr.toml#teardown", args=[cluster.value])
+```
+
+The cleanup can also read the value with `schedr task-ctx resource get`. `args=` replaces
+the declaration's arguments and `env=` adds to or replaces its environment variables.
+`cleanup_script` options override the declaration's settings, which override the cleanup
+defaults: three retries, a 30-second retry delay and the setup's queue.
+
+A declaration with `[outcomes]` is refused for both `ScriptResource` and `cleanup_script`:
+resource setup and cleanup succeed only on exit 0. A `cleanup_script` declaration with
+`[cleanup]` is also refused, since that would be a cleanup of a cleanup. A
+`ScriptResource` setup may have `[cleanup]`: that is its per-task cleanup, for example if
+setup fails halfway, separate from the resource cleanup. Declare a script twice if it is
+needed in both roles. `ScriptResource` can override that per-task cleanup's settings with
+`cleanup_timeout`, `cleanup_retries`, `cleanup_retry_delay` and `cleanup_anywhere`.
 
 ## Users
 
@@ -123,7 +152,8 @@ resources.
 
 ## Groups and cleanup
 
-For a resource set up in a group, `g >> after` also makes `after` wait for its cleanup. The exception is when
+For a resource set up in a group, `g >> after` also makes `after` wait for its cleanup. The
+exception is when
 `after`, or a task downstream of it, still uses that resource: waiting for cleanup would form
 a cycle. If that cleanup fails, `after` becomes `upstream_failed`. Set
 `@cluster.cleanup(blocking=False)` to let what follows the group proceed without waiting for
