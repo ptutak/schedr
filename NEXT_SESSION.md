@@ -18,6 +18,9 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **The user's question, answered:** `CommandOperator` has no guard against `../../x.sh`, by
   design (DAG authors run code as the worker anyway); offered a `DagHint` lint or a "trust
   model" paragraph in the deployment docs, not decided.
+- **CI:** M4.9a's run (42050300360) failed one roles test, logged as B168 (medium/rare,
+  suspected: a moved cleanup's marker empty when its run had failed; a test race or a run
+  ending before its cleanup). Check M4.9b's run (`gh run list`) first thing.
 - **Next:** M4.9c (`params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource`,
   `cleanup_script`), then M4.9d (305: parse only `.py` files mentioning `schedr`; the docs say
   a DAG file needs at least `import schedr`).

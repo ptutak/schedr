@@ -1,0 +1,16 @@
+title = "A moved cleanup's marker was empty when its run had already failed (roles test, CI)"
+severity = "medium"
+probability = "rare"
+kind = "tests"
+summary = "CI on 9094400 (run 42050300360) failed `a_master_gone_stops_a_task_whose_cleanup_may_move_and_the_cleanup_waits_for_it` (crates/schedr/tests/roles.rs:1611): the run reached `failed` but the cleanup's marker file was empty, not `j-1`; the test is unchanged since M4.8b3 and passed in the other runs: a race in the test (the marker read before the cleanup wrote it), or a run ending before its moved cleanup ran"
+found = 2026-11-05
+suspected = true
+details = '''
+- **Found:** 2026-11-05, the CI run of M4.9a (42050300360, `integration` job): `left: ""`,
+  `right: "j-1"` at roles.rs:1611, after `cluster.wait("the run to end", ...)` saw `failed`.
+- **To check:** whether a run can end `failed` while a task's moved cleanup is still to run
+  (decisions 252-258 say the run waits in `cleaning_up`); if not, the test's read is racing the
+  cleanup's write (the file created before it is written), and it should wait for the content.
+- **Why it matters:** if real, a run reports its end before its cleanup ran (a resource left
+  behind with the run shown as finished); if not, a flaky test reddening CI.
+'''
