@@ -258,6 +258,12 @@ pub fn agent_settings(
                 .iter()
                 .filter_map(|r| Some((r.name.clone(), r.only.clone()?)))
                 .collect(),
+            script_roots: config
+                .script_roots
+                .iter()
+                .map(|r| (r.name.clone(), r.path.clone()))
+                .collect(),
+            interpreters: config.interpreters.keys().cloned().collect(),
             python,
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),

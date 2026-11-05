@@ -193,6 +193,25 @@ pub enum TaskKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource: Option<ResourceRole>,
     },
+    /// A script declared in a `schedr.toml` (M4.9): run by the agent with the declared
+    /// interpreter, from its script root at the version the master expects. A standalone job's
+    /// task.
+    Script {
+        /// The declaration: `<root>:<schedr.toml's path in the root>#<name>`.
+        job: String,
+        /// The script, relative to the script root.
+        script: String,
+        /// The interpreter: an `[interpreters]` entry of the worker that runs it.
+        interpreter: String,
+        /// Its arguments, each one argument (never a shell string).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<Template>,
+        /// Extra environment variables for the process.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        env: BTreeMap<String, Template>,
+        /// Where it runs, relative to the script root (`schedr.toml`'s directory by default).
+        working_dir: String,
+    },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
 }
@@ -369,6 +388,11 @@ impl Task {
                         .into_iter()
                         .flat_map(CommandLine::templates),
                 )
+                .chain(env.values())
+                .flat_map(Template::references)
+                .collect(),
+            TaskKind::Script { args, env, .. } => args
+                .iter()
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),

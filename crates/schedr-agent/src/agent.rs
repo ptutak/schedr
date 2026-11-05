@@ -1012,6 +1012,7 @@ impl<E: Executor> Agent<E> {
             .setup
             .roots
             .iter()
+            .chain(&settings.setup.script_roots)
             .map(|(name, dir)| {
                 let store = settings.code_dir.join(code_folder(name));
                 (
@@ -1624,14 +1625,14 @@ impl<E: Executor> Agent<E> {
         for (name, watcher) in &mut self.watchers {
             loop {
                 if let Some(hash) = watcher.hash() {
-                    roots.push(root_hash(name, hash));
+                    roots.push(root_hash(&self.settings.setup, name, hash));
                     break;
                 }
                 match watcher.poll(Instant::now()) {
                     Ok(Poll::Settling(wait)) => tokio::time::sleep(wait).await,
                     Ok(_) => {}
                     Err(error) => {
-                        tracing::warn!(root = name.as_str(), %error, "can't scan DAG root");
+                        tracing::warn!(root = name.as_str(), %error, "can't scan the root");
                         tokio::time::sleep(self.settings.poll_interval).await;
                     }
                 }
@@ -2309,8 +2310,26 @@ impl<E: Executor> Agent<E> {
         }
         let dir = code.to_path_buf();
         *self.parsing.entry(root.content_hash.clone()).or_default() += 1;
-        let executor = self.executor.clone();
         let done = self.done_tx.clone();
+        if self.settings.setup.script_roots.contains_key(&root.root) {
+            // Read here, in Rust, never imported (decision 293).
+            let files: Vec<String> = snapshot.files().keys().cloned().collect();
+            let wanted: Vec<String> = files
+                .iter()
+                .filter(|file| crate::jobs::is_config(file))
+                .cloned()
+                .collect();
+            tokio::task::spawn_blocking(move || {
+                let parsed = crate::jobs::read_root(&root.root, &dir, (&files, &wanted), None);
+                let _ = done.send(Done::Parse {
+                    job_id: job.parse_job_id,
+                    root,
+                    files: Ok(parsed),
+                });
+            });
+            return;
+        }
+        let executor = self.executor.clone();
         tokio::spawn(async move {
             let parsed = executor.parse(root.root.clone(), dir, files).await;
             let _ = done.send(Done::Parse {
@@ -2618,12 +2637,12 @@ impl<E: Executor> Agent<E> {
                     changed_any = true;
                     let changed =
                         worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
-                            root: Some(root_hash(name, &hash)),
+                            root: Some(root_hash(&self.settings.setup, name, &hash)),
                         });
                     let _ = to_master.send(wrap(changed));
                 }
                 Ok(_) => {}
-                Err(error) => tracing::warn!(root = name.as_str(), %error, "can't scan DAG root"),
+                Err(error) => tracing::warn!(root = name.as_str(), %error, "can't scan the root"),
             }
         }
         if changed_any {
@@ -2776,9 +2795,15 @@ async fn fetch_inputs(
     }
 }
 
-fn root_hash(name: &str, hash: &str) -> pb::RootHash {
+/// A root's hash as reported, of its kind: a script root or a DAG root.
+fn root_hash(setup: &WorkerSetup, name: &str, hash: &str) -> pb::RootHash {
+    let kind = if setup.script_roots.contains_key(name) {
+        pb::RootKind::Script
+    } else {
+        pb::RootKind::Dag
+    };
     pb::RootHash {
-        kind: pb::RootKind::Dag.into(),
+        kind: kind.into(),
         root: name.to_owned(),
         content_hash: hash.to_owned(),
     }

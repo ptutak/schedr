@@ -7,7 +7,8 @@ Every role reads the same configuration: one TOML file (`--config`, else
 it, e.g. `SCHEDR_CONFIG__MASTER__GRPC_PORT` for `[master] grpc_port`. Flags win over the
 environment, which wins over the file. Unknown keys are an error. Each role uses only its own
 sections. The [configuration reference](../_generated/04-reference/01-configuration.md) lists
-every key.
+every key. Workers find DAG roots through `SCHEDR_DAG_PATH` and script roots through
+`SCHEDR_SCRIPT_PATH`; see [Plain scripts](../02-dags/17-plain-scripts.md).
 
 ## The roles in a cluster
 

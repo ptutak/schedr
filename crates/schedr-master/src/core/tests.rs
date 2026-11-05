@@ -185,7 +185,19 @@ async fn an_uploaded_parse_stores_its_dags_and_a_known_hash_needs_no_job() {
             ..root("h3")
         }),
     });
-    assert_eq!(core.handle("w1", scripts, ts(NOW)).await.unwrap(), []);
+    // A script root is read for its `schedr.toml` files (M4.9): a parse job of its kind.
+    let out = core.handle("w1", scripts, ts(NOW)).await.unwrap();
+    let master_message::Message::AssignParse(job) = message(&out[0]) else {
+        panic!("expected AssignParse")
+    };
+    assert_eq!(job.root.as_ref().unwrap().kind(), pb::RootKind::Script);
+    let unknown = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+        root: Some(pb::RootHash {
+            kind: pb::RootKind::Unspecified.into(),
+            ..root("h4")
+        }),
+    });
+    assert_eq!(core.handle("w1", unknown, ts(NOW)).await.unwrap(), []);
     let empty = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged { root: None });
     assert_eq!(core.handle("w1", empty, ts(NOW)).await.unwrap(), []);
 }

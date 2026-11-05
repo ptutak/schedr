@@ -1065,6 +1065,7 @@ impl MasterCore {
                 ParseUpload {
                     worker_id: result.worker_id.clone(),
                     key: ParseKey {
+                        kind: root.kind(),
                         root: root.root,
                         content_hash: root.content_hash,
                         schedr_version: result.schedr_version.clone(),
@@ -1170,11 +1171,12 @@ impl MasterCore {
         let keys: Vec<ParseKey> = register
             .roots
             .iter()
-            .filter(|root| root.kind == i32::from(pb::RootKind::Dag))
+            .filter(|root| parsed_kind(root))
             .map(|root| {
                 self.dispatcher
                     .report_root(worker_id, &root.root, &root.content_hash);
                 ParseKey {
+                    kind: root.kind(),
                     root: root.root.clone(),
                     content_hash: root.content_hash.clone(),
                     schedr_version: register.schedr_version.clone(),
@@ -1211,7 +1213,7 @@ impl MasterCore {
         root: &pb::RootHash,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
-        if root.kind != i32::from(pb::RootKind::Dag) {
+        if !parsed_kind(root) {
             return Ok(Vec::new());
         }
         let version = self
@@ -1220,6 +1222,7 @@ impl MasterCore {
             .map(|c| c.schedr_version.clone())
             .unwrap_or_default();
         let key = ParseKey {
+            kind: root.kind(),
             root: root.root.clone(),
             content_hash: root.content_hash.clone(),
             schedr_version: version,
@@ -1390,13 +1393,19 @@ fn assign_parse(assignment: ParseAssignment) -> Outgoing {
             message: Some(master_message::Message::AssignParse(pb::AssignParse {
                 parse_job_id: assignment.job_id,
                 root: Some(pb::RootHash {
-                    kind: pb::RootKind::Dag.into(),
+                    kind: assignment.key.kind.into(),
                     root: assignment.key.root,
                     content_hash: assignment.key.content_hash,
                 }),
             })),
         },
     }
+}
+
+/// A root the master has parsed: DAG roots, and script roots for their `schedr.toml` files
+/// (M4.9); not one of a kind it doesn't know.
+fn parsed_kind(root: &pb::RootHash) -> bool {
+    matches!(root.kind(), pb::RootKind::Dag | pb::RootKind::Script)
 }
 
 fn millis(duration: Duration) -> u64 {

@@ -32,6 +32,8 @@ pub const MAX_RETRY_DELAY: Duration = Duration::from_mins(10);
 /// What a parse job parses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParseKey {
+    /// The root's kind: DAG files imported, or `schedr.toml` files read (M4.9).
+    pub kind: schedr_proto::pb::RootKind,
     /// The root's name.
     pub root: String,
     /// The content hash.

@@ -54,6 +54,170 @@ fn a_file_is_a_root_of_one_file_in_its_directory() {
     assert_eq!(found.files, ["sync.py"]);
 }
 
+/// A configuration with interpreter `bash`, and the script roots given.
+fn scripts_config(roots: &[(&str, &Path)]) -> Config {
+    let mut config = Config::default();
+    config.interpreters.insert(
+        "bash".to_owned(),
+        schedr_config::Interpreter::path(PathBuf::from("/bin/bash")),
+    );
+    config.script_roots = roots
+        .iter()
+        .map(|(name, path)| schedr_config::roots::Root {
+            name: (*name).to_owned(),
+            path: path.to_path_buf(),
+            only: None,
+        })
+        .collect();
+    config
+}
+
+/// A script root `scripts` with a valid `team/schedr.toml` and an invalid top one.
+fn script_root(dir: &TempDir) -> PathBuf {
+    let root = dir.path().join("scripts");
+    std::fs::create_dir_all(root.join("team")).unwrap();
+    std::fs::write(root.join("team/run.sh"), "echo hi\n").unwrap();
+    // A `.py` that a DAG check would import: never imported here.
+    std::fs::write(root.join("team/boom.py"), "raise SystemExit(1)\n").unwrap();
+    std::fs::write(
+        root.join("team/schedr.toml"),
+        "[jobs.daily]\nscript = \"run.sh\"\ninterpreter = \"bash\"\nschedule = \"@daily\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("schedr.toml"),
+        "[jobs.bad]\nscript = \"nope.sh\"\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn a_directory_with_a_schedr_toml_is_checked_as_a_script_root() {
+    let dir = TempDir::new().unwrap();
+    let root = script_root(&dir);
+    let files = check_scripts(&root, &scripts_config(&[])).unwrap().unwrap();
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["schedr.toml", "team/schedr.toml"]);
+    let error = files[0].error.as_ref().unwrap();
+    assert_eq!(error.exception, schedr_agent::jobs::INVALID_JOBS_EXCEPTION);
+    assert!(
+        error.message.contains("`interpreter` is required"),
+        "{error:?}"
+    );
+    assert_eq!(files[1].error, None);
+    assert_eq!(
+        files[1].dags[0].id.as_str(),
+        "scripts:team/schedr.toml#daily"
+    );
+}
+
+#[test]
+fn a_schedr_toml_inside_a_configured_script_root_gets_its_name() {
+    let dir = TempDir::new().unwrap();
+    let root = script_root(&dir);
+    let config = scripts_config(&[("etl", root.as_path())]);
+    let files = check_scripts(&root.join("team/schedr.toml"), &config)
+        .unwrap()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].dags[0].id.as_str(), "etl:team/schedr.toml#daily");
+    // A subdirectory of it: only the files under it.
+    let files = check_scripts(&root.join("team"), &config).unwrap().unwrap();
+    assert_eq!(files.len(), 1);
+}
+
+#[test]
+fn a_dag_file_or_a_directory_without_schedr_toml_isnt_a_script_check() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("sync.py"), "").unwrap();
+    let config = scripts_config(&[]);
+    assert_eq!(check_scripts(dir.path(), &config).unwrap(), None);
+    assert_eq!(
+        check_scripts(&dir.path().join("sync.py"), &config).unwrap(),
+        None
+    );
+    assert!(check_scripts(&dir.path().join("nope"), &config).is_err());
+}
+
+#[test]
+fn a_configured_script_root_is_never_imported_even_without_schedr_toml() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("scripts");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("side_effect.py"), "open('marker', 'w')\n").unwrap();
+    let config = scripts_config(&[("scripts", root.as_path())]);
+    assert_eq!(check_scripts(&root, &config).unwrap(), Some(Vec::new()));
+    let error = check_scripts(&root.join("side_effect.py"), &config).unwrap_err();
+    assert!(error.to_string().contains("aren't DAG files"), "{error}");
+}
+
+#[test]
+fn a_configured_dag_root_is_a_dag_check_whatever_toml_it_holds() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("dags");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("broken.py"), "raise RuntimeError\n").unwrap();
+    std::fs::write(root.join("schedr.toml"), "").unwrap();
+    let mut config = scripts_config(&[]);
+    config.dag_roots = vec![schedr_config::roots::Root {
+        name: "dags".to_owned(),
+        path: root.clone(),
+        only: None,
+    }];
+    assert_eq!(check_scripts(&root, &config).unwrap(), None);
+    let error = check_scripts(&root.join("schedr.toml"), &config).unwrap_err();
+    assert!(
+        error.to_string().contains("read only in script roots"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_schedr_toml_linked_elsewhere_is_checked_by_its_own_name() {
+    let dir = TempDir::new().unwrap();
+    let root = script_root(&dir);
+    std::fs::rename(
+        root.join("team/schedr.toml"),
+        root.join("team/declarations.toml"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("declarations.toml", root.join("team/schedr.toml")).unwrap();
+    let files = check_scripts(&root.join("team/schedr.toml"), &scripts_config(&[]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].dags[0].id.as_str(), "team:schedr.toml#daily");
+}
+
+#[test]
+fn a_schedr_toml_asked_for_by_name_is_read_even_if_ignored() {
+    let dir = TempDir::new().unwrap();
+    let root = script_root(&dir);
+    std::fs::write(root.join(".schedrignore"), "schedr.toml\n").unwrap();
+    let files = check_scripts(&root.join("schedr.toml"), &scripts_config(&[]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(files[0].error.is_some(), "{files:?}");
+}
+
+#[test]
+fn a_local_check_warns_of_an_interpreter_not_configured_here() {
+    let dir = TempDir::new().unwrap();
+    let root = script_root(&dir);
+    std::fs::write(
+        root.join("team/schedr.toml"),
+        "[jobs.daily]\nscript = \"run.sh\"\ninterpreter = \"ruby\"\nschedule = \"@daily\"\n",
+    )
+    .unwrap();
+    let files = check_scripts(&root.join("team/schedr.toml"), &scripts_config(&[]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(files[0].error, None);
+    assert_eq!(files[0].warnings.len(), 1, "{:?}", files[0].warnings);
+}
+
 #[test]
 fn a_missing_path_is_a_bad_argument() {
     let dir = TempDir::new().unwrap();

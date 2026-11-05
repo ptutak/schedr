@@ -1,0 +1,17 @@
+title = "Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)"
+severity = "low"
+probability = "possible"
+kind = "tests"
+summary = "The nightly Stress run on 2026-11-05 (run 42003419375, on b9fa0e3) failed only scenario 15 (`15_change_signals`): the master's mean round with the change triggers on was 1.167 times the one without, over the 1.15 limit; a noisy comparison on a shared CI runner, or a real cost of the triggers"
+found = 2026-11-05
+suspected = false
+details = '''
+- **Found:** 2026-11-05, the scheduled Stress run 42003419375 (`round_mean_ratio = 1.167, over
+  its limit 1.15`, crates/schedr/tests/stress/check.rs:465). The run before passed (11-04); runs
+  on 10-31 to 11-02 failed (not checked here which scenario).
+- **To check:** the ratio over the last runs' reports (the JSON artefacts), and whether it
+  moves with the runner's load; then either a wider limit or more samples (a noisy comparison),
+  or the triggers' cost looked at (a real regression).
+- **Why it matters:** a red nightly hides real failures; the triggers' cost is what scenario 15
+  exists to bound.
+'''

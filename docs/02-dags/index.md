@@ -32,4 +32,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 14-connections
 15-cleanup
 16-resources
+17-plain-scripts
 ```

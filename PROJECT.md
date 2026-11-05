@@ -1733,6 +1733,15 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   found when that module's own file is parsed, not taken as the importing file's (B110).
   Parsing imports the file, so its top-level code runs on every parse; helper modules with
   heavy import-time work should be ignored or refactored. This will be documented.
+- **305. Only files that mention `schedr` are parsed (A, the user's, 2026-11-05):** a `.py`
+  file whose text doesn't contain `schedr` is shipped and hashed with its root but never
+  loaded by the parser, as Airflow's safe mode does: a library in a root (or linked into it)
+  isn't run on every parse, and a module of a package with a relative import (`from .util
+  import clean`) no longer shows a false import error from being loaded by path on its own.
+  Imported normally (`import mylib.core` from a DAG or a task) it works as ever. Not chosen:
+  loading a file inside a package under its package name (relative imports fixed, but every
+  library module still run on each parse); `PYTHONPATH` (it finds modules for `import`, but the
+  parser loads each file by its path).
 - **New DAGs are paused** when first found; a user unpauses them from the UI or CLI.
 - **Removed DAGs disappear.** When a DAG's file is deleted (or no longer defines that DAG), the
   DAG is removed from the web UI and from all listings, and its schedule stops.
@@ -1964,6 +1973,42 @@ anywhere = false                   # native cleanup_anywhere
   for manual runs (one more combination to define, with `schedule` too); every declaration a
   DAG, every key accepted (a declaration made for `ScriptOperator` listed as a DAG, keys that
   do nothing accepted).
+- **298. `notify` is an import error until notifications exist (A, the user's, 2026-11-05):**
+  "`notify` isn't available yet", naming the job; schedr has no server channels yet. Not
+  chosen: its shape checked and the key ignored with a warning (a key doing nothing); dropped
+  from the design (brought back with notifications).
+- **299. A script root and a DAG root can't share a name (A, 2026-11-05):** a startup error
+  naming both paths, as for two DAG roots; `[scripts.roots]` renames one. A name means one
+  directory in logs, the UI and references. Not chosen: names by kind (`etl` both a DAG and a
+  script root, every mention saying which).
+- **300. A standalone job's task is named after the job (A, 2026-11-05):** the DAG
+  `etl:team_a/schedr.toml#report_daily` has one task, `report_daily`; a job name is letters,
+  digits, `_` and `-` (anything else an import error naming it), so it is a task ID too. Not
+  chosen: a fixed task ID `run` for every job (the same name on every job's page).
+- **301. A script root's change reaches the DAGs through their root's hash (A, 2026-11-05):**
+  the agent reports a DAG root's hash with the hashes of the script roots its last parse used
+  folded in, so a change to one of them is a new hash: the DAG root is parsed again (decision
+  294) and its tasks go to workers with both roots at the parsed code (`CODE_MISMATCH` as
+  ever). The master's discovery doesn't change. A root that starts using a script root is
+  parsed once more after its first parse. Not chosen: every script root folded into every DAG
+  root (any script change re-parsing every DAG root); the master re-parsing the same hash
+  (discovery keyed on (root, hash) reworked, with a migration).
+- **302. `ScriptOperator`'s overrides (A, 2026-11-05):** `args=` replaces the declared list;
+  `env=` is merged per variable, the operator's winning; `secrets=` adds to the declared ones.
+  Not chosen: every override replacing the declared value whole (an `env=` dropping the TOML's
+  other variables).
+- **303. A worker lacking a script root a DAG root uses doesn't report that DAG root (A,
+  2026-11-05):** it can't fold the same hash (301), so it leaves the root out: it neither parses
+  it (as 295 requires) nor runs any of its tasks, and warns naming the missing script root. Not
+  chosen: reporting a hash without it and rejecting only the script tasks (its different hash
+  could become the root's newest code, its parse full of 295's import errors replacing the
+  good one, unless discovery gained a rule against it).
+- **304. The master tells workers which script roots each DAG root uses (A, 2026-11-05):** a
+  parsed file records the script roots its `ScriptOperator`s asked for; the master sends each
+  root's set, from its current parse, to every worker at registration and when it changes, so
+  every worker folds the same ones. Nothing new stored: recomputed from the stored parses after
+  a master restart. Not chosen: each worker learning from its own parses (a worker that never
+  parsed the root, or just restarted, reporting the plain hash: workers disagreeing).
 
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
@@ -7249,6 +7294,24 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   cleanup gate past the deadline missed a deadline moved on; the journal's `Finished` of a
   cleanup waiting to move was answered `Kill` (282); a master paused while a `Register` waited
   for the lock took it (297); the stress checker merged two runs of one try.
+
+- **Built (M4.9a; decisions 292, 293, 296, 298-300):** script roots (`SCHEDR_SCRIPT_PATH`,
+  `[scripts.roots]`) scanned, hashed and settled as DAG roots and reported as `RootKind::Script`;
+  a name shared with a DAG root a startup error (299). Their parse jobs read every `schedr.toml`
+  in Rust on the agent (`schedr_agent::jobs`; nothing imported): every key checked, unknown
+  keys and those not available yet (`params`, `outcomes`, `cleanup`, `cleanup_handles`,
+  `notify`, 298) an `InvalidScriptConfig` import error naming the job. A scheduled job is a
+  one-task DAG `<root>:<path>#<name>` with the task `<name>` (300), paused when first found;
+  DAG IDs take `:/#` (250 bytes), percent-encoded in the client's and the UI's URLs. The
+  `script` task kind is in the model; workers reject it until M4.9b. `schedr dags check` reads
+  a `schedr.toml` or a script root (a configured script root never imported; a configured DAG
+  root always a DAG check; a job's interpreter missing here a warning, the worker that runs it
+  checks it). Codex's review found 6: a configured script root without `schedr.toml` imported
+  by the check, a DAG root with a stray `schedr.toml` not checked, a linked `schedr.toml` or an
+  ignored one named on the command line misread, a job name too long for a task ID dropped in
+  silence: fixed with a test each; a stored DAG parse counting for a script root of the same
+  name and content is B167 (fixed in M4.9b, with 301). Also: two agent tests' leases widened to
+  300 ms (flaky since 281); B166 logged.
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,

@@ -4,6 +4,7 @@ use super::*;
 
 fn key(hash: &str) -> ParseKey {
     ParseKey {
+        kind: schedr_proto::pb::RootKind::Dag,
         root: "etl".to_owned(),
         content_hash: hash.to_owned(),
         schedr_version: "0.1.0".to_owned(),

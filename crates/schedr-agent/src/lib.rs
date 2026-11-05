@@ -15,6 +15,7 @@ pub mod drain;
 pub mod env;
 pub mod fork;
 pub mod handles;
+pub mod jobs;
 pub mod journal;
 pub mod launch;
 pub mod logs;

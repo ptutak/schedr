@@ -1892,6 +1892,53 @@
           "type": "object"
         },
         {
+          "description": "A script declared in a `schedr.toml` (M4.9): run by the agent with the declared\ninterpreter, from its script root at the version the master expects. A standalone job's\ntask.",
+          "properties": {
+            "args": {
+              "description": "Its arguments, each one argument (never a shell string).",
+              "items": {
+                "$ref": "#/$defs/Template"
+              },
+              "type": "array"
+            },
+            "env": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Template"
+              },
+              "description": "Extra environment variables for the process.",
+              "type": "object"
+            },
+            "interpreter": {
+              "description": "The interpreter: an `[interpreters]` entry of the worker that runs it.",
+              "type": "string"
+            },
+            "job": {
+              "description": "The declaration: `<root>:<schedr.toml's path in the root>#<name>`.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "script",
+              "type": "string"
+            },
+            "script": {
+              "description": "The script, relative to the script root.",
+              "type": "string"
+            },
+            "working_dir": {
+              "description": "Where it runs, relative to the script root (`schedr.toml`'s directory by default).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "job",
+            "script",
+            "interpreter",
+            "working_dir"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An `EmptyOperator`: completed by the master, no process.",
           "properties": {
             "kind": {

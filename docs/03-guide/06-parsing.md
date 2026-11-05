@@ -1,7 +1,8 @@
 # Parsing and code versions
 
 DAG files are Python. The master has no Python and never runs user code, so it can't read
-them. Workers do, and send the master the result as plain data. This page covers how code
+them. Workers do, and send the master the result as plain data. Script roots contain
+`schedr.toml` declarations instead; the agent reads them in Rust. This page covers how code
 gets from a git repository to a DAG the master can schedule, and which code a task runs.
 
 ## From files to DAGs
@@ -49,6 +50,11 @@ flowchart LR
    was imported does too
    ([When a file fails to import](#when-a-file-fails-to-import)). The
    upload runs beside the worker's session, so heartbeats go on while it is sent.
+
+Script roots are scanned, settled, copied and hashed like DAG roots. A script root's parse
+job reads every `schedr.toml` in Rust on the agent; it never imports scripts or anything else.
+A bad file is reported as the import error `InvalidScriptConfig`, with each job-specific
+problem prefixed by the job name, for example ``job `report_daily`:``. See [Plain scripts](../02-dags/17-plain-scripts.md).
 
 A parse job that hasn't finished after `[master] parse_job_timeout` (10 minutes by default),
 or whose worker is lost, goes to the next

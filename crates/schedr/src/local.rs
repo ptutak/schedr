@@ -166,6 +166,13 @@ async fn check_path(
     env: &BTreeMap<String, String>,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
+    if let Some(files) = check_scripts(path, config)? {
+        let version = match against {
+            Some(url) => Some(worker_versions(url, client, env).await),
+            None => None,
+        };
+        return finish_check(&files, version, client.json, out);
+    }
     let root = LocalRoot::at(path)?;
     let mut files = check_root(&root, config, env).await?;
     if path.is_dir() {
@@ -177,6 +184,114 @@ async fn check_path(
         None => None,
     };
     finish_check(&files, version, client.json, out)
+}
+
+/// A script root's `schedr.toml` files read and checked, as a worker reads them (M4.9): for a
+/// path in a configured script root (its scripts never imported, as a DAG check would), or
+/// outside the configured roots a `schedr.toml` or a directory holding one. The root is the
+/// configured script root, else the directory (the file's own for a file). `None` for a DAG
+/// check: a path in a configured DAG root, or anything else.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] if the path doesn't exist or can't be scanned, or is a file in a
+/// script root that isn't a `schedr.toml` (no DAG file there), or a `schedr.toml` in a DAG
+/// root (read only in script roots).
+pub fn check_scripts(path: &Path, config: &Config) -> Result<Option<Vec<ParsedFile>>, AppError> {
+    let bad = |e: std::io::Error| AppError::BadArgument(format!("{}: {e}", path.display()));
+    let is_file = path.metadata().map_err(bad)?.is_file();
+    // A file by its own name (a `schedr.toml` may link elsewhere) in its resolved directory.
+    let named_config =
+        is_file && path.file_name().and_then(|n| n.to_str()) == Some(schedr_agent::jobs::FILE_NAME);
+    let resolved = if is_file {
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        parent
+            .canonicalize()
+            .map_err(bad)?
+            .join(path.file_name().unwrap_or_default())
+    } else {
+        path.canonicalize().map_err(bad)?
+    };
+    let inside = |roots: &[schedr_config::roots::Root]| {
+        roots.iter().find_map(|root| {
+            let dir = root.path.canonicalize().ok()?;
+            resolved.starts_with(&dir).then(|| (root.name.clone(), dir))
+        })
+    };
+    let (name, dir) = if let Some(configured) = inside(&config.script_roots) {
+        if is_file && !named_config {
+            return Err(AppError::BadArgument(format!(
+                "{}: in script root `{}`, whose files aren't DAG files: check its `{}` files",
+                path.display(),
+                configured.0,
+                schedr_agent::jobs::FILE_NAME
+            )));
+        }
+        configured
+    } else if let Some((root, _)) = inside(&config.dag_roots) {
+        if named_config {
+            return Err(AppError::BadArgument(format!(
+                "{}: in DAG root `{root}`: `{}` files are read only in script roots \
+                 (`SCHEDR_SCRIPT_PATH`)",
+                path.display(),
+                schedr_agent::jobs::FILE_NAME
+            )));
+        }
+        return Ok(None);
+    } else if is_file {
+        if !named_config {
+            return Ok(None);
+        }
+        let dir = resolved
+            .parent()
+            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
+        (directory_name(&dir), dir)
+    } else {
+        (directory_name(&resolved), resolved.clone())
+    };
+    let snapshot = scan(&dir).map_err(|e| AppError::BadArgument(e.to_string()))?;
+    let mut files: Vec<String> = snapshot.files().keys().cloned().collect();
+    let wanted: Vec<String> = if is_file {
+        // Asked for by name: read even if `.schedrignore` leaves it out.
+        let relative = resolved
+            .strip_prefix(&dir)
+            .map_err(|e| AppError::BadArgument(format!("{}: {e}", path.display())))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !files.contains(&relative) {
+            files.push(relative.clone());
+        }
+        vec![relative]
+    } else {
+        files
+            .iter()
+            .filter(|file| {
+                schedr_agent::jobs::is_config(file) && dir.join(file).starts_with(&resolved)
+            })
+            .cloned()
+            .collect()
+    };
+    if wanted.is_empty() && inside(&config.script_roots).is_none() {
+        // Outside the configured roots, a directory without one is a DAG directory.
+        return Ok(None);
+    }
+    let interpreters: Vec<String> = config.interpreters.keys().cloned().collect();
+    let parsed = schedr_agent::jobs::read_root(&name, &dir, (&files, &wanted), Some(&interpreters));
+    let limit = usize::try_from(config.master.grpc_max_message_size).unwrap_or(usize::MAX);
+    Ok(Some(validate_files(
+        &name,
+        parsed,
+        &Checks::new(SchedrVersion::current(), limit),
+    )))
+}
+
+/// A directory's last component, as a root's default name.
+fn directory_name(dir: &Path) -> String {
+    dir.file_name()
+        .map_or_else(|| "root".to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
 /// Parses a root's files with the real runner and applies the master's checks.

@@ -364,6 +364,11 @@ pub struct WorkerSetup {
     /// The roots of which only some `.py` files are parsed, those files by root (decision
     /// 117: `schedr dags test` of one file); a root not here is parsed whole.
     pub parse_only: BTreeMap<String, Vec<String>>,
+    /// The script roots, by name (`SCHEDR_SCRIPT_PATH`): read for their `schedr.toml` files,
+    /// never imported.
+    pub script_roots: BTreeMap<String, PathBuf>,
+    /// The names of the interpreters it has (`[interpreters]`), for scripts.
+    pub interpreters: Vec<String>,
     /// The interpreter for Python tasks (`[dags] interpreter`).
     pub python: PathBuf,
     /// The agent's own environment (the allow-listed variables pass to tasks).
@@ -565,6 +570,11 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
         TaskKind::Empty => Err(NotRun::Rejected {
             reason: pb::RejectReason::InvalidSpecification,
             detail: "empty tasks are completed by the master".to_owned(),
+        }),
+        // Found and listed (M4.9a); run once the agent knows how (M4.9b).
+        TaskKind::Script { job, .. } => Err(NotRun::Rejected {
+            reason: pb::RejectReason::InvalidSpecification,
+            detail: format!("`{job}`: this worker can't run scripts yet"),
         }),
     }
 }

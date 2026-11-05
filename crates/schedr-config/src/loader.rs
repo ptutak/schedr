@@ -225,6 +225,7 @@ pub fn load(
         &config.scripts.path,
         &config.scripts.roots,
     )?;
+    crate::roots::check_apart(&config.dag_roots, &config.script_roots)?;
     Ok(config)
 }
 

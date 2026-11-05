@@ -85,6 +85,8 @@ fn setup() -> (TempDir, WorkerSetup) {
     let setup = WorkerSetup {
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
+        script_roots: BTreeMap::new(),
+        interpreters: Vec::new(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([
             ("PATH".to_owned(), "/usr/bin".to_owned()),

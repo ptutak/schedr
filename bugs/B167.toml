@@ -1,0 +1,16 @@
+title = "A stored parse of a DAG root counts for a script root of the same name and content"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "Discovery looks a parse up by (root, content hash, schedr version), not the root's kind: a directory first configured as a DAG root (its `schedr.toml` never read) and then moved to `SCHEDR_SCRIPT_PATH` under the same name with the same files gets the old, empty DAG parse, so its scheduled jobs aren't found until a file changes"
+found = 2026-11-05
+suspected = false
+details = '''
+- **Found:** 2026-11-05, Codex's review of M4.9a (finding 2), reproduced with a throwaway
+  discovery test: a persisted DAG parse, then the same (root, hash) reported as a script root
+  after a restart: no parse assigned.
+- **Where:** crates/schedr-master/src/discovery.rs (`find_parse` and the `(root, hash)` cache),
+  crates/schedr-db/src/dags.rs (the lookup and its unique key).
+- **Fix planned:** in M4.9b, with decision 301's reported hashes: a script root's reported
+  hash marks its kind, so it never equals a DAG root's (no migration).
+'''

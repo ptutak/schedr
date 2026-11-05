@@ -335,8 +335,9 @@ reviews of about five sub-steps.
 | M4.8f | **A hung resource cleanup** (decisions 278, 279): `schedr tasks cancel` stops a resource's cleanup (`cleanup_cancelled`); `[worker] resource_cleanup_timeout`, 30 minutes per try, for one without `timeout=` | a hung resource cleanup no longer holds its run and the DAG's next runs for ever |
 | M4.8z | **Chaos scenarios** (between M4.8 and what follows it): the stress suite's TCP proxy between worker and master; start and end lines for cleanups, checked (never during the task, run once); scenarios for a silent cut around the lease, a one-way cut, a slow link, a worker frozen past the lease. A seeded random schedule under load after them, a fresh seed each night, kept in the run's report. All in the nightly `stress.yml`, never on every push; the latest Stress run is checked at the start of each step, a failure going to `bugs/` with its seed | a cut worker's cleanups hold every invariant under the stress suite |
 | M4.9a | **Script roots and `schedr.toml`** (decisions 292-296): `SCHEDR_SCRIPT_PATH`, script roots (`[scripts.roots]`), their scan, hash and settle time as DAG roots; the agent reads and checks `schedr.toml` in Rust (every key, unknown keys an error); standalone jobs (one-task DAGs, paused when first found); an unscheduled declaration a script for DAGs only (DAG-level keys an error); `schedr dags check` for TOML | a scheduled job found, checked and listed; a bad key an import error naming it |
-| M4.9b | **The `script` task kind and `ScriptOperator`:** interpreters, rejections 3-5, the `SCHEDR_*` run variables, `CODE_MISMATCH` for script roots; `ScriptOperator` asking the agent for the declaration (293), its overrides, a script root missing on a parsing worker an import error (295); a changed declaration re-parsing the DAGs that use it (294) | a scheduled job and a script used from a DAG run |
+| M4.9b | **The `script` task kind and `ScriptOperator`:** interpreters, rejections 3-5, the `SCHEDR_*` run variables, `CODE_MISMATCH` for script roots; `ScriptOperator` asking the agent for the declaration (293), its overrides, a script root missing on a parsing worker an import error (295); a changed declaration re-parsing the DAGs that use it (294, 301-304); B167; libraries: a Python script's root copy on `PYTHONPATH`, the other DAG roots' copies (not their configured paths) on a Python task's `sys.path` | a scheduled job and a script used from a DAG run |
 | M4.9c | **The rest of `[jobs.<name>]`:** `params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource` and `<resource>.cleanup_script(...)` (moved from M4.8d) | a scheduled job and a script used from a DAG run, with params, outcomes and a cleanup |
+| M4.9d | **Libraries in roots** (decision 305, the user's, 2026-11-05): the parser loads only the `.py` files whose text mentions `schedr`; the others are shipped and hashed, never parsed; documented with a library example | a root with a package using relative imports: its DAG runs, no import error for the library |
 | M4.10 | **Async task functions:** `async def` tasks (`asyncio.run` per attempt, SIGTERM cancelling the main coroutine), async in-task calls, async cleanups and resources, optional `uvloop`, a plain call returning the coroutine, leftover tasks cancelled (49A); `async with` on connections | an async task with concurrent waits, cancelled cleanly, in tests and a run |
 | M4.11a | **Wait steps:** the watcher host (`schedr.runner watchers`, one per worker, the 30-second rule and its watchdog, its memory budget, logs per watcher), `@sensor` and `@sensor.poke`, `TimedOut`, watcher slots and placement, drain and loss | a wait step ends with a value and with `TimedOut`; a blocked loop is caught |
 | M4.11b | **Triggers:** `@trigger` and `@trigger.poke`, events (`events` table, bookmarks), event runs (`dag_ctx.event`, queueing, back-pressure), the master's trigger supervisor, restarts, manual runs with an event, the CLI, API and UI | an event-triggered DAG runs once per event, resumes from its bookmark after a restart |
@@ -508,6 +509,17 @@ Ideas logged for M6, not decided:
   master holds (no worker slot), the answer typed and checked, `Rejected` and `TimedOut`
   outcomes, `approvers=` and `four_eyes=`, an email with a link to the UI, each answer in the
   command log; the docs show a `@sensor.poke` for answers kept in other systems.
+- **`exclusive=True`: a task stopped on a cut, retried only after the lease** (the user,
+  2026-11-05: an idea, built when a user needs it; decision 280's not-chosen opt-in). About one
+  step on M4.8b3's machinery: the agent's set of tasks stopped at the lease (today the
+  `cleanup_anywhere` gates) widened to exclusive tasks, the master's retry of one lost with its
+  worker not before the lease, the cancel grace and a margin, the stress checker failing on
+  its overlap. Why not now: it closes a narrow gap (a worker cut from the master but not from
+  what its task writes to, past the lease); a frozen worker and a crash before the result is
+  stored still run a task twice, so tasks with outside effects must be idempotent anyway, and
+  then it adds nothing; the name reads as a guarantee it isn't; every such task stops on a
+  master or database outage past the lease. To decide then: the name, a DAG-level default,
+  resource setups, whether the stop uses a retry.
 
 ## Testing approach
 

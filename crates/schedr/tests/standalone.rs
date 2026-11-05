@@ -1022,6 +1022,57 @@ fn files_added_changed_and_removed_update_the_dag_list() {
     assert!(out.contains("CONFLICT: 2 places"), "{out}");
 }
 
+/// M4.9a: a scheduled job in a script root's `schedr.toml` is found as a one-task DAG, paused
+/// when new, listed and reachable by its encoded ID; an unknown key is an import error naming
+/// it.
+#[test]
+fn a_scheduled_script_job_is_found_paused_and_listed_and_a_bad_key_is_an_import_error() {
+    let scripts = TempDir::new().unwrap();
+    let root = scripts.path().join("jobs");
+    std::fs::create_dir_all(root.join("team")).unwrap();
+    std::fs::write(root.join("team/report.py"), "print('report')\n").unwrap();
+    let job = "[jobs.daily]\nscript = \"report.py\"\ninterpreter = \"python\"\n\
+               schedule = \"0 3 * * *\"\n";
+    std::fs::write(root.join("team/schedr.toml"), job).unwrap();
+    let standalone = Standalone::start_configured(
+        &[],
+        None,
+        &[],
+        "",
+        &[("SCHEDR_SCRIPT_PATH", root.to_str().unwrap())],
+    );
+    let id = "jobs:team/schedr.toml#daily";
+    standalone.wait("the script job", || standalone.dag_ids() == [id]);
+    let (_, dag) = &standalone.dags()[0];
+    assert_eq!(dag["paused"], true);
+    assert_eq!(dag["location"]["root"], "jobs");
+    assert_eq!(dag["location"]["path"], "team/schedr.toml");
+    let shown = standalone
+        .get("/api/v1/dags/jobs%3Ateam%2Fschedr.toml%23daily")
+        .expect("the job by its encoded ID");
+    assert_eq!(shown["dag_id"], id, "{shown}");
+
+    std::fs::write(
+        root.join("team/schedr.toml"),
+        format!("{job}colour = \"blue\"\n"),
+    )
+    .unwrap();
+    let mut errors = Value::Null;
+    standalone.wait("the import error", || {
+        errors = standalone.get("/api/v1/import-errors").unwrap_or_default();
+        errors["errors"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty())
+    });
+    let error = &errors["errors"][0];
+    assert_eq!(error["root"], "jobs");
+    assert_eq!(error["path"], "team/schedr.toml");
+    assert!(
+        error.to_string().contains("colour"),
+        "names the key: {error}"
+    );
+}
+
 #[test]
 fn an_unpaused_dag_gets_scheduled_runs_until_paused() {
     let dag = r#"

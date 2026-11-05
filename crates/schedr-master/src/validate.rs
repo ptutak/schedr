@@ -131,6 +131,9 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         (TaskKind::Empty, _) => Some(format!(
             "task `{id}`: an empty task has nothing to clean up"
         )),
+        (TaskKind::Script { .. }, _) => Some(format!(
+            "task `{id}`: a script's cleanup isn't available yet"
+        )),
     }
 }
 
@@ -156,51 +159,7 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                 problems.push(format!("task `{id}`: connections=: `{name}`: {error}"));
             }
         }
-        let mut in_text: Vec<&Template> = Vec::new();
-        match &task.kind {
-            TaskKind::Command {
-                command,
-                env,
-                connection_env,
-                ..
-            } => {
-                for (prefix, name) in connection_env {
-                    if let Err(error) = schedr_model::connection::check_prefix(prefix) {
-                        problems.push(format!("task `{id}`: connections=: {error}"));
-                    }
-                    if !task.connections.contains(name) {
-                        problems.push(format!(
-                            "task `{id}`: connections=: `{prefix}` names `{name}`, which the \
-                             task doesn't declare"
-                        ));
-                    }
-                }
-                let cleanup = task.cleanup_command().into_iter();
-                for template in command
-                    .templates()
-                    .into_iter()
-                    .chain(cleanup.flat_map(CommandLine::templates))
-                {
-                    for reference in template.references() {
-                        if let Reference::Secret(name) = reference {
-                            problems.push(format!(
-                                "task `{id}`: `{name}` in the command line (anyone on the \
-                                 machine could read it in the process list): pass it in `env`, \
-                                 or declare it in `secrets=` and read it with `schedr task-ctx \
-                                 secret get`"
-                            ));
-                        }
-                    }
-                }
-                in_text.extend(env.values());
-            }
-            TaskKind::Python { arguments, .. } => {
-                for value in arguments.values() {
-                    in_text.extend(value_templates(value));
-                }
-            }
-            TaskKind::Empty => {}
-        }
+        let mut in_text = kind_problems(task, problems);
         let mapped: Vec<&Value> = match &task.expand {
             Some(Expand::Product(over)) => over.iter().map(|m| &m.value).collect(),
             Some(Expand::Kwargs(over)) => vec![over],
@@ -229,6 +188,70 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
             ));
         }
     }
+}
+
+/// The problems of the task's own kind (its command line, connections, arguments); the
+/// templates it writes secrets into as text.
+fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Template> {
+    let id = &task.id;
+    let mut in_text: Vec<&Template> = Vec::new();
+    match &task.kind {
+        TaskKind::Command {
+            command,
+            env,
+            connection_env,
+            ..
+        } => {
+            for (prefix, name) in connection_env {
+                if let Err(error) = schedr_model::connection::check_prefix(prefix) {
+                    problems.push(format!("task `{id}`: connections=: {error}"));
+                }
+                if !task.connections.contains(name) {
+                    problems.push(format!(
+                        "task `{id}`: connections=: `{prefix}` names `{name}`, which the \
+                         task doesn't declare"
+                    ));
+                }
+            }
+            let cleanup = task.cleanup_command().into_iter();
+            for template in command
+                .templates()
+                .into_iter()
+                .chain(cleanup.flat_map(CommandLine::templates))
+            {
+                for reference in template.references() {
+                    if let Reference::Secret(name) = reference {
+                        problems.push(format!(
+                            "task `{id}`: `{name}` in the command line (anyone on the \
+                             machine could read it in the process list): pass it in `env`, \
+                             or declare it in `secrets=` and read it with `schedr task-ctx \
+                             secret get`"
+                        ));
+                    }
+                }
+            }
+            in_text.extend(env.values());
+        }
+        TaskKind::Script { args, env, .. } => {
+            for reference in args.iter().flat_map(Template::references) {
+                if let Reference::Secret(name) = reference {
+                    problems.push(format!(
+                        "task `{id}`: `{name}` in the arguments (anyone on the machine could \
+                         read it in the process list): pass it in `env`, or declare it in \
+                         `secrets` and read it with `schedr task-ctx secret get`"
+                    ));
+                }
+            }
+            in_text.extend(env.values());
+        }
+        TaskKind::Python { arguments, .. } => {
+            for value in arguments.values() {
+                in_text.extend(value_templates(value));
+            }
+        }
+        TaskKind::Empty => {}
+    }
+    in_text
 }
 
 /// The templates inside a value, at any depth.
@@ -793,7 +816,7 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
         .filter_map(|task| {
             let streams = match task.kind {
                 TaskKind::Empty => return None,
-                TaskKind::Command { .. } => 2,
+                TaskKind::Command { .. } | TaskKind::Script { .. } => 2,
                 TaskKind::Python { .. } => 1,
             };
             let size = task.settings.max_output_size;

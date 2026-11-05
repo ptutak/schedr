@@ -4,6 +4,26 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, late evening): M4.9a committed; M4.9b next
+
+- **The user's instruction:** "go on until end of M4.9 if nothing to decide, review, commit and
+  push as you need".
+- **Done: M4.9a** (script roots, `schedr.toml` read in Rust, standalone jobs listed paused,
+  `dags check` for TOML; decisions 298-300). Codex's review found 6: 5 fixed with tests, B167
+  (a stored DAG parse counting for a script root) left for M4.9b. B166 (stress 15's ratio)
+  logged. Docs by Codex.
+- **Decided for M4.9b:** 301 A (a DAG root's reported hash folds in the script roots its last
+  parse used), 302 A (`args=` replaces, `env=` merges, `secrets=` adds). 303 A (a worker
+  lacking a used script root leaves the DAG root out), 304 A (the master sends each DAG root's
+  used script roots). B167: the user agreed medium, fixed first thing in M4.9b.
+- **Libraries (the user, 2026-11-05):** 305 A (parse only `.py` files mentioning `schedr`) is
+  M4.9d, after M4.9c; M4.9b also puts a Python script's root copy on `PYTHONPATH` and the
+  other DAG roots' copies on a task's `sys.path`.
+- **My calls, for the user to overrule:** a job's interpreter isn't checked at parse (the
+  worker running it rejects, rejection 3; `dags check` warns); `SchedrScriptOperator` and the
+  `schedr.airflow` export wait for M5; `ScriptOperator` outside a parse is a clear error
+  (support in `schedr.testing` an idea).
+
 ## State (2026-11-05, evening): M4.8z committed; M4.9 next
 
 - **Done: M4.8z (chaos)**, one commit fixing B162, B163 (281), B164 (282) and B165 (297); the

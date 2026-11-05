@@ -23,6 +23,7 @@ fn now() -> Timestamp {
 
 fn key(hash: &str) -> ParseKey {
     ParseKey {
+        kind: schedr_proto::pb::RootKind::Dag,
         root: "etl".to_owned(),
         content_hash: hash.to_owned(),
         schedr_version: "0.1.0".to_owned(),
@@ -250,6 +251,7 @@ async fn refreshing_without_changes_stores_nothing() {
 
 fn key_of(hash: &str, version: &str) -> ParseKey {
     ParseKey {
+        kind: schedr_proto::pb::RootKind::Dag,
         schedr_version: version.to_owned(),
         ..key(hash)
     }

@@ -146,6 +146,30 @@ fn rejects_invalid_roots() {
 }
 
 #[test]
+fn a_script_root_named_as_a_dag_root_is_an_error_until_renamed() {
+    // Decision 299.
+    let vars = env(&[
+        ("SCHEDR_DAG_PATH", "/git/dags/etl"),
+        ("SCHEDR_SCRIPT_PATH", "/git/scripts/etl"),
+    ]);
+    let err = load(None, &vars, &[]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "SCHEDR_SCRIPT_PATH: `/git/scripts/etl` is named `etl`, as the DAG root `/git/dags/etl`; \
+         rename one in [scripts.roots] or [dags.roots]"
+    );
+    let renamed = load(
+        Some(file(
+            "[scripts.roots]\netl-scripts = \"/git/scripts/etl\"\n",
+        )),
+        &vars,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(renamed.script_roots[0].name, "etl-scripts");
+}
+
+#[test]
 fn rejects_environment_errors() {
     let vars = env(&[
         ("SCHEDR_DAG_PATH", "/a"),

@@ -199,6 +199,8 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root.clone())]),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -688,6 +690,8 @@ async fn against_master(
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root)]),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1165,6 +1169,8 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1206,7 +1212,11 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
     };
     done.send(Done::Parse {
         job_id: "j1".to_owned(),
-        root: root_hash("etl", "sha256:h"),
+        root: pb::RootHash {
+            kind: pb::RootKind::Dag.into(),
+            root: "etl".to_owned(),
+            content_hash: "sha256:h".to_owned(),
+        },
         files: Ok(vec![]),
     })
     .unwrap();
@@ -1377,6 +1387,8 @@ fn a_second_shutdown_request_interrupts_at_once() {
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1425,6 +1437,8 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1889,6 +1903,8 @@ fn command_needing_secret(
     let setup = WorkerSetup {
         roots: std::collections::BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: std::collections::BTreeMap::new(),
+        script_roots: std::collections::BTreeMap::new(),
+        interpreters: Vec::new(),
         python: std::path::PathBuf::from("/usr/bin/python3"),
         agent_env: std::collections::BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
         pass_env: vec![],
@@ -2131,6 +2147,8 @@ async fn command_with_connection(
     let setup = WorkerSetup {
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
+        script_roots: BTreeMap::new(),
+        interpreters: Vec::new(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
         pass_env: vec![],
@@ -2283,6 +2301,8 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
+            script_roots: BTreeMap::new(),
+            interpreters: Vec::new(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -2377,7 +2397,11 @@ async fn a_connections_job_waiting_past_its_time_for_its_turn_says_so() {
     let registry = json!({"connections": {"db": {"name": "db", "params": {}}}});
     agent.connection_job(pb::ConnectionJob {
         job_id: "c1/etl".to_owned(),
-        root: Some(root_hash("etl", "sha256:h")),
+        root: Some(pb::RootHash {
+            kind: pb::RootKind::Dag.into(),
+            root: "etl".to_owned(),
+            content_hash: "sha256:h".to_owned(),
+        }),
         connections_json: serde_json::to_vec(&registry).unwrap(),
         test: None,
     });
@@ -2421,6 +2445,8 @@ fn attempt_with_timed_cleanup(
     let setup = WorkerSetup {
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
+        script_roots: BTreeMap::new(),
+        interpreters: Vec::new(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
         pass_env: vec![],
@@ -2936,10 +2962,17 @@ async fn a_moved_cleanup_runs_alone_with_the_handles_it_came_with() {
 
 /// A `Registered` with a lease of 50 ms and `wait`, with a cleanup, `anywhere` as said.
 fn silent_master(anywhere: bool) -> Vec<pb::MasterMessage> {
+    silent_master_leased(anywhere, 50)
+}
+
+/// As [`silent_master`], with a lease of `lease_ms`: one long enough for a loaded machine to
+/// handle the `Registered` before the assignment behind it comes past the lease (decision
+/// 281: then never started).
+fn silent_master_leased(anywhere: bool, lease_ms: u64) -> Vec<pb::MasterMessage> {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
-            lease_timeout_ms: 50,
+            lease_timeout_ms: lease_ms,
             cancel_grace_ms: 1000,
         }),
         ..pb::Registered::default()
@@ -2955,7 +2988,8 @@ async fn a_master_gone_silent_stops_a_task_whose_cleanup_may_move() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
     let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
-    against_script_with(2, Start::With(vec![]), silent_master(true), done, |agent| {
+    let script = silent_master_leased(true, 300);
+    against_script_with(2, Start::With(vec![]), script, done, |agent| {
         agent.executor.stops = seen_stops;
     })
     .await;
@@ -2966,17 +3000,9 @@ async fn a_master_gone_silent_stops_a_task_whose_cleanup_may_move() {
 async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
-    let mut script = silent_master(true);
     // A lease of several heartbeats: since decision 281 the stream ends at the lease, and the
     // last heartbeats before it may go with it.
-    script[0] = to_worker(master_message::Message::Registered(pb::Registered {
-        timing: Some(pb::Timing {
-            heartbeat_interval_ms: 20,
-            lease_timeout_ms: 300,
-            cancel_grace_ms: 1000,
-        }),
-        ..pb::Registered::default()
-    }));
+    let mut script = silent_master_leased(true, 300);
     let mut other = assign(
         "a2",
         &task_json(&json!({"kind": "python"})),
