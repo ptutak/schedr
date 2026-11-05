@@ -149,19 +149,34 @@ class Resource:
         setup: The task that creates it; its ID is the resource's.
         cleanup: The task that undoes it, once every user is done.
         users: The tasks that need it, in the order of the edges.
+        blocking: Whether what follows its group waits for its cleanup (decision 266).
+        unschedulable_timeout_ms: How long a user may wait for a worker before it fails
+            (decision 273); ``None``: no limit.
     """
 
     setup: str
     cleanup: str
     users: Sequence[str] = ()
+    blocking: bool = True
+    unschedulable_timeout_ms: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         """The resource as DAG JSON.
 
         Returns:
-            ``{"setup": ..., "cleanup": ..., "users": [...]}``.
+            ``{"setup": ..., "cleanup": ..., "users": [...]}``, with ``"blocking": false``
+            and ``"unschedulable_timeout_ms"`` when set.
         """
-        return {"setup": self.setup, "cleanup": self.cleanup, "users": list(self.users)}
+        result: dict[str, Any] = {
+            "setup": self.setup,
+            "cleanup": self.cleanup,
+            "users": list(self.users),
+        }
+        if not self.blocking:
+            result["blocking"] = False
+        if self.unschedulable_timeout_ms is not None:
+            result["unschedulable_timeout_ms"] = self.unschedulable_timeout_ms
+        return result
 
 
 @dataclass(frozen=True, slots=True)

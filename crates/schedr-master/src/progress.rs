@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_model::{
-    AttemptStatus, DEFAULT_OUTCOME, Dag, Edge, RetryRule, RunIf, RunState, Task, TaskId,
+    AttemptStatus, DEFAULT_OUTCOME, Dag, Edge, EdgeKind, RetryRule, RunIf, RunState, Task, TaskId,
     TaskInstanceState, TaskKind, TaskSettings,
 };
 
@@ -96,6 +96,24 @@ pub fn readiness(edges: &[TaskInstanceState], rule: RunIf) -> Readiness {
     }
     Readiness::Ready
 }
+
+/// Of two verdicts on a task, the one that decides: a failure, then a cancel, then waiting,
+/// then a skip; ready only when both are.
+const fn strongest(a: Readiness, b: Readiness) -> Readiness {
+    const fn rank(r: Readiness) -> u8 {
+        match r {
+            Readiness::UpstreamFailed => 4,
+            Readiness::Cancel => 3,
+            Readiness::Wait => 2,
+            Readiness::Skip => 1,
+            Readiness::Ready => 0,
+        }
+    }
+    if rank(a) >= rank(b) { a } else { b }
+}
+
+/// The reason an empty cleanup gets, where its log would be (decision 276).
+pub const EMPTY_CLEANUP: &str = "no cleanup declared: nothing to clean";
 
 /// What happens to a task after one of its attempts ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +246,9 @@ pub struct RunProgress<'a> {
     to_expand: BTreeSet<TaskId>,
     /// Whether a cleanup of the run failed.
     failed_cleanup: bool,
+    /// Whether the run is being cancelled: it ends `cancelled` even if nothing was left to
+    /// cancel but its resources' cleanups (decision 277).
+    cancelling: bool,
     /// Running instances to stop: their step failed (decision 75a).
     stops: Vec<(TaskId, usize)>,
     /// Why mapped tasks failed without an attempt.
@@ -256,6 +277,7 @@ impl<'a> RunProgress<'a> {
             to_expand: BTreeSet::new(),
             stops: Vec::new(),
             failed_cleanup: false,
+            cancelling: false,
             reasons: BTreeMap::new(),
             instance_moved: false,
         }
@@ -452,6 +474,10 @@ impl<'a> RunProgress<'a> {
     /// instance to and `RunIf::NoneFailed` any (decision 120).
     fn edge_states(&self, edge: &Edge) -> Vec<TaskInstanceState> {
         use TaskInstanceState as S;
+        if edge.kind == EdgeKind::Requirement {
+            // Only stops a task ([`Self::required`]): never one of its rule's edges.
+            return Vec::new();
+        }
         let state = self.edge_state(edge);
         if state != S::Success
             || edge.on.is_empty()
@@ -514,9 +540,15 @@ impl<'a> RunProgress<'a> {
                     .edges_into(&task.id)
                     .flat_map(|edge| self.edge_states(edge))
                     .collect();
-                let next = match readiness(&edges, task.settings.run_if) {
+                let next = match self.gate(task, readiness(&edges, task.settings.run_if)) {
                     Readiness::Wait => continue,
-                    Readiness::Ready if task.kind == TaskKind::Empty => TaskInstanceState::Success,
+                    Readiness::Ready if task.kind == TaskKind::Empty => {
+                        if self.dag.resource_of_cleanup(&task.id).is_some() {
+                            self.reasons
+                                .insert(task.id.clone(), EMPTY_CLEANUP.to_owned());
+                        }
+                        TaskInstanceState::Success
+                    }
                     Readiness::Ready => TaskInstanceState::Queued,
                     Readiness::Skip => TaskInstanceState::Skipped,
                     Readiness::UpstreamFailed => TaskInstanceState::UpstreamFailed,
@@ -541,7 +573,14 @@ impl<'a> RunProgress<'a> {
         use TaskInstanceState as S;
         let mut changes = Vec::new();
         let mut running = Vec::new();
+        self.cancelling = true;
+        let dag = self.dag;
         for (id, state) in &mut self.states {
+            if dag.resource_of_cleanup(id).is_some() {
+                // A resource set up is freed all the same (decision 277); one that wasn't is
+                // `cancelled` by its setup's edge.
+                continue;
+            }
             match state {
                 S::Scheduled | S::Queued | S::UpForRetry | S::Unschedulable => {
                     *state = S::Cancelled;
@@ -585,10 +624,19 @@ impl<'a> RunProgress<'a> {
         run_result(&all).map(|result| {
             if self.failed_cleanup {
                 RunState::Failed
+            } else if self.cancelling && result == RunState::Success {
+                RunState::Cancelled
             } else {
                 result
             }
         })
+    }
+
+    /// Notes that the run is being cancelled: it can't end `success`.
+    #[must_use]
+    pub const fn with_cancelling(mut self, cancelling: bool) -> Self {
+        self.cancelling = cancelling;
+        self
     }
 
     /// Notes that a cleanup failed: the run ends `failed` (see PROJECT.md, Run result).
@@ -609,7 +657,7 @@ impl<'a> RunProgress<'a> {
                     .edges_into(&task.id)
                     .flat_map(|edge| self.whole_edge_state(edge))
                     .collect();
-                match readiness(&edges, task.settings.run_if) {
+                match self.gate(task, readiness(&edges, task.settings.run_if)) {
                     Readiness::Wait => None,
                     Readiness::Ready => {
                         self.to_expand.insert(task.id.clone());
@@ -629,7 +677,7 @@ impl<'a> RunProgress<'a> {
     /// upstream has expanded (its count is known), any other edge as usual.
     fn whole_edge_state(&self, edge: &Edge) -> Vec<TaskInstanceState> {
         use TaskInstanceState as S;
-        if !mapping::is_lane(self.dag, edge) {
+        if edge.kind == EdgeKind::Requirement || !mapping::is_lane(self.dag, edge) {
             return self.whole_edge(edge);
         }
         vec![
@@ -660,7 +708,7 @@ impl<'a> RunProgress<'a> {
             let mut edges = Vec::new();
             let dag = self.dag;
             for edge in dag.edges_into(&task.id) {
-                if !mapping::is_lane(dag, edge) {
+                if edge.kind == EdgeKind::Requirement || !mapping::is_lane(dag, edge) {
                     edges.extend(self.whole_edge(edge));
                     continue;
                 }
@@ -671,7 +719,7 @@ impl<'a> RunProgress<'a> {
                 lane_skipped |= state == S::Skipped;
                 edges.push(state);
             }
-            let next = match readiness(&edges, task.settings.run_if) {
+            let next = match self.gate(task, readiness(&edges, task.settings.run_if)) {
                 Readiness::Wait => continue,
                 Readiness::Ready if lane_skipped => S::Skipped,
                 Readiness::Ready => S::Queued,
@@ -719,9 +767,59 @@ impl<'a> RunProgress<'a> {
         Some(next)
     }
 
+    /// What a task's requirement edges and, for a resource's cleanup, its users say on top of
+    /// `rule`, its trigger rule over its other edges. A requirement never lets a task run, it
+    /// can only stop it: its setup failed (`upstream_failed`), was cancelled, or was skipped
+    /// (skipped, whatever the rule). A cleanup that could run waits until every user is done
+    /// (decision 259): a task that will never run again counts, an `unschedulable` one doesn't.
+    fn gate(&self, task: &Task, rule: Readiness) -> Readiness {
+        use TaskInstanceState as S;
+        let state = |id: &TaskId| self.states.get(id).copied().unwrap_or(S::Scheduled);
+        let required: Vec<S> = self
+            .dag
+            .edges_into(&task.id)
+            .filter(|e| e.kind == EdgeKind::Requirement)
+            .map(|e| state(&e.from))
+            .collect();
+        let gated = if required
+            .iter()
+            .any(|s| matches!(s, S::Failed | S::UpstreamFailed))
+        {
+            Readiness::UpstreamFailed
+        } else if required.contains(&S::Cancelled) {
+            Readiness::Cancel
+        } else if required.iter().any(|s| !s.is_final()) {
+            Readiness::Wait
+        } else if required.contains(&S::Skipped) {
+            Readiness::Skip
+        } else {
+            Readiness::Ready
+        };
+        let decided = strongest(rule, gated);
+        if decided != Readiness::Ready {
+            return decided;
+        }
+        // A mapped user is done when its instances are too: one failing fails it as a whole
+        // while the others are still being stopped.
+        let done = |user: &TaskId| {
+            state(user).is_final()
+                && self
+                    .instances
+                    .get(user)
+                    .is_none_or(|i| i.states.iter().all(|s| s.is_final()))
+        };
+        match self.dag.resource_of_cleanup(&task.id) {
+            Some(resource) if !resource.users.iter().all(done) => Readiness::Wait,
+            _ => Readiness::Ready,
+        }
+    }
+
     /// An edge that isn't a lane: as usual, except that one whose outcomes are taken per
     /// element counts as its upstream task's state ([`mapping::narrows_per_element`]).
     fn whole_edge(&self, edge: &Edge) -> Vec<TaskInstanceState> {
+        if edge.kind == EdgeKind::Requirement {
+            return Vec::new();
+        }
         if mapping::narrows_per_element(self.dag, edge) {
             return vec![self.edge_state(edge)];
         }

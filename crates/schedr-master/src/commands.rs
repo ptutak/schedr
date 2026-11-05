@@ -617,6 +617,10 @@ async fn cancel_task(
             "run `{run_id}` hasn't started its tasks yet: cancel the run \
              (`schedr runs cancel`), or try again once it runs"
         )),
+        TaskCancel::ResourceCleanup => Outcome::Rejected(format!(
+            "task `{task_id}` of run `{run_id}` is a resource's cleanup: it frees what the setup \
+             made, and isn't cancelled (it ends at its timeout)"
+        )),
     })
 }
 

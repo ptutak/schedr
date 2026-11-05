@@ -21,6 +21,21 @@ const OUTPUTS_PER_QUERY: usize = 500;
 #[cfg(test)]
 mod tests;
 
+/// A task instance of a running run waiting for a worker (`unschedulable`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unschedulable {
+    /// The run's ID.
+    pub run_id: String,
+    /// The task.
+    pub task_id: TaskId,
+    /// Its place among a mapped task's instances; -1 for an unmapped task.
+    pub map_index: i32,
+    /// The DAG version the run runs.
+    pub dag: Arc<Dag>,
+    /// Since when it is `unschedulable`.
+    pub since: Timestamp,
+}
+
 /// A queued task instance of a running run, ready to be assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadyInstance {
@@ -185,6 +200,7 @@ type ReadyRow = (
     Option<String>,
     String,
     i32,
+    bool,
 );
 type AttemptRow = (
     String,
@@ -229,8 +245,8 @@ const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t
     ORDER BY a.assigned_at, a.id LIMIT $2";
 
 impl Database {
-    /// Queued task instances of running runs not being cancelled, ready at `now`, oldest
-    /// ready first.
+    /// Queued task instances of running runs not being cancelled, ready at `now`: resources'
+    /// cleanups first (a cancelled run's too, decision 277), then oldest ready first.
     ///
     /// # Errors
     ///
@@ -238,12 +254,13 @@ impl Database {
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version, t.map_index FROM task_instances t \
+            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL \
+            FROM task_instances t \
             JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
             WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' \
-            AND r.cancel_requested_at IS NULL AND t.cancel_requested_at IS NULL \
+            AND t.cancel_requested_at IS NULL \
             ORDER BY t.ready_at, t.id";
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, READY))
@@ -255,10 +272,21 @@ impl Database {
         // definition along, once per ready task (B13).
         let mut ready_list = Vec::with_capacity(rows.len());
         for row in rows {
+            let run_cancelling = row.12;
             let dag = self.dag_version(&row.7).await?;
-            ready_list.push(ready(row, dag)?);
+            let cleanup = dag
+                .resource_of_cleanup(&task_id_of(row.2.clone())?)
+                .is_some();
+            // A cancelled run's tasks don't start, but its resources' cleanups do (decision 277).
+            if run_cancelling && !cleanup {
+                continue;
+            }
+            ready_list.push((cleanup, ready(row, dag)?));
         }
-        Ok(ready_list)
+        // Cleanups first, a paid cluster going before queued work (decision 225); the sort is
+        // stable, so the oldest first among each.
+        ready_list.sort_by_key(|(cleanup, _)| !*cleanup);
+        Ok(ready_list.into_iter().map(|(_, r)| r).collect())
     }
 
     /// Assigns a queued task instance to a worker: it becomes `running` with a new attempt.
@@ -596,8 +624,8 @@ impl Database {
     ) -> Result<Vec<(String, ReadyInstance)>, DbError> {
         const WAITING: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version, t.map_index FROM attempts a \
-            JOIN task_instances t ON t.id = a.task_instance_id \
+            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL \
+            FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
             JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
@@ -973,6 +1001,35 @@ impl Database {
         .transpose()
     }
 
+    /// The `unschedulable` task instances of running runs: each one's run, task, `map_index`,
+    /// DAG version and since when it waits (decision 273).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn unschedulable_instances(&self) -> Result<Vec<Unschedulable>, DbError> {
+        const WAITING: &str = "SELECT r.id{text}, t.task_id, t.map_index, \
+            r.dag_version_id{text}, {ts<}t.updated_at{>ts} FROM task_instances t \
+            JOIN runs r ON r.id = t.run_id \
+            WHERE t.state = 'unschedulable' AND r.state = 'running' ORDER BY t.updated_at";
+        let rows: Vec<(String, String, i32, String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, WAITING))
+                .fetch_all(pool)
+                .await?
+        });
+        let mut waiting = Vec::with_capacity(rows.len());
+        for (run_id, task_id, map_index, version_id, since) in rows {
+            waiting.push(Unschedulable {
+                run_id,
+                task_id: task_id_of(task_id)?,
+                map_index,
+                dag: self.dag_version(&version_id).await?,
+                since: parse_time("task_instances.updated_at", &since)?,
+            });
+        }
+        Ok(waiting)
+    }
+
     /// Queues every `unschedulable` task instance again (the set of workers changed).
     /// Returns how many.
     ///
@@ -1014,6 +1071,7 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         queued_reason,
         parse_version,
         map_index,
+        _,
     ) = row;
     Ok(ReadyInstance {
         instance_id,

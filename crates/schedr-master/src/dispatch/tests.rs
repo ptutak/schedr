@@ -2552,3 +2552,222 @@ async fn an_assignment_carries_only_the_connections_its_task_declares() {
         .unwrap()
     );
 }
+
+/// `tmp`, a resource without setup code (finished by the master), its cleanup
+/// `tmp.cleanup`, and `hold` (a user when `hold_uses`, else only after `tmp`); `top` on the DAG.
+fn tmp_resource(hold_uses: bool, top: &Json) -> Dag {
+    let mut empty = task("tmp", &json!({}), 0);
+    empty["kind"] = json!("empty");
+    let users = if hold_uses {
+        json!(["hold"])
+    } else {
+        json!([])
+    };
+    let hold_kind = if hold_uses { "requirement" } else { "order" };
+    let mut dag = json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 2,
+        "tasks": [empty, task("tmp.cleanup", &json!({}), 1), task("hold", &json!({}), 0)],
+        "edges": [
+            {"from": "tmp", "to": "tmp.cleanup", "kind": "requirement"},
+            {"from": "tmp", "to": "hold", "kind": hold_kind},
+        ],
+        "resources": [{"setup": "tmp", "cleanup": "tmp.cleanup", "users": users}],
+    });
+    for (key, value) in top.as_object().unwrap() {
+        dag[key] = value.clone();
+    }
+    serde_json::from_value(dag).unwrap()
+}
+
+fn assigned_tasks(out: &[Outgoing]) -> Vec<String> {
+    out.iter().map(|o| assignment(o).task_id.clone()).collect()
+}
+
+#[tokio::test]
+async fn a_resources_cleanup_goes_first_and_isnt_held_by_limits() {
+    let (mut dispatcher, db, _run_id) =
+        with_run(tmp_resource(false, &json!({"max_active_tasks": 1}))).await;
+    dispatcher
+        .register("w1", "i2", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    // Both ready together: the cleanup first, then `hold` waits for the DAG's limit.
+    assert_eq!(
+        assigned_tasks(&dispatcher.step(ts(NOW)).await.unwrap()),
+        ["tmp.cleanup"]
+    );
+    // With the limit reached, another run's cleanup still goes; its `hold` doesn't.
+    another_run(&db).await;
+    assert_eq!(
+        assigned_tasks(&dispatcher.step(ts(NOW)).await.unwrap()),
+        ["tmp.cleanup"]
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_run_still_runs_and_retries_its_resources_cleanup() {
+    let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["hold"]);
+    let hold = assignment(&out[0]).attempt_id.clone();
+    let stops = dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    assert_eq!(cancelled_attempt(&stops[0]), hold);
+    let done = finished(&hold, pb::AttemptStatus::Cancelled, &json!(null));
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    // The user is done: the cleanup runs, and a failure of it is tried again.
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
+    let first = assignment(&out[0]).attempt_id.clone();
+    let failed = finished(&first, pb::AttemptStatus::Failed, &json!(null));
+    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "tmp.cleanup").await.0,
+        TaskInstanceState::UpForRetry
+    );
+    let out = dispatcher.step(later(1)).await.unwrap();
+    let second = assignment(&out[0]).attempt_id.clone();
+    succeed(&mut dispatcher, &second).await;
+    assert_eq!(
+        db.run_tasks(&run_id).await.unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn a_resources_cleanup_cant_be_cancelled() {
+    let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
+    dispatcher.step(ts(NOW)).await.unwrap();
+    let (cancelled, out) = dispatcher
+        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!((cancelled, out.len()), (TaskCancel::ResourceCleanup, 0));
+    assert_eq!(
+        state_of(&db, &run_id, "tmp.cleanup").await.0,
+        TaskInstanceState::Scheduled
+    );
+}
+
+#[tokio::test]
+async fn a_user_waiting_for_a_worker_past_the_timeout_fails_and_the_cleanup_runs() {
+    let mut dag = tmp_resource(true, &json!({}));
+    dag.resources[0].unschedulable_timeout_ms = Some(60_000);
+    let (mut dispatcher, db, run_id) = with_run(dag).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let no_venv = rejected(
+        &attempt,
+        pb::RejectReason::InterpreterUndefined,
+        "no etl-venv",
+    );
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "hold").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    // Not before the timeout: it may still get a worker.
+    assert_eq!(dispatcher.step(later(59)).await.unwrap(), []);
+    assert_eq!(
+        state_of(&db, &run_id, "hold").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    let out = dispatcher.step(later(60)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let hold = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("hold"))
+        .unwrap();
+    assert_eq!(hold.state, TaskInstanceState::Failed);
+    assert_eq!(
+        hold.reason.as_deref(),
+        Some("no worker within 1m: it uses a resource whose `unschedulable_timeout` ran out")
+    );
+}
+
+/// `tmp_resource(true, ...)` with an empty cleanup and `hold` timing out after a minute,
+/// left `unschedulable`.
+async fn timing_out() -> (Dispatcher, Database, String) {
+    let mut dag = tmp_resource(true, &json!({}));
+    dag.resources[0].unschedulable_timeout_ms = Some(60_000);
+    dag.tasks[1].kind = schedr_model::TaskKind::Empty;
+    let (mut dispatcher, db, run_id) = with_run(dag).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let no_venv = rejected(
+        &attempt,
+        pb::RejectReason::InterpreterUndefined,
+        "no etl-venv",
+    );
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    (dispatcher, db, run_id)
+}
+
+#[tokio::test]
+async fn a_timeout_whose_writes_fail_is_done_whole_next_round() {
+    // Codex's review of M4.8c2: the run's end written apart from the task's, a failure
+    // between them left a run whose tasks had all ended `running` for ever.
+    let (mut dispatcher, db, _) = timing_out().await;
+    db.count_writes();
+    dispatcher.step(later(60)).await.unwrap();
+    let writes = db.writes();
+    assert!(writes >= 2, "{writes}");
+    for nth in 1..=writes {
+        let (mut dispatcher, db, run_id) = timing_out().await;
+        db.fail_write(nth);
+        assert!(dispatcher.step(later(60)).await.is_err(), "write {nth}");
+        db.fail_write(0);
+        dispatcher.step(later(61)).await.unwrap();
+        let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::Failed, "write {nth}");
+    }
+}
+
+#[tokio::test]
+async fn a_mapped_user_timing_out_stops_its_running_instances() {
+    // Codex's review of M4.8c2: the stops of the failed step were dropped.
+    let mut dag = tmp_resource(true, &json!({}));
+    dag.resources[0].unschedulable_timeout_ms = Some(60_000);
+    dag.tasks[2].expand =
+        serde_json::from_value(json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]}))
+            .unwrap();
+    let (mut dispatcher, db, run_id) = with_run(dag).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["hold", "hold"]);
+    let first = assignment(&out[0]).attempt_id.clone();
+    let running = assignment(&out[1]).attempt_id.clone();
+    // Started, so its assignment doesn't expire meanwhile.
+    dispatcher
+        .started("w1", &started(&running), ts(NOW))
+        .await
+        .unwrap();
+    let no_venv = rejected(
+        &first,
+        pb::RejectReason::InterpreterUndefined,
+        "no etl-venv",
+    );
+    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    let out = dispatcher.step(later(60)).await.unwrap();
+    assert_eq!(
+        out.iter()
+            .filter_map(|o| match &o.message.message {
+                Some(Message::CancelAttempt(c)) => Some(c.attempt_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&running)
+    );
+    // The cleanup waits for the instance still being stopped.
+    assert_eq!(
+        state_of(&db, &run_id, "tmp.cleanup").await.0,
+        TaskInstanceState::Scheduled
+    );
+    let done = finished(&running, pb::AttemptStatus::Cancelled, &json!(null));
+    dispatcher.finished("w1", &done, later(60)).await.unwrap();
+    assert_eq!(
+        assigned_tasks(&dispatcher.step(later(60)).await.unwrap()),
+        ["tmp.cleanup"]
+    );
+}

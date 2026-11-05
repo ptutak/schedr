@@ -551,3 +551,85 @@ def test_run_dag_gives_a_connections_values(tmp_path: Path) -> None:
     query = result.tasks["query"]
     assert query.state == "success", query.log
     assert query.output == "sqlite://test pool=1"
+
+
+RESOURCED = """
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+
+from schedr import Dag, EmptyOperator, Resource, TaskDefaults, group, resource, task
+
+MARKS = Path("{marks}")
+
+
+def mark(text: str) -> None:
+    with MARKS.open("a") as out:
+        out.write(text + "\\n")
+
+
+@dataclass
+class Cluster:
+    cluster_id: str
+
+
+@resource
+def cluster(size: int) -> Cluster:
+    mark("setup")
+    return Cluster(f"c-{size}")
+
+
+@cluster.cleanup
+def delete(c: Cluster) -> None:
+    mark(f"cleanup {c.cluster_id}")
+
+
+@task
+def load(c: Cluster) -> int:
+    mark("load")
+    return len(c.cluster_id)
+
+
+@task
+def warm() -> None:
+    mark("warm")
+
+
+@task
+def fails() -> None:
+    raise ValueError("boom")
+
+
+@task
+def report() -> None:
+    mark("report")
+
+
+with Dag("resourced", defaults=TaskDefaults(retries=0, retry_delay=timedelta(0))):
+    with group("work") as work:
+        made = cluster(8)
+        load(made)
+        warm.override(uses=[made])()
+        fails.override(uses=[made])()
+    work >> report()
+    tmp = Resource("tmp")
+    EmptyOperator("stage", uses=[tmp])
+"""
+
+
+def test_a_resource_is_cleaned_once_after_its_last_user(tmp_path: Path) -> None:
+    # The worker runs a copy of the code: the marks go to a path of the test's.
+    (tmp_path / "resourced.py").write_text(RESOURCED.replace("{marks}", str(tmp_path / "marks")))
+    result = run_dag(tmp_path / "resourced.py", "resourced", for_=FOR)
+    marks = (tmp_path / "marks").read_text().splitlines()
+    assert marks[0] == "setup"
+    assert marks.count("cleanup c-8") == 1
+    assert marks.index("cleanup c-8") > max(marks.index("load"), marks.index("warm"))
+    # A failed user doesn't stop the cleanup, but fails what follows the group.
+    assert result.tasks["work.fails"].state == "failed"
+    assert result.tasks["work.cluster.cleanup"].state == "success"
+    assert "report" not in marks
+    assert result.state == "failed"
+    # A resource without code: both parts finished by the master.
+    assert result.tasks["tmp"].state == "success"
+    assert result.tasks["tmp.cleanup"].state == "success"

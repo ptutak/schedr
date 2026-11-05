@@ -69,6 +69,25 @@ pub struct RunTasks {
     pub instances: Vec<StoredInstance>,
 }
 
+impl RunTasks {
+    /// Whether an attempt of `instance` is being cancelled: it was asked to be, or its run was,
+    /// unless it is a resource's cleanup, which a run's cancel keeps (decision 277).
+    #[must_use]
+    pub fn cancels(&self, instance: &StoredInstance) -> bool {
+        instance.cancel_requested
+            || (self.cancel_requested && self.dag.resource_of_cleanup(&instance.task_id).is_none())
+    }
+
+    /// As [`Self::cancels`], by the instance's ID (`false` for one not in the run).
+    #[must_use]
+    pub fn cancels_instance(&self, instance_id: &str) -> bool {
+        self.instances
+            .iter()
+            .find(|i| i.id == instance_id)
+            .is_some_and(|i| self.cancels(i))
+    }
+}
+
 /// A change to a task instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceUpdate {

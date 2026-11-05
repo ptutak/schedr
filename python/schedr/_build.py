@@ -351,6 +351,11 @@ class DeclaredResource(Protocol):
         """Whether what follows the resource's group waits for its cleanup."""
         ...
 
+    @property
+    def unschedulable_timeout(self) -> timedelta | None:
+        """How long a user may wait for a worker before it fails."""
+        ...
+
     def finish(self, builder: DagBuilder, setup: str) -> str:
         """Adds its cleanup to the DAG.
 
@@ -715,7 +720,22 @@ class DagBuilder:
                     DagHint(f"resource `{setup}` has no users: its cleanup runs right after it"),
                     stacklevel=4,
                 )
-            finished.append(Resource(setup, cleanup, tuple(users)))
+            finished.append(
+                Resource(
+                    setup,
+                    cleanup,
+                    tuple(users),
+                    blocking=declared.blocking,
+                    unschedulable_timeout_ms=(
+                        None
+                        if declared.unschedulable_timeout is None
+                        else to_ms(
+                            declared.unschedulable_timeout,
+                            f"resource `{setup}`: `unschedulable_timeout`",
+                        )
+                    ),
+                )
+            )
         return finished
 
     def wait_for_cleanups(self, resources: Sequence[Resource]) -> None:

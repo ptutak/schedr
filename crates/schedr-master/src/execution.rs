@@ -113,6 +113,9 @@ pub enum TaskCancel {
     RunFinished(RunState),
     /// The run is queued: its tasks don't exist yet (cancel the run instead).
     RunQueued,
+    /// It is a resource's cleanup: it frees what the setup made, and isn't cancelled
+    /// (decision 277).
+    ResourceCleanup,
 }
 
 /// What retrying an `unschedulable` task did.
@@ -278,7 +281,7 @@ impl Execution {
             result.error_kind.as_deref(),
             instance.retries_used,
             &task.settings,
-            run.cancel_requested || instance.cancel_requested,
+            run.cancels(&instance),
             now,
         );
         // An instance whose mapped task already failed was being stopped: its result is
@@ -430,6 +433,9 @@ impl Execution {
                 run_id: run_id.to_owned(),
                 task_id: task_id.clone(),
             });
+        }
+        if run.dag.resource_of_cleanup(task_id).is_some() {
+            return Ok(TaskCancel::ResourceCleanup);
         }
         if let Some(index) = map_index.filter(|i| *i >= 0) {
             return self
@@ -586,6 +592,34 @@ impl Execution {
             return Ok(TaskRetry::Queued(instance.id.clone()));
         }
         Ok(TaskRetry::NotUnschedulable(instance.state))
+    }
+
+    /// Fails a resource's user that waited too long for a worker, so the cleanup can run
+    /// (decision 273); nothing if it isn't `unschedulable` any more. Returns the run's result,
+    /// if it finished now, and the instances to stop (a mapped task's others, its step failed).
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or a database failure.
+    pub async fn fail_unschedulable(
+        &self,
+        run_id: &str,
+        (task_id, map_index): (&TaskId, i32),
+        reason: String,
+        now: Timestamp,
+    ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
+        let run = self.run(run_id).await?;
+        let waiting = run.instances.iter().any(|i| {
+            &i.task_id == task_id
+                && i.map_index == map_index
+                && i.state == TaskInstanceState::Unschedulable
+        });
+        if run.state.is_final() || !waiting {
+            return Ok((None, Vec::new()));
+        }
+        let mut failed = update(task_id, map_index, TaskInstanceState::Failed);
+        failed.reason = Some(reason);
+        self.advance(run_id, &run, vec![failed], now).await
     }
 
     /// Moves a run forward after a task's state was changed directly (an assignment of a
@@ -884,6 +918,7 @@ fn progress_of(run: &RunTasks) -> RunProgress<'_> {
         }
     }
     RunProgress::new(&run.dag, states_of(run))
+        .with_cancelling(run.cancel_requested)
         .with_failed_cleanup(
             run.instances
                 .iter()

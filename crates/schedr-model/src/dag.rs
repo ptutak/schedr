@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{DagId, TaskId};
+use crate::states::TaskInstanceState;
 use crate::task::Task;
 use crate::trigger::Trigger;
 use crate::version::SchedrVersion;
@@ -72,6 +73,65 @@ pub struct Resource {
     pub cleanup: TaskId,
     /// The tasks that need it.
     pub users: Vec<TaskId>,
+    /// Whether what follows its group waits for its cleanup (decision 266); the edges from
+    /// the cleanup say so, this is for showing them (decision 272).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub blocking: bool,
+    /// How long a user may stay `unschedulable` before it fails, so the cleanup can run
+    /// (decision 273); none: no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unschedulable_timeout_ms: Option<u64>,
+}
+
+const fn yes() -> bool {
+    true
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if"
+)]
+const fn is_yes(value: &bool) -> bool {
+    *value
+}
+
+/// Where a resource stands in a run, from its two tasks' states (decision 275).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceState {
+    /// Its setup hasn't ended yet.
+    SettingUp,
+    /// Its setup succeeded; its cleanup waits for the users.
+    WaitingForUsers,
+    /// Its cleanup is queued, running or waiting to be tried again.
+    CleaningUp,
+    /// Its cleanup succeeded.
+    Cleaned,
+    /// Its cleanup failed after its last retry.
+    CleanupFailed,
+    /// Its setup didn't succeed: there is nothing to clean.
+    NotNeeded,
+}
+
+impl ResourceState {
+    /// The state of a resource whose setup and cleanup are in these states.
+    #[must_use]
+    pub const fn of(setup: TaskInstanceState, cleanup: TaskInstanceState) -> Self {
+        use TaskInstanceState as S;
+        match cleanup {
+            S::Success => Self::Cleaned,
+            S::Failed => Self::CleanupFailed,
+            S::Queued | S::Unschedulable | S::Running | S::CleaningUp | S::UpForRetry => {
+                Self::CleaningUp
+            }
+            S::Skipped | S::UpstreamFailed | S::Cancelled => Self::NotNeeded,
+            S::Scheduled => match setup {
+                S::Success => Self::WaitingForUsers,
+                S::Failed | S::Skipped | S::UpstreamFailed | S::Cancelled => Self::NotNeeded,
+                _ => Self::SettingUp,
+            },
+        }
+    }
 }
 
 /// A DAG: its identity, trigger, tasks and dependencies.
@@ -151,6 +211,12 @@ impl Dag {
     #[must_use]
     pub fn task(&self, id: &TaskId) -> Option<&Task> {
         self.tasks.iter().find(|t| &t.id == id)
+    }
+
+    /// The resource whose cleanup `id` is.
+    #[must_use]
+    pub fn resource_of_cleanup(&self, id: &TaskId) -> Option<&Resource> {
+        self.resources.iter().find(|r| &r.cleanup == id)
     }
 
     /// The edges into `id`, in order (one upstream task may have several, on different

@@ -2966,7 +2966,13 @@ async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
         inputs_stuck: true,
         ..Scripted::default()
     };
-    let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
+    // Both, in whatever order a loaded machine gives them: a heartbeat may come after the stop.
+    let done = move |seen: &[pb::WorkerMessage]| {
+        !stopped.lock().unwrap().is_empty()
+            && seen
+                .iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+    };
     let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
         agent.executor.stops = seen_stops;
     })

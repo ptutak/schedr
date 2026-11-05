@@ -155,3 +155,49 @@ fn downstream_of_lists_direct_downstream_tasks_once() {
     assert_eq!(dag.downstream_of(&id("b")), vec![&id("c")]);
     assert_eq!(dag.downstream_of(&id("c")), Vec::<&TaskId>::new());
 }
+
+#[test]
+fn a_resources_state_follows_its_two_tasks() {
+    use crate::ResourceState as R;
+    use crate::TaskInstanceState as S;
+    let cases = [
+        (S::Running, S::Scheduled, R::SettingUp),
+        (S::UpForRetry, S::Scheduled, R::SettingUp),
+        (S::Success, S::Scheduled, R::WaitingForUsers),
+        (S::Failed, S::Scheduled, R::NotNeeded),
+        (S::Failed, S::UpstreamFailed, R::NotNeeded),
+        (S::Skipped, S::Skipped, R::NotNeeded),
+        (S::Cancelled, S::Cancelled, R::NotNeeded),
+        (S::Success, S::Queued, R::CleaningUp),
+        (S::Success, S::Running, R::CleaningUp),
+        (S::Success, S::UpForRetry, R::CleaningUp),
+        (S::Success, S::Success, R::Cleaned),
+        (S::Success, S::Failed, R::CleanupFailed),
+    ];
+    for (setup, cleanup, state) in cases {
+        assert_eq!(
+            ResourceState::of(setup, cleanup),
+            state,
+            "{setup:?}, {cleanup:?}"
+        );
+    }
+}
+
+#[test]
+fn a_resource_blocks_and_has_no_timeout_unless_said() {
+    let read: Resource =
+        serde_json::from_value(json!({"setup": "s", "cleanup": "c", "users": []})).unwrap();
+    assert!(read.blocking);
+    assert_eq!(read.unschedulable_timeout_ms, None);
+    assert_eq!(
+        serde_json::to_value(&read).unwrap(),
+        json!({"setup": "s", "cleanup": "c", "users": []})
+    );
+    let other: Resource = serde_json::from_value(json!({
+        "setup": "s", "cleanup": "c", "users": [], "blocking": false,
+        "unschedulable_timeout_ms": 0
+    }))
+    .unwrap();
+    assert!(!other.blocking);
+    assert_eq!(other.unschedulable_timeout_ms, Some(0));
+}

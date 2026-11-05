@@ -459,3 +459,34 @@ def test_the_cleanup_cant_clash_with_a_task() -> None:
             EmptyOperator("cleanup")
         with pytest.raises(ValueError, match="group's ID"):
             cluster(8)
+
+
+def test_a_cleanup_carries_blocking_and_its_unschedulable_timeout() -> None:
+    cluster = make_cluster()
+
+    @cluster.cleanup(blocking=False, unschedulable_timeout=timedelta(hours=1))
+    def delete(c: Cluster) -> None:
+        del c
+
+    with Dag("settings") as dag:
+        load(cluster(8))
+    assert as_json(dag)["resources"] == [
+        {
+            "setup": "cluster",
+            "cleanup": "cluster.cleanup",
+            "users": ["load"],
+            "blocking": False,
+            "unschedulable_timeout_ms": 3_600_000,
+        }
+    ]
+
+
+def test_a_negative_unschedulable_timeout_is_refused() -> None:
+    cluster = make_cluster()
+
+    @cluster.cleanup(unschedulable_timeout=timedelta(seconds=-1))
+    def delete(c: Cluster) -> None:
+        del c
+
+    with pytest.raises(ValueError, match="unschedulable_timeout"), Dag("negative"):
+        load(cluster(8))

@@ -7036,6 +7036,47 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   cleanup with the worker, or run the code after `yield` with its locals gone); `@conn.close` to
   match resources (state forced through a return value, for nothing).
 
+- **270. A run keeps its `max_active_runs` slot until its cleanups end,** with `blocking=False` too:
+  a run isn't finished before its resources are gone, so a new run can't collide with a teardown.
+  Not chosen: freeing the slot when the last task ends (runs overlapping on one resource).
+
+- **271. Command and script cleanups are methods too:** `cluster.cleanup_command([...])` and
+  `cluster.cleanup_script(job=...)`, with `blocking=`, as decision 268. Not chosen:
+  `CommandCleanup(cluster, ...)` and `ScriptCleanup(...)` as first designed (two styles for one
+  thing).
+
+- **272. The graph shows what a cleanup holds back:** with `blocking=True` the tasks after a group
+  are drawn from the cleanup's cap, the wait they really have; the edges from the users to them say
+  nothing more and aren't drawn. With `blocking=False` they are drawn from the tasks and groups they
+  were attached to, and the cleanup's own link is dashed.
+
+- **273. A cleanup waits for an `unschedulable` user, up to `unschedulable_timeout`:** such a user
+  isn't done, and comes back by itself when a worker registers or resumes, so deleting the resource
+  under it would lose the run. `@cluster.cleanup(unschedulable_timeout=timedelta(hours=1))` bounds
+  the wait: then the user is `failed`, with the reason "no worker within 1 h", what follows it is
+  `upstream_failed`, the run fails and the cleanup runs. `timedelta(0)` fails it at once; the
+  default is no limit. With several resources the shortest applies. Cancelling the user also
+  releases the cleanup. It is a DAG setting, no config key. Not chosen: `unschedulable` counting as
+  done (a later `tasks retry` meets a deleted resource); the user `skipped` (a green run where the
+  work never happened); a flag beside a timeout (they could contradict each other);
+  `no_worker_timeout`, `unschedulable_wait`, `give_up_after`, `wait_for_users`.
+
+- **274. A cleanup keeps its own kind** (`python`, `empty`, later `command` or `script`); its role
+  comes from `Dag.resources` and is shown as "cleanup of `cluster`". Amends 261. Not chosen: a kind
+  `resource_cleanup` (it would hide what runs).
+- **275. A resource's state is derived from its two tasks,** not stored: `waiting for users` (setup
+  succeeded, cleanup not started), `cleaning_up` (queued, running or up for retry), `cleaned`,
+  `cleanup_failed`, `not needed` (setup failed, skipped or cancelled). Amends 261. Not chosen: a
+  `resource_instances` table (a copy that can drift, a second write each time).
+- **276. An empty cleanup's line goes in the task's reason,** shown where a log would be: logs live
+  on workers, and it has no attempt. Amends 260. Not chosen: a master-side log store.
+- **277. Cancelling keeps cleanups:** a cancelled run still runs the cleanup of every resource set up
+  (retries included), and ends `cancelled`, or `failed` if a cleanup fails; `schedr tasks cancel`
+  refuses a resource's cleanup. As 264. Not chosen: cancel as for any task (a resource left behind).
+  Claude's small calls with it: a cleanup ignores `max_active_tasks`, `max_active` and
+  `max_active_per_run` (`TaskDefaults` would hand it limits otherwise); `blocking` and
+  `unschedulable_timeout` are in the DAG JSON's resource entry.
+
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,
   users). The cleanup is the task `<setup>.cleanup`, added when the DAG is complete. In skip and
@@ -7043,6 +7084,21 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   a resource's users agree with the edges from its setup, that neither part is mapped, and counts
   user -> cleanup in its cycle check. A second `@<resource>.cleanup` from the same place is the file imported
   again and replaces the first; one from elsewhere is refused (decision 267). Only parsing: the master runs a resource from M4.8c2.
+
+- **Built (M4.8c2; decisions 263, 264, 266, 270, 273-277):** the master runs a resource. A
+  requirement edge is left out of a task's rule and only stops it (`RunProgress::gate`); a
+  cleanup that could run waits until every user is in a final state (`unschedulable` isn't). An
+  empty cleanup is finished by the master with the reason "no cleanup declared: nothing to clean".
+  A run's cancel leaves its resources' cleanups alone: they are dispatched, retried and not
+  stopped (`RunTasks::cancels`), and `schedr tasks cancel` refuses one. Ready cleanups come first
+  and no concurrency limit holds them. Each dispatch round fails a user `unschedulable` past its
+  resources' shortest `unschedulable_timeout` (an index on `unschedulable` instances).
+  `ResourceState::of` derives a resource's state for M4.8e. No new configuration value: the
+  timeout is a DAG setting (decision 273). Pausing needed nothing: it holds no task back. Codex's review
+  (4, all fixed): a mapped user counted done while instances it failed were still being stopped;
+  a timeout's stops of a failed step dropped; the timeout's task and run ends written apart (now
+  one transaction); a run cancelled with only a cleanup left ended `success` (a run being
+  cancelled can't now).
 
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before

@@ -1257,13 +1257,7 @@ impl MasterCore {
                     .db
                     .run_tasks(&attempt.run_id)
                     .await?
-                    .is_some_and(|run| {
-                        run.cancel_requested
-                            || run
-                                .instances
-                                .iter()
-                                .any(|i| i.id == attempt.instance_id && i.cancel_requested)
-                    });
+                    .is_some_and(|run| run.cancels_instance(&attempt.instance_id));
                 let cancel = cancelling.then(|| Outgoing {
                     worker_id: worker_id.to_owned(),
                     message: pb::MasterMessage {

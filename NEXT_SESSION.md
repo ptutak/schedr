@@ -4,6 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, night; the user asleep): M4.8c2 committed; M4.8d next
+
+- **Tonight's instruction:** "commit and push as needed, keep up with the review, if decisions
+  wait for morning, stop after M4.8". Commits pre-accepted; important decisions parked below.
+- **Done: M4.8c2** (decisions 270-277): the master runs resources. A cleanup waits for every
+  user (every mapped instance), gets the setup's value, skips when setup didn't succeed; an empty
+  cleanup ends in the master with a reason; `unschedulable_timeout` fails a stuck user; cleanups
+  go first and ignore `max_active*`; a run keeps its slot until cleanups end; cancel keeps
+  cleanups (run ends `cancelled`), `tasks cancel` refuses them. Codex's review found four (all
+  fixed with tests); docs by Codex. No new config values.
+- **My call, for the user to overrule:** ScriptResource and `cleanup_script` moved to M4.9 (script
+  tasks arrive there); M4.8d = CommandResource, `cleanup_command`, `task-ctx resource set/get`.
+- **Next: M4.8d, then M4.8e** (UI: caps/rail per 262, edges per 272, Resources panel), then stop.
+  M4.8z (chaos scenarios) later.
+- **Decisions waiting for the morning:** none yet.
+- **Codex:** weekly 26%, 5 h 48%.
+
 ## State (2026-11-05, small hours): M4.8c1 committed; the user relogs
 
 - **Done:** M4.8b, b2, b3 (decisions 242-258) and M4.8c1 (decisions 259-269): `@resource`,
@@ -26,11 +43,14 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   cleanup itself. An order edge from a cleanup (decision 266): a failed cleanup gives
   `upstream_failed`. Run cancel keeps resource cleanups. `run_dag` and `schedr dags test` run the
   example today only as ordinary tasks.
-- **Open, asked 2026-11-05, unanswered at the commit (recommendations in brackets):** clearing a
-  user after the cleanup ended (refused; clearing the setup reruns users and cleanup); a run keeping
-  its `max_active_runs` slot until its cleanups end (yes, `blocking=False` too); `CommandCleanup`
-  after decision 268 (`cluster.cleanup_command([...])`, `cluster.cleanup_script(job=...)`).
-  Claude's small call for M4.8e: `blocking=False` as a dashed link.
+- **Decided after the commit (uncommitted in PROJECT.md):** 270 slot kept until cleanups end, 271
+  `cluster.cleanup_command`/`cleanup_script`, 272 the graph draws what follows from the cleanup when
+  blocking, from the attached tasks and dashed when not. PLAN.md's M4.8d row and the Resources
+  section still say `CommandCleanup`: update them at M4.8d.
+- **273 (also uncommitted):** a cleanup waits for an `unschedulable` user, up to
+  `@cluster.cleanup(unschedulable_timeout=...)`; then the user is `failed`. Goes into M4.8c2. There
+  is no "clear" in schedr: `tasks retry` only re-queues `unschedulable` tasks. Nothing is open for
+  the rest of M4.8.
 - **Codex:** weekly 24%, 5 h 36%.
 
 ## State (2026-11-04, end of day): M4.7e committed; stopped for the day

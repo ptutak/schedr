@@ -172,6 +172,8 @@ CREATE TABLE task_instances (
 CREATE INDEX task_instances_ready ON task_instances (ready_at) WHERE state = 'queued';
 -- Each round's retries due and running attempts: only the pending ones, not the history (B87).
 CREATE INDEX task_instances_retry_due ON task_instances (ready_at) WHERE state = 'up_for_retry';
+-- Users of a resource waiting for a worker past `unschedulable_timeout` (decision 273).
+CREATE INDEX task_instances_unschedulable ON task_instances (updated_at) WHERE state = 'unschedulable';
 
 CREATE TABLE attempts (
     id                TEXT PRIMARY KEY,

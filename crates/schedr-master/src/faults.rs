@@ -178,15 +178,13 @@ fn cancel_problems(
         let Some(attempt) = open.iter().find(|a| a.id == attempt_id) else {
             continue;
         };
-        let instance = run.instances.iter().find(|i| i.id == attempt.instance_id);
         let step_failed = run.instances.iter().any(|i| {
             i.task_id == attempt.task_id
                 && i.map_index == -1
                 && attempt.map_index >= 0
                 && matches!(i.state, S::Failed | S::UpstreamFailed)
         });
-        let justified =
-            run.cancel_requested || instance.is_some_and(|i| i.cancel_requested) || step_failed;
+        let justified = run.cancels_instance(&attempt.instance_id) || step_failed;
         if !justified {
             found.push(format!(
                 "a cancel of `{}` queued for `{worker}`, with no cancel or failure stored",

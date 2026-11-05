@@ -475,6 +475,10 @@
       "additionalProperties": false,
       "description": "A resource: one thing of two parts, each a task of the DAG, both always there (decision 259).",
       "properties": {
+        "blocking": {
+          "description": "Whether what follows its group waits for its cleanup (decision 266); the edges from\nthe cleanup say so, this is for showing them (decision 272).",
+          "type": "boolean"
+        },
         "cleanup": {
           "$ref": "#/$defs/TaskId",
           "description": "The task that undoes it, once every user is done."
@@ -482,6 +486,15 @@
         "setup": {
           "$ref": "#/$defs/TaskId",
           "description": "The task that creates it; its ID is the resource's."
+        },
+        "unschedulable_timeout_ms": {
+          "description": "How long a user may stay `unschedulable` before it fails, so the cleanup can run\n(decision 273); none: no limit.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "users": {
           "description": "The tasks that need it.",

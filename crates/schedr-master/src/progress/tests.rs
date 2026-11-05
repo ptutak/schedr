@@ -706,3 +706,198 @@ fn an_order_edge_narrowed_from_a_mapped_task_is_decided_per_instance_by_the_rule
     assert_eq!(run.states()[&id("size")], S::Success);
     assert_eq!(run.states()[&id("report")], expected);
 }
+
+/// `cluster` (a resource's setup) → `load` (a user by its value), `warm` (a user by
+/// `uses=`, also after `pick`), `cluster.cleanup` (data edge from the setup); `after` follows
+/// the cleanup (a group's wait, decision 266).
+fn resourced(cleanup_kind: &str) -> Dag {
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "res", "location": {"root": "etl", "path": "a.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1,
+        "tasks": [
+            task("cluster", "python"), task("pick", "python"), task("load", "python"),
+            task("warm", "python"), task("cluster.cleanup", cleanup_kind),
+            task("after", "python")
+        ],
+        "edges": [
+            {"from": "cluster", "to": "load", "kind": "data"},
+            {"from": "cluster", "to": "warm", "kind": "requirement"},
+            {"from": "pick", "to": "warm", "kind": "order"},
+            {"from": "cluster", "to": "cluster.cleanup", "kind": "data"},
+            {"from": "cluster.cleanup", "to": "after", "kind": "order"}
+        ],
+        "resources": [{"setup": "cluster", "cleanup": "cluster.cleanup", "users": ["load", "warm"]}]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_cleanup_waits_for_every_user_then_what_follows_it_waits_for_the_cleanup() {
+    let dag = resourced("python");
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    assert_eq!(
+        run.settle(),
+        changes(&[("cluster", S::Queued), ("pick", S::Queued)])
+    );
+    run.set(&id("cluster"), S::Success);
+    run.set(&id("pick"), S::Success);
+    assert_eq!(
+        run.settle(),
+        changes(&[("load", S::Queued), ("warm", S::Queued)])
+    );
+    run.set(&id("load"), S::Failed);
+    assert_eq!(run.settle(), []);
+    run.set(&id("warm"), S::Unschedulable);
+    assert_eq!(run.settle(), [], "an unschedulable user isn't done");
+    run.set(&id("warm"), S::Success);
+    assert_eq!(run.settle(), changes(&[("cluster.cleanup", S::Queued)]));
+    run.set(&id("cluster.cleanup"), S::Running);
+    assert_eq!(run.settle(), []);
+    run.set(&id("cluster.cleanup"), S::Success);
+    assert_eq!(run.settle(), changes(&[("after", S::Queued)]));
+}
+
+#[test]
+fn a_requirement_only_stops_its_user() {
+    let dag = resourced("python");
+    // Under `NoneFailed` the setup's success doesn't make `warm` run: `pick` skipped decides.
+    let states = BTreeMap::from([(id("cluster"), S::Success), (id("pick"), S::Skipped)]);
+    let mut run = RunProgress::new(&dag, states);
+    assert!(run.settle().contains(&(id("warm"), S::Skipped)));
+    // The setup skipped skips the user whatever its other edges say.
+    let states = BTreeMap::from([(id("cluster"), S::Skipped), (id("pick"), S::Success)]);
+    let mut run = RunProgress::new(&dag, states);
+    let moved = run.settle();
+    assert!(moved.contains(&(id("warm"), S::Skipped)), "{moved:?}");
+    assert!(
+        moved.contains(&(id("cluster.cleanup"), S::Skipped)),
+        "{moved:?}"
+    );
+    // The setup failed fails it.
+    let states = BTreeMap::from([(id("cluster"), S::Failed), (id("pick"), S::Success)]);
+    let mut run = RunProgress::new(&dag, states);
+    let moved = run.settle();
+    assert!(
+        moved.contains(&(id("warm"), S::UpstreamFailed)),
+        "{moved:?}"
+    );
+    assert!(
+        moved.contains(&(id("cluster.cleanup"), S::UpstreamFailed)),
+        "{moved:?}"
+    );
+}
+
+#[test]
+fn an_empty_cleanup_is_finished_by_the_master_with_a_reason() {
+    let dag = resourced("empty");
+    let states = BTreeMap::from([
+        (id("cluster"), S::Success),
+        (id("pick"), S::Success),
+        (id("load"), S::Success),
+        (id("warm"), S::Success),
+    ]);
+    let mut run = RunProgress::new(&dag, states);
+    assert_eq!(
+        run.settle(),
+        changes(&[("cluster.cleanup", S::Success), ("after", S::Queued)])
+    );
+    assert_eq!(run.reason(&id("cluster.cleanup")), Some(EMPTY_CLEANUP));
+}
+
+#[test]
+fn cancelling_a_run_keeps_the_cleanup_of_a_resource_set_up() {
+    let dag = resourced("python");
+    let states = BTreeMap::from([
+        (id("cluster"), S::Success),
+        (id("pick"), S::Success),
+        (id("load"), S::Running),
+        (id("warm"), S::Queued),
+    ]);
+    let mut run = RunProgress::new(&dag, states);
+    let (cancelled, running) = run.cancel();
+    assert_eq!(
+        cancelled,
+        changes(&[("after", S::Cancelled), ("warm", S::Cancelled)])
+    );
+    assert_eq!(running, [(id("load"), -1)]);
+    assert_eq!(run.settle(), []);
+    run.set(&id("load"), S::Cancelled);
+    assert_eq!(run.settle(), changes(&[("cluster.cleanup", S::Queued)]));
+    // A running cleanup isn't stopped either.
+    run.set(&id("cluster.cleanup"), S::Running);
+    assert_eq!(run.cancel().1, []);
+    run.set(&id("cluster.cleanup"), S::Success);
+    assert_eq!(run.result(), Some(RunState::Cancelled));
+}
+
+#[test]
+fn cancelling_before_the_setup_ran_leaves_nothing_to_clean() {
+    let dag = resourced("python");
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    run.settle();
+    run.cancel();
+    let moved = run.settle();
+    assert!(
+        moved.contains(&(id("cluster.cleanup"), S::Cancelled)),
+        "{moved:?}"
+    );
+    assert_eq!(run.result(), Some(RunState::Cancelled));
+}
+
+#[test]
+fn a_failed_cleanup_fails_the_run() {
+    let dag = resourced("python");
+    let states = BTreeMap::from([
+        (id("cluster"), S::Success),
+        (id("pick"), S::Success),
+        (id("load"), S::Success),
+        (id("warm"), S::Success),
+        (id("cluster.cleanup"), S::Failed),
+    ]);
+    let mut run = RunProgress::new(&dag, states);
+    assert_eq!(run.settle(), changes(&[("after", S::UpstreamFailed)]));
+    assert_eq!(run.result(), Some(RunState::Failed));
+}
+
+#[test]
+fn a_cleanup_waits_for_a_failed_mapped_users_instances_still_running() {
+    // Codex's review of M4.8c2: the user failed as a whole while an instance still ran.
+    let dag = resourced("python");
+    let states = BTreeMap::from([
+        (id("cluster"), S::Success),
+        (id("pick"), S::Success),
+        (id("load"), S::Failed),
+        (id("warm"), S::Success),
+    ]);
+    let instances = BTreeMap::from([(
+        id("load"),
+        Instances {
+            sizes: vec![2],
+            states: vec![S::Failed, S::Running],
+            outcomes: vec![None, None],
+        },
+    )]);
+    let mut run = RunProgress::new(&dag, states).with_instances(instances);
+    assert_eq!(run.settle(), []);
+    run.set_instance(&id("load"), 1, S::Cancelled);
+    assert_eq!(run.settle(), changes(&[("cluster.cleanup", S::Queued)]));
+}
+
+#[test]
+fn a_run_cancelled_with_only_a_cleanup_left_ends_cancelled() {
+    // Codex's review of M4.8c2: nothing left to cancel, it ended `success`.
+    let dag = resourced("python");
+    let states = BTreeMap::from([
+        (id("cluster"), S::Success),
+        (id("pick"), S::Success),
+        (id("load"), S::Success),
+        (id("warm"), S::Success),
+        (id("cluster.cleanup"), S::Running),
+        (id("after"), S::Success),
+    ]);
+    let mut run = RunProgress::new(&dag, states);
+    assert_eq!(run.cancel(), (Vec::new(), Vec::new()));
+    run.set(&id("cluster.cleanup"), S::Success);
+    assert_eq!(run.result(), Some(RunState::Cancelled));
+}

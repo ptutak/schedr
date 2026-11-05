@@ -63,6 +63,8 @@ class CleanupOptions(TypedDict, total=False):
         blocking: Whether what follows the resource's group waits for this cleanup (the
             default). With ``False`` it goes on, and isn't stopped if the cleanup fails; the
             run still fails.
+        unschedulable_timeout: How long a user may wait for a worker (``unschedulable``)
+            before it fails, so this cleanup can run; no limit if not given.
     """
 
     timeout: timedelta | None
@@ -72,6 +74,7 @@ class CleanupOptions(TypedDict, total=False):
     secrets: SecretsArg
     connections: ConnectionsArg
     blocking: bool
+    unschedulable_timeout: timedelta | None
 
 
 type _WithValue[T] = Callable[[Callable[[T], object]], Callable[[T], object]]
@@ -90,6 +93,7 @@ class _Cleanup:
     secrets: tuple[SecretDecl, ...]
     connections: tuple[str, ...]
     blocking: bool
+    unschedulable_timeout: timedelta | None
 
 
 def _origin(fn: Callable[..., object]) -> tuple[object, object]:
@@ -115,6 +119,11 @@ class _Declared:
     def blocking(self) -> bool:
         """Whether what follows the resource's group waits for its cleanup."""
         return self.cleanup is None or self.cleanup.blocking
+
+    @property
+    def unschedulable_timeout(self) -> timedelta | None:
+        """How long a user may wait for a worker before it fails (decision 273)."""
+        return None if self.cleanup is None else self.cleanup.unschedulable_timeout
 
     def attach[F: Callable[..., object]](self, fn: F, options: CleanupOptions) -> F:
         """Gives the resource its cleanup, one wherever it is imported (decision 267).
@@ -144,6 +153,7 @@ class _Declared:
             () if secrets is None else tuple(_secrets.declared(secrets, where)),
             declared_connections(options.get("connections"), where) or (),
             options.get("blocking", True),
+            options.get("unschedulable_timeout"),
         )
         return fn
 

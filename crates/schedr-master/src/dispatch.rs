@@ -710,6 +710,9 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.set_aside.retain(|_, until| *until > now);
+        self.fail_waiting_users(now).await?;
+        // The stops of a step a timeout failed go now, not a round later.
+        outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
         let ready: Vec<ReadyInstance> = self
             .db
@@ -760,6 +763,47 @@ impl Dispatcher {
         self.assign_one_by_one(now, &ready, outgoing).await
     }
 
+    /// Fails each resource's user `unschedulable` for longer than the resource's
+    /// `unschedulable_timeout` (the shortest, when it uses several), so the cleanup can run
+    /// (decision 273).
+    async fn fail_waiting_users(&mut self, now: Timestamp) -> Result<(), DispatchError> {
+        for waiting in self.db.unschedulable_instances().await? {
+            let Some(limit) = waiting
+                .dag
+                .resources
+                .iter()
+                .filter(|r| r.users.contains(&waiting.task_id))
+                .filter_map(|r| r.unschedulable_timeout_ms)
+                .min()
+            else {
+                continue;
+            };
+            let limit = SignedDuration::from_millis(i64::try_from(limit).unwrap_or(i64::MAX));
+            if waiting.since.checked_add(limit).unwrap_or(Timestamp::MAX) > now {
+                continue;
+            }
+            let reason = format!(
+                "no worker within {limit:#}: it uses a resource whose `unschedulable_timeout` \
+                 ran out"
+            );
+            // One transaction: the task's end and the run's, and the stops sent with them.
+            self.whole(async |me| {
+                let (_, stops) = me
+                    .execution
+                    .fail_unschedulable(
+                        &waiting.run_id,
+                        (&waiting.task_id, waiting.map_index),
+                        reason,
+                        now,
+                    )
+                    .await?;
+                me.stop(&waiting.run_id, &stops).await
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Reads what the concurrency limits need: the open attempts, once (the master's first
     /// round with tasks ready; then kept in memory), and each DAG's current version.
     async fn read_limits(&mut self) -> Result<(), DispatchError> {
@@ -800,6 +844,10 @@ impl Dispatcher {
         ready: &ReadyInstance,
         tally: &mut Tally,
     ) -> Result<bool, DispatchError> {
+        if ready.dag.resource_of_cleanup(&ready.task_id).is_some() {
+            // A resource's cleanup isn't held by any limit (decision 225); it needs a slot.
+            return Ok(false);
+        }
         let current = self.current_dag(ready).await?;
         let Some(reached) =
             self.active
@@ -1115,13 +1163,9 @@ impl Dispatcher {
         self.workers.release(&attempt.id);
         self.active.remove(&attempt.id);
         let run = self.db.run_tasks(&attempt.run_id).await?;
-        let cancelling = run.as_ref().is_some_and(|run| {
-            run.cancel_requested
-                || run
-                    .instances
-                    .iter()
-                    .any(|i| i.id == attempt.instance_id && i.cancel_requested)
-        });
+        let cancelling = run
+            .as_ref()
+            .is_some_and(|run| run.cancels_instance(&attempt.instance_id));
         if cancelling {
             // Never a try, and nothing runs again: the task is cancelled (B5).
             self.db
