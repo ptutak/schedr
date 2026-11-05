@@ -554,7 +554,7 @@ fn print_run(detail: &RunDetail, local: &TimeZone, out: &mut impl Write) -> Resu
         run.dag_id,
         run.kind,
         show(run.planned_for, local),
-        run.state
+        run_state(run)
     )?;
     if detail.code_hashes.len() > 1 {
         // Its code changed while it ran.
@@ -778,11 +778,20 @@ fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// A run's state, with why a `success` turned yellow after its end (decision 309):
+/// `success (late_cleanup_failed)`.
+fn run_state(run: &RunView) -> String {
+    match &run.late_failure {
+        Some(late) => format!("{} ({late})", run.state),
+        None => run.state.clone(),
+    }
+}
+
 fn run_row(run: &RunView, local: &TimeZone) -> Vec<String> {
     vec![
         run.run_id.clone(),
         run.kind.clone(),
-        run.state.clone(),
+        run_state(run),
         show(run.planned_for, local),
         run.triggered_by.clone(),
     ]

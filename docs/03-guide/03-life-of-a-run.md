@@ -180,6 +180,15 @@ otherwise `success`. A skipped task leaves the run `success`. `upstream_failed` 
 consequence of the original failure, which already makes the run `failed`. Independent
 parts of the graph keep running after a failure.
 
+A success can later become a **yellow success**, which asks for attention while its run state
+remains `success`: something may already have acted on that result. Its one reason now is
+`late_cleanup_failed`, when the original worker returns and fails to clean handles missing
+from a moved cleanup after the run ended. Handles may be left behind. The UI shows the success
+in yellow with the reason; the CLI shows `success (late_cleanup_failed)` and the API exposes
+`late_failure`. The task instance shows its failed cleanup, the master logs an error, and
+`schedr_master_runs_late_failed_total` counts it for alerts. Notifications, when added, will
+send this as an event. See [cleanup](../02-dags/15-cleanup.md#cleanup-on-another-worker).
+
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
 it from the worker that ran the attempt (see [Workers](05-workers.md)). The
 [run page](12-ui.md#a-run) shows that run: its state, its graph, its tasks, a task's

@@ -1611,3 +1611,180 @@ fn a_master_gone_stops_a_task_whose_cleanup_may_move_and_the_cleanup_waits_for_i
     assert_eq!(std::fs::read_to_string(&marker).unwrap_or_default(), "j-1");
     assert_eq!(cluster.attempts(&run_id, "work")[0]["status"], "lost");
 }
+
+#[test]
+fn a_handle_registered_while_the_master_is_down_is_cleaned_up_after_its_restart() {
+    // B168: the worker waits up to half the lease between tries, so it is back before the
+    // restarted master takes it for lost (and moves the cleanup without the handle it never
+    // got). Its first wait asks for 14 s, far past the test cluster's 4 s lease.
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("cleaned");
+    let late = left_behind_for(&marker, 30).replace(
+        "    cleanup_handle(Job",
+        "    time.sleep(1)\n    cleanup_handle(Job",
+    );
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("left_behind.py"), late).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    cluster.start_with(
+        "worker",
+        &[("SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_FIRST", "14s")],
+    );
+    cluster.wait("the worker", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("left_behind");
+    cluster.wait("the task to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    // Gone before the task registers its handle.
+    cluster.kill("master");
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    cluster.start("master");
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+    let attempt = &cluster.attempts(&run_id, "work")[0];
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "j-1",
+        "{attempt}"
+    );
+    assert_eq!(attempt["cleanup"]["result"], "ok", "{attempt}");
+}
+
+/// Stops (`STOP`) or resumes (`CONT`) a role's own process, not its tasks.
+fn signal_role(cluster: &Cluster, name: &str, signal: &str) {
+    let role = cluster.roles.iter().find(|r| r.name == name).unwrap();
+    let pid = role.child.id().to_string();
+    let sent = std::process::Command::new("kill")
+        .args(["-s", signal, "--", &pid])
+        .status()
+        .unwrap();
+    assert!(sent.success(), "kill -s {signal} {pid}");
+}
+
+/// [`left_behind_for`] registering its handle 1 s in, run by `w1` with `move_wait`; the
+/// handle registered while the master is down, then `w1`'s agent frozen (not its task) while
+/// the master, back, takes it for lost: the master never got the handle. Returns the
+/// cluster, the run and the marker, `w1` still frozen.
+fn handle_the_master_never_got(
+    move_wait: &str,
+    dir: &std::path::Path,
+) -> (Cluster, String, PathBuf) {
+    let marker = dir.join("cleaned");
+    // Its cleanup appends the handles it has: a moved one may have none.
+    let late = left_behind_for(&marker, 120)
+        .replace(
+            "    cleanup_handle(Job",
+            "    time.sleep(1)\n    cleanup_handle(Job",
+        )
+        .replace(
+            r#"open("{marker}", "w")"#.replace("{marker}", &marker.display().to_string()).as_str(),
+            &format!(r#"open("{}", "a")"#, marker.display()),
+        )
+        .replace(
+            "out.write(handles[0].id)",
+            r#"out.write("".join(h.id for h in handles))"#,
+        );
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    std::fs::write(cluster.root().join("left_behind.py"), late).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    let master_env = [
+        ("SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT", move_wait),
+        ("SCHEDR_CONFIG__MASTER__CANCEL_GRACE", "1s"),
+    ];
+    cluster.start_with("master", &master_env);
+    cluster.start("webserver");
+    cluster.start("worker");
+    cluster.wait("the worker", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let run_id = cluster.trigger("left_behind");
+    cluster.wait("the task to start", || {
+        cluster
+            .attempts(&run_id, "work")
+            .first()
+            .is_some_and(|a| !a["started_at"].is_null())
+    });
+    cluster.kill("master");
+    // The handle is registered meanwhile, kept by the agent for the master.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    signal_role(&cluster, "worker", "STOP");
+    cluster.start_with("master", &master_env);
+    cluster.wait("the worker taken for lost", || {
+        cluster.worker_state("w1").as_deref() == Some("lost")
+    });
+    (cluster, run_id, marker)
+}
+
+#[test]
+fn a_handle_the_master_never_got_is_cleaned_by_its_worker_after_the_move_ran_elsewhere() {
+    // B169: the cleanup moved to w2 without the handle; w1, back, cleans it, and its result
+    // is added to the attempt's.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cluster, run_id, marker) = handle_the_master_never_got("1s", dir.path());
+    // A worker joining while w1 is cut off, with a data folder of its own as any real one.
+    let own = cluster.dir.path().join("w2-data");
+    cluster.start_as(
+        "worker-2",
+        "worker",
+        &[
+            ("SCHEDR_CONFIG__WORKER__ID", "w2"),
+            ("SCHEDR_CONFIG__WORKER__DATA_DIR", own.to_str().unwrap()),
+        ],
+    );
+    cluster.wait("the moved cleanup to end", || {
+        cluster.attempts(&run_id, "work")[0]["status"] == "lost"
+    });
+    // w2 had no handle to clean.
+    assert_eq!(std::fs::read_to_string(&marker).unwrap_or_default(), "");
+    signal_role(&cluster, "worker", "CONT");
+    cluster.wait("w1 to clean its handle", || {
+        std::fs::read_to_string(&marker).unwrap_or_default() == "j-1"
+    });
+    cluster.wait("its result added", || {
+        cluster.attempts(&run_id, "work")[0]["cleanup"]["result"] == "ok"
+    });
+    let attempt = &cluster.attempts(&run_id, "work")[0];
+    assert_eq!(attempt["worker_id"], "w2", "{attempt}");
+}
+
+#[test]
+fn a_waiting_cleanup_goes_back_to_its_worker_holding_a_handle_the_master_never_got() {
+    // B169: back while the move waits, the worker is the only one with every handle: the
+    // cleanup is its own again.
+    let dir = tempfile::tempdir().unwrap();
+    let (cluster, run_id, marker) = handle_the_master_never_got("300s", dir.path());
+    signal_role(&cluster, "worker", "CONT");
+    // Its task stopped for want of word from the master (decision 255): `lost`.
+    cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+    let attempt = &cluster.attempts(&run_id, "work")[0];
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "j-1",
+        "{attempt}"
+    );
+    assert_eq!(
+        (
+            &attempt["status"],
+            &attempt["worker_id"],
+            &attempt["cleanup"]["result"],
+            &attempt["cleanup"]["moves"]
+        ),
+        (
+            &serde_json::json!("lost"),
+            &serde_json::json!("w1"),
+            &serde_json::json!("ok"),
+            &serde_json::json!(0)
+        ),
+        "{attempt}"
+    );
+}

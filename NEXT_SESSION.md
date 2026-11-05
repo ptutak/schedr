@@ -4,6 +4,26 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, late night): B168 and B169 fixed; paused for the user's restart
+
+- **The user's instruction:** pause for their restart; then M4.9c and M4.9d, as "go on until
+  end of M4.9 if nothing to decide".
+- **Done: B168 and B169** (PROJECT.md, decisions 307-309 and their Built note): the worker's
+  reconnect wait capped at half the lease (307); handles the master never got cleaned by the
+  worker that has them (308: a waiting move given back, else `CLEAN_REST`); a yellow `SUCCESS`
+  with `late_cleanup_failed` when that cleanup fails after the run's end (309, the user's
+  design: the state doesn't change, it asks for attention; metric `runs_late_failed`; an event
+  for M4.13's notifications). Codex's review: 7 findings, all handled.
+- **The user's calls:** "Worker cleans the rest", "Take it back" (no double cleanup while a
+  move waits), the yellow success (309); silent leftovers when a worker never returns are left
+  as they are (nothing can know of them).
+- **Also committed:** linuxserver/openssh-server pinned to 10.3_p1-r2-ls242 (Alpine's fix of
+  sshd's password bypass, advisory of 2026-11-05) in the Makefile, the demo and CI; our images
+  ship only `openssh-client`, not affected.
+- **CI:** 5627851's run failed B168's test (before the fix); check this commit's run first.
+- **Next:** M4.9c (`params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource`,
+  `cleanup_script`), then M4.9d (305).
+
 ## State (2026-11-05, night): M4.9b committed; paused for the user's restart
 
 - **The user's instruction:** pause after M4.9b (they restart Claude and log in again); then

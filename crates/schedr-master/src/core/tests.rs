@@ -495,6 +495,7 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
     };
     let open = assign.attempt_id.clone();
     let entry = |id: &str, state: pb::JournalState| pb::JournalEntry {
+        handles: 0,
         attempt_id: id.to_owned(),
         state: state.into(),
     };
@@ -578,6 +579,7 @@ async fn a_registration_goes_on_when_adopting_an_attempt_is_refused_for_its_data
     )
     .await;
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: assign.attempt_id.clone(),
         state: pb::JournalState::Finished.into(),
     }];
@@ -621,6 +623,7 @@ async fn an_attempt_adopted_unrecorded_isnt_taken_back_while_its_worker_runs_it(
     )
     .await;
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: assign.attempt_id.clone(),
         state: pb::JournalState::Running.into(),
     }];
@@ -690,6 +693,7 @@ async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_bac
     let waiting = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!((waiting.worker_id.as_str(), waiting.status), ("", None));
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: assign.attempt_id.clone(),
         state: pb::JournalState::Finished.into(),
     }];
@@ -720,6 +724,290 @@ async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_bac
         0,
         "it ran: it doesn't move"
     );
+}
+
+/// Assigns `sync`'s task with an anywhere cleanup to `w1`, started; `w1` is then lost and
+/// its cleanup waits to move. Returns the core and the attempt's ID.
+async fn moved_away_from_w1() -> (MasterCore, String) {
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    });
+    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    let waiting = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!((waiting.worker_id.as_str(), waiting.status), ("", None));
+    (core, assign.attempt_id.clone())
+}
+
+fn running(attempt_id: &str, handles: u32) -> Vec<pb::JournalEntry> {
+    vec![pb::JournalEntry {
+        attempt_id: attempt_id.to_owned(),
+        state: pb::JournalState::Running.into(),
+        handles,
+    }]
+}
+
+fn finished_with_cleanup(
+    attempt_id: &str,
+    status: pb::AttemptStatus,
+    cleanup: pb::CleanupStatus,
+) -> worker_message::Message {
+    worker_message::Message::Finished(pb::Finished {
+        attempt_id: attempt_id.to_owned(),
+        status: status.into(),
+        cleanup: Some(pb::CleanupResult {
+            status: cleanup.into(),
+            tries: 1,
+            ..pb::CleanupResult::default()
+        }),
+        ..pb::Finished::default()
+    })
+}
+
+#[tokio::test]
+async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_lacks() {
+    // B169: cut off past its lease, the worker registered a handle the master never got; the
+    // cleanup moved with none. Back while the move waits, it is the only one with them all.
+    let (mut core, attempt_id) = moved_away_from_w1().await;
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 1)), later(62))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue)
+    );
+    let back = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            back.worker_id.as_str(),
+            back.cleanup_moves,
+            back.result_kept
+        ),
+        ("w1", 0, false),
+        "the move is undone, its `lost` result dropped"
+    );
+    assert!(
+        core.db
+            .waiting_cleanups(later(600))
+            .await
+            .unwrap()
+            .is_empty(),
+        "no other worker gets it"
+    );
+    let done = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Success,
+        pb::CleanupStatus::Ok,
+    );
+    core.handle("w1", done, later(63)).await.unwrap();
+    let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        ended.status,
+        Some(schedr_model::AttemptStatus::Success),
+        "its own result counts"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_its_result() {
+    // B169: the move ran elsewhere without the handle the master never got.
+    let (mut core, attempt_id) = moved_away_from_w1().await;
+    let (_, out) = core
+        .register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    assert!(out.is_empty(), "{out:?}");
+    // Alive past its first lease, when the moved cleanup is given to it.
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    let out = core.tick(later(125)).await.unwrap();
+    assert!(
+        out.iter()
+            .any(|o| o.worker_id == "w2"
+                && matches!(message(o), master_message::Message::AssignTask(_))),
+        "the moved cleanup goes to w2: {out:?}"
+    );
+    let not_needed = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Lost,
+        pb::CleanupStatus::NotNeeded,
+    );
+    core.handle("w2", not_needed, later(126)).await.unwrap();
+    let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
+    // Nothing missing: nothing to clean there.
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 0)), later(127))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill)
+    );
+    core.disconnected("w1", later(128)).await.unwrap();
+    let (registered, _) = core
+        .register(&register("w1", "i3", running(&attempt_id, 2)), later(128))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            registered.decisions[0].decision,
+            registered.decisions[0].cleanup_from
+        ),
+        (i32::from(pb::AttemptDecision::CleanRest), 0)
+    );
+    let rest = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Lost,
+        pb::CleanupStatus::Failed,
+    );
+    core.handle("w1", rest, later(129)).await.unwrap();
+    let run = core.db.run_tasks(&ended.run_id).await.unwrap().unwrap();
+    let instance = run
+        .instances
+        .iter()
+        .find(|i| i.id == ended.instance_id)
+        .unwrap();
+    assert_eq!(
+        instance.cleanup_result,
+        Some(schedr_model::CleanupResult::Failed),
+        "the rest's failure is the instance's"
+    );
+    // Added once: sent again, or reported again in the journal, it changes nothing.
+    assert!(
+        !core
+            .db
+            .add_rest_cleanup(&attempt_id, &rest_end())
+            .await
+            .unwrap()
+    );
+    core.disconnected("w1", later(130)).await.unwrap();
+    let journal = vec![pb::JournalEntry {
+        attempt_id: attempt_id.clone(),
+        state: pb::JournalState::Finished.into(),
+        handles: 2,
+    }];
+    let (registered, _) = core
+        .register(&register("w1", "i4", journal), later(130))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill)
+    );
+}
+
+#[tokio::test]
+async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
+    // Decision 309 (Codex's review of B169): the run ended `success` before the worker it
+    // moved from came back; its rest's failure doesn't change the run's state, it marks it.
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    });
+    core.handle("w1", started, ts(NOW)).await.unwrap();
+    // The task succeeded; w1 was cut off while it cleaned up.
+    let ended = worker_message::Message::TaskEnded(pb::TaskEnded {
+        result: Some(pb::Finished {
+            attempt_id: attempt_id.clone(),
+            status: pb::AttemptStatus::Success.into(),
+            ..pb::Finished::default()
+        }),
+    });
+    core.handle("w1", ended, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    core.register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    core.tick(later(125)).await.unwrap();
+    let moved = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Lost,
+        pb::CleanupStatus::NotNeeded,
+    );
+    core.handle("w2", moved, later(126)).await.unwrap();
+    core.tick(later(127)).await.unwrap();
+    let attempt = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    let run_id = attempt.run_id.clone();
+    let db = core.db.clone();
+    let state = || async {
+        let run = db.run_record(&run_id).await.unwrap().unwrap();
+        (run.state, run.late_failure)
+    };
+    assert_eq!(state().await, (schedr_model::RunState::Success, None));
+    let (registered, _) = core
+        .register(&register("w1", "i3", running(&attempt_id, 1)), later(128))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::CleanRest)
+    );
+    let mut rest = pb::Finished {
+        attempt_id: attempt_id.clone(),
+        status: pb::AttemptStatus::Lost.into(),
+        cleanup: Some(pb::CleanupResult {
+            status: pb::CleanupStatus::Failed.into(),
+            tries: 1,
+            rest: true,
+            ..pb::CleanupResult::default()
+        }),
+        ..pb::Finished::default()
+    };
+    core.handle(
+        "w1",
+        worker_message::Message::Finished(rest.clone()),
+        later(129),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        state().await,
+        (
+            schedr_model::RunState::Success,
+            Some("late_cleanup_failed".to_owned())
+        ),
+        "still a success, marked"
+    );
+    // A rest said to be one never counts as the whole cleanup, even from the attempt's worker.
+    rest.cleanup.as_mut().unwrap().status = pb::CleanupStatus::Ok.into();
+    core.handle("w1", worker_message::Message::Finished(rest), later(130))
+        .await
+        .unwrap();
+    assert_eq!(
+        state().await.1.as_deref(),
+        Some("late_cleanup_failed"),
+        "added once"
+    );
+}
+
+fn rest_end() -> schedr_db::attempts::CleanupEnd {
+    schedr_db::attempts::CleanupEnd {
+        result: schedr_model::CleanupResult::Ok,
+        tries: 1,
+        duration_ms: 1,
+        error_kind: None,
+        error_summary: None,
+    }
 }
 
 #[tokio::test]
@@ -778,6 +1066,7 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
         .unwrap();
     core.tick(later(1)).await.unwrap();
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: assign.attempt_id.clone(),
         state: pb::JournalState::Running.into(),
     }];
@@ -821,6 +1110,7 @@ async fn a_task_cancelled_while_its_worker_is_away_is_cancelled_on_reconnect() {
         .unwrap();
     core.tick(later(1)).await.unwrap();
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: attempt.clone(),
         state: pb::JournalState::Running.into(),
     }];
@@ -849,6 +1139,7 @@ async fn an_attempt_running_on_reconnect_whose_start_was_lost_is_not_assigned_ag
     };
     core.disconnected("w1", later(1)).await.unwrap();
     let journal = vec![pb::JournalEntry {
+        handles: 0,
         attempt_id: assign.attempt_id.clone(),
         state: pb::JournalState::Running.into(),
     }];

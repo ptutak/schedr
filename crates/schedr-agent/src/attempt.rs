@@ -43,6 +43,17 @@ pub enum Gate {
     Held,
     /// Never: the master answered `Kill`.
     Dropped,
+    /// On the handles from this one on: its cleanup moved without them (B169).
+    Rest(u32),
+}
+
+/// What a cleanup passing its [`CleanupGate`] runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pass {
+    /// All its handles.
+    All,
+    /// The handles from this one on (B169: its cleanup moved without them).
+    From(usize),
 }
 
 /// The agent's [`Gate`] for one attempt, and when the master's word runs out: the last word
@@ -67,8 +78,8 @@ impl CleanupGate {
     /// (B162: a worker frozen past its lease saw its task end before its overdue timer, and ran
     /// a cleanup the master had moved); it does next, and the master's answer decides, unless
     /// the master's word moves the deadline on first (a heartbeat answered just in time).
-    /// Returns whether the cleanup may start.
-    pub async fn passes(mut self) -> bool {
+    /// Returns whether the cleanup may start, and on which handles.
+    pub async fn passes(mut self) -> Option<Pass> {
         loop {
             let gate = *self.gate.borrow_and_update();
             let late = self
@@ -76,8 +87,9 @@ impl CleanupGate {
                 .borrow_and_update()
                 .is_some_and(|at| tokio::time::Instant::now() >= at);
             let changed = match gate {
-                Gate::Dropped => return false,
-                Gate::Open if !late => return true,
+                Gate::Dropped => return None,
+                Gate::Rest(from) => return Some(Pass::From(from as usize)),
+                Gate::Open if !late => return Some(Pass::All),
                 Gate::Open => tokio::select! {
                     changed = self.gate.changed() => changed.is_ok(),
                     changed = self.deadline.changed() => changed.is_ok(),
@@ -85,7 +97,7 @@ impl CleanupGate {
                 Gate::Held => self.gate.changed().await.is_ok(),
             };
             if !changed {
-                return false;
+                return None;
             }
         }
     }

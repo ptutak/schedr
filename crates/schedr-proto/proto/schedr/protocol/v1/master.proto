@@ -69,6 +69,8 @@ enum JournalState {
 message JournalEntry {
   string attempt_id = 1;
   JournalState state = 2;
+  // How many cleanup handles the journal holds for it (B169).
+  uint32 handles = 3;
 }
 
 // Sent on every connect.
@@ -213,6 +215,9 @@ message CleanupResult {
   bytes error_summary_json = 4;
   // How long its tries ran, the delays between them left out.
   uint64 duration_ms = 5;
+  // Only of the handles from `JournalDecision.cleanup_from` on (`CLEAN_REST`, B169): added to
+  // the attempt's cleanup, never its whole.
+  bool rest = 6;
 }
 
 message ProcessUsage {
@@ -281,11 +286,17 @@ enum AttemptDecision {
   ATTEMPT_DECISION_KILL = 2;
   // Its result is stored: remove it from the journal.
   ATTEMPT_DECISION_ACK = 3;
+  // Ended, its cleanup moved without some of its handles (registered while the master
+  // couldn't hear the worker, B169): run the cleanup on its handles from `cleanup_from` on,
+  // then send its `Finished`.
+  ATTEMPT_DECISION_CLEAN_REST = 4;
 }
 
 message JournalDecision {
   string attempt_id = 1;
   AttemptDecision decision = 2;
+  // For `CLEAN_REST`: the first handle (in registration order) the moved cleanup didn't have.
+  uint32 cleanup_from = 3;
 }
 
 message Registered {

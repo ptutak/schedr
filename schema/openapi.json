@@ -1069,6 +1069,13 @@
             "description": "`scheduled`, `manual`, `backfill`, `chained` or `event`.",
             "type": "string"
           },
+          "late_failure": {
+            "description": "A `success` that learnt of a failure after its end, shown yellow (decision 309): why,\n`late_cleanup_failed` for now.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planned_for": {
             "description": "The moment it is for.",
             "format": "date-time",

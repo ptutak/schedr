@@ -571,17 +571,20 @@ async fn a_cleanup_gate_waits_while_held_and_says_what_the_master_answered() {
         gate: passes.clone(),
         deadline: never.clone(),
     };
-    assert!(of(&passes).passes().await);
+    assert_eq!(of(&passes).passes().await, Some(Pass::All));
     gate.send_replace(Gate::Held);
     let waiting = tokio::spawn(of(&passes).passes());
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
     gate.send_replace(Gate::Open);
-    assert!(waiting.await.unwrap());
+    assert_eq!(waiting.await.unwrap(), Some(Pass::All));
+    // B169: the master had the first two handles, moved elsewhere: the rest is cleaned here.
+    gate.send_replace(Gate::Rest(2));
+    assert_eq!(of(&passes).passes().await, Some(Pass::From(2)));
     gate.send_replace(Gate::Dropped);
-    assert!(!of(&passes).passes().await);
+    assert_eq!(of(&passes).passes().await, None);
     drop(gate);
-    assert!(!of(&passes).passes().await);
+    assert_eq!(of(&passes).passes().await, None);
 }
 
 #[tokio::test]
@@ -600,13 +603,13 @@ async fn an_open_gate_past_the_masters_deadline_waits_for_its_answer() {
     // The loop holds it, then the master answers `Kill`: never run here.
     gate.send_replace(Gate::Held);
     gate.send_replace(Gate::Dropped);
-    assert!(!waiting.await.unwrap());
+    assert_eq!(waiting.await.unwrap(), None);
     // Or `Continue`, heard just now: it runs.
     gate.send_replace(Gate::Held);
     let waiting = tokio::spawn(gated.passes());
     deadline.send_replace(Some(tokio::time::Instant::now() + Duration::from_secs(60)));
     gate.send_replace(Gate::Open);
-    assert!(waiting.await.unwrap());
+    assert_eq!(waiting.await.unwrap(), Some(Pass::All));
 }
 
 #[tokio::test]
@@ -628,7 +631,10 @@ async fn an_open_gate_past_its_deadline_passes_when_the_master_is_heard_in_time(
     assert!(!waiting.is_finished());
     deadline.send_replace(Some(tokio::time::Instant::now() + Duration::from_secs(60)));
     let woken = tokio::time::timeout(Duration::from_secs(5), waiting).await;
-    assert!(woken.expect("woken by the deadline").unwrap());
+    assert_eq!(
+        woken.expect("woken by the deadline").unwrap(),
+        Some(Pass::All)
+    );
 }
 
 /// A DAG's script task using `jobs:team/schedr.toml#report` (script `team/report.py`).

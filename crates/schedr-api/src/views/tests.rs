@@ -87,6 +87,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         triggered_by: "trigger".to_owned(),
         started_at: None,
         ended_at: None,
+        late_failure: None,
     };
     let view = RunView::from(&run);
     assert_eq!(

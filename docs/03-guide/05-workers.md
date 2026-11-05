@@ -44,7 +44,14 @@ again. The master takes back an unstarted assignment only after the same lease.
 
 The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
 workers that lost the master together don't come back in step. After a session in which it
-was registered, the backoff starts from 200 ms again.
+was registered, the backoff starts from 200 ms again. Once the worker knows its lease, each
+reconnect wait is capped at half that lease. A restarted master gives it a fresh lease from
+the master's start.
+
+If the worker returns after its lease and its `cleanup_anywhere` move is still waiting, the
+master gives the cleanup back when the worker has handles it did not receive. If the move
+was assigned elsewhere or ended, `CLEAN_REST` asks the original worker to clean those
+remaining handles. See [State and failures](07-failures.md).
 
 ## Checking connections
 
@@ -417,7 +424,8 @@ discards it. A running attempt without recoverable cleanup is left out of `Regis
 master ends it lost. With recoverable cleanup, the agent holds a slot and reports it as running.
 It waits for `Continue` before reporting `TaskEnded` and restarting cleanup with its handles,
 all tries and freshly read secrets. A task interrupted while running gets a `lost` result; one
-already cleaning keeps its task result. `Kill` discards the waiting cleanup. Even a record
+already cleaning keeps its task result. `Kill` discards the waiting cleanup; `CLEAN_REST`
+stops any still-running task and cleans the handles the moved cleanup did not have. Even a record
 without a process identity gets cleanup, since the agent cannot tell whether it started. A
 journal write failure is logged; a result not written can be lost on restart before its ack.
 

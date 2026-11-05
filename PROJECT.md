@@ -7298,6 +7298,57 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   worker's reconnect could wait there past its lease (stress scenario 05). Not chosen (the user,
   2026-11-05): only the refusal (a Service still sending every new stream to it); only the
   readiness (a worker that got there anyway waits).
+- **307. A worker waits at most half the master's lease between tries (B168, 2026-11-05):**
+  once a master has told it its lease, a worker's reconnect backoff is capped at half of it,
+  so a worker still alive reaches a master back from a restart before that master's lease on it
+  runs out (a restarted master gives every worker a fresh lease from its start). It used to wait
+  up to `reconnect_max` (30 s by default, past a short lease): the master took it for lost and
+  moved its cleanup with only the handles it had got, so a handle registered while the master
+  was down was left behind.
+- **308. Handles the master never got are cleaned by the worker that has them (B169, the
+  user's: "Worker cleans the rest" and "Take it back", 2026-11-05):** a worker's `Register`
+  says how many handles each attempt in its journal has (`JournalEntry.handles`). When its
+  cleanup moved from that worker (`cleanup_anywhere`) and the master has fewer:
+  - the move still waiting for a worker: undone, the cleanup is the returning worker's again
+    (adopted; its first move's kept `lost` result dropped, so the worker's own result counts),
+    nothing else cleans those handles;
+  - the move given to another worker, or ended: the master answers `CLEAN_REST` with
+    `cleanup_from` (the master's count), the worker stops the task if it still runs and cleans
+    the handles from there on; its result is added to the attempt's once (`rest_cleaned`): a
+    failure of either (`failed`, `worker_lost`) fails it, else either's `ok`, tries and time
+    add up; the instance's cleanup result takes a failed or `ok` rest (a failure fails the run
+    if it is still open; an ended run becomes a yellow `SUCCESS`, decision 309). An attempt
+    still open combines its end with the rest added. The rest's `CleanupResult` says it is one
+    (`rest`), so it never counts as the whole cleanup, even from a worker the cleanup was given
+    back to meanwhile.
+  The worker asked is the one the cleanup first moved from (`cleanup_origin`: the one that ran
+  the task), whatever moves came after. The master's count is its handles from the first on
+  without a gap: one past a gap is cleaned again rather than one in it left behind. The worker
+  counts its handles from its journal. A worker that never comes back takes its unknown handles
+  with it: nothing knows they exist. Not chosen (the user, 2026-11-05): the worker left to clean
+  everything again while the move waits (the known handles cleaned twice).
+- **309. A yellow `SUCCESS`: a run's state changed after its end (the user's, 2026-11-05):** a
+  run that ended `SUCCESS` and learns of a failure afterwards keeps its state (whatever its
+  success set off has happened) but is shown yellow, not green, with the reason; for now one
+  reason, `LATE_CLEANUP_FAILED`: a rest cleanup (308) failed after the run's end, its handles
+  maybe left behind. The task instance shows its failed cleanup; an error is logged and a
+  metric counts it, for alerts; with notifications (M4.13) it is one of their events. Failures
+  and successes are expected; a yellow success isn't, and asks for attention: a late cleanup
+  failing often points at the DAG (a cleanup that fails on what is already gone, where it
+  should succeed: cleanups are meant to be idempotent), and may not be rare then. It is
+  the only way a run's state changes after its end: every other cleanup, resources' too, ends
+  before its run does (decision 270). Not chosen (the user, 2026-11-05): the run turned
+  `failed` (something may have acted on its success already); a run waiting for its lost
+  worker (every such run held, the late case left anyway).
+- **Built (B168, B169; decisions 307-309, 2026-11-05):** the agent's reconnect wait capped at
+  half the lease; `JournalEntry.handles` (from the journal), `CLEAN_REST` with `cleanup_from`,
+  `CleanupResult.rest`, a waiting move given back (`take_back_cleanup`), `cleanup_origin`,
+  `rest_cleaned` and the merge of a rest into the attempt's cleanup (`failed` and `worker_lost`
+  win); the run's `late_failure` (API, UI in yellow, CLI) and `schedr_master_runs_late_failed`.
+  Codex's review found the multi-move, the rest taken as the whole, the count read before the
+  loop heard of a handle, the gap in the master's handles and `worker_lost` overwritten: all
+  fixed with tests. Roles tests stop a worker's agent (SIGSTOP) while the master is down, so the
+  handle it registered never reaches the master.
 
 - **Built (M4.8z; decisions 280-282, 290, 291, 297; fixes B162-B165):** chaos scenarios in the
   stress suite: the TCP proxy between workers and master cuts a link one way or both, slows it

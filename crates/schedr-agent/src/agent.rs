@@ -24,7 +24,7 @@
 //! The work itself goes through an [`Executor`]: processes in production
 //! ([`ProcessExecutor`]), something simpler in tests.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
@@ -47,8 +47,8 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
 use crate::attempt::{
-    AttemptSpec, CleanupGate, Gate, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished,
-    plan, plan_at, with_resource_value,
+    AttemptSpec, CleanupGate, Gate, NotRun, Pass, Plan, Ran, WorkerSetup, failed_before_start,
+    finished, plan, plan_at, with_resource_value,
 };
 use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
@@ -84,6 +84,16 @@ pub const ORPHAN_GRACE: Duration = Duration::from_secs(10);
 /// The first wait after the master connection drops; it doubles up to [`MAX_BACKOFF`], and
 /// starts again here after a session in which the master registered the worker.
 pub const FIRST_BACKOFF: Duration = Duration::from_millis(200);
+
+/// The longest wait between two tries to reach the master: `max`, but at most half the
+/// master's worker lease once it has told it (B168), so a worker still alive reaches a master
+/// back from a restart before that master's lease on it runs out; else the master would take
+/// it for lost and move its cleanups with only the handles it got (a handle registered while
+/// the master was away left behind).
+#[must_use]
+pub fn reconnect_cap(max: Duration, lease: Option<Duration>) -> Duration {
+    lease.map_or(max, |lease| max.min(lease / 2))
+}
 
 /// A backoff with jitter: between half of `backoff` and all of it, picked by `seed` (so many
 /// workers losing the master at once don't come back in lockstep).
@@ -466,12 +476,17 @@ impl ProcessExecutor {
         {
             ended(finished.clone());
             // Dropped, the attempt is no longer this worker's: what it reports here is ignored.
-            let may_run = match spec.cleanup_gate.clone() {
+            let pass = match spec.cleanup_gate.clone() {
                 Some(gate) => gate.passes().await,
-                None => true,
+                None => Some(Pass::All),
             };
-            if may_run {
-                finished.cleanup = Some(self.run_cleanup(&spec, cleanup, shared).await);
+            if let Some(pass) = pass {
+                if let Pass::From(from) = pass {
+                    handles.skip(from);
+                }
+                let mut result = self.run_cleanup(&spec, cleanup, shared).await;
+                result.rest = matches!(pass, Pass::From(_));
+                finished.cleanup = Some(result);
             }
         }
         let log = self.setup.log_file(&spec.attempt_id);
@@ -896,6 +911,8 @@ struct WaitingCleanup {
     handles: Vec<CleanupHandle>,
     /// The task's result; `None`: it was running, and is `lost`.
     ended: Option<pb::Finished>,
+    /// Only the handles the master didn't have (`CLEAN_REST`, B169): its result says so.
+    rest: bool,
 }
 
 /// How many connections jobs' answers the agent keeps while no master listens.
@@ -922,6 +939,8 @@ pub struct Agent<E> {
     stopped: std::collections::BTreeSet<String>,
     /// The gate of each running attempt with `cleanup_anywhere`.
     gates: BTreeMap<String, watch::Sender<Gate>>,
+    /// The attempts whose cleanup runs on the handles the master didn't have (B169).
+    rest_cleaning: BTreeSet<String>,
     /// When the master was last heard from.
     heard: tokio::time::Instant,
     /// `heard` plus the lease, for the cleanup gates (see [`Self::publish_deadline`]).
@@ -1060,6 +1079,7 @@ impl<E: Executor> Agent<E> {
             cleanup_room: BTreeMap::new(),
             stopped: std::collections::BTreeSet::new(),
             gates: BTreeMap::new(),
+            rest_cleaning: BTreeSet::new(),
             heard: tokio::time::Instant::now(),
             deadline: watch::channel(None).0,
             lease: None,
@@ -1157,13 +1177,16 @@ impl<E: Executor> Agent<E> {
                 .map_or(0, |d| d.subsec_nanos())
                 .wrapping_mul(2_654_435_761);
             if self
-                .offline(tokio::time::sleep(jittered(backoff, seed)))
+                .offline(tokio::time::sleep(jittered(
+                    backoff.min(reconnect_cap(timeouts.reconnect_max, self.lease)),
+                    seed,
+                )))
                 .await
                 .is_none()
             {
                 return;
             }
-            backoff = (backoff * 2).min(timeouts.reconnect_max);
+            backoff = (backoff * 2).min(reconnect_cap(timeouts.reconnect_max, self.lease));
         }
     }
 
@@ -1569,6 +1592,7 @@ impl<E: Executor> Agent<E> {
             spec,
             handles,
             ended,
+            rest: false,
         };
         self.waiting.insert(attempt_id.to_owned(), waiting);
         true
@@ -1595,9 +1619,12 @@ impl<E: Executor> Agent<E> {
         });
         self.task_ended(ended.clone(), Some(to_master)).await;
         let executor = self.executor.clone();
-        let (spec, handles) = (waiting.spec, waiting.handles);
+        let (spec, handles, rest) = (waiting.spec, waiting.handles, waiting.rest);
         tokio::spawn(async move {
-            let finished = executor.cleanup(spec, ended, handles, spawned).await;
+            let mut finished = executor.cleanup(spec, ended, handles, spawned).await;
+            if let Some(cleanup) = finished.cleanup.as_mut() {
+                cleanup.rest = rest;
+            }
             let _ = done.send(Done::Attempt(finished));
         });
     }
@@ -1955,6 +1982,25 @@ impl<E: Executor> Agent<E> {
                     self.forget(id).await;
                 }
             }
+            Ok(pb::AttemptDecision::CleanRest) => {
+                // Ended, its cleanup moved without the handles from `cleanup_from` on: they
+                // are cleaned here, the master adding the result to the attempt's (B169).
+                let from = decision.cleanup_from;
+                self.rest_cleaning.insert(id.clone());
+                if let Some(gate) = self.gates.get(id) {
+                    gate.send_replace(Gate::Rest(from));
+                }
+                if let Some(mut waiting) = self.waiting.remove(id) {
+                    let from = (from as usize).min(waiting.handles.len());
+                    waiting.handles.drain(..from);
+                    waiting.rest = true;
+                    self.start_waiting(id, waiting, to_master).await;
+                }
+                // The master ended the task: stopped here, the rest cleaned once it stops.
+                if let Some(stop) = self.running.get(id) {
+                    let _ = stop.send(StopReason::Cancelled);
+                }
+            }
             Ok(pb::AttemptDecision::Kill) => {
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
@@ -2072,6 +2118,13 @@ impl<E: Executor> Agent<E> {
                 detail,
             }))
         };
+        if assign.cleanup_only.is_some() && self.cleaning_rest(&assign.attempt_id) {
+            // Its whole cleanup, given here while this worker cleans the handles the master
+            // didn't have (B169): refused, it goes elsewhere or comes back after.
+            let detail = "cleaning the rest of this attempt's handles".to_owned();
+            let _ = to_master.send(reject(pb::RejectReason::NoFreeSlot, detail));
+            return;
+        }
         if self.running.contains_key(&assign.attempt_id)
             || self.unacked.contains_key(&assign.attempt_id)
         {
@@ -2180,6 +2233,7 @@ impl<E: Executor> Agent<E> {
             spec,
             handles,
             ended: None,
+            rest: false,
         };
         self.start_waiting(&id, waiting, to_master).await;
     }
@@ -2303,6 +2357,7 @@ impl<E: Executor> Agent<E> {
 
     fn release_code(&mut self, attempt_id: &str) -> Option<String> {
         self.other_copies.remove(attempt_id);
+        self.rest_cleaning.remove(attempt_id);
         self.code_hashes.remove(attempt_id)
     }
 
@@ -2855,14 +2910,36 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// Whether this worker cleans the rest of attempt `id`'s handles (`CLEAN_REST`, B169).
+    fn cleaning_rest(&self, id: &str) -> bool {
+        self.rest_cleaning.contains(id)
+    }
+
+    /// How many cleanup handles attempt `id` has journaled: the master compares it with what
+    /// it has (B169). Read from the journal, which has a handle before the loop hears of it
+    /// (Codex's review of B169: a `Register` built in between said one fewer).
+    fn handle_count(&self, id: &str) -> u32 {
+        let waiting = self.waiting.get(id).map_or(0, |w| w.handles.len());
+        let journaled = self.journal.handles(id).map_or_else(
+            |error| {
+                tracing::warn!(attempt_id = id, %error, "can't read the journaled handles");
+                0
+            },
+            |handles| handles.len(),
+        );
+        u32::try_from(journaled.max(waiting)).unwrap_or(u32::MAX)
+    }
+
     fn journal_entries(&self) -> Vec<pb::JournalEntry> {
         let running = self.running.keys().map(|id| pb::JournalEntry {
             attempt_id: id.clone(),
             state: pb::JournalState::Running.into(),
+            handles: self.handle_count(id),
         });
         let finished = self.unacked.keys().map(|id| pb::JournalEntry {
             attempt_id: id.clone(),
             state: pb::JournalState::Finished.into(),
+            handles: self.handle_count(id),
         });
         running.chain(finished).collect()
     }

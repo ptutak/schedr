@@ -126,7 +126,7 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__WORKER__ORPHAN_KILL_WAIT` | 5 s | How long an orphan may take to go after SIGKILL. |
 | `SCHEDR_HIDDEN__WORKER__ORPHAN_GRACE` | 10 s | Time an orphan found at startup gets from SIGTERM to SIGKILL. |
 | `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_FIRST` | 200 ms | First wait after the master connection drops; it doubles with jitter up to the maximum. |
-| `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_MAX` | 30 s | Longest wait between tries to reach the master. |
+| `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_MAX` | 30 s | Longest wait between tries to reach the master; once the worker knows its lease, each wait is also capped at half that lease. |
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
 | `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 5 s | How long a stopping worker waits for the master to accept its deregistration. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_TICK` | 100 ms | How often a drain checks what is left. |

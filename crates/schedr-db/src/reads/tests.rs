@@ -489,3 +489,107 @@ async fn states_are_counted_for_the_masters_gauges() {
         }
     );
 }
+
+/// An attempt of `extract`, assigned to `w1`, in a running run; returns the run and attempt.
+async fn assigned(db: &Database, version: &str) -> (String, String) {
+    let run_id = add_run(db, version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    let now = ts("2026-10-15T03:00:01Z");
+    db.create_instances(&run_id, &[(extract(), -1, TaskInstanceState::Queued)], now)
+        .await
+        .unwrap();
+    let ready = db.ready_instances(now).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", now)
+        .await
+        .unwrap()
+        .unwrap();
+    (run_id, attempt_id)
+}
+
+fn cleanup_end(result: schedr_model::CleanupResult) -> crate::attempts::CleanupEnd {
+    crate::attempts::CleanupEnd {
+        result,
+        tries: 1,
+        duration_ms: 10,
+        error_kind: None,
+        error_summary: None,
+    }
+}
+
+#[tokio::test]
+async fn the_handles_the_master_has_count_from_the_first_without_a_gap() {
+    // Codex's review of B169: a handle stored past a gap isn't one the worker may skip.
+    let (db, version) = with_dag().await;
+    let (_, attempt_id) = assigned(&db, &version).await;
+    let handle = |id: u32| format!(r#"{{"handle_type":"Job","value":{{"id":{id}}}}}"#);
+    db.add_cleanup_handles(&attempt_id, 1, &[handle(1)], 1 << 20)
+        .await
+        .unwrap();
+    assert_eq!(db.cleanup_handles_unbroken(&attempt_id).await.unwrap(), 0);
+    db.add_cleanup_handles(&attempt_id, 0, &[handle(0)], 1 << 20)
+        .await
+        .unwrap();
+    assert_eq!(db.cleanup_handles_unbroken(&attempt_id).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn a_rest_cleanup_keeps_a_lost_one_failed_whichever_comes_first() {
+    // Codex's review of B169: `worker_lost` is a failure; an `ok` rest didn't keep it.
+    use schedr_model::CleanupResult::{Ok as Clean, WorkerLost};
+    let (db, version) = with_dag().await;
+    let now = ts("2026-10-15T03:00:02Z");
+    for rest_first in [true, false] {
+        let (run_id, attempt_id) = assigned(&db, &version).await;
+        let end = AttemptEnd {
+            cleanup: Some(cleanup_end(WorkerLost)),
+            ..AttemptEnd::by_master(AttemptStatus::Lost)
+        };
+        if rest_first {
+            assert!(
+                db.add_rest_cleanup(&attempt_id, &cleanup_end(Clean))
+                    .await
+                    .unwrap()
+            );
+            db.end_attempt(&attempt_id, &end, now).await.unwrap();
+        } else {
+            db.end_attempt(&attempt_id, &end, now).await.unwrap();
+            assert!(
+                db.add_rest_cleanup(&attempt_id, &cleanup_end(Clean))
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            !db.add_rest_cleanup(&attempt_id, &cleanup_end(Clean))
+                .await
+                .unwrap(),
+            "added once"
+        );
+        let attempts = db.task_attempts(&run_id, &extract()).await.unwrap();
+        let cleanup = &attempts[0].cleanup;
+        assert_eq!(
+            (cleanup.result, cleanup.tries),
+            (Some(WorkerLost), Some(2)),
+            "rest first: {rest_first}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_rest_is_owed_by_the_worker_the_cleanup_first_moved_from() {
+    // Codex's review of B169: a second move made the worker it moved from last the one asked.
+    let (db, version) = with_dag().await;
+    let (_, attempt_id) = assigned(&db, &version).await;
+    let now = ts("2026-10-15T03:00:02Z");
+    db.move_cleanup(&attempt_id, b"lost", now).await.unwrap();
+    assert!(db.assign_cleanup(&attempt_id, "w2", now).await.unwrap());
+    db.move_cleanup(&attempt_id, b"lost", now).await.unwrap();
+    assert_eq!(
+        db.rest_owed_by(&attempt_id).await.unwrap().as_deref(),
+        Some("w1")
+    );
+    assert_eq!(
+        db.cleanup_moved_from(&attempt_id).await.unwrap().as_deref(),
+        Some("w2")
+    );
+}

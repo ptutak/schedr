@@ -161,6 +161,8 @@ pub struct RunRow {
     pub triggered_by: String,
     /// When it ended, as people read it; empty while it runs.
     pub ended_at: String,
+    /// Why a `success` is yellow (decision 309), as people read it; empty if it isn't.
+    pub late: String,
 }
 
 /// A run as listed, before it is shown: what orders the merged list.
@@ -316,6 +318,38 @@ pub fn run_row<T>(page: &Page, deployment: &Deployment<T>, run: &RunView) -> Run
         triggered_at: page.time(&run.triggered_at),
         triggered_by: run.triggered_by.clone(),
         ended_at: run.ended_at.map(|t| page.time(&t)).unwrap_or_default(),
+        late: run
+            .late_failure
+            .as_deref()
+            .map(late_said)
+            .unwrap_or_default(),
+    }
+}
+
+/// A run page's address.
+fn run_href_of(page: &Page, deployment: &str, run_id: &str) -> String {
+    let (deployment, run_id) = (path_segment(deployment), path_segment(run_id));
+    format!("{}/d/{deployment}/runs/{run_id}", page.base)
+}
+
+/// Why `run` is a yellow success (decision 309), as people read it; empty if it isn't.
+fn late_of(run: &RunView) -> String {
+    run.late_failure
+        .as_deref()
+        .map(late_said)
+        .unwrap_or_default()
+}
+
+/// Why a run that ended `success` is yellow (decision 309), as people read it.
+#[must_use]
+pub fn late_said(reason: &str) -> String {
+    match reason {
+        "late_cleanup_failed" => {
+            "late cleanup failed: a cleanup after the run's end failed, handles may be left \
+             behind"
+                .to_owned()
+        }
+        other => other.replace('_', " "),
     }
 }
 
@@ -541,6 +575,8 @@ struct RunPage {
     triggered_at: String,
     started_at: String,
     ended_at: String,
+    /// Why a `success` is yellow (decision 309), as people read it; empty if it isn't.
+    late: String,
     summary: String,
     code_hashes: Vec<String>,
     /// The run's parameters, each name with its value as given (masked, decision 134).
@@ -615,12 +651,7 @@ pub async fn run<T: Transport>(
             return unavailable_page(&page, &deployment.name, &error);
         }
     };
-    let run_href = format!(
-        "{}/d/{}/runs/{}",
-        page.base,
-        path_segment(&deployment.name),
-        path_segment(&run_id)
-    );
+    let run_href = run_href_of(&page, &deployment.name, &run_id);
     let tail = ui.timings.tail_interval;
     let panel = match &query.task {
         Some(task) => {
@@ -658,6 +689,7 @@ pub async fn run<T: Transport>(
                 .map(|t| page.time(&t))
                 .unwrap_or_default(),
             summary: summary(&detail.run.state, &whole),
+            late: late_of(&detail.run),
             run_href: run_href.clone(),
             code_hashes: detail.code_hashes,
             params: shown_params(detail.params),

@@ -214,6 +214,9 @@ pub struct RunView {
     pub started_at: Option<Timestamp>,
     /// When it finished.
     pub ended_at: Option<Timestamp>,
+    /// A `success` that learnt of a failure after its end, shown yellow (decision 309): why,
+    /// `late_cleanup_failed` for now.
+    pub late_failure: Option<String>,
 }
 
 impl From<&RunRecord> for RunView {
@@ -229,6 +232,7 @@ impl From<&RunRecord> for RunView {
             triggered_by: run.triggered_by.clone(),
             started_at: run.started_at,
             ended_at: run.ended_at,
+            late_failure: run.late_failure.clone(),
         }
     }
 }

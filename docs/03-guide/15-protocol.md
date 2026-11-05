@@ -22,6 +22,12 @@ sequenceDiagram
     end
 ```
 
+Each `JournalEntry.handles` in `Register` counts the handles in that attempt's worker journal.
+A `JournalDecision` can answer `CLEAN_REST` (`ATTEMPT_DECISION_CLEAN_REST`) with
+`cleanup_from`, the first handle index to clean. The worker stops a still-running task,
+cleans from that index and sends `Finished` with `CleanupResult.rest` set. That result is
+added to the attempt once; it never represents the whole cleanup.
+
 Any worker message renews the master's worker lease at arrival, even if it waits to be handled.
 The master answers heartbeats before they wait for its lock, while it leads. The worker notes
 messages from the master as word from it. The worker ends a stream silent for a lease,
@@ -261,7 +267,11 @@ sequenceDiagram
 Each move counts as a cleanup try; if the receiving worker is lost after
 `cleanup_retries + 1` moves, cleanup ends `worker_lost`. A refused worker can be asked again
 when no other is available. A handle not delivered before the original worker is lost cannot
-accompany the cleanup.
+accompany the cleanup. If the original worker returns with more handles while the move
+still waits, the master takes the move back and gives cleanup to that worker. If the move
+was assigned elsewhere or ended, the master sends `CLEAN_REST` with its contiguous handle
+count as `cleanup_from`. A handle received past a gap can therefore be cleaned again. The
+rest result can arrive after the run ends; a failure after success makes it a [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end).
 
 If the worker from which cleanup was first scheduled to move reconnects with a finished cleanup before the
 move takes place, its journaled `Finished` receives `Continue`, so it sends the result again;
@@ -280,14 +290,17 @@ sequenceDiagram
     Note over O: Task runs; connection lost, cleanup held
     Note over O: No word for worker lease (60 s default)
     O->>O: CutOff stops task (lost); cleanup waits
-    alt Master has counted worker lost
-        Note over M: Worker lease expires; worker counted lost
-        Note over M: Wait cancel_grace + cleanup_move_wait (30 s + 10 s default)
-        M->>W: AssignTask (cleanup_only)
-        W->>W: Run cleanup
-        O->>M: Register (attempt)
-        M-->>O: Registered (Kill)
-        O->>O: Drop held cleanup
+    alt Move waiting and original worker has more handles
+        O->>M: Register (attempt and handle count)
+        M->>M: Take back move; give cleanup to original worker
+        M-->>O: Registered (Continue)
+        O->>O: Run cleanup with all handles
+    else Move assigned or ended and original worker has more handles
+        M->>W: AssignTask (cleanup_only, known handles)
+        O->>M: Register (attempt and handle count)
+        M-->>O: Registered (CLEAN_REST, cleanup_from)
+        O->>O: Stop task if running; clean remaining handles
+        O->>M: Finished (CleanupResult.rest)
     else Master still owns the attempt
         O->>M: Register (attempt)
         M-->>O: Registered (Continue)
@@ -336,9 +349,9 @@ sequenceDiagram
     Note over DB,B: Master lease: 30 s default; standby can take over after expiry (clean stop releases it)
     B->>DB: Take lease and read state
     B->>B: Mark workers disconnected; restart worker leases
-    Note over W: Reconnect backoff: 200 ms first, up to 30 s default
+    Note over W: Reconnect backoff: 200 ms first, up to 30 s default and half known lease
     W->>B: Register (journal and roots)
-    B-->>W: Registered (Continue, Kill or Ack per entry)
+    B-->>W: Registered (Continue, Kill, Ack or CLEAN_REST per entry)
     Note over B: Worker lease: 60 s default from startup; absent worker becomes lost
 ```
 

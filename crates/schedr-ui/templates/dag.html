@@ -63,7 +63,7 @@
   {% for run in runs %}
     <tr>
       <td class="mono"><a href="{{ run.href }}">{{ run.run_id }}</a></td>
-      <td><span class="state {{ run.state }}">{{ run.state }}</span></td>
+      <td><span class="state {{ run.state }}{% if !run.late.is_empty() %} late{% endif %}"{% if !run.late.is_empty() %} title="{{ run.late }}"{% endif %}>{{ run.state }}{% if !run.late.is_empty() %} · {{ run.late }}{% endif %}</span></td>
       <td class="time">{{ run.planned_for }}</td>
       <td>{{ run.kind }}</td>
       <td class="time">{{ run.triggered_at }}</td>

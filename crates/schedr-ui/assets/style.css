@@ -18,6 +18,8 @@
   --running-bg: #e4edfb;
   --waiting: #8a5a00;
   --waiting-bg: #fdf1d8;
+  --late: #6b5800;
+  --late-bg: #fff3a3;
   --neutral-bg: #eceef1;
   --edge: #8b93a0;
   --resource: #8e3aa8;
@@ -44,6 +46,8 @@
   --running-bg: #1b2a44;
   --waiting: #f2c46b;
   --waiting-bg: #3a2e14;
+  --late: #ffe45c;
+  --late-bg: #3d3505;
   --neutral-bg: #2a2f37;
   --edge: #6b7482;
   --resource: #d79bf0;
@@ -137,6 +141,8 @@ dl.facts dd { margin: 0; }
 
 /* Run and task states. */
 .state.success { background: var(--ok-bg); color: var(--ok); }
+/* A success that learnt of a failure after its end (decision 309): yellow, outlined, not green. */
+.state.success.late { background: var(--late-bg); color: var(--late); box-shadow: inset 0 0 0 1px var(--late); }
 .state.failed, .state.upstream_failed, .state.timed_out, .state.oom_killed, .state.lost {
   background: var(--failed-bg); color: var(--failed);
 }

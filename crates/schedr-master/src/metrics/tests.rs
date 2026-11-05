@@ -25,6 +25,7 @@ fn every_metric_is_registered_as_documented() {
     metrics.set_waiting(&[("no_slot", 1)]);
     metrics.attempt_ended(&AttemptStatus::Success);
     metrics.run_finished("sync", &RunState::Success);
+    metrics.run_late_failed("sync", "late_cleanup_failed");
     metrics
         .rejections
         .get_or_create(&ReasonLabels {

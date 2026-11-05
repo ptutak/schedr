@@ -1266,6 +1266,24 @@ impl Dispatcher {
                 && attempt.status.is_none()
                 && finished.cleanup.is_some()
                 && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id);
+            // The handles the master never got, cleaned by the worker its cleanup first moved
+            // from (B169): added to the attempt's cleanup, ended or not. Said to be a rest, it
+            // never counts as the whole cleanup, even from the attempt's worker now.
+            let rest_only = finished.cleanup.as_ref().is_some_and(|c| c.rest);
+            if (rest_only || (attempt.worker_id != worker_id && !left_by_it))
+                && let Some(rest) = &finished.cleanup
+                && self.db.rest_owed_by(&attempt.id).await?.as_deref() == Some(worker_id)
+            {
+                let rest = cleanup_end(rest, worker_id)?;
+                if self.db.add_rest_cleanup(&attempt.id, &rest).await? {
+                    self.rest_cleaned(&attempt, &rest, now).await?;
+                }
+                return Ok(finished_ack(worker_id, &finished.attempt_id));
+            }
+            if rest_only {
+                // Added already, or not this worker's to clean: ignored.
+                return Ok(finished_ack(worker_id, &finished.attempt_id));
+            }
             if attempt.worker_id != worker_id && !left_by_it {
                 // Not its attempt (B46): only the worker it was assigned to ran it. Acknowledged
                 // so the sender stops resending, never stored, as `Started` is refused.
@@ -1311,6 +1329,44 @@ impl Dispatcher {
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
+    }
+
+    /// The cleanup of the handles the master never got, added to `attempt`'s (B169): the
+    /// instance's cleanup result takes a failed or `ok` one, and a failure fails the run if it
+    /// is still open; an ended `success` turns a yellow one (decision 309), logged as an error
+    /// and counted.
+    async fn rest_cleaned(
+        &self,
+        attempt: &StoredAttempt,
+        rest: &CleanupEnd,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if rest.result == CleanupResult::NotNeeded {
+            return Ok(());
+        }
+        self.db
+            .set_cleanup_result(&attempt.instance_id, rest.result, now)
+            .await?;
+        if !rest.result.fails_the_run() {
+            return Ok(());
+        }
+        if let Some(dag_id) = self
+            .db
+            .mark_late_failure(&attempt.run_id, LATE_CLEANUP_FAILED)
+            .await?
+        {
+            tracing::error!(
+                dag_id,
+                run_id = %attempt.run_id,
+                task_id = %attempt.task_id,
+                attempt_id = %attempt.id,
+                error_kind = rest.error_kind.as_deref().unwrap_or_default(),
+                "a cleanup after the run's success failed: handles may be left behind; the run \
+                 is a yellow success (late_cleanup_failed)"
+            );
+            self.metrics.run_late_failed(&dag_id, LATE_CLEANUP_FAILED);
+        }
+        Ok(())
     }
 
     /// Takes back assignments with no `Started` within the start timeout: they end
@@ -2247,6 +2303,9 @@ fn summary_of(finished: &pb::Finished) -> Option<String> {
     (!finished.error_summary_json.is_empty())
         .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned())
 }
+
+/// Why a run is a yellow success: a cleanup after its end failed (decision 309).
+pub const LATE_CLEANUP_FAILED: &str = "late_cleanup_failed";
 
 /// A cleanup standing in when the task's is gone from its DAG.
 const fn no_cleanup() -> TaskCleanup {

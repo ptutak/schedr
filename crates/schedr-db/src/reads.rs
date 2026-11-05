@@ -53,6 +53,8 @@ pub struct RunRecord {
     pub started_at: Option<Timestamp>,
     /// When it finished.
     pub ended_at: Option<Timestamp>,
+    /// Why it turned a yellow success after its end (decision 309): `late_cleanup_failed`.
+    pub late_failure: Option<String>,
 }
 
 /// A task instance, as shown.
@@ -155,6 +157,7 @@ type RunRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 type InstanceRow = (
@@ -199,16 +202,16 @@ type AttemptRow = (
 
 const RUN_COLUMNS_ONE: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts} FROM runs WHERE id = $1{uuid}";
+    {ts<}ended_at{>ts}, late_failure FROM runs WHERE id = $1{uuid}";
 
 const RUN_COLUMNS_OF_DAG: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts} FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
+    {ts<}ended_at{>ts}, late_failure FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
     ORDER BY planned_for DESC, triggered_at DESC, id DESC LIMIT $3";
 
 const RUNS_FILTERED: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts} FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
+    {ts<}ended_at{>ts}, late_failure FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
     AND ($2 IS NULL OR state = $2) AND ($3{ts} IS NULL OR triggered_at < $3{ts} \
     OR ($5{uuid} IS NOT NULL AND triggered_at = $3{ts} AND id < $5{uuid})) \
     ORDER BY triggered_at DESC, runs.id DESC LIMIT $4";
@@ -588,8 +591,19 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
 }
 
 fn run_record(row: RunRow) -> Result<RunRecord, DbError> {
-    let (id, dag_id, kind, state, planned_for, since, triggered_at, triggered_by, started, ended) =
-        row;
+    let (
+        id,
+        dag_id,
+        kind,
+        state,
+        planned_for,
+        since,
+        triggered_at,
+        triggered_by,
+        started,
+        ended,
+        late_failure,
+    ) = row;
     Ok(RunRecord {
         id,
         dag_id: DagId::new(dag_id).map_err(|e| DbError::InvalidData {
@@ -604,6 +618,7 @@ fn run_record(row: RunRow) -> Result<RunRecord, DbError> {
         triggered_by,
         started_at: optional_time("runs.started_at", started)?,
         ended_at: optional_time("runs.ended_at", ended)?,
+        late_failure,
     })
 }
 

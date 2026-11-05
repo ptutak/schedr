@@ -44,6 +44,13 @@ const RUNS_FINISHED: MetricDoc = MetricDoc {
     labels: &["dag_id", "result"],
     help: "Runs finished, by DAG and result",
 };
+const RUNS_LATE_FAILED: MetricDoc = MetricDoc {
+    name: "runs_late_failed",
+    kind: MetricKind::Counter,
+    labels: &["dag_id", "reason"],
+    help: "Runs that ended `success` and learnt of a failure afterwards (a yellow success, \
+           decision 309), by DAG and reason (`late_cleanup_failed`)",
+};
 const TASKS: MetricDoc = MetricDoc {
     name: "tasks",
     kind: MetricKind::Gauge,
@@ -139,6 +146,7 @@ pub const METRICS: &[MetricDoc] = &[
     TICK_DURATION,
     RUNS,
     RUNS_FINISHED,
+    RUNS_LATE_FAILED,
     TASKS,
     TASKS_WAITING,
     ASSIGNMENTS,
@@ -180,6 +188,15 @@ pub struct ResultLabels {
     pub result: String,
 }
 
+/// A DAG and why its run turned a yellow success.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct LateLabels {
+    /// The DAG.
+    pub dag_id: String,
+    /// Why (`late_cleanup_failed`).
+    pub reason: String,
+}
+
 /// A reason (a rejection's, a waiting task's).
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ReasonLabels {
@@ -212,6 +229,8 @@ pub struct MasterMetrics {
     pub runs: Family<RunLabels, Gauge>,
     /// Runs finished, by DAG and result.
     pub runs_finished: Family<ResultLabels, Counter>,
+    /// Runs that ended `success` and learnt of a failure afterwards, by DAG and reason.
+    pub runs_late_failed: Family<LateLabels, Counter>,
     /// Task instances of unfinished runs, by state.
     pub tasks: Family<StateLabels, Gauge>,
     /// Ready tasks no worker could take at the last assignment pass, by reason.
@@ -260,6 +279,7 @@ impl Default for MasterMetrics {
             tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
             runs: Family::default(),
             runs_finished: Family::default(),
+            runs_late_failed: Family::default(),
             tasks: Family::default(),
             tasks_waiting: Family::default(),
             assignments: Counter::default(),
@@ -296,6 +316,11 @@ impl MasterMetrics {
             RUNS_FINISHED.name,
             RUNS_FINISHED.help,
             self.runs_finished.clone(),
+        );
+        r.register(
+            RUNS_LATE_FAILED.name,
+            RUNS_LATE_FAILED.help,
+            self.runs_late_failed.clone(),
         );
         r.register(TASKS.name, TASKS.help, self.tasks.clone());
         r.register(
@@ -389,6 +414,16 @@ impl MasterMetrics {
         self.attempts_ended
             .get_or_create(&StatusLabels {
                 status: status.to_string(),
+            })
+            .inc();
+    }
+
+    /// Counts one run turned a yellow success (decision 309).
+    pub fn run_late_failed(&self, dag_id: &str, reason: &str) {
+        self.runs_late_failed
+            .get_or_create(&LateLabels {
+                dag_id: dag_id.to_owned(),
+                reason: reason.to_owned(),
             })
             .inc();
     }

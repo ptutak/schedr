@@ -235,6 +235,17 @@ impl AttemptHandles {
             .clone()
     }
 
+    /// Leaves out the first `count` handles: a cleanup that moved had them, this one runs on
+    /// the rest (B169).
+    pub fn skip(&self, count: usize) {
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let count = count.min(registered.handles.len());
+        registered.handles.drain(..count);
+    }
+
     /// Stops taking handles: the cleanup starts.
     pub fn close(&self) {
         self.registered

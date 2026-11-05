@@ -35,7 +35,7 @@ The names used across the documentation, the API and the logs.
 **Run** (DAG run)
 : One execution of a DAG, for one moment (`planned_for`). Its kind says who created it
   (`scheduled`, `manual`, …). States: `queued` (waiting for `max_active_runs`), `running`,
-  then `success`, `failed` or `cancelled`. A run holds its place until its [resource cleanups](../02-dags/16-resources.md) end; a failed cleanup fails the run. Cancelling a run keeps those cleanups, while cancelling one as a task stops it.
+  then `success`, `failed` or `cancelled`. A [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end) still has state `success` and asks for attention after a late cleanup failure. A run holds its place until its [resource cleanups](../02-dags/16-resources.md) end; a failed cleanup fails the run. Cancelling a run keeps those cleanups, while cancelling one as a task stops it.
 
 **Task instance**
 : One task of one run. States: `scheduled`, `queued`, `unschedulable`, `running`,

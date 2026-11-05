@@ -459,6 +459,30 @@ impl Database {
         Ok(ids)
     }
 
+    /// Marks a run that ended `success` as a yellow success (decision 309), once, with why
+    /// (`late_cleanup_failed`). Returns its DAG when this call marked it; `None` if it isn't
+    /// an ended success or is marked already.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn mark_late_failure(
+        &self,
+        run_id: &str,
+        reason: &str,
+    ) -> Result<Option<String>, DbError> {
+        const MARK: &str = "UPDATE runs SET late_failure = $1 \
+            WHERE id = $2{uuid} AND state = 'success' AND late_failure IS NULL RETURNING dag_id";
+        let marked: Option<(String,)> = in_tx!(self, |tx, backend| {
+            sqlx::query_as(sql(backend, MARK))
+                .bind(reason)
+                .bind(run_id)
+                .fetch_optional(&mut *tx)
+                .await?
+        });
+        Ok(marked.map(|(dag_id,)| dag_id))
+    }
+
     /// Starts a queued run: it becomes `running`.
     ///
     /// # Errors

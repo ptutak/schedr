@@ -26,7 +26,10 @@ For things known only during the attempt, call `cleanup_handle` with a dataclass
 soon as the thing exists. The cleanup declares `handles: list[ExportJob | TempDir]` and gets
 the registered instances in order. A single type is `list[ExportJob]`. Only declared types
 are accepted; a cleanup without a `handles` parameter takes no handles. A handle cannot be
-removed after registration, and a cleanup cannot register more.
+removed after registration, and a cleanup cannot register more. The list may be empty: the
+attempt can end before registering anything, and a cleanup moved off a lost worker gets only
+the handles that reached the master. The cleanup still runs then, since it may work from the
+task's inputs alone, so handle an empty list rather than reading its first item.
 
 Make cleanup actions idempotent: they must be safe after success and if tried again. For
 example, cancel a job only if it is still running, and tolerate a directory already removed.
@@ -37,7 +40,8 @@ mask. Declare a secret separately if the cleanup needs it. All handles together 
 to about 1 MiB per attempt; exceeding the limit fails the registration and the attempt.
 Handles are journaled on the worker before registration returns and sent to the master,
 which stores them. Nothing secret belongs in a handle. Registration does not wait for the
-master to acknowledge it, so a worker lost before delivery can lose a handle. Handles also
+master to acknowledge it. A handle not delivered before a worker is lost cannot accompany a
+moved cleanup; with `cleanup_anywhere`, the worker cleans it if it returns. Handles also
 survive an agent restart when its journal disk survives; after restart the cleanup waits for
 the master's `Continue`.
 
@@ -53,13 +57,21 @@ A worker that hears nothing from the master for the [worker lease](../03-guide/1
 (60 s by default) stops its running tasks with `cleanup_anywhere`. They end `lost` and use a
 retry. A master outage longer than the lease therefore stops these tasks. When the connection
 is lost, their cleanup waits for the master's answer, including when a task ends by itself
-while disconnected: `Continue` runs it here; `Kill` drops it. The cleanup normally runs once,
+while disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles than the returning
+original worker, a move still waiting is given back to that worker. If the move was assigned
+elsewhere or ended, the original worker cleans the remaining handles (`CLEAN_REST`). The run
+may already have ended; if this late cleanup fails after a success, the run stays successful
+but becomes a [yellow success](../03-guide/03-life-of-a-run.md#7-the-next-task-and-the-end).
+The cleanup normally runs once,
 here or on another worker. After the master marks the worker lost, it waits the cancel grace
 (30 s by default) plus 10 s before moving cleanup.
 
 A cleanup already running when the connection is lost continues and can overlap one moved to
 another worker. A frozen VM cannot stop its task at all. The cleanup must therefore still be
-safe during the task as well as safe to repeat. For example, deleting a shared temporary
+safe during the task as well as safe to repeat. A handle can also be cleaned twice if the
+master received one past a gap, or if the original cleanup overlaps a move. A cleanup that
+fails because something is already gone is a common cause of a late failure: treat an already
+removed item as success. For example, deleting a shared temporary
 directory is unsafe if the task may still be writing to it, even if deleting an already absent
 directory is harmless.
 

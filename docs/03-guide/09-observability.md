@@ -58,6 +58,12 @@ the ID check found the DAG with something to do (a run running or queued, or one
 created). That is a missed wake, and the counter staying at zero is the healthy case. See
 [Busy and quiet DAGs](04-master.md#busy-and-quiet-dags).
 
+`schedr_master_runs_late_failed_total{dag_id,reason}` counts runs that ended `success`
+and later learned of a failure. The reason is `late_cleanup_failed` for now. Alert on an
+increase, for example `sum by (dag_id, reason) (increase(schedr_master_runs_late_failed_total[5m])) > 0`.
+A yellow success asks for attention: the master also logs an error and handles may be left
+behind. See [Life of a run](03-life-of-a-run.md#7-the-next-task-and-the-end).
+
 `schedr_worker_task_start_seconds` is one histogram (10 ms to about 40 s). It is how M2.5
 judges the fork server and which libraries to preload: the same series, split by how the
 process was started, before and after. `method` is `spawn` (a new process) or `fork` (a

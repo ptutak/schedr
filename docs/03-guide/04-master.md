@@ -208,6 +208,11 @@ reconnects), never an ended attempt with its run left behind.
 | `Finished` | Stores the result once, including the cleanup result, the outcome on success, `usage` and `core_dumped`, moves the run forward (downstream tasks become ready, skipped or `upstream_failed` by their edges and `run_if`), finishes the run when every task has, and answers `FinishedAck`. `usage` is null when the worker did not read it. |
 | `Draining`, `Deregister` | Stops assigning to the worker; records it `draining`, then `offline`. |
 
+When the original worker returns with handles the master lacks, a `cleanup_anywhere` move
+still waiting is given back to it. If the move was assigned elsewhere or ended, the master
+answers `CLEAN_REST` so that worker cleans the remaining handles. A late failure can mark an
+ended success yellow without changing its state (see [Life of a run](03-life-of-a-run.md#7-the-next-task-and-the-end)).
+
 **The lease counts from when a message arrives, not when it is handled.** Each worker's stream
 is read by a task of its own, which records the arrival time and queues the message; messages
 are then handled in order, under the lock. A reconnecting worker's `Register` counts as it

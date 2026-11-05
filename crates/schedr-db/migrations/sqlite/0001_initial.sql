@@ -130,6 +130,9 @@ CREATE TABLE runs (
     params         TEXT NOT NULL DEFAULT '{}',
     started_at     TEXT,
     ended_at       TEXT,
+    -- Why a run that ended `success` learnt of a failure afterwards: a yellow success
+    -- (decision 309); `late_cleanup_failed` for now.
+    late_failure   TEXT,
     result_reason  TEXT,
     -- Set when a user asked to cancel the run: nothing new starts, failures aren't retried.
     cancel_requested_at TEXT
@@ -217,6 +220,12 @@ CREATE TABLE attempts (
     cleanup_not_before TEXT,
     -- The worker its waiting cleanup moved from: its late result still counts (decision 282).
     moved_from        TEXT,
+    -- The worker its cleanup first moved from, the one that ran the task: it may hold handles
+    -- the master never got (B169).
+    cleanup_origin    TEXT,
+    -- The handles its first worker registered past the master's knowledge were cleaned by that
+    -- worker after the attempt ended, and their result was added (B169).
+    rest_cleaned      INTEGER NOT NULL DEFAULT 0 CHECK (rest_cleaned IN (0, 1)),
     UNIQUE (task_instance_id, try_number)
 );
 

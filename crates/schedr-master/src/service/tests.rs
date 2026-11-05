@@ -636,6 +636,7 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
     let mut again = register(PROTOCOL_VERSION);
     if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
         register.journal = vec![pb::JournalEntry {
+            handles: 0,
             attempt_id: assign.attempt_id.clone(),
             state: pb::JournalState::Running.into(),
         }];
@@ -1466,6 +1467,7 @@ async fn a_reconnect_waiting_behind_a_round_keeps_its_running_attempts() {
     let mut again = register(PROTOCOL_VERSION);
     if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
         register.journal = vec![pb::JournalEntry {
+            handles: 0,
             attempt_id: assign.attempt_id.clone(),
             state: pb::JournalState::Running.into(),
         }];
@@ -1570,6 +1572,7 @@ async fn a_refused_registration_keeps_no_start_of_its_journal() {
     if let Some(worker_message::Message::Register(register)) = old.message.as_mut() {
         register.journal = ["a0", "a1"]
             .map(|id| pb::JournalEntry {
+                handles: 0,
                 attempt_id: id.to_owned(),
                 state: pb::JournalState::Running.into(),
             })

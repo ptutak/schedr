@@ -634,10 +634,12 @@ impl MasterCore {
         let mut outgoing = reported?;
         let mut decisions = Vec::with_capacity(register.journal.len());
         for entry in &register.journal {
-            let (decision, cancel) = self.journal_decision(worker_id, entry, now).await?;
+            let (decision, cleanup_from, cancel) =
+                self.journal_decision(worker_id, entry, now).await?;
             decisions.push(pb::JournalDecision {
                 attempt_id: entry.attempt_id.clone(),
                 decision: decision.into(),
+                cleanup_from,
             });
             outgoing.extend(cancel);
         }
@@ -1277,25 +1279,45 @@ impl MasterCore {
         worker_id: &str,
         entry: &pb::JournalEntry,
         now: Timestamp,
-    ) -> Result<(pb::AttemptDecision, Option<Outgoing>), CoreError> {
-        let Some(attempt) = self.db.attempt(&entry.attempt_id).await? else {
-            return Ok((pb::AttemptDecision::Kill, None));
+    ) -> Result<(pb::AttemptDecision, u32, Option<Outgoing>), CoreError> {
+        let Some(mut attempt) = self.db.attempt(&entry.attempt_id).await? else {
+            return Ok((pb::AttemptDecision::Kill, 0, None));
         };
         let finished = entry.state == i32::from(pb::JournalState::Finished);
-        // A cleanup that ended while its worker was away, waiting to move: its `Finished`,
-        // sent again, counts and the move is dropped (decision 282). Not adopted: nothing of
-        // it runs any more.
-        if finished
-            && attempt.worker_id.is_empty()
+        if attempt.worker_id.is_empty()
             && attempt.status.is_none()
             && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id)
         {
-            return Ok((pb::AttemptDecision::Continue, None));
+            // A cleanup that ended while its worker was away, waiting to move: its
+            // `Finished`, sent again, counts and the move is dropped (decision 282). Not
+            // adopted: nothing of it runs any more.
+            if finished {
+                return Ok((pb::AttemptDecision::Continue, 0, None));
+            }
+            // One not ended, holding handles the master never got: the only worker with all
+            // of them gets it back, adopted below, and nothing else cleans them (B169).
+            if entry.handles > self.known_handles(&attempt.id).await?
+                && self.take_back(&attempt, worker_id).await?
+            {
+                attempt.worker_id = worker_id.to_owned();
+            }
         }
         if attempt.worker_id != worker_id {
-            return Ok((pb::AttemptDecision::Kill, None));
+            // Its cleanup moved from this worker, which may hold handles the master never got
+            // (registered while it was cut off): it cleans those itself, and its result is
+            // added to the attempt's (B169). One that ended is sent again for that.
+            if self.db.rest_owed_by(&attempt.id).await?.as_deref() == Some(worker_id) {
+                if finished {
+                    return Ok((pb::AttemptDecision::Continue, 0, None));
+                }
+                let known = self.known_handles(&attempt.id).await?;
+                if entry.handles > known {
+                    return Ok((pb::AttemptDecision::CleanRest, known, None));
+                }
+            }
+            return Ok((pb::AttemptDecision::Kill, 0, None));
         }
-        Ok(match (attempt.status, finished) {
+        let (decision, outgoing) = match (attempt.status, finished) {
             // The master stored its result: the worker can forget it.
             (Some(_), true) => (pb::AttemptDecision::Ack, None),
             // The master ended it (lost, expired) while the worker still runs it.
@@ -1320,7 +1342,34 @@ impl MasterCore {
                 });
                 (pb::AttemptDecision::Continue, cancel)
             }
-        })
+        };
+        Ok((decision, 0, outgoing))
+    }
+
+    /// Undoes a waiting cleanup's move back to `worker_id` (B169). The task's result the
+    /// move kept is the master's own `lost` when the task ran there: dropped, the worker
+    /// reports its own.
+    async fn take_back(
+        &self,
+        attempt: &schedr_db::attempts::StoredAttempt,
+        worker_id: &str,
+    ) -> Result<bool, CoreError> {
+        let lost_kept = attempt.cleanup_moves == 1
+            && self
+                .db
+                .task_result(&attempt.id)
+                .await?
+                .and_then(|kept| <pb::Finished as prost::Message>::decode(kept.as_slice()).ok())
+                .is_some_and(|kept| kept.status == i32::from(pb::AttemptStatus::Lost));
+        Ok(self
+            .db
+            .take_back_cleanup(&attempt.id, worker_id, lost_kept)
+            .await?)
+    }
+
+    /// How many of an attempt's cleanup handles the master has, from the first without a gap.
+    async fn known_handles(&self, attempt_id: &str) -> Result<u32, CoreError> {
+        Ok(self.db.cleanup_handles_unbroken(attempt_id).await?)
     }
 
     /// A worker's state and the end of its attempts, in one transaction, memory put back if it

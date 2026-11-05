@@ -498,6 +498,30 @@ impl Database {
         Ok(fitted)
     }
 
+    /// How many of an attempt's handles the master has from the first on without a gap: a
+    /// worker holding more cleans those after them (B169). One stored past a gap is cleaned
+    /// there again rather than one in the gap left behind (Codex's review of B169).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn cleanup_handles_unbroken(&self, attempt_id: &str) -> Result<u32, DbError> {
+        const POSITIONS: &str = "SELECT position FROM cleanup_handles \
+            WHERE attempt_id = $1{uuid} ORDER BY position";
+        let rows: Vec<(i32,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, POSITIONS))
+                .bind(attempt_id)
+                .fetch_all(pool)
+                .await?
+        });
+        let unbroken = rows
+            .iter()
+            .zip(0_i32..)
+            .take_while(|((position,), expected)| position == expected)
+            .count();
+        Ok(u32::try_from(unbroken).unwrap_or(u32::MAX))
+    }
+
     /// An attempt's handles, each as JSON text, in registration order.
     ///
     /// # Errors
@@ -528,6 +552,7 @@ impl Database {
         not_before: Timestamp,
     ) -> Result<(), DbError> {
         const MOVE: &str = "UPDATE attempts SET moved_from = worker_id, worker_id = NULL, \
+            cleanup_origin = COALESCE(cleanup_origin, worker_id), \
             moved_at = NULL, cleanup_moves = cleanup_moves + 1, \
             task_result = COALESCE(task_result, $1), \
             cleanup_not_before = $2{ts} WHERE id = $3{uuid} AND status IS NULL";
@@ -540,6 +565,57 @@ impl Database {
                 .await?;
         });
         Ok(())
+    }
+
+    /// Gives a cleanup waiting to move back to the worker it moved from, which came back
+    /// holding handles the master never got (B169): the move is undone, and with
+    /// `drop_result` the task's result the move kept goes too (the worker reports its own).
+    /// `false` if it no longer waits for a worker, or moved from another.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn take_back_cleanup(
+        &self,
+        attempt_id: &str,
+        worker_id: &str,
+        drop_result: bool,
+    ) -> Result<bool, DbError> {
+        const BACK: &str = "UPDATE attempts SET worker_id = $1, moved_from = NULL, \
+            moved_at = NULL, cleanup_not_before = NULL, cleanup_moves = cleanup_moves - 1, \
+            cleanup_origin = CASE WHEN cleanup_moves = 1 THEN NULL ELSE cleanup_origin END, \
+            task_result = CASE WHEN $2 THEN NULL ELSE task_result END \
+            WHERE id = $3{uuid} AND status IS NULL AND worker_id IS NULL AND moved_from = $1 \
+            AND cleanup_moves > 0";
+        let updated = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, BACK))
+                .bind(worker_id)
+                .bind(drop_result)
+                .bind(attempt_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(updated == 1)
+    }
+
+    /// The worker an attempt's cleanup first moved from (the one that ran its task), while no
+    /// rest of its cleanup was added (B169): handles it registered that the master never got
+    /// are cleaned there. Moves after the first don't change it (Codex's review of B169).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the read fails.
+    pub async fn rest_owed_by(&self, attempt_id: &str) -> Result<Option<String>, DbError> {
+        const FROM: &str = "SELECT cleanup_origin FROM attempts \
+            WHERE id = $1{uuid} AND NOT rest_cleaned";
+        let row: Option<(Option<String>,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, FROM))
+                .bind(attempt_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(row.and_then(|(from,)| from))
     }
 
     /// The worker an open attempt's cleanup moved from, while it waits for another (no worker
@@ -801,7 +877,8 @@ impl Database {
     }
 
     /// Records how an attempt ended, unless an end is already recorded. Returns whether this
-    /// call recorded it.
+    /// call recorded it. A rest cleanup added before (B169, [`Self::add_rest_cleanup`]) is
+    /// kept: the two cleanups' results combine as there.
     ///
     /// # Errors
     ///
@@ -815,8 +892,20 @@ impl Database {
         const END: &str = "UPDATE attempts SET status = $1, exit_code = $2, signal = $3, \
             peak_memory_bytes = $4, error_kind = $5, error_summary = $6{json}, code_hash = $7, \
             ended_at = $8{ts}, duration_ms = $9, usage = $10{json}, core_dumped = $11, \
-            cleanup_result = $12, cleanup_tries = $13, cleanup_duration_ms = $14, \
-            cleanup_error_kind = $15, cleanup_error_summary = $16{json}, task_result = NULL \
+            cleanup_result = CASE WHEN NOT rest_cleaned THEN $12 \
+                WHEN cleanup_result IN ('failed', 'worker_lost') THEN cleanup_result \
+                WHEN $12 IN ('failed', 'worker_lost') THEN $12 \
+                WHEN cleanup_result = 'ok' OR $12 = 'ok' THEN 'ok' \
+                ELSE COALESCE($12, cleanup_result) END, \
+            cleanup_tries = CASE WHEN NOT rest_cleaned THEN $13 \
+                ELSE COALESCE(cleanup_tries, 0) + COALESCE($13, 0) END, \
+            cleanup_duration_ms = CASE WHEN NOT rest_cleaned THEN $14 \
+                ELSE COALESCE(cleanup_duration_ms, 0) + COALESCE($14, 0) END, \
+            cleanup_error_kind = CASE WHEN NOT rest_cleaned THEN $15 \
+                ELSE COALESCE(cleanup_error_kind, $15) END, \
+            cleanup_error_summary = CASE WHEN NOT rest_cleaned THEN $16{json} \
+                ELSE COALESCE(cleanup_error_summary, $16{json}) END, \
+            task_result = NULL \
             WHERE id = $17{uuid} AND status IS NULL";
         let cleanup = end.cleanup.as_ref();
         let updated = in_tx!(self, |tx, backend| {
@@ -848,6 +937,48 @@ impl Database {
                         .map(crate::query::storable_json),
                 )
                 .bind(attempt_id)
+                .bind(true)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(updated == 1)
+    }
+
+    /// Adds the cleanup of the handles a moved cleanup didn't have (B169: registered while
+    /// the master couldn't hear the worker, which ran it on its return) to the attempt's: a
+    /// failure of either (`failed`, `worker_lost`) is the result, else either's `ok`; tries and time add up, the rest's
+    /// error is kept. Before the attempt ends, its end combines with it. Once only: `false`
+    /// if a rest was added already.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn add_rest_cleanup(
+        &self,
+        attempt_id: &str,
+        rest: &CleanupEnd,
+    ) -> Result<bool, DbError> {
+        const ADD: &str = "UPDATE attempts SET \
+            cleanup_result = CASE WHEN cleanup_result IN ('failed', 'worker_lost') \
+                THEN cleanup_result \
+                WHEN $1 IN ('failed', 'worker_lost') THEN $1 \
+                WHEN cleanup_result = 'ok' OR $1 = 'ok' THEN 'ok' ELSE $1 END, \
+            cleanup_tries = COALESCE(cleanup_tries, 0) + $2, \
+            cleanup_duration_ms = COALESCE(cleanup_duration_ms, 0) + $3, \
+            cleanup_error_kind = COALESCE($4, cleanup_error_kind), \
+            cleanup_error_summary = COALESCE($5{json}, cleanup_error_summary), \
+            rest_cleaned = $7 \
+            WHERE id = $6{uuid} AND NOT rest_cleaned";
+        let updated = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, ADD))
+                .bind(rest.result.to_string())
+                .bind(i64::from(rest.tries))
+                .bind(i64::try_from(rest.duration_ms).unwrap_or(i64::MAX))
+                .bind(rest.error_kind.as_deref())
+                .bind(rest.error_summary.clone().map(crate::query::storable_json))
+                .bind(attempt_id)
+                .bind(true)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()

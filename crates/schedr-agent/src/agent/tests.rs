@@ -839,14 +839,17 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
         }),
         decisions: vec![
             pb::JournalDecision {
+                cleanup_from: 0,
                 attempt_id: "old-1".to_owned(),
                 decision: pb::AttemptDecision::Ack.into(),
             },
             pb::JournalDecision {
+                cleanup_from: 0,
                 attempt_id: "old-2".to_owned(),
                 decision: pb::AttemptDecision::Kill.into(),
             },
             pb::JournalDecision {
+                cleanup_from: 0,
                 attempt_id: "old-3".to_owned(),
                 decision: pb::AttemptDecision::Continue.into(),
             },
@@ -958,10 +961,12 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
         }),
         decisions: vec![
             pb::JournalDecision {
+                cleanup_from: 0,
                 attempt_id: "old-1".to_owned(),
                 decision: pb::AttemptDecision::Ack.into(),
             },
             pb::JournalDecision {
+                cleanup_from: 0,
                 attempt_id: "old-2".to_owned(),
                 decision: pb::AttemptDecision::Continue.into(),
             },
@@ -1004,6 +1009,7 @@ async fn a_result_sent_again_fits_the_limit_the_master_has_now() {
             cancel_grace_ms: 1000,
         }),
         decisions: vec![pb::JournalDecision {
+            cleanup_from: 0,
             attempt_id: "old-1".to_owned(),
             decision: pb::AttemptDecision::Continue.into(),
         }],
@@ -1041,6 +1047,7 @@ async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
             cancel_grace_ms: 1000,
         }),
         decisions: vec![pb::JournalDecision {
+            cleanup_from: 0,
             attempt_id: "old-1".to_owned(),
             decision: pb::AttemptDecision::Continue.into(),
         }],
@@ -1267,9 +1274,19 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         [pb::JournalEntry {
             attempt_id: "a2".to_owned(),
             state: finished,
+            handles: 0,
         }],
         "reported in the next `Register`"
     );
+    // B169 (Codex's review): a handle journaled before the loop hears of it is counted.
+    agent.running.insert("a3".to_owned(), Stops::new().0);
+    journal.add_handle("a3", &one_handle()).unwrap();
+    let a3 = agent
+        .journal_entries()
+        .into_iter()
+        .find(|e| e.attempt_id == "a3")
+        .unwrap();
+    assert_eq!(a3.handles, 1);
 }
 
 #[tokio::test]
@@ -1371,6 +1388,31 @@ async fn a_shutdown_drains_interrupts_what_still_runs_and_deregisters() {
         ]
     );
     assert_eq!(left, ["a1"], "unacknowledged, it stays in the journal");
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_given_while_cleaning_its_rest_is_refused() {
+    // Codex's review of B169: ignored, the whole cleanup waited on a worker cleaning only the
+    // handles the master didn't have, whose result then counted as the whole.
+    let python = task_json(&json!({"kind": "python", "cleanup": {"run": "python"}}));
+    let master_message::Message::AssignTask(mut whole) =
+        assign("a1", &python, "sync.py", false).message.unwrap()
+    else {
+        unreachable!()
+    };
+    whole.cleanup_only = Some(pb::CleanupOnly::default());
+    let script = vec![to_worker(master_message::Message::AssignTask(whole))];
+    let (seen, _) = against_script_with(
+        2,
+        Start::With(vec![]),
+        script,
+        |m| kinds(m).len() >= 2,
+        |agent| {
+            agent.rest_cleaning.insert("a1".to_owned());
+        },
+    )
+    .await;
+    assert_eq!(kinds(&seen), ["register", "rejected: no slot"]);
 }
 
 #[tokio::test]
@@ -1491,6 +1533,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
     agent.running.insert("a1".to_owned(), stop);
     let (to_master, _outbound) = mpsc::unbounded_channel();
     let kill = pb::JournalDecision {
+        cleanup_from: 0,
         attempt_id: "a1".to_owned(),
         decision: pb::AttemptDecision::Kill.into(),
     };
@@ -2740,6 +2783,7 @@ fn decided(attempt_id: &str, decision: pb::AttemptDecision) -> pb::MasterMessage
             cancel_grace_ms: 1000,
         }),
         decisions: vec![pb::JournalDecision {
+            cleanup_from: 0,
             attempt_id: attempt_id.to_owned(),
             decision: decision.into(),
         }],
@@ -3475,4 +3519,20 @@ async fn a_recovered_cleanup_imports_the_other_roots_from_the_copies_its_task_us
     .await;
     let then = old.lock().unwrap().clone();
     assert_eq!(*copies.lock().unwrap(), [vec![(then, true)]]);
+}
+
+#[test]
+fn the_reconnect_backoff_stays_under_half_the_masters_lease() {
+    // B168: past the lease, a restarted master takes a live worker for lost.
+    let max = Duration::from_secs(30);
+    assert_eq!(reconnect_cap(max, None), max);
+    assert_eq!(reconnect_cap(max, Some(Duration::from_secs(60))), max);
+    assert_eq!(
+        reconnect_cap(max, Some(Duration::from_secs(4))),
+        Duration::from_secs(2)
+    );
+    // Jitter only shortens a wait.
+    for seed in [0, u32::MAX / 2, u32::MAX] {
+        assert!(jittered(Duration::from_secs(2), seed) <= Duration::from_secs(2));
+    }
 }
