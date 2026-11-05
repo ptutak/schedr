@@ -11,7 +11,7 @@
 <p class="summary">{{ summary }}</p>
 {% if run.state == "queued" || run.state == "running" %}
 <div class="actions">
-  {% call confirm::action("Cancel run", "Cancel run " ~ run.run_id ~ "?", "Its running tasks are stopped and the rest cancelled; a task already ended keeps its result.", run_href ~ "/cancel", "", page.base) %}{% endcall %}
+  {% call confirm::action("Cancel run", "Cancel run " ~ run.run_id ~ "?", "Its running tasks are stopped and the rest cancelled; a task already ended keeps its result. Its resources' cleanups still run (cancel one by itself to stop it).", run_href ~ "/cancel", "", page.base) %}{% endcall %}
 </div>
 {% endif %}
 {% if code_hashes.len() > 1 %}

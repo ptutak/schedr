@@ -174,6 +174,9 @@ fn a_resources_state_follows_its_two_tasks() {
         (S::Success, S::UpForRetry, R::CleaningUp),
         (S::Success, S::Success, R::Cleaned),
         (S::Success, S::Failed, R::CleanupFailed),
+        // Cancelled by hand (decision 279): the resource may be left.
+        (S::Success, S::Cancelled, R::CleanupCancelled),
+        (S::Running, S::Cancelled, R::CleanupCancelled),
     ];
     for (setup, cleanup, state) in cases {
         assert_eq!(

@@ -7072,10 +7072,28 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   on workers, and it has no attempt. Amends 260. Not chosen: a master-side log store.
 - **277. Cancelling keeps cleanups:** a cancelled run still runs the cleanup of every resource set up
   (retries included), and ends `cancelled`, or `failed` if a cleanup fails; `schedr tasks cancel`
-  refuses a resource's cleanup. As 264. Not chosen: cancel as for any task (a resource left behind).
+  refuses a resource's cleanup (amended by 279: it stops one). As 264. Not chosen: cancel as for
+  any task (a resource left behind).
   Claude's small calls with it: a cleanup ignores `max_active_tasks`, `max_active` and
   `max_active_per_run` (`TaskDefaults` would hand it limits otherwise); `blocking` and
   `unschedulable_timeout` are in the DAG JSON's resource entry.
+- **278. A resource's cleanup without a `timeout` gets `[worker] resource_cleanup_timeout`, 30
+  minutes by default** (public; the user picked 30 minutes over Claude's hour): its run doesn't cancel it (277) and ends only after it, keeping its
+  `max_active_runs` slot, so one hung on a system that never answers held the DAG's next runs for
+  ever. The master marks the assignment (`AssignTask.resource_cleanup`), the agent fills the
+  timeout (as 235: the worker's value, not the DAG's); an older master never marks it. A timeout
+  is a failed try: the retries still apply, so a hang holds the run up to the limit times the
+  tries (cancel it, or set a shorter `timeout=`). Not chosen: `[worker] cleanup_timeout` (5 minutes
+  kills real teardowns, a cluster's deletion, halfway); no default (the hang); a hidden value
+  (operators tune it for their teardowns).
+- **279. `schedr tasks cancel` stops a resource's cleanup** (the panel's Cancel too), as any
+  task: one waiting (for its users, a worker or a retry) is cancelled at once, a running one is
+  stopped; a run's cancel still keeps them (277). The resource is `cleanup_cancelled` (what its
+  setup made may be left) and the run ends `cancelled` (`failed` if something failed). A
+  blocking cleanup's cancel cancels what follows its group (its edges); a non-blocking one has
+  none, so nothing else. The Cancel dialog says so. Not chosen: only with `--force` (the run's
+  cancel already keeps it, so stopping one is a deliberate act); the run ending `failed` (a
+  deliberate act read as an error); `success` (a possible leftover hidden).
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,
@@ -7156,7 +7174,18 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   what follows its group stays; a resource without users and with `blocking=False` gets its
   dashed link; the Cleanup tab no longer claims a task without rows has no `cleanup=`; two
   docstrings (`blocking`, the cleanup's duration over all its tries).
-
+- **Built (M4.8f; decisions 278, 279):** a resource's cleanup can be cancelled and has a default
+  timeout, found from a side note on M4.8c2: a cleanup hung on a system that never answers
+  couldn't be cancelled (277) and had no timeout, so its run, and the DAG's `max_active_runs`
+  slot, waited for ever. `Execution::cancel_task` no longer refuses one (`TaskCancel::
+  ResourceCleanup` gone; `RunTasks::cancels` already honoured an instance's own cancel);
+  `ResourceState::CleanupCancelled` when its setup didn't fail, else `not_needed`; the panel's
+  Cancel dialog on a resource's cleanup warns of the leftover, of what follows a blocking group,
+  and of the run's end (`cancel_note`); the run's Cancel dialog says its cleanups still run.
+  `[worker] resource_cleanup_timeout` (30 minutes, per try): the master sets
+  `AssignTask.resource_cleanup`, the agent fills `timeout_ms` in `plan` (`AttemptSpec::
+  default_timeout`). Codex's review (1, fixed): the dialog promised `cancelled` when a task had
+  failed (the run ends `failed`).
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before
   `Started`) and `<attempt_id>.handles` (a line each, on disk before the task hears of it) in the

@@ -205,8 +205,8 @@ another worker. `handles` is a tuple in registration order, as stored JSON objec
 `handle_type` and `value`, masked as task data; it is not decoded into dataclasses.
 
 A `ResourceResult` has `setup`, `cleanup`, `users`, `blocking` and `state`. The state is
-`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or
-`not_needed`.
+`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed`,
+`cleanup_cancelled` or `not_needed`.
 
 For example, using the DAGs shown in [Cleanup](15-cleanup.md) and
 [Resources](16-resources.md):

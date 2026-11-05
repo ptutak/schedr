@@ -1473,10 +1473,32 @@ struct PanelFragment {
     back_href: String,
     /// Whether it can be cancelled: it hasn't ended.
     cancellable: bool,
+    /// What its Cancel dialog says cancelling does (a resource's cleanup warns of a leftover).
+    cancel_note: String,
     /// Whether it can be retried: every eligible worker rejected it.
     retryable: bool,
     tabs: Vec<Tab>,
     body: TabBody,
+}
+
+/// What cancelling the task does, for its Cancel dialog: a resource's cleanup stops freeing
+/// what its setup made (decision 279).
+fn cancel_note(resources: &[ResourceView], task_id: &str) -> String {
+    match resources.iter().find(|r| r.cleanup == task_id) {
+        Some(resource) => format!(
+            "It stops freeing resource {}: what its setup made may be left behind{}. The run \
+             ends cancelled, or failed if a task of it failed.",
+            resource.setup,
+            if resource.blocking {
+                ", and what follows its group is cancelled"
+            } else {
+                ""
+            }
+        ),
+        None => "Stopped if it runs, cancelled at once if it hasn't started; the tasks \
+                 downstream of it are cancelled."
+            .to_owned(),
+    }
 }
 
 /// `GET /d/<deployment>/runs/<run>/tasks/<task>`: a task's panel alone, for htmx; a browser
@@ -1689,6 +1711,7 @@ async fn task_panel<T: Transport>(
             "success" | "failed" | "cancelled" | "skipped" | "upstream_failed"
         ),
         retryable: task.state == "unschedulable",
+        cancel_note: cancel_note(&detail.resources, task_id),
         tabs,
         body,
     };

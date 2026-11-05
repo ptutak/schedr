@@ -61,7 +61,10 @@ class CleanupOptions(TypedDict, total=False):
     """``.cleanup()``'s options.
 
     Attributes:
-        timeout: How long one try may run.
+        timeout: How long one try may run (default: the worker's
+            ``resource_cleanup_timeout``, 30 minutes), for each try: with retries, a hung one
+            holds its run up to that times the tries. It isn't cancelled with its run;
+            ``schedr tasks cancel`` stops it.
         retries: How many times it is tried again.
         retry_delay: The delay before each try again.
         queue: Its queue; the setup's if not given.

@@ -23,7 +23,8 @@ These are the duration keys in the [configuration reference](../_generated/04-re
 | `[worker] log_retention` | 30 days | Deletes task logs older than this. Change it for the retention needed. |
 | `[worker] runner_start_timeout` | 30 s | Time a Python runner has to say hello. Raise it for a slow interpreter start; a failed start is noticed later. |
 | `[worker] fork_server_preload_timeout` | 5 min | Time a fork server has to import preloaded libraries. Raise it for large preload lists or slow storage; tasks are spawned until it is up. |
-| `[worker] cleanup_timeout` | 5 min | Limit for each cleanup try when the task doesn't set its own. Raise it for slow systems, or lower it to free slots sooner. The attempt holds its slot meanwhile. |
+| `[worker] cleanup_timeout` | 5 min | Limit for each per-task cleanup try when the task doesn't set its own. Raise it for slow systems, or lower it to free slots sooner. The attempt holds its slot meanwhile. |
+| `[worker] resource_cleanup_timeout` | 30 min | Limit for each resource cleanup try without its own `timeout=`. Raise it for slow teardowns, or lower it to notice a hang sooner; retries each get the same limit. |
 | `[worker] fork_server_import_retry` | 20 min | How long a failed preload import is retried with backoff. Change it for dependencies slow to become ready; `0s` disables retry. Threads after preloading and version mismatches are never retried. |
 | `[tls] reload_interval` | 30 s | How often TLS files are read for changes. Shorten it for faster rotation, or lengthen it for fewer reads. |
 | `[secret_storage.<name>] request_timeout` | 30 s | Limit for one Vault request. Raise it for a slow or distant Vault; a task waits this long at most for a hung request. |
@@ -33,7 +34,7 @@ These are the duration keys in the [configuration reference](../_generated/04-re
 A key that can't work at zero stops the start when set to `0s`: `[dags] poll_interval` and
 `parse_file_timeout`, `[master] parse_job_timeout`, `[webserver] worker_request_timeout` and
 `connection_test_timeout`, `[worker] log_retention`, `runner_start_timeout`,
-`fork_server_preload_timeout` and `cleanup_timeout`, `[tls] reload_interval` (with TLS on), and
+`fork_server_preload_timeout`, `cleanup_timeout` and `resource_cleanup_timeout`, `[tls] reload_interval` (with TLS on), and
 a storage's `request_timeout` and `connect_timeout`. Elsewhere zero means something: no wait, no
 retry, no cache.
 

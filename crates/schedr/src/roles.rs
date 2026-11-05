@@ -99,6 +99,7 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         runner_start: config.worker.runner_start_timeout,
         fork_preload: config.worker.fork_server_preload_timeout,
         cleanup: config.worker.cleanup_timeout,
+        resource_cleanup: config.worker.resource_cleanup_timeout,
         output_drain: config.timings.output_drain_timeout,
         fork_answer: config.timings.fork_answer_timeout,
         fork_backoff: schedr_agent::fork::ForkBackoff {

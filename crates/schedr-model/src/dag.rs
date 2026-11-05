@@ -109,6 +109,8 @@ pub enum ResourceState {
     Cleaned,
     /// Its cleanup failed after its last retry.
     CleanupFailed,
+    /// Its cleanup was cancelled (`schedr tasks cancel`): what the setup made may be left.
+    CleanupCancelled,
     /// Its setup didn't succeed: there is nothing to clean.
     NotNeeded,
 }
@@ -124,7 +126,12 @@ impl ResourceState {
             S::Queued | S::Unschedulable | S::Running | S::CleaningUp | S::UpForRetry => {
                 Self::CleaningUp
             }
-            S::Skipped | S::UpstreamFailed | S::Cancelled => Self::NotNeeded,
+            S::Skipped | S::UpstreamFailed => Self::NotNeeded,
+            // Cancelled with a setup that didn't succeed (a cancelled run): nothing was made.
+            S::Cancelled => match setup {
+                S::Failed | S::Skipped | S::UpstreamFailed | S::Cancelled => Self::NotNeeded,
+                _ => Self::CleanupCancelled,
+            },
             S::Scheduled => match setup {
                 S::Success => Self::WaitingForUsers,
                 S::Failed | S::Skipped | S::UpstreamFailed | S::Cancelled => Self::NotNeeded,

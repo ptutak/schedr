@@ -2111,6 +2111,7 @@ impl<E: Executor> Agent<E> {
     /// Plans an attempt here; a DAG file missing from the code the master expects fails it
     /// (the file is gone) instead of rejecting it as "code not there yet".
     fn plan(&self, spec: &mut AttemptSpec, assign: &pb::AssignTask) -> Result<Plan, NotRun> {
+        spec.default_timeout(assign, &self.settings.setup.timeouts);
         // The copy of the code the root's reported hash is of (decision 102); the configured
         // path until the root's first scan.
         let code = self

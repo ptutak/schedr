@@ -2635,18 +2635,120 @@ async fn a_cancelled_run_still_runs_and_retries_its_resources_cleanup() {
 }
 
 #[tokio::test]
-async fn a_resources_cleanup_cant_be_cancelled() {
+async fn a_running_resource_cleanup_is_cancelled_and_its_run_ends_cancelled() {
+    // Decision 279: `schedr tasks cancel` stops a resource's cleanup (a run's cancel doesn't).
     let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
-    dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let hold = assignment(&out[0]).attempt_id.clone();
+    assert!(!assignment(&out[0]).resource_cleanup);
+    succeed(&mut dispatcher, &hold).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
+    // The worker gives it `resource_cleanup_timeout` when it sets no timeout.
+    assert!(assignment(&out[0]).resource_cleanup);
+    let cleanup = assignment(&out[0]).attempt_id.clone();
+    let (cancelled, stops) = dispatcher
+        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(cancelled, TaskCancel::Stopping);
+    assert_eq!(cancelled_attempt(&stops[0]), cleanup);
+    // Stopped, it reports so: cancelled, without a retry (it has one).
+    let done = finished(&cleanup, pb::AttemptStatus::Cancelled, &json!(null));
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "tmp.cleanup").await.0,
+        TaskInstanceState::Cancelled
+    );
+    assert_eq!(
+        db.run_tasks(&run_id).await.unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn a_resource_cleanup_waiting_for_its_users_or_a_retry_is_cancelled_at_once() {
+    // Waiting for its user: cancelled now; the run ends once `hold` has, `cancelled`.
+    let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let hold = assignment(&out[0]).attempt_id.clone();
     let (cancelled, out) = dispatcher
         .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
         .await
         .unwrap();
-    assert_eq!((cancelled, out.len()), (TaskCancel::ResourceCleanup, 0));
+    assert_eq!((cancelled, out.len()), (TaskCancel::Cancelled(None), 0));
+    succeed(&mut dispatcher, &hold).await;
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        db.run_tasks(&run_id).await.unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+
+    // Waiting to be tried again: cancelled now, and the run ends with it.
+    let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let hold = assignment(&out[0]).attempt_id.clone();
+    succeed(&mut dispatcher, &hold).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let first = assignment(&out[0]).attempt_id.clone();
+    let failed = finished(&first, pb::AttemptStatus::Failed, &json!(null));
+    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
     assert_eq!(
         state_of(&db, &run_id, "tmp.cleanup").await.0,
-        TaskInstanceState::Scheduled
+        TaskInstanceState::UpForRetry
     );
+    let (cancelled, _) = dispatcher
+        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(cancelled, TaskCancel::Cancelled(Some(RunState::Cancelled)));
+    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn cancelling_a_blocking_cleanup_cancels_what_follows_its_group_a_non_blocking_one_nothing() {
+    for blocking in [true, false] {
+        // `after` follows the group of `tmp`: an order edge from the cleanup when blocking.
+        let mut dag = tmp_resource(true, &json!({}));
+        dag.resources[0].blocking = blocking;
+        dag.tasks
+            .push(serde_json::from_value(task("after", &json!({}), 0)).unwrap());
+        dag.edges.push(
+            serde_json::from_value(json!({"from": "hold", "to": "after", "kind": "order"}))
+                .unwrap(),
+        );
+        if blocking {
+            dag.edges.push(
+                serde_json::from_value(
+                    json!({"from": "tmp.cleanup", "to": "after", "kind": "order"}),
+                )
+                .unwrap(),
+            );
+        }
+        let (mut dispatcher, db, run_id) = with_run(dag).await;
+        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let hold = assignment(&out[0]).attempt_id.clone();
+        dispatcher
+            .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+            .await
+            .unwrap();
+        succeed(&mut dispatcher, &hold).await;
+        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let after = state_of(&db, &run_id, "after").await.0;
+        if blocking {
+            assert_eq!((after, out.len()), (TaskInstanceState::Cancelled, 0));
+        } else {
+            assert_eq!(assigned_tasks(&out), ["after"], "nothing waits for it");
+            let attempt = assignment(&out[0]).attempt_id.clone();
+            succeed(&mut dispatcher, &attempt).await;
+        }
+        // Either way the run ends `cancelled`: what the setup made may be left.
+        assert_eq!(
+            db.run_tasks(&run_id).await.unwrap().unwrap().state,
+            RunState::Cancelled,
+            "blocking: {blocking}"
+        );
+    }
 }
 
 #[tokio::test]

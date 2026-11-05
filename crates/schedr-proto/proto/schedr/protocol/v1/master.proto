@@ -337,6 +337,9 @@ message AssignTask {
   bytes connections_json = 15;
   // Only the cleanup of an attempt whose worker was lost (decision 243), with its handles.
   optional CleanupOnly cleanup_only = 16;
+  // The task is a resource's cleanup: without a timeout of its own, it gets the worker's
+  // `resource_cleanup_timeout` (it isn't cancelled with its run, decision 277).
+  bool resource_cleanup = 17;
 }
 
 message CleanupOnly {

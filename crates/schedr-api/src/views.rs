@@ -339,8 +339,8 @@ pub struct ResourceView {
     pub users: Vec<String>,
     /// Whether what follows its group waits for its cleanup.
     pub blocking: bool,
-    /// `setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or
-    /// `not_needed`.
+    /// `setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed`,
+    /// `cleanup_cancelled` (cancelled by hand: what the setup made may be left) or `not_needed`.
     pub state: String,
 }
 

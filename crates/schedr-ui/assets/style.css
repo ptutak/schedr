@@ -360,6 +360,7 @@ td.connection-result .warning-text, td.connection-result .dim { font-size: 0.9em
 .resource-state { font-weight: 600; }
 .resource-state.cleaned { color: var(--ok); }
 .resource-state.cleanup_failed { color: var(--failed); }
+.resource-state.cleanup_cancelled { color: var(--waiting); }
 .resource-state.setting_up, .resource-state.cleaning_up { color: var(--running); }
 .resource-state.waiting_for_users { color: var(--resource); }
 .resource-state.not_needed { color: var(--dim); }

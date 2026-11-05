@@ -113,9 +113,6 @@ pub enum TaskCancel {
     RunFinished(RunState),
     /// The run is queued: its tasks don't exist yet (cancel the run instead).
     RunQueued,
-    /// It is a resource's cleanup: it frees what the setup made, and isn't cancelled
-    /// (decision 277).
-    ResourceCleanup,
 }
 
 /// What retrying an `unschedulable` task did.
@@ -433,9 +430,6 @@ impl Execution {
                 run_id: run_id.to_owned(),
                 task_id: task_id.clone(),
             });
-        }
-        if run.dag.resource_of_cleanup(task_id).is_some() {
-            return Ok(TaskCancel::ResourceCleanup);
         }
         if let Some(index) = map_index.filter(|i| *i >= 0) {
             return self

@@ -953,7 +953,7 @@
             "type": "string"
           },
           "state": {
-            "description": "`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or\n`not_needed`.",
+            "description": "`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed`,\n`cleanup_cancelled` (cancelled by hand: what the setup made may be left) or `not_needed`.",
             "type": "string"
           },
           "users": {

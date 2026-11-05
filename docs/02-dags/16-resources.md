@@ -18,7 +18,11 @@ also take options, as in `@cluster.cleanup(retries=5)`.
 
 The cleanup inherits the setup's secrets and connections and can declare more of its own.
 Its queue defaults to the setup's queue and can be overridden. It also accepts `timeout`,
-`retries`, `retry_delay`, `blocking` and `unschedulable_timeout`.
+`retries`, `retry_delay`, `blocking` and `unschedulable_timeout`. Without `timeout=`, each
+cleanup try gets the worker's `[worker] resource_cleanup_timeout` (30 minutes by default).
+With retries, a hang can hold the run for that limit times the number of tries, plus retry
+delays and scheduling time. Cancel the cleanup, or use a shorter `timeout=` when setting
+many retries.
 
 Without a declared cleanup, the resource still has an empty cleanup. The master
 finishes it without an attempt or log, with the reason "no cleanup declared: nothing to clean".
@@ -143,8 +147,13 @@ The run keeps its `max_active_runs` place until its cleanups end, even with
 
 Cancelling a run still runs the cleanups of resources that were set up, including their
 retries. The run ends `cancelled`, unless a cleanup or another task fails, in which case it
-ends `failed`. `schedr tasks cancel` refuses to cancel a resource cleanup. A cleanup that
-fails after its retries fails the run.
+ends `failed`. A cleanup that fails after its retries fails the run.
+
+`schedr tasks cancel` and the cleanup task panel's **Cancel task** can cancel a resource
+cleanup: one waiting for users, a worker or a retry is cancelled at once, and a running one
+is stopped. What the setup made may be left behind. The resource reads `cleanup_cancelled`;
+the run ends `cancelled`, or `failed` if a task failed. Cancelling a blocking cleanup also
+cancels what follows its group; cancelling a non-blocking cleanup cancels nothing else.
 
 ## Seeing and testing resources
 

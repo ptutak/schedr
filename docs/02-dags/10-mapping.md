@@ -137,7 +137,8 @@ limits](05-defaults.md#concurrency-limits)).
   An index outside `0` to `N-1` is a 400, on every one of those endpoints, cancel included.
 - **In the CLI,** `schedr tasks logs / attempts / output / cancel / retry` take
   `--map-index N`: `logs`, `attempts` and `retry` need it for a mapped task; `output` without
-  it prints the gathered list, and `cancel` without it cancels the whole task. `schedr runs
+  it prints the gathered list, and `cancel` without it cancels the whole task. A resource
+  cleanup can also be cancelled as a task; see [Resources](16-resources.md#scheduling-and-cancellation). `schedr runs
   show` and `schedr dags test` list the instances as `fetch[0]`, `fetch[1]`, ... after the
   task.
 - **In tests,** `run_dag(...).tasks["fetch"]` is the whole task (its `output` the list) and

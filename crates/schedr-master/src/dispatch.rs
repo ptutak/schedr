@@ -2123,6 +2123,7 @@ impl Dispatcher {
                 _ => Vec::new(),
             },
             cleanup_only: None,
+            resource_cleanup: ready.dag.resource_of_cleanup(&ready.task_id).is_some(),
         }
     }
 }

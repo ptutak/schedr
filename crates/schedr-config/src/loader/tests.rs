@@ -668,7 +668,7 @@ fn the_new_timeouts_are_read_from_a_file() {
             "[master]\nparse_job_timeout = \"1m\"\n\
              [webserver]\nworker_request_timeout = \"2m\"\nconnection_test_timeout = \"3m\"\n\
              [worker]\nrunner_start_timeout = \"4m\"\nfork_server_preload_timeout = \"5m\"\n\
-             cleanup_timeout = \"6m\"\n",
+             cleanup_timeout = \"6m\"\nresource_cleanup_timeout = \"7m\"\n",
         )),
         &env(&[]),
         &[],
@@ -689,6 +689,10 @@ fn the_new_timeouts_are_read_from_a_file() {
         Duration::from_mins(5)
     );
     assert_eq!(config.worker.cleanup_timeout, Duration::from_mins(6));
+    assert_eq!(
+        config.worker.resource_cleanup_timeout,
+        Duration::from_mins(7)
+    );
 }
 
 #[rstest]
@@ -709,6 +713,10 @@ fn the_new_timeouts_are_read_from_a_file() {
     "[worker] fork_server_preload_timeout"
 )]
 #[case("[worker]\ncleanup_timeout = \"0s\"\n", "[worker] cleanup_timeout")]
+#[case(
+    "[worker]\nresource_cleanup_timeout = \"0s\"\n",
+    "[worker] resource_cleanup_timeout"
+)]
 fn a_timing_that_cant_work_at_zero_is_refused(#[case] contents: &str, #[case] key: &str) {
     assert_eq!(
         load(Some(file(contents)), &env(&[]), &[]).unwrap_err(),

@@ -92,7 +92,8 @@ Later in the same round the dispatcher:
    only when no other can take the task (it may have synced since, else it rejects again);
 3. stores the attempt in the database **before** sending anything, then builds `AssignTask`:
    attempt ID, what to run, the expected code hash, the inputs, the run's parameters, timeouts
-   and memory budget.
+   and memory budget. A `resource_cleanup` flag marks a resource cleanup so its worker can
+   supply the default timeout when it has none.
 
 When the round ends, the master sends the round's messages down the workers' streams.
 

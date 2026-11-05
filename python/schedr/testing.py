@@ -402,7 +402,8 @@ class ResourceResult:
         blocking: Whether what follows the resource's group waits for its cleanup (a failed
             cleanup fails the run either way).
         state: Where it is: ``setting_up``, ``waiting_for_users``, ``cleaning_up``,
-            ``cleaned``, ``cleanup_failed`` or ``not_needed``.
+            ``cleaned``, ``cleanup_failed``, ``cleanup_cancelled`` (cancelled by hand: what
+            the setup made may be left) or ``not_needed``.
     """
 
     setup: str

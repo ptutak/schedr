@@ -73,6 +73,7 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         upstream_outcomes: std::collections::HashMap::new(),
         connections_json: Vec::new(),
         cleanup_only: None,
+        resource_cleanup: false,
     }
 }
 
@@ -97,6 +98,26 @@ fn setup() -> (TempDir, WorkerSetup) {
         fork_server: None,
     };
     (dir, setup)
+}
+
+#[test]
+fn a_resource_cleanup_without_a_timeout_gets_the_workers() {
+    let timeouts = crate::attempt::WorkerTimeouts::default();
+    let mut untimed = python_task();
+    untimed["settings"]["timeout_ms"] = json!(null);
+    let read = |task: &serde_json::Value, resource_cleanup: bool| {
+        let message = pb::AssignTask {
+            resource_cleanup,
+            ..assign(task)
+        };
+        let mut spec = AttemptSpec::from_assign(&message, None).unwrap();
+        spec.default_timeout(&message, &timeouts);
+        spec.timeout()
+    };
+    assert_eq!(read(&untimed, true), Some(Duration::from_mins(30)));
+    // Its own timeout is kept; any other task keeps none.
+    assert_eq!(read(&python_task(), true), Some(Duration::from_secs(5)));
+    assert_eq!(read(&untimed, false), None);
 }
 
 #[test]

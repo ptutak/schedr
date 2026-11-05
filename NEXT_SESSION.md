@@ -4,6 +4,18 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, morning): M4.8f committed; M4.8z (chaos) next
+
+- **Done: M4.8f** (decisions 278, 279; from a side note): a resource's cleanup can be cancelled
+  (`schedr tasks cancel`, the panel's Cancel; a run's cancel still keeps them), the resource
+  then `cleanup_cancelled`, the run `cancelled` (`failed` if a task failed); a resource cleanup
+  without `timeout=` gets `[worker] resource_cleanup_timeout` (30 min, the user's pick, per try;
+  public). Codex's review: 1 low, fixed; docs by Codex.
+- **Next: M4.8z (chaos scenarios),** the user's go (2026-11-05): run the new chaos scenarios
+  while building them, and the whole quick stress suite once before committing.
+- **Flaky under load?** `schedr-agent agent::tests::a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats`
+  failed once (12 s) while a worktree build ran beside it; passed 3/3 alone. Watch it.
+
 ## State (2026-11-05, early morning): M4.8e committed; M4.8 done, stopped as asked
 
 - **Tonight's instruction:** "commit and push as needed, keep up with the review, if decisions
@@ -25,8 +37,7 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **Not checked by eye:** the graph's caps and rail in a browser (the HTML is tested, the look
   isn't); worth a glance, or a Playwright case in `make test-ui`.
 - **Next:** M4.8z (chaos scenarios), then M4.9. Grok's weekly reset is Friday 9:00.
-- **Decisions waiting:** none.
-- **Codex:** weekly 32%, 5 h 37%.
+- **Codex:** weekly 35%, 5 h 21%.
 
 ## State (2026-11-05, small hours): M4.8c1 committed; the user relogs
 

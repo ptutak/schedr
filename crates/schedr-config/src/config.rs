@@ -909,6 +909,16 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "DurationText")]
     pub cleanup_timeout: Duration,
+    /// How long one try of a resource's cleanup may run, for one that doesn't set `timeout`.
+    /// It ends a cleanup hung on a system that never answers, which can't be cancelled with
+    /// its run and holds the run (and its `max_active_runs` slot) until it ends. Raise it for
+    /// teardowns that take longer (a cluster's deletion), lower it to notice a hang sooner.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub resource_cleanup_timeout: Duration,
     /// How long a fork server whose preloaded library fails to import is retried (with
     /// backoff, from the first failure), for what isn't ready when the pod starts (a
     /// sidecar's network, a mount); `0s`: not retried. Threads after preloading and a version
@@ -926,8 +936,8 @@ impl Default for WorkerSection {
     /// (Kubernetes' default) of which the last 5 s stop and report what still runs (3 s to
     /// SIGKILL, 2 s to report), the log endpoint on port 8081 of every interface, logs kept for
     /// 30 days, the memory budget from the pod's limit, sampled every second, 30 s for a runner
-    /// to start, 5 minutes for a fork server to preload and for a cleanup's try, a fork server's
-    /// failing import retried for 20 minutes.
+    /// to start, 5 minutes for a fork server to preload and for a cleanup's try, 30 minutes for
+    /// a resource cleanup's try, a fork server's failing import retried for 20 minutes.
     fn default() -> Self {
         Self {
             id: None,
@@ -949,6 +959,7 @@ impl Default for WorkerSection {
             runner_start_timeout: Duration::from_secs(30),
             fork_server_preload_timeout: Duration::from_mins(5),
             cleanup_timeout: Duration::from_mins(5),
+            resource_cleanup_timeout: Duration::from_mins(30),
             fork_server_import_retry: Duration::from_mins(20),
         }
     }

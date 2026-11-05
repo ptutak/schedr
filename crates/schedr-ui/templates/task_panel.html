@@ -9,7 +9,7 @@
 {% if cancellable || retryable %}
 <div class="actions">
   {% if cancellable %}
-  {% call confirm::action("Cancel task", "Cancel task " ~ task_id ~ "?", "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of it are cancelled.", actions ~ "/cancel" ~ action_query, "", base) %}{% endcall %}
+  {% call confirm::action("Cancel task", "Cancel task " ~ task_id ~ "?", cancel_note, actions ~ "/cancel" ~ action_query, "", base) %}{% endcall %}
   {% endif %}
   {% if retryable %}
   {% call confirm::action("Retry", "Retry task " ~ task_id ~ "?", "Every worker that could run it rejected it; it is queued again, for every worker.", actions ~ "/retry" ~ action_query, "", base) %}{% endcall %}

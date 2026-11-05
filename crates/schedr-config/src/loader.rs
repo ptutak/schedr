@@ -252,6 +252,10 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
             config.worker.fork_server_preload_timeout,
         ),
         ("[worker] cleanup_timeout", config.worker.cleanup_timeout),
+        (
+            "[worker] resource_cleanup_timeout",
+            config.worker.resource_cleanup_timeout,
+        ),
     ]
     .map(|(key, timing)| (key.to_owned(), timing));
     let storages = config

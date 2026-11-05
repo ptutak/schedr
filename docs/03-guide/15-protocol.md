@@ -406,9 +406,9 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 |---|---|---|---|---|
 | `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; with `cleanup_anywhere` tasks running, silence for the worker lease stops them | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing and journal decisions; with cleanup waiting, ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
-| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
-| `CancelAttempt` | Master on cancellation or reconnect | Stop running task, leave cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
+| `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
 | `ConnectionJob` | Master for a check or test | Run one job, return reports | Do not rely on repeated execution being harmless for a test | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) |
 

@@ -1235,6 +1235,47 @@ async fn the_cleanup_tab_shows_each_attempts_cleanup_and_handles_masked() {
 }
 
 #[tokio::test]
+async fn cancelling_a_resources_cleanup_warns_of_what_may_be_left() {
+    // Decision 279: the cleanup's Cancel dialog says what cancelling it does.
+    let mut answers = resourced_run();
+    for path in [
+        "/api/v1/runs/r3/tasks/w.cluster.cleanup/attempts",
+        "/api/v1/runs/r3/tasks/w.warm/attempts",
+    ] {
+        answers.push((path, 200, json!({"attempts": []})));
+    }
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let dialog = |html: &str| texts(html, "dialog.confirm p");
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r3/tasks/w.cluster.cleanup",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(
+        dialog(&html),
+        [
+            "It stops freeing resource w.cluster: what its setup made may be left behind, and \
+          what follows its group is cancelled. The run ends cancelled, or failed if a task of \
+          it failed."
+        ]
+    );
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r3/tasks/w.warm",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(
+        dialog(&html),
+        [
+            "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of \
+          it are cancelled."
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_data_edge_to_what_follows_stays_and_an_unused_resources_link_is_dashed() {
     let mut answers = resourced_run();
     let (_, _, dag) = answers

@@ -1947,6 +1947,7 @@ fn command_needing_secret(
         upstream_outcomes: std::collections::HashMap::new(),
         connections_json: serde_json::to_vec(&connections).unwrap(),
         cleanup_only: None,
+        resource_cleanup: false,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2182,6 +2183,7 @@ async fn command_with_connection(
         upstream_outcomes: std::collections::HashMap::new(),
         connections_json: serde_json::to_vec(&connections).unwrap(),
         cleanup_only: None,
+        resource_cleanup: false,
     };
     let mut spec = crate::attempt::AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2469,6 +2471,7 @@ fn attempt_with_timed_cleanup(
         upstream_outcomes: std::collections::HashMap::new(),
         connections_json: Vec::new(),
         cleanup_only: None,
+        resource_cleanup: false,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();

@@ -247,6 +247,15 @@ impl AttemptSpec {
             .collect();
     }
 
+    /// Gives a resource's cleanup without a timeout of its own the worker's
+    /// `resource_cleanup_timeout`: a hung one would hold its run, which doesn't cancel it.
+    pub fn default_timeout(&mut self, assign: &pb::AssignTask, timeouts: &WorkerTimeouts) {
+        if assign.resource_cleanup && self.task.settings.timeout_ms.is_none() {
+            self.task.settings.timeout_ms =
+                Some(u64::try_from(timeouts.resource_cleanup.as_millis()).unwrap_or(u64::MAX));
+        }
+    }
+
     /// The task's timeout, if any.
     #[must_use]
     pub fn timeout(&self) -> Option<Duration> {
@@ -263,6 +272,8 @@ pub struct WorkerTimeouts {
     pub fork_preload: Duration,
     /// One try of a cleanup that sets no timeout of its own (`cleanup_timeout`).
     pub cleanup: Duration,
+    /// One try of a resource's cleanup that sets no `timeout` (`resource_cleanup_timeout`).
+    pub resource_cleanup: Duration,
     /// How long a stopped process's output may take to reach its log (`output_drain_timeout`).
     pub output_drain: Duration,
     /// How long a fork server may take to answer a request (`fork_answer_timeout`).
@@ -301,6 +312,7 @@ impl Default for WorkerTimeouts {
             runner_start: crate::launch::RUNNER_START_TIMEOUT,
             fork_preload: crate::fork::PRELOAD_TIMEOUT,
             cleanup: Duration::from_mins(5),
+            resource_cleanup: Duration::from_mins(30),
             output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
             fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,
             fork_backoff: crate::fork::ForkBackoff::default(),

@@ -270,6 +270,7 @@ fn worker_and_tls_defaults() {
             runner_start_timeout: Duration::from_secs(30),
             fork_server_preload_timeout: Duration::from_mins(5),
             cleanup_timeout: Duration::from_mins(5),
+            resource_cleanup_timeout: Duration::from_mins(30),
             fork_server_import_retry: Duration::from_mins(20),
         }
     );
