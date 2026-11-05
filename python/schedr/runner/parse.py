@@ -212,7 +212,12 @@ def run_parse(channel: Channel, request: dict[str, Any]) -> None:
     """
     extend_sys_path(request["sys_path"])
     root, root_dir = request["root"], Path(request["root_dir"])
-    for path in request["files"]:
-        channel.send({"type": "file_started", "path": path})
-        channel.send(file_result(root, root_dir, path))
+
+    def ask(reference: str) -> dict[str, Any]:
+        return channel.ask({"type": "script_declaration", "reference": reference})
+
+    with registry.script_declarations(ask):
+        for path in request["files"]:
+            channel.send({"type": "file_started", "path": path})
+            channel.send(file_result(root, root_dir, path))
     channel.send({"type": "parse_finished"})

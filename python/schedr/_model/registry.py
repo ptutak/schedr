@@ -21,6 +21,38 @@ LOCAL_ROOT = "local"
 _ROOT: ContextVar[tuple[str, Path, Path] | None] = ContextVar("schedr_parse_root", default=None)
 """The parse root: its name, its absolute path as given, and that path resolved."""
 
+type ScriptAsker = Callable[[str], Mapping[str, Any]]
+"""Asks the agent for a ``schedr.toml`` declaration by reference: its answer."""
+
+_SCRIPTS: ContextVar[ScriptAsker | None] = ContextVar("schedr_script_asker", default=None)
+"""How a ``ScriptOperator`` gets its declaration: set while the runner parses."""
+
+
+@contextlib.contextmanager
+def script_declarations(ask: ScriptAsker) -> Iterator[None]:
+    """Lets each ``ScriptOperator`` inside the block ask for its declaration.
+
+    Args:
+        ask: Asks the agent (the runner's parse channel).
+
+    Yields:
+        Nothing.
+    """
+    token = _SCRIPTS.set(ask)
+    try:
+        yield
+    finally:
+        _SCRIPTS.reset(token)
+
+
+def script_asker() -> ScriptAsker | None:
+    """How to ask for a ``schedr.toml`` declaration; ``None`` outside a parse.
+
+    Returns:
+        The asker, while the runner parses.
+    """
+    return _SCRIPTS.get()
+
 
 @dataclass(frozen=True, slots=True)
 class DefinedDag:

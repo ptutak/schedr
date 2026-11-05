@@ -99,6 +99,8 @@ message Heartbeat {
 }
 
 // A root's content hash changed (after the settle time).
+// A root's reported hash changed. An empty `content_hash` withdraws the root: the worker no
+// longer offers it (decision 303: a DAG root using a script root it lacks).
 message CodeVersionChanged {
   RootHash root = 1;
 }
@@ -256,6 +258,7 @@ message MasterMessage {
     FinishedAck finished_ack = 5;
     ConnectionJob connection_job = 6;
     HeartbeatAck heartbeat_ack = 7;
+    ScriptUses script_uses = 8;
   }
 }
 
@@ -291,6 +294,21 @@ message Registered {
   // The largest message the master accepts ([master] grpc_max_message_size): the agent turns
   // a result or a parsed file past it into a failure instead of sending it (B33, B35).
   uint64 max_message_size = 3;
+  // Which script roots each DAG root uses (decision 304), as ScriptUses.
+  repeated RootUses script_uses = 4;
+}
+
+// The script roots a DAG root's current parse used (decision 304): a worker folds their hashes
+// into the hash it reports for the DAG root (decision 301).
+message RootUses {
+  string root = 1;
+  repeated string script_roots = 2;
+}
+
+// Every DAG root's script roots, sent to each worker when they change; it replaces what was
+// sent before (a root left out uses none).
+message ScriptUses {
+  repeated RootUses roots = 1;
 }
 
 message RunInfo {
@@ -399,6 +417,8 @@ message ParsedFile {
   // Each connection the file defines itself, as schedr-model ConnectionDef JSON (decision
   // 174; never a secret's value).
   repeated bytes connection_json = 4;
+  // The script roots its ScriptOperators asked about while it was imported (decision 304).
+  repeated string script_roots = 5;
 }
 
 // Why a DAG file couldn't be imported (schedr-model ErrorSummary).

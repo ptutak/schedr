@@ -82,6 +82,8 @@ CREATE TABLE parse_files (
     parsed_at       TEXT NOT NULL,
     -- The connections the file defines itself (decision 174), never a value.
     connections     TEXT NOT NULL DEFAULT '[]',
+    -- The script roots its ScriptOperators asked about (decision 304).
+    script_roots    TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (parse_result_id, path)
 );
 

@@ -288,7 +288,86 @@ class EmptyKind:
         return {"kind": "empty"}
 
 
-type TaskKind = PythonKind | CommandKind | EmptyKind
+@dataclass(frozen=True, slots=True)
+class DeclaredTemplate:
+    """An argument or variable as a ``schedr.toml`` declares it, in DAG JSON already.
+
+    The agent read and checked it (decision 293); it is passed on as it came, and references
+    nothing a DAG checks (no task's output).
+
+    Attributes:
+        json: Its DAG JSON (a template's parts).
+    """
+
+    json: Any
+
+    def references(self) -> list[Reference]:
+        """None a DAG checks.
+
+        Returns:
+            An empty list.
+        """
+        return []
+
+    def to_json(self) -> Any:
+        """Its DAG JSON, as it came.
+
+        Returns:
+            The JSON.
+        """
+        return self.json
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptKind:
+    """A script declared in a ``schedr.toml`` (decision 293), run by the agent.
+
+    Attributes:
+        job: Its declaration: ``<root>:<path>#<name>``.
+        script: The script, relative to its script root.
+        interpreter: The interpreter's name.
+        args: Its arguments, each one argument.
+        env: Extra environment variables.
+        working_dir: Where it runs, relative to its script root.
+    """
+
+    job: str
+    script: str
+    interpreter: str
+    args: Sequence[Template | DeclaredTemplate] = ()
+    env: Mapping[str, Template | DeclaredTemplate] = field(default_factory=dict)
+    working_dir: str = ""
+
+    def references(self) -> list[Reference]:
+        """The arguments' and the environment's references.
+
+        Returns:
+            Argument references first, then environment ones by variable name.
+        """
+        templates = [*self.args, *(self.env[k] for k in sorted(self.env))]
+        return [r for t in templates for r in t.references()]
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind's fields as DAG JSON.
+
+        Returns:
+            ``{"kind": "script", "job": ..., ...}``, with ``args`` and ``env`` when set.
+        """
+        result: dict[str, Any] = {
+            "kind": "script",
+            "job": self.job,
+            "script": self.script,
+            "interpreter": self.interpreter,
+            "working_dir": self.working_dir,
+        }
+        if self.args:
+            result["args"] = [arg.to_json() for arg in self.args]
+        if self.env:
+            result["env"] = {key: self.env[key].to_json() for key in sorted(self.env)}
+        return result
+
+
+type TaskKind = PythonKind | CommandKind | ScriptKind | EmptyKind
 """Any task kind."""
 
 

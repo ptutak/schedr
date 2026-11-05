@@ -27,6 +27,7 @@ fn place(root: &str, path: &str) -> DagLocation {
 
 fn ok(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags,
         connections: Vec::new(),
@@ -37,6 +38,7 @@ fn ok(path: &str, dags: Vec<Dag>) -> ParsedFile {
 
 fn failed(path: &str) -> ParsedFile {
     ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags: vec![],
         connections: Vec::new(),

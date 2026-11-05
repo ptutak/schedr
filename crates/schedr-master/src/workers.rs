@@ -192,6 +192,13 @@ impl Workers {
         }
     }
 
+    /// A worker withdrew a root (decision 303): it no longer has it.
+    pub fn withdraw_root(&mut self, id: &str, root: &str) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.roots.remove(root);
+        }
+    }
+
     /// The worker stops taking new tasks.
     pub fn draining(&mut self, id: &str) {
         if let Some(worker) = self.workers.get_mut(id) {

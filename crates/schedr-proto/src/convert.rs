@@ -73,6 +73,7 @@ pub fn parsed_file_to_proto(file: &ParsedFile) -> pb::ParsedFile {
             .iter()
             .map(|c| serde_json::to_vec(c).expect("a connection always serializes"))
             .collect(),
+        script_roots: file.script_roots.clone(),
     }
 }
 
@@ -171,6 +172,7 @@ pub fn parsed_file_from_proto(file: pb::ParsedFile) -> Result<ParsedFile, Conver
         })
         .collect::<Result<_, _>>()?;
     Ok(ParsedFile {
+        script_roots: file.script_roots,
         dags,
         connections,
         error: file.import_error.map(|e| ErrorSummary {

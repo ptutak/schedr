@@ -608,6 +608,11 @@ impl Dispatcher {
         self.workers.report_root(worker_id, root, hash);
     }
 
+    /// A worker withdrew a root (decision 303): its tasks no longer go there.
+    pub fn withdraw_root(&mut self, worker_id: &str, root: &str) {
+        self.workers.withdraw_root(worker_id, root);
+    }
+
     /// A reconnecting worker still runs `attempt_id` (or holds its result): it keeps its
     /// slot, and the attempt counts as started, so it isn't taken back for want of a
     /// `Started` lost with the old stream (B50).

@@ -628,6 +628,10 @@ impl ParseSession for ProcessParseSession {
         }
     }
 
+    async fn send(&mut self, message: AgentMessage) -> Result<(), ChannelError> {
+        write_message(&mut self.stream, &message).await
+    }
+
     async fn stop(self) {
         let Self {
             mut process,

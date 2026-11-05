@@ -62,7 +62,6 @@ use crate::launch::{AGENT_VERSION, ProcessParseRunner, PythonTask, run_command, 
 use crate::mask::Mask;
 use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::metrics::AgentMetrics;
-use crate::parse::parse_files;
 use crate::process::ProcessSpec;
 use crate::resource::AttemptResource;
 use crate::secrets::{AttemptSecrets, SecretStores};
@@ -154,6 +153,15 @@ struct Shared<'a> {
     spawned: &'a Spawned,
 }
 
+/// The copies of the other roots a parse sees (decision 102).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParseCode {
+    /// The script roots, for a `ScriptOperator`'s declaration (decision 293).
+    pub scripts: BTreeMap<String, crate::jobs::ScriptRoot>,
+    /// The other DAG roots' copies, on `sys.path` in place of their configured paths.
+    pub roots: BTreeMap<String, PathBuf>,
+}
+
 /// Runs attempts and parse jobs.
 pub trait Executor: Clone + Send + Sync + 'static {
     /// Runs a planned attempt until it ends or `stop` says why to stop it (a later reason
@@ -184,12 +192,13 @@ pub trait Executor: Clone + Send + Sync + 'static {
         watch::channel(Vec::new()).1
     }
 
-    /// Parses `files` of the root `root` in `dir`.
+    /// Parses `files` of the root `root` in `dir`, with the other roots' copies `code`.
     fn parse(
         &self,
         root: String,
         dir: PathBuf,
         files: Vec<String>,
+        code: ParseCode,
     ) -> impl Future<Output = Result<Vec<ParsedFile>, String>> + Send;
 
     /// Checks a root's connections, or tests one (`schedr connections check` / `test`); a
@@ -395,8 +404,9 @@ impl Executor for ProcessExecutor {
         root: String,
         dir: PathBuf,
         files: Vec<String>,
+        code: ParseCode,
     ) -> Result<Vec<ParsedFile>, String> {
-        self.parse_files(root, dir, files).await
+        self.parse_files(root, dir, files, code).await
     }
 }
 
@@ -766,6 +776,7 @@ impl ProcessExecutor {
         root: String,
         dir: PathBuf,
         files: Vec<String>,
+        code: ParseCode,
     ) -> Result<Vec<ParsedFile>, String> {
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let mut runner = ProcessParseRunner {
@@ -794,13 +805,15 @@ impl ProcessExecutor {
             kills: self.metrics.watchdog_kills.clone(),
             forks: self.forks.clone(),
         };
+        let mut copies = code.roots;
+        copies.insert(root.clone(), dir.clone());
         let request = ParseRequest {
-            sys_path: self.setup.sys_path_with(&root, &dir),
+            sys_path: self.setup.sys_path_at(&copies),
             root,
             root_dir: dir.to_string_lossy().into_owned(),
             files,
         };
-        parse_files(&mut runner, request, self.parse_file_timeout)
+        crate::parse::parse_files_with(&mut runner, request, self.parse_file_timeout, &code.scripts)
             .await
             .map_err(|e| e.to_string())
     }
@@ -862,6 +875,8 @@ enum Done {
     Parse {
         job_id: String,
         root: pb::RootHash,
+        /// The content hashes of the copies it used (kept meanwhile).
+        copies: Vec<String>,
         files: Result<Vec<ParsedFile>, String>,
     },
     Connections {
@@ -923,6 +938,14 @@ pub struct Agent<E> {
     unsent_answers: std::collections::VecDeque<pb::ConnectionJobDone>,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
+    /// The content hashes of the other roots' copies a task runs from (its script root, the
+    /// other DAG roots on its `sys.path`), while it runs (kept meanwhile).
+    other_copies: BTreeMap<String, Vec<String>>,
+    /// The script roots each DAG root uses, as the master last said (decision 304).
+    uses: BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// Each root's hash as last reported to the master (decisions 301, 303; B167); a root
+    /// withdrawn, or never reported, isn't in it.
+    reported: BTreeMap<String, String>,
     /// The parse jobs running, by the hash they parse (their copy is kept meanwhile).
     parsing: BTreeMap<String, usize>,
     /// Held by the connections job running (decision 199: one at a time).
@@ -1045,6 +1068,9 @@ impl<E: Executor> Agent<E> {
             unacked: BTreeMap::new(),
             unsent_answers: std::collections::VecDeque::new(),
             code_hashes: BTreeMap::new(),
+            other_copies: BTreeMap::new(),
+            uses: BTreeMap::new(),
+            reported: BTreeMap::new(),
             parsing: BTreeMap::new(),
             connection_jobs: Arc::new(tokio::sync::Mutex::new(())),
             done_tx,
@@ -1532,9 +1558,11 @@ impl<E: Executor> Agent<E> {
             }
         };
         spec.code_dir = kept.code_dir;
+        spec.root_copies = kept.root_copies;
         if let Some(hash) = kept.code_hash {
             self.code_hashes.insert(attempt_id.to_owned(), hash);
         }
+        self.remember_other_copies(&spec);
         let (stop, _) = Stops::new();
         self.running.insert(attempt_id.to_owned(), stop);
         let waiting = WaitingCleanup {
@@ -1619,13 +1647,12 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    /// The roots' content hashes, waiting for each to settle the first time.
+    /// The roots' reported hashes, waiting for each to settle the first time; a DAG root
+    /// using a script root this worker lacks is left out (decision 303).
     async fn hashes(&mut self) -> Vec<pb::RootHash> {
-        let mut roots = Vec::new();
         for (name, watcher) in &mut self.watchers {
             loop {
-                if let Some(hash) = watcher.hash() {
-                    roots.push(root_hash(&self.settings.setup, name, hash));
+                if watcher.hash().is_some() {
                     break;
                 }
                 match watcher.poll(Instant::now()) {
@@ -1638,7 +1665,88 @@ impl<E: Executor> Agent<E> {
                 }
             }
         }
-        roots
+        self.reported = self
+            .watchers
+            .keys()
+            .filter_map(|name| Some((name.clone(), self.reported_hash(name)?)))
+            .collect();
+        self.reported
+            .iter()
+            .map(|(name, hash)| root_hash(&self.settings.setup, name, hash))
+            .collect()
+    }
+
+    /// The hash this worker reports for root `name`, `None` before its first scan or for a
+    /// DAG root it can't offer (decision 303). A script root's is its content hash marked as
+    /// a script root's, so a parse of the same files as a DAG root never counts for it
+    /// (B167); a DAG root's folds in the reported hashes of the script roots it uses (decision
+    /// 301), so a change to one of them is new code for it.
+    fn reported_hash(&self, name: &str) -> Option<String> {
+        let content = self.watchers.get(name)?.hash()?;
+        let scripts = &self.settings.setup.script_roots;
+        if scripts.contains_key(name) {
+            return Some(fold_hash("script", content, &[]));
+        }
+        let Some(used) = self.uses.get(name).filter(|used| !used.is_empty()) else {
+            return Some(content.to_owned());
+        };
+        let mut folded = Vec::with_capacity(used.len());
+        for script in used {
+            if !scripts.contains_key(script) {
+                return None;
+            }
+            folded.push((script.clone(), self.reported_hash(script)?));
+        }
+        Some(fold_hash("dag", content, &folded))
+    }
+
+    /// Reports each root whose hash changed since it was last reported: a new hash, or an
+    /// empty one for a root withdrawn (decision 303).
+    fn report_changes(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        let names: Vec<String> = self.watchers.keys().cloned().collect();
+        for name in names {
+            let now = self.reported_hash(&name);
+            if now.as_ref() == self.reported.get(&name) {
+                continue;
+            }
+            if now.is_none() {
+                let missing: Vec<&str> = self
+                    .uses
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|script| !self.settings.setup.script_roots.contains_key(*script))
+                    .map(String::as_str)
+                    .collect();
+                tracing::warn!(
+                    root = name.as_str(),
+                    missing = missing.join(", "),
+                    "DAG root withdrawn: its DAGs use script roots this worker doesn't have"
+                );
+            }
+            let hash = now.clone().unwrap_or_default();
+            match now {
+                Some(hash) => self.reported.insert(name.clone(), hash),
+                None => self.reported.remove(&name),
+            };
+            let changed = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+                root: Some(root_hash(&self.settings.setup, &name, &hash)),
+            });
+            let _ = to_master.send(wrap(changed));
+        }
+    }
+
+    /// The master said which script roots each DAG root uses (decision 304).
+    fn set_uses(
+        &mut self,
+        roots: Vec<pb::RootUses>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
+        self.uses = roots
+            .into_iter()
+            .map(|uses| (uses.root, uses.script_roots.into_iter().collect()))
+            .collect();
+        self.report_changes(to_master);
     }
 
     /// One session with the master: register, then handle messages until the connection ends.
@@ -1809,7 +1917,9 @@ impl<E: Executor> Agent<E> {
                 for done in self.unsent_answers.drain(..) {
                     let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
                 }
+                self.set_uses(registered.script_uses, to_master);
             }
+            master_message::Message::ScriptUses(uses) => self.set_uses(uses.roots, to_master),
             master_message::Message::AssignTask(assign) => {
                 self.assign(assign, to_master, client, (heartbeat, opened))
                     .await;
@@ -1855,7 +1965,7 @@ impl<E: Executor> Agent<E> {
                 if self.waiting.remove(id).is_some() {
                     // The master ended it, or it moved: its cleanup isn't run here.
                     self.running.remove(id);
-                    self.code_hashes.remove(id);
+                    self.release_code(id);
                     self.forget(id).await;
                     self.collect_code();
                 }
@@ -2010,7 +2120,7 @@ impl<E: Executor> Agent<E> {
             let _ = to_master.send(reject(pb::RejectReason::DiskNotWritable, detail));
             return;
         }
-        self.remember_code(&assign, &spec.attempt_id);
+        self.remember_code(&assign, &spec);
         self.note_cleanup(&mut spec, &assign);
         if let Some(only) = &assign.cleanup_only
             && !matches!(planned, Err(NotRun::Rejected { .. }))
@@ -2019,7 +2129,7 @@ impl<E: Executor> Agent<E> {
                 Ok(handles) => self.moved_cleanup(spec, handles, to_master).await,
                 // Run without them, it could report success and leave them behind.
                 Err(error) => {
-                    self.code_hashes.remove(&spec.attempt_id);
+                    self.release_code(&spec.attempt_id);
                     self.forget(&spec.attempt_id).await;
                     let detail = format!("a handle that doesn't read: {error}");
                     let _ = to_master.send(reject(pb::RejectReason::InvalidSpecification, detail));
@@ -2033,7 +2143,7 @@ impl<E: Executor> Agent<E> {
         }));
         match planned {
             Err(NotRun::Rejected { reason, detail }) => {
-                self.code_hashes.remove(&spec.attempt_id);
+                self.release_code(&spec.attempt_id);
                 let _ = to_master.send(reject(reason, detail));
             }
             Err(NotRun::Failed { kind, message }) => {
@@ -2091,6 +2201,7 @@ impl<E: Executor> Agent<E> {
                 assign,
                 code_dir: spec.code_dir.clone(),
                 code_hash: self.code_hash_of(spec),
+                root_copies: spec.root_copies.clone(),
             };
             let journal = self.journal.clone();
             let id = spec.attempt_id.clone();
@@ -2175,8 +2286,30 @@ impl<E: Executor> Agent<E> {
         });
     }
 
+    /// Keeps the other roots' copies a task was planned against while it runs: its script
+    /// root's, the other DAG roots' on its `sys.path` (held by their folder, named after the
+    /// hash).
+    fn remember_other_copies(&mut self, spec: &AttemptSpec) {
+        let held: Vec<String> = spec
+            .root_copies
+            .values()
+            .chain(&spec.script_dir)
+            .filter_map(|dir| Some(dir.file_name()?.to_string_lossy().into_owned()))
+            .collect();
+        if !held.is_empty() {
+            self.other_copies.insert(spec.attempt_id.clone(), held);
+        }
+    }
+
+    fn release_code(&mut self, attempt_id: &str) -> Option<String> {
+        self.other_copies.remove(attempt_id);
+        self.code_hashes.remove(attempt_id)
+    }
+
     /// Notes the hash of the task's root now, for its `Finished`.
-    fn remember_code(&mut self, assign: &pb::AssignTask, attempt_id: &str) {
+    fn remember_code(&mut self, assign: &pb::AssignTask, spec: &AttemptSpec) {
+        let attempt_id = spec.attempt_id.as_str();
+        self.remember_other_copies(spec);
         if let Some(hash) = assign
             .dag_file
             .as_ref()
@@ -2210,13 +2343,31 @@ impl<E: Executor> Agent<E> {
             .get(&spec.dag_root)
             .and_then(RootWatcher::code_dir);
         spec.code_dir = code.map(Path::to_path_buf);
+        spec.root_copies = self
+            .watchers
+            .iter()
+            .filter(|(name, _)| {
+                **name != spec.dag_root && !self.settings.setup.script_roots.contains_key(*name)
+            })
+            .filter_map(|(name, watcher)| Some((name.clone(), watcher.code_dir()?.to_path_buf())))
+            .collect();
+        // A script task's script root: its copy at the hash folded into the task's (301).
+        if let TaskKind::Script { job, .. } = &spec.task.kind {
+            let root = job.split_once(':').map_or(job.as_str(), |(root, _)| root);
+            spec.script_dir = self
+                .watchers
+                .get(root)
+                .filter(|_| self.settings.setup.script_roots.contains_key(root))
+                .and_then(RootWatcher::code_dir)
+                .map(Path::to_path_buf);
+        }
         let planned = match code {
             Some(dir) => plan_at(spec, &self.settings.setup, dir),
             None => plan(spec, &self.settings.setup),
         };
         match planned {
             Err(NotRun::Rejected {
-                reason: pb::RejectReason::DagFileMissing,
+                reason: pb::RejectReason::DagFileMissing | pb::RejectReason::ScriptReferenceNotFound,
                 detail,
             }) if self.has_expected_code(assign) => Err(NotRun::Failed {
                 kind: DAG_FILE_MISSING.to_owned(),
@@ -2233,8 +2384,8 @@ impl<E: Executor> Agent<E> {
             && assign
                 .dag_file
                 .as_ref()
-                .and_then(|f| self.watchers.get(&f.root))
-                .and_then(RootWatcher::hash)
+                .and_then(|f| self.reported_hash(&f.root))
+                .as_deref()
                 == Some(expected)
     }
 
@@ -2242,7 +2393,19 @@ impl<E: Executor> Agent<E> {
     /// when the root isn't here at all: planning rejects that).
     fn code_mismatch(&self, assign: &pb::AssignTask) -> Option<String> {
         let root = assign.dag_file.as_ref()?.root.as_str();
-        let here = self.watchers.get(root)?.hash()?;
+        let scanned = self
+            .watchers
+            .get(root)
+            .and_then(RootWatcher::hash)
+            .is_some();
+        let Some(here) = self.reported_hash(root) else {
+            // Withdrawn (303): it lacks a script root the root uses, so runs none of its tasks.
+            return scanned.then(|| {
+                format!(
+                    "root `{root}` is withdrawn here: a script root it uses isn't on this worker"
+                )
+            });
+        };
         let expected = assign.expected_code_hash.as_str();
         (!expected.is_empty() && here != expected)
             .then(|| format!("root `{root}` here is at {here}, the task expects {expected}"))
@@ -2254,6 +2417,7 @@ impl<E: Executor> Agent<E> {
         let in_use: std::collections::BTreeSet<String> = self
             .code_hashes
             .values()
+            .chain(self.other_copies.values().flatten())
             .chain(self.parsing.keys())
             .map(|hash| hash.replace(':', "-"))
             .collect();
@@ -2294,10 +2458,13 @@ impl<E: Executor> Agent<E> {
             );
             return;
         };
-        if watcher.hash() != Some(root.content_hash.as_str()) {
+        if self.reported_hash(&root.root).as_deref() != Some(root.content_hash.as_str()) {
             // The root changed since: its new hash was (or will be) reported.
             return;
         }
+        let Some(copy) = watcher.hash().map(str::to_owned) else {
+            return;
+        };
         let (Some(snapshot), Some(code)) = (watcher.snapshot(), watcher.code_dir()) else {
             return;
         };
@@ -2309,7 +2476,6 @@ impl<E: Executor> Agent<E> {
             files.retain(|file| only.contains(file));
         }
         let dir = code.to_path_buf();
-        *self.parsing.entry(root.content_hash.clone()).or_default() += 1;
         let done = self.done_tx.clone();
         if self.settings.setup.script_roots.contains_key(&root.root) {
             // Read here, in Rust, never imported (decision 293).
@@ -2319,25 +2485,61 @@ impl<E: Executor> Agent<E> {
                 .filter(|file| crate::jobs::is_config(file))
                 .cloned()
                 .collect();
+            *self.parsing.entry(copy.clone()).or_default() += 1;
             tokio::task::spawn_blocking(move || {
                 let parsed = crate::jobs::read_root(&root.root, &dir, (&files, &wanted), None);
                 let _ = done.send(Done::Parse {
                     job_id: job.parse_job_id,
                     root,
+                    copies: vec![copy],
                     files: Ok(parsed),
                 });
             });
             return;
         }
+        let (code, mut copies) = self.parse_code(&root.root);
+        copies.push(copy);
+        for copy in &copies {
+            *self.parsing.entry(copy.clone()).or_default() += 1;
+        }
         let executor = self.executor.clone();
         tokio::spawn(async move {
-            let parsed = executor.parse(root.root.clone(), dir, files).await;
+            let parsed = executor.parse(root.root.clone(), dir, files, code).await;
             let _ = done.send(Done::Parse {
                 job_id: job.parse_job_id,
                 root,
+                copies,
                 files: parsed,
             });
         });
+    }
+
+    /// The copies of the other roots a parse of `root` sees (script roots for a
+    /// `ScriptOperator`, DAG roots on `sys.path`), with their content hashes to hold meanwhile.
+    fn parse_code(&self, root: &str) -> (ParseCode, Vec<String>) {
+        let mut code = ParseCode::default();
+        let mut held = Vec::new();
+        for (name, watcher) in &self.watchers {
+            let (Some(hash), Some(dir)) = (watcher.hash(), watcher.code_dir()) else {
+                continue;
+            };
+            if name == root {
+                continue;
+            }
+            if let Some(configured) = self.settings.setup.script_roots.get(name) {
+                code.scripts.insert(
+                    name.clone(),
+                    crate::jobs::ScriptRoot {
+                        configured: configured.clone(),
+                        copy: dir.to_path_buf(),
+                    },
+                );
+            } else {
+                code.roots.insert(name.clone(), dir.to_path_buf());
+            }
+            held.push(hash.to_owned());
+        }
+        (code, held)
     }
 
     /// A connections job (decisions 174, 193): run beside the tasks, no slot, one at a time;
@@ -2354,10 +2556,14 @@ impl<E: Executor> Agent<E> {
         };
         // The copy of the code it was sent for (a test imports from it), held meanwhile.
         let watcher = self.watchers.get(&root.root);
+        let current = self.reported_hash(&root.root).as_deref() == Some(root.content_hash.as_str());
         let code_dir = watcher
-            .filter(|w| w.hash() == Some(root.content_hash.as_str()))
+            .filter(|_| current)
             .and_then(|w| w.code_dir().map(Path::to_path_buf));
-        let hash = code_dir.as_ref().map(|_| root.content_hash.clone());
+        // The copy's content hash, by which it is kept meanwhile.
+        let hash = code_dir
+            .as_ref()
+            .and_then(|_| watcher.and_then(RootWatcher::hash).map(str::to_owned));
         if let Some(hash) = &hash {
             *self.parsing.entry(hash.clone()).or_default() += 1;
         }
@@ -2488,7 +2694,7 @@ impl<E: Executor> Agent<E> {
                 let status = attempt_status_from_proto(finished.status)
                     .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
                 self.metrics.attempt_ended(&status);
-                if let Some(hash) = self.code_hashes.remove(&finished.attempt_id) {
+                if let Some(hash) = self.release_code(&finished.attempt_id) {
                     finished.code_hash = hash;
                     self.collect_code();
                 }
@@ -2520,12 +2726,15 @@ impl<E: Executor> Agent<E> {
             Done::Parse {
                 job_id,
                 root,
+                copies,
                 files,
             } => {
-                if let Some(count) = self.parsing.get_mut(&root.content_hash) {
-                    *count -= 1;
-                    if *count == 0 {
-                        self.parsing.remove(&root.content_hash);
+                for copy in copies {
+                    if let Some(count) = self.parsing.get_mut(&copy) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.parsing.remove(&copy);
+                        }
                     }
                 }
                 self.collect_code();
@@ -2633,19 +2842,14 @@ impl<E: Executor> Agent<E> {
         let mut changed_any = false;
         for (name, watcher) in &mut self.watchers {
             match watcher.poll(Instant::now()) {
-                Ok(Poll::Changed { hash, .. }) => {
-                    changed_any = true;
-                    let changed =
-                        worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
-                            root: Some(root_hash(&self.settings.setup, name, &hash)),
-                        });
-                    let _ = to_master.send(wrap(changed));
-                }
+                Ok(Poll::Changed { .. }) => changed_any = true,
                 Ok(_) => {}
                 Err(error) => tracing::warn!(root = name.as_str(), %error, "can't scan the root"),
             }
         }
         if changed_any {
+            // A script root's change is new code for the DAG roots using it too (decision 301).
+            self.report_changes(to_master);
             // The previous code's copy, unless something still runs from it.
             self.collect_code();
         }
@@ -2796,6 +3000,31 @@ async fn fetch_inputs(
 }
 
 /// A root's hash as reported, of its kind: a script root or a DAG root.
+/// A reported hash made from a root's content hash: `kind` (`script` or `dag`) and the
+/// reported hashes of the script roots it uses, by name, folded in (decision 301; B167).
+#[must_use]
+pub fn fold_hash(kind: &str, content: &str, used: &[(String, String)]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(content.as_bytes());
+    for (name, hash) in used {
+        hasher.update(b"\n");
+        hasher.update(name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(hash.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut text = String::with_capacity(crate::scan::HASH_PREFIX.len() + 64);
+    text.push_str(crate::scan::HASH_PREFIX);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
 fn root_hash(setup: &WorkerSetup, name: &str, hash: &str) -> pb::RootHash {
     let kind = if setup.script_roots.contains_key(name) {
         pb::RootKind::Script
@@ -2872,6 +3101,8 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
             traceback: String::new(),
         }),
         connection_json: Vec::new(),
+        // Kept: its DAG root still uses them (decision 304).
+        script_roots: file.script_roots,
     }
 }
 

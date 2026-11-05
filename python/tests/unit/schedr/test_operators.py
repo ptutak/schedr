@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from schedr import CommandOperator, Dag, EmptyOperator, dag_ctx, task
+from schedr import CommandOperator, Dag, EmptyOperator, ScriptOperator, dag_ctx, task
 from schedr._model import (
     ArgvCommand,
     CommandKind,
@@ -13,6 +13,7 @@ from schedr._model import (
     EmptyKind,
     OutputRef,
     ScalarType,
+    SecretRef,
     ShellCommand,
     Template,
     TemplateRef,
@@ -240,3 +241,114 @@ def echo_count_as_date() -> None:
     with Dag("d"):
         n = count()
         CommandOperator("t", ["echo", t"{n:%Y}"])
+
+
+# ScriptOperator (decisions 293, 302): the declaration is asked of the agent while parsing.
+
+_DECLARED: dict[str, Any] = {
+    "type": "script_declaration",
+    "job": "jobs:sales/schedr.toml#clean",
+    "script": "sales/clean.py",
+    "interpreter": "py311",
+    "args": [[{"text": "--day"}], [{"ref": {"kind": "dag_ctx", "field": "since"}}]],
+    "env": {"MODE": [{"text": "full"}], "LEVEL": [{"text": "info"}]},
+    "secrets": [{"kind": "secret", "path": "etl/db", "key": "password"}],
+    "working_dir": "sales",
+    "retries": 2,
+    "timeout_ms": 60000,
+    "queue": "scripts",
+}
+
+
+def _asking(answer: dict[str, Any], asked: list[str] | None = None) -> Any:
+    def ask(reference: str) -> dict[str, Any]:
+        if asked is not None:
+            asked.append(reference)
+        return answer
+
+    return registry.script_declarations(ask)
+
+
+def test_a_script_operator_takes_its_declaration(
+    validate: Validate, validate_runner_message: Callable[[Any], None]
+) -> None:
+    validate_runner_message(_DECLARED)
+    asked: list[str] = []
+    with _asking(_DECLARED, asked), Dag("d"):
+        op = ScriptOperator("clean", "jobs:sales/schedr.toml#clean")
+    assert asked == ["jobs:sales/schedr.toml#clean"]
+    task = only_dag().tasks[0]
+    shown = task.to_json()
+    assert {
+        k: shown[k] for k in ("kind", "job", "script", "interpreter", "working_dir", "args", "env")
+    } == {
+        "kind": "script",
+        "job": "jobs:sales/schedr.toml#clean",
+        "script": "sales/clean.py",
+        "interpreter": "py311",
+        "working_dir": "sales",
+        "args": _DECLARED["args"],
+        "env": {"LEVEL": [{"text": "info"}], "MODE": [{"text": "full"}]},
+    }
+    assert (task.settings.retries, task.settings.timeout_ms, task.settings.queue) == (
+        2,
+        60000,
+        "scripts",
+    )
+    assert task.secrets == (SecretRef("etl/db", "password"),)
+    assert task.output_type == ScalarType("process_result")
+    assert repr(op) == "ScriptOperator('clean')"
+    validate("Task", task.to_json())
+
+
+def test_a_script_operators_own_settings_change_the_declared_ones(validate: Validate) -> None:
+    with _asking(_DECLARED), Dag("d"):
+        n = count()
+        ScriptOperator(
+            "clean",
+            "jobs:sales/schedr.toml#clean",
+            args=["--count", n],
+            env={"MODE": "quick"},
+            secrets=["etl/api#token"],
+            retries=0,
+            queue="fast",
+        )
+    model = only_dag()
+    task = model.tasks[1]
+    kind = task.to_json()
+    # args= replaces, env= merges per variable (the operator's wins), secrets= adds (302).
+    assert kind["args"] == [[{"text": "--count"}], [{"ref": {"kind": "output", "task": "count"}}]]
+    assert kind["env"] == {"LEVEL": [{"text": "info"}], "MODE": [{"text": "quick"}]}
+    assert task.secrets == (SecretRef("etl/db", "password"), SecretRef("etl/api", "token"))
+    assert (task.settings.retries, task.settings.timeout_ms, task.settings.queue) == (
+        0,
+        60000,
+        "fast",
+    )
+    assert [(e.from_, e.to, e.kind) for e in model.edges] == [("count", "clean", EdgeKind.DATA)]
+    validate("Dag", model.to_json())
+
+
+def test_a_script_the_worker_cant_find_is_an_import_error_saying_why() -> None:
+    missing = {"type": "script_not_found", "message": "script root `jobs` isn't on this worker"}
+    with (
+        pytest.raises(LookupError, match=r"task `clean`: script root `jobs` isn't on this worker"),
+        _asking(missing),
+        Dag("d"),
+    ):
+        ScriptOperator("clean", "jobs:sales/schedr.toml#clean")
+    registry.take_defined()
+
+
+def test_outside_a_parse_a_script_operator_only_names_its_declaration() -> None:
+    # A task's runner imports its DAG file to find its own task: no agent to ask.
+    with Dag("d"):
+        ScriptOperator("clean", "jobs:sales/schedr.toml#clean")
+    kind = only_dag().tasks[0].to_json()
+    assert (kind["job"], kind["script"]) == ("jobs:sales/schedr.toml#clean", "")
+
+
+def test_a_script_operators_args_are_a_list() -> None:
+    with pytest.raises(TypeError, match="args= is a list"), _asking(_DECLARED), Dag("d"):
+        ScriptOperator("clean", "jobs:sales/schedr.toml#clean", args="--day")  # type: ignore[arg-type]
+    registry.take_defined()

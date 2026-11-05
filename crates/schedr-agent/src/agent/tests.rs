@@ -19,6 +19,9 @@ use schedr_model::runner::DAG_FILE_MISSING;
 
 use super::*;
 
+/// Each copy a cleanup was given, and whether it was there when it ran.
+type CopiesSeen = Vec<(PathBuf, bool)>;
+
 /// Parses each file into a DAG named after it, with one Python task; runs tasks at once,
 /// except task `wait`, which waits until it is stopped. Each attempt's "process" is one that
 /// doesn't exist.
@@ -31,6 +34,10 @@ struct Fake {
     cleanups: Arc<Mutex<Vec<Vec<CleanupHandle>>>>,
     /// Why each task named `wait` was stopped.
     stops: Arc<Mutex<Vec<StopReason>>>,
+    /// Each Python task's `sys.path`.
+    sys_paths: Arc<Mutex<Vec<Vec<String>>>>,
+    /// Each cleanup's other roots' copies, and whether each was there when it ran.
+    cleanup_copies: Arc<Mutex<Vec<CopiesSeen>>>,
 }
 
 impl Executor for Fake {
@@ -42,8 +49,12 @@ impl Executor for Fake {
         spawned: Spawned,
         ended: TaskEnded,
     ) -> pb::Finished {
-        if let Plan::Python { process, .. } = &plan {
+        if let Plan::Python { process, request } = &plan {
             self.dirs.lock().unwrap().push(process.working_dir.clone());
+            self.sys_paths
+                .lock()
+                .unwrap()
+                .push(request.sys_path.clone());
         }
         // A task named `cleaning` ends, and stays in its cleanup.
         if spec.task.id.as_str() == "cleaning" {
@@ -79,12 +90,18 @@ impl Executor for Fake {
 
     async fn cleanup(
         &self,
-        _spec: AttemptSpec,
+        spec: AttemptSpec,
         mut ended: pb::Finished,
         handles: Vec<CleanupHandle>,
         _spawned: Spawned,
     ) -> pb::Finished {
         tokio::task::yield_now().await; // a real cleanup starts a process
+        let copies = spec
+            .root_copies
+            .values()
+            .map(|dir| (dir.clone(), dir.is_dir()))
+            .collect();
+        self.cleanup_copies.lock().unwrap().push(copies);
         self.cleanups.lock().unwrap().push(handles);
         ended.cleanup = Some(pb::CleanupResult {
             status: pb::CleanupStatus::Ok.into(),
@@ -99,6 +116,7 @@ impl Executor for Fake {
         root: String,
         dir: PathBuf,
         files: Vec<String>,
+        _code: ParseCode,
     ) -> Result<Vec<ParsedFile>, String> {
         tokio::task::yield_now().await; // a real parse starts a runner
         self.dirs.lock().unwrap().push(dir.clone());
@@ -200,7 +218,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
             roots: BTreeMap::from([("etl".to_owned(), root.clone())]),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -572,6 +590,7 @@ fn kept(attempt_id: &str) -> KeptAttempt {
         assign,
         code_dir: None,
         code_hash: None,
+        root_copies: BTreeMap::new(),
     }
 }
 
@@ -691,7 +710,7 @@ async fn against_master(
             roots: BTreeMap::from([("etl".to_owned(), root)]),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -811,6 +830,7 @@ async fn without_a_free_slot_an_assignment_is_rejected() {
 #[tokio::test]
 async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -929,6 +949,7 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
         ("old-4", JournalRecord::Running(None)),
     ]);
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -975,6 +996,7 @@ async fn a_result_sent_again_fits_the_limit_the_master_has_now() {
         ..pb::Finished::default()
     });
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 1,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -1011,6 +1033,7 @@ async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
     // B41: the master failed to store it (a database stall) and keeps the stream; nothing
     // but a reconnect sent it again.
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -1102,6 +1125,7 @@ async fn the_workers_warnings_go_after_register_and_on_every_change() {
 #[tokio::test]
 async fn a_forked_attempt_sends_started_again_with_its_method() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -1139,6 +1163,7 @@ async fn a_forked_attempt_sends_started_again_with_its_method() {
 #[tokio::test]
 async fn an_attempt_assigned_again_is_ignored() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -1170,7 +1195,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1217,6 +1242,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             root: "etl".to_owned(),
             content_hash: "sha256:h".to_owned(),
         },
+        copies: vec!["sha256:h".to_owned()],
         files: Ok(vec![]),
     })
     .unwrap();
@@ -1388,7 +1414,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1438,7 +1464,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -1549,6 +1575,7 @@ fn a_missing_proc_is_warned_once_and_other_identity_errors_every_time() {
 #[tokio::test]
 async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -1581,6 +1608,7 @@ async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
 #[tokio::test]
 async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 1,
         timing: None,
         decisions: vec![],
@@ -1619,6 +1647,7 @@ async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() 
 #[tokio::test]
 async fn a_result_past_the_masters_limit_is_sent_as_output_too_large() {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 1,
         timing: None,
         decisions: vec![],
@@ -1904,7 +1933,7 @@ fn command_needing_secret(
         roots: std::collections::BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: std::collections::BTreeMap::new(),
         script_roots: std::collections::BTreeMap::new(),
-        interpreters: Vec::new(),
+        interpreters: BTreeMap::default(),
         python: std::path::PathBuf::from("/usr/bin/python3"),
         agent_env: std::collections::BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
         pass_env: vec![],
@@ -2148,7 +2177,7 @@ async fn command_with_connection(
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
         script_roots: BTreeMap::new(),
-        interpreters: Vec::new(),
+        interpreters: BTreeMap::default(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
         pass_env: vec![],
@@ -2302,7 +2331,7 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: PathBuf::from("python3"),
             agent_env: BTreeMap::new(),
             pass_env: vec![],
@@ -2446,7 +2475,7 @@ fn attempt_with_timed_cleanup(
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
         script_roots: BTreeMap::new(),
-        interpreters: Vec::new(),
+        interpreters: BTreeMap::default(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([("PATH".to_owned(), "/usr/bin:/bin".to_owned())]),
         pass_env: vec![],
@@ -2703,6 +2732,7 @@ time.sleep(30)
 /// The answer to `Register`: `decision` for `attempt_id`.
 fn decided(attempt_id: &str, decision: pb::AttemptDecision) -> pb::MasterMessage {
     to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -2970,6 +3000,7 @@ fn silent_master(anywhere: bool) -> Vec<pb::MasterMessage> {
 /// 281: then never started).
 fn silent_master_leased(anywhere: bool, lease_ms: u64) -> Vec<pb::MasterMessage> {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
             lease_timeout_ms: lease_ms,
@@ -3238,4 +3269,210 @@ async fn a_moved_cleanup_this_worker_cant_plan_is_refused_to_wait_for_another() 
     let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"rejected: missing");
     let (seen, _) = against_script(2, Start::With(vec![]), vec![message], done).await;
     assert_eq!(kinds(&seen), ["register", "rejected: missing"]);
+}
+
+#[test]
+fn a_folded_hash_marks_its_kind_and_moves_with_what_it_folds_in() {
+    let content = "sha256:abc";
+    let script = fold_hash("script", content, &[]);
+    assert!(
+        script.starts_with("sha256:") && script.len() == 7 + 64,
+        "{script}"
+    );
+    assert_ne!(script, content);
+    assert_ne!(script, fold_hash("dag", content, &[]));
+    let used = |hash: &str| vec![("jobs".to_owned(), hash.to_owned())];
+    assert_eq!(
+        fold_hash("dag", content, &used("h1")),
+        fold_hash("dag", content, &used("h1"))
+    );
+    assert_ne!(
+        fold_hash("dag", content, &used("h1")),
+        fold_hash("dag", content, &used("h2"))
+    );
+}
+
+/// The roots and hashes of the agent's reports, in order: `Register`'s, then each
+/// `CodeVersionChanged` (an empty hash: withdrawn).
+fn root_reports(messages: &[pb::WorkerMessage]) -> Vec<Vec<(String, String)>> {
+    messages
+        .iter()
+        .filter_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Register(r) => Some(
+                r.roots
+                    .iter()
+                    .map(|root| (root.root.clone(), root.content_hash.clone()))
+                    .collect(),
+            ),
+            worker_message::Message::CodeVersionChanged(c) => c
+                .root
+                .as_ref()
+                .map(|root| vec![(root.root.clone(), root.content_hash.clone())]),
+            _ => None,
+        })
+        .collect()
+}
+
+/// B167 and decisions 301, 303, 304: a script root holding the same files as a DAG root
+/// reports another hash; a DAG root using it reports its hash folded in once the master says
+/// so, and is withdrawn when it uses a script root this worker lacks.
+#[tokio::test]
+async fn a_dag_roots_hash_folds_in_the_script_roots_it_uses_and_one_lacking_withdraws_it() {
+    let uses = |roots: &[(&str, &[&str])]| -> Vec<pb::RootUses> {
+        roots
+            .iter()
+            .map(|(root, used)| pb::RootUses {
+                root: (*root).to_owned(),
+                script_roots: used.iter().map(|s| (*s).to_owned()).collect(),
+            })
+            .collect()
+    };
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: uses(&[("etl", &["jobs"])]),
+        ..pb::Registered::default()
+    }));
+    let lacking = to_worker(master_message::Message::ScriptUses(pb::ScriptUses {
+        roots: uses(&[("etl", &["jobs", "elsewhere"])]),
+    }));
+    let scripts = TempDir::new().unwrap();
+    let (seen, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        vec![registered, lacking],
+        |m| root_reports(m).len() >= 3,
+        |agent| {
+            // The same files as the DAG root `etl` (one empty `sync.py`).
+            std::fs::write(scripts.path().join("sync.py"), "").unwrap();
+            let store = agent.settings.code_dir.join("jobs");
+            agent
+                .settings
+                .setup
+                .script_roots
+                .insert("jobs".to_owned(), scripts.path().into());
+            agent.watchers.insert(
+                "jobs".to_owned(),
+                RootWatcher::new(scripts.path(), store, Duration::ZERO),
+            );
+        },
+    )
+    .await;
+    let reports = root_reports(&seen);
+    let first: BTreeMap<String, String> = reports[0].iter().cloned().collect();
+    let (dag, script) = (&first["etl"], &first["jobs"]);
+    assert_ne!(
+        dag, script,
+        "the same files as a DAG root and as a script root (B167)"
+    );
+    assert_eq!(*script, fold_hash("script", dag, &[]));
+    let folded = fold_hash("dag", dag, &[("jobs".to_owned(), script.clone())]);
+    assert_eq!(reports[1], [("etl".to_owned(), folded)]);
+    assert_eq!(
+        reports[2],
+        [("etl".to_owned(), String::new())],
+        "withdrawn (303)"
+    );
+}
+
+#[tokio::test]
+async fn a_task_imports_another_dag_roots_library_from_its_copy() {
+    let python = task_json(&json!({"kind": "python"}));
+    let libs = TempDir::new().unwrap();
+    std::fs::write(libs.path().join("helpers.py"), "").unwrap();
+    let configured = libs.path().to_string_lossy().into_owned();
+    let sys_paths = Arc::new(Mutex::new(Vec::new()));
+    let seen_paths = Arc::clone(&sys_paths);
+    let (_, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        vec![assign("a1", &python, "sync.py", false)],
+        |m| kinds(m).iter().any(|k| k.starts_with("finished")),
+        |agent| {
+            agent.executor.sys_paths = seen_paths;
+            let store = agent.settings.code_dir.join(code_folder("libs"));
+            agent
+                .settings
+                .setup
+                .roots
+                .insert("libs".to_owned(), libs.path().into());
+            agent.watchers.insert(
+                "libs".to_owned(),
+                RootWatcher::new(libs.path(), store, Duration::ZERO),
+            );
+        },
+    )
+    .await;
+    let paths = sys_paths.lock().unwrap().clone();
+    let libs_entry = paths[0]
+        .iter()
+        .find(|p| Path::new(p).join("helpers.py").is_file() && **p != configured);
+    assert!(
+        libs_entry.is_some_and(|p| p.contains("code")),
+        "the copy of `libs`, not its configured path: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_withdrawn_roots_task_is_rejected_even_if_the_master_sent_it_before_knowing() {
+    // 303: the worker lacks script root `elsewhere`, which `etl` uses; an assignment the
+    // master sent from the root's earlier report must not run.
+    let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: vec![pb::RootUses {
+            root: "etl".to_owned(),
+            script_roots: vec!["elsewhere".to_owned()],
+        }],
+        ..pb::Registered::default()
+    }));
+    let python = task_json(&json!({"kind": "python"}));
+    let mut sent = assign("a1", &python, "sync.py", false);
+    if let Some(master_message::Message::AssignTask(a)) = sent.message.as_mut() {
+        a.expected_code_hash = "sha256:earlier".to_owned();
+    }
+    let (seen, _) = against_script(1, Start::With(vec![]), vec![registered, sent], |m| {
+        kinds(m)
+            .iter()
+            .any(|k| k.starts_with("rejected") || k.starts_with("finished"))
+    })
+    .await;
+    let rejected = rejection(&seen);
+    assert_eq!(
+        rejected.detail,
+        "root `etl` is withdrawn here: a script root it uses isn't on this worker"
+    );
+}
+
+#[tokio::test]
+async fn a_recovered_cleanup_imports_the_other_roots_from_the_copies_its_task_used() {
+    let start = Start::Kept(vec![("old-1", JournalRecord::Running(None))]);
+    let script = vec![decided("old-1", pb::AttemptDecision::Continue)];
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: failed");
+    let libs = TempDir::new().unwrap();
+    std::fs::write(libs.path().join("helpers.py"), "VERSION = 2\n").unwrap();
+    let copies = Arc::new(Mutex::new(Vec::new()));
+    let seen_copies = Arc::clone(&copies);
+    let old = Arc::new(Mutex::new(PathBuf::new()));
+    let old_dir = Arc::clone(&old);
+    against_script_with(2, start, script, done, |agent| {
+        agent.executor.cleanup_copies = seen_copies;
+        // `libs` moved on since the task ran: its copy then is an old one, the task's own.
+        let store = agent.settings.code_dir.join(code_folder("libs"));
+        let then = store.join("sha256-then");
+        std::fs::create_dir_all(&then).unwrap();
+        std::fs::write(then.join("helpers.py"), "VERSION = 1\n").unwrap();
+        agent
+            .settings
+            .setup
+            .roots
+            .insert("libs".to_owned(), libs.path().into());
+        agent.watchers.insert(
+            "libs".to_owned(),
+            RootWatcher::new(libs.path(), store, Duration::ZERO),
+        );
+        let mut kept = agent.journal.kept("old-1").unwrap().unwrap();
+        kept.root_copies = [("libs".to_owned(), then.clone())].into();
+        agent.journal.keep("old-1", &kept).unwrap();
+        *old_dir.lock().unwrap() = then;
+    })
+    .await;
+    let then = old.lock().unwrap().clone();
+    assert_eq!(*copies.lock().unwrap(), [vec![(then, true)]]);
 }

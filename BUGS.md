@@ -55,44 +55,32 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
 | 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 3 | B167: A stored parse of a DAG root counts for a script root of the same name and content | 2 | medium | rare | correctness |
-| 4 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 9 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 10 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 11 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 12 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 13 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 14 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 15 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 16 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 17 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 18 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 19 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 20 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 21 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 22 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 23 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 24 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 25 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 26 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 27 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 28 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 29 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
-
-## B167: A stored parse of a DAG root counts for a script root of the same name and content
-
-- **Rating:** severity **medium**, probability **rare**, correctness (score 2): Discovery looks a parse up by (root, content hash, schedr version), not the root's kind: a directory first configured as a DAG root (its `schedr.toml` never read) and then moved to `SCHEDR_SCRIPT_PATH` under the same name with the same files gets the old, empty DAG parse, so its scheduled jobs aren't found until a file changes.
-- **Found:** 2026-11-05, Codex's review of M4.9a (finding 2), reproduced with a throwaway
-  discovery test: a persisted DAG parse, then the same (root, hash) reported as a script root
-  after a restart: no parse assigned.
-- **Where:** crates/schedr-master/src/discovery.rs (`find_parse` and the `(root, hash)` cache),
-  crates/schedr-db/src/dags.rs (the lookup and its unique key).
-- **Fix planned:** in M4.9b, with decision 301's reported hashes: a script root's reported
-  hash marks its kind, so it never equals a DAG root's (no migration).
+| 3 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 8 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 9 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 10 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 11 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 12 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 14 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 15 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 19 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 20 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 21 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 22 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 23 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 24 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 25 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 26 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 27 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 28 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
 ## B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)
 

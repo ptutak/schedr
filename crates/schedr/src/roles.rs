@@ -135,6 +135,7 @@ pub fn master_settings(config: &Config) -> Settings {
         code_wait: config.master.code_wait,
         set_aside: config.timings.set_aside,
         cleanup_move_wait: config.timings.cleanup_move_wait,
+        script_root_grace: config.timings.script_root_grace,
         timings: schedr_master::core::MasterTimings {
             round_gap: config.timings.round_gap,
             notification_retry: config.timings.notification_retry,
@@ -186,6 +187,36 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
         })
 }
 
+/// The worker's memory watch, refused when it leaves a task less than [`MIN_BUDGET`].
+fn checked_memory(config: &Config, default_reserve: Reserve) -> Result<MemoryWatch, AppError> {
+    if let Some(budget) = config.worker.memory_budget
+        && budget < MIN_BUDGET
+    {
+        return Err(AppError::BadArgument(format!(
+            "[worker] memory_budget {} is too small for any task: give at least {}",
+            show_size(budget),
+            show_size(MIN_BUDGET)
+        )));
+    }
+    let limit = cgroup_limit(Path::new("/proc"), Path::new("/sys/fs/cgroup"))
+        .ok()
+        .flatten();
+    let memory = memory_watch(config, limit, default_reserve);
+    if config.worker.memory_budget.is_none()
+        && let Some(budget) = memory.budget
+        && budget < MIN_BUDGET
+    {
+        return Err(AppError::BadArgument(format!(
+            "[worker] memory_reserve leaves {} per task of the pod's {} limit: give at least {} \
+             (a smaller reserve, fewer slots, or more memory)",
+            show_size(budget),
+            show_size(limit.unwrap_or_default()),
+            show_size(MIN_BUDGET)
+        )));
+    }
+    Ok(memory)
+}
+
 /// The worker agent's settings, from the configuration; its journal is
 /// `<data_dir>/journal/<worker ID>` and its logs `<data_dir>/logs/<worker ID>` (other bytes
 /// than letters, digits, `-`, `_` and `.`, and a leading `.`, as `%XX`), so workers sharing a
@@ -218,31 +249,7 @@ pub fn agent_settings(
         .clone()
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
-    if let Some(budget) = config.worker.memory_budget
-        && budget < MIN_BUDGET
-    {
-        return Err(AppError::BadArgument(format!(
-            "[worker] memory_budget {} is too small for any task: give at least {}",
-            show_size(budget),
-            show_size(MIN_BUDGET)
-        )));
-    }
-    let limit = cgroup_limit(Path::new("/proc"), Path::new("/sys/fs/cgroup"))
-        .ok()
-        .flatten();
-    let memory = memory_watch(config, limit, default_reserve);
-    if config.worker.memory_budget.is_none()
-        && let Some(budget) = memory.budget
-        && budget < MIN_BUDGET
-    {
-        return Err(AppError::BadArgument(format!(
-            "[worker] memory_reserve leaves {} per task of the pod's {} limit: give at least {} \
-             (a smaller reserve, fewer slots, or more memory)",
-            show_size(budget),
-            show_size(limit.unwrap_or_default()),
-            show_size(MIN_BUDGET)
-        )));
-    }
+    let memory = checked_memory(config, default_reserve)?;
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
@@ -263,7 +270,11 @@ pub fn agent_settings(
                 .iter()
                 .map(|r| (r.name.clone(), r.path.clone()))
                 .collect(),
-            interpreters: config.interpreters.keys().cloned().collect(),
+            interpreters: config
+                .interpreters
+                .iter()
+                .map(|(name, interpreter)| (name.clone(), interpreter.path.clone()))
+                .collect(),
             python,
             agent_env: env.clone(),
             pass_env: config.worker.pass_env.clone(),

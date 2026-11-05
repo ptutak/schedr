@@ -1714,3 +1714,96 @@ async fn a_task_end_cut_off_at_its_commit_counts_only_if_its_result_was_kept() {
     assert!(result_landed(kept.as_ref()));
     assert!(result_landed(None));
 }
+
+/// Decisions 303 and 304: the script roots a DAG root's current parse asked about go to the
+/// live workers once, and to a worker registering in `Registered`; a worker withdrawing the
+/// root no longer has it.
+#[tokio::test]
+async fn the_script_roots_a_dag_root_uses_go_to_the_workers_and_a_root_can_be_withdrawn() {
+    let mut file = dag_file();
+    file.script_roots = vec!["jobs".to_owned()];
+    let mut core = with_dag_of(&file).await;
+    let uses_sent = |out: &[Outgoing]| -> Vec<(String, Vec<pb::RootUses>)> {
+        out.iter()
+            .filter_map(|o| match message(o) {
+                master_message::Message::ScriptUses(uses) => {
+                    Some((o.worker_id.clone(), uses.roots.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let expected = vec![pb::RootUses {
+        root: "etl".to_owned(),
+        script_roots: vec!["jobs".to_owned()],
+    }];
+    let out = core.tick(later(1)).await.unwrap();
+    assert_eq!(uses_sent(&out), [("w1".to_owned(), expected.clone())]);
+    assert_eq!(uses_sent(&core.tick(later(2)).await.unwrap()), []);
+    let (registered, _) = core
+        .register(&register("w2", "i1", vec![]), later(3))
+        .await
+        .unwrap();
+    assert_eq!(registered.script_uses, expected);
+    let withdrawn = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+        root: Some(root("")),
+    });
+    core.handle("w1", withdrawn, later(4)).await.unwrap();
+    let w1 = core.dispatcher().workers().get("w1").unwrap();
+    assert_eq!(w1.roots.get("etl"), None);
+    assert_eq!(
+        core.dispatcher()
+            .workers()
+            .get("w2")
+            .unwrap()
+            .roots
+            .get("etl")
+            .map(String::as_str),
+        Some("h1")
+    );
+}
+
+#[tokio::test]
+async fn a_script_root_no_worker_has_stops_withdrawing_its_dag_roots_after_the_grace() {
+    // A typo (`typo`) that no worker has: after the grace, workers no longer fold it, so the
+    // DAG root stays reported and a fix to it is parsed (303, the user's refinement).
+    let mut file = dag_file();
+    file.script_roots = vec!["jobs".to_owned(), "typo".to_owned()];
+    let mut core = with_dag_of(&file).await;
+    core.settings.script_root_grace = Duration::from_mins(1);
+    let mut w2 = register("w2", "i1", vec![]);
+    w2.roots.push(pb::RootHash {
+        kind: pb::RootKind::Script.into(),
+        root: "jobs".to_owned(),
+        content_hash: "s1".to_owned(),
+    });
+    let (registered, _) = core.register(&w2, later(30)).await.unwrap();
+    let uses = |roots: &[&str]| {
+        vec![pb::RootUses {
+            root: "etl".to_owned(),
+            script_roots: roots.iter().map(|r| (*r).to_owned()).collect(),
+        }]
+    };
+    // Within the grace from the master's start, a root not reported yet still counts.
+    assert_eq!(registered.script_uses, uses(&["jobs", "typo"]));
+    let sent = |out: &[Outgoing]| -> Vec<Vec<pb::RootUses>> {
+        out.iter()
+            .filter_map(|o| match message(o) {
+                master_message::Message::ScriptUses(uses) => Some(uses.roots.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    core.tick(later(31)).await.unwrap();
+    // After it, `typo` is left out; `jobs`, reported by `w2`, stays.
+    let out = core.tick(later(61)).await.unwrap();
+    assert_eq!(sent(&out), [uses(&["jobs"]), uses(&["jobs"])]);
+    // `w2` is lost (its lease ends at the tick of 123 s): `jobs` too counts as absent once
+    // the grace has passed since it was last reported, not before.
+    core.disconnected("w2", later(62)).await.unwrap();
+    core.tick(later(123)).await.unwrap();
+    assert!(!core.connections.contains_key("w2"));
+    let effective = |core: &mut MasterCore, t| root_uses(&core.script_uses_at(later(t)));
+    assert_eq!(effective(&mut core, 180), uses(&["jobs"]));
+    assert_eq!(effective(&mut core, 184), []);
+}

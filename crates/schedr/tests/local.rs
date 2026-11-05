@@ -86,8 +86,14 @@ impl Local {
 
     /// Runs `schedr dags <args>`: exit code, stdout, stderr.
     fn dags(&self, args: &[&str]) -> (i32, String, String) {
+        self.dags_with(args, &[])
+    }
+
+    /// As [`Self::dags`], with more environment variables.
+    fn dags_with(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
         let output = Command::new(BINARY)
             .env_clear()
+            .envs(env.iter().copied())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", self.dir.path())
             .env("TZ", "UTC")
@@ -156,6 +162,38 @@ fn check_reports_broken_and_invalid_files_and_fails() {
     assert!(err.contains("2 file(s) with errors"), "{err}");
     // The traceback starts at the user's code, not in schedr or importlib.
     assert!(!out.contains("importlib"), "{out}");
+}
+
+#[test]
+fn check_looks_a_script_operator_up_in_the_configured_script_roots() {
+    let dag = r#"
+from schedr import Dag, ScriptOperator
+
+with Dag("uses_script"):
+    ScriptOperator("clean", "jobs:team/schedr.toml#daily")
+
+with Dag("typo"):
+    ScriptOperator("clean", "jobs:team/schedr.toml#dialy")
+"#;
+    let local = Local::new(&[("uses.py", dag)]);
+    let jobs = local.dir.path().join("jobs");
+    std::fs::create_dir_all(jobs.join("team")).unwrap();
+    std::fs::write(jobs.join("team/report.py"), "").unwrap();
+    std::fs::write(
+        jobs.join("team/schedr.toml"),
+        "[jobs.daily]\nscript = \"report.py\"\ninterpreter = \"python\"\n",
+    )
+    .unwrap();
+    let root = local.root();
+    let (code, out, _) = local.dags_with(
+        &["check", path_str(&root)],
+        &[("SCHEDR_SCRIPT_PATH", path_str(&jobs))],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("error  uses.py: LookupError: task `clean`: `jobs:team/schedr.toml` declares no job `dialy`"),
+        "{out}"
+    );
 }
 
 #[test]

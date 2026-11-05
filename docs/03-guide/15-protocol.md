@@ -356,6 +356,11 @@ sequenceDiagram
     Note over M: parse_job_timeout: 10 min default; unfinished job is reassigned
 ```
 
+A `ParsedFile` carries `script_roots`, the script roots its `ScriptOperator`s asked for,
+including a missing root that caused an import error. During a DAG parse, the runner asks the
+agent `script_declaration` for a reference. The agent answers with the checked declaration
+or an error explaining why it could not resolve it.
+
 A file exceeding the master's message limit is reported as an import error; the upload runs separately from heartbeats.
 
 ## Connection job
@@ -398,7 +403,7 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 |---|---|---|---|---|
 | `Register` | Worker on every connection | Validate, reconcile journal and reply | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
 | `Heartbeat` | Worker periodically | Renew lease on arrival | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
-| `CodeVersionChanged` | Worker after root settles | Record hash, possibly plan parse | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
+| `CodeVersionChanged` | Worker after root settles or withdraws it | Record hash and possibly plan parse; an empty hash withdraws the root | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | [assignment expiry](14-timings.md#fixed-timings) |
 | `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
@@ -414,7 +419,8 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
 | `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
-| `Registered` | Master after `Register` | Apply timing and journal decisions; ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
 | `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |

@@ -131,6 +131,13 @@ pub struct AttemptSpec {
     /// The copy of its root's code it was planned against (decision 102); `None`: the
     /// configured root.
     pub code_dir: Option<PathBuf>,
+    /// For a script task, the copy of its script root's code it was planned against; `None`:
+    /// the configured script root.
+    pub script_dir: Option<PathBuf>,
+    /// The copies of the other DAG roots it was planned against, on a Python task's
+    /// `sys.path` in place of their configured paths (a library in another root comes from
+    /// one copy for the whole task).
+    pub root_copies: BTreeMap<String, PathBuf>,
     /// Its root's connections (decision 174): rendered when the task opens one.
     pub connections: Arc<Registry>,
     /// A command's connections given as variables (`connections={"DB": warehouse}`, decision
@@ -224,6 +231,8 @@ impl AttemptSpec {
             secrets: BTreeMap::new(),
             mask: Mask::default(),
             code_dir: None,
+            script_dir: None,
+            root_copies: BTreeMap::new(),
             connections: Arc::new(if assign.connections_json.is_empty() {
                 Registry::default()
             } else {
@@ -367,8 +376,8 @@ pub struct WorkerSetup {
     /// The script roots, by name (`SCHEDR_SCRIPT_PATH`): read for their `schedr.toml` files,
     /// never imported.
     pub script_roots: BTreeMap<String, PathBuf>,
-    /// The names of the interpreters it has (`[interpreters]`), for scripts.
-    pub interpreters: Vec<String>,
+    /// The interpreters it has (`[interpreters]`): each name's executable, for scripts.
+    pub interpreters: BTreeMap<String, PathBuf>,
     /// The interpreter for Python tasks (`[dags] interpreter`).
     pub python: PathBuf,
     /// The agent's own environment (the allow-listed variables pass to tasks).
@@ -400,6 +409,16 @@ impl WorkerSetup {
     pub fn sys_path(&self) -> Vec<String> {
         self.roots
             .values()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// As [`Self::sys_path`], with each root of `copies` at its copy instead (decision 102).
+    #[must_use]
+    pub fn sys_path_at(&self, copies: &BTreeMap<String, PathBuf>) -> Vec<String> {
+        self.roots
+            .iter()
+            .map(|(name, p)| copies.get(name).unwrap_or(p))
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
     }
@@ -517,7 +536,14 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                     inputs: spec.inputs.clone(),
                     outcomes: spec.outcomes.clone(),
                     run: spec.run.clone(),
-                    sys_path: setup.sys_path_with(&spec.dag_root, root_dir),
+                    sys_path: setup.sys_path_at(
+                        &spec
+                            .root_copies
+                            .clone()
+                            .into_iter()
+                            .chain([(spec.dag_root.clone(), root_dir.to_path_buf())])
+                            .collect(),
+                    ),
                     secrets: spec
                         .secrets
                         .iter()
@@ -532,24 +558,10 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             })
         }
         TaskKind::Command { command, env, .. } => {
-            let mut ctx = RenderContext::new(
-                &spec.run.dag_id,
-                &spec.run.run_id,
-                &spec.run.kind.to_string(),
-                &spec.run.planned_for.to_string(),
-                &spec.run.since.to_string(),
-            );
-            ctx.inputs.clone_from(&spec.inputs);
-            ctx.outcomes.clone_from(&spec.outcomes);
-            ctx.params.clone_from(&spec.run.params);
-            ctx.secrets.clone_from(&spec.secrets);
+            let ctx = render_context(spec);
             let (program, args) =
                 command_line(command, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?;
-            let mut task_env = env
-                .iter()
-                .map(|(name, template)| Ok((name.clone(), render(template, &ctx)?)))
-                .collect::<Result<BTreeMap<_, _>, crate::render::RenderError>>()
-                .map_err(|e| failed(RENDER_FAILED, &e))?;
+            let mut task_env = render_env(env, &ctx)?;
             add_connection_env(&mut task_env, &spec.connection_env)?;
             let env = task_environment(&setup.agent_env, &setup.pass_env, &task_env, &vars)
                 .map_err(|e| failed(RENDER_FAILED, &e))?;
@@ -571,12 +583,149 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             reason: pb::RejectReason::InvalidSpecification,
             detail: "empty tasks are completed by the master".to_owned(),
         }),
-        // Found and listed (M4.9a); run once the agent knows how (M4.9b).
-        TaskKind::Script { job, .. } => Err(NotRun::Rejected {
-            reason: pb::RejectReason::InvalidSpecification,
-            detail: format!("`{job}`: this worker can't run scripts yet"),
-        }),
+        TaskKind::Script { .. } => plan_script(spec, setup, root_dir, &vars),
     }
+}
+
+/// A script task's process (decision 293): its interpreter running the script from its
+/// script root's copy.
+fn plan_script(
+    spec: &AttemptSpec,
+    setup: &WorkerSetup,
+    root_dir: &Path,
+    vars: &RunVars,
+) -> Result<Plan, NotRun> {
+    let TaskKind::Script {
+        job,
+        script,
+        interpreter,
+        args,
+        env,
+        working_dir,
+    } = &spec.task.kind
+    else {
+        unreachable!("planned as a script")
+    };
+    let log_file = setup.log_file(&spec.attempt_id);
+    let max_output_size = usize::try_from(spec.task.settings.max_output_size).unwrap_or(usize::MAX);
+    // Checked when it was read; checked again, as the path is about to run (decision 293).
+    if !crate::jobs::stays_inside(script)
+        || !(working_dir.is_empty() || crate::jobs::stays_inside(working_dir))
+    {
+        return Err(NotRun::Failed {
+            kind: RENDER_FAILED.to_owned(),
+            message: format!("`{job}`: its script or working directory leaves its script root"),
+        });
+    }
+    let script_dir = script_dir(spec, setup, job, root_dir)?;
+    let program = setup
+        .interpreters
+        .get(interpreter)
+        .ok_or_else(|| NotRun::Rejected {
+            reason: pb::RejectReason::InterpreterUndefined,
+            detail: format!(
+                "interpreter `{interpreter}` of `{job}` isn't defined on this worker \
+                     ([interpreters])"
+            ),
+        })?;
+    let file = script_dir.join(script);
+    if !file.is_file() {
+        return Err(NotRun::Rejected {
+            reason: pb::RejectReason::ScriptReferenceNotFound,
+            detail: format!("`{job}`: its script `{script}` isn't on this worker"),
+        });
+    }
+    let ctx = render_context(spec);
+    let mut argv = vec![file.to_string_lossy().into_owned()];
+    for template in args {
+        argv.push(render(template, &ctx).map_err(|e| failed(RENDER_FAILED, &e))?);
+    }
+    let mut task_env = render_env(env, &ctx)?;
+    // Its root's libraries importable from anywhere in it (a Python script).
+    task_env
+        .entry(PYTHONPATH.to_owned())
+        .or_insert_with(|| python_path(&script_dir, setup));
+    let env = task_environment(&setup.agent_env, &setup.pass_env, &task_env, vars)
+        .map_err(|e| failed(RENDER_FAILED, &e))?;
+    Ok(Plan::Command(ProcessSpec {
+        program: program.clone(),
+        args: argv,
+        env,
+        working_dir: script_dir.join(working_dir),
+        log_file,
+        max_output_size,
+        mask: spec.mask.clone(),
+        start_timeout: setup.timeouts.runner_start,
+        output_drain: setup.timeouts.output_drain,
+    }))
+}
+
+/// The variable a Python script finds its root's libraries through.
+const PYTHONPATH: &str = "PYTHONPATH";
+
+/// A script's `PYTHONPATH`: its script root's copy, then the agent's own when the worker
+/// passes it on (`[worker] pass_env`).
+fn python_path(script_dir: &Path, setup: &WorkerSetup) -> String {
+    let own = script_dir.to_string_lossy().into_owned();
+    match setup.agent_env.get(PYTHONPATH) {
+        Some(passed) if setup.pass_env.iter().any(|name| name == PYTHONPATH) => {
+            format!("{own}:{passed}")
+        }
+        _ => own,
+    }
+}
+
+/// The script root a script task's `job` (`<root>:<path>#<name>`) is in, as this worker has
+/// it: the copy it was planned against, else the configured directory; the task's own root
+/// when it is a standalone job's.
+fn script_dir(
+    spec: &AttemptSpec,
+    setup: &WorkerSetup,
+    job: &str,
+    root_dir: &Path,
+) -> Result<PathBuf, NotRun> {
+    let root = job.split_once(':').map_or(job, |(root, _)| root);
+    if let Some(dir) = &spec.script_dir {
+        return Ok(dir.clone());
+    }
+    if root == spec.dag_root {
+        return Ok(root_dir.to_path_buf());
+    }
+    setup
+        .script_roots
+        .get(root)
+        .cloned()
+        .ok_or_else(|| NotRun::Rejected {
+            reason: pb::RejectReason::ScriptRootUnknown,
+            detail: format!("script root `{root}` of `{job}` isn't on this worker"),
+        })
+}
+
+/// What a command's or a script's templates are rendered with.
+fn render_context(spec: &AttemptSpec) -> RenderContext {
+    let mut ctx = RenderContext::new(
+        &spec.run.dag_id,
+        &spec.run.run_id,
+        &spec.run.kind.to_string(),
+        &spec.run.planned_for.to_string(),
+        &spec.run.since.to_string(),
+    );
+    ctx.inputs.clone_from(&spec.inputs);
+    ctx.outcomes.clone_from(&spec.outcomes);
+    ctx.params.clone_from(&spec.run.params);
+    ctx.secrets.clone_from(&spec.secrets);
+    ctx
+}
+
+/// A task's `env`, rendered.
+fn render_env(
+    env: &BTreeMap<String, schedr_model::value::Template>,
+    ctx: &RenderContext,
+) -> Result<BTreeMap<String, String>, NotRun> {
+    env.iter()
+        .map(|(name, template)| Ok((name.clone(), render(template, ctx)?)))
+        .collect::<Result<BTreeMap<_, _>, crate::render::RenderError>>()
+        .map_err(|e| failed(RENDER_FAILED, &e))
 }
 
 /// How a started attempt ended.

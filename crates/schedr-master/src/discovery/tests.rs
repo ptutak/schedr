@@ -47,6 +47,7 @@ fn upload(hash: &str, files: Vec<(&str, Vec<Dag>)>) -> ParseUpload {
         files: files
             .into_iter()
             .map(|(path, dags)| ParsedFile {
+                script_roots: Vec::new(),
                 path: path.to_owned(),
                 dags,
                 connections: Vec::new(),
@@ -589,6 +590,7 @@ async fn a_draining_worker_takes_no_parse_jobs_and_hands_its_own_over() {
 /// `upload`, with `path` failing with `exception` instead.
 fn failing(mut upload: ParseUpload, path: &str, exception: &str) -> ParseUpload {
     upload.files.push(ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags: Vec::new(),
         connections: Vec::new(),
@@ -1251,6 +1253,7 @@ async fn a_rolled_back_change_puts_the_roots_connections_back() {
     let mut discovery = discovery().await;
     let registry = |path: &str| {
         Arc::new(Registry::of(&[schedr_model::runner::ParsedFile {
+            script_roots: Vec::new(),
             path: path.to_owned(),
             dags: Vec::new(),
             connections: vec![serde_json::from_value(json!({"name": "db", "params": {}})).unwrap()],

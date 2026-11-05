@@ -86,7 +86,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         roots: BTreeMap::from([("etl".to_owned(), dir.path().join("etl"))]),
         parse_only: BTreeMap::new(),
         script_roots: BTreeMap::new(),
-        interpreters: Vec::new(),
+        interpreters: BTreeMap::default(),
         python: PathBuf::from("/usr/bin/python3"),
         agent_env: BTreeMap::from([
             ("PATH".to_owned(), "/usr/bin".to_owned()),
@@ -629,4 +629,126 @@ async fn an_open_gate_past_its_deadline_passes_when_the_master_is_heard_in_time(
     deadline.send_replace(Some(tokio::time::Instant::now() + Duration::from_secs(60)));
     let woken = tokio::time::timeout(Duration::from_secs(5), waiting).await;
     assert!(woken.expect("woken by the deadline").unwrap());
+}
+
+/// A DAG's script task using `jobs:team/schedr.toml#report` (script `team/report.py`).
+fn script_task() -> serde_json::Value {
+    task(&json!({
+        "kind": "script",
+        "job": "jobs:team/schedr.toml#report",
+        "script": "team/report.py",
+        "interpreter": "etl-venv",
+        "args": [[{"text": "--rows="}, {"ref": {"kind": "output", "task": "extract", "path": ["rows"]}}]],
+        "env": {"MODE": [{"text": "full"}]},
+        "working_dir": "team"
+    }))
+}
+
+/// [`setup`] with a script root `jobs` holding `team/report.py`, and `etl-venv`.
+fn script_setup() -> (TempDir, WorkerSetup) {
+    let (dir, mut setup) = setup();
+    std::fs::create_dir_all(dir.path().join("jobs/team")).unwrap();
+    std::fs::write(dir.path().join("jobs/team/report.py"), "").unwrap();
+    setup
+        .script_roots
+        .insert("jobs".to_owned(), dir.path().join("jobs"));
+    setup
+        .interpreters
+        .insert("etl-venv".to_owned(), PathBuf::from("/opt/etl/bin/python"));
+    (dir, setup)
+}
+
+#[test]
+fn a_script_runs_with_its_interpreter_its_rendered_args_and_its_root_on_pythonpath() {
+    let (dir, setup) = script_setup();
+    let spec = AttemptSpec::from_assign(&assign(&script_task()), None).unwrap();
+    let Plan::Command(process) = plan(&spec, &setup).unwrap() else {
+        panic!("expected a process")
+    };
+    let root = &setup.script_roots["jobs"];
+    assert_eq!(process.program, PathBuf::from("/opt/etl/bin/python"));
+    assert_eq!(
+        process.args,
+        [
+            root.join("team/report.py").to_string_lossy().into_owned(),
+            "--rows=3".to_owned()
+        ]
+    );
+    assert_eq!(process.env["MODE"], "full");
+    assert_eq!(process.env["PYTHONPATH"], root.to_string_lossy());
+    assert_eq!(process.env["SCHEDR_DAG_ID"], "sync");
+    assert_eq!(process.env["SCHEDR_TASK_ID"], "load");
+    assert!(!process.env.contains_key("SECRET"));
+    assert_eq!(process.working_dir, root.join("team"));
+    // Planned against a copy of the script root: run from it.
+    let mut copied = spec;
+    std::fs::create_dir_all(dir.path().join("copy/team")).unwrap();
+    std::fs::write(dir.path().join("copy/team/report.py"), "").unwrap();
+    copied.script_dir = Some(dir.path().join("copy"));
+    let Plan::Command(process) = plan(&copied, &setup).unwrap() else {
+        panic!("expected a process")
+    };
+    assert_eq!(process.working_dir, dir.path().join("copy/team"));
+}
+
+#[test]
+fn a_script_without_its_interpreter_root_or_file_here_is_rejected_with_why() {
+    let reason = |setup: &WorkerSetup| match plan(
+        &AttemptSpec::from_assign(&assign(&script_task()), None).unwrap(),
+        setup,
+    ) {
+        Err(NotRun::Rejected { reason, detail }) => (reason, detail),
+        other => panic!("expected a rejection, got {other:?}"),
+    };
+    let (_dir, mut no_interpreter) = script_setup();
+    no_interpreter.interpreters.clear();
+    let (why, detail) = reason(&no_interpreter);
+    assert_eq!(why, pb::RejectReason::InterpreterUndefined);
+    assert!(detail.contains("interpreter `etl-venv`"), "{detail}");
+    let (_dir, mut no_root) = script_setup();
+    no_root.script_roots.clear();
+    let (why, detail) = reason(&no_root);
+    assert_eq!(why, pb::RejectReason::ScriptRootUnknown);
+    assert!(detail.contains("script root `jobs`"), "{detail}");
+    let (dir, no_file) = script_setup();
+    std::fs::remove_file(dir.path().join("jobs/team/report.py")).unwrap();
+    let (why, detail) = reason(&no_file);
+    assert_eq!(why, pb::RejectReason::ScriptReferenceNotFound);
+    assert!(detail.contains("`team/report.py`"), "{detail}");
+}
+
+#[test]
+fn a_standalone_jobs_script_comes_from_its_own_root() {
+    let (dir, mut setup) = script_setup();
+    setup
+        .roots
+        .insert("jobs".to_owned(), dir.path().join("jobs"));
+    std::fs::write(dir.path().join("jobs/team/schedr.toml"), "").unwrap();
+    let mut job = assign(&script_task());
+    job.dag_file = Some(pb::DagFileRef {
+        root: "jobs".to_owned(),
+        path: "team/schedr.toml".to_owned(),
+    });
+    let spec = AttemptSpec::from_assign(&job, None).unwrap();
+    let Plan::Command(process) = plan(&spec, &setup).unwrap() else {
+        panic!("expected a process")
+    };
+    assert_eq!(process.working_dir, dir.path().join("jobs/team"));
+}
+
+#[test]
+fn a_script_or_working_dir_leaving_its_script_root_isnt_run() {
+    let (dir, setup) = script_setup();
+    std::fs::write(dir.path().join("payload.py"), "").unwrap();
+    for (field, value) in [("script", "../payload.py"), ("working_dir", "../..")] {
+        let mut task = script_task();
+        task[field] = json!(value);
+        let spec = AttemptSpec::from_assign(&assign(&task), None).unwrap();
+        match plan(&spec, &setup) {
+            Err(NotRun::Failed { message, .. }) => {
+                assert!(message.ends_with("leaves its script root"), "{message}");
+            }
+            other => panic!("{field} = {value}: expected a failure, got {other:?}"),
+        }
+    }
 }

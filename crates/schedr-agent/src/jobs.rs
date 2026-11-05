@@ -129,6 +129,56 @@ pub struct Declaration {
     pub description: Option<String>,
     /// Its tags.
     pub tags: Vec<String>,
+    /// The settings its file gives (the others are the defaults in `task`).
+    pub given: Given,
+}
+
+/// The task settings a declaration gives itself: a `ScriptOperator` takes these, and the
+/// DAG's defaults for the others.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Given {
+    /// `retries`.
+    pub retries: Option<u32>,
+    /// `retry_delay`.
+    pub retry_delay_ms: Option<u64>,
+    /// `timeout`.
+    pub timeout_ms: Option<u64>,
+    /// `queue`.
+    pub queue: Option<String>,
+    /// `max_output_size`.
+    pub max_output_size: Option<u64>,
+}
+
+impl Declaration {
+    /// What a `ScriptOperator` referring to it gets (decision 293).
+    #[must_use]
+    pub fn for_operator(&self) -> schedr_model::runner::ScriptDeclaration {
+        let TaskKind::Script {
+            job,
+            script,
+            interpreter,
+            args,
+            env,
+            working_dir,
+        } = &self.task.kind
+        else {
+            unreachable!("a declaration's task is a script")
+        };
+        schedr_model::runner::ScriptDeclaration {
+            job: job.clone(),
+            script: script.clone(),
+            interpreter: interpreter.clone(),
+            args: args.clone(),
+            env: env.clone(),
+            secrets: self.task.secrets.clone(),
+            working_dir: working_dir.clone(),
+            retries: self.given.retries,
+            retry_delay_ms: self.given.retry_delay_ms,
+            timeout_ms: self.given.timeout_ms,
+            queue: self.given.queue.clone(),
+            max_output_size: self.given.max_output_size,
+        }
+    }
 }
 
 /// A standalone job's DAG-level settings.
@@ -248,6 +298,11 @@ fn job_of(
         );
     }
     let task = keys.task(name, source);
+    let given = task
+        .as_ref()
+        .map(|(_, given)| given.clone())
+        .unwrap_or_default();
+    let task = task.map(|(task, _)| task);
     let description = keys.string("description");
     let tags = keys.strings("tags").unwrap_or_default();
     let reference = source.reference(name);
@@ -264,6 +319,7 @@ fn job_of(
         name: name.to_owned(),
         reference,
         task: task?,
+        given,
         schedule: match schedule {
             Scheduling::Scheduled(schedule) => Some(schedule),
             Scheduling::Unscheduled | Scheduling::Bad => None,
@@ -492,8 +548,8 @@ impl Keys<'_> {
         })
     }
 
-    /// The job's task, named after it.
-    fn task(&mut self, name: &str, source: &Source<'_>) -> Option<Task> {
+    /// The job's task, named after it, and the settings the file gives.
+    fn task(&mut self, name: &str, source: &Source<'_>) -> Option<(Task, Given)> {
         let script = self.path("script", source, true);
         // Checked by the worker that runs it (rejection 3): workers may have different ones.
         let interpreter = self.required_string("interpreter");
@@ -509,21 +565,24 @@ impl Keys<'_> {
             .collect();
         let env = self.env();
         let secrets = self.secrets();
+        let given = Given {
+            retries: self.whole("retries", 0),
+            retry_delay_ms: self.duration_ms("retry_delay"),
+            timeout_ms: self.duration_ms("timeout"),
+            queue: self.string("queue"),
+            max_output_size: self.size("max_output_size"),
+        };
         let defaults = TaskSettings::default();
         let settings = TaskSettings {
-            retries: self.whole("retries", 0).unwrap_or(defaults.retries),
-            retry_delay_ms: self
-                .duration_ms("retry_delay")
-                .unwrap_or(defaults.retry_delay_ms),
-            timeout_ms: self.duration_ms("timeout"),
-            queue: self.string("queue").unwrap_or(defaults.queue.clone()),
-            max_output_size: self
-                .size("max_output_size")
-                .unwrap_or(defaults.max_output_size),
+            retries: given.retries.unwrap_or(defaults.retries),
+            retry_delay_ms: given.retry_delay_ms.unwrap_or(defaults.retry_delay_ms),
+            timeout_ms: given.timeout_ms,
+            queue: given.queue.clone().unwrap_or(defaults.queue.clone()),
+            max_output_size: given.max_output_size.unwrap_or(defaults.max_output_size),
             ..defaults
         };
         let id = TaskId::new(name).ok()?;
-        Some(Task {
+        let task = Task {
             id,
             kind: TaskKind::Script {
                 job: source.reference(name),
@@ -541,7 +600,8 @@ impl Keys<'_> {
             secrets,
             connections: Vec::new(),
             cleanup: None,
-        })
+        };
+        Some((task, given))
     }
 
     /// A path key as a path in the root; a `script` must name a file there.
@@ -728,6 +788,108 @@ fn moment_of(when: &Datetime, tz: &TimeZone) -> Result<Timestamp, String> {
         .map_err(|e| format!("`{text}`: {e}"))
 }
 
+/// A script root as a parse sees it: where it is configured, and the copy of its code the
+/// worker reports (decision 102).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptRoot {
+    /// The configured directory (an absolute reference is resolved against it).
+    pub configured: std::path::PathBuf,
+    /// The copy its files are read from.
+    pub copy: std::path::PathBuf,
+}
+
+/// The declaration a `ScriptOperator` refers to (decision 293): `reference` is
+/// `<root>:<path>#<name>` or `/abs/path/schedr.toml#<name>`, read from the copies of this
+/// worker's script roots `scripts`. Returns the script root it names, if it names one (the
+/// DAG root then uses it, decision 304, found or not), and the declaration or why it can't
+/// be used.
+pub fn lookup(
+    reference: &str,
+    scripts: &BTreeMap<String, ScriptRoot>,
+) -> (
+    Option<String>,
+    Result<schedr_model::runner::ScriptDeclaration, String>,
+) {
+    let Some((location, name)) = reference.rsplit_once('#') else {
+        return (
+            None,
+            Err(format!(
+                "`{reference}`: a reference is `<root>:<path>/{FILE_NAME}#<job>` (or an \
+                 absolute path to the file, then `#<job>`)"
+            )),
+        );
+    };
+    let resolved = if location.starts_with('/') {
+        let file = std::path::Path::new(location);
+        scripts.iter().find_map(|(root, at)| {
+            let configured = at
+                .configured
+                .canonicalize()
+                .unwrap_or_else(|_| at.configured.clone());
+            let relative = file
+                .strip_prefix(&configured)
+                .or_else(|_| file.strip_prefix(&at.configured))
+                .ok()?;
+            Some((root.clone(), relative.to_string_lossy().replace('\\', "/")))
+        })
+    } else {
+        location
+            .split_once(':')
+            .map(|(root, path)| (root.to_owned(), path.to_owned()))
+    };
+    let Some((root, path)) = resolved else {
+        let why = if location.starts_with('/') {
+            format!("`{location}` isn't in a script root of this worker (`SCHEDR_SCRIPT_PATH`)")
+        } else {
+            format!(
+                "`{reference}`: a reference is `<root>:<path>/{FILE_NAME}#<job>` (or an \
+                 absolute path to the file, then `#<job>`)"
+            )
+        };
+        return (None, Err(why));
+    };
+    let found = (|| {
+        let at = scripts.get(&root).ok_or_else(|| {
+            format!("script root `{root}` isn't on this worker (`SCHEDR_SCRIPT_PATH`)")
+        })?;
+        if !is_config(&path) {
+            return Err(format!("`{root}:{path}` isn't a `{FILE_NAME}`"));
+        }
+        if !stays_inside(&path) {
+            return Err(format!(
+                "`{root}:{path}`: a reference goes down into its script root (no `..`, not \
+                 absolute)"
+            ));
+        }
+        let exists = |file: &str| at.copy.join(file).is_file();
+        let source = Source {
+            root: &root,
+            path: &path,
+            exists: &exists,
+        };
+        let text = std::fs::read_to_string(at.copy.join(&path))
+            .map_err(|_| format!("`{root}:{path}` isn't in script root `{root}`"))?;
+        let declared = read(&text, &source)
+            .map_err(|problems| format!("`{root}:{path}`: {}", problems.join("; ")))?;
+        declared
+            .iter()
+            .find(|declaration| declaration.name == name)
+            .map(Declaration::for_operator)
+            .ok_or_else(|| format!("`{root}:{path}` declares no job `{name}`"))
+    })();
+    (Some(root), found)
+}
+
+/// Whether a path relative to a root stays in it: only names going down (`.` aside).
+#[must_use]
+pub fn stays_inside(path: &str) -> bool {
+    use std::path::Component;
+    !path.is_empty()
+        && std::path::Path::new(path)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+}
+
 /// A warning for each declaration whose interpreter isn't one of `known`.
 fn unknown_interpreters(declared: &[Declaration], known: &[String]) -> Vec<String> {
     declared
@@ -778,6 +940,7 @@ pub fn read_root(
             };
             match read {
                 Ok(declared) => ParsedFile {
+                    script_roots: Vec::new(),
                     path: path.clone(),
                     dags: declared.iter().filter_map(|d| d.dag(&location)).collect(),
                     connections: Vec::new(),
@@ -786,6 +949,7 @@ pub fn read_root(
                         .map_or_else(Vec::new, |known| unknown_interpreters(&declared, known)),
                 },
                 Err(problems) => ParsedFile {
+                    script_roots: Vec::new(),
                     path: path.clone(),
                     dags: Vec::new(),
                     connections: Vec::new(),

@@ -160,6 +160,8 @@ pub fn test_spec(
         secrets: std::collections::BTreeMap::new(),
         mask: crate::mask::Mask::default(),
         code_dir: job.code_dir.clone(),
+        script_dir: None,
+        root_copies: std::collections::BTreeMap::new(),
         connections: Arc::clone(&job.registry),
         connection_env: std::collections::BTreeMap::new(),
         connection_test: Some(name.to_owned()),

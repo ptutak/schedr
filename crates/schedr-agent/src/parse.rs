@@ -6,12 +6,13 @@
 //! the agent stops the runner, records an import error for that file and starts a new runner
 //! for the remaining files (see PROJECT.md, Rust/Python integration: parsing granularity).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use schedr_model::runner::{ErrorSummary, ParseRequest, ParsedFile, RunnerMessage};
+use schedr_model::runner::{AgentMessage, ErrorSummary, ParseRequest, ParsedFile, RunnerMessage};
 
 use crate::channel::ChannelError;
+use crate::jobs::ScriptRoot;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,12 @@ pub enum ParseError {
 pub trait ParseSession: Send {
     /// The runner's next message.
     fn next(&mut self) -> impl Future<Output = Result<RunnerMessage, ChannelError>> + Send;
+
+    /// Answers the runner (a `ScriptOperator`'s declaration, decision 293).
+    fn send(
+        &mut self,
+        message: AgentMessage,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send;
 
     /// Stops the runner (its whole process group) and waits for it.
     fn stop(self) -> impl Future<Output = ()> + Send;
@@ -67,6 +74,22 @@ pub async fn parse_files<R: ParseRunner>(
     request: ParseRequest,
     per_file: Duration,
 ) -> Result<Vec<ParsedFile>, ParseError> {
+    parse_files_with(runner, request, per_file, &BTreeMap::new()).await
+}
+
+/// As [`parse_files`], answering a `ScriptOperator`'s questions from the script roots
+/// `scripts` (their copies, decision 293) and recording in each file the script roots it
+/// asked about (decision 304).
+///
+/// # Errors
+///
+/// As [`parse_files`].
+pub async fn parse_files_with<R: ParseRunner>(
+    runner: &mut R,
+    request: ParseRequest,
+    per_file: Duration,
+    scripts: &BTreeMap<String, ScriptRoot>,
+) -> Result<Vec<ParsedFile>, ParseError> {
     let mut remaining: VecDeque<String> = request.files.iter().cloned().collect();
     let mut parsed = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
@@ -76,7 +99,14 @@ pub async fn parse_files<R: ParseRunner>(
                 ..request.clone()
             })
             .await?;
-        let step = run_session(&mut session, &mut remaining, &mut parsed, per_file).await;
+        let mut asked = BTreeSet::new();
+        let step = run_session(
+            &mut session,
+            (&mut remaining, &mut parsed),
+            per_file,
+            (scripts, &mut asked),
+        )
+        .await;
         session.stop().await;
         match step {
             // Done, or the file goes first in a fresh runner (it alone is then measured).
@@ -84,6 +114,8 @@ pub async fn parse_files<R: ParseRunner>(
             Err(SessionEnd::Lost(path, error)) => {
                 remaining.pop_front();
                 parsed.push(ParsedFile {
+                    // What it asked before it was lost still counts (decision 304).
+                    script_roots: asked.into_iter().collect(),
                     path,
                     dags: Vec::new(),
                     connections: Vec::new(),
@@ -110,14 +142,19 @@ enum SessionEnd {
 
 async fn run_session<S: ParseSession>(
     session: &mut S,
-    remaining: &mut VecDeque<String>,
-    parsed: &mut Vec<ParsedFile>,
+    (remaining, parsed): (&mut VecDeque<String>, &mut Vec<ParsedFile>),
     per_file: Duration,
+    (scripts, asked): (&BTreeMap<String, ScriptRoot>, &mut BTreeSet<String>),
 ) -> Result<(), SessionEnd> {
     let mut current: Option<String> = None;
     let mut imported = 0;
+    // A file's whole import has `per_file`, its `ScriptOperator`s' questions included.
+    let mut deadline = tokio::time::Instant::now() + per_file;
     loop {
-        let message = match tokio::time::timeout(per_file, session.next()).await {
+        if current.is_none() {
+            deadline = tokio::time::Instant::now() + per_file;
+        }
+        let message = match tokio::time::timeout_at(deadline, session.next()).await {
             Ok(Ok(message)) => message,
             Ok(Err(error)) => {
                 return Err(match current {
@@ -139,7 +176,22 @@ async fn run_session<S: ParseSession>(
             RunnerMessage::FileStarted { path }
                 if current.is_none() && remaining.front() == Some(&path) =>
             {
+                asked.clear();
                 current = Some(path);
+            }
+            RunnerMessage::ScriptDeclaration { reference } if current.is_some() => {
+                let (root, found) = crate::jobs::lookup(&reference, scripts);
+                asked.extend(root);
+                let answer = match found {
+                    Ok(declaration) => AgentMessage::ScriptDeclaration(declaration),
+                    Err(message) => AgentMessage::ScriptNotFound { message },
+                };
+                let path = || current.clone().unwrap_or_default();
+                match tokio::time::timeout_at(deadline, session.send(answer)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => return Err(SessionEnd::Lost(path(), died(&error))),
+                    Err(_) => return Err(SessionEnd::Lost(path(), timed_out(per_file))),
+                }
             }
             RunnerMessage::FileParsed {
                 path,
@@ -152,6 +204,7 @@ async fn run_session<S: ParseSession>(
                 imported += 1;
                 remaining.pop_front();
                 parsed.push(ParsedFile {
+                    script_roots: std::mem::take(asked).into_iter().collect(),
                     path,
                     dags,
                     connections,

@@ -35,6 +35,9 @@ use crate::scheduler::{Scheduler, SchedulerError};
 #[cfg(test)]
 mod tests;
 
+/// How long a script root may be unreported before it counts as absent (decision 303).
+pub const DEFAULT_SCRIPT_ROOT_GRACE: Duration = Duration::from_mins(5);
+
 /// The master's timing, sent to every worker in `Registered` so all behave the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
@@ -52,6 +55,10 @@ pub struct Settings {
     pub set_aside: Duration,
     /// How long a lost worker's cleanup waits before it moves, on top of `cancel_grace`.
     pub cleanup_move_wait: Duration,
+    /// How long no alive worker must report a script root (counted from the master's start
+    /// too) before it counts as absent: DAG roots using it are then no longer withdrawn for it
+    /// (decision 303).
+    pub script_root_grace: Duration,
     /// How a commit cut off is read back (see [`crate::dispatch::ReadBack`]).
     pub read_back: crate::dispatch::ReadBack,
     /// How often to try listening for commands again after it failed to start.
@@ -112,6 +119,7 @@ impl Default for Settings {
             code_wait: DEFAULT_CODE_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
             cleanup_move_wait: Duration::from_secs(10),
+            script_root_grace: DEFAULT_SCRIPT_ROOT_GRACE,
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
             timings: MasterTimings::default(),
@@ -310,6 +318,13 @@ pub struct MasterCore {
     /// Workers resumed whose follow-up (their parse jobs) failed: tried again each round, as
     /// the resume command isn't applied again (B99).
     unresumed: BTreeSet<String>,
+    /// The script roots each DAG root uses as last sent to the live workers (decision 304); a
+    /// change goes to them all at the next tick (a worker registering gets them in
+    /// `Registered`).
+    sent_uses: crate::discovery::ScriptUses,
+    /// When an alive worker last reported each script root, and when this master started
+    /// looking (decision 303's grace).
+    script_roots_seen: (BTreeMap<String, Timestamp>, Option<Timestamp>),
     /// The connection jobs sent and not answered, by job ID, with their worker (lost with
     /// it) and when they are given up on (`schedr connections check` / `test`).
     connection_jobs: BTreeMap<String, (String, Timestamp)>,
@@ -353,6 +368,8 @@ impl MasterCore {
             arrivals,
             metrics: MasterMetrics::default(),
             unresumed: BTreeSet::new(),
+            sent_uses: crate::discovery::ScriptUses::new(),
+            script_roots_seen: (BTreeMap::new(), None),
             connection_jobs: BTreeMap::new(),
             settings,
             db,
@@ -515,6 +532,36 @@ impl MasterCore {
         Ok(())
     }
 
+    /// A worker came back as a new incarnation: its unreported attempts and its jobs are lost.
+    async fn incarnation_replaced(
+        &mut self,
+        register: &pb::Register,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let worker_id = register.worker_id.as_str();
+        let reported = register
+            .journal
+            .iter()
+            .map(|entry| entry.attempt_id.as_str())
+            .collect();
+        let ended = self
+            .dispatcher
+            .incarnation_replaced(worker_id, &reported, now)
+            .await?;
+        tracing::warn!(
+            worker_id,
+            ended,
+            "worker restarted (a new incarnation): its unreported attempts are lost \
+             (possibly out of memory)"
+        );
+        // The old incarnation's jobs: none will answer.
+        self.connection_jobs_lost(
+            worker_id,
+            &format!("worker `{worker_id}` restarted before answering"),
+        )
+        .await
+    }
+
     /// Accepts a registration that passed the checks: reconciles a replaced incarnation,
     /// records the worker, and decides on its journal.
     async fn accept(
@@ -528,27 +575,7 @@ impl MasterCore {
             .get(worker_id)
             .is_some_and(|known| known.incarnation != register.incarnation_id);
         if replaced {
-            let reported = register
-                .journal
-                .iter()
-                .map(|entry| entry.attempt_id.as_str())
-                .collect();
-            let ended = self
-                .dispatcher
-                .incarnation_replaced(worker_id, &reported, now)
-                .await?;
-            tracing::warn!(
-                worker_id,
-                ended,
-                "worker restarted (a new incarnation): its unreported attempts are lost \
-                 (possibly out of memory)"
-            );
-            // The old incarnation's jobs: none will answer.
-            self.connection_jobs_lost(
-                worker_id,
-                &format!("worker `{worker_id}` restarted before answering"),
-            )
-            .await?;
+            self.incarnation_replaced(register, now).await?;
         }
         self.connections.insert(
             worker_id.to_owned(),
@@ -622,6 +649,7 @@ impl MasterCore {
             }),
             decisions,
             max_message_size: u64::try_from(self.settings.max_message_size).unwrap_or(u64::MAX),
+            script_uses: root_uses(&self.script_uses_at(now)),
         };
         Ok((registered, outgoing))
     }
@@ -957,6 +985,7 @@ impl MasterCore {
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
+        self.send_uses(outgoing, now);
         let mut applied = Applied::default();
         let commands = self
             .commander
@@ -1216,6 +1245,15 @@ impl MasterCore {
         if !parsed_kind(root) {
             return Ok(Vec::new());
         }
+        if root.content_hash.is_empty() {
+            // Withdrawn (decision 303).
+            self.dispatcher.withdraw_root(worker_id, &root.root);
+            self.discovery
+                .root_withdrawn(worker_id, &root.root, now)
+                .await?;
+            self.sync_code();
+            return Ok(Vec::new());
+        }
         let version = self
             .connections
             .get(worker_id)
@@ -1384,6 +1422,68 @@ impl MasterCore {
         self.dispatcher
             .set_connections(self.discovery.registries(), &parsed);
     }
+}
+
+impl MasterCore {
+    /// The script roots each DAG root uses, as workers fold them: those no alive worker has
+    /// reported for `script_root_grace` (since this master started, for one never reported)
+    /// left out. No worker could fold one, so all would withdraw the DAG root and a fix to it
+    /// would never be parsed; a reference to it stays an import error (295). The grace keeps a
+    /// restart of the workers having it, or of the master, from dropping it meanwhile.
+    fn script_uses_at(&mut self, now: Timestamp) -> crate::discovery::ScriptUses {
+        let (seen, started) = &mut self.script_roots_seen;
+        let started = *started.get_or_insert(now);
+        for root in self.discovery.reported_script_roots() {
+            seen.insert(root, now);
+        }
+        let grace = jiff::SignedDuration::try_from(self.settings.script_root_grace)
+            .unwrap_or(jiff::SignedDuration::MAX);
+        let present = |script: &str| {
+            let since = seen.get(script).copied().unwrap_or(started);
+            now.duration_since(since) < grace
+        };
+        self.discovery
+            .script_uses()
+            .iter()
+            .filter_map(|(root, used)| {
+                let used: BTreeSet<String> = used.iter().filter(|s| present(s)).cloned().collect();
+                (!used.is_empty()).then(|| (root.clone(), used))
+            })
+            .collect()
+    }
+
+    /// Sends every live worker the script roots each DAG root uses when they changed since
+    /// they were last sent (decision 304).
+    fn send_uses(&mut self, outgoing: &mut Vec<Outgoing>, now: Timestamp) {
+        let uses = self.script_uses_at(now);
+        if uses == self.sent_uses {
+            return;
+        }
+        self.sent_uses = uses;
+        let roots = root_uses(&self.sent_uses);
+        for (worker_id, connection) in &self.connections {
+            if connection.live {
+                outgoing.push(Outgoing {
+                    worker_id: worker_id.clone(),
+                    message: pb::MasterMessage {
+                        message: Some(master_message::Message::ScriptUses(pb::ScriptUses {
+                            roots: roots.clone(),
+                        })),
+                    },
+                });
+            }
+        }
+    }
+}
+
+/// The script roots each DAG root uses, as the protocol sends them (decision 304).
+fn root_uses(uses: &crate::discovery::ScriptUses) -> Vec<pb::RootUses> {
+    uses.iter()
+        .map(|(root, used)| pb::RootUses {
+            root: root.clone(),
+            script_roots: used.iter().cloned().collect(),
+        })
+        .collect()
 }
 
 fn assign_parse(assignment: ParseAssignment) -> Outgoing {

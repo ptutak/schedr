@@ -165,6 +165,7 @@ async fn manual_runs_of_a_paused_dag_run_and_wait_for_a_place() {
 /// `etl`'s current parse.
 async fn current_parse(db: &Database, hash: &str, exception: Option<&str>) {
     let file = schedr_model::runner::ParsedFile {
+        script_roots: Vec::new(),
         path: "a.py".to_owned(),
         dags: Vec::new(),
         connections: Vec::new(),

@@ -42,6 +42,7 @@ fn dag(id: &str, path: &str) -> Dag {
 fn files() -> Vec<ParsedFile> {
     vec![
         ParsedFile {
+            script_roots: Vec::new(),
             path: "sync.py".to_owned(),
             dags: vec![dag("sync", "sync.py")],
             connections: Vec::new(),
@@ -49,6 +50,7 @@ fn files() -> Vec<ParsedFile> {
             warnings: Vec::new(),
         },
         ParsedFile {
+            script_roots: Vec::new(),
             path: "bad.py".to_owned(),
             dags: vec![],
             connections: Vec::new(),
@@ -449,4 +451,15 @@ async fn a_bad_stored_time_names_the_column_it_is_in() {
         .unwrap();
     let error = db.parses_of("etl", "h1").await.unwrap_err().to_string();
     assert!(error.contains("parse_results.parsed_at"), "{error}");
+}
+
+#[tokio::test]
+async fn a_files_script_roots_are_stored_and_read_back_with_it() {
+    let db = migrated().await;
+    let mut asked = files();
+    asked[0].script_roots = vec!["etl-scripts".to_owned(), "ml-scripts".to_owned()];
+    let parse_id = store_parse(&db, "h1", &asked).await;
+    let read = db.parse_files(&parse_id).await.unwrap();
+    let stored = read.iter().find(|f| f.path == asked[0].path).unwrap();
+    assert_eq!(stored.script_roots, ["etl-scripts", "ml-scripts"]);
 }

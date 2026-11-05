@@ -1121,6 +1121,7 @@ async fn the_current_codes_import_errors_are_listed() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"errors": []}));
     let files = [schedr_model::runner::ParsedFile {
+        script_roots: Vec::new(),
         path: "broken.py".to_owned(),
         dags: vec![],
         connections: Vec::new(),
@@ -1636,6 +1637,7 @@ async fn each_roots_connections_are_listed_with_the_tasks_declaring_them() {
         )]),
     };
     let file = |path: &str, connections| schedr_model::runner::ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags: vec![],
         connections,

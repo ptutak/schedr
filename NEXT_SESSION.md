@@ -4,6 +4,24 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, night): M4.9b committed; paused for the user's restart
+
+- **The user's instruction:** pause after M4.9b (they restart Claude and log in again); then
+  go on with M4.9c and M4.9d, as "go on until end of M4.9 if nothing to decide".
+- **Done: M4.9b** (see PROJECT.md, Built M4.9b): script tasks run; `ScriptOperator(task_id,
+  job, ...)`; B167 and 301-304; libraries from the copies; `dags check` looks references up.
+  Codex's review found 7: 5 fixed with a test each, `job=` and the guide in this step too.
+- **The user's calls this step:** 306 A (a reference is checked by a parse only;
+  `schedr.testing` support an idea); 303 refined: a script root no alive worker has reported
+  for 5 minutes (from the master's start too, `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE`) is
+  left out of the uses sent, so a typo'd root can't freeze a DAG root.
+- **The user's question, answered:** `CommandOperator` has no guard against `../../x.sh`, by
+  design (DAG authors run code as the worker anyway); offered a `DagHint` lint or a "trust
+  model" paragraph in the deployment docs, not decided.
+- **Next:** M4.9c (`params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource`,
+  `cleanup_script`), then M4.9d (305: parse only `.py` files mentioning `schedr`; the docs say
+  a DAG file needs at least `import schedr`).
+
 ## State (2026-11-05, late evening): M4.9a committed; M4.9b next
 
 - **The user's instruction:** "go on until end of M4.9 if nothing to decide, review, commit and

@@ -582,7 +582,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
             roots: BTreeMap::from([("etl".to_owned(), configured)]),
             parse_only: BTreeMap::new(),
             script_roots: BTreeMap::new(),
-            interpreters: Vec::new(),
+            interpreters: BTreeMap::default(),
             python: python(),
             agent_env: BTreeMap::from([(
                 "PATH".to_owned(),

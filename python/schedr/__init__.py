@@ -17,7 +17,7 @@ from schedr.connections import (
 from schedr.context import SecretError, cleanup_handle, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
-from schedr.operators import CommandOperator, EmptyOperator
+from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
 from schedr.outcomes import DagHint, Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
 from schedr.resources import CommandResource, Resource, resource
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
@@ -53,6 +53,7 @@ __all__ = [
     "Output",
     "Resource",
     "RunIf",
+    "ScriptOperator",
     "SecretError",
     "SecretPrefix",
     "Task",

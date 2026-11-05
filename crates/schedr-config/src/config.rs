@@ -45,6 +45,9 @@ pub struct Timings {
     pub heartbeat_interval: Duration,
     /// A worker silent for this long is lost.
     pub lease_timeout: Duration,
+    /// How long no alive worker must report a script root before DAG roots using it are no
+    /// longer withdrawn for it (decision 303).
+    pub script_root_grace: Duration,
     /// How long the master's lease lasts (one master per database: a second one waits as a
     /// standby, and takes over at most this long after the first dies); renewed every third
     /// of it. At least three `query_timeout`s, shorter than `loop_stall_timeout`.
@@ -204,6 +207,7 @@ impl Default for Timings {
             tick_interval: Duration::from_secs(1),
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
+            script_root_grace: Duration::from_mins(5),
             lease_period: Duration::from_secs(30),
             read_back_window: Duration::from_secs(3),
             read_back_interval: Duration::from_millis(500),

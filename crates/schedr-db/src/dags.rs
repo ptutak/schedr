@@ -93,7 +93,7 @@ pub enum DagChange {
 }
 
 /// The row of a parse file: path, DAGs JSON, error JSON.
-type FileRow = (String, String, Option<String>, String);
+type FileRow = (String, String, Option<String>, String, String);
 
 /// The row of a stored DAG with its current version.
 type DagRow = (
@@ -269,8 +269,9 @@ impl Database {
             VALUES ($1{uuid}, $2, $3, $4, $5, $6{ts}) \
             ON CONFLICT (root, content_hash, schedr_version) DO NOTHING";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections, \
+            script_roots) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json}, $9{json})";
         let id = Uuid::now_v7().to_string();
         let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             let done = sqlx::query(sql(backend, INSERT))
@@ -294,6 +295,7 @@ impl Database {
                         .bind(self.fenced_as())
                         .bind(db_time(parse.parsed_at))
                         .bind(to_json(&file.connections))
+                        .bind(to_json(&file.script_roots))
                         .execute(&mut *tx)
                         .await?;
                 }
@@ -326,8 +328,9 @@ impl Database {
         const DELETE: &str =
             "DELETE FROM parse_files WHERE parse_result_id = $1{uuid} AND path = $2";
         const FILE: &str = "INSERT INTO parse_files \
-            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections) \
-            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json})";
+            (parse_result_id, path, dags, error, worker_id, master_id, parsed_at, connections, \
+            script_roots) \
+            VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json}, $9{json})";
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for file in files {
                 sqlx::query(sql(backend, DELETE))
@@ -344,6 +347,7 @@ impl Database {
                     .bind(self.fenced_as())
                     .bind(db_time(parsed_at))
                     .bind(to_json(&file.connections))
+                    .bind(to_json(&file.script_roots))
                     .execute(&mut *tx)
                     .await?;
             }
@@ -379,8 +383,8 @@ impl Database {
     /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if a stored file doesn't
     /// read back.
     pub async fn parse_files(&self, parse_id: &str) -> Result<Vec<ParsedFile>, DbError> {
-        const FILES: &str = "SELECT path, dags{text}, error{text}, connections{text} FROM parse_files \
-            WHERE parse_result_id = $1{uuid} ORDER BY path";
+        const FILES: &str = "SELECT path, dags{text}, error{text}, connections{text}, \
+            script_roots{text} FROM parse_files WHERE parse_result_id = $1{uuid} ORDER BY path";
         let rows: Vec<FileRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, FILES))
                 .bind(parse_id)
@@ -388,10 +392,11 @@ impl Database {
                 .await?
         });
         rows.into_iter()
-            .map(|(path, dags, error, connections)| {
+            .map(|(path, dags, error, connections, script_roots)| {
                 Ok(ParsedFile {
                     dags: from_json("parse_files.dags", &dags)?,
                     connections: from_json("parse_files.connections", &connections)?,
+                    script_roots: from_json("parse_files.script_roots", &script_roots)?,
                     error: error
                         .map(|e| from_json("parse_files.error", &e))
                         .transpose()?,
@@ -423,6 +428,7 @@ impl Database {
             .into_iter()
             .map(|(path, connections)| {
                 Ok(ParsedFile {
+                    script_roots: Vec::new(),
                     connections: from_json("parse_files.connections", &connections)?,
                     path,
                     dags: Vec::new(),

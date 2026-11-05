@@ -411,6 +411,7 @@ fn a_task_that_isnt_a_user_may_wait_for_a_cleanup() {
 
 fn file(path: &str, dags: Vec<Dag>) -> ParsedFile {
     ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags,
         connections: Vec::new(),
@@ -445,6 +446,7 @@ fn valid_files_and_import_errors_are_kept() {
         traceback: String::new(),
     };
     let failed = ParsedFile {
+        script_roots: Vec::new(),
         path: "bad.py".to_owned(),
         dags: vec![dag_with(&json!({}))],
         connections: Vec::new(),

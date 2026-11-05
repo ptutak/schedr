@@ -91,6 +91,7 @@ fn dag() -> Dag {
 fn files() -> Vec<ParsedFile> {
     vec![
         ParsedFile {
+            script_roots: Vec::new(),
             path: "sync.py".to_owned(),
             dags: vec![dag()],
             connections: Vec::new(),
@@ -98,6 +99,7 @@ fn files() -> Vec<ParsedFile> {
             warnings: Vec::new(),
         },
         ParsedFile {
+            script_roots: Vec::new(),
             path: "bad.py".to_owned(),
             dags: vec![],
             connections: Vec::new(),

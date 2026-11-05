@@ -51,6 +51,17 @@ flowchart LR
    ([When a file fails to import](#when-a-file-fails-to-import)). The
    upload runs beside the worker's session, so heartbeats go on while it is sent.
 
+A DAG root's reported hash also folds in the hashes of the script roots used by its last
+parse. Editing a used script root therefore causes the DAG root to be parsed again; a root
+that first starts using a script root is parsed once more. Script and DAG roots with the
+same files have different hashes. Each parsed file records the script roots its
+`ScriptOperator`s asked for, even when a missing root caused its import to fail. The master
+sends each DAG root's used script roots to workers at registration and when the set changes.
+A worker missing a used script root warns and withdraws the DAG root: it neither parses it
+nor runs its tasks. If no alive worker has reported a script root for five minutes, counted
+from the master's start too, the master leaves it out of the sets it sends. This lets a fix
+be parsed; a reference to the missing root remains an import error.
+
 Script roots are scanned, settled, copied and hashed like DAG roots. A script root's parse
 job reads every `schedr.toml` in Rust on the agent; it never imports scripts or anything else.
 A bad file is reported as the import error `InvalidScriptConfig`, with each job-specific
@@ -166,10 +177,9 @@ place) leaves running jobs alone. So:
   the task: the code runs as the worker's user, which owns the copy (workers and their DAG code
   are trusted, decision 101). Its directories are read-only too, so deleting a worker's data
   directory by hand takes `chmod -R u+w <data_dir>` first.
-- **A root imports only from itself.** Other roots are on `sys.path` too, but at their live
-  checkout, not a copy: a module imported from another root isn't the code hashed, isn't
-  recorded with the attempt, and can change under a running task. Put code shared between
-  roots in a package installed with the interpreter, or keep a copy in each root.
+- **Other DAG roots are on `sys.path` at their copies.** A parse also sees the other DAG
+  roots and script roots at their copies. These copies are kept while the parse runs; task
+  copies are kept while the task or its recovered cleanup runs.
 - **Only the hashed files are in it.** What `.schedrignore` excludes is not, so read such a
   file by its full path under the configured root.
 - A copy is removed once newer code replaced it and nothing running uses it: one or two per

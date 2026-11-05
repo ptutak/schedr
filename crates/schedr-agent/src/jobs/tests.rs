@@ -432,3 +432,34 @@ fn a_local_check_warns_of_an_interpreter_it_lacks_and_the_worker_doesnt() {
     let on_a_worker = read_root("etl", dir.path(), (&files, &wanted), None);
     assert_eq!(on_a_worker[0].warnings, Vec::<String>::new());
 }
+
+#[test]
+fn a_reference_cant_leave_its_script_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("jobs");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::create_dir_all(dir.path().join("outside")).unwrap();
+    std::fs::write(dir.path().join("outside/payload.py"), "").unwrap();
+    std::fs::write(
+        dir.path().join("outside/schedr.toml"),
+        "[jobs.escape]\nscript = \"payload.py\"\ninterpreter = \"py\"\n",
+    )
+    .unwrap();
+    let scripts = BTreeMap::from([(
+        "jobs".to_owned(),
+        ScriptRoot {
+            configured: copy.clone(),
+            copy: copy.clone(),
+        },
+    )]);
+    let absolute = format!("{}/../outside/schedr.toml#escape", copy.display());
+    for reference in ["jobs:../outside/schedr.toml#escape", absolute.as_str()] {
+        let (root, found) = lookup(reference, &scripts);
+        assert_eq!(root.as_deref(), Some("jobs"), "{reference}");
+        let why = found.expect_err(reference);
+        assert!(why.contains("no `..`"), "{why}");
+    }
+    assert!(stays_inside("team/./schedr.toml"));
+    assert!(!stays_inside("/etc/schedr.toml"));
+    assert!(!stays_inside(""));
+}

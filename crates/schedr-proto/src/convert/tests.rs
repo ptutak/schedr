@@ -128,7 +128,9 @@ fn parsed_files_round_trip() {
         parsed_file_from_proto(parsed_file_to_proto(&file)).unwrap(),
         file
     );
+    // A file whose import failed keeps the script roots it asked about (decision 304).
     let failed = ParsedFile {
+        script_roots: vec!["etl-scripts".to_owned()],
         path: "bad.py".to_owned(),
         dags: vec![],
         connections: Vec::new(),

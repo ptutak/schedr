@@ -1073,6 +1073,71 @@ fn a_scheduled_script_job_is_found_paused_and_listed_and_a_bad_key_is_an_import_
     );
 }
 
+const SCRIPT_DAG: &str = r#"
+from schedr import Dag, ScriptOperator, dag_ctx
+
+with Dag("uses_script"):
+    ScriptOperator(
+        "clean",
+        "jobs:team/schedr.toml#daily",
+        args=["--run", dag_ctx.run.id],
+        env={"MODE": "from-dag"},
+    )
+"#;
+
+#[test]
+fn a_script_runs_as_its_own_job_and_from_a_dag_with_its_library() {
+    let scripts = TempDir::new().unwrap();
+    let root = scripts.path().join("jobs");
+    std::fs::create_dir_all(root.join("team")).unwrap();
+    // A library at the script root, found through PYTHONPATH (its copy).
+    std::fs::write(root.join("shared.py"), "GREETING = 'hello'\n").unwrap();
+    std::fs::write(
+        root.join("team/report.py"),
+        "import os, sys\nimport shared\n\
+         print(shared.GREETING, os.environ['MODE'], os.environ['LEVEL'], *sys.argv[1:])\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("team/schedr.toml"),
+        "[jobs.daily]\nscript = \"report.py\"\ninterpreter = \"python\"\n\
+         schedule = \"0 3 * * *\"\nargs = [\"--declared\"]\n\
+         env = { MODE = \"declared\", LEVEL = \"info\" }\n",
+    )
+    .unwrap();
+    let standalone = Standalone::start_configured(
+        &[("uses.py", SCRIPT_DAG)],
+        None,
+        &[],
+        "",
+        &[("SCHEDR_SCRIPT_PATH", root.to_str().unwrap())],
+    );
+    let job = "jobs:team/schedr.toml#daily";
+    standalone.wait("the job and the DAG", || {
+        standalone.dag_ids() == [job, "uses_script"]
+    });
+    let stdout = |run_id: &str, task: &str| {
+        let output = standalone
+            .get(&format!("/api/v1/runs/{run_id}/tasks/{task}/output"))
+            .unwrap_or_default();
+        output["value"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    // The job on its own: everything as declared.
+    let run_id = standalone.trigger(job);
+    standalone.wait_for_state(&run_id, "success");
+    assert_eq!(stdout(&run_id, "daily"), "hello declared info --declared\n");
+    // From a DAG: args= replaces, env= merges (decision 302).
+    let run_id = standalone.trigger("uses_script");
+    standalone.wait_for_state(&run_id, "success");
+    assert_eq!(
+        stdout(&run_id, "clean"),
+        format!("hello from-dag info --run {run_id}\n")
+    );
+}
+
 #[test]
 fn an_unpaused_dag_gets_scheduled_runs_until_paused() {
     let dag = r#"

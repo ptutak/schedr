@@ -346,6 +346,7 @@ fn worker(id: &str, state: &str, version: &str, drained: bool) -> schedr_api::vi
 
 fn parsed(path: &str, error: bool) -> ParsedFile {
     ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags: vec![],
         connections: Vec::new(),

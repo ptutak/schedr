@@ -1,8 +1,9 @@
 """Operators: the task kinds other than Python functions.
 
-``CommandOperator`` runs an inline command; ``EmptyOperator`` does nothing and is completed
-by the master. Operators can't be subclassed: reuse is by composition, e.g. a function that
-creates tasks (see PROJECT.md, Native API: no custom operators).
+``CommandOperator`` runs an inline command; ``ScriptOperator`` a script declared in a
+``schedr.toml``; ``EmptyOperator`` does nothing and is completed by the master. Operators
+can't be subclassed: reuse is by composition, e.g. a function that creates tasks (see
+PROJECT.md, Native API: no custom operators).
 """
 
 import dataclasses
@@ -17,14 +18,19 @@ from schedr import _build, _secrets
 from schedr._model import (
     ArgvCommand,
     CommandKind,
+    DeclaredTemplate,
     EdgeKind,
     EmptyKind,
     ResourceRole,
     ScalarType,
+    ScriptKind,
+    SecretDecl,
+    SecretPrefixDecl,
     SecretRef,
     ShellCommand,
     Template,
     TypeDesc,
+    registry,
 )
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
@@ -315,7 +321,42 @@ def add_command(
     return task_id
 
 
-class CommandOperator[E: Outcome = DefaultOutcome](Operator):
+class _ProcessOperator[E: Outcome = DefaultOutcome](Operator):
+    """A task run as a process, whose output is its ``ProcessResult``."""
+
+    @property
+    def output(self) -> ProcessResult:
+        """The process's output: a reference, read by type checkers as its value."""
+        return Output[ProcessResult](self._task_id, dag=self._dag)  # type: ignore[return-value]
+
+    def on(self, *members: E) -> ProcessResult:
+        """The output, depended on only for these outcomes (see ``Output.on``).
+
+        Args:
+            *members: Members of its ``outcomes=`` enum (``DefaultOutcome.SUCCESS`` without).
+
+        Returns:
+            The narrowed reference, e.g. ``probe.on(Check.CHANGED) >> notify``.
+        """
+        return self._on(members)  # type: ignore[return-value]
+
+    @property
+    def outcome(self) -> E:
+        """The process's outcome as data, for a task taking its ``Outcome`` enum."""
+        return self._outcome()  # type: ignore[return-value]
+
+    @property
+    def stdout(self) -> str:
+        """The process's standard output: a reference, read by type checkers as its value."""
+        return Output[str](self._task_id, ("stdout",), dag=self._dag)  # type: ignore[return-value]
+
+    @property
+    def stderr(self) -> str:
+        """The process's standard error: a reference, read by type checkers as its value."""
+        return Output[str](self._task_id, ("stderr",), dag=self._dag)  # type: ignore[return-value]
+
+
+class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
     """Runs an inline command.
 
     A string is run by a shell, and takes no placeholders (a t-string with one is refused):
@@ -425,36 +466,153 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
         )
         self._dag = builder
 
-    @property
-    def output(self) -> ProcessResult:
-        """The command's output: a reference, read by type checkers as its value."""
-        return Output[ProcessResult](self._task_id, dag=self._dag)  # type: ignore[return-value]
 
-    def on(self, *members: E) -> ProcessResult:
-        """The output, depended on only for these outcomes (see ``Output.on``).
+def _declared_secret(item: Mapping[str, Any]) -> SecretDecl:
+    """A secret a ``schedr.toml`` declares, from the agent's JSON."""
+    if item.get("kind") == "prefix":
+        return SecretPrefixDecl(item["prefix"], item.get("storage"))
+    return SecretRef(item["path"], item.get("key"), item.get("storage"))
 
-        Args:
-            *members: Members of its ``outcomes=`` enum (``DefaultOutcome.SUCCESS`` without).
 
-        Returns:
-            The narrowed reference, e.g. ``probe.on(Check.CHANGED) >> notify``.
-        """
-        return self._on(members)  # type: ignore[return-value]
+def _millis(value: object) -> timedelta | None:
+    return None if value is None else timedelta(milliseconds=int(str(value)))
 
-    @property
-    def outcome(self) -> E:
-        """The command's outcome as data, for a task taking its ``Outcome`` enum."""
-        return self._outcome()  # type: ignore[return-value]
 
-    @property
-    def stdout(self) -> str:
-        """The command's standard output: a reference, read by type checkers as its value."""
-        return Output[str](self._task_id, ("stdout",), dag=self._dag)  # type: ignore[return-value]
+def _declaration(reference: str, where: str) -> Mapping[str, Any] | None:
+    """The declaration ``reference`` names, asked of the agent while the runner parses.
 
-    @property
-    def stderr(self) -> str:
-        """The command's standard error: a reference, read by type checkers as its value."""
-        return Output[str](self._task_id, ("stderr",), dag=self._dag)  # type: ignore[return-value]
+    Returns:
+        The declaration; ``None`` outside a parse (a task's runner importing its DAG file, a
+        test), where the task is only named.
+
+    Raises:
+        TypeError: For a reference that isn't a string.
+        LookupError: For one the agent can't find.
+    """
+    if not isinstance(reference, str):
+        raise TypeError(f"{where}: the reference is a string, `<root>:<path>#<job>`")
+    ask = registry.script_asker()
+    if ask is None:
+        return None
+    answer = ask(reference)
+    if answer.get("type") == "script_not_found":
+        raise LookupError(f"{where}: {answer.get('message', reference)}")
+    return answer
+
+
+class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
+    """Runs a script declared in a ``schedr.toml`` of a script root (decision 293).
+
+    The declaration gives the script, its interpreter, its arguments, its environment, its
+    secrets and its settings; the operator may change them: ``args`` replaces the declared
+    arguments, ``env`` adds variables (and replaces those of the same name), ``secrets`` adds
+    declarations; ``retries`` and the other settings win over the declaration's, which win over
+    the DAG's defaults. The output is a ``ProcessResult``, as a ``CommandOperator``'s.
+
+    Args:
+        task_id: The task's ID.
+        job: The declaration: ``"<root>:<path>/schedr.toml#<name>"``, or the absolute
+            path of the ``schedr.toml`` in a script root, then ``#<name>``.
+        args: Its arguments instead of the declared ones; each a string, a t-string or a
+            reference, one argument (never a shell string).
+        env: Environment variables added to (or replacing) the declared ones.
+        secrets: Secrets declared besides the declared ones (as ``CommandOperator``'s).
+        retries: How many times a failed attempt is retried.
+        retry_delay: The delay before each retry.
+        timeout: The attempt's timeout.
+        queue: The queue the task goes to.
+        max_output_size: The output size limit in bytes (per stream).
+        outcomes: An ``Outcome`` enum of exit codes, as ``CommandOperator``'s.
+        run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
+        max_active: At most this many running at once, across all runs (``None``: no limit).
+        max_active_per_run: Accepted for symmetry; an operator isn't mapped (a ``DagHint``
+            says so).
+        uses: The resources it needs (decision 259).
+
+    Raises:
+        RuntimeError: Outside ``with Dag(...)``.
+        TypeError: For an argument or environment value of the wrong type.
+        ValueError: For an invalid environment variable name.
+        LookupError: For a declaration the worker parsing the file doesn't have.
+    """
+
+    def __init__(  # noqa: PLR0913 (the task's options, by keyword)
+        self,
+        task_id: str,
+        job: str,
+        *,
+        args: Sequence[object] | None = None,
+        env: Mapping[str, object] | None = None,
+        secrets: SecretsArg = None,
+        retries: int | None = None,
+        retry_delay: timedelta | None = None,
+        timeout: timedelta | None = None,
+        queue: str | None = None,
+        max_output_size: int | None = None,
+        outcomes: type[E] | None = None,
+        run_if: RunIf | None = None,
+        max_active: int | None = None,
+        max_active_per_run: int | None = None,
+        uses: Sequence[object] | None = None,
+    ) -> None:
+        """Records the script task in the DAG being defined."""
+        builder = _build.require_active("ScriptOperator")
+        task_id = builder.qualified(task_id)
+        where = f"task `{task_id}`"
+        declared = _declaration(job, where) or {}
+        upstream: list[_build.Upstream] = []
+        if isinstance(args, str):
+            raise TypeError(f"{where}: args= is a list of arguments, not a string")
+        given_args = [
+            _build.to_template(arg, f"{where}, args[{i}]", upstream)
+            for i, arg in enumerate(args or ())
+        ]
+        given_env: dict[str, Template] = {}
+        for name, value in (env or {}).items():
+            if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+                raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
+            given_env[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
+        for template in [*given_args, *given_env.values()]:
+            _build.check_template_references(builder, template, where)
+        kind = ScriptKind(
+            job=str(declared.get("job", job)),
+            script=str(declared.get("script", "")),
+            interpreter=str(declared.get("interpreter", "")),
+            args=given_args
+            if args is not None
+            else [DeclaredTemplate(arg) for arg in declared.get("args", [])],
+            env={
+                **{name: DeclaredTemplate(v) for name, v in declared.get("env", {}).items()},
+                **given_env,
+            },
+            working_dir=str(declared.get("working_dir", "")),
+        )
+        own = _secrets.declared(secrets, where)
+        both = [*(_declared_secret(item) for item in declared.get("secrets", [])), *own]
+        options = _build.TaskOptions(
+            declared.get("retries") if retries is None else retries,
+            _millis(declared.get("retry_delay_ms")) if retry_delay is None else retry_delay,
+            _millis(declared.get("timeout_ms")) if timeout is None else timeout,
+            declared.get("queue") if queue is None else queue,
+            declared.get("max_output_size") if max_output_size is None else max_output_size,
+            run_if=run_if,
+            max_active=max_active,
+            max_active_per_run=max_active_per_run,
+            secrets=tuple(dict.fromkeys(both)),
+            uses=None if uses is None else tuple(uses),
+        )
+        _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
+        builder.add_task(
+            task_id,
+            kind,
+            ScalarType("process_result"),
+            options,
+            for_command(outcomes, where),
+        )
+        for up, on in dict.fromkeys(upstream):
+            builder.add_edge(up, task_id, EdgeKind.DATA, on)
+        self._task_id = task_id
+        self._dag = builder
 
 
 class EmptyOperator(Operator):

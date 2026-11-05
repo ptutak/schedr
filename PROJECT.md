@@ -1738,7 +1738,11 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   loaded by the parser, as Airflow's safe mode does: a library in a root (or linked into it)
   isn't run on every parse, and a module of a package with a relative import (`from .util
   import clean`) no longer shows a false import error from being loaded by path on its own.
-  Imported normally (`import mylib.core` from a DAG or a task) it works as ever. Not chosen:
+  Imported normally (`import mylib.core` from a DAG or a task) it works as ever. **A file that
+  defines DAGs must mention `schedr`** (the user, 2026-11-05): a file that only calls a factory
+  (`from factory import build_dag; build_dag("team_a")`) is skipped and its DAGs count as
+  removed, so the docs say it plainly: such a file needs at least `import schedr` (a `# schedr`
+  comment counts too). Not chosen:
   loading a file inside a package under its package name (relative imports fixed, but every
   library module still run on each parse); `PYTHONPATH` (it finds modules for `import`, but the
   parser loads each file by its path).
@@ -2003,12 +2007,29 @@ anywhere = false                   # native cleanup_anywhere
   chosen: reporting a hash without it and rejecting only the script tasks (its different hash
   could become the root's newest code, its parse full of 295's import errors replacing the
   good one, unless discovery gained a rule against it).
+  **Refined (the user's, 2026-11-05, after Codex's review of M4.9b):** a script root no
+  alive worker has reported for a grace (5 minutes, counted from the master's start too;
+  `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE`) is left out of what the master sends (304): no
+  worker could fold it, so every worker would withdraw the DAG root and a fix to its files
+  (say, a typo in the root's name) would never be parsed. A reference to it stays an import
+  error (295). The grace keeps a restart of the workers having it, or of the master, from
+  dropping it meanwhile. Not chosen: live workers only (a restart briefly replacing a good
+  parse with import errors); any root ever reported, stored (a removed root withdrawing DAG
+  roots until someone clears it).
 - **304. The master tells workers which script roots each DAG root uses (A, 2026-11-05):** a
   parsed file records the script roots its `ScriptOperator`s asked for; the master sends each
   root's set, from its current parse, to every worker at registration and when it changes, so
-  every worker folds the same ones. Nothing new stored: recomputed from the stored parses after
-  a master restart. Not chosen: each worker learning from its own parses (a worker that never
+  every worker folds the same ones. Each stored file keeps its script roots (`parse_files`,
+  in place before 1.0), so a restarted master sends the same; a file whose import failed for a
+  missing script root (295) records it too. Not chosen: each worker learning from its own parses (a worker that never
   parsed the root, or just restarted, reporting the plain hash: workers disagreeing).
+- **306. A `ScriptOperator`'s reference is checked by a parse only (A, the user's,
+  2026-11-05):** outside a parse (plain pytest, `schedr.testing`, a task's runner importing its
+  DAG file) the operator only records its reference: no agent to ask, and a task's import must
+  not fail on it. `schedr dags check` looks references up in the configured script roots
+  (`SCHEDR_SCRIPT_PATH`), so a typo is caught before deployment. Not chosen: `schedr.testing`
+  checking references itself (an idea for later); a `DagHint` outside a parse (noise in every
+  test and task import).
 
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
@@ -7312,6 +7333,25 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   silence: fixed with a test each; a stored DAG parse counting for a script root of the same
   name and content is B167 (fixed in M4.9b, with 301). Also: two agent tests' leases widened to
   300 ms (flaky since 281); B166 logged.
+- **Built (M4.9b; decisions 293-295, 301-304, 306; B167):** the `script` task kind runs: the
+  job's interpreter (`[interpreters]`) on the script, made absolute, from its script root's
+  copy, args rendered one argument each, `PYTHONPATH` the root's copy; rejections 3-5, a
+  script gone from the expected code a failure. `ScriptOperator(task_id, job, args=, env=,
+  secrets=, ...)` asks the agent for its declaration over the parse channel
+  (`script_declaration`), with 302's overrides; outside a parse it only records the reference
+  (306), `schedr dags check` looking it up in `SCHEDR_SCRIPT_PATH`. Each parsed file records
+  the script roots it asked about (`parse_files.script_roots`); the master sends each DAG
+  root's set (`Registered.script_uses`, `ScriptUses`); a DAG root's reported hash folds them
+  in (`fold_hash`, a script root's hash marked `script`: B167), a worker lacking one
+  withdraws the DAG root (an empty `CodeVersionChanged`, its tasks rejected). Parses and
+  tasks see the other DAG roots and script roots at their copies, held while they run (a
+  recovered cleanup too, from the journal). Codex's review found 7 (3 critical, 1 high, 2
+  medium, 1 low): a reference escaping its script root with `..`, a DAG root withdrawn for a
+  script root no worker has never reparsed (303 refined: a grace of 5 minutes,
+  `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE`), a recovered cleanup losing its other roots'
+  copies, a withdrawn root still accepting a task sent before, the parse timeout restarted by
+  each question: fixed with a test each; `job=` (renamed before it) and the guide (the docs
+  round).
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,

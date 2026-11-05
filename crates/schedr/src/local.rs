@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use schedr_agent::launch::ProcessParseRunner;
-use schedr_agent::parse::parse_files;
+use schedr_agent::parse::parse_files_with;
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
 use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
@@ -346,7 +346,25 @@ pub async fn check_root(
         files: root.files.clone(),
         sys_path: vec![root.dir.to_string_lossy().into_owned()],
     };
-    let parsed = parse_files(&mut runner, request, config.dags.parse_file_timeout).await;
+    // A `ScriptOperator` is looked up in the configured script roots, read in place.
+    let scripts = config
+        .script_roots
+        .iter()
+        .map(|script| {
+            let at = schedr_agent::jobs::ScriptRoot {
+                configured: script.path.clone(),
+                copy: script.path.clone(),
+            };
+            (script.name.clone(), at)
+        })
+        .collect();
+    let parsed = parse_files_with(
+        &mut runner,
+        request,
+        config.dags.parse_file_timeout,
+        &scripts,
+    )
+    .await;
     let output = std::fs::read_to_string(&log_file).unwrap_or_default();
     let _ = std::fs::remove_file(&log_file);
     let parsed = parsed.map_err(|e| {

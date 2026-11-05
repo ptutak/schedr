@@ -77,6 +77,49 @@ file named explicitly is checked even if `.schedrignore` excludes it. Scripts ar
 imported. The check warns if an interpreter is absent from the local configuration: a
 worker without it rejects the job's tasks.
 
-```{note}
-Workers cannot run script tasks yet. `ScriptOperator` comes next in M4.9b.
+## Running scripts on workers
+
+The worker runs the executable named by the declaration's `[interpreters]` entry, passing
+it the script's absolute path in the script root's copy and then each `args` element as one
+argument. It runs in `working_dir` (relative to the declaration). By default, `PYTHONPATH`
+starts with the script root's copy, so a Python script can import a library in that root;
+if the worker passes its own `PYTHONPATH` through, that follows the copy. An explicitly
+declared `PYTHONPATH` takes precedence.
+
+The agent sets `SCHEDR_DAG_ID`, `SCHEDR_RUN_ID`, `SCHEDR_RUN_KIND`, `SCHEDR_TASK_ID`,
+`SCHEDR_TRY_NUMBER`, `SCHEDR_PLANNED_FOR` and `SCHEDR_SINCE`; mapped tasks also get
+`SCHEDR_MAP_INDEX`. Times are ISO 8601. A worker lacking the interpreter, the script root
+or the script file rejects the assignment, so it can be tried on another worker; a script
+gone from the code the task expects fails the task, as does a script or `working_dir`
+leaving its script root.
+
+## Using a script in a DAG
+
+```python
+from schedr import Dag, ScriptOperator
+
+with Dag("reports"):
+    report = ScriptOperator(
+        "report",
+        job="etl:team_a/schedr.toml#report_daily",
+        args=["--region", "west"],
+        env={"REPORT_MODE": "incremental"},
+        secrets=["etl/other#token"],
+    )
 ```
+
+`job=` names a declaration as `<root>:<path to schedr.toml>#<job>`, or as an absolute
+path to a `schedr.toml` inside a script root followed by `#<job>`. A reference cannot leave
+its root with `..`. During a DAG parse the agent checks the reference and declaration; a
+missing root, file or job causes an import error naming the problem. Outside a parse, such
+as in `schedr.testing` or a task importing its DAG file, the reference is only recorded.
+Set `SCHEDR_SCRIPT_PATH` when running `schedr dags check` on DAG files to check references
+before deployment.
+
+`args=` replaces the declared list, `env=` merges by variable with the operator winning,
+and `secrets=` adds to the declared secrets. Arguments and environment values can use
+t-strings and output references. For task settings such as `queue`, `retries`,
+`retry_delay`, `timeout` and `max_output_size`, the operator wins over the declaration,
+which wins over DAG defaults. `outcomes=` takes an `Outcome` enum mapping exit codes, as
+for `CommandOperator`. The output is a `ProcessResult`; use `report.output`, or
+`report.stdout` and `report.stderr` for its streams.

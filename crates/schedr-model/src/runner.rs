@@ -56,6 +56,46 @@ pub struct ErrorSummary {
     pub traceback: String,
 }
 
+/// A declared script, as the agent answers a `ScriptOperator` (decision 293): what its task
+/// runs, and only the settings its `schedr.toml` gives (the DAG's defaults apply to the
+/// others).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptDeclaration {
+    /// Its reference, `<root>:<path>#<name>` (an absolute one resolved to its root).
+    pub job: String,
+    /// The script, relative to the script root.
+    pub script: String,
+    /// The interpreter's name.
+    pub interpreter: String,
+    /// Its arguments, as the task carries them (templates).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<crate::value::Template>,
+    /// Its environment variables, as the task carries them (templates).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, crate::value::Template>,
+    /// The secrets it declares.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<crate::secret::SecretDecl>,
+    /// Where it runs, relative to the script root.
+    pub working_dir: String,
+    /// `retries`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+    /// `retry_delay`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_delay_ms: Option<u64>,
+    /// `timeout`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// `queue`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    /// `max_output_size`, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_size: Option<u64>,
+}
+
 /// The exception name of the import error the agent records for a file that took longer than
 /// the parse timeout.
 pub const PARSE_TIMEOUT_EXCEPTION: &str = "ParseTimeout";
@@ -115,6 +155,11 @@ pub struct ParsedFile {
     /// check`; neither uploaded to the master nor stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// The script roots its `ScriptOperator`s asked the agent about while it was imported,
+    /// found or not (decision 304): the master tells every worker which script roots each DAG
+    /// root uses, from its current parse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_roots: Vec<String>,
 }
 
 /// A message from the runner to the agent.
@@ -167,6 +212,13 @@ pub enum RunnerMessage {
     SecretGet {
         /// Which secret.
         secret: crate::secret::SecretName,
+    },
+    /// A DAG file being parsed has a `ScriptOperator` (decision 293): the declaration it
+    /// refers to, `<root>:<path>#<name>` or `/abs/path/schedr.toml#<name>`; the agent answers
+    /// [`AgentMessage::ScriptDeclaration`] or [`AgentMessage::ScriptNotFound`].
+    ScriptDeclaration {
+        /// The reference as written.
+        reference: String,
     },
     /// A running task opens a connection it didn't get with the request
     /// (`with name():`); the agent answers [`AgentMessage::Connection`] or
@@ -411,6 +463,15 @@ pub enum AgentMessage {
     ForkServer(ForkServerRequest),
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
+    /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.
+    ScriptDeclaration(ScriptDeclaration),
+    /// Why the declaration a [`RunnerMessage::ScriptDeclaration`] asked for can't be used:
+    /// its script root isn't on this worker (decision 295), its file or job isn't there, or
+    /// the file has problems; the DAG file's import error.
+    ScriptNotFound {
+        /// What is wrong.
+        message: String,
+    },
     /// The value of the secret a [`RunnerMessage::SecretGet`] asked for.
     Secret {
         /// A key's value as a string; a whole secret as an object of key to value.

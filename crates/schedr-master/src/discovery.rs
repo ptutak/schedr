@@ -80,7 +80,13 @@ pub struct Discovery {
     /// Each root's connections from its current parse (decision 174); a task's assignment
     /// carries those it declares.
     registries: BTreeMap<String, Arc<Registry>>,
+    /// The script roots each DAG root's current parse asked about (decision 304); a root
+    /// asking none isn't in it.
+    script_uses: ScriptUses,
 }
+
+/// The script roots each DAG root uses (decision 304), by DAG root.
+pub type ScriptUses = BTreeMap<String, BTreeSet<String>>;
 
 /// What discovery keeps in memory, copied by [`Discovery::memory`] to put back when the
 /// transaction its changes were part of rolls back (B91).
@@ -95,6 +101,7 @@ pub struct Memory {
     accepted: BTreeMap<String, BTreeSet<String>>,
     no_parse: BTreeSet<String>,
     registries: BTreeMap<String, Arc<Registry>>,
+    script_uses: ScriptUses,
 }
 
 /// A root's current parse.
@@ -139,6 +146,7 @@ impl Discovery {
             accepted: BTreeMap::new(),
             no_parse: BTreeSet::new(),
             registries: BTreeMap::new(),
+            script_uses: ScriptUses::new(),
             wakes: Wakes::default(),
         }
     }
@@ -156,6 +164,7 @@ impl Discovery {
             accepted: self.accepted.clone(),
             no_parse: self.no_parse.clone(),
             registries: self.registries.clone(),
+            script_uses: self.script_uses.clone(),
         }
     }
 
@@ -171,6 +180,7 @@ impl Discovery {
             accepted,
             no_parse,
             registries,
+            script_uses,
         } = memory;
         self.jobs = jobs;
         self.reports = reports;
@@ -181,6 +191,7 @@ impl Discovery {
         self.accepted = accepted;
         self.no_parse = no_parse;
         self.registries = registries;
+        self.script_uses = script_uses;
     }
 
     /// A worker drains (or is drained): it gets no parse jobs, and its unfinished ones go to
@@ -305,6 +316,29 @@ impl Discovery {
             self.decide(root, now).await?;
         }
         Ok(jobs)
+    }
+
+    /// A worker withdrew a root (decision 303: a DAG root using a script root it lacks): it
+    /// neither parses it nor counts for its code any more, as if it had registered without it.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if reading or storing fails.
+    pub async fn root_withdrawn(
+        &mut self,
+        worker_id: &str,
+        root: &str,
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        let Some(key) = self
+            .reports
+            .get_mut(worker_id)
+            .and_then(|roots| roots.remove(root))
+        else {
+            return Ok(());
+        };
+        self.jobs.moved_away(&key, worker_id, now);
+        self.decide(root, now).await
     }
 
     /// A worker reported a root's content hash. Returns the parse job to send it, if the hash
@@ -587,6 +621,17 @@ impl Discovery {
             .iter()
             .map(|source| (source.root.clone(), Arc::new(Registry::of(&source.files))))
             .collect();
+        self.script_uses = sources
+            .iter()
+            .filter_map(|source| {
+                let used: BTreeSet<String> = source
+                    .files
+                    .iter()
+                    .flat_map(|file| file.script_roots.iter().cloned())
+                    .collect();
+                (!used.is_empty()).then(|| (source.root.clone(), used))
+            })
+            .collect();
         if !changes.is_empty() {
             self.db.apply_dag_changes(&changes, now).await?;
             for change in &changes {
@@ -728,6 +773,23 @@ impl Discovery {
     #[must_use]
     pub const fn registries(&self) -> &BTreeMap<String, Arc<Registry>> {
         &self.registries
+    }
+
+    /// The script roots each DAG root's current parse asked about (decision 304).
+    #[must_use]
+    pub const fn script_uses(&self) -> &ScriptUses {
+        &self.script_uses
+    }
+
+    /// The script roots alive workers report now.
+    #[must_use]
+    pub fn reported_script_roots(&self) -> BTreeSet<String> {
+        self.reports
+            .values()
+            .flat_map(BTreeMap::values)
+            .filter(|key| key.kind == schedr_proto::pb::RootKind::Script)
+            .map(|key| key.root.clone())
+            .collect()
     }
 
     /// Refreshes the catalog; if that fails, forgets `root`'s current parse, so the next

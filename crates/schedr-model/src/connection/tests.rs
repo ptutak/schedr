@@ -43,6 +43,7 @@ fn a_connection_refuses_a_bad_name_and_references_other_than_secrets() {
 
 fn file(path: &str, connections: Vec<ConnectionDef>) -> crate::runner::ParsedFile {
     crate::runner::ParsedFile {
+        script_roots: Vec::new(),
         path: path.to_owned(),
         dags: Vec::new(),
         connections,

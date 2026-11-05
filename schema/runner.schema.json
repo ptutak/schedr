@@ -217,6 +217,123 @@
         },
         {
           "additionalProperties": false,
+          "description": "The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.",
+          "properties": {
+            "args": {
+              "description": "Its arguments, as the task carries them (templates).",
+              "items": {
+                "$ref": "#/$defs/Template"
+              },
+              "type": "array"
+            },
+            "env": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Template"
+              },
+              "description": "Its environment variables, as the task carries them (templates).",
+              "type": "object"
+            },
+            "interpreter": {
+              "description": "The interpreter's name.",
+              "type": "string"
+            },
+            "job": {
+              "description": "Its reference, `<root>:<path>#<name>` (an absolute one resolved to its root).",
+              "type": "string"
+            },
+            "max_output_size": {
+              "description": "`max_output_size`, if given.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "queue": {
+              "description": "`queue`, if given.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retries": {
+              "description": "`retries`, if given.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "retry_delay_ms": {
+              "description": "`retry_delay`, if given.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "script": {
+              "description": "The script, relative to the script root.",
+              "type": "string"
+            },
+            "secrets": {
+              "description": "The secrets it declares.",
+              "items": {
+                "$ref": "#/$defs/SecretDecl"
+              },
+              "type": "array"
+            },
+            "timeout_ms": {
+              "description": "`timeout`, if given.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "script_declaration",
+              "type": "string"
+            },
+            "working_dir": {
+              "description": "Where it runs, relative to the script root.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "job",
+            "script",
+            "interpreter",
+            "working_dir"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the declaration a [`RunnerMessage::ScriptDeclaration`] asked for can't be used:\nits script root isn't on this worker (decision 295), its file or job isn't there, or\nthe file has problems; the DAG file's import error.",
+          "properties": {
+            "message": {
+              "description": "What is wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "script_not_found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The value of the secret a [`RunnerMessage::SecretGet`] asked for.",
           "properties": {
             "type": {
@@ -1449,6 +1566,25 @@
           "required": [
             "type",
             "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A DAG file being parsed has a `ScriptOperator` (decision 293): the declaration it\nrefers to, `<root>:<path>#<name>` or `/abs/path/schedr.toml#<name>`; the agent answers\n[`AgentMessage::ScriptDeclaration`] or [`AgentMessage::ScriptNotFound`].",
+          "properties": {
+            "reference": {
+              "description": "The reference as written.",
+              "type": "string"
+            },
+            "type": {
+              "const": "script_declaration",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
           ],
           "type": "object"
         },
