@@ -909,6 +909,8 @@ pub struct Agent<E> {
     gates: BTreeMap<String, watch::Sender<Gate>>,
     /// When the master was last heard from.
     heard: tokio::time::Instant,
+    /// `heard` plus the lease, for the cleanup gates (see [`Self::publish_deadline`]).
+    deadline: watch::Sender<Option<tokio::time::Instant>>,
     /// The master's worker lease, once it has told it.
     lease: Option<Duration>,
     /// The tasks with `cleanup_anywhere` were stopped; till the next registration.
@@ -1035,6 +1037,7 @@ impl<E: Executor> Agent<E> {
             stopped: std::collections::BTreeSet::new(),
             gates: BTreeMap::new(),
             heard: tokio::time::Instant::now(),
+            deadline: watch::channel(None).0,
             lease: None,
             cut_off: false,
             warned_room: std::collections::BTreeSet::new(),
@@ -1164,48 +1167,58 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Fetches an attempt's inputs, which can take long, with the session's timers going on:
-    /// its loop waits for this. A chunk is word from the master.
+    /// its loop waits for this. A chunk is word from the master, unless it comes past the
+    /// lease (decision 281). `None` when the master went silent for the lease (on a stream
+    /// opened at `opened`): the session ends, and nothing is started.
     async fn fetch_with_timers(
         &mut self,
         client: &mut MasterClient<Channel>,
         attempt_id: &str,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-        heartbeat: &mut tokio::time::Interval,
-    ) -> Result<Vec<u8>, String> {
-        let (heard, seen) = watch::channel(self.heard);
-        let fetching = fetch_inputs(client, attempt_id, &heard);
+        (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
+    ) -> Option<Result<Vec<u8>, String>> {
+        let (heard, seen) = watch::channel(self.heard.max(opened));
+        let fetching = fetch_inputs(client, attempt_id, &heard, self.lease);
         tokio::pin!(fetching);
         loop {
             self.heard = self.heard.max(*seen.borrow());
-            let cut_off_at = self.cut_off_at();
+            self.publish_deadline();
+            let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
             tokio::select! {
-                fetched = &mut fetching => return fetched,
+                fetched = &mut fetching => {
+                    return match fetched {
+                        Fetched::Bytes(bytes) => Some(Ok(bytes)),
+                        Fetched::Failed(error) => Some(Err(error)),
+                        Fetched::Silent => {
+                            self.cut_off_if_late();
+                            None
+                        }
+                    };
+                }
                 _ = heartbeat.tick() => {
                     let _ = to_master.send(self.heartbeat_message());
                 }
-                () = at(cut_off_at) => {
+                () = at(give_up_at) => {
                     self.heard = self.heard.max(*seen.borrow());
-                    if self.cut_off_at() <= Some(tokio::time::Instant::now()) {
-                        self.stop_cut_off();
-                        return Err(NO_WORD.to_owned());
+                    if self.silent_too_long(opened) {
+                        return None;
                     }
                 }
             }
         }
     }
 
-    /// Whether this is a `Registered` older than the lease it states, with a cleanup waiting
-    /// for it: the master may have counted this worker lost since, and moved the cleanup, so
-    /// its decisions no longer stand. Asked again, it answers as things are now.
-    fn answer_too_late(&self, message: &master_message::Message, age: Duration) -> bool {
+    /// Whether this is a `Registered` older than the lease it states: the master may have
+    /// counted this worker lost since, moved its cleanups and taken back what it assigned
+    /// with it (decision 281), so its decisions no longer stand; a worker without a lease yet
+    /// (its first session) included. Asked again, it answers as things are now.
+    fn answer_too_late(message: &master_message::Message, age: Duration) -> bool {
         let master_message::Message::Registered(registered) = message else {
             return false;
         };
-        let holding = !self.gates.is_empty() || !self.waiting.is_empty();
-        holding
-            && registered.timing.as_ref().is_some_and(|t| {
-                t.lease_timeout_ms > 0 && age.as_millis() >= u128::from(t.lease_timeout_ms)
-            })
+        registered.timing.as_ref().is_some_and(|t| {
+            t.lease_timeout_ms > 0 && age.as_millis() >= u128::from(t.lease_timeout_ms)
+        })
     }
 
     /// The attempts a drain waits for: not a cleanup waiting for the master, with none to
@@ -1256,8 +1269,21 @@ impl<E: Executor> Agent<E> {
         if spec.task.cleanup.as_ref().is_some_and(|c| c.anywhere) {
             let (gate, passes) = watch::channel(Gate::Open);
             self.gates.insert(spec.attempt_id.clone(), gate);
-            spec.cleanup_gate = Some(CleanupGate(passes));
+            spec.cleanup_gate = Some(CleanupGate {
+                gate: passes,
+                deadline: self.deadline.subscribe(),
+            });
         }
+    }
+
+    /// Tells the cleanup gates when the master's word runs out (`heard` plus the lease).
+    fn publish_deadline(&self) {
+        let deadline = self.lease.map(|lease| self.heard + lease);
+        self.deadline.send_if_modified(|now| {
+            let changed = *now != deadline;
+            *now = deadline;
+            changed
+        });
     }
 
     /// When the tasks with `cleanup_anywhere` are stopped, with no word from the master: the
@@ -1267,6 +1293,39 @@ impl<E: Executor> Agent<E> {
             return None;
         }
         self.lease.map(|lease| self.heard + lease)
+    }
+
+    /// When a stream opened at `opened` is given up with no word from the master, whatever
+    /// runs: the lease after the master's last word, or after the stream opened. An assignment
+    /// held on its way (a one-way cut) is then never started after the master took it back
+    /// at the lease (decision 281, B163).
+    fn silent_at(&self, opened: tokio::time::Instant) -> Option<tokio::time::Instant> {
+        self.lease.map(|lease| self.heard.max(opened) + lease)
+    }
+
+    /// Whether a stream opened at `opened` has been silent for the lease
+    /// ([`Self::silent_at`]); past the lease the tasks are cut off ([`Self::cut_off_if_late`]).
+    fn silent_too_long(&mut self, opened: tokio::time::Instant) -> bool {
+        let silent = self.gone_silent(opened);
+        self.cut_off_if_late() || silent
+    }
+
+    /// Whether the lease has run out with no word from the master ([`Self::silent_at`]).
+    fn gone_silent(&self, opened: tokio::time::Instant) -> bool {
+        self.silent_at(opened)
+            .is_some_and(|at| at <= tokio::time::Instant::now())
+    }
+
+    /// Cuts the tasks off ([`Self::stop_cut_off`]) if the lease has run out since the master's
+    /// last word; whether it had.
+    fn cut_off_if_late(&mut self) -> bool {
+        let late = self
+            .cut_off_at()
+            .is_some_and(|at| at <= tokio::time::Instant::now());
+        if late {
+            self.stop_cut_off();
+        }
+        late
     }
 
     /// Stops the tasks whose cleanup may move: it mustn't run during them. Their cleanups wait
@@ -1595,11 +1654,11 @@ impl<E: Executor> Agent<E> {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
         let opened = tokio::time::Instant::now();
-        let cut_off_at = self.cut_off_at();
+        let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
         let control = tokio::select! {
             control = client.control(UnboundedReceiverStream::new(outbound)) => control,
-            () = at(cut_off_at) => {
-                self.stop_cut_off();
+            () = at(give_up_at) => {
+                self.cut_off_if_late();
                 return SessionEnd::Lost(NO_WORD.to_owned());
             }
         };
@@ -1618,10 +1677,10 @@ impl<E: Executor> Agent<E> {
         // the stream).
         let mut resends = Resends::default();
         loop {
-            let cut_off_at = self.cut_off_at();
+            let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
             tokio::select! {
-                () = at(cut_off_at) => {
-                    self.stop_cut_off();
+                () = at(give_up_at) => {
+                    self.cut_off_if_late();
                     return SessionEnd::Lost(NO_WORD.to_owned());
                 }
                 count = next_request(&mut self.shutdown) => {
@@ -1649,13 +1708,20 @@ impl<E: Executor> Agent<E> {
                 }
                 message = inbound.message() => match message {
                     Ok(Some(pb::MasterMessage { message: Some(message) })) => {
-                        if self.answer_too_late(&message, opened.elapsed()) {
+                        if Self::answer_too_late(&message, opened.elapsed()) {
                             return SessionEnd::Lost(TOO_LATE.to_owned());
                         }
+                        // Past the lease, a message (one held while this worker was frozen,
+                        // B162, or on its way through a one-way cut, B163) doesn't count as
+                        // the master's word.
+                        if self.silent_too_long(opened) {
+                            return SessionEnd::Lost(NO_WORD.to_owned());
+                        }
                         self.heard = tokio::time::Instant::now();
-                        self.on_master(message, &to_master, &mut client, &mut heartbeat).await;
+                        self.publish_deadline();
+                        self.on_master(message, &to_master, &mut client, (&mut heartbeat, opened)).await;
                         // Past the lease while handling it (a slow fetch of inputs).
-                        if self.cut_off {
+                        if self.cut_off || self.gone_silent(opened) {
                             return SessionEnd::Lost(NO_WORD.to_owned());
                         }
                     }
@@ -1719,7 +1785,7 @@ impl<E: Executor> Agent<E> {
         message: master_message::Message,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
         client: &mut MasterClient<Channel>,
-        heartbeat: &mut tokio::time::Interval,
+        (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
         match message {
             master_message::Message::Registered(registered) => {
@@ -1733,6 +1799,7 @@ impl<E: Executor> Agent<E> {
                     *heartbeat = heartbeat_timer(self.heartbeat);
                     self.lease = (timing.lease_timeout_ms > 0)
                         .then(|| Duration::from_millis(timing.lease_timeout_ms));
+                    self.publish_deadline();
                 }
                 self.cut_off = false;
                 for decision in registered.decisions {
@@ -1743,7 +1810,8 @@ impl<E: Executor> Agent<E> {
                 }
             }
             master_message::Message::AssignTask(assign) => {
-                self.assign(assign, to_master, client, heartbeat).await;
+                self.assign(assign, to_master, client, (heartbeat, opened))
+                    .await;
             }
             master_message::Message::AssignParse(job) => self.parse(job),
             // Heard: that is all it says.
@@ -1849,12 +1917,42 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// An assignment's inputs fetched from the master when they came apart from it: `None`
+    /// when it isn't started, rejected (a failed fetch) or the master gone silent (the session
+    /// ends, and the master takes it back at the lease).
+    async fn external_inputs(
+        &mut self,
+        assign: &pb::AssignTask,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        client: &mut MasterClient<Channel>,
+        timers: (&mut tokio::time::Interval, tokio::time::Instant),
+    ) -> Option<Option<Vec<u8>>> {
+        if !assign.inputs_external {
+            return Some(None);
+        }
+        match self
+            .fetch_with_timers(client, &assign.attempt_id, to_master, timers)
+            .await?
+        {
+            Ok(bytes) => Some(Some(bytes)),
+            Err(detail) => {
+                let rejected = pb::Rejected {
+                    attempt_id: assign.attempt_id.clone(),
+                    reason: pb::RejectReason::InvalidSpecification.into(),
+                    detail,
+                };
+                let _ = to_master.send(wrap(worker_message::Message::Rejected(rejected)));
+                None
+            }
+        }
+    }
+
     async fn assign(
         &mut self,
         assign: pb::AssignTask,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
         client: &mut MasterClient<Channel>,
-        heartbeat: &mut tokio::time::Interval,
+        timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
@@ -1877,19 +1975,11 @@ impl<E: Executor> Agent<E> {
             let _ = to_master.send(reject(reason, detail.to_owned()));
             return;
         }
-        let external = if assign.inputs_external {
-            let fetched = self
-                .fetch_with_timers(client, &assign.attempt_id, to_master, heartbeat)
-                .await;
-            match fetched {
-                Ok(bytes) => Some(bytes),
-                Err(error) => {
-                    let _ = to_master.send(reject(pb::RejectReason::InvalidSpecification, error));
-                    return;
-                }
-            }
-        } else {
-            None
+        let Some(external) = self
+            .external_inputs(&assign, to_master, client, timers)
+            .await
+        else {
+            return;
         };
         let mut spec = match AttemptSpec::from_assign(&assign, external.as_deref()) {
             Ok(spec) => spec,
@@ -2644,24 +2734,46 @@ fn code_folder(name: &str) -> String {
     )
 }
 
+/// What a fetch of inputs ended with.
+enum Fetched {
+    Bytes(Vec<u8>),
+    Failed(String),
+    /// A chunk came past the `lease` after the master's last word: not word any more.
+    Silent,
+}
+
+/// Fetches an attempt's inputs, noting each chunk in `heard` (from its value now) unless it
+/// came past `lease` after the last.
 async fn fetch_inputs(
     client: &mut MasterClient<Channel>,
     attempt_id: &str,
     heard: &watch::Sender<tokio::time::Instant>,
-) -> Result<Vec<u8>, String> {
-    let mut stream = client
+    lease: Option<Duration>,
+) -> Fetched {
+    let stream = client
         .fetch_inputs(pb::FetchInputsRequest {
             attempt_id: attempt_id.to_owned(),
         })
-        .await
-        .map_err(|s| s.to_string())?
-        .into_inner();
+        .await;
+    let mut stream = match stream {
+        Ok(response) => response.into_inner(),
+        Err(status) => return Fetched::Failed(status.to_string()),
+    };
     let mut bytes = Vec::new();
-    while let Some(chunk) = stream.message().await.map_err(|s| s.to_string())? {
-        heard.send_replace(tokio::time::Instant::now());
-        bytes.extend(chunk.data);
+    loop {
+        match stream.message().await {
+            Ok(Some(chunk)) => {
+                let now = tokio::time::Instant::now();
+                if lease.is_some_and(|lease| now >= *heard.borrow() + lease) {
+                    return Fetched::Silent;
+                }
+                heard.send_replace(now);
+                bytes.extend(chunk.data);
+            }
+            Ok(None) => return Fetched::Bytes(bytes),
+            Err(status) => return Fetched::Failed(status.to_string()),
+        }
     }
-    Ok(bytes)
 }
 
 fn root_hash(name: &str, hash: &str) -> pb::RootHash {
@@ -2775,6 +2887,14 @@ fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
 
 /// Why a session ends when the master has gone silent.
 const NO_WORD: &str = "no word from the master for the worker lease";
+
+/// The earlier of two moments, either of them maybe none.
+fn earliest(
+    a: Option<tokio::time::Instant>,
+    b: Option<tokio::time::Instant>,
+) -> Option<tokio::time::Instant> {
+    a.into_iter().chain(b).min()
+}
 
 /// Why a session ends when the answer to its `Register` no longer stands.
 const TOO_LATE: &str = "the master's answer came after the worker lease; asking again";

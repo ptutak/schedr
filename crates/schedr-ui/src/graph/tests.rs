@@ -452,3 +452,136 @@ fn a_group_with_tasks_on_layer_0_and_3_and_no_edge_between_them_stays_one_column
         );
     }
 }
+
+/// Whether an axis-aligned segment passes through a node's box (touching its edge doesn't).
+fn cuts(a: (f64, f64), b: (f64, f64), node: &Placed) -> bool {
+    let (left, right) = (
+        node.x - NODE_WIDTH / 2.0 + 0.5,
+        node.x + NODE_WIDTH / 2.0 - 0.5,
+    );
+    let (top, bottom) = (
+        node.y - NODE_HEIGHT / 2.0 + 0.5,
+        node.y + NODE_HEIGHT / 2.0 - 0.5,
+    );
+    let (x1, x2) = (a.0.min(b.0), a.0.max(b.0));
+    let (y1, y2) = (a.1.min(b.1), a.1.max(b.1));
+    x1 < right && x2 > left && y1 < bottom && y2 > top
+}
+
+/// No route cuts a box but its own ends', and the side box holds the side nodes only.
+fn check_sides(layout: &Layout, side: &[bool]) -> Result<(), String> {
+    let frame = layout.side.ok_or("no side box")?;
+    for (n, node) in layout.nodes.iter().enumerate() {
+        let inside = node.x - NODE_WIDTH / 2.0 >= frame.left
+            && node.x + NODE_WIDTH / 2.0 <= frame.left + frame.width
+            && node.y - NODE_HEIGHT / 2.0 >= frame.top
+            && node.y + NODE_HEIGHT / 2.0 <= frame.top + frame.height;
+        let clear = node.x - NODE_WIDTH / 2.0 > frame.left + frame.width;
+        if side[n] && !inside {
+            return Err(format!("side node {n} outside the side box"));
+        }
+        if !side[n] && !clear {
+            return Err(format!("task {n} not right of the side box"));
+        }
+    }
+    for route in &layout.routes {
+        for pair in route.points.windows(2) {
+            for (n, node) in layout.nodes.iter().enumerate() {
+                let own_end = n == route.from || n == route.to;
+                if !own_end && cuts(pair[0], pair[1], node) {
+                    return Err(format!("edge {} cuts node {n}", route.edge));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn resources_go_left_of_the_tasks_in_their_rows() {
+    // setup 0, users 1 and 2, cleanup 3, then 4 after the cleanup.
+    let edges = [(0, 1), (1, 2), (2, 3), (0, 3), (3, 4), (0, 2)];
+    let layout = layout_sided(5, &edges, &[], &[None; 5], &[(0, 3)]);
+    let layers: Vec<usize> = layout.nodes.iter().map(|n| n.layer).collect();
+    assert_eq!(layers, [0, 1, 2, 3, 4], "every row where it was");
+    let (setup, cleanup) = (layout.nodes[0], layout.nodes[3]);
+    assert!((setup.x - cleanup.x).abs() < 1e-9, "one lane");
+    for n in [1, 2, 4] {
+        assert!(
+            layout.nodes[n].x > setup.x + NODE_WIDTH,
+            "task {n} on the right"
+        );
+    }
+    check_sides(&layout, &[true, false, false, true, false]).unwrap();
+    assert_eq!(layout.routes.len(), edges.len(), "every edge drawn");
+    // Without resources aside, the layout is the grouped one.
+    assert_eq!(
+        layout_sided(5, &edges, &[], &[None; 5], &[]),
+        layout_grouped(5, &edges, &[], &[None; 5])
+    );
+    assert_eq!(layout_grouped(5, &edges, &[], &[None; 5]).side, None);
+}
+
+#[test]
+fn resources_at_once_take_lanes_of_their_own() {
+    // Two resources whose rows overlap: 0..3 and 1..4; a third after the first ends.
+    let edges = [(0, 2), (1, 2), (2, 3), (2, 4), (3, 5), (5, 6)];
+    let sides = [(0, 3), (1, 4), (5, 6)];
+    let layout = layout_sided(7, &edges, &[], &[None; 7], &sides);
+    let x = |n: usize| layout.nodes[n].x;
+    assert!((x(0) - x(1)).abs() >= NODE_WIDTH, "two lanes");
+    assert!((x(5) - x(0)).abs() < 1e-9, "the first lane again");
+    check_sides(&layout, &[true, true, false, true, true, true, true]).unwrap();
+}
+
+/// DAGs with resources: each pair (a, b), a before b, taken from nodes no other pair uses.
+/// A DAG and its resources: `(count, edges, sides)`.
+type SidedDag = (usize, Vec<(usize, usize)>, Vec<(usize, usize)>);
+
+fn sided_dags(max: usize) -> impl Strategy<Value = SidedDag> {
+    dags(max).prop_flat_map(|(count, edges)| {
+        let candidates: Vec<(usize, usize)> = edges.clone();
+        (
+            Just(count),
+            Just(edges),
+            proptest::sample::subsequence(candidates.clone(), 0..=candidates.len().min(4)),
+        )
+            .prop_map(|(count, edges, picked)| {
+                let mut used = vec![false; count];
+                let sides = picked
+                    .into_iter()
+                    .filter(|&(a, b)| {
+                        let free = !used[a] && !used[b];
+                        if free {
+                            used[a] = true;
+                            used[b] = true;
+                        }
+                        free
+                    })
+                    .collect();
+                (count, edges, sides)
+            })
+    })
+}
+
+proptest! {
+    #[test]
+    fn resources_aside_never_overlap_or_cut_a_task((count, edges, sides) in sided_dags(16)) {
+        let layout = layout_sided(count, &edges, &[], &vec![None; count], &sides);
+        for (i, a) in layout.nodes.iter().enumerate() {
+            for b in &layout.nodes[i + 1..] {
+                let apart_x = (a.x - b.x).abs() >= NODE_WIDTH;
+                let apart_y = (a.y - b.y).abs() >= NODE_HEIGHT;
+                prop_assert!(apart_x || apart_y, "{a:?} overlaps {b:?}");
+            }
+        }
+        if !sides.is_empty() {
+            let mut side = vec![false; count];
+            for &(a, b) in &sides {
+                side[a] = true;
+                side[b] = true;
+            }
+            prop_assert_eq!(check_sides(&layout, &side), Ok(()));
+        }
+    }
+}

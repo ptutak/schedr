@@ -33,7 +33,9 @@ every key.
   termination_grace_period`, so a draining worker has the time it expects.
 - **Probes** go to the ops port: liveness on `/healthz` for every role, readiness on `/readyz`
   for the master, the webserver and `schedr ui` (ready once it listens). Workers need no
-  readiness probe: nothing connects to them through a Service.
+  readiness probe: nothing connects to them through a Service. A standby or paused master is
+  not ready (503), so the master Service directs workers to the leader. A stream reaching a
+  non-leading master is refused with `UNAVAILABLE` and the worker reconnects.
 - **Connection files:** commands write these under `/dev/shm` by default. Docker and
   Podman typically give a container 64 MB there; size it for concurrent attempts and their
   connection files. In Kubernetes, mount an `emptyDir` with `medium: Memory` at `/dev/shm`

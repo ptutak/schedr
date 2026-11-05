@@ -40,16 +40,18 @@
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker>
       </defs>
+      {% if let Some((left, top, width, height)) = graph.resources %}<g class="resources-section"><rect class="resources-box" x="{{ left }}" y="{{ top }}" width="{{ width }}" height="{{ height }}" rx="10"></rect><text class="group-label" x="{{ left + 10.0 }}" y="{{ top + 15.0 }}">Resources</text></g>{% endif %}
       {% for group in graph.groups %}<g class="group"><title>group {{ group.group_id }}</title><rect class="group-box" x="{{ group.left }}" y="{{ group.top }}" width="{{ group.width }}" height="{{ group.height }}" rx="10"></rect><text class="group-label" x="{{ group.left + 10.0 }}" y="{{ group.top + 15.0 }}">{{ group.label }}</text></g>
       {% endfor %}
       {% for rail in graph.rails %}<path class="rail" data-resource="{{ rail.resource }}" d="{{ rail.path }}"><title>resource {{ rail.resource }}</title></path>
       {% endfor %}
-      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}{% if edge.not_taken %} not-taken{% endif %}" data-from="{{ edge.from }}" data-to="{{ edge.to }}" d="{{ edge.path }}" marker-end="url(#arrow)">{% if !edge.on.is_empty() %}<title>on {{ edge.on }}{% if edge.not_taken %} (not taken){% endif %}</title>{% endif %}</path>{% if !edge.on.is_empty() %}<text class="edge-on{% if edge.not_taken %} not-taken{% endif %}" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.on }}</text>{% endif %}
+      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}{% if edge.not_taken %} not-taken{% endif %}" data-from="{{ edge.from }}" data-to="{{ edge.to }}"{% if !edge.resource.is_empty() %} data-resource="{{ edge.resource }}"{% endif %} d="{{ edge.path }}" marker-end="url(#arrow)">{% if !edge.on.is_empty() %}<title>on {{ edge.on }}{% if edge.not_taken %} (not taken){% endif %}</title>{% endif %}</path>{% if !edge.on.is_empty() %}<text class="edge-on{% if edge.not_taken %} not-taken{% endif %}" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.on }}</text>{% endif %}
       {% endfor %}
       {% for node in graph.nodes %}
       <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}"{% if !node.resource.is_empty() %} data-resource="{{ node.resource }}"{% endif %}>
         <title>{{ node.task_id }} · {{ node.state }}{% if !node.resource.is_empty() %} · resource {{ node.resource }}{% endif %}</title>
         {% if node.cap.is_empty() %}<rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>{% else %}<path class="box cap {{ node.state }}" d="{{ node.cap }}"></path><line class="cap-band" x1="{{ node.band.0 }}" x2="{{ node.band.1 }}" y1="{{ node.band.2 }}" y2="{{ node.band.2 }}"></line>{% endif %}
+        {% for dot in node.uses %}<circle class="uses-dot" cx="{{ dot.x }}" cy="{{ dot.y }}" r="3.5" data-resource="{{ dot.resource }}"><title>uses resource {{ dot.resource }}</title></circle>{% endfor %}
         <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
         <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{% if node.counts.is_empty() %}{{ node.state }}{% else %}{{ node.counts }}{% endif %}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
       </a>
@@ -69,8 +71,8 @@ function schedrRails(hovered) {
     shown[node.getAttribute("data-resource")] = true;
   });
   if (hovered) { shown[hovered] = true; }
-  document.querySelectorAll("svg.dag .rail").forEach(function (rail) {
-    rail.classList.toggle("shown", shown[rail.getAttribute("data-resource")] === true);
+  document.querySelectorAll("svg.dag .rail, svg.dag .resource-detail").forEach(function (line) {
+    line.classList.toggle("shown", shown[line.getAttribute("data-resource")] === true);
   });
 }
 document.addEventListener("htmx:afterSettle", function () {
@@ -81,10 +83,11 @@ document.addEventListener("htmx:afterSettle", function () {
   });
   schedrRails(null);
 });
-// A resource's rail on hover of its setup or cleanup (decision 262).
+// A resource's rail and all its lines on hover of its setup, its cleanup, a user's dot or its
+// summary line (decisions 262, 291).
 document.addEventListener("mouseover", function (event) {
-  var node = event.target.closest ? event.target.closest("svg.dag a.node[data-resource]") : null;
-  schedrRails(node ? node.getAttribute("data-resource") : null);
+  var at = event.target.closest ? event.target.closest("svg.dag [data-resource]") : null;
+  schedrRails(at ? at.getAttribute("data-resource") : null);
 });
 document.addEventListener("DOMContentLoaded", function () { schedrRails(null); });
 </script>

@@ -13,6 +13,7 @@ mod support;
 
 mod chaos;
 mod check;
+mod cuts;
 mod load;
 
 use std::fmt::Write as _;

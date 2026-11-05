@@ -19,6 +19,13 @@
 //! members' extent and its nested boxes', with padding and a band for its label on top; the
 //! space between layers grows with the deepest nesting, so labels never meet.
 //!
+//! **Resources** beside the tasks: a resource's setup and cleanup are taken out of the
+//! layers' order and drawn in a box of their own on the left, each resource in a lane, its
+//! setup and cleanup in the layers they would have had (so every row stays where it was). Their
+//! edges run in a channel between the box and the tasks (a track per resource and direction),
+//! reaching it through the space below their upstream node's layer and leaving it through the
+//! space above their downstream node's: never through a box.
+//!
 //! Deterministic: the same graph always gets the same layout.
 
 #[cfg(test)]
@@ -108,11 +115,29 @@ pub struct Layout {
     pub routes: Vec<Route>,
     /// The groups' boxes, outer before inner (a group without nodes has none).
     pub boxes: Vec<GroupBox>,
+    /// The resources' box on the left, if any are put aside ([`layout_sided`]).
+    pub side: Option<SideBox>,
     /// The drawing's width.
     pub width: f64,
     /// The drawing's height.
     pub height: f64,
 }
+
+/// The box of the nodes put aside: the resources' section, left of the tasks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SideBox {
+    /// Its left edge.
+    pub left: f64,
+    /// Its top edge (its label's band above its contents).
+    pub top: f64,
+    /// Its width.
+    pub width: f64,
+    /// Its height.
+    pub height: f64,
+}
+
+/// The space between two tracks of the channel beside the side box.
+const TRACK: f64 = 6.0;
 
 /// A node of the layered graph: a task, or a point of a long edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,15 +185,42 @@ pub fn layout_grouped(
     groups: &[GroupSpec],
     node_group: &[Option<usize>],
 ) -> Layout {
+    layout_sided(count, edges, groups, node_group, &[])
+}
+
+/// [`layout_grouped`], with the nodes of `sides` (each a resource's setup and cleanup) put in
+/// a box of their own on the left, a lane per resource (see the module's docs).
+#[must_use]
+pub fn layout_sided(
+    count: usize,
+    edges: &[(usize, usize)],
+    groups: &[GroupSpec],
+    node_group: &[Option<usize>],
+    sides: &[(usize, usize)],
+) -> Layout {
+    let layer = layers(count, edges);
+    let lanes = side_lanes(count, sides, &layer);
+    let aside = |n: usize| lanes.get(n).copied().flatten();
     let paths: Vec<Vec<usize>> = (0..count)
-        .map(|n| group_path(groups, node_group.get(n).copied().flatten()))
+        .map(|n| {
+            if aside(n).is_some() {
+                Vec::new()
+            } else {
+                group_path(groups, node_group.get(n).copied().flatten())
+            }
+        })
         .collect();
     let deepest = paths.iter().map(Vec::len).max().unwrap_or(0);
     // Room between layers for the deepest boxes' padding and labels.
     let layer_gap = LAYER_GAP + to_f64(deepest.saturating_sub(1)) * (GROUP_PAD + GROUP_LABEL);
-    let top = MARGIN + to_f64(deepest) * GROUP_LABEL;
-    let layer = layers(count, edges);
-    let mut graph = layered(count, edges, &layer, paths);
+    // The side box's label needs a band on top too.
+    let bands = deepest.max(usize::from(lanes.iter().any(Option::is_some)));
+    let top = MARGIN + to_f64(bands) * GROUP_LABEL;
+    let mut graph = layered(count, &task_edges(count, edges, &lanes), &layer, paths);
+    for row in &mut graph.layers {
+        row.retain(|&i| i >= count || aside(i).is_none());
+    }
+    let in_tasks = |i: usize| i >= count || aside(i).is_none();
     for l in 0..graph.layers.len() {
         let keys: Vec<f64> = (0..graph.layers[l].len()).map(to_f64).collect();
         arrange(&mut graph, l, &keys);
@@ -188,11 +240,13 @@ pub fn layout_grouped(
                 .items
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| in_tasks(*i))
                 .map(|(i, item)| x[i] - item.width() / 2.0),
         )
         .fold(f64::INFINITY, f64::min);
+    let side = SideFrame::of(&lanes);
     if left.is_finite() {
-        let shift = MARGIN - left;
+        let shift = side.tasks_left() - left;
         for value in &mut x {
             *value += shift;
         }
@@ -202,53 +256,244 @@ pub fn layout_grouped(
     }
     let nodes = (0..count)
         .map(|n| Placed {
-            x: x[n],
+            x: aside(n).map_or(x[n], |(lane, _)| SideFrame::lane_x(lane)),
             y: y(layer[n]),
             layer: layer[n],
         })
         .collect::<Vec<_>>();
-    let routes = graph
-        .chains
-        .iter()
-        .map(|(edge, chain)| {
-            let (from, to) = (&chain[0], &chain[chain.len() - 1]);
-            let mut points = vec![(x[*from], y(layer[*from]) + NODE_HEIGHT / 2.0)];
-            for &i in &chain[1..chain.len() - 1] {
-                let middle = y(graph.layer_of[i]);
-                points.push((x[i], middle - NODE_HEIGHT / 2.0));
-                points.push((x[i], middle + NODE_HEIGHT / 2.0));
-            }
-            points.push((x[*to], y(layer[*to]) - NODE_HEIGHT / 2.0));
-            Route {
-                edge: *edge,
-                from: *from,
-                to: *to,
-                points,
-            }
-        })
-        .collect();
+    let mut routes = chain_routes(&graph, &x, &y);
+    routes.extend(side_routes(edges, &nodes, &lanes, &side, layer_gap));
+    routes.sort_by_key(|route| route.edge);
+    let side_box = side.frame(&nodes, &lanes);
     let right = graph
         .items
         .iter()
         .enumerate()
+        .filter(|(i, _)| in_tasks(*i))
         .map(|(i, item)| x[i] + item.width() / 2.0)
         .chain(boxes.iter().map(|b| b.left + b.width))
+        .chain(side_box.map(|b| b.left + b.width))
         .fold(0.0_f64, f64::max);
     let bottom = boxes
         .iter()
         .map(|b| b.top + b.height)
+        .chain(side_box.map(|b| b.top + b.height))
         .fold(0.0_f64, f64::max);
     let depth = layer.iter().copied().max().map_or(0, |l| l + 1);
     Layout {
         nodes,
         routes,
         boxes,
+        side: side_box,
         width: right + MARGIN,
         height: if depth == 0 {
             2.0 * MARGIN
         } else {
             (y(depth - 1) + NODE_HEIGHT / 2.0).max(bottom) + MARGIN
         },
+    }
+}
+
+/// The edges as the layers see them: a side node's out of range (skipped), routed apart
+/// ([`side_routes`]); the others' indices kept.
+fn task_edges(
+    count: usize,
+    edges: &[(usize, usize)],
+    lanes: &[Option<(usize, usize)>],
+) -> Vec<(usize, usize)> {
+    let aside = |n: usize| lanes.get(n).copied().flatten().is_some();
+    edges
+        .iter()
+        .map(|&(f, t)| {
+            if aside(f) || aside(t) {
+                (count, count)
+            } else {
+                (f, t)
+            }
+        })
+        .collect()
+}
+
+/// The routes of the edges between tasks: down through each layer a long edge crosses.
+fn chain_routes(graph: &Layered, x: &[f64], y: &impl Fn(usize) -> f64) -> Vec<Route> {
+    graph
+        .chains
+        .iter()
+        .map(|(edge, chain)| {
+            let (from, to) = (chain[0], chain[chain.len() - 1]);
+            let mut points = vec![(x[from], y(graph.layer_of[from]) + NODE_HEIGHT / 2.0)];
+            for &i in &chain[1..chain.len() - 1] {
+                let middle = y(graph.layer_of[i]);
+                points.push((x[i], middle - NODE_HEIGHT / 2.0));
+                points.push((x[i], middle + NODE_HEIGHT / 2.0));
+            }
+            points.push((x[to], y(graph.layer_of[to]) - NODE_HEIGHT / 2.0));
+            Route {
+                edge: *edge,
+                from,
+                to,
+                points,
+            }
+        })
+        .collect()
+}
+
+/// Each node's place aside, `(lane, resource)`, if it is a side node: each resource of
+/// `sides` (setup, cleanup) in the first lane free from its setup's layer to its cleanup's.
+fn side_lanes(
+    count: usize,
+    sides: &[(usize, usize)],
+    layer: &[usize],
+) -> Vec<Option<(usize, usize)>> {
+    let mut lanes = vec![None; count];
+    // The last layer each lane is taken to.
+    let mut ends: Vec<usize> = Vec::new();
+    let mut order: Vec<usize> = (0..sides.len())
+        .filter(|&r| sides[r].0 < count && sides[r].1 < count && sides[r].0 != sides[r].1)
+        .collect();
+    order.sort_by_key(|&r| (layer[sides[r].0], r));
+    for (resource, r) in order.into_iter().enumerate() {
+        let (setup, cleanup) = sides[r];
+        if lanes[setup].is_some() || lanes[cleanup].is_some() {
+            continue; // a node in two resources, which validation refuses
+        }
+        let (first, last) = (
+            layer[setup].min(layer[cleanup]),
+            layer[setup].max(layer[cleanup]),
+        );
+        let lane = ends
+            .iter()
+            .position(|&end| end < first)
+            .unwrap_or(ends.len());
+        if lane == ends.len() {
+            ends.push(last);
+        } else {
+            ends[lane] = last;
+        }
+        lanes[setup] = Some((lane, resource));
+        lanes[cleanup] = Some((lane, resource));
+    }
+    lanes
+}
+
+/// The routes of the edges to or from a side node (`lanes`, see [`side_lanes`]): out of the
+/// upstream node's bottom, through the space below its layer to the resource's track in the
+/// channel, along it, and through the space above the downstream node's layer into its top.
+fn side_routes(
+    edges: &[(usize, usize)],
+    nodes: &[Placed],
+    lanes: &[Option<(usize, usize)>],
+    side: &SideFrame,
+    layer_gap: f64,
+) -> Vec<Route> {
+    let aside = |n: usize| lanes.get(n).copied().flatten();
+    let edge_y = NODE_HEIGHT / 2.0 + layer_gap / 2.0;
+    let mut routes = Vec::new();
+    for (edge, &(from, to)) in edges.iter().enumerate() {
+        let (Some(a), Some(b)) = (nodes.get(from), nodes.get(to)) else {
+            continue;
+        };
+        if a.layer >= b.layer {
+            continue;
+        }
+        let (start, end) = (aside(from), aside(to));
+        let track = match (start, end) {
+            (Some((_, resource)), _) => 2 * resource,
+            (None, Some((_, resource))) => 2 * resource + 1,
+            (None, None) => continue,
+        };
+        let (top, bottom) = (b.y - NODE_HEIGHT / 2.0, a.y + NODE_HEIGHT / 2.0);
+        // A resource's own setup to its cleanup: straight down its lane.
+        let own = matches!((start, end), (Some((_, r)), Some((_, s))) if r == s);
+        let points = if own {
+            vec![(a.x, bottom), (b.x, top)]
+        } else {
+            // Out of the bottom, along the gap below, the track, the gap above, into the top:
+            // the gaps hold no box, so no box is cut.
+            let (below, above, cx) = (a.y + edge_y, b.y - edge_y, side.track_x(track));
+            vec![
+                (a.x, bottom),
+                (a.x, below),
+                (cx, below),
+                (cx, above),
+                (b.x, above),
+                (b.x, top),
+            ]
+        };
+        routes.push(Route {
+            edge,
+            from,
+            to,
+            points,
+        });
+    }
+    routes
+}
+
+/// The side box's geometry: its lanes, then the channel's tracks (two per resource), then the
+/// tasks.
+struct SideFrame {
+    lanes: usize,
+    resources: usize,
+}
+
+impl SideFrame {
+    fn of(lanes: &[Option<(usize, usize)>]) -> Self {
+        let most = |pick: fn(&(usize, usize)) -> usize| {
+            lanes.iter().flatten().map(pick).max().map_or(0, |m| m + 1)
+        };
+        Self {
+            lanes: most(|p| p.0),
+            resources: most(|p| p.1),
+        }
+    }
+
+    /// The box's right edge.
+    fn right(&self) -> f64 {
+        MARGIN
+            + 2.0 * GROUP_PAD
+            + to_f64(self.lanes) * NODE_WIDTH
+            + to_f64(self.lanes.saturating_sub(1)) * GAP
+    }
+
+    fn lane_x(lane: usize) -> f64 {
+        MARGIN + GROUP_PAD + NODE_WIDTH / 2.0 + to_f64(lane) * (NODE_WIDTH + GAP)
+    }
+
+    fn track_x(&self, track: usize) -> f64 {
+        self.right() + TRACK * to_f64(track + 1)
+    }
+
+    /// Where the tasks start: the margin, or past the box and its channel.
+    fn tasks_left(&self) -> f64 {
+        if self.lanes == 0 {
+            MARGIN
+        } else {
+            self.track_x(2 * self.resources) + GAP
+        }
+    }
+
+    /// The box around the side nodes placed.
+    fn frame(&self, nodes: &[Placed], lanes: &[Option<(usize, usize)>]) -> Option<SideBox> {
+        let ys = || {
+            nodes
+                .iter()
+                .zip(lanes)
+                .filter(|(_, lane)| lane.is_some())
+                .map(|(n, _)| n.y)
+        };
+        let first = ys().fold(f64::INFINITY, f64::min);
+        let last = ys().fold(f64::NEG_INFINITY, f64::max);
+        if self.lanes == 0 || !first.is_finite() {
+            return None;
+        }
+        let top = first - NODE_HEIGHT / 2.0 - GROUP_PAD - GROUP_LABEL;
+        Some(SideBox {
+            left: MARGIN,
+            top,
+            width: self.right() - MARGIN,
+            height: last + NODE_HEIGHT / 2.0 + GROUP_PAD - top,
+        })
     }
 }
 

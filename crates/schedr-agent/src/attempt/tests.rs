@@ -564,15 +564,67 @@ fn a_commands_exit_code_names_its_outcome() {
 #[tokio::test]
 async fn a_cleanup_gate_waits_while_held_and_says_what_the_master_answered() {
     let (gate, passes) = tokio::sync::watch::channel(Gate::Open);
-    assert!(CleanupGate(passes.clone()).passes().await);
+    let (_deadline, never) = tokio::sync::watch::channel(None);
+    let of = |passes: &tokio::sync::watch::Receiver<Gate>| CleanupGate {
+        gate: passes.clone(),
+        deadline: never.clone(),
+    };
+    assert!(of(&passes).passes().await);
     gate.send_replace(Gate::Held);
-    let waiting = tokio::spawn(CleanupGate(passes.clone()).passes());
+    let waiting = tokio::spawn(of(&passes).passes());
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
     gate.send_replace(Gate::Open);
     assert!(waiting.await.unwrap());
     gate.send_replace(Gate::Dropped);
-    assert!(!CleanupGate(passes.clone()).passes().await);
+    assert!(!of(&passes).passes().await);
     drop(gate);
-    assert!(!CleanupGate(passes).passes().await);
+    assert!(!of(&passes).passes().await);
+}
+
+#[tokio::test]
+async fn an_open_gate_past_the_masters_deadline_waits_for_its_answer() {
+    // B162: frozen past the lease, the worker's loop hadn't held the gate yet.
+    let (gate, passes) = tokio::sync::watch::channel(Gate::Open);
+    let past = tokio::time::Instant::now() - Duration::from_secs(1);
+    let (deadline, late) = tokio::sync::watch::channel(Some(past));
+    let gated = CleanupGate {
+        gate: passes,
+        deadline: late,
+    };
+    let waiting = tokio::spawn(gated.clone().passes());
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished(), "it doesn't pass on its own");
+    // The loop holds it, then the master answers `Kill`: never run here.
+    gate.send_replace(Gate::Held);
+    gate.send_replace(Gate::Dropped);
+    assert!(!waiting.await.unwrap());
+    // Or `Continue`, heard just now: it runs.
+    gate.send_replace(Gate::Held);
+    let waiting = tokio::spawn(gated.passes());
+    deadline.send_replace(Some(tokio::time::Instant::now() + Duration::from_secs(60)));
+    gate.send_replace(Gate::Open);
+    assert!(waiting.await.unwrap());
+}
+
+#[tokio::test]
+async fn an_open_gate_past_its_deadline_passes_when_the_master_is_heard_in_time() {
+    // Codex's review of B162: a heartbeat's answer heard just before the lease ran out moves
+    // the deadline on with the gate left open; the cleanup waited for a change of the gate
+    // that never came.
+    let (_gate, passes) = tokio::sync::watch::channel(Gate::Open);
+    let past = tokio::time::Instant::now() - Duration::from_secs(1);
+    let (deadline, late) = tokio::sync::watch::channel(Some(past));
+    let waiting = tokio::spawn(
+        CleanupGate {
+            gate: passes,
+            deadline: late,
+        }
+        .passes(),
+    );
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    deadline.send_replace(Some(tokio::time::Instant::now() + Duration::from_secs(60)));
+    let woken = tokio::time::timeout(Duration::from_secs(5), waiting).await;
+    assert!(woken.expect("woken by the deadline").unwrap());
 }

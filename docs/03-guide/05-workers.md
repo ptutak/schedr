@@ -36,6 +36,12 @@ If the connection drops, running tasks initially keep running. After a worker le
 by default) without word from the master, the agent stops those with `cleanup_anywhere` as
 `lost`, using a retry. Their cleanup waits for the master's decision, including if a task
 ends on its own while disconnected. A master outage longer than the lease has the same effect.
+The agent ends any stream silent for a lease, whatever it runs, and acts on no message
+arriving past that limit. This also applies while fetching inputs: a late chunk is ignored,
+the task is not started and no rejection is sent. On its first stream, before it knows the
+lease, it drops a `Registered` at least as old as the lease stated in that reply and registers
+again. The master takes back an unstarted assignment only after the same lease.
+
 The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms to 30 s, with jitter, so
 workers that lost the master together don't come back in step. After a session in which it
 was registered, the backoff starts from 200 ms again.

@@ -340,6 +340,7 @@ impl MasterCore {
                     .cancel_grace
                     .saturating_add(settings.cleanup_move_wait),
             )
+            .with_start_timeout(settings.lease_timeout)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
         dispatcher.set_max_instances(settings.max_instances);
@@ -1239,10 +1240,20 @@ impl MasterCore {
         let Some(attempt) = self.db.attempt(&entry.attempt_id).await? else {
             return Ok((pb::AttemptDecision::Kill, None));
         };
+        let finished = entry.state == i32::from(pb::JournalState::Finished);
+        // A cleanup that ended while its worker was away, waiting to move: its `Finished`,
+        // sent again, counts and the move is dropped (decision 282). Not adopted: nothing of
+        // it runs any more.
+        if finished
+            && attempt.worker_id.is_empty()
+            && attempt.status.is_none()
+            && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id)
+        {
+            return Ok((pb::AttemptDecision::Continue, None));
+        }
         if attempt.worker_id != worker_id {
             return Ok((pb::AttemptDecision::Kill, None));
         }
-        let finished = entry.state == i32::from(pb::JournalState::Finished);
         Ok(match (attempt.status, finished) {
             // The master stored its result: the worker can forget it.
             (Some(_), true) => (pb::AttemptDecision::Ack, None),

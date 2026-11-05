@@ -295,6 +295,45 @@ with Dag("{id}"):
 }
 
 /// Writes `count` DAGs `<prefix>0001`, … of `tasks` tasks each; their IDs.
+/// A DAG for the chaos scenarios (M4.8z): a resource `env` (a command setup and cleanup), and
+/// `tasks` command tasks using it, each sleeping 2 s (every fourth 25 s, to be under way when a
+/// link is cut) with a cleanup `cleanup_work` that may run on another worker when its own is
+/// lost (`cleanup_anywhere`); all marked, with `retries` for the tasks and the cleanups alike.
+pub fn chaos_dag(
+    id: &str,
+    tasks: usize,
+    cleanup_work: &str,
+    retries: u32,
+    marks: &std::path::Path,
+) -> String {
+    let command = crate::check::marked(marks, "sleep {secs}");
+    let cleanup = crate::check::marked_cleanup(marks, cleanup_work);
+    let setup = crate::check::marked(marks, "sleep 0.2");
+    format!(
+        r#"from datetime import timedelta
+
+from schedr import CommandOperator, CommandResource, Dag
+
+with Dag("{id}"):
+    env = CommandResource("env", "{setup}", retries={retries}, retry_delay=timedelta(0))
+    env.cleanup_command("{setup}", retries={retries}, retry_delay=timedelta(0))
+    for k in range({tasks}):
+        secs = 25 if k % 4 == 0 else 2
+        CommandOperator(
+            f"c{{k:04}}",
+            f"{command}",
+            retries={retries},
+            retry_delay=timedelta(0),
+            cleanup="{cleanup}",
+            cleanup_retries={retries},
+            cleanup_retry_delay=timedelta(0),
+            cleanup_anywhere=True,
+            uses=[env],
+        )
+"#
+    )
+}
+
 pub fn command_dags(
     stress: &Stress,
     prefix: &str,

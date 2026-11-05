@@ -1929,11 +1929,42 @@ anywhere = false                   # native cleanup_anywhere
   one-task DAG, so `max_active_runs` covers it.
 - **`schedule` is optional.** With a schedule (or `every` / `once`), the declaration is a
   **standalone job**: a one-task DAG, paused when first found like any new DAG, whose ID is its
-  reference (e.g. `etl-repo:team_a/schedr.toml#report_daily`); it can also be used from DAGs.
-  Without one, it is only used from DAGs or triggered manually.
+  reference (e.g. `etl-repo:team_a/schedr.toml#report_daily`); like any DAG it can also be
+  triggered by hand, and it can also be used from DAGs. Without one, it is **a script for DAGs
+  only** (decision 296): no DAG, not listed among the DAGs, used only through
+  `ScriptOperator` (and `ScriptResource`, `cleanup_script`). Only `script` and `interpreter`
+  are required; the DAG-level keys (`timezone`, `start`, `end`, `initial_since`, `catchup`,
+  `max_active_runs`, `notify`, `params`) are an error there: they would do nothing.
 - **To use a script in a DAG, it must be declared** in a `schedr.toml` inside
   `SCHEDR_SCRIPT_PATH`, typically **without a schedule**. There is no way to run an undeclared
   script file.
+- **292. M4.9 in three steps (the user: A, 2026-11-05):** M4.9a script roots, reading and
+  checking `schedr.toml`, standalone jobs, `schedr dags check` for TOML; M4.9b the `script`
+  task kind on the worker (interpreters, rejections 3-5, the `SCHEDR_*` variables) and
+  `ScriptOperator`; M4.9c `params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource` and
+  `cleanup_script`. Each reviewed and documented on its own. Not chosen: one step.
+- **293. One reader of `schedr.toml`, in the agent (A):** Rust checks every key and builds a
+  standalone job's one-task DAG, so a worker running scripts needs no `schedr` in Python. A DAG
+  file's `ScriptOperator` asks the agent over the runner's socket and gets the checked
+  declaration back; Python never reads TOML. Not chosen: a second reader in Python
+  (`tomllib`) for `ScriptOperator` (two readers drifting apart).
+- **294. A changed declaration re-parses its DAGs (A):** the keys the master schedules with
+  (`queue`, `retries`, `retry_delay`, `timeout`, `outcomes`, a cleanup) come from the
+  declaration at the DAG's parse; a change to a script root re-parses the DAGs whose
+  `ScriptOperator`s refer into it (the master knows the references), so every key follows the
+  TOML. The worker runs the script at the script root's hash the master expects
+  (`CODE_MISMATCH` as for DAG roots). Not chosen: the master's keys frozen until the DAG's own
+  file changes (a raised `retries` not applied).
+- **295. A script root a parsing worker lacks is an import error (A):** "script root `etl`
+  isn't on this worker", naming it; workers that parse need every script root their DAGs use.
+  Not chosen: accepted with a warning and checked at run time (the master's keys unknown until
+  then).
+- **296. An unscheduled declaration is a script for DAGs only (B, the user's):** see
+  "`schedule` is optional" above. Not chosen: a `manual = true` key making it a one-task DAG
+  for manual runs (one more combination to define, with `schedule` too); every declaration a
+  DAG, every key accepted (a declaration made for `ScriptOperator` listed as a DAG, keys that
+  do nothing accepted).
+
 - **Run information** (no t-strings or other templating in TOML) is passed as **environment
   variables**, set by the agent for every `script` and `command` task: `SCHEDR_DAG_ID`,
   `SCHEDR_RUN_ID`, `SCHEDR_RUN_KIND`, `SCHEDR_TASK_ID`, `SCHEDR_MAP_INDEX` (mapped tasks
@@ -6525,6 +6556,54 @@ create duplicate events).
   like `empty`); events pushed in through the API (`POST /api/events/...`); runs of other DAGs
   as events (`ExternalTaskSensor` without polling).
 
+### Human in the loop (M6)
+
+A wait step a person ends: an approval or an answer given in the UI, the API or the CLI. Proposed
+by the user on 2026-11-05 and designed the same day; built after 1.0.0, in M6 (PLAN.md).
+
+```python
+@dataclass
+class Rollout:
+    region: Literal["eu", "us"]
+    percent: int
+
+with Dag("release"):
+    build = build_artifacts()
+    ok = approve(t"Ship {build.version}?", approvers=["release-managers"],
+                 four_eyes=True, timeout=timedelta(days=2))
+    plan = ask("How should it roll out?", answer=Rollout)
+    build >> ok >> plan >> deploy(build, plan)
+    ok.on(Rejected) >> notify_team(build)
+```
+
+- **283. The master holds it (the user: A, 2026-11-05):** `approve(...)` and `ask(...)` are
+  declared in Python and become a task of kind `ask` in DAG JSON (the question, the answer's
+  schema, approvers, timeout); no Python runs for the step. A wait step like a sensor (a task in
+  the graph, its answer its output as data, `timeout` and `TimedOut`), but the master holds it:
+  the task, once ready, waits for an answer instead of being assigned, with no user code and no
+  worker or watcher slot. The docs show a `@sensor.poke` for an answer kept in another system
+  (a ticket approved in an issue tracker): sensors cover that already. Not chosen: a `@sensor`
+  for it (it would poll schedr's own API, holding a watcher slot for days, each author writing
+  the loop); both mechanisms.
+- **284. What can be asked (A):** the answer's type is the step's output: `approve` a yes or no;
+  `ask(answer=...)` a `Literal` or `Enum` (a choice) or a dataclass or pydantic model (a form,
+  drawn as the params form is). The master checks an answer against the schema. Not chosen:
+  approvals only.
+- **285. A "no" (A):** a rejected approval ends with the `Rejected` outcome, not a failure:
+  `.on(Rejected)` branches on it, plain `>>` downstream tasks are skipped, as with `TimedOut`.
+  Not chosen: a failure.
+- **286. Who answers (A):** whoever may trigger the DAG, by default; `approvers=[...]` (users or
+  groups, checked against the signed-in user; LDAP groups in M6) narrows it; `four_eyes=True`
+  keeps whoever triggered the run from answering. Not chosen: no narrowing.
+- **287. Timeout (A):** `timeout=`, else `[ask] default_timeout` (7 days), ending with the
+  `TimedOut` outcome. Not chosen: the sensors' 24 h default.
+- **288. Notice (A, the user: an email with a link to the UI):** a "Waiting for you" list in the
+  UI with a badge, the answer form in the task panel, `schedr runs answer <run> <task>`, and a
+  `WAITING_FOR_ANSWER` notification (M4.13's channels) whose email links to the task in the UI.
+  Not chosen: the UI and the CLI only.
+- **289. Record (A):** each answer in the command log (who, when, what, an optional comment),
+  shown in the task panel; an answer is final.
+
 ### Cleanup and resources
 
 Work that must run **whatever the result** of the tasks before it (releasing a lock, deleting
@@ -7094,6 +7173,82 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   none, so nothing else. The Cancel dialog says so. Not chosen: only with `--force` (the run's
   cancel already keeps it, so stopping one is a deliberate act); the run ending `failed` (a
   deliberate act read as an error); `success` (a possible leftover hidden).
+- **280. A task without `cleanup_anywhere` may run twice while its worker is cut off: at least
+  once, made visible.** A cut worker can't tell a master outage from its own cut, so it stops
+  only `cleanup_anywhere` tasks (252); a master that is up marks the cut worker's attempts
+  `lost` at the lease and retries them elsewhere, and its other tasks run on in both places
+  until the worker reconnects and is told to kill them. A frozen worker (its process paused: a
+  stalled VM or node) can stop nothing, so after a freeze any task may run twice, a
+  `cleanup_anywhere` one too if it outlives the lease and the cleanup's move wait (its retry
+  waits for its cleanup, 219 and 256); only fencing the node could prevent it (the user,
+  2026-11-05, accepted). The chaos scenarios (M4.8z) count these overlaps (`tries_run_twice`,
+  listed in the scenario's bundle) instead of failing on them; any other overlap fails, a
+  `cleanup_anywhere` task's on a cut (not frozen) worker included. The docs say such a task
+  should be idempotent. Not chosen (the user, 2026-11-05; a side note found it): fencing every task (a
+  worker cut past the lease stops all, the master retries after lease and grace: a master or
+  database outage would kill all running work, what 252 avoids); an opt-in `exclusive=True`
+  (B's stop-and-wait per task, a public option: a later step if wanted); never retrying a cut
+  worker's tasks (work stalls for the whole cut).
+- **281. Nothing a worker starts was given away (B163):** the agent ends a stream silent for the
+  worker lease whatever it runs (not only with a `cleanup_anywhere` task) and acts on nothing
+  arriving past it, and the master takes back an unstarted assignment only after the lease (it
+  was 10 s), so an assignment held in a one-way cut is never started after the master ran the
+  task elsewhere. Cost: an assignment lost on its way is run again after the lease (60 s by
+  default) instead of 10 s. The same holds while it fetches an assignment's inputs (a chunk
+  past the lease isn't word either: nothing is started, and no rejection sent), and on a
+  worker's first stream, before it knows its lease: a `Registered` older than the lease it
+  states is dropped and asked again, whatever waits (the user, 2026-11-05, on Codex's review;
+  the cost: a master taking more than the lease to answer a `Register` sees the worker connect
+  again, as a worker that knew its lease already did). Not chosen (the user, 2026-11-05): the
+  agent side alone (an assignment held between 10 s and the lease still started); the worker
+  asking before each start (a round trip on every task).
+- **282. A moving cleanup's result from its own worker counts:** a worker cut off while its
+  cleanup ran (255) reports the result when it comes back; arriving before the move took place,
+  it is stored and the move dropped, so the cleanup doesn't run again. Its `Finished` in the
+  journal of its `Register` is answered `Continue`, not `Kill`, so it is sent again. Only the
+  worker it first moved from ran the task: from one it moved from later (a cleanup alone), the
+  task's kept result stands. Not chosen (the user, 2026-11-05): ignoring it as before (the
+  cleanup ran twice in stress scenario 21).
+- **290. Resources beside the tasks on the graph (the user's, 2026-11-05):** a run's graph
+  draws its resources' setups and cleanups in a "Resources" box on the left, a lane per
+  resource (resources at once in lanes of their own), each at the height of the row it would
+  have had, so the tasks' rows stay as they were; their lines run in a channel between the box
+  and the tasks (a track per resource and direction) and cross over only between rows, never
+  through a box. Not chosen: the right side; the resources listed from the top, away from their
+  rows.
+- **291. A resource's lines cut down (the user: "two lines + hover", 2026-11-05):** when its
+  users share a group, one line from the setup into the group's box (at its users' first row)
+  and one from the box (at their last row) to the cleanup; otherwise the lines to its first
+  users and from its last ones. The other lines show on hover or selection of the resource (its
+  setup, cleanup, a user's dot or a summary line), with its rail; each user has a dot in the
+  resources' colour. The lines from a cleanup to what follows it are always drawn. Not chosen:
+  no lines but on hover (the order not visible at a glance); one trunk per resource with a
+  branch to each user (many users, many branches).
+- **297. A master that doesn't lead is neither ready nor holding streams (B165):** paused (its
+  database lease not renewed) or taken over, it answers `/readyz` with 503 ("starting: master",
+  as a standby) until it leads again, so its Service sends workers to the master that leads; a
+  stream that reaches it anyway is refused at once with UNAVAILABLE, "not leading", and the
+  worker connects again; so is one whose `Register` waited for the lock while it paused. It used to stay ready and hold a stream until it led again, so a
+  worker's reconnect could wait there past its lease (stress scenario 05). Not chosen (the user,
+  2026-11-05): only the refusal (a Service still sending every new stream to it); only the
+  readiness (a worker that got there anyway waits).
+
+- **Built (M4.8z; decisions 280-282, 290, 291, 297; fixes B162-B165):** chaos scenarios in the
+  stress suite: the TCP proxy between workers and master cuts a link one way or both, slows it
+  or freezes a worker (`SIGSTOP`), and a seeded random schedule under load (scenario 21), its
+  seed in the report; the checks count tries run twice (280) and fail on any other overlap, on a
+  cleanup started before its try ended or run to its end more than once; each scenario leaves an
+  investigation bundle. The nightly `stress.yml` runs scenario 21 alone with a fresh seed when
+  main didn't change. The harness proxy dials upstream per connection with a 2 s limit (its
+  accept loop waited 135 s on a master gone, failing scenario 05). B162: a cleanup gate past the
+  master's deadline waits for its answer. B163 (281), B164 (282), B165 (297). The run graph puts
+  resources on the left (290) with two lines each and the rest on hover (291);
+  `examples/workspace.py` is a resource example with its test. Codex's review found 7, all
+  fixed with a test each (the checker's by reading): a second move's report took the place of
+  the task's success; a fetch of inputs and a first stream escaped the silence limit (281); a
+  cleanup gate past the deadline missed a deadline moved on; the journal's `Finished` of a
+  cleanup waiting to move was answered `Kill` (282); a master paused while a `Register` waited
+  for the lock took it (297); the stress checker merged two runs of one try.
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,

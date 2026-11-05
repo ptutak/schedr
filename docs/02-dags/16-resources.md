@@ -161,3 +161,14 @@ The run's Resources table shows each resource's state, setup, cleanup and users.
 [graph](../03-guide/12-ui.md#the-graph), setup and cleanup are caps joined by a rail,
 with lines to their users; the task panel's Cleanup tab links the two parts. Use
 [`run_dag`](07-testing.md#run_dag) to assert a resource's state.
+
+## Full example
+
+This workspace is created once, shared by tasks that download and count files, and removed
+after its users end. The report waits for the group's cleanup. Its test is
+`examples/test_workspace.py`.
+
+```{literalinclude} ../../examples/workspace.py
+:language: python
+:caption: examples/workspace.py
+```

@@ -89,7 +89,8 @@ struct Checks {
     parts: Vec<(&'static str, Arc<AtomicBool>)>,
 }
 
-/// A part of a role that is starting; ready once told.
+/// A part of a role that is starting; ready once told (and not ready again when told, as a
+/// master that isn't leading, B165).
 #[derive(Debug, Clone)]
 pub struct Starting(Arc<AtomicBool>);
 
@@ -97,6 +98,11 @@ impl Starting {
     /// The part has started.
     pub fn ready(&self) {
         self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// The part is ready, or not any more.
+    pub fn set(&self, ready: bool) {
+        self.0.store(ready, Ordering::Relaxed);
     }
 }
 

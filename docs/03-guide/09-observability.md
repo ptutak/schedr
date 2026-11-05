@@ -11,7 +11,7 @@ for all its parts.
 | Endpoint | Answers 200 when | Otherwise |
 |---|---|---|
 | `/healthz` (liveness) | every loop the role watches has turned within the [loop stall limit](14-timings.md#fixed-timings) (2 min) | 503, "the scheduling loop hasn't turned for 150 s (limit 120 s)" |
-| `/readyz` (readiness) | every part of the role has started | 503, "starting: master" |
+| `/readyz` (readiness) | every part of the role has started and the master leads | 503, "starting: master" |
 | `/metrics` | always | |
 
 **Liveness never asks another component.** If it failed whenever the database or the master
@@ -23,8 +23,7 @@ and the web UI have no loop, so each is alive while it answers.
 
 **Readiness** waits for each part to start. The master is ready after its schema check,
 registry restore and gRPC listener; the worker after recovering its journal; the webserver
-and the web UI once each listens. It doesn't check the database either: with one master,
-taking it out of its Service helps nobody. The web UI has no database.
+and the web UI once each listens. A master that is standby, paused or taken over returns 503 ("starting: master") until it leads again; a control stream reaching it is refused with `UNAVAILABLE` ("not leading"). This directs workers to the leader through the Service. The web UI has no database.
 
 ## Metrics
 

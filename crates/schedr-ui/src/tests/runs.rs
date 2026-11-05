@@ -1114,17 +1114,31 @@ async fn a_resource_is_two_caps_on_a_rail_its_cleanup_reached_from_its_last_user
     assert_eq!(status, StatusCode::OK);
     // Decision 262: the cleanup reached from the last user only, not the setup; decision 272:
     // what follows the group drawn from the cleanup alone; a cleanup nothing waits for dashed.
+    // Decision 291: `w.cluster`'s users share group `w`: one line into its box and one out,
+    // the lines to and from each user shown on hover only.
     assert_eq!(
         lines(&html),
         [
             "tmp -> tmp.user: edge requirement",
             "tmp.user -> tmp.cleanup: edge requirement released",
-            "w.cluster -> w.load: edge requirement",
-            "w.cluster -> w.warm: edge requirement",
+            "w -> w.cluster.cleanup: edge requirement resource-summary",
+            "w.cluster -> w.load: edge requirement resource-detail",
+            "w.cluster -> w.warm: edge requirement resource-detail",
+            "w.cluster -> w: edge requirement resource-summary",
             "w.cluster.cleanup -> after: edge order",
             "w.load -> w.warm: edge data",
-            "w.warm -> w.cluster.cleanup: edge requirement",
+            "w.warm -> w.cluster.cleanup: edge requirement resource-detail",
         ]
+    );
+    // Hovering the resource shows them: they and the summaries are named by it.
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge[data-resource]", "data-resource"),
+        ["w.cluster"; 5]
+    );
+    // A dot on each user.
+    assert_eq!(
+        attrs(&html, "svg.dag circle.uses-dot", "data-resource"),
+        ["w.cluster", "w.cluster", "tmp"]
     );
     // The caps: the setup's and the cleanup's, named by their resource; the rails.
     assert_eq!(
@@ -1272,6 +1286,35 @@ async fn cancelling_a_resources_cleanup_warns_of_what_may_be_left() {
             "Stopped if it runs, cancelled at once if it hasn't started; the tasks downstream of \
           it are cancelled."
         ]
+    );
+}
+
+#[tokio::test]
+async fn users_in_no_shared_group_keep_the_lines_to_the_first_and_from_the_last() {
+    let mut answers = resourced_run();
+    let (_, _, dag) = answers
+        .iter_mut()
+        .find(|(path, _, _)| *path == "/api/v1/runs/r3/dag")
+        .unwrap();
+    // `w.warm` out of group `w`: the users share no group.
+    for task in dag["tasks"].as_array_mut().unwrap() {
+        if task["id"] == "w.warm" {
+            task.as_object_mut().unwrap().remove("group");
+        }
+    }
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(&app, "/d/etl/runs/r3", &[]).await;
+    let drawn = lines(&html);
+    for line in [
+        "w.cluster -> w.load: edge requirement",
+        "w.cluster -> w.warm: edge requirement resource-detail",
+        "w.warm -> w.cluster.cleanup: edge requirement",
+    ] {
+        assert!(drawn.contains(&line.to_owned()), "{line} not in {drawn:?}");
+    }
+    assert!(
+        !drawn.iter().any(|l| l.contains("resource-summary")),
+        "{drawn:?}"
     );
 }
 

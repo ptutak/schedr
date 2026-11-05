@@ -17,7 +17,7 @@
 //! - **A task that waits** shows why: no active worker serves its queue, none is recent
 //!   enough, none has the newest code yet, every one rejected it, or no free slot.
 //! - **`Finished`** is stored (the first one counts) and always acknowledged.
-//! - An attempt with no `Started` within [`START_TIMEOUT`] ends `assignment_expired` and the
+//! - An attempt with no `Started` within the worker lease ends `assignment_expired` and the
 //!   task runs again without using a retry; a lost worker's attempts end `lost`.
 //!
 //! The dispatcher only builds messages; the gRPC server sends them (milestone 1.14).
@@ -56,7 +56,8 @@ use crate::workers::{Needs, Workers};
 #[cfg(test)]
 mod tests;
 
-/// How long a worker has to report `Started` after an assignment.
+/// How long a worker has to report `Started` after an assignment, by default; the master uses
+/// the worker lease (decision 281, [`Dispatcher::with_start_timeout`]).
 pub const START_TIMEOUT: SignedDuration = SignedDuration::from_secs(10);
 
 /// How long a task whose assignment failed on its own is left out of the rounds before it is
@@ -100,7 +101,7 @@ pub enum KeptResults {
 /// is stored, checked at once, then every `interval` for up to `window`, since a server slow
 /// enough to have cut it off may still be committing it (`read_back_window`,
 /// `read_back_interval`). Never seen meanwhile: not stored (a stored round's attempts are
-/// taken back after [`START_TIMEOUT`] and run again). The master holds its lock meanwhile:
+/// taken back after the start timeout and run again). The master holds its lock meanwhile:
 /// only after a commit cut off, a database incident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadBack {
@@ -260,6 +261,8 @@ pub struct Dispatcher {
     set_aside_for: SignedDuration,
     /// How long a lost worker's cleanup waits before it moves (decision 256).
     cleanup_move_wait: SignedDuration,
+    /// How long a worker has to report `Started` before its assignment is taken back.
+    start_timeout: SignedDuration,
     /// How a commit cut off is read back.
     read_back: ReadBack,
     /// `CancelAttempt`s for running instances whose mapped task's step failed (75a), sent
@@ -327,6 +330,7 @@ impl Dispatcher {
             set_aside: BTreeMap::new(),
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
+            start_timeout: START_TIMEOUT,
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
             read_back: ReadBack::default(),
@@ -412,6 +416,15 @@ impl Dispatcher {
     #[must_use]
     pub fn with_arrivals(mut self, arrivals: Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// The dispatcher taking back an assignment with no `Started` after `timeout`: the worker
+    /// lease, so an assignment held on its way (a one-way cut) is never started after its task
+    /// ran elsewhere; the worker drops a stream silent for the lease (decision 281, B163).
+    #[must_use]
+    pub fn with_start_timeout(mut self, timeout: Duration) -> Self {
+        self.start_timeout = SignedDuration::try_from(timeout).unwrap_or(SignedDuration::MAX);
         self
     }
 
@@ -1240,7 +1253,15 @@ impl Dispatcher {
                 reason: e.to_string(),
             })?;
         if let Some(attempt) = self.db.attempt(&finished.attempt_id).await? {
-            if attempt.worker_id != worker_id {
+            // A cleanup under way when its worker was cut off (decision 255), reported when it
+            // came back, while the cleanup waits to move: it ran, so it counts and doesn't
+            // move (decision 282). The worker ran the task too, if it is the first move: its
+            // own result stands (see `kept` below).
+            let left_by_it = attempt.worker_id.is_empty()
+                && attempt.status.is_none()
+                && finished.cleanup.is_some()
+                && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id);
+            if attempt.worker_id != worker_id && !left_by_it {
                 // Not its attempt (B46): only the worker it was assigned to ran it. Acknowledged
                 // so the sender stops resending, never stored, as `Started` is refused.
                 tracing::warn!(
@@ -1266,8 +1287,13 @@ impl Dispatcher {
                 .map(|c| cleanup_end(c, worker_id))
                 .transpose()?;
             // A cleanup that moved knows nothing of the task: its result is the kept one
-            // (a refused one is reported as `result_not_stored`, and stands).
-            let kept = if attempt.cleanup_moves > 0 && finished.error_kind != RESULT_NOT_STORED {
+            // (a refused one is reported as `result_not_stored`, and stands). Only the worker
+            // it first moved from ran the task: one it moved from later ran the cleanup alone.
+            let ran_the_task = left_by_it && attempt.cleanup_moves == 1;
+            let kept = if attempt.cleanup_moves > 0
+                && !ran_the_task
+                && finished.error_kind != RESULT_NOT_STORED
+            {
                 self.kept_result(&attempt).await?
             } else {
                 None
@@ -1282,7 +1308,7 @@ impl Dispatcher {
         Ok(finished_ack(worker_id, &finished.attempt_id))
     }
 
-    /// Takes back assignments with no `Started` within [`START_TIMEOUT`]: they end
+    /// Takes back assignments with no `Started` within the start timeout: they end
     /// `assignment_expired` and their tasks run again without using a retry. One whose
     /// `Started` arrived but waits for a busy master isn't taken back: the task did start
     /// (B11). Returns how many.
@@ -1291,7 +1317,9 @@ impl Dispatcher {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
-        let cutoff = now.checked_sub(START_TIMEOUT).unwrap_or(Timestamp::MIN);
+        let cutoff = now
+            .checked_sub(self.start_timeout)
+            .unwrap_or(Timestamp::MIN);
         // At most so many a round (several writes each): after an outage, over a few (B18).
         // Read only so many, and as many more as starts wait in memory, which are left out
         // after reading: they can't fill the round's share (B52).

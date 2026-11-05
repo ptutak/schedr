@@ -334,7 +334,9 @@ reviews of about five sub-steps.
 | M4.8e | **UI and test doubles:** the UI's shells filled (25B), `task_context`'s `ctx.handles`, `run_dag`'s `cleanup`, `handles` and `resources` | a run's cleanups and resources are shown and can be asserted in a test |
 | M4.8f | **A hung resource cleanup** (decisions 278, 279): `schedr tasks cancel` stops a resource's cleanup (`cleanup_cancelled`); `[worker] resource_cleanup_timeout`, 30 minutes per try, for one without `timeout=` | a hung resource cleanup no longer holds its run and the DAG's next runs for ever |
 | M4.8z | **Chaos scenarios** (between M4.8 and what follows it): the stress suite's TCP proxy between worker and master; start and end lines for cleanups, checked (never during the task, run once); scenarios for a silent cut around the lease, a one-way cut, a slow link, a worker frozen past the lease. A seeded random schedule under load after them, a fresh seed each night, kept in the run's report. All in the nightly `stress.yml`, never on every push; the latest Stress run is checked at the start of each step, a failure going to `bugs/` with its seed | a cut worker's cleanups hold every invariant under the stress suite |
-| M4.9 | **`schedr.toml` and `ScriptOperator`:** `SCHEDR_SCRIPT_PATH` and script roots, `[jobs.<name>]` (every key, outcomes, params, cleanup), standalone jobs (one-task DAGs, paused when first found), `ScriptOperator`, `ScriptResource` and `<resource>.cleanup_script(...)` (moved from M4.8d), `schedr dags check` for TOML | a scheduled job and a script used from a DAG run, with params, outcomes and a cleanup |
+| M4.9a | **Script roots and `schedr.toml`** (decisions 292-296): `SCHEDR_SCRIPT_PATH`, script roots (`[scripts.roots]`), their scan, hash and settle time as DAG roots; the agent reads and checks `schedr.toml` in Rust (every key, unknown keys an error); standalone jobs (one-task DAGs, paused when first found); an unscheduled declaration a script for DAGs only (DAG-level keys an error); `schedr dags check` for TOML | a scheduled job found, checked and listed; a bad key an import error naming it |
+| M4.9b | **The `script` task kind and `ScriptOperator`:** interpreters, rejections 3-5, the `SCHEDR_*` run variables, `CODE_MISMATCH` for script roots; `ScriptOperator` asking the agent for the declaration (293), its overrides, a script root missing on a parsing worker an import error (295); a changed declaration re-parsing the DAGs that use it (294) | a scheduled job and a script used from a DAG run |
+| M4.9c | **The rest of `[jobs.<name>]`:** `params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource` and `<resource>.cleanup_script(...)` (moved from M4.8d) | a scheduled job and a script used from a DAG run, with params, outcomes and a cleanup |
 | M4.10 | **Async task functions:** `async def` tasks (`asyncio.run` per attempt, SIGTERM cancelling the main coroutine), async in-task calls, async cleanups and resources, optional `uvloop`, a plain call returning the coroutine, leftover tasks cancelled (49A); `async with` on connections | an async task with concurrent waits, cancelled cleanly, in tests and a run |
 | M4.11a | **Wait steps:** the watcher host (`schedr.runner watchers`, one per worker, the 30-second rule and its watchdog, its memory budget, logs per watcher), `@sensor` and `@sensor.poke`, `TimedOut`, watcher slots and placement, drain and loss | a wait step ends with a value and with `TimedOut`; a blocked loop is caught |
 | M4.11b | **Triggers:** `@trigger` and `@trigger.poke`, events (`events` table, bookmarks), event runs (`dag_ctx.event`, queueing, back-pressure), the master's trigger supervisor, restarts, manual runs with an event, the CLI, API and UI | an event-triggered DAG runs once per event, resumes from its bookmark after a restart |
@@ -411,6 +413,21 @@ What each message does in a turn:
 A commit cut off is read back once for the turn: it lands whole or not at all, so one
 message's attempt answers for all.
 
+**To think about when M4B is the main topic** (the user, 2026-11-05: "there will be a lot
+to think about"; found while chasing M4.8z's stress 05 and B165):
+- **What a paused or standby master tells a worker.** Since B165 it refuses a stream at once
+  with UNAVAILABLE, "not leading", and drops out of its Service through `/readyz`; whether it
+  should also name the master that leads (from the lease row) or say how long to wait.
+- **Readiness during a takeover.** Between the old master's pause and the new one's first
+  round, no master is ready: workers wait on the Service and their lease runs; how long that
+  gap can be against the worker lease (60 s) and the database lease (30 s).
+- **The agent's silence limit against a slow `Register`.** The agent ends a stream silent for
+  the worker lease (decision 281); a `Register` waiting behind a long round or a batched
+  turn's commit must stay well under it, which M4B.1's measurements should show.
+- **Reconnect storms after a failover.** Every worker reconnects to the new master at once,
+  each `Register` a reconciliation under the core lock; whether batching (or a spread of the
+  reconnects) keeps the first rounds of a new master from stalling.
+
 | Step | Contents | Done when |
 |---|---|---|
 | M4B.1 | **Measure first:** per-turn timings (waiting for the core lock, handling, the commit) and the messages per turn as metrics; the assign-to-started gap split into its parts (Grok's 2026-10-28 investigation: rounds holding the lock); a stress baseline (scenario chosen with the user, run only with their go) | the baseline recorded |
@@ -486,6 +503,11 @@ Ideas logged for M6, not decided:
   edge of a skipped task passes `None`, so the parse-time check of `None` would have to
   cover it; "mark success" would need an output schedr can't invent), whether a running task
   can be skipped, a mapped task's instances, and the command log recording who and why.
+- **Human in the loop** (the user, 2026-11-05: built in M6, after 1.0.0; designed, decisions
+  283-289, PROJECT.md "Human in the loop"): `approve(...)` and `ask(...)`, a wait step the
+  master holds (no worker slot), the answer typed and checked, `Rejected` and `TimedOut`
+  outcomes, `approvers=` and `four_eyes=`, an email with a link to the UI, each answer in the
+  command log; the docs show a `@sensor.poke` for answers kept in other systems.
 
 ## Testing approach
 

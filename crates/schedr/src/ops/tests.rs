@@ -26,6 +26,27 @@ async fn get(ops: &Ops, uri: &str) -> (u16, String, String) {
 }
 
 #[tokio::test]
+async fn a_part_ready_can_be_not_ready_again() {
+    // B165: a master that stops leading is taken out of its Service until it leads again.
+    let health = Health::new(Duration::from_secs(120));
+    let master = health.starting("master");
+    let ops = Ops::new(Registry::default(), health);
+    master.ready();
+    assert_eq!(get(&ops, "/readyz").await.0, 200);
+    master.set(false);
+    assert_eq!(
+        get(&ops, "/readyz").await,
+        (
+            503,
+            "text/plain; charset=utf-8".to_owned(),
+            "starting: master\n".to_owned()
+        )
+    );
+    master.set(true);
+    assert_eq!(get(&ops, "/readyz").await.0, 200);
+}
+
+#[tokio::test]
 async fn readiness_waits_for_every_part() {
     let health = Health::new(Duration::from_secs(120));
     let master = health.starting("master");

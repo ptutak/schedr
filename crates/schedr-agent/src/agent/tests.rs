@@ -407,8 +407,12 @@ struct Scripted {
     uploads: Arc<Mutex<Vec<pb::ParseResult>>>,
     /// `FetchInputs` never answers.
     inputs_stuck: bool,
+    /// How long `FetchInputs` takes to send its chunk.
+    inputs_after: Duration,
     /// How long the stream takes to open.
     answer_after: Duration,
+    /// Messages sent after the script, this long after it (held on their way, B163).
+    late: Option<(Duration, Vec<pb::MasterMessage>)>,
 }
 
 #[tonic::async_trait]
@@ -440,6 +444,15 @@ impl pb::master_server::Master for Scripted {
             self.received.lock().unwrap().push(first);
         }
         let received = Arc::clone(&self.received);
+        if let Some((after, late)) = self.late.clone() {
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                for message in late {
+                    let _ = sender.send(Ok(message)).await;
+                }
+            });
+        }
         tokio::spawn(async move {
             let _keep_open = sender;
             while let Ok(Some(message)) = inbound.message().await {
@@ -476,6 +489,7 @@ impl pb::master_server::Master for Scripted {
             std::future::pending::<()>().await;
         }
         let (sender, receiver) = mpsc::channel(1);
+        tokio::time::sleep(self.inputs_after).await;
         sender
             .send(Ok(pb::InputChunk {
                 data: br#"{"extract": 3}"#.to_vec(),
@@ -2953,6 +2967,16 @@ async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
     let mut script = silent_master(true);
+    // A lease of several heartbeats: since decision 281 the stream ends at the lease, and the
+    // last heartbeats before it may go with it.
+    script[0] = to_worker(master_message::Message::Registered(pb::Registered {
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 300,
+            cancel_grace_ms: 1000,
+        }),
+        ..pb::Registered::default()
+    }));
     let mut other = assign(
         "a2",
         &task_json(&json!({"kind": "python"})),
@@ -3034,7 +3058,7 @@ async fn a_drain_doesnt_wait_for_a_held_cleanup_but_does_for_its_task() {
 }
 
 #[tokio::test]
-async fn a_master_gone_silent_leaves_other_tasks_running() {
+async fn a_master_gone_silent_ends_the_stream_and_leaves_other_tasks_running() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let seen_stops = Arc::clone(&stops);
     let beats = |m: &[pb::WorkerMessage]| {
@@ -3042,9 +3066,10 @@ async fn a_master_gone_silent_leaves_other_tasks_running() {
             .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
             .count()
     };
-    // Ten heartbeats are four leases.
-    let done = move |m: &[pb::WorkerMessage]| beats(m) >= 10;
-    against_script_with(
+    // Six leases: a stream kept open would have sent fifteen heartbeats (one each 20 ms).
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(300);
+    let (seen, _) = against_script_with(
         2,
         Start::With(vec![]),
         silent_master(false),
@@ -3055,6 +3080,92 @@ async fn a_master_gone_silent_leaves_other_tasks_running() {
     )
     .await;
     assert_eq!(*stops.lock().unwrap(), Vec::<StopReason>::new());
+    // Decision 281 (B163): the stream ends at the lease, whatever runs.
+    assert!(beats(&seen) < 8, "{} heartbeats", beats(&seen));
+}
+
+#[tokio::test]
+async fn an_assignment_arriving_after_a_lease_of_silence_isnt_started() {
+    // B163: a one-way cut held an assignment while the master took it back at the lease and
+    // ran the task elsewhere; delivered at the heal, it mustn't start here.
+    let registered = silent_master(false).swap_remove(0);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("late");
+    let master = Scripted {
+        script: vec![registered],
+        late: Some((
+            Duration::from_millis(150),
+            vec![assign("a1", &task, "sync.py", false)],
+        )),
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(400);
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |_| {}).await;
+    assert_eq!(kinds(&seen), ["register"]);
+}
+
+#[tokio::test]
+async fn an_assignment_whose_inputs_come_after_a_lease_of_silence_isnt_started() {
+    // Codex's review of B163: the fetch of inputs ran without the silence limit, and its
+    // assignment started after the master took it back.
+    let mut script = silent_master(false);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("fetched");
+    let mut external = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut external.message else {
+        panic!("expected an assignment")
+    };
+    assigned.inputs_external = true;
+    script[1] = external;
+    let master = Scripted {
+        script,
+        inputs_after: Duration::from_millis(250),
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(600);
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    assert!(
+        kinds(&seen).iter().all(|k| *k == "register"),
+        "{:?}",
+        kinds(&seen)
+    );
+}
+
+#[tokio::test]
+async fn a_first_registration_older_than_its_lease_isnt_acted_on() {
+    // Codex's review of B163: a worker's first session knew no lease yet, took a `Registered`
+    // held past it and started the assignment behind it, which the master had taken back.
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("cold");
+    let mut script = silent_master(false);
+    script[1] = assign("a1", &task, "sync.py", false);
+    let master = Scripted {
+        script,
+        answer_after: Duration::from_millis(150),
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(500);
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    assert!(
+        kinds(&seen).iter().all(|k| *k == "register"),
+        "{:?}",
+        kinds(&seen)
+    );
 }
 
 #[tokio::test]

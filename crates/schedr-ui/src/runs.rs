@@ -366,6 +366,8 @@ pub struct Node {
     pub band: (f64, f64, f64),
     /// The resource it sets up or cleans up; empty for any other task.
     pub resource: String,
+    /// The resources it uses, a dot each.
+    pub uses: Vec<Badge>,
 }
 
 /// A resource's rail on the graph: a line in the side gutter from its setup to its cleanup,
@@ -399,6 +401,20 @@ pub struct EdgeLine {
     /// Whether its upstream task ended with an outcome it isn't taken on, was skipped, or is a
     /// branch that didn't choose its downstream task.
     pub not_taken: bool,
+    /// A resource's line drawn only on hover or selection of the resource (its setup), or its
+    /// summary line (decision 291); empty for any other.
+    pub resource: String,
+}
+
+/// A dot on a task using a resource, in the resources' colour (decision 291).
+#[derive(Debug, Clone)]
+pub struct Badge {
+    /// Its centre.
+    pub x: f64,
+    /// See `x`.
+    pub y: f64,
+    /// The resource (its setup's ID).
+    pub resource: String,
 }
 
 /// The graph as drawn.
@@ -420,6 +436,8 @@ pub struct Graph {
     pub groups: Vec<GroupFrame>,
     /// The resources' rails.
     pub rails: Vec<Rail>,
+    /// The resources' section, left of the tasks: `(left, top, width, height)`.
+    pub resources: Option<(f64, f64, f64, f64)>,
 }
 
 /// A task group's box on the graph.
@@ -869,7 +887,9 @@ fn graph_of(
     resource_edges(&mut edges, &resources);
     let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _, _)| (*f, *t)).collect();
     let (group_ids, specs, node_group) = groups_of(dag, &ids);
-    let layout = graph::layout_grouped(ids.len(), &pairs, &specs, &node_group);
+    // The resources beside the tasks, in a section of their own (the user, 2026-11-05).
+    let sides: Vec<(usize, usize)> = resources.iter().map(|r| (r.setup, r.cleanup)).collect();
+    let layout = graph::layout_sided(ids.len(), &pairs, &specs, &node_group, &sides);
     let nodes = ids
         .iter()
         .zip(&layout.nodes)
@@ -881,7 +901,9 @@ fn graph_of(
                 .map_or_else(|| fitted(id, 22), |n| format!("{} ×{n}", fitted(id, 17)));
             let (left, top) = (placed.x - NODE_WIDTH / 2.0, placed.y - NODE_HEIGHT / 2.0);
             let (cap, band, resource) = cap_of(&resources, &ids, index(id), left, top);
+            let uses = badges(&resources, &ids, index(id), left, top);
             Node {
+                uses,
                 left,
                 top,
                 cap,
@@ -926,11 +948,199 @@ fn graph_of(
                 label_x: end.0 + 6.0,
                 label_y: end.1 - 12.0,
                 not_taken,
+                resource: String::new(),
             }
         })
         .collect();
-    let groups = layout
-        .boxes
+    let grouping = (
+        group_ids.as_slice(),
+        specs.as_slice(),
+        node_group.as_slice(),
+    );
+    let lines = resource_lines(&resources, &ids, &edges, &layout, grouping, lines);
+    let groups = group_frames(&layout.boxes, &group_ids);
+    Graph {
+        width: layout.width,
+        height: layout.height,
+        node_width: NODE_WIDTH,
+        node_height: NODE_HEIGHT,
+        nodes,
+        edges: lines,
+        groups,
+        rails: rails_of(&resources, &ids, &layout.nodes),
+        resources: layout.side.map(|b| (b.left, b.top, b.width, b.height)),
+    }
+}
+
+/// The dots of the resources the task at `at` uses, along its box's top right corner.
+fn badges(
+    resources: &[GraphResource],
+    ids: &[String],
+    at: Option<usize>,
+    left: f64,
+    top: f64,
+) -> Vec<Badge> {
+    resources
+        .iter()
+        .filter(|r| at.is_some_and(|at| r.users.contains(&at)))
+        .enumerate()
+        .map(|(k, r)| Badge {
+            x: left + NODE_WIDTH - 10.0 - 10.0 * to_f64(k),
+            y: top + 10.0,
+            resource: ids[r.setup].clone(),
+        })
+        .collect()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a small count: a task's resources"
+)]
+const fn to_f64(n: usize) -> f64 {
+    n as f64
+}
+
+/// A resource's lines cut down (decision 291): when its users share a group, one line from its
+/// setup into the group's box and one from the box to its cleanup, the lines to and from each
+/// user drawn only on hover; otherwise the lines to its first users and from its last ones, the
+/// others on hover. `lines` are `layout`'s routes drawn, in the same order.
+fn resource_lines(
+    resources: &[GraphResource],
+    ids: &[String],
+    edges: &[Joined],
+    layout: &graph::Layout,
+    groups: (&[String], &[graph::GroupSpec], &[Option<usize>]),
+    mut lines: Vec<EdgeLine>,
+) -> Vec<EdgeLine> {
+    let (group_ids, specs, node_group) = groups;
+    let mut summaries = Vec::new();
+    for r in resources {
+        let setup_id = &ids[r.setup];
+        let into: Vec<usize> = (0..layout.routes.len())
+            .filter(|&i| {
+                let route = &layout.routes[i];
+                route.from == r.setup && r.users.contains(&route.to)
+            })
+            .collect();
+        let out: Vec<usize> = (0..layout.routes.len())
+            .filter(|&i| {
+                let route = &layout.routes[i];
+                route.to == r.cleanup && r.users.contains(&route.from)
+            })
+            .collect();
+        let shared = shared_group(&r.users, (specs, node_group))
+            .and_then(|g| layout.boxes.iter().find(|b| b.group == g));
+        let hidden: Vec<usize> = if let (Some(frame), Some(&first_in), Some(&first_out)) =
+            (shared, into.first(), out.first())
+        {
+            let rows = r
+                .users
+                .iter()
+                .filter_map(|&u| layout.nodes.get(u))
+                .map(|n| n.y);
+            let first = rows.clone().fold(f64::INFINITY, f64::min);
+            let last = rows.fold(f64::NEG_INFINITY, f64::max);
+            let (going, coming) = (&layout.routes[first_in], &layout.routes[first_out]);
+            if going.points.len() < 3 || coming.points.len() < 4 {
+                continue;
+            }
+            // Out of the setup to its track (as its own lines go), along it to the users'
+            // first row, into the box's left side.
+            let mut to_box = going.points[..3].to_vec();
+            let track = going.points[2].0;
+            to_box.extend([(track, first), (frame.left, first)]);
+            // Out of the box's left side at the users' last row, to the cleanup's track,
+            // and on as the users' own lines go.
+            let back = coming.points[2].0;
+            let mut from_box = vec![(frame.left, last), (back, last)];
+            from_box.extend_from_slice(&coming.points[3..]);
+            let group_id = group_ids.get(frame.group).cloned().unwrap_or_default();
+            for (points, kind, from, to) in [
+                (
+                    to_box,
+                    "requirement".to_owned(),
+                    setup_id.clone(),
+                    group_id.clone(),
+                ),
+                (
+                    from_box,
+                    lines[first_out].kind.clone(),
+                    group_id,
+                    ids[r.cleanup].clone(),
+                ),
+            ] {
+                summaries.push(EdgeLine {
+                    path: path_of(&points),
+                    from,
+                    to,
+                    kind: format!("{kind} resource-summary"),
+                    on: String::new(),
+                    label_x: 0.0,
+                    label_y: 0.0,
+                    not_taken: false,
+                    resource: setup_id.clone(),
+                });
+            }
+            into.into_iter().chain(out).collect()
+        } else {
+            // Only the lines to its first users stay; those from its last ones are all there
+            // is (`resource_edges`).
+            let first = first_users(edges, &r.users);
+            into.into_iter()
+                .filter(|&i| !first.contains(&layout.routes[i].to))
+                .collect()
+        };
+        for i in hidden {
+            let line = &mut lines[i];
+            line.kind.push_str(" resource-detail");
+            line.resource.clone_from(setup_id);
+        }
+    }
+    lines.extend(summaries);
+    lines
+}
+
+/// The innermost group every one of `users` is in, if any (`groups`: the specs and each
+/// node's innermost group).
+fn shared_group(
+    users: &[usize],
+    (specs, node_group): (&[graph::GroupSpec], &[Option<usize>]),
+) -> Option<usize> {
+    let path = |n: usize| {
+        let mut path = Vec::new();
+        let mut at = node_group.get(n).copied().flatten();
+        while let Some(g) = at.filter(|&g| g < specs.len() && path.len() <= specs.len()) {
+            path.push(g);
+            at = specs[g].parent;
+        }
+        path.reverse();
+        path
+    };
+    let mut paths = users.iter().map(|&u| path(u));
+    let mut common = paths.next()?;
+    for other in paths {
+        let same = common
+            .iter()
+            .zip(&other)
+            .take_while(|(a, b)| a == b)
+            .count();
+        common.truncate(same);
+    }
+    common.last().copied()
+}
+
+/// The users no other user comes before: [`last_users`] on the lines reversed.
+fn first_users(edges: &[Joined], users: &[usize]) -> Vec<usize> {
+    let reversed: Vec<Joined> = edges
+        .iter()
+        .map(|(f, t, kind, on)| (*t, *f, kind.clone(), on.clone()))
+        .collect();
+    last_users(&reversed, users)
+}
+
+/// The task groups' boxes as drawn, labelled with their last segment.
+fn group_frames(boxes: &[graph::GroupBox], group_ids: &[String]) -> Vec<GroupFrame> {
+    boxes
         .iter()
         .map(|b| {
             let id = &group_ids[b.group];
@@ -943,17 +1153,7 @@ fn graph_of(
                 group_id: id.clone(),
             }
         })
-        .collect();
-    Graph {
-        width: layout.width,
-        height: layout.height,
-        node_width: NODE_WIDTH,
-        node_height: NODE_HEIGHT,
-        nodes,
-        edges: lines,
-        groups,
-        rails: rails_of(&resources, &ids, &layout.nodes),
-    }
+        .collect()
 }
 
 /// The users no other user follows: one search from each user over the lines (`O(users ×

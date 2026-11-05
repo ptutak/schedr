@@ -527,8 +527,9 @@ impl Database {
         result: &[u8],
         not_before: Timestamp,
     ) -> Result<(), DbError> {
-        const MOVE: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL, \
-            cleanup_moves = cleanup_moves + 1, task_result = COALESCE(task_result, $1), \
+        const MOVE: &str = "UPDATE attempts SET moved_from = worker_id, worker_id = NULL, \
+            moved_at = NULL, cleanup_moves = cleanup_moves + 1, \
+            task_result = COALESCE(task_result, $1), \
             cleanup_not_before = $2{ts} WHERE id = $3{uuid} AND status IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, MOVE))
@@ -539,6 +540,24 @@ impl Database {
                 .await?;
         });
         Ok(())
+    }
+
+    /// The worker an open attempt's cleanup moved from, while it waits for another (no worker
+    /// yet): that worker's late result still counts (decision 282).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the read fails.
+    pub async fn cleanup_moved_from(&self, attempt_id: &str) -> Result<Option<String>, DbError> {
+        const FROM: &str = "SELECT moved_from FROM attempts \
+            WHERE id = $1{uuid} AND status IS NULL AND worker_id IS NULL";
+        let row: Option<(Option<String>,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, FROM))
+                .bind(attempt_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(row.and_then(|(from,)| from))
     }
 
     /// Gives a moved cleanup to `worker_id`, if it still waits. Returns whether it did.

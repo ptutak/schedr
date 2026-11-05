@@ -151,7 +151,9 @@ async fn the_master_and_the_api_serve_until_stopped() {
         (Duration::from_millis(10), Problems::default()),
         listen(loopback()).await.unwrap(),
         None,
-        async { Ok(take_lease(db, Duration::from_secs(15), "master", new_master_id()).await) },
+        // Past three query limits (sqlx's 30 s acquire timeout), as a real lease: else it
+        // would be over as taken, and the master never led (nor be ready, B165).
+        async { Ok(take_lease(db, Duration::from_secs(120), "master", new_master_id()).await) },
         Observed {
             metrics: MasterMetrics::default(),
             health: &health,
@@ -178,13 +180,15 @@ async fn the_master_and_the_api_serve_until_stopped() {
     );
     let later = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
+        let ready = health.not_ready();
         let _ = stop.send(1);
+        ready
     };
-    let (master, api, ()) = tokio::join!(master, api, later);
+    let (master, api, not_ready) = tokio::join!(master, api, later);
     master.unwrap();
     api.unwrap();
-    // Both said they were ready; the master's loop beat.
-    assert_eq!(health.not_ready(), Vec::<&str>::new());
+    // Both said they were ready while serving; the master's loop beat.
+    assert_eq!(not_ready, Vec::<&str>::new());
     assert_eq!(health.stalled(std::time::Instant::now()), None);
 }
 

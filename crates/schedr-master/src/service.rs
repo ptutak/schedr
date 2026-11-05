@@ -145,6 +145,13 @@ impl Hub {
         self
     }
 
+    /// Whether this master leads: false while paused (its lease not renewed) or after another
+    /// took it over; readiness follows it (B165).
+    #[must_use]
+    pub fn leading(&self) -> watch::Receiver<bool> {
+        self.leading.subscribe()
+    }
+
     /// When the loop last turned: every tick, and at least every [`ALIVE_INTERVAL`] while it
     /// waits, never while a tick is stuck.
     #[must_use]
@@ -633,6 +640,10 @@ impl Hub {
     }
 }
 
+/// Why a stream opened while this master doesn't lead is refused.
+const NOT_LEADING: &str = "this master isn't leading (its database lease isn't renewed, or another \
+     master took it over): connect again";
+
 /// Answers a worker's heartbeats as they arrive, before they wait for the lock: a busy master
 /// isn't a lost one. Not while paused: another master may be leading, and may count the worker
 /// lost. The stream is held weakly, for this reader not to keep it open.
@@ -718,6 +729,12 @@ impl Master for Hub {
                 "the first message must be `Register`",
             ));
         };
+        // Not while paused: another master may be leading. Refused at once rather than held
+        // (B165), before anything is noted of it: the worker connects again, through the
+        // Service, to the master that leads.
+        if !*self.leading.borrow() {
+            return Err(Status::unavailable(NOT_LEADING));
+        }
         // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
         // a stall); and the attempts its journal reports have started, so none is taken back
         // for want of a `Started` meanwhile (B50: lost with the old stream). Adopted, they are
@@ -732,9 +749,17 @@ impl Master for Hub {
             })
             .map(|entry| entry.attempt_id.as_str())
             .collect();
-        // Not while paused: another master may be leading.
         self.while_leading().await;
         let mut core = self.core.lock().await;
+        // Paused while it waited for the lock (behind a round): refused as above, what it
+        // added gone.
+        if !*self.leading.borrow() {
+            drop(core);
+            for attempt_id in &added {
+                self.arrivals.start_handled(attempt_id);
+            }
+            return Err(Status::unavailable(NOT_LEADING));
+        }
         let registered = core.register(&register, (self.clock)()).await;
         match &registered {
             // Its journal is the whole truth now: what it reports is adopted (started) or

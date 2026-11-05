@@ -213,6 +213,8 @@ CREATE TABLE attempts (
     -- When the moved cleanup was assigned, until its `Started`.
     moved_at          TEXT,
     cleanup_not_before TEXT,
+    -- The worker its waiting cleanup moved from: its late result still counts (decision 282).
+    moved_from        TEXT,
     UNIQUE (task_instance_id, try_number)
 );
 

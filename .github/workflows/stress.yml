@@ -55,7 +55,8 @@ jobs:
       SCHEDR_TEST_PGBOUNCER: 127.0.0.1:6432
       SCHEDR_STRESS_PROFILE: ${{ inputs.profile || 'quick' }}
     steps:
-      # Nightly: nothing to do when main is where the last passing run left it.
+      # Nightly: when main is where the last passing run left it, only the random chaos runs,
+      # with a fresh seed (M4.8z: a new seed each night).
       - name: Changed since the last passing run?
         id: changed
         env:
@@ -67,11 +68,10 @@ jobs:
           last=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/stress.yml/runs?status=success&branch=main&per_page=1" \
             | python3 -c 'import json, sys; runs = json.load(sys.stdin)["workflow_runs"]; print(runs[0]["head_sha"] if runs else "")')
+          echo "run=true" >> "$GITHUB_OUTPUT"
           if [ "$last" = "${{ github.sha }}" ]; then
-            echo "main unchanged since the last passing run ($last)"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "main unchanged since the last passing run ($last): the random chaos only"
+            echo "only=stress_21_random_chaos" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.run == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -107,7 +107,7 @@ jobs:
         name: Stress suite
         # The filter through the environment, never pasted into the script.
         env:
-          FILTER: ${{ inputs.filter }}
+          FILTER: ${{ inputs.filter || steps.changed.outputs.only }}
         run: |
           filter=()
           if [ -n "$FILTER" ]; then filter=(-E "test(/$FILTER/)"); fi

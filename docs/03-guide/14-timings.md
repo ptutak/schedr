@@ -58,7 +58,7 @@ migration connection timing, which has no query timeout to tie it to.
 |---|---|---|
 | `SCHEDR_HIDDEN__MASTER__TICK_INTERVAL` | 1 s | Runs the master's scheduler, commands and dispatch loop; rounds and their work depend on it. |
 | `SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL` | 10 s | How often workers send heartbeats, set by the master and sent to workers; worker liveness depends on messages arriving. |
-| `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended. |
+| `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended. An unstarted assignment is taken back after this time; a worker also ends a stream silent this long. |
 | `SCHEDR_HIDDEN__MASTER__LEASE_PERIOD` | 30 s | Master's database lease; renewed every third of it. A standby takes over at most this long after a crash. It must fit the query and stall limits below. |
 | `SCHEDR_HIDDEN__MASTER__READ_BACK_WINDOW` | 3 s | After a commit is cut off or the connection lost, the master checks whether it was stored for this long, holding its lock; rounds and worker messages wait. If not seen, it is taken as not stored. |
 | `SCHEDR_HIDDEN__MASTER__READ_BACK_INTERVAL` | 500 ms | Interval between reads within the read-back window. |

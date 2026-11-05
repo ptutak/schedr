@@ -73,13 +73,26 @@ fn dag_file() -> ParsedFile {
 }
 
 fn upload(job_id: &str) -> pb::ParseResult {
+    upload_of(job_id, &dag_file())
+}
+
+fn upload_of(job_id: &str, file: &ParsedFile) -> pb::ParseResult {
     pb::ParseResult {
         parse_job_id: job_id.to_owned(),
         worker_id: "w1".to_owned(),
         root: Some(root("h1")),
         schedr_version: "0.1.0".to_owned(),
-        files: vec![parsed_file_to_proto(&dag_file())],
+        files: vec![parsed_file_to_proto(file)],
     }
+}
+
+/// [`dag_file`], `extract` with a `cleanup_anywhere` cleanup.
+fn anywhere_file() -> ParsedFile {
+    let mut file = serde_json::to_value(dag_file()).unwrap();
+    file["dags"][0]["tasks"][0]["cleanup"] = json!({
+        "run": "python", "retries": 0, "retry_delay_ms": 0, "anywhere": true
+    });
+    serde_json::from_value(file).unwrap()
 }
 
 fn message(outgoing: &Outgoing) -> &master_message::Message {
@@ -88,6 +101,11 @@ fn message(outgoing: &Outgoing) -> &master_message::Message {
 
 /// Registers `w1`, parses its root and stores DAG `sync`; returns the core.
 async fn with_dag() -> MasterCore {
+    with_dag_of(&dag_file()).await
+}
+
+/// As [`with_dag`], the root parsed as `file`.
+async fn with_dag_of(file: &ParsedFile) -> MasterCore {
     let mut core = core().await;
     let (_, outgoing) = core
         .register(&register("w1", "i1", vec![]), ts(NOW))
@@ -96,7 +114,7 @@ async fn with_dag() -> MasterCore {
     let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
         panic!("expected AssignParse")
     };
-    core.upload(upload(&job.parse_job_id), ts(NOW))
+    core.upload(upload_of(&job.parse_job_id, file), ts(NOW))
         .await
         .unwrap();
     core
@@ -638,6 +656,58 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
     assert!(core.dispatcher().workers().get("w1").is_none());
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Lost));
+}
+
+#[tokio::test]
+async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_back() {
+    // Codex's review of decision 282: the journal's `Finished` of a cleanup waiting to move
+    // was answered `Kill`, the worker dropped the result, and the cleanup ran again elsewhere.
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    });
+    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    let waiting = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!((waiting.worker_id.as_str(), waiting.status), ("", None));
+    let journal = vec![pb::JournalEntry {
+        attempt_id: assign.attempt_id.clone(),
+        state: pb::JournalState::Finished.into(),
+    }];
+    let (registered, _) = core
+        .register(&register("w1", "i1", journal), later(62))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue),
+        "sent again, not dropped"
+    );
+    let finished = worker_message::Message::Finished(pb::Finished {
+        attempt_id: assign.attempt_id.clone(),
+        status: pb::AttemptStatus::Lost.into(),
+        cleanup: Some(pb::CleanupResult {
+            status: pb::CleanupStatus::Ok.into(),
+            tries: 1,
+            ..pb::CleanupResult::default()
+        }),
+        ..pb::Finished::default()
+    });
+    core.handle("w1", finished, later(63)).await.unwrap();
+    let ended = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
+    assert_eq!(
+        core.db.waiting_cleanups(later(63)).await.unwrap().len(),
+        0,
+        "it ran: it doesn't move"
+    );
 }
 
 #[tokio::test]

@@ -946,6 +946,92 @@ async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
     assert_eq!((stored.worker_id.as_str(), stored.status), ("", None));
 }
 
+#[tokio::test]
+async fn a_cleanup_reported_by_the_worker_it_moved_from_counts_and_doesnt_move() {
+    // Decision 282: cut off while its cleanup ran (255), the worker reports it on its return,
+    // before the move took place.
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .finished("w1", &cleaned(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Lost)
+    );
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(extract.cleanup_result, Some(CleanupResult::Ok));
+    assert_eq!(db.waiting_cleanups(ts(NOW)).await.unwrap().len(), 0);
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert!(
+        out.iter().all(|o| assignment(o).cleanup_only.is_none()),
+        "the cleanup ran: it doesn't move"
+    );
+}
+
+#[tokio::test]
+async fn a_cleanup_reported_by_a_worker_it_moved_from_again_keeps_the_tasks_result() {
+    // Codex's review of decision 282: moved twice, the second worker ran the cleanup alone;
+    // its report took the place of the task's success, and the task was run again.
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
+    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 1);
+    dispatcher
+        .started("w2", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost("w2", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    let waiting = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((waiting.worker_id.as_str(), waiting.cleanup_moves), ("", 2));
+    dispatcher
+        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        (extract.state, extract.cleanup_result),
+        (TaskInstanceState::Success, Some(CleanupResult::Ok))
+    );
+    assert_eq!(
+        db.run_outputs(&run_id).await.unwrap().get(&id("extract")),
+        Some(&json!(7))
+    );
+}
+
+#[tokio::test]
+async fn a_cleanup_reported_by_its_old_worker_after_it_moved_is_ignored() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    dispatcher
+        .finished("w1", &cleaned(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let stored = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((stored.worker_id.as_str(), stored.status), ("w2", None));
+}
+
 /// A started attempt whose worker `w1` was lost, its cleanup given to `w2`.
 async fn moved_to_w2(dispatcher: &mut Dispatcher) -> String {
     let attempt = started_attempt(dispatcher).await;

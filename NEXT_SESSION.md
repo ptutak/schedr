@@ -4,6 +4,21 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-05, evening): M4.8z committed; M4.9 next
+
+- **Done: M4.8z (chaos)**, one commit fixing B162, B163 (281), B164 (282) and B165 (297); the
+  run graph's resources on the left (290, 291); `examples/workspace.py`. Codex's review found 7
+  (3 critical), all fixed with a test each failing on the old code (the stress checker's by
+  reading); docs by Codex. Stress: the quick suite once (24/25, 05 then fixed in the harness),
+  05, 20 and 21 again after the review's fixes (21's seed 1793882326824059459: no try run twice).
+- **The user's call on Codex's finding 3:** a worker's first stream drops a `Registered` older
+  than its lease too (281).
+- **Watch:** `a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats` got a 300 ms
+  lease (its 50 ms one lost heartbeats with the stream since 281); 12/12 and 3 full runs since.
+- **Decided, next:** M4.9 (292-296; 296 B: an unscheduled declaration is a script for DAGs only,
+  no `manual` key); human in the loop designed (283-289), built in M6. PLAN.md's M4B has "to
+  think about" notes.
+
 ## State (2026-11-05, morning): M4.8f committed; M4.8z (chaos) next
 
 - **Done: M4.8f** (decisions 278, 279; from a side note): a resource's cleanup can be cancelled

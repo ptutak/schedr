@@ -545,6 +545,19 @@ pub async fn serve_master(
         );
     }
     observed.ready.ready();
+    // Ready only while leading (B165): a paused master, or one whose lease was taken over,
+    // gets no new workers from a Service, as a standby gets none.
+    tokio::spawn({
+        let (ready, mut leading) = (observed.ready.clone(), hub.leading());
+        async move {
+            loop {
+                ready.set(*leading.borrow_and_update());
+                if leading.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
         .serve_with_incoming_shutdown(connections, until(stop.clone()));

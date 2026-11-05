@@ -209,7 +209,7 @@ def main() -> None:
         elif command == "check" and not rest:
             if OUTPUT.read_text() != render(FOLDER):
                 raise BugError("BUGS.md is out of date: run `python3 scripts/bugs.py render`")
-        elif command == "new" and len(rest) == 1:
+        elif command == "new" and len(rest) == 1 and not rest[0].startswith("-"):
             print(new(FOLDER, rest[0]).relative_to(ROOT))
         else:
             sys.exit(__doc__)

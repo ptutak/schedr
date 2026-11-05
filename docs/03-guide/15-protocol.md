@@ -24,9 +24,10 @@ sequenceDiagram
 
 Any worker message renews the master's worker lease at arrival, even if it waits to be handled.
 The master answers heartbeats before they wait for its lock, while it leads. The worker notes
-messages from the master as word from it. With a cleanup gate or recovered cleanup waiting, a
-`Registered` received at least a lease after opening the stream is ignored and the worker
-registers again: its decisions may have become stale.
+messages from the master as word from it. The worker ends a stream silent for a lease,
+whatever it runs, and ignores messages arriving past that limit. On its first stream, a `Registered` at least as old as the lease it states is
+ignored and the worker registers again. A non-leading master refuses a stream with
+`UNAVAILABLE` ("not leading"), including a `Register` held at its lock as it paused.
 
 ## A normal run
 
@@ -81,7 +82,7 @@ sequenceDiagram
         W->>M: Started
         Note over M: Arrival counts even while the message waits to be handled
     else No Started arrives
-        Note over M: Assignment expiry: 10 s default; take it back in a round
+        Note over M: Assignment expiry: worker lease, 60 s default; take it back in a round
         M->>M: End assignment_expired; queue again without using a retry
     end
 ```
@@ -98,9 +99,12 @@ sequenceDiagram
     alt Fetch succeeds
         W->>M: Started
     else Fetch fails or does not finish in time
-        Note over M: Assignment expiry: 10 s default without Started; assignment is taken back
+        Note over M: Assignment expiry: worker lease, 60 s default without Started; assignment is taken back
     end
 ```
+
+A chunk arriving after the worker has heard nothing for a lease is ignored: the worker
+does not start the task or send a rejection.
 
 ## Cancel
 
@@ -259,6 +263,11 @@ Each move counts as a cleanup try; if the receiving worker is lost after
 when no other is available. A handle not delivered before the original worker is lost cannot
 accompany the cleanup.
 
+If the worker from which cleanup was first scheduled to move reconnects with a finished cleanup before the
+move takes place, its journaled `Finished` receives `Continue`, so it sends the result again;
+the master stores it and drops the move. A report from a later cleanup-only worker keeps the
+task result already stored.
+
 A lost worker may only be cut off from the master. A cleanup already running when the cut
 starts can overlap a moved one, and a frozen VM cannot stop its task. See
 [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
@@ -404,8 +413,8 @@ The timing links point to [Timings](14-timings.md); a dash means no dedicated me
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; with `cleanup_anywhere` tasks running, silence for the worker lease stops them | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
-| `Registered` | Master after `Register` | Apply timing and journal decisions; with cleanup waiting, ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `Registered` | Master after `Register` | Apply timing and journal decisions; ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` runs moved cleanup with its handles; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |

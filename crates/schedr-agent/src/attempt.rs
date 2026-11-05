@@ -45,24 +45,49 @@ pub enum Gate {
     Dropped,
 }
 
-/// The agent's [`Gate`] for one attempt.
+/// The agent's [`Gate`] for one attempt, and when the master's word runs out: the last word
+/// plus the worker lease (`None` before the master told its lease).
 #[derive(Debug, Clone)]
-pub struct CleanupGate(pub tokio::sync::watch::Receiver<Gate>);
+pub struct CleanupGate {
+    /// What the agent says.
+    pub gate: tokio::sync::watch::Receiver<Gate>,
+    /// When the master's word runs out.
+    pub deadline: tokio::sync::watch::Receiver<Option<tokio::time::Instant>>,
+}
 
 /// Compared by what it says now, for a spec's equality.
 impl PartialEq for CleanupGate {
     fn eq(&self, other: &Self) -> bool {
-        *self.0.borrow() == *other.0.borrow()
+        *self.gate.borrow() == *other.gate.borrow()
     }
 }
 
 impl CleanupGate {
-    /// Waits while held. Returns whether the cleanup may start.
+    /// Waits while held, and while open past the deadline: the agent's loop hasn't held it yet
+    /// (B162: a worker frozen past its lease saw its task end before its overdue timer, and ran
+    /// a cleanup the master had moved); it does next, and the master's answer decides, unless
+    /// the master's word moves the deadline on first (a heartbeat answered just in time).
+    /// Returns whether the cleanup may start.
     pub async fn passes(mut self) -> bool {
-        self.0
-            .wait_for(|gate| *gate != Gate::Held)
-            .await
-            .is_ok_and(|gate| *gate == Gate::Open)
+        loop {
+            let gate = *self.gate.borrow_and_update();
+            let late = self
+                .deadline
+                .borrow_and_update()
+                .is_some_and(|at| tokio::time::Instant::now() >= at);
+            let changed = match gate {
+                Gate::Dropped => return false,
+                Gate::Open if !late => return true,
+                Gate::Open => tokio::select! {
+                    changed = self.gate.changed() => changed.is_ok(),
+                    changed = self.deadline.changed() => changed.is_ok(),
+                },
+                Gate::Held => self.gate.changed().await.is_ok(),
+            };
+            if !changed {
+                return false;
+            }
+        }
     }
 }
 

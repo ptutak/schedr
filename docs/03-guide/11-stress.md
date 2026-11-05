@@ -3,8 +3,8 @@
 Besides the unit and integration tests run on every change, a **stress suite** puts the real
 system under load and trouble: the `schedr` binary as separate processes on a real Postgres,
 many workers, killed processes, a frozen master, a stalled database, a connection pooler.
-It is too slow for every push, so it runs **nightly in CI** (when `main` changed since its last
-passing run) and **locally with `make stress`**, at the end of each milestone and after a
+It is too slow for every push, so it runs **nightly in CI** (the whole suite when `main` changed since its last
+passing run; scenario 21 alone with a fresh seed when it did not) and **locally with `make stress`**, at the end of each milestone and after a
 change to scheduling, the database layer or the worker.
 
 ## What every scenario checks
@@ -15,11 +15,20 @@ Each scenario ends with the same **invariants**, and any of them broken fails it
 - no task succeeded twice, and every task of a successful run succeeded;
 - every run ended in a state the scenario expects (`success`, or `cancelled` / `failed` where
   it cancels or overloads on purpose);
-- **no try of a task started before the previous try ended**, checked twice: by the times the
+- **No unexpected overlap of tries**, checked twice: by the times the
   database recorded, and by the tasks themselves. Every stress task appends a `start` and an
   `end` line (its run, task, try, process and the time) to one shared file. A try the suite
   killed ends when it was killed; a try schedr stopped ends when the database recorded it.
-  Two tries of one task running at once would show as overlapping lines.
+  Two tries of one task running at once show as overlapping lines. In the chaos scenarios,
+  expected overlaps are counted as `tries_run_twice` and listed in the bundle: a cut worker
+  can keep running a task without `cleanup_anywhere` after the master retries it; a frozen
+  worker cannot stop any task, including one with `cleanup_anywhere`. Other overlaps fail,
+  including a `cleanup_anywhere` task on a cut (not frozen) worker. Tasks should be
+  idempotent: tasks without `cleanup_anywhere` can run twice after a cut, and any task can
+  run twice after a freeze.
+- Chaos checks also fail if cleanup starts before its try ends, if a cleanup runs to its end
+  more than once (except when its earlier worker was in trouble), or if the database says
+  cleanup succeeded but its end mark is missing.
 
 **Speed only fails on a gross regression.** Each scenario has generous limits (at least so many
 tasks a second, the master's round under 5 s at the 99th percentile, a task starting within
@@ -49,10 +58,26 @@ are in the report.
 | 15b | The same, on SQLite through standalone (scenario 9's load) | the same comparison |
 | 15c | The same with scenario 13's load (Python tasks, spawned): bound by the CPU, where the triggers' work at commit competes with the tasks' starts instead of hiding behind the disk | the same comparison |
 | 16 | Concurrency limits: DAGs of two mapped Python tasks, two runs each at once, on many more slots than the limits allow | never more open at once than `max_active_per_run`, `max_active` or `max_active_tasks`; the DAG's limit reached; every run succeeds. Written in M4.4, its first result comes with the next run of the suite |
+| 17 | Silent two-way cut, shorter and then longer than the worker lease and cleanup move wait | reconnection and moved cleanups |
+| 18 | One-way cuts past the lease, first toward the master, then toward the worker | each direction's recovery |
+| 19 | Slow links: 200 ms per chunk on every worker, then 1.5 s on one | no failures |
+| 20 | Worker frozen with `SIGSTOP` past the lease and cleanup move, then thawed | its tasks continue while its agent is frozen |
+| 21 | Seeded random cuts, slow links and freezes under load | recovery under a reproducible fault schedule |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
 back.
+
+Each chaos worker has its own TCP proxy link. Scenario 21 chooses a fault every few seconds,
+for 5–90 s, affecting at most half the workers at once. It uses `SCHEDR_STRESS_SEED` or a
+fresh clock seed, recorded in the report and timeline. Replay the schedule with the same
+profile and seed, for example `SCHEDR_STRESS_SEED=123 make stress STRESS=21_random_chaos`.
+Timing of processes and the resulting execution can still vary.
+
+Each chaos scenario leaves `target/stress/<scenario>/timeline.txt` and
+`tries_run_twice.txt`. On failure the bundle also contains role logs, `marks.txt` and a
+`database.json` snapshot; CI retains the bundle with the JSON report. The report counts
+lost attempts and moved cleanups as well as overlaps.
 
 **Scenario 13** is two tests of one load: chains of `@task` functions passing outputs on, a
 Python process for each task. `13_python_tasks` spawns each task, a new interpreter every

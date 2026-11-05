@@ -507,6 +507,60 @@ async fn a_heartbeat_is_answered_as_it_arrives_while_the_master_leads() {
 }
 
 #[tokio::test]
+async fn a_master_that_isnt_leading_refuses_a_stream_at_once() {
+    // B165: a paused master (or one taken over) doesn't hold a worker's stream until it
+    // leads again; the worker is told at once, to connect to the master that leads.
+    let (hub, _db, mut client) = connected().await;
+    hub.leading.send_replace(false);
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.control(ReceiverStream::new(outbound)),
+    )
+    .await
+    .expect("refused at once, not held");
+    let status = refused.expect_err("a stream to a master that doesn't lead");
+    assert_eq!(status.code(), tonic::Code::Unavailable, "{status:?}");
+    assert!(status.message().contains("isn't leading"), "{status:?}");
+    // Leading again, it takes streams again.
+    hub.leading.send_replace(true);
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_master_paused_while_a_register_waits_for_the_lock_refuses_it() {
+    // Codex's review of B165: the check came before the wait for the lock, behind a round
+    // during which the master paused.
+    let (hub, _db, mut client) = connected().await;
+    let round = hub.core().lock_owned().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let opening = tokio::spawn(async move { client.control(ReceiverStream::new(outbound)).await });
+    // Past the first check, waiting for the lock.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!opening.is_finished());
+    hub.leading.send_replace(false);
+    drop(round);
+    let refused = tokio::time::timeout(Duration::from_secs(5), opening)
+        .await
+        .expect("answered once the lock is free")
+        .unwrap();
+    let status = refused.expect_err("a stream to a master that paused meanwhile");
+    assert_eq!(status.code(), tonic::Code::Unavailable, "{status:?}");
+}
+
+#[tokio::test]
 async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives() {
     // B6, the reconnect: a worker whose connection dropped registers again within its lease
     // while the master is stuck; its `Register` waits for the lock behind a round, which must
@@ -1571,7 +1625,12 @@ async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it(
         next(&mut stream).await,
         master_message::Message::Registered(_)
     ));
+    // Not at the old 10 s: the start timeout is the worker lease (decision 281, B163).
     move_to(11);
+    hub.tick().await.unwrap();
+    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, None);
+    move_to(61);
     hub.tick().await.unwrap();
     let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(

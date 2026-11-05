@@ -126,6 +126,18 @@ def test_a_new_bug_takes_the_next_number_and_must_be_filled_in(folder: Path) -> 
     assert (loaded.id, loaded.title, loaded.score) == ("B10", 'a "quoted" title', 1)
 
 
+def test_an_option_as_a_title_shows_the_usage_and_files_nothing(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `new --help` once filed a bug titled "--help".
+    monkeypatch.setattr(bugs(), "FOLDER", folder)
+    monkeypatch.setattr(sys, "argv", ["bugs.py", "new", "--help"])
+    with pytest.raises(SystemExit) as stopped:
+        bugs().main()
+    assert stopped.value.code == bugs().__doc__
+    assert not (folder / "B10.toml").exists()
+
+
 def test_this_repositorys_bugs_md_is_current() -> None:
     assert (ROOT / "BUGS.md").read_text() == bugs().render(ROOT / "bugs"), (
         "BUGS.md is out of date: run `make bugs`"
