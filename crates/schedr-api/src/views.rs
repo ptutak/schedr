@@ -263,6 +263,10 @@ pub struct TaskView {
     /// Why it waits or can't be scheduled, or why a mapped task failed without an attempt
     /// (too many instances, a mapped value that isn't a list).
     pub reason: Option<String>,
+    /// How its cleanups ended (`ok`, `failed`, `worker_lost`, `not_needed`): the last, unless
+    /// one failed; none for a task without a cleanup, or before its first one ends.
+    #[serde(default)]
+    pub cleanup: Option<String>,
     /// When it last changed.
     pub updated_at: Timestamp,
 }
@@ -287,6 +291,7 @@ impl TaskView {
                 .reason
                 .clone()
                 .or_else(|| instance.queued_reason.clone()),
+            cleanup: instance.cleanup_result.map(|r| r.to_string()),
             updated_at: instance.updated_at,
         }
     }
@@ -318,6 +323,25 @@ pub struct RunDetail {
     #[serde(default)]
     #[schema(value_type = Object)]
     pub params: serde_json::Value,
+    /// Its resources, in the DAG's order (decision 275: each one's state from its two tasks).
+    #[serde(default)]
+    pub resources: Vec<ResourceView>,
+}
+
+/// A resource of a run: its setup, its cleanup and its users.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ResourceView {
+    /// Its name: its setup's task ID.
+    pub setup: String,
+    /// Its cleanup's task ID.
+    pub cleanup: String,
+    /// The tasks that use it, in the DAG's order.
+    pub users: Vec<String>,
+    /// Whether what follows its group waits for its cleanup.
+    pub blocking: bool,
+    /// `setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or
+    /// `not_needed`.
+    pub state: String,
 }
 
 /// An attempt of a task.
@@ -360,6 +384,31 @@ pub struct AttemptView {
     pub usage: Option<UsageView>,
     /// Whether its process dumped core (ended by a signal).
     pub core_dumped: bool,
+    /// Its cleanup; none for a task without one.
+    #[serde(default)]
+    pub cleanup: Option<CleanupView>,
+}
+
+/// An attempt's cleanup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CleanupView {
+    /// How it ended (`ok`, `failed`, `worker_lost`, `not_needed`); none until it has.
+    pub result: Option<String>,
+    /// The tries it made.
+    pub tries: Option<u32>,
+    /// How long its tries ran, measured by the worker.
+    pub duration_ms: Option<u64>,
+    /// The error kind of its last failed try.
+    pub error_kind: Option<String>,
+    /// The structured error summary of its last failed try.
+    #[schema(value_type = Option<Object>)]
+    pub error_summary: Option<serde_json::Value>,
+    /// How many times it moved to another worker (`cleanup_anywhere`).
+    pub moves: u32,
+    /// The handles the attempt registered (`{"handle_type": ..., "value": ...}`), masked, in
+    /// order.
+    #[schema(value_type = Vec<Object>)]
+    pub handles: Vec<serde_json::Value>,
 }
 
 /// What an attempt's process used.
@@ -414,8 +463,40 @@ impl From<&AttemptRecord> for AttemptView {
                 involuntary_context_switches: u.involuntary_context_switches,
             }),
             core_dumped: attempt.core_dumped,
+            cleanup: (!attempt.cleanup.is_empty()).then(|| CleanupView {
+                result: attempt.cleanup.result.map(|r| r.to_string()),
+                tries: attempt.cleanup.tries,
+                duration_ms: attempt.cleanup.duration_ms,
+                error_kind: attempt.cleanup.error_kind.clone(),
+                error_summary: attempt
+                    .cleanup
+                    .error_summary
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .map(|mut summary| {
+                        schedr_config::masked::mask(&mut summary);
+                        summary
+                    }),
+                moves: attempt.cleanup.moves,
+                handles: attempt
+                    .cleanup
+                    .handles
+                    .iter()
+                    .map(|h| shown_handle(h))
+                    .collect(),
+            }),
         }
     }
+}
+
+/// A stored handle as shown: masked as a task's data, by its field names and texts (the agent
+/// masked only the secrets the attempt read); one that doesn't parse is shown as `{"unreadable": <text>}`,
+/// masked, rather than left out.
+fn shown_handle(stored: &str) -> serde_json::Value {
+    let mut value = serde_json::from_str(stored)
+        .unwrap_or_else(|_| serde_json::json!({ "unreadable": mask_text(stored) }));
+    schedr_config::masked::mask_data(&mut value);
+    value
 }
 
 /// A task's attempts.

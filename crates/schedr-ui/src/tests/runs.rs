@@ -1022,3 +1022,245 @@ async fn a_last_line_longer_than_a_part_is_said_not_shown() {
         ["… (its last line is longer than 1 MiB: not shown here)"]
     );
 }
+
+/// A run `r3` with two resources: `w.cluster` in group `w`, used by `w.load` then `w.warm`,
+/// with `after` following the group; and `tmp`, used by `tmp.user`, nothing waiting for its
+/// cleanup (`blocking=False`), which failed.
+fn resourced_run() -> Vec<(&'static str, u16, Value)> {
+    let mut failed_cleanup = task("tmp.user", "success", None, None);
+    failed_cleanup["cleanup"] = json!("failed");
+    vec![
+        (
+            "/api/v1/runs/r3",
+            200,
+            json!({
+                "run": run_at("r3", "sync", "running", 2),
+                "tasks": [
+                    task("w.cluster", "success", None, None),
+                    task("w.load", "success", None, None),
+                    task("w.warm", "running", None, None),
+                    task("w.cluster.cleanup", "scheduled", None, None),
+                    task("after", "scheduled", None, None),
+                    task("tmp", "success", None, None),
+                    failed_cleanup,
+                    task("tmp.cleanup", "failed", None, None),
+                ],
+                "code_hashes": [],
+                "resources": [
+                    {"setup": "w.cluster", "cleanup": "w.cluster.cleanup",
+                     "users": ["w.load", "w.warm"], "blocking": true,
+                     "state": "waiting_for_users"},
+                    {"setup": "tmp", "cleanup": "tmp.cleanup", "users": ["tmp.user"],
+                     "blocking": false, "state": "cleanup_failed"}
+                ]
+            }),
+        ),
+        (
+            "/api/v1/runs/r3/dag",
+            200,
+            json!({
+                "id": "sync",
+                "groups": [{"id": "w"}],
+                "tasks": [
+                    {"id": "w.cluster", "group": "w"},
+                    {"id": "w.load", "group": "w"},
+                    {"id": "w.warm", "group": "w"},
+                    {"id": "w.cluster.cleanup", "group": "w"},
+                    {"id": "after"},
+                    {"id": "tmp"},
+                    {"id": "tmp.user"},
+                    {"id": "tmp.cleanup"}
+                ],
+                "edges": [
+                    {"from": "w.cluster", "to": "w.load", "kind": "requirement"},
+                    {"from": "w.cluster", "to": "w.warm", "kind": "requirement"},
+                    {"from": "w.cluster", "to": "w.cluster.cleanup", "kind": "requirement"},
+                    {"from": "w.load", "to": "w.warm", "kind": "data"},
+                    {"from": "w.warm", "to": "after", "kind": "order"},
+                    {"from": "w.cluster.cleanup", "to": "after", "kind": "order"},
+                    {"from": "tmp", "to": "tmp.user", "kind": "requirement"},
+                    {"from": "tmp", "to": "tmp.cleanup", "kind": "requirement"}
+                ],
+                "resources": [
+                    {"setup": "w.cluster", "cleanup": "w.cluster.cleanup",
+                     "users": ["w.load", "w.warm"]},
+                    {"setup": "tmp", "cleanup": "tmp.cleanup", "users": ["tmp.user"],
+                     "blocking": false}
+                ]
+            }),
+        ),
+        ("/api/v1/runs/r3/commands", 200, json!({"commands": []})),
+    ]
+}
+
+/// The graph's lines as `from -> to: class`, sorted.
+fn lines(html: &str) -> Vec<String> {
+    let (from, to, class) = (
+        attrs(html, "svg.dag path.edge", "data-from"),
+        attrs(html, "svg.dag path.edge", "data-to"),
+        attrs(html, "svg.dag path.edge", "class"),
+    );
+    let mut lines: Vec<String> = (from.iter().zip(&to).zip(&class))
+        .map(|((f, t), c)| format!("{f} -> {t}: {c}"))
+        .collect();
+    lines.sort();
+    lines
+}
+
+#[tokio::test]
+async fn a_resource_is_two_caps_on_a_rail_its_cleanup_reached_from_its_last_users() {
+    let app = ui(vec![deployment("etl", scripted(&resourced_run()))]);
+    let (status, html) = get(&app, "/d/etl/runs/r3", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    // Decision 262: the cleanup reached from the last user only, not the setup; decision 272:
+    // what follows the group drawn from the cleanup alone; a cleanup nothing waits for dashed.
+    assert_eq!(
+        lines(&html),
+        [
+            "tmp -> tmp.user: edge requirement",
+            "tmp.user -> tmp.cleanup: edge requirement released",
+            "w.cluster -> w.load: edge requirement",
+            "w.cluster -> w.warm: edge requirement",
+            "w.cluster.cleanup -> after: edge order",
+            "w.load -> w.warm: edge data",
+            "w.warm -> w.cluster.cleanup: edge requirement",
+        ]
+    );
+    // The caps: the setup's and the cleanup's, named by their resource; the rails.
+    assert_eq!(
+        attrs(&html, "svg.dag a.node[data-resource]", "data-task"),
+        ["w.cluster", "w.cluster.cleanup", "tmp", "tmp.cleanup"]
+    );
+    assert_eq!(texts(&html, "svg.dag path.box.cap").len(), 4);
+    assert_eq!(
+        attrs(&html, "svg.dag path.rail", "data-resource"),
+        ["w.cluster", "tmp"]
+    );
+    assert_eq!(texts(&html, "svg.dag line.cap-band").len(), 4);
+}
+
+#[tokio::test]
+async fn a_runs_resources_are_listed_and_a_failed_cleanup_is_in_the_tasks_status() {
+    let app = ui(vec![deployment("etl", scripted(&resourced_run()))]);
+    let (_, html) = get(&app, "/d/etl/runs/r3", &[]).await;
+    assert_eq!(
+        texts(&html, "table.resources tbody tr td:first-child"),
+        ["w.cluster", "tmp"]
+    );
+    assert_eq!(
+        texts(&html, "table.resources .resource-state"),
+        ["waiting for users", "cleanup failed"]
+    );
+    assert_eq!(
+        texts(&html, "table.resources td.cleanup .state"),
+        ["scheduled", "failed"]
+    );
+    assert_eq!(
+        texts(&html, "table.resources td:nth-child(5)"),
+        ["w.load, w.warm", "tmp.user"]
+    );
+    assert!(
+        texts(&html, "table.resources td:nth-child(2)")[1].contains("not waited for"),
+        "a cleanup nothing waits for says so"
+    );
+    // state · outcome · cleanup (only when it says something).
+    assert!(texts(&html, "table.tasks .state").contains(&"success · cleanup failed".to_owned()));
+}
+
+#[tokio::test]
+async fn the_cleanup_tab_shows_each_attempts_cleanup_and_handles_masked() {
+    let mut answers = resourced_run();
+    let mut cleaned = attempt(1, Some("success"));
+    cleaned["cleanup"] = json!({
+        "result": "failed", "tries": 2, "duration_ms": 1_500, "error_kind": "exit",
+        "error_summary": {"exception": "OSError", "message": "gone",
+                          "traceback": "Traceback: here"},
+        "moves": 1,
+        "handles": [{"handle_type": "Job", "value": {"id": "j-1", "password": "hunter2"}}]
+    });
+    let quiet = attempt(2, Some("success"));
+    answers.push((
+        "/api/v1/runs/r3/tasks/tmp.user/attempts",
+        200,
+        json!({"attempts": [cleaned, quiet]}),
+    ));
+    answers.push((
+        "/api/v1/runs/r3/tasks/tmp/attempts",
+        200,
+        json!({"attempts": [attempt(1, Some("success"))]}),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r3/tasks/tmp.user?tab=cleanup",
+        &[("hx-request", "true")],
+    )
+    .await;
+    // Only the attempt that has a cleanup.
+    assert_eq!(texts(&html, "table.cleanups .cleanup"), ["failed"]);
+    assert_eq!(
+        texts(&html, "table.cleanups tbody tr:first-child td"),
+        ["1", "failed", "2 tries · moved once", "1.5 s"]
+    );
+    assert_eq!(
+        texts(&html, "table.cleanups .error"),
+        ["exit · OSError: gone"]
+    );
+    let handles = texts(&html, "ul.handles li");
+    assert_eq!(handles.len(), 1);
+    assert!(handles[0].starts_with("Job "), "{handles:?}");
+    assert!(!handles[0].contains("hunter2"), "{handles:?}");
+    assert!(
+        texts(&html, "p.resource-note").is_empty(),
+        "a user isn't a resource's part"
+    );
+
+    // A setup names its cleanup; without cleanups, the tab says why.
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r3/tasks/tmp?tab=cleanup",
+        &[("hx-request", "true")],
+    )
+    .await;
+    let note = texts(&html, "p.resource-note");
+    assert!(
+        note[0].starts_with("It sets up resource tmp; its cleanup is tmp.cleanup failed"),
+        "{note:?}"
+    );
+    assert_eq!(texts(&html, "table.cleanups").len(), 0);
+    assert_eq!(
+        texts(&html, "p.empty"),
+        ["No cleanup has run after its attempts (yet)."]
+    );
+}
+
+#[tokio::test]
+async fn a_data_edge_to_what_follows_stays_and_an_unused_resources_link_is_dashed() {
+    let mut answers = resourced_run();
+    let (_, _, dag) = answers
+        .iter_mut()
+        .find(|(path, _, _)| *path == "/api/v1/runs/r3/dag")
+        .unwrap();
+    // `after` takes `w.warm`'s output; `tmp` has no users and nothing waits for its cleanup.
+    for edge in dag["edges"].as_array_mut().unwrap() {
+        if edge["from"] == "w.warm" && edge["to"] == "after" {
+            edge["kind"] = json!("data");
+        }
+    }
+    dag["edges"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|e| e["to"] != "tmp.user");
+    dag["resources"][1]["users"] = json!([]);
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(&app, "/d/etl/runs/r3", &[]).await;
+    let drawn = lines(&html);
+    assert!(
+        drawn.contains(&"w.warm -> after: edge data".to_owned()),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"tmp -> tmp.cleanup: edge requirement released".to_owned()),
+        "{drawn:?}"
+    );
+}

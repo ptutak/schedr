@@ -4,23 +4,29 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-05, night; the user asleep): M4.8d committed; M4.8e next
+## State (2026-11-05, early morning): M4.8e committed; M4.8 done, stopped as asked
 
 - **Tonight's instruction:** "commit and push as needed, keep up with the review, if decisions
-  wait for morning, stop after M4.8". Commits pre-accepted; important decisions parked below.
-- **Done: M4.8c2** (decisions 270-277, commit 00f77ca): the master runs resources. See PROJECT.md's
-  "Built (M4.8c2" entry.
-- **Done: M4.8d:** `CommandResource`, `cleanup_command` on every resource object, `schedr task-ctx
-  resource set|get`, the command's `resource` role in DAG JSON. Codex's review found 10 (9 fixed,
-  one not taken, see PROJECT.md's "Built (M4.8d" entry); docs by Codex.
-- **My calls, for the user to overrule:** ScriptResource and `cleanup_script` moved to M4.9
-  (script tasks arrive there); `.value` on an `@resource` setup and a `CommandResource` (typed as
-  the value; `t"{cluster.value.cluster_id}"` in a `cleanup_command`), needed because a
-  module-level `@resource` has no task ID before a DAG calls it.
-- **Next: M4.8e** (UI: caps/rail per 262, edges per 272, Resources panel), then stop. M4.8z
-  (chaos scenarios) later.
-- **Decisions waiting for the morning:** none yet.
-- **Codex:** weekly 29%, 5 h 20%.
+  wait for morning, stop after M4.8". Done: M4.8c2, M4.8d and M4.8e committed and pushed.
+- **Done: M4.8e:** a run's cleanups and resources in the API (`AttemptView.cleanup`,
+  `TaskView.cleanup`, `RunDetail.resources`), `schedr dags test --json`, `run_dag`
+  (`Attempt.cleanup`, `TaskResult.cleanup`, `RunResult.resources`) and the UI (status
+  `state · outcome · cleanup`, the Cleanup tab, the Resources table, caps and rail per 262, edges
+  per 272). Codex's review found 8, all fixed (handles masked as task data in the API; see
+  PROJECT.md's "Built (M4.8e" entry); docs by Codex.
+- **My calls, for the user to overrule:**
+  - M4.8d: ScriptResource and `cleanup_script` moved to M4.9; `.value` on an `@resource` setup and
+    a `CommandResource` (typed as the value); `run_dag` gives a `CommandResource` setup's output as
+    JSON; Codex's finding 7 (a late report by a child process during the output drain) not taken.
+  - M4.8e: the UI draws the user -> cleanup lines itself (the DAG has none); handles stay as stored
+    JSON in `run_dag`; `worker_lost` reads `cleanup lost`; a mapped task shows its instances' worst
+    cleanup.
+- **No new configuration values** in M4.8c2, M4.8d or M4.8e.
+- **Not checked by eye:** the graph's caps and rail in a browser (the HTML is tested, the look
+  isn't); worth a glance, or a Playwright case in `make test-ui`.
+- **Next:** M4.8z (chaos scenarios), then M4.9. Grok's weekly reset is Friday 9:00.
+- **Decisions waiting:** none.
+- **Codex:** weekly 32%, 5 h 37%.
 
 ## State (2026-11-05, small hours): M4.8c1 committed; the user relogs
 

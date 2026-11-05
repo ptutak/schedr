@@ -14,6 +14,7 @@ from schedr import dag_ctx, task
 from schedr.testing import (
     BINARY_ENV,
     Attempt,
+    Cleanup,
     RunDagError,
     RunResult,
     TaskResult,
@@ -113,6 +114,34 @@ def test_an_attempt_that_didnt_end_has_no_duration() -> None:
     attempt = Attempt.from_json(ATTEMPT | {"status": None, "ended_at": None, "duration_ms": None})
     assert attempt.ended_at is None
     assert attempt.duration is None
+
+
+def test_an_attempts_cleanup_is_read_with_its_handles() -> None:
+    handle = {"handle_type": "Job", "value": {"job_id": "j-1"}}
+    cleanup = {
+        "result": "failed",
+        "tries": 2,
+        "duration_ms": 40,
+        "error_kind": "cleanup_failed",
+        "error_summary": {"exception": "OSError", "message": "gone", "traceback": "..."},
+        "moves": 1,
+        "handles": [handle],
+    }
+    attempt = Attempt.from_json(ATTEMPT | {"cleanup": cleanup})
+    assert attempt.cleanup == Cleanup(
+        result="failed",
+        tries=2,
+        duration=timedelta(milliseconds=40),
+        error_kind="cleanup_failed",
+        error={"exception": "OSError", "message": "gone", "traceback": "..."},
+        moves=1,
+        handles=(handle,),
+    )
+    # An attempt without one, and one whose cleanup hasn't run yet.
+    assert Attempt.from_json(ATTEMPT).cleanup is None
+    pending = Attempt.from_json(ATTEMPT | {"cleanup": {"moves": 0, "handles": [handle]}}).cleanup
+    assert pending is not None
+    assert (pending.result, pending.tries, pending.duration) == (None, None, None)
 
 
 DAG_FILE = """

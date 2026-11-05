@@ -208,6 +208,53 @@ def _now() -> datetime:
 
 
 @dataclass(frozen=True, slots=True)
+class Cleanup:
+    """The cleanup of an attempt in a ``run_dag`` result: what ran on its handles.
+
+    Attributes:
+        result: How it ended (``ok``, ``failed``, ``worker_lost``, ``not_needed``); ``None``
+            until it has.
+        tries: The tries it made.
+        duration: How long its tries ran, measured by the worker.
+        error_kind: The failure kind of a failed cleanup.
+        error: The error summary of a failed cleanup.
+        moves: How many times it moved to another worker.
+        handles: The handles the attempt registered, in order, as stored:
+            ``{"handle_type": ..., "value": ...}`` (masked).
+    """
+
+    result: str | None
+    tries: int | None
+    duration: timedelta | None
+    error_kind: str | None
+    error: Mapping[str, str] | None
+    moves: int
+    handles: tuple[Json, ...]
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> Cleanup:
+        """Reads an attempt's cleanup from ``schedr dags test --json``.
+
+        Args:
+            data: The cleanup's JSON.
+
+        Returns:
+            The cleanup.
+        """
+        return cls(
+            result=data.get("result"),
+            tries=data.get("tries"),
+            duration=None
+            if data.get("duration_ms") is None
+            else timedelta(milliseconds=data["duration_ms"]),
+            error_kind=data.get("error_kind"),
+            error=data.get("error_summary"),
+            moves=data.get("moves", 0),
+            handles=tuple(data.get("handles", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Attempt:
     """One attempt of a task in a ``run_dag`` result.
 
@@ -223,6 +270,8 @@ class Attempt:
         duration: How long it ran, measured by the worker (``None`` while it runs, or for an
             attempt the master ended); not ``ended_at - started_at``, which come from the
             master's wall clock and can step.
+        cleanup: What ran on its handles (``cleanup_handle``), or ``None`` if it registered
+            none and its task has no ``cleanup=``.
     """
 
     attempt_id: str
@@ -234,6 +283,7 @@ class Attempt:
     started_at: datetime | None
     ended_at: datetime | None
     duration: timedelta | None
+    cleanup: Cleanup | None = None
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> Attempt:
@@ -257,6 +307,7 @@ class Attempt:
             duration=None
             if data.get("duration_ms") is None
             else timedelta(milliseconds=data["duration_ms"]),
+            cleanup=None if data.get("cleanup") is None else Cleanup.from_json(data["cleanup"]),
         )
 
 
@@ -282,6 +333,8 @@ class TaskResult:
             task and a mapped one as a whole.
         instances: A mapped task's instances, in order (``result.tasks["fetch"][1]`` is one);
             ``None`` for an unmapped task.
+        cleanup: The task's own ``cleanup=``: how it ended over all its attempts (``ok``,
+            ``failed``, ...); ``None`` for a task without one, or until it has ended.
     """
 
     task_id: str
@@ -294,6 +347,7 @@ class TaskResult:
     _decode: Callable[[str, Json, str | None], object] = field(repr=False, compare=False)
     map_index: int | None = None
     instances: tuple[TaskResult, ...] | None = None
+    cleanup: str | None = None
 
     def __getitem__(self, index: int) -> TaskResult:
         """One instance of a mapped task (decision 85).
@@ -338,6 +392,27 @@ class TaskResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceResult:
+    """A resource of a run in a ``run_dag`` result.
+
+    Attributes:
+        setup: Its setup's task ID (the resource's name).
+        cleanup: Its cleanup's task ID.
+        users: The tasks that use it.
+        blocking: Whether what follows the resource's group waits for its cleanup (a failed
+            cleanup fails the run either way).
+        state: Where it is: ``setting_up``, ``waiting_for_users``, ``cleaning_up``,
+            ``cleaned``, ``cleanup_failed`` or ``not_needed``.
+    """
+
+    setup: str
+    cleanup: str
+    users: tuple[str, ...]
+    blocking: bool
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
 class RunResult:
     """The result of ``run_dag``: the run and each of its tasks.
 
@@ -349,6 +424,7 @@ class RunResult:
         planned_for: The moment it was for.
         since: The start of its window, ``(since, planned_for]``.
         tasks: Its tasks by ID.
+        resources: Its resources by name (the setup's task ID).
     """
 
     run_id: str
@@ -358,6 +434,7 @@ class RunResult:
     planned_for: datetime
     since: datetime
     tasks: Mapping[str, TaskResult]
+    resources: Mapping[str, ResourceResult] = field(default_factory=dict)
 
 
 class _OutputTypes:
@@ -536,6 +613,7 @@ def _result(report: Mapping[str, Any], root_dir: Path) -> RunResult:
             _decode=types.decode,
             map_index=index if index >= 0 else None,
             instances=instances,
+            cleanup=task.get("cleanup"),
         )
 
     # A mapped task's instances follow its own row (decision 85).
@@ -559,4 +637,14 @@ def _result(report: Mapping[str, Any], root_dir: Path) -> RunResult:
         planned_for=datetime.fromisoformat(run["planned_for"]),
         since=datetime.fromisoformat(run["since"]),
         tasks=tasks,
+        resources={
+            resource["setup"]: ResourceResult(
+                setup=resource["setup"],
+                cleanup=resource["cleanup"],
+                users=tuple(resource["users"]),
+                blocking=resource["blocking"],
+                state=resource["state"],
+            )
+            for resource in report.get("resources", ())
+        },
     )

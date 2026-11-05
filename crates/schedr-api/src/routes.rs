@@ -21,7 +21,7 @@ use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
 use schedr_model::commands::Command;
 use schedr_model::logs::{MASK_CONTEXT, MAX_CHUNK, MIN_CHUNK};
-use schedr_model::{DagId, TaskId, WorkerState};
+use schedr_model::{DagId, ResourceState, TaskId, TaskInstanceState, WorkerState};
 
 use crate::auth::User;
 use crate::error::ApiError;
@@ -31,8 +31,8 @@ use crate::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
     DagList, DagView, DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery,
     LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
-    ProblemView, RunDetail, RunList, RunView, RunsQuery, TaskView, TestConnectionRequest,
-    TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
+    ProblemView, ResourceView, RunDetail, RunList, RunView, RunsQuery, TaskView,
+    TestConnectionRequest, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -671,10 +671,33 @@ pub async fn get_run(
     let run = known_run(&state, &run_id).await?;
     let run_id = &run.id;
     let tasks = state.db.run_instances(run_id).await?;
-    let mapped = run_tasks(&state, run_id)
-        .await?
-        .map(|(_, mapped)| mapped)
-        .unwrap_or_default();
+    let dag = match state.db.run_dag(run_id).await {
+        Ok(dag) => dag,
+        Err(schedr_db::DbError::InvalidData { .. }) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mapped: BTreeSet<&TaskId> = dag
+        .iter()
+        .flat_map(|dag| dag.tasks.iter().filter(|t| t.expand.is_some()))
+        .map(|t| &t.id)
+        .collect();
+    let state_of = |task: &TaskId| {
+        tasks
+            .iter()
+            .find(|i| &i.task_id == task && i.map_index == -1)
+            .map_or(TaskInstanceState::Scheduled, |i| i.state)
+    };
+    let resources = dag
+        .iter()
+        .flat_map(|dag| &dag.resources)
+        .map(|r| ResourceView {
+            setup: r.setup.to_string(),
+            cleanup: r.cleanup.to_string(),
+            users: r.users.iter().map(ToString::to_string).collect(),
+            blocking: r.blocking,
+            state: name_of(ResourceState::of(state_of(&r.setup), state_of(&r.cleanup))),
+        })
+        .collect();
     let count = |task: &TaskId| {
         tasks
             .iter()
@@ -686,8 +709,12 @@ pub async fn get_run(
         tasks: tasks
             .iter()
             .map(|i| {
-                let whole = i.map_index == -1 && mapped.contains(&i.task_id);
-                TaskView::of(i, whole.then(|| count(&i.task_id)))
+                let whole = i.map_index == -1 && mapped.contains(&&i.task_id);
+                let mut view = TaskView::of(i, whole.then(|| count(&i.task_id)));
+                if whole && view.cleanup.is_none() {
+                    view.cleanup = worst_cleanup(&tasks, &i.task_id);
+                }
+                view
             })
             .collect(),
         code_hashes: state.db.run_code_hashes(run_id).await?,
@@ -698,7 +725,34 @@ pub async fn get_run(
                 .await?
                 .unwrap_or_else(|| serde_json::json!({})),
         )),
+        resources,
     }))
+}
+
+/// A mapped task's cleanup as a whole: the worst of its instances' (`failed`, then
+/// `worker_lost`, `ok`, `not_needed`), so a failed one shows on the task's row.
+fn worst_cleanup(tasks: &[schedr_db::reads::InstanceRecord], task: &TaskId) -> Option<String> {
+    use schedr_model::CleanupResult as R;
+    let rank = |r: R| match r {
+        R::Failed => 3,
+        R::WorkerLost => 2,
+        R::Ok => 1,
+        R::NotNeeded => 0,
+    };
+    tasks
+        .iter()
+        .filter(|i| &i.task_id == task && i.map_index >= 0)
+        .filter_map(|i| i.cleanup_result)
+        .max_by_key(|r| rank(*r))
+        .map(|r| r.to_string())
+}
+
+/// A resource's state as the API names it (`waiting_for_users`).
+fn name_of(state: ResourceState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Cancel a run (`schedr runs cancel`). Applied by the master; poll the command for the

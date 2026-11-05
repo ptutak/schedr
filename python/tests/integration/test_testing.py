@@ -633,6 +633,62 @@ def test_a_resource_is_cleaned_once_after_its_last_user(tmp_path: Path) -> None:
     # A resource without code: both parts finished by the master.
     assert result.tasks["tmp"].state == "success"
     assert result.tasks["tmp.cleanup"].state == "success"
+    # The run's resources, as the UI shows them (M4.8e).
+    cluster = result.resources["work.cluster"]
+    assert (cluster.cleanup, cluster.state) == ("work.cluster.cleanup", "cleaned")
+    assert {"work.load", "work.warm", "work.fails"} <= set(cluster.users)
+    assert result.resources["tmp"].state == "cleaned"
+
+
+HANDLED = """
+from dataclasses import dataclass
+
+from schedr import Dag, cleanup_handle, task
+
+
+@dataclass
+class Job:
+    job_id: str
+
+
+def undo(handles: list[Job]) -> None:
+    print("undoing", [h.job_id for h in handles])
+
+
+@task(cleanup=undo)
+def export() -> None:
+    cleanup_handle(Job("j-1"))
+    cleanup_handle(Job("j-2"))
+
+
+@task
+def plain() -> None:
+    pass
+
+
+with Dag("handled"):
+    export()
+    plain()
+"""
+
+
+def test_an_attempts_cleanup_and_handles_are_in_the_result(tmp_path: Path) -> None:
+    (tmp_path / "handled.py").write_text(HANDLED)
+    result = run_dag(tmp_path / "handled.py", "handled", for_=FOR)
+    export = result.tasks["export"]
+    assert export.cleanup == "ok"
+    cleanup = export.attempts[-1].cleanup
+    assert cleanup is not None
+    assert cleanup.result == "ok"
+    assert cleanup.tries == 1
+    assert cleanup.moves == 0
+    assert cleanup.handles == (
+        {"handle_type": "Job", "value": {"job_id": "j-1"}},
+        {"handle_type": "Job", "value": {"job_id": "j-2"}},
+    )
+    # A task without a cleanup has none.
+    assert result.tasks["plain"].cleanup is None
+    assert result.tasks["plain"].attempts[-1].cleanup is None
 
 
 COMMAND_RESOURCED = """

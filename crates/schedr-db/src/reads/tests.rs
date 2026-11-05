@@ -342,6 +342,63 @@ async fn a_runs_instances_and_attempts_are_shown() {
 }
 
 #[tokio::test]
+async fn an_attempts_cleanup_and_handles_are_shown() {
+    let (db, version) = with_dag().await;
+    let run_id = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    let now = ts("2026-10-15T03:00:01Z");
+    db.create_instances(&run_id, &[(extract(), -1, TaskInstanceState::Queued)], now)
+        .await
+        .unwrap();
+    let ready = db.ready_instances(now).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", now)
+        .await
+        .unwrap()
+        .unwrap();
+    let handles = [
+        r#"{"handle_type":"Job","value":{"id":1}}"#.to_owned(),
+        r#"{"handle_type":"Job","value":{"id":2}}"#.to_owned(),
+    ];
+    assert!(
+        db.add_cleanup_handles(&attempt_id, 0, &handles, 1 << 20)
+            .await
+            .unwrap()
+    );
+    let before = db.task_attempts(&run_id, &extract()).await.unwrap();
+    assert_eq!(before[0].cleanup.handles, handles, "shown while it runs");
+    assert_eq!(before[0].cleanup.result, None);
+    let end = AttemptEnd {
+        cleanup: Some(crate::attempts::CleanupEnd {
+            result: schedr_model::CleanupResult::Failed,
+            tries: 2,
+            duration_ms: 70,
+            error_kind: Some("exit".to_owned()),
+            error_summary: Some(r#"{"exception": "Boom"}"#.to_owned()),
+        }),
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    };
+    db.end_attempt(&attempt_id, &end, now).await.unwrap();
+    let attempts = db.task_attempts(&run_id, &extract()).await.unwrap();
+    let cleanup = &attempts[0].cleanup;
+    assert_eq!(
+        (
+            cleanup.result,
+            cleanup.tries,
+            cleanup.duration_ms,
+            cleanup.moves
+        ),
+        (
+            Some(schedr_model::CleanupResult::Failed),
+            Some(2),
+            Some(70),
+            0
+        )
+    );
+    assert_eq!(cleanup.error_kind.as_deref(), Some("exit"));
+    assert_eq!(cleanup.handles.len(), 2);
+}
+
+#[tokio::test]
 async fn stored_values_that_dont_read_are_errors() {
     let (db, version) = with_dag().await;
     let run_id = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;

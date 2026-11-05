@@ -3,8 +3,12 @@
 //! The webserver reads the database directly (with a read-only role in production) and never
 //! writes scheduling state; actions are command rows (see PROJECT.md, Web UI and CLI).
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
-use schedr_model::{AttemptStatus, DagId, RunKind, RunState, TaskId, TaskInstanceState};
+use schedr_model::{
+    AttemptStatus, CleanupResult, DagId, RunKind, RunState, TaskId, TaskInstanceState,
+};
 
 use crate::database::{Database, DbError};
 use crate::query::{db_time, from_json, from_name, on_pool, optional_time, parse_time, sql};
@@ -69,8 +73,38 @@ pub struct InstanceRecord {
     pub try_number: u32,
     /// Why it is waiting or unschedulable.
     pub queued_reason: Option<String>,
+    /// How its cleanups ended: the last, unless one failed; `None` for a task without one, or
+    /// before its first cleanup ends.
+    pub cleanup_result: Option<CleanupResult>,
     /// When it last changed.
     pub updated_at: Timestamp,
+}
+
+/// An attempt's cleanup, as shown.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CleanupRecord {
+    /// How it ended; `None` while it hasn't (or for a task without one).
+    pub result: Option<CleanupResult>,
+    /// The tries it made.
+    pub tries: Option<u32>,
+    /// How long its tries ran, measured by the worker.
+    pub duration_ms: Option<u64>,
+    /// The error kind of its last failed try.
+    pub error_kind: Option<String>,
+    /// The structured error summary of its last failed try (JSON text).
+    pub error_summary: Option<String>,
+    /// How many times it moved to another worker (`cleanup_anywhere`).
+    pub moves: u32,
+    /// The handles the attempt registered, each as JSON text (masked), in order.
+    pub handles: Vec<String>,
+}
+
+impl CleanupRecord {
+    /// Whether there is anything to show: a task without a cleanup has nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// An attempt, as shown.
@@ -106,6 +140,8 @@ pub struct AttemptRecord {
     pub usage: Option<schedr_model::runner::ProcessUsage>,
     /// Whether its process dumped core.
     pub core_dumped: bool,
+    /// Its cleanup (empty for a task without one).
+    pub cleanup: CleanupRecord,
 }
 
 type RunRow = (
@@ -130,6 +166,17 @@ type InstanceRow = (
     String,
     i32,
     Option<String>,
+    Option<String>,
+);
+
+type CleanupRow = (
+    String,
+    Option<String>,
+    Option<i32>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    i32,
 );
 
 type AttemptRow = (
@@ -348,7 +395,7 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn run_instances(&self, run_id: &str) -> Result<Vec<InstanceRecord>, DbError> {
         const INSTANCES: &str = "SELECT task_id, state, outcome, try_number, queued_reason, \
-            {ts<}updated_at{>ts}, map_index, reason FROM task_instances \
+            {ts<}updated_at{>ts}, map_index, reason, cleanup_result FROM task_instances \
             WHERE run_id = $1{uuid} ORDER BY task_id, map_index";
         let rows: Vec<InstanceRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, INSTANCES))
@@ -367,6 +414,7 @@ impl Database {
                     updated_at,
                     map_index,
                     reason,
+                    cleanup_result,
                 )| {
                     Ok(InstanceRecord {
                         task_id: task_id_of(task_id)?,
@@ -376,6 +424,9 @@ impl Database {
                         outcome,
                         try_number: u32::try_from(try_number).unwrap_or(0),
                         queued_reason,
+                        cleanup_result: cleanup_result
+                            .map(|name| from_name("task_instances.cleanup_result", name))
+                            .transpose()?,
                         updated_at: parse_time("task_instances.updated_at", &updated_at)?,
                     })
                 },
@@ -467,15 +518,65 @@ impl Database {
             JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3 \
             ORDER BY a.try_number";
-        let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ATTEMPTS))
-                .bind(run_id)
-                .bind(task_id.as_str())
-                .bind(map_index)
-                .fetch_all(pool)
-                .await?
-        });
-        rows.into_iter().map(attempt_record).collect()
+        const CLEANUPS: &str = "SELECT a.id{text}, a.cleanup_result, a.cleanup_tries, \
+            a.cleanup_duration_ms, a.cleanup_error_kind, a.cleanup_error_summary{text}, \
+            a.cleanup_moves FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3";
+        const HANDLES: &str = "SELECT h.attempt_id{text}, h.handle FROM cleanup_handles h \
+            JOIN attempts a ON a.id = h.attempt_id \
+            JOIN task_instances t ON t.id = a.task_instance_id \
+            WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3 \
+            ORDER BY h.attempt_id, h.position";
+        let (rows, cleanups, handles): (Vec<AttemptRow>, Vec<CleanupRow>, Vec<(String, String)>) =
+            on_pool!(self, |pool, backend| {
+                (
+                    sqlx::query_as(sql(backend, ATTEMPTS))
+                        .bind(run_id)
+                        .bind(task_id.as_str())
+                        .bind(map_index)
+                        .fetch_all(&mut *pool)
+                        .await?,
+                    sqlx::query_as(sql(backend, CLEANUPS))
+                        .bind(run_id)
+                        .bind(task_id.as_str())
+                        .bind(map_index)
+                        .fetch_all(&mut *pool)
+                        .await?,
+                    sqlx::query_as(sql(backend, HANDLES))
+                        .bind(run_id)
+                        .bind(task_id.as_str())
+                        .bind(map_index)
+                        .fetch_all(&mut *pool)
+                        .await?,
+                )
+            });
+        let mut by_attempt: BTreeMap<String, CleanupRecord> = BTreeMap::new();
+        for (id, result, tries, duration_ms, error_kind, error_summary, moves) in cleanups {
+            by_attempt.insert(
+                id,
+                CleanupRecord {
+                    result: result
+                        .map(|name| from_name("attempts.cleanup_result", name))
+                        .transpose()?,
+                    tries: tries.and_then(|n| u32::try_from(n).ok()),
+                    duration_ms: duration_ms.and_then(|ms| u64::try_from(ms).ok()),
+                    error_kind,
+                    error_summary,
+                    moves: u32::try_from(moves).unwrap_or(0),
+                    handles: Vec::new(),
+                },
+            );
+        }
+        for (id, handle) in handles {
+            by_attempt.entry(id).or_default().handles.push(handle);
+        }
+        rows.into_iter()
+            .map(|row| {
+                let mut record = attempt_record(row)?;
+                record.cleanup = by_attempt.remove(&record.id).unwrap_or_default();
+                Ok(record)
+            })
+            .collect()
     }
 }
 
@@ -544,5 +645,6 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
             .map(|json| from_json("attempts.usage", &json))
             .transpose()?,
         core_dumped,
+        cleanup: CleanupRecord::default(),
     })
 }

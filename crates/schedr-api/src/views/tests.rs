@@ -107,13 +107,18 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
             outcome: None,
             try_number: 0,
             queued_reason: Some("waiting".to_owned()),
+            cleanup_result: Some(schedr_model::CleanupResult::WorkerLost),
             updated_at: ts("2026-10-21T08:00:00Z"),
         },
         None,
     );
     assert_eq!(
-        (task.state.as_str(), task.reason.as_deref()),
-        ("upstream_failed", Some("waiting"))
+        (
+            task.state.as_str(),
+            task.reason.as_deref(),
+            task.cleanup.as_deref()
+        ),
+        ("upstream_failed", Some("waiting"), Some("worker_lost"))
     );
 
     let attempt = AttemptView::from(&AttemptRecord {
@@ -139,6 +144,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
             involuntary_context_switches: Some(6),
         }),
         core_dumped: true,
+        cleanup: schedr_db::reads::CleanupRecord::default(),
     });
     assert_eq!(
         serde_json::to_value(attempt.usage).unwrap(),
@@ -154,6 +160,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
     assert_eq!(attempt.peak_memory_bytes, Some(64 << 20));
     assert_eq!(attempt.start_method.as_deref(), Some("fork"));
     assert_eq!(attempt.error_summary, Some(json!({"exception": "Timeout"})));
+    assert_eq!(attempt.cleanup, None, "a task without a cleanup shows none");
 
     let command = CommandView::from(&CommandRecord {
         id: "c".to_owned(),
@@ -166,6 +173,39 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         decided_at: None,
     });
     assert_eq!(command.status, "rejected");
+}
+
+#[test]
+fn an_attempts_cleanup_shows_its_result_and_handles() {
+    let cleaned = AttemptView::from(&AttemptRecord {
+        cleanup: schedr_db::reads::CleanupRecord {
+            result: Some(schedr_model::CleanupResult::Failed),
+            tries: Some(3),
+            duration_ms: Some(40),
+            error_kind: Some("exit".to_owned()),
+            error_summary: Some(r#"{"exception": "Boom"}"#.to_owned()),
+            moves: 1,
+            handles: vec![
+                r#"{"handle_type": "Job", "value": {"id": 7, "password": "hunter2",
+                    "dsn": "postgres://u:pw@db/x"}}"#
+                    .to_owned(),
+                "{broken".to_owned(),
+            ],
+        },
+        ..sample_attempt()
+    });
+    assert_eq!(
+        serde_json::to_value(cleaned.cleanup).unwrap(),
+        json!({"result": "failed", "tries": 3, "duration_ms": 40, "error_kind": "exit",
+        "error_summary": {"exception": "Boom"}, "moves": 1,
+        "handles": [
+            // Masked as task data (the agent masks only the secrets it read).
+            {"handle_type": "Job", "value": {"id": 7, "password": "****",
+             "dsn": "postgres://u:****@db/x"}},
+            // A row that doesn't parse is shown, not left out.
+            {"unreadable": "{broken"}
+        ]})
+    );
 }
 
 #[test]
@@ -226,4 +266,25 @@ fn limits_are_counted_by_what_they_limit() {
             ("max_active_per_run".to_owned(), Some("a".to_owned()), 3, 3),
         ]
     );
+}
+
+fn sample_attempt() -> AttemptRecord {
+    AttemptRecord {
+        id: "a".to_owned(),
+        try_number: 1,
+        worker_id: None,
+        status: None,
+        exit_code: None,
+        error_kind: None,
+        error_summary: None,
+        assigned_at: ts("2026-10-21T08:00:00Z"),
+        started_at: None,
+        ended_at: None,
+        duration_ms: None,
+        peak_memory_bytes: None,
+        start_method: None,
+        usage: None,
+        core_dumped: false,
+        cleanup: schedr_db::reads::CleanupRecord::default(),
+    }
 }

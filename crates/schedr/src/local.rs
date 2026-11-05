@@ -959,12 +959,18 @@ async fn report(
             "state": task.state,
             "outcome": task.outcome,
             "try_number": task.try_number,
+            "cleanup": task.cleanup,
             "output": output,
             "attempts": attempts.attempts,
             "log": log,
         }));
     }
-    Ok(json!({"run": detail.run, "location": location, "tasks": tasks}))
+    Ok(json!({
+        "run": detail.run,
+        "location": location,
+        "tasks": tasks,
+        "resources": detail.resources,
+    }))
 }
 
 /// A task as the report shows it: `fetch`, or `fetch[2]` for an instance (decision 86).

@@ -7128,6 +7128,35 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   value=int | None)`. Not taken: a value reported by a child after the setup's main process exited
   but while its output drains (the setup's own process group, bounded by the drain).
 
+- **Built (M4.8e; decisions 25B, 262, 272, 275):** a run's cleanups and resources are shown and
+  can be asserted in a test. The API gives each attempt its `cleanup` (result, tries, duration of
+  the last try, error, moves to another worker, and its handles, masked), each task its
+  `cleanup` result, and a run its `resources` (setup, cleanup, users, `blocking` and the state
+  `ResourceState::of` derives from its two tasks). `schedr dags test --json` carries them, and
+  `run_dag` gives `Attempt.cleanup` (`schedr.testing.Cleanup`, its handles as stored),
+  `TaskResult.cleanup` and `RunResult.resources` (`ResourceResult`); `task_context`'s
+  `ctx.handles` was there since M4.8a. The UI fills its shells: a task's status is
+  `state · outcome · cleanup` (`cleanup failed`, `cleanup lost`); the panel's Cleanup tab lists
+  each attempt's cleanup with its handles and names a resource's other part; the run has a
+  Resources table, one row in two parts; on the graph a setup and a cleanup are caps (rounded
+  on top, at the bottom) with a band in the resources' colour, joined by a rail in the gutter
+  on hover or selection, requirement edges dotted in that colour. The graph draws the cleanup
+  reached from the last users (the DAG has no such edge: the master reads `users`) instead of
+  the setup's own link; with `blocking=True` the edges from the users to what follows the group
+  are left out (the cleanup's edge says it), with `blocking=False` the users' link to the cleanup
+  is dashed. Small decisions (Claude's, to be overruled): handles stay as stored JSON in
+  `run_dag` (decoding them needs the cleanup's types); a cleanup's `worker_lost` reads `cleanup
+  lost` in the status; a mapped task's row shows the worst of its instances' cleanups (`failed`,
+  then `worker_lost`, `ok`, `not_needed`). No new configuration value. Codex's review (8, all
+  fixed, with tests): handles are masked as task data in the API (by field names and texts, as
+  outputs; the agent masks only the secrets the attempt read), so `run_dag` and the UI get them
+  masked; a handle row that doesn't parse is shown as `{"unreadable": ...}`, not left out; a
+  mapped task's cleanup failures showed nowhere on its row; the last users are found with one
+  search per user (it was a search per pair: 0.8 s for 800 users); a data edge from a user to
+  what follows its group stays; a resource without users and with `blocking=False` gets its
+  dashed link; the Cleanup tab no longer claims a task without rows has no `cleanup=`; two
+  docstrings (`blocking`, the cleanup's duration over all its tries).
+
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before
   `Started`) and `<attempt_id>.handles` (a line each, on disk before the task hears of it) in the

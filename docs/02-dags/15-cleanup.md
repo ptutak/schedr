@@ -102,7 +102,14 @@ The attempt holds its worker slot through cleanup, retries and their delays. Its
 A cleanup that still fails after its retries fails the run, even if the task succeeded. See
 [State and failures](../03-guide/07-failures.md) for what happens when a worker stops.
 
+## Seeing cleanup
+
+The run's task status can add `cleanup failed` or `cleanup lost` after the state and outcome.
+The task panel's Cleanup tab shows each attempt's cleanup and handles; see [the UI](../03-guide/12-ui.md#the-task-panel).
+
 ## Testing
 
 `with task_context() as ctx:` records calls to `cleanup_handle` in `ctx.handles`. A test can
 inspect the list and call the cleanup function itself. See [Testing a DAG](07-testing.md#one-task-and-its-context).
+
+Use [`run_dag`](07-testing.md#run_dag) to assert the task and attempt cleanup results.

@@ -72,6 +72,17 @@ async fn api_over(
     task: Json,
     instances: &[(&str, i32, TaskInstanceState)],
 ) -> (axum::Router, Database, String) {
+    api_of(params, &[task], &json!([]), instances).await
+}
+
+/// The API over DAG `sync` with `tasks`, `resources` and `params`, and a running run of it
+/// with `instances`.
+async fn api_of(
+    params: Option<Json>,
+    tasks: &[Json],
+    resources: &Json,
+    instances: &[(&str, i32, TaskInstanceState)],
+) -> (axum::Router, Database, String) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -89,8 +100,9 @@ async fn api_over(
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
-        "tasks": [task],
+        "tasks": tasks,
         "edges": [],
+        "resources": resources,
         "params": params,
     }))
     .unwrap();
@@ -376,6 +388,41 @@ async fn runs_are_listed_and_read_with_their_tasks_and_attempts() {
             StatusCode::NOT_FOUND,
             json!({"error": format!("no command `{missing}`")})
         )
+    );
+}
+
+#[tokio::test]
+async fn a_runs_resources_are_shown_with_their_state() {
+    let task = |id: &str| {
+        json!({
+            "id": id, "kind": "empty",
+            "settings": serde_json::to_value(schedr_model::TaskSettings::default()).unwrap(),
+            "output_type": {"type": "none"}
+        })
+    };
+    let tasks = ["db", "db.cleanup", "load", "tmp", "tmp.cleanup"].map(task);
+    let resources = json!([
+        {"setup": "db", "cleanup": "db.cleanup", "users": ["load"]},
+        {"setup": "tmp", "cleanup": "tmp.cleanup", "users": [], "blocking": false}
+    ]);
+    let instances = [
+        ("db", -1, TaskInstanceState::Success),
+        ("db.cleanup", -1, TaskInstanceState::Scheduled),
+        ("load", -1, TaskInstanceState::Running),
+        ("tmp", -1, TaskInstanceState::Success),
+        ("tmp.cleanup", -1, TaskInstanceState::Failed),
+    ];
+    let (app, _db, run_id) = api_of(None, &tasks, &resources, &instances).await;
+    let (status, detail) = get(&app, &format!("/api/v1/runs/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        detail["resources"],
+        json!([
+            {"setup": "db", "cleanup": "db.cleanup", "users": ["load"], "blocking": true,
+             "state": "waiting_for_users"},
+            {"setup": "tmp", "cleanup": "tmp.cleanup", "users": [], "blocking": false,
+             "state": "cleanup_failed"}
+        ])
     );
 }
 
@@ -1664,4 +1711,30 @@ async fn a_connection_test_without_a_timeout_gets_the_configured_one() {
         })
         .collect();
     assert_eq!(timeouts, [120_000, 5_000]);
+}
+
+#[test]
+fn a_mapped_tasks_cleanup_is_the_worst_of_its_instances() {
+    use schedr_model::CleanupResult as R;
+    let instance = |index: i32, cleanup: Option<R>| schedr_db::reads::InstanceRecord {
+        task_id: TaskId::new("fetch").unwrap(),
+        map_index: index,
+        reason: None,
+        state: TaskInstanceState::Success,
+        outcome: None,
+        try_number: 1,
+        queued_reason: None,
+        cleanup_result: cleanup,
+        updated_at: ts(NOW),
+    };
+    let fetch = TaskId::new("fetch").unwrap();
+    let tasks = [
+        instance(-1, None),
+        instance(0, Some(R::Ok)),
+        instance(1, Some(R::Failed)),
+        instance(2, Some(R::WorkerLost)),
+    ];
+    assert_eq!(worst_cleanup(&tasks, &fetch).as_deref(), Some("failed"));
+    assert_eq!(worst_cleanup(&tasks[..2], &fetch).as_deref(), Some("ok"));
+    assert_eq!(worst_cleanup(&tasks[..1], &fetch), None);
 }

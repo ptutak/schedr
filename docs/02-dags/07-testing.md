@@ -183,6 +183,7 @@ returns a `RunResult` whether the run succeeded or failed. `for_` is `--for` and
 | `run_id`, `dag_id`, `kind` | The run. `kind` is `manual`. |
 | `state` | `success`, `failed` or `cancelled`. |
 | `planned_for`, `since` | The window. |
+| `resources` | A `ResourceResult` per resource name (its setup task ID). |
 | `tasks` | A `TaskResult` per task ID. A mapped task's is the task as a whole; `tasks["fetch"][1]` (or `.instances`) is one instance's. |
 
 | `TaskResult` | |
@@ -194,7 +195,36 @@ returns a `RunResult` whether the run succeeded or failed. `for_` is `--for` and
 | `output_json` | The output as stored. |
 | `log` | Every attempt's log. |
 | `attempts` | `attempt_id`, `try_number`, `status`, `exit_code`, `error_kind`, `error`, `started_at`, `ended_at`, `duration`. None for a mapped task as a whole (its instances have them). |
+| `cleanup` | The task cleanup result across attempts: `ok`, `failed`, `worker_lost`, `not_needed`, or `None` before a cleanup ends or when there is none. |
 | `map_index`, `instances` | An instance's index (`None` otherwise); a mapped task's instances (`None` for a task that isn't mapped). |
+
+Each attempt's `cleanup` is a `Cleanup`, or `None` when it has no cleanup data. Its
+`result` is `ok`, `failed`, `worker_lost`, `not_needed`, or `None` until it ends;
+`tries`, `duration`, `error_kind` and `error` can also be `None`. `moves` counts moves to
+another worker. `handles` is a tuple in registration order, as stored JSON objects with
+`handle_type` and `value`, masked as task data; it is not decoded into dataclasses.
+
+A `ResourceResult` has `setup`, `cleanup`, `users`, `blocking` and `state`. The state is
+`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or
+`not_needed`.
+
+For example, using the DAGs shown in [Cleanup](15-cleanup.md) and
+[Resources](16-resources.md):
+
+```python
+from schedr.testing import run_dag
+
+result = run_dag("examples/docs/cleanup.py", "cleanup")
+assert result.tasks["export"].cleanup == "ok"
+cleanup = result.tasks["export"].attempts[-1].cleanup
+assert cleanup is not None
+assert cleanup.result == "ok" and cleanup.tries == 1 and cleanup.moves == 0
+assert cleanup.handles[1]["handle_type"] == "ExportJob"
+assert cleanup.handles[1]["value"]["job_id"] == "job-2026-11-04"
+
+result = run_dag("examples/docs/resources.py", "cluster_job")
+assert result.resources["work.cluster"].state == "cleaned"
+```
 
 `duration` is what the worker measured. It is `None` for an attempt the master ended.
 `error` is the failure summary (`exception`, `message`, `traceback`).

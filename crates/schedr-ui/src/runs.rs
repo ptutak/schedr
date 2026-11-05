@@ -1,6 +1,7 @@
 //! The run pages: the runs of every deployment (one list, 32A), a run with its graph (30A),
 //! its tasks and its command history, and a task's panel beside the graph (31A): attempts,
-//! output (its last 64 KiB, 33), log, and cleanup (a shell until M4).
+//! output (its last 64 KiB, 33), log, and cleanup (M4.8e); the run's resources, as a table and
+//! on the graph (decisions 262, 272).
 
 use futures_util::StreamExt as _;
 use std::collections::BTreeMap;
@@ -13,7 +14,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jiff::Timestamp;
-use schedr_api::views::{AllRunsQuery, AttemptView, CommandView, RunView, TaskView};
+use schedr_api::views::{
+    AllRunsQuery, AttemptView, CleanupView, CommandView, ResourceView, RunView, TaskView,
+};
 use schedr_client::{ClientError, Transport, path_segment};
 use serde::Deserialize;
 
@@ -356,6 +359,23 @@ pub struct Node {
     pub panel: String,
     /// Whether its panel is open.
     pub selected: bool,
+    /// A resource's setup or cleanup: its cap's outline (rounded on top for the setup, at the
+    /// bottom for the cleanup, decision 262); empty for any other task.
+    pub cap: String,
+    /// The band across a cap's rounded side, in the resources' colour: `(x1, x2, y)`.
+    pub band: (f64, f64, f64),
+    /// The resource it sets up or cleans up; empty for any other task.
+    pub resource: String,
+}
+
+/// A resource's rail on the graph: a line in the side gutter from its setup to its cleanup,
+/// shown on hover or selection (decision 262).
+#[derive(Debug, Clone)]
+pub struct Rail {
+    /// The resource.
+    pub resource: String,
+    /// The SVG path.
+    pub path: String,
 }
 
 /// An edge of the graph.
@@ -363,7 +383,12 @@ pub struct Node {
 pub struct EdgeLine {
     /// The SVG path.
     pub path: String,
-    /// `data`, `order` or `selection` (its CSS class).
+    /// Its upstream task.
+    pub from: String,
+    /// Its downstream task.
+    pub to: String,
+    /// `data`, `order`, `selection` or `requirement`, with `released` for the link to a
+    /// cleanup nothing waits for (its CSS classes).
     pub kind: String,
     /// The outcomes it is taken on (`Rows | Unavailable`); empty for any.
     pub on: String,
@@ -393,6 +418,8 @@ pub struct Graph {
     pub edges: Vec<EdgeLine>,
     /// The task groups' boxes, outer before inner (decision 65).
     pub groups: Vec<GroupFrame>,
+    /// The resources' rails.
+    pub rails: Vec<Rail>,
 }
 
 /// A task group's box on the graph.
@@ -433,6 +460,39 @@ pub struct TaskRow {
     pub updated_at: String,
 }
 
+/// A resource's row in the run's table: one row in two parts, its setup and its cleanup
+/// (decision 262).
+#[derive(Debug, Clone)]
+pub struct ResourceRow {
+    /// Its name: its setup's task ID.
+    pub name: String,
+    /// Its state (`waiting_for_users`, `cleaned`, ...; also its CSS class).
+    pub state: String,
+    /// The state as people read it (`waiting for users`).
+    pub status: String,
+    /// The setup: its state, panel and page.
+    pub setup: ResourcePart,
+    /// The cleanup: its state, panel and page.
+    pub cleanup: ResourcePart,
+    /// The tasks that use it.
+    pub users: String,
+    /// Whether what follows its group waits for its cleanup.
+    pub blocking: bool,
+}
+
+/// A resource's setup or cleanup in its row.
+#[derive(Debug, Clone)]
+pub struct ResourcePart {
+    /// Its task's ID.
+    pub task_id: String,
+    /// Its task's state (also its CSS class).
+    pub state: String,
+    /// Its panel (htmx).
+    pub panel: String,
+    /// The run page with its panel open.
+    pub href: String,
+}
+
 /// A command about the run.
 #[derive(Debug, Clone)]
 pub struct CommandRow {
@@ -469,6 +529,7 @@ struct RunPage {
     params: Vec<(String, String)>,
     graph: Graph,
     tasks: Vec<TaskRow>,
+    resources: Vec<ResourceRow>,
     commands: Vec<CommandRow>,
     /// The open panel's HTML (rendered by [`PanelFragment`]), empty when none is open.
     panel: String,
@@ -587,6 +648,9 @@ pub async fn run<T: Transport>(
                 .iter()
                 .map(|c| command_row(&page, c))
                 .collect(),
+            resources: (detail.resources.iter())
+                .map(|r| resource_row(&run_href, r, &detail.tasks))
+                .collect(),
             run: detail.run,
             graph,
             tasks,
@@ -640,11 +704,26 @@ fn summary(state: &str, tasks: &[TaskView]) -> String {
     }
 }
 
-/// `state · outcome`, the outcome only when it says something (`SUCCESS` doesn't).
+/// `state · outcome · cleanup`, each part only when it says something: `SUCCESS` doesn't, nor
+/// a cleanup that went well or wasn't needed.
 fn status(task: &TaskView) -> String {
-    match task.outcome.as_deref() {
-        Some(outcome) if outcome != "SUCCESS" => format!("{} · {outcome}", task.state),
-        _ => task.state.clone(),
+    let mut line = task.state.clone();
+    if let Some(outcome) = task.outcome.as_deref().filter(|o| *o != "SUCCESS") {
+        let _ = write!(line, " · {outcome}");
+    }
+    if let Some(cleanup) = cleanup_said(task.cleanup.as_deref()) {
+        let _ = write!(line, " · {cleanup}");
+    }
+    line
+}
+
+/// How a cleanup ended, when it says something: `cleanup failed`, `cleanup lost` (its worker
+/// was lost with what it should have cleaned up).
+fn cleanup_said(result: Option<&str>) -> Option<&'static str> {
+    match result? {
+        "failed" => Some("cleanup failed"),
+        "worker_lost" => Some("cleanup lost"),
+        _ => None,
     }
 }
 
@@ -674,6 +753,30 @@ fn task_row(page: &Page, run_href: &str, task: &TaskView) -> TaskRow {
         tries: task.try_number,
         reason: task.reason.clone().unwrap_or_default(),
         updated_at: page.time(&task.updated_at),
+    }
+}
+
+fn resource_row(run_href: &str, resource: &ResourceView, tasks: &[TaskView]) -> ResourceRow {
+    let part = |task_id: &str| {
+        let segment = path_segment(task_id);
+        ResourcePart {
+            task_id: task_id.to_owned(),
+            state: tasks
+                .iter()
+                .find(|t| t.task_id == task_id && t.map_index == -1)
+                .map_or_else(|| "scheduled".to_owned(), |t| t.state.clone()),
+            panel: format!("{run_href}/tasks/{segment}"),
+            href: format!("{run_href}?task={segment}"),
+        }
+    };
+    ResourceRow {
+        name: resource.setup.clone(),
+        state: resource.state.clone(),
+        status: resource.state.replace('_', " "),
+        setup: part(&resource.setup),
+        cleanup: part(&resource.cleanup),
+        users: resource.users.join(", "),
+        blocking: resource.blocking,
     }
 }
 
@@ -761,7 +864,9 @@ fn graph_of(
         })
         .unwrap_or_default();
     let index = |id: &str| ids.iter().position(|i| i == id);
-    let edges = joined_edges(dag, index);
+    let resources = resources_of(dag, index);
+    let mut edges = joined_edges(dag, index);
+    resource_edges(&mut edges, &resources);
     let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _, _)| (*f, *t)).collect();
     let (group_ids, specs, node_group) = groups_of(dag, &ids);
     let layout = graph::layout_grouped(ids.len(), &pairs, &specs, &node_group);
@@ -774,9 +879,14 @@ fn graph_of(
             let label = task
                 .and_then(|t| t.instances)
                 .map_or_else(|| fitted(id, 22), |n| format!("{} ×{n}", fitted(id, 17)));
+            let (left, top) = (placed.x - NODE_WIDTH / 2.0, placed.y - NODE_HEIGHT / 2.0);
+            let (cap, band, resource) = cap_of(&resources, &ids, index(id), left, top);
             Node {
-                left: placed.x - NODE_WIDTH / 2.0,
-                top: placed.y - NODE_HEIGHT / 2.0,
+                left,
+                top,
+                cap,
+                band,
+                resource,
                 task_id: id.clone(),
                 label,
                 counts: task
@@ -805,6 +915,8 @@ fn graph_of(
             let not_taken = not_taken(&edges[route.edge], upstream, chose, &ids[*to]);
             let end = route.points.last().copied().unwrap_or_default();
             EdgeLine {
+                from: ids[*from].clone(),
+                to: ids[*to].clone(),
                 path: path_of(&route.points),
                 kind: kind.clone(),
                 on: on
@@ -840,6 +952,200 @@ fn graph_of(
         nodes,
         edges: lines,
         groups,
+        rails: rails_of(&resources, &ids, &layout.nodes),
+    }
+}
+
+/// The users no other user follows: one search from each user over the lines (`O(users ×
+/// lines)`), each line read once per search.
+fn last_users(edges: &[Joined], users: &[usize]) -> Vec<usize> {
+    let size = edges
+        .iter()
+        .map(|(f, t, _, _)| f.max(t) + 1)
+        .max()
+        .unwrap_or(0);
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); size];
+    for (f, t, _, _) in edges {
+        next[*f].push(*t);
+    }
+    let is_user: Vec<bool> = (0..size).map(|i| users.contains(&i)).collect();
+    users
+        .iter()
+        .copied()
+        .filter(|&user| {
+            let mut seen = vec![false; size];
+            let mut stack = next.get(user).cloned().unwrap_or_default();
+            while let Some(at) = stack.pop() {
+                if std::mem::replace(&mut seen[at], true) {
+                    continue;
+                }
+                if at != user && is_user[at] {
+                    return false;
+                }
+                stack.extend(&next[at]);
+            }
+            true
+        })
+        .collect()
+}
+
+/// A node's cap, the band across its rounded side, and its resource, for the task at `at` in
+/// `ids`, placed at `(left, top)`: none for a task that is neither a setup nor a cleanup.
+fn cap_of(
+    resources: &[GraphResource],
+    ids: &[String],
+    at: Option<usize>,
+    left: f64,
+    top: f64,
+) -> (String, (f64, f64, f64), String) {
+    let (from, to) = (left + CAP_RADIUS, left + NODE_WIDTH - CAP_RADIUS);
+    if let Some(r) = resources.iter().find(|r| Some(r.setup) == at) {
+        return (
+            cap_path(left, top, true),
+            (from, to, top + 1.5),
+            ids[r.setup].clone(),
+        );
+    }
+    if let Some(r) = resources.iter().find(|r| Some(r.cleanup) == at) {
+        let band = (from, to, top + NODE_HEIGHT - 1.5);
+        return (cap_path(left, top, false), band, ids[r.setup].clone());
+    }
+    (String::new(), (0.0, 0.0, 0.0), String::new())
+}
+
+/// The resources' rails: from each setup's left side out into the gutter, down, and into its
+/// cleanup's left side.
+fn rails_of(resources: &[GraphResource], ids: &[String], nodes: &[graph::Placed]) -> Vec<Rail> {
+    resources
+        .iter()
+        .filter_map(|r| {
+            let (setup, cleanup) = (nodes.get(r.setup)?, nodes.get(r.cleanup)?);
+            let gutter = setup.x.min(cleanup.x) - NODE_WIDTH / 2.0 - RAIL_GUTTER;
+            let (from, to) = (setup.x - NODE_WIDTH / 2.0, cleanup.x - NODE_WIDTH / 2.0);
+            Some(Rail {
+                resource: ids[r.setup].clone(),
+                path: format!(
+                    "M{from:.1},{:.1} H{gutter:.1} V{:.1} H{to:.1}",
+                    setup.y, cleanup.y
+                ),
+            })
+        })
+        .collect()
+}
+
+/// How far left of its tasks a resource's rail runs (within the graph's margin).
+const RAIL_GUTTER: f64 = 8.0;
+
+/// The radius of a cap's rounded side.
+const CAP_RADIUS: f64 = 14.0;
+
+/// A cap's outline at `(left, top)`: rounded on top (a setup) or at the bottom (a cleanup).
+fn cap_path(left: f64, top: f64, setup: bool) -> String {
+    let (w, h, r, k) = (NODE_WIDTH, NODE_HEIGHT, CAP_RADIUS, 3.0);
+    let (right, bottom) = (left + w, top + h);
+    // The other side's corners stay slightly rounded, like the other boxes.
+    if setup {
+        format!(
+            "M{left:.1},{:.1} A{r},{r} 0 0 1 {:.1},{top:.1} H{:.1} A{r},{r} 0 0 1 {right:.1},{:.1} \
+             V{:.1} A{k},{k} 0 0 1 {:.1},{bottom:.1} H{:.1} A{k},{k} 0 0 1 {left:.1},{:.1} Z",
+            top + r,
+            left + r,
+            right - r,
+            top + r,
+            bottom - k,
+            right - k,
+            left + k,
+            bottom - k,
+        )
+    } else {
+        format!(
+            "M{left:.1},{:.1} A{k},{k} 0 0 1 {:.1},{top:.1} H{:.1} A{k},{k} 0 0 1 {right:.1},{:.1} \
+             V{:.1} A{r},{r} 0 0 1 {:.1},{bottom:.1} H{:.1} A{r},{r} 0 0 1 {left:.1},{:.1} Z",
+            top + k,
+            left + k,
+            right - k,
+            top + k,
+            bottom - r,
+            right - r,
+            left + r,
+            bottom - r,
+        )
+    }
+}
+
+/// A resource on the graph: its setup, cleanup and users by their position among the tasks.
+#[derive(Debug)]
+struct GraphResource {
+    setup: usize,
+    cleanup: usize,
+    users: Vec<usize>,
+    blocking: bool,
+}
+
+/// The DAG's resources whose setup and cleanup it has (`index` gives a task ID's position).
+fn resources_of(
+    dag: &serde_json::Value,
+    index: impl Fn(&str) -> Option<usize>,
+) -> Vec<GraphResource> {
+    dag["resources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            Some(GraphResource {
+                setup: index(r["setup"].as_str()?)?,
+                cleanup: index(r["cleanup"].as_str()?)?,
+                users: r["users"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|u| index(u.as_str()?))
+                    .collect(),
+                blocking: r["blocking"].as_bool().unwrap_or(true),
+            })
+        })
+        .collect()
+}
+
+/// The lines around resources as the graph draws them: the users' requirement on the cleanup,
+/// from the last users only (decision 262), instead of the setup's own link to it; with
+/// `blocking`, what follows the group drawn from the cleanup alone, the users' edges to it left
+/// out (decision 272); without, the link to the cleanup dashed (`released`).
+fn resource_edges(edges: &mut Vec<Joined>, resources: &[GraphResource]) {
+    for resource in resources {
+        let (setup, cleanup) = (resource.setup, resource.cleanup);
+        let kind = if resource.blocking {
+            "requirement"
+        } else {
+            "requirement released"
+        };
+        if resource.users.is_empty() {
+            // The setup's own link is the cleanup's only one: dashed when nothing waits for it.
+            for edge in edges.iter_mut() {
+                if (edge.0, edge.1) == (setup, cleanup) && edge.2 == "requirement" {
+                    kind.clone_into(&mut edge.2);
+                }
+            }
+            continue;
+        }
+        let last = last_users(edges, &resource.users);
+        edges.retain(|(f, t, kind, _)| !((*f, *t) == (setup, cleanup) && kind != "data"));
+        if resource.blocking {
+            let held: Vec<usize> = edges
+                .iter()
+                .filter(|(f, _, _, _)| *f == cleanup)
+                .map(|(_, t, _, _)| *t)
+                .collect();
+            // A data edge stays: it says where the input comes from, not only the order.
+            edges.retain(|(f, t, kind, _)| {
+                kind == "data" || !(resource.users.contains(f) && held.contains(t))
+            });
+        }
+        for user in last {
+            if !edges.iter().any(|(f, t, _, _)| (*f, *t) == (user, cleanup)) {
+                edges.push((user, cleanup, kind.to_owned(), None));
+            }
+        }
     }
 }
 
@@ -1112,8 +1418,34 @@ pub enum TabBody {
     NoLog(String),
     /// A mapped task's instances, in order (decision 83).
     Instances(Vec<InstanceRow>),
-    /// The cleanup: nothing until M4's per-task cleanups (a shell, 25B).
-    Cleanup,
+    /// The cleanup: what ran after each attempt, and the resource the task sets up or
+    /// cleans up.
+    Cleanup {
+        /// The attempts' cleanups, oldest first: only attempts that have one.
+        rows: Vec<CleanupRow>,
+        /// The resource the task belongs to: what it is, and the other part's task.
+        resource: Option<(String, ResourcePart)>,
+    },
+}
+
+/// An attempt's cleanup in the panel.
+#[derive(Debug, Clone)]
+pub struct CleanupRow {
+    /// The attempt's try number.
+    pub try_number: u32,
+    /// How it ended (also its CSS class): `ok`, `failed`, `worker_lost`, `not_needed`, or
+    /// `pending` until it has.
+    pub result: String,
+    /// The tries it made, and the moves to another worker: `2 tries · moved once`.
+    pub tries: String,
+    /// How long its tries ran.
+    pub duration: String,
+    /// The error of a failed cleanup.
+    pub error: String,
+    /// The traceback, when there is one.
+    pub traceback: String,
+    /// The handles the attempt registered: their type and value (masked).
+    pub handles: Vec<(String, String)>,
 }
 
 #[derive(Template)]
@@ -1300,7 +1632,16 @@ async fn task_panel<T: Transport>(
         "instances" => TabBody::Instances(instance_rows(&detail.tasks, &at)),
         "output" => output_tab(deployment, run_id, &at).await?,
         "logs" => log_tab(deployment, run_id, &at, query, tail_interval).await?,
-        "cleanup" => TabBody::Cleanup,
+        "cleanup" => {
+            let attempts = client
+                .instance_attempts(run_id, task_id, map_index)
+                .await
+                .map_err(|error| Failure::unavailable(&deployment.name, &error))?;
+            TabBody::Cleanup {
+                rows: attempts.attempts.iter().filter_map(cleanup_row).collect(),
+                resource: resource_of(&detail.resources, &detail.tasks, task_id, run_href),
+            }
+        }
         _ => {
             let attempts = client
                 .instance_attempts(run_id, task_id, map_index)
@@ -1639,6 +1980,95 @@ fn attempt_row(page: &Page, attempt: &AttemptView) -> AttemptRow {
     }
 }
 
+/// What a task is to a resource: `sets up` or `cleans up`, with the resource's other part.
+fn resource_of(
+    resources: &[ResourceView],
+    tasks: &[TaskView],
+    task_id: &str,
+    run_href: &str,
+) -> Option<(String, ResourcePart)> {
+    resources.iter().find_map(|r| {
+        let row = || resource_row(run_href, r, tasks);
+        if r.setup == task_id {
+            Some((
+                format!("It sets up resource {}; its cleanup is", r.setup),
+                row().cleanup,
+            ))
+        } else if r.cleanup == task_id {
+            Some((
+                format!("It cleans up resource {}, set up by", r.setup),
+                row().setup,
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+/// An attempt's cleanup row; none for an attempt without one.
+fn cleanup_row(attempt: &AttemptView) -> Option<CleanupRow> {
+    let cleanup: &CleanupView = attempt.cleanup.as_ref()?;
+    let mut tries = match cleanup.tries {
+        Some(1) => "1 try".to_owned(),
+        Some(n) => format!("{n} tries"),
+        None => String::new(),
+    };
+    if cleanup.moves > 0 {
+        let moved = match cleanup.moves {
+            1 => "moved once".to_owned(),
+            n => format!("moved {n} times"),
+        };
+        tries = if tries.is_empty() {
+            moved
+        } else {
+            format!("{tries} · {moved}")
+        };
+    }
+    let summary = cleanup.error_summary.as_ref();
+    let exception = summary
+        .and_then(|s| {
+            let kind = s["exception"].as_str()?;
+            let message = s["message"].as_str().unwrap_or_default();
+            Some(if message.is_empty() {
+                kind.to_owned()
+            } else {
+                format!("{kind}: {message}")
+            })
+        })
+        .unwrap_or_default();
+    let error = match (cleanup.error_kind.as_deref(), exception.is_empty()) {
+        (Some(kind), true) => kind.to_owned(),
+        (Some(kind), false) => format!("{kind} · {exception}"),
+        (None, _) => exception,
+    };
+    Some(CleanupRow {
+        try_number: attempt.try_number,
+        result: cleanup
+            .result
+            .clone()
+            .unwrap_or_else(|| "pending".to_owned()),
+        tries,
+        duration: cleanup.duration_ms.map(duration).unwrap_or_default(),
+        // Masked again here, as the attempts' errors.
+        error: schedr_config::masked::mask_text(&error),
+        traceback: schedr_config::masked::mask_text(
+            summary
+                .and_then(|s| s["traceback"].as_str())
+                .unwrap_or_default(),
+        ),
+        handles: cleanup
+            .handles
+            .iter()
+            .map(|h| {
+                let kind = h["handle_type"].as_str().unwrap_or("?").to_owned();
+                let mut value = h["value"].clone();
+                schedr_config::masked::mask_data(&mut value);
+                (kind, value.to_string())
+            })
+            .collect(),
+    })
+}
+
 /// The end of `text`, at most `limit` bytes, from a character boundary; and whether it was
 /// cut.
 fn tail(text: &str, limit: usize) -> (&str, bool) {
@@ -1685,4 +2115,24 @@ fn no_deployment(page: &Page, name: &str) -> Response {
 
 fn bad_request_page(page: &Page, message: &str) -> Response {
     crate::pages::error_page(page, "Bad request", message, StatusCode::BAD_REQUEST)
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn the_last_users_are_those_no_other_user_follows_and_many_are_quick() {
+        // 0 -> 1 -> 2, and 3 alone: 2 and 3 are last.
+        let edge = |f: usize, t: usize| (f, t, "data".to_owned(), None);
+        let edges = vec![edge(0, 1), edge(1, 2), edge(5, 3)];
+        assert_eq!(last_users(&edges, &[0, 1, 2, 3]), [2, 3]);
+        // Thousands of independent users: one search each, not one per pair (Codex's review).
+        let n = 3_000;
+        let wide: Vec<Joined> = (1..=n).map(|u| edge(0, u)).collect();
+        let users: Vec<usize> = (1..=n).collect();
+        let started = std::time::Instant::now();
+        assert_eq!(last_users(&wide, &users).len(), n);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 }

@@ -29,6 +29,17 @@
             "description": "Its ID.",
             "type": "string"
           },
+          "cleanup": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CleanupView",
+                "description": "Its cleanup; none for a task without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "core_dumped": {
             "description": "Whether its process dumped core (ended by a signal).",
             "type": "boolean"
@@ -162,6 +173,68 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "CleanupView": {
+        "description": "An attempt's cleanup.",
+        "properties": {
+          "duration_ms": {
+            "description": "How long its tries ran, measured by the worker.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error_kind": {
+            "description": "The error kind of its last failed try.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_summary": {
+            "description": "The structured error summary of its last failed try.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "handles": {
+            "description": "The handles the attempt registered (`{\"handle_type\": ..., \"value\": ...}`), masked, in\norder.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "moves": {
+            "description": "How many times it moved to another worker (`cleanup_anywhere`).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result": {
+            "description": "How it ended (`ok`, `failed`, `worker_lost`, `not_needed`); none until it has.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tries": {
+            "description": "The tries it made.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "moves",
+          "handles"
+        ],
         "type": "object"
       },
       "CommandList": {
@@ -864,6 +937,42 @@
         ],
         "type": "object"
       },
+      "ResourceView": {
+        "description": "A resource of a run: its setup, its cleanup and its users.",
+        "properties": {
+          "blocking": {
+            "description": "Whether what follows its group waits for its cleanup.",
+            "type": "boolean"
+          },
+          "cleanup": {
+            "description": "Its cleanup's task ID.",
+            "type": "string"
+          },
+          "setup": {
+            "description": "Its name: its setup's task ID.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`setting_up`, `waiting_for_users`, `cleaning_up`, `cleaned`, `cleanup_failed` or\n`not_needed`.",
+            "type": "string"
+          },
+          "users": {
+            "description": "The tasks that use it, in the DAG's order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "setup",
+          "cleanup",
+          "users",
+          "blocking",
+          "state"
+        ],
+        "type": "object"
+      },
       "RootConnections": {
         "description": "One root's connections.",
         "properties": {
@@ -898,6 +1007,13 @@
           "params": {
             "description": "Its parameters as JSON, masked like a task's output (decision 134); `{}` for a DAG\nthat takes none.",
             "type": "object"
+          },
+          "resources": {
+            "description": "Its resources, in the DAG's order (decision 275: each one's state from its two tasks).",
+            "items": {
+              "$ref": "#/components/schemas/ResourceView"
+            },
+            "type": "array"
           },
           "run": {
             "$ref": "#/components/schemas/RunView",
@@ -1004,6 +1120,13 @@
       "TaskView": {
         "description": "A task of a run.",
         "properties": {
+          "cleanup": {
+            "description": "How its cleanups ended (`ok`, `failed`, `worker_lost`, `not_needed`): the last, unless\none failed; none for a task without a cleanup, or before its first one ends.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "instances": {
             "description": "A mapped task as a whole: how many instances it has (0 before it expands, or for an\nempty list); `null` for an unmapped task and for an instance.",
             "minimum": 0,

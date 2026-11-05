@@ -31,7 +31,7 @@
 </div>
 <div class="run-view">
   <section class="graph" id="live-graph">
-    <div class="legend"><span class="edge-key data"></span> takes the output <span class="edge-key order"></span> runs after</div>
+    <div class="legend"><span class="edge-key data"></span> takes the output <span class="edge-key order"></span> runs after <span class="edge-key requirement"></span> needs a resource</div>
     {% if graph.nodes.is_empty() %}
     <p class="empty">This DAG has no tasks.</p>
     {% else %}
@@ -42,12 +42,14 @@
       </defs>
       {% for group in graph.groups %}<g class="group"><title>group {{ group.group_id }}</title><rect class="group-box" x="{{ group.left }}" y="{{ group.top }}" width="{{ group.width }}" height="{{ group.height }}" rx="10"></rect><text class="group-label" x="{{ group.left + 10.0 }}" y="{{ group.top + 15.0 }}">{{ group.label }}</text></g>
       {% endfor %}
-      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}{% if edge.not_taken %} not-taken{% endif %}" d="{{ edge.path }}" marker-end="url(#arrow)">{% if !edge.on.is_empty() %}<title>on {{ edge.on }}{% if edge.not_taken %} (not taken){% endif %}</title>{% endif %}</path>{% if !edge.on.is_empty() %}<text class="edge-on{% if edge.not_taken %} not-taken{% endif %}" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.on }}</text>{% endif %}
+      {% for rail in graph.rails %}<path class="rail" data-resource="{{ rail.resource }}" d="{{ rail.path }}"><title>resource {{ rail.resource }}</title></path>
+      {% endfor %}
+      {% for edge in graph.edges %}<path class="edge {{ edge.kind }}{% if edge.not_taken %} not-taken{% endif %}" data-from="{{ edge.from }}" data-to="{{ edge.to }}" d="{{ edge.path }}" marker-end="url(#arrow)">{% if !edge.on.is_empty() %}<title>on {{ edge.on }}{% if edge.not_taken %} (not taken){% endif %}</title>{% endif %}</path>{% if !edge.on.is_empty() %}<text class="edge-on{% if edge.not_taken %} not-taken{% endif %}" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.on }}</text>{% endif %}
       {% endfor %}
       {% for node in graph.nodes %}
-      <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}">
-        <title>{{ node.task_id }} · {{ node.state }}</title>
-        <rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>
+      <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}"{% if !node.resource.is_empty() %} data-resource="{{ node.resource }}"{% endif %}>
+        <title>{{ node.task_id }} · {{ node.state }}{% if !node.resource.is_empty() %} · resource {{ node.resource }}{% endif %}</title>
+        {% if node.cap.is_empty() %}<rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>{% else %}<path class="box cap {{ node.state }}" d="{{ node.cap }}"></path><line class="cap-band" x1="{{ node.band.0 }}" x2="{{ node.band.1 }}" y1="{{ node.band.2 }}" y2="{{ node.band.2 }}"></line>{% endif %}
         <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
         <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{% if node.counts.is_empty() %}{{ node.state }}{% else %}{{ node.counts }}{% endif %}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
       </a>
@@ -60,14 +62,31 @@
 </div>
 <script>
 // The graph marks the task whose panel is shown (none after an error), after any swap: a
-// new panel, or the graph read again.
+// new panel, or the graph read again; a selected setup or cleanup shows its resource's rail.
+function schedrRails(hovered) {
+  var shown = {};
+  document.querySelectorAll("svg.dag a.node.selected[data-resource]").forEach(function (node) {
+    shown[node.getAttribute("data-resource")] = true;
+  });
+  if (hovered) { shown[hovered] = true; }
+  document.querySelectorAll("svg.dag .rail").forEach(function (rail) {
+    rail.classList.toggle("shown", shown[rail.getAttribute("data-resource")] === true);
+  });
+}
 document.addEventListener("htmx:afterSettle", function () {
   var head = document.querySelector("#task-panel .panel-head[data-task]");
   var task = head ? head.getAttribute("data-task") : null;
   document.querySelectorAll("svg.dag a.node").forEach(function (node) {
     node.classList.toggle("selected", node.getAttribute("data-task") === task);
   });
+  schedrRails(null);
 });
+// A resource's rail on hover of its setup or cleanup (decision 262).
+document.addEventListener("mouseover", function (event) {
+  var node = event.target.closest ? event.target.closest("svg.dag a.node[data-resource]") : null;
+  schedrRails(node ? node.getAttribute("data-resource") : null);
+});
+document.addEventListener("DOMContentLoaded", function () { schedrRails(null); });
 </script>
 <div id="live-tasks">
 <h2>Tasks</h2>
@@ -90,7 +109,24 @@ document.addEventListener("htmx:afterSettle", function () {
 </table>
 {% endif %}
 <h2>Resources</h2>
+{% if resources.is_empty() %}
 <p class="empty">This run has no resources.</p>
+{% else %}
+<table class="list resources">
+  <thead><tr><th>Resource</th><th>State</th><th>Setup</th><th>Cleanup</th><th>Used by</th></tr></thead>
+  <tbody>
+  {% for resource in resources %}
+    <tr>
+      <td class="mono">{{ resource.name }}</td>
+      <td><span class="resource-state {{ resource.state }}">{{ resource.status }}</span>{% if !resource.blocking %} <span class="dim" title="What follows its group doesn't wait for its cleanup">not waited for</span>{% endif %}</td>
+      <td class="part setup"><a class="mono" href="{{ resource.setup.href }}" hx-get="{{ resource.setup.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ resource.setup.href }}">{{ resource.setup.task_id }}</a> <span class="state {{ resource.setup.state }}">{{ resource.setup.state }}</span></td>
+      <td class="part cleanup"><a class="mono" href="{{ resource.cleanup.href }}" hx-get="{{ resource.cleanup.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ resource.cleanup.href }}">{{ resource.cleanup.task_id }}</a> <span class="state {{ resource.cleanup.state }}">{{ resource.cleanup.state }}</span></td>
+      <td class="mono dim">{{ resource.users }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 <h2>Commands</h2>
 {% if commands.is_empty() %}
 <p class="empty">No commands about this run.</p>

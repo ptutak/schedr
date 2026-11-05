@@ -145,3 +145,10 @@ Cancelling a run still runs the cleanups of resources that were set up, includin
 retries. The run ends `cancelled`, unless a cleanup or another task fails, in which case it
 ends `failed`. `schedr tasks cancel` refuses to cancel a resource cleanup. A cleanup that
 fails after its retries fails the run.
+
+## Seeing and testing resources
+
+The run's Resources table shows each resource's state, setup, cleanup and users. In the
+[graph](../03-guide/12-ui.md#the-graph), setup and cleanup are caps joined by a rail,
+with lines to their users; the task panel's Cleanup tab links the two parts. Use
+[`run_dag`](07-testing.md#run_dag) to assert a resource's state.

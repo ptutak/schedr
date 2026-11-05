@@ -76,8 +76,40 @@
     </tbody>
   </table>
   {% endif %}
-{% when TabBody::Cleanup %}
-  <p class="empty">This task has no cleanup.</p>
+{% when TabBody::Cleanup with { rows, resource } %}
+  {% if let Some((what, other)) = resource %}
+  <p class="resource-note">{{ what }} <a class="mono" href="{{ other.href }}" hx-get="{{ other.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ other.href }}">{{ other.task_id }}</a> <span class="state {{ other.state }}">{{ other.state }}</span>.</p>
+  {% endif %}
+  {% if rows.is_empty() %}
+  <p class="empty">No cleanup has run after its attempts (yet).</p>
+  {% else %}
+  <table class="list cleanups">
+    <thead><tr><th>Try</th><th>Cleanup</th><th>Tries</th><th>Took</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.try_number }}</td>
+        <td><span class="cleanup {{ row.result }}">{{ row.result }}</span></td>
+        <td>{{ row.tries }}</td>
+        <td>{{ row.duration }}</td>
+      </tr>
+      {% if !row.error.is_empty() %}
+      <tr class="error-row"><td></td><td colspan="3">
+        <span class="error">{{ row.error }}</span>
+        {% if !row.traceback.is_empty() %}<details><summary>Traceback</summary><pre class="log">{{ row.traceback }}</pre></details>{% endif %}
+      </td></tr>
+      {% endif %}
+      {% if !row.handles.is_empty() %}
+      <tr class="handles-row"><td></td><td colspan="3">
+        <details><summary>{{ row.handles.len() }} handle{% if row.handles.len() != 1 %}s{% endif %}</summary>
+        <ul class="handles">{% for (kind, value) in row.handles %}<li><span class="mono">{{ kind }}</span> <code>{{ value }}</code></li>{% endfor %}</ul>
+        </details>
+      </td></tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 {% endmatch %}
 </div>
 </div>

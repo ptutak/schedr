@@ -20,6 +20,7 @@
   --waiting-bg: #fdf1d8;
   --neutral-bg: #eceef1;
   --edge: #8b93a0;
+  --resource: #8e3aa8;
   /* The 16 terminal colours of logs. */
   --ansi-0: #1d2127; --ansi-1: #b42318; --ansi-2: #1e7b3a; --ansi-3: #8a5a00;
   --ansi-4: #1f5fbf; --ansi-5: #8e3aa8; --ansi-6: #0f7a85; --ansi-7: #5f6773;
@@ -45,6 +46,7 @@
   --waiting-bg: #3a2e14;
   --neutral-bg: #2a2f37;
   --edge: #6b7482;
+  --resource: #d79bf0;
   --ansi-0: #4b5260; --ansi-1: #ff8a80; --ansi-2: #6fd28d; --ansi-3: #f2c46b;
   --ansi-4: #7fb0ff; --ansi-5: #d79bf0; --ansi-6: #62d3dc; --ansi-7: #c9ced6;
   --ansi-8: #7d8592; --ansi-9: #ffaba3; --ansi-10: #95e3ad; --ansi-11: #f7d78f;
@@ -185,6 +187,14 @@ svg.dag .group-box { fill: var(--neutral-bg); fill-opacity: 0.45; stroke: var(--
 svg.dag text.group-label { fill: var(--dim); font: 600 11px system-ui, sans-serif; letter-spacing: 0.02em; }
 svg.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
 svg.dag .edge.order { stroke-dasharray: 5 4; }
+/* A resource's requirement (uses=, decision 262): dotted, in the resources' colour; the link to a
+   cleanup nothing waits for (blocking=False, decision 272) dashed. */
+svg.dag .edge.requirement { stroke: var(--resource); stroke-dasharray: 1.5 3; stroke-linecap: round; }
+svg.dag .edge.requirement.released { stroke-dasharray: 6 4; opacity: 0.7; }
+.edge-key.requirement { border-top: 2px dotted var(--resource); }
+svg.dag .cap-band { stroke: var(--resource); stroke-width: 3; stroke-linecap: round; }
+svg.dag .rail { fill: none; stroke: var(--resource); stroke-width: 2; opacity: 0; transition: opacity 0.15s; pointer-events: none; }
+svg.dag .rail.shown { opacity: 0.9; }
 /* An edge taken on some outcomes: its label; faint once its outcome didn't happen. */
 svg.dag .edge-on { font-size: 11px; fill: var(--dim); }
 svg.dag .edge.not-taken, svg.dag .edge-on.not-taken { opacity: 0.35; }
@@ -344,3 +354,17 @@ td.connection-result .warning-text, td.connection-result .dim { font-size: 0.9em
 .command.unknown { border-color: var(--waiting); }
 .state.unknown { background: var(--waiting-bg); color: var(--waiting); }
 .connection-test:not(:empty) { margin-top: 4px; }
+
+/* A run's resources (M4.8e): one row in two parts, its setup and its cleanup (decision 262). */
+.resources .part .state { margin-left: 4px; }
+.resource-state { font-weight: 600; }
+.resource-state.cleaned { color: var(--ok); }
+.resource-state.cleanup_failed { color: var(--failed); }
+.resource-state.setting_up, .resource-state.cleaning_up { color: var(--running); }
+.resource-state.waiting_for_users { color: var(--resource); }
+.resource-state.not_needed { color: var(--dim); }
+.resource-note { color: var(--dim); }
+.cleanup.ok { color: var(--ok); }
+.cleanup.failed, .cleanup.worker_lost { color: var(--failed); }
+.cleanup.pending, .cleanup.not_needed { color: var(--dim); }
+ul.handles { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
