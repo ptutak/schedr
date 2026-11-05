@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use schedr_agent::ctx::{CtxInfo, channel, serve};
 use schedr_agent::handles::AttemptHandles;
+use schedr_agent::resource::AttemptResource;
 use schedr_model::ctx::CtxRun;
 use schedr_model::states::RunKind;
 use schedr_model::task::{CleanupRun, TaskCleanup};
@@ -33,6 +34,7 @@ fn info(version: &str) -> CtxInfo {
         version: version.into(),
         secrets: None,
         handles: None,
+        resource: None,
     }
 }
 
@@ -482,4 +484,171 @@ fn a_handle_may_be_given_whole_as_json() {
         handle_value(&[], Some(r#"{"a": [1]}"#)).unwrap(),
         json!({"a": [1]})
     );
+}
+
+/// Runs a `task-ctx resource` command against a served channel with `resource`.
+async fn resource_against_agent(
+    command: ResourceCommand,
+    resource: Option<Arc<AttemptResource>>,
+) -> Result<String, String> {
+    let (ours, theirs) = channel().unwrap();
+    let served = CtxInfo {
+        resource,
+        ..info("1.2.3")
+    };
+    let _serving = serve(ours, served);
+    let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let result = run_task_ctx_resource(&command, &env, "1.2.3", &mut out);
+        drop(theirs);
+        result.map(|()| String::from_utf8(out).unwrap())
+    })
+    .await
+    .unwrap()
+}
+
+fn resource_task(role: &Value, output_type: &Value) -> schedr_model::Task {
+    serde_json::from_value(json!({
+        "id": "cluster.cleanup",
+        "kind": "command",
+        "command": {"argv": [[{"text": "./x.sh"}]]},
+        "resource": role,
+        "settings": serde_json::to_value(schedr_model::TaskSettings::default()).unwrap(),
+        "output_type": output_type,
+    }))
+    .unwrap()
+}
+
+fn set(fields: &[&str]) -> ResourceCommand {
+    ResourceCommand::Set {
+        fields: fields.iter().map(|f| (*f).to_owned()).collect(),
+        json: None,
+    }
+}
+
+fn get(field: Option<&str>) -> ResourceCommand {
+    ResourceCommand::Get {
+        field: FieldArg {
+            field: field.map(str::to_owned),
+        },
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_setup_reports_its_value_checked_against_its_type() {
+    let ty = json!({"type": "typed_dict", "name": "Info", "fields": [
+        {"name": "cluster_id", "type": {"type": "str"}, "required": true},
+        {"name": "size", "type": {"type": "int"}, "required": false},
+    ]});
+    let task = resource_task(&json!({"role": "setup"}), &ty);
+    let resource = Arc::new(
+        AttemptResource::of(
+            &task,
+            &BTreeMap::new(),
+            Arc::new(schedr_agent::mask::MaskSet::new(4)),
+        )
+        .unwrap(),
+    );
+    // No coercion: `size=8` is text.
+    let misfit = resource_against_agent(set(&["cluster_id=c-1", "size=8"]), Some(resource.clone()))
+        .await
+        .unwrap_err();
+    assert!(misfit.contains("`size`"), "{misfit}");
+    resource_against_agent(set(&["cluster_id=c-1", "size:=8"]), Some(resource.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        resource.outcome(),
+        Some(Ok(json!({"cluster_id": "c-1", "size": 8})))
+    );
+    let again = resource_against_agent(set(&["cluster_id=c-2"]), Some(resource.clone()))
+        .await
+        .unwrap_err();
+    assert!(again.contains("reported already"), "{again}");
+    let get_in_setup = resource_against_agent(get(None), Some(resource)).await;
+    assert!(
+        get_in_setup
+            .unwrap_err()
+            .contains("only in a resource's `cleanup_command`")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleanup_prints_its_setups_value_as_json_or_one_field() {
+    let task = resource_task(
+        &json!({"role": "cleanup", "setup": "cluster"}),
+        &json!({"type": "process_result"}),
+    );
+    let inputs = BTreeMap::from([(
+        "cluster".to_owned(),
+        json!({"cluster_id": "c-1", "made": {"$date": "2026-11-05"}}),
+    )]);
+    let resource = Arc::new(
+        AttemptResource::of(
+            &task,
+            &inputs,
+            Arc::new(schedr_agent::mask::MaskSet::new(4)),
+        )
+        .unwrap(),
+    );
+    let whole = resource_against_agent(get(None), Some(resource.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&whole).unwrap(),
+        json!({"cluster_id": "c-1", "made": "2026-11-05"})
+    );
+    let field = resource_against_agent(get(Some("cluster_id")), Some(resource.clone()))
+        .await
+        .unwrap();
+    assert_eq!(field, "c-1\n");
+    let set_in_cleanup = resource_against_agent(set(&["a=1"]), Some(resource)).await;
+    assert!(
+        set_in_cleanup
+            .unwrap_err()
+            .contains("only in a `CommandResource`")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn outside_a_resource_both_are_refused() {
+    let set_error = resource_against_agent(set(&["a=1"]), None)
+        .await
+        .unwrap_err();
+    assert!(
+        set_error.contains("`resource set` works only"),
+        "{set_error}"
+    );
+    let get_error = resource_against_agent(get(None), None).await.unwrap_err();
+    assert!(
+        get_error.contains("`resource get` works only"),
+        "{get_error}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_of_any_type_is_given_as_json() {
+    let task = resource_task(
+        &json!({"role": "setup"}),
+        &json!({"type": "list", "item": {"type": "int"}}),
+    );
+    let resource = Arc::new(
+        AttemptResource::of(
+            &task,
+            &BTreeMap::new(),
+            Arc::new(schedr_agent::mask::MaskSet::new(4)),
+        )
+        .unwrap(),
+    );
+    let command = ResourceCommand::Set {
+        fields: Vec::new(),
+        json: Some("[7, 8]".to_owned()),
+    };
+    resource_against_agent(command, Some(resource.clone()))
+        .await
+        .unwrap();
+    assert_eq!(resource.outcome(), Some(Ok(json!([7, 8]))));
+    let both = resource_value(&["a=1".to_owned()], Some("1")).unwrap_err();
+    assert!(both.contains("not both"), "{both}");
 }

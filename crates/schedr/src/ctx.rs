@@ -22,7 +22,9 @@ use serde_json::Value;
 use schedr_model::SecretName;
 use schedr_model::runner::CleanupHandle;
 
-use crate::cli::{CleanupCommand, ConnectionArgs, DagCtxCommand, GetCommand, SecretCommand};
+use crate::cli::{
+    CleanupCommand, ConnectionArgs, DagCtxCommand, GetCommand, ResourceCommand, SecretCommand,
+};
 
 #[cfg(test)]
 mod tests;
@@ -198,6 +200,65 @@ pub fn run_task_ctx_cleanup(
     }
 }
 
+/// `schedr task-ctx resource set|get`: reports the value of the resource a `CommandResource`
+/// setup creates (checked against its type at once), or prints the value a resource's
+/// `cleanup_command` cleans up (as `--params` takes it: dates as text, tuples as lists).
+///
+/// # Errors
+///
+/// Outside a task, when the channel is gone, when a field or `--json` can't be read, or when
+/// the agent refuses: `set` outside a setup, twice, or with a value of another type; `get`
+/// outside a cleanup; a missing `--field`.
+pub fn run_task_ctx_resource(
+    command: &ResourceCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    match command {
+        ResourceCommand::Set { fields, json } => {
+            let value = resource_value(fields, json.as_deref())?;
+            let mut stream = connect(env, Ctx::Task)?;
+            match call(&mut stream, version, &CtxRequest::ResourceSet { value })? {
+                CtxAnswer::ResourceReported => Ok(()),
+                CtxAnswer::ResourceRefused { reason }
+                | CtxAnswer::Error { reason }
+                | CtxAnswer::Refused { reason } => Err(reason),
+                _ => Err("the agent answered with something else than the resource".to_owned()),
+            }
+        }
+        ResourceCommand::Get { field } => {
+            let mut stream = connect(env, Ctx::Task)?;
+            let value = match call(&mut stream, version, &CtxRequest::ResourceGet)? {
+                CtxAnswer::Resource { value } => schedr_model::params::shown(&value),
+                CtxAnswer::ResourceRefused { reason }
+                | CtxAnswer::Error { reason }
+                | CtxAnswer::Refused { reason } => return Err(reason),
+                _ => {
+                    return Err(
+                        "the agent answered with something else than the resource".to_owned()
+                    );
+                }
+            };
+            let text = printed(&value, field.field.as_deref())?;
+            out.write_all(text.as_bytes())
+                .map_err(|e| format!("can't write output: {e}"))
+        }
+    }
+}
+
+/// A resource's value: an object from `key=value` and `key:=json` fields, or any JSON from
+/// `--json` (`--json 7` for `value=int`).
+fn resource_value(fields: &[String], json: Option<&str>) -> Result<Value, String> {
+    match json {
+        Some(text) if fields.is_empty() => {
+            serde_json::from_str(text).map_err(|e| format!("--json isn't JSON: {e}"))
+        }
+        Some(_) => Err("give the value as fields or as --json, not both".to_owned()),
+        None => handle_value(fields, None),
+    }
+}
+
 /// A handle's value from `key=value` and `key:=json` fields, or from `--json`.
 fn handle_value(fields: &[String], json: Option<&str>) -> Result<Value, String> {
     if let Some(text) = json {
@@ -276,6 +337,11 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         CtxAnswer::Welcome => Err("the agent answered `welcome` to a request".to_owned()),
         CtxAnswer::HandleAdded | CtxAnswer::HandleRefused { .. } | CtxAnswer::Handles { .. } => {
             Err("the agent answered with a cleanup handle to another request".to_owned())
+        }
+        CtxAnswer::ResourceReported
+        | CtxAnswer::Resource { .. }
+        | CtxAnswer::ResourceRefused { .. } => {
+            Err("the agent answered with a resource to another request".to_owned())
         }
         // Never printed in a message: it may hold a value.
         CtxAnswer::Secret { .. }

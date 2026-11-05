@@ -48,7 +48,7 @@ use tonic::transport::Channel;
 
 use crate::attempt::{
     AttemptSpec, CleanupGate, Gate, NotRun, Plan, Ran, WorkerSetup, failed_before_start, finished,
-    plan, plan_at,
+    plan, plan_at, with_resource_value,
 };
 use crate::connection_jobs::ConnectionJob;
 use crate::ctx::CtxInfo;
@@ -64,6 +64,7 @@ use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::metrics::AgentMetrics;
 use crate::parse::parse_files;
 use crate::process::ProcessSpec;
+use crate::resource::AttemptResource;
 use crate::secrets::{AttemptSecrets, SecretStores};
 use crate::status::StopReason;
 use crate::supervise::{Limits, StopSender, Stops};
@@ -602,8 +603,15 @@ impl ProcessExecutor {
         let mut spec = spec.clone();
         spec.task.outcomes = default_outcomes();
         match (&mut spec.task.kind, &cleanup.run) {
-            (TaskKind::Command { command, .. }, CleanupRun::Command(line)) => {
+            (
+                TaskKind::Command {
+                    command, resource, ..
+                },
+                CleanupRun::Command(line),
+            ) => {
                 command.clone_from(line);
+                // A setup's own cleanup (for a setup failing halfway) reports no value.
+                *resource = None;
             }
             (TaskKind::Python { .. }, CleanupRun::Python) => {
                 spec.cleanup_handles = Some(shared.handles.list());
@@ -708,6 +716,8 @@ impl ProcessExecutor {
                 Err(error) => warn_unidentified(pid, &error),
             }
         };
+        let resource =
+            AttemptResource::of(&spec.task, &spec.inputs, Arc::clone(&secrets.mask)).map(Arc::new);
         let ran = match plan {
             Plan::Python { process, request } => {
                 let forks = self.forks.as_ref();
@@ -722,6 +732,7 @@ impl ProcessExecutor {
                 let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
                 ctx.secrets = Some(Arc::clone(secrets));
                 ctx.handles = Some(Arc::clone(handles));
+                ctx.resource.clone_from(&resource);
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
@@ -742,6 +753,9 @@ impl ProcessExecutor {
             Ok(ran) => finished(&spec.attempt_id, &spec.task, &ran),
             Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),
         };
+        if let Some(outcome) = resource.as_ref().and_then(|r| r.outcome()) {
+            with_resource_value(&mut finished, outcome);
+        }
         let seen = *seen.lock().unwrap_or_else(PoisonError::into_inner);
         with_memory(&mut finished, seen, self.setup.memory.budget);
         finished

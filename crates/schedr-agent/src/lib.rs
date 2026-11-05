@@ -25,6 +25,7 @@ pub mod output;
 pub mod parse;
 pub mod process;
 pub mod render;
+pub mod resource;
 pub mod retention;
 pub mod scan;
 pub mod secrets;

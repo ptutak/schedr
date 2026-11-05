@@ -21,6 +21,7 @@ fn info() -> CtxInfo {
         version: "1.2.3".into(),
         secrets: None,
         handles: None,
+        resource: None,
     }
 }
 

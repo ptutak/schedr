@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use schedr_db::{Database, DbError};
 use schedr_model::{
-    Dag, Edge, EdgeKind, Expand, PathElem, Reference, Task, TaskId, TaskInstanceState, Value,
+    Dag, Edge, EdgeKind, Expand, PathElem, Reference, ResourceRole, Task, TaskId,
+    TaskInstanceState, TaskKind, Value,
 };
 use serde_json::Value as Json;
 
@@ -372,6 +373,18 @@ pub enum InputsError {
     NotArguments(String),
 }
 
+/// The setup whose value a resource's command cleanup reads (`schedr task-ctx resource get`),
+/// whatever its templates name.
+fn resource_setup(task: &Task) -> Option<&TaskId> {
+    match &task.kind {
+        TaskKind::Command {
+            resource: Some(ResourceRole::Cleanup { setup }),
+            ..
+        } => Some(setup),
+        _ => None,
+    }
+}
+
 /// A task instance's inputs, as JSON: the whole outputs of the upstream tasks it uses (not
 /// its lanes), and for an instance of a mapped task its own arguments under `$expand`, with
 /// the outcome of each taken from a lane under `$expand_outcomes` (decision 76), and those its
@@ -409,13 +422,14 @@ pub async fn inputs(
         Dim::Values(Value::List(items)) => Some(items.iter().filter(|i| built_by_runner(i))),
         _ => None,
     });
-    let whole = upstream(
+    let mut whole = upstream(
         task.argument_references()
             .into_iter()
             .chain(runner_built.flatten().flat_map(Value::references))
             .filter(|r| matches!(r, Reference::Output { .. }))
             .collect(),
     );
+    whole.extend(resource_setup(task).cloned());
     // The mapped values' sources only while their resolved lists aren't known yet.
     let unresolved = dims.iter().enumerate().any(|(d, (_, dim))| {
         matches!(dim, Dim::Values(_))

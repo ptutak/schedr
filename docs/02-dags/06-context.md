@@ -262,6 +262,17 @@ subprocess.run(["schedr", "dag-ctx", "run", "get"], pass_fds=[fd])
 In Python, `from schedr.script import dag_ctx` reads the same values in the process that
 already has the descriptor.
 
+### `schedr task-ctx`
+
+`schedr task-ctx` uses the same channel for [secrets](13-secrets.md),
+[connections](14-connections.md), [cleanup handles](15-cleanup.md), and
+[resource values](16-resources.md#a-command-setup):
+
+| Command | What it does |
+|---|---|
+| `resource set [FIELD ...] [--json JSON]` | Reports the setup's value, checked immediately against `CommandResource(..., value=T)`. Fields are `key=value` (text) or `key:=json`; alternatively, `--json` takes any JSON value. Report once per setup attempt. Only a command resource setup can call it. |
+| `resource get [--field NAME]` | Prints the setup's value in a resource's command cleanup: one line of JSON, in the form `--params` takes. `--field` prints a top-level string as text and other fields as JSON, followed by a newline. A resource with no value returns `null`. |
+
 ## The running task's own context: `task_ctx`
 
 `task_ctx` is the running task's own context, read inside its function while it runs:
@@ -277,4 +288,4 @@ running task, raises `RuntimeError`. A test sets it with `task_context(task_id=.
 try_number=..., map_index=...)` ([Testing a DAG](07-testing.md#one-task-and-its-context)).
 A declared secret is `task_ctx.secret(...)` ([Secrets](13-secrets.md)). Tasks can also use
 [connections](14-connections.md) and register [cleanup handles](15-cleanup.md). Resource
-values come later.
+values for command setups and cleanups use `schedr task-ctx resource` above.

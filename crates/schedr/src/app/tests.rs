@@ -181,33 +181,6 @@ async fn execute_dispatches_db_commands() {
     );
 }
 
-#[rstest]
-#[case(&["schedr", "task-ctx", "resource", "get"], "task-ctx", "M4")]
-#[tokio::test]
-async fn execute_reports_later_milestones(
-    #[case] args: &[&str],
-    #[case] command: &str,
-    #[case] milestone: &str,
-) {
-    let cli = Cli::try_parse_from(args).unwrap();
-    let err = execute(
-        &cli.command,
-        &memory_config(),
-        &BTreeMap::new(),
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        matches!(&err, AppError::NotImplemented { command: c, milestone: m } if *c == command && *m == milestone)
-    );
-    assert_eq!(
-        err.to_string(),
-        format!("`schedr {command}` isn't implemented yet (milestone {milestone})")
-    );
-}
-
 #[test]
 fn every_error_exits_with_1() {
     assert_eq!(AppError::NoDatabase.exit_code(), 1);

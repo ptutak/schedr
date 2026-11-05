@@ -25,6 +25,7 @@ use tokio::net::{UnixDatagram, UnixStream};
 use tokio::task::JoinSet;
 
 use crate::handles::{AttemptHandles, HandleError};
+use crate::resource::{AttemptResource, ResourceError};
 use crate::secrets::{AttemptSecrets, ConnectionError, SecretError};
 
 #[cfg(test)]
@@ -53,6 +54,9 @@ pub struct CtxInfo {
     pub secrets: Option<Arc<AttemptSecrets>>,
     /// The attempt's cleanup handles (`schedr task-ctx cleanup`); none outside an attempt.
     pub handles: Option<Arc<AttemptHandles>>,
+    /// The resource value it reports or reads (`schedr task-ctx resource`); none for a task
+    /// that is no resource's command part.
+    pub resource: Option<Arc<AttemptResource>>,
 }
 
 impl CtxInfo {
@@ -71,6 +75,7 @@ impl CtxInfo {
             version: version.to_owned(),
             secrets: None,
             handles: None,
+            resource: None,
         }
     }
 }
@@ -393,12 +398,33 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                     },
                 }
             }
+            Some(Ok(CtxRequest::ResourceSet { value })) => resource_answer(info, Some(&value)),
+            Some(Ok(CtxRequest::ResourceGet)) => resource_answer(info, None),
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }
             Some(Err(reason)) => return refuse(stream, &reason).await,
         };
         write_answer(stream, &answer).await?;
+    }
+}
+
+/// The answer to `resource set` (with the value) or `resource get`.
+fn resource_answer(info: &CtxInfo, set: Option<&serde_json::Value>) -> CtxAnswer {
+    let refused = |error: ResourceError| CtxAnswer::ResourceRefused {
+        reason: error.to_string(),
+    };
+    match (info.resource.as_ref(), set) {
+        (Some(resource), Some(value)) => match resource.set(value) {
+            Ok(()) => CtxAnswer::ResourceReported,
+            Err(error) => refused(error),
+        },
+        (Some(resource), None) => match resource.get() {
+            Ok(value) => CtxAnswer::Resource { value },
+            Err(error) => refused(error),
+        },
+        (None, Some(_)) => refused(ResourceError::NotSetup),
+        (None, None) => refused(ResourceError::NotCleanup),
     }
 }
 

@@ -7099,6 +7099,34 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   a timeout's stops of a failed step dropped; the timeout's task and run ends written apart (now
   one transaction); a run cancelled with only a cleanup left ended `success` (a run being
   cancelled can't now).
+- **Built (M4.8d; decision 271, the command half):** `CommandResource(name, command,
+  value=T, ...)` and `<resource>.cleanup_command(command, env=..., **CleanupOptions)` on all three
+  resource objects; `schedr task-ctx resource set|get`. In DAG JSON a command carries its part,
+  `"resource": {"role": "setup"}` or `{"role": "cleanup", "setup": ...}`, which the master checks
+  against `Dag.resources` (a command setup must be a `CommandResource`, its value no
+  `ProcessResult`). The master always sends a command cleanup its setup's output. The agent keeps
+  the reported value in memory (the setup's attempt is stopped on an agent restart; once it ends,
+  the value is its output and journaled with it): `set` checks it against the declared type with
+  `params::to_stored` (no coercion; a Pydantic model's value isn't checked in Rust), masks it,
+  and takes it once; `get` works only in a resource's command cleanup and prints the value as
+  `--params` takes it. A setup exiting 0 without a value fails, `resource_not_reported`. Small
+  decisions (Claude's, to be overruled): **`.value`** on an `@resource` setup and a
+  `CommandResource` is the value as a reference typed as the value, resolved when the DAG sets the
+  resource up (a module-level `@resource` has no task ID before), so a command cleanup writes
+  `t"{cluster.value.cluster_id}"`; a `CommandResource` also takes `t"{cluster.cluster_id}"` as
+  planned. `run_dag` gives a `CommandResource` setup's output as JSON (its class isn't
+  recorded). With this every CLI command works: the "milestone" test of the last one went.
+  ScriptResource and `cleanup_script` moved to M4.9 with script tasks. No new configuration value.
+  Codex's review (10; 9 fixed, with tests): the value masked when the attempt ends, so a secret
+  read after the report is masked too; a setup's own `cleanup=` no longer took the setup's role
+  (it failed as "not reported"); in a union a model or `Any` is tried last (it took a tuple
+  untagged); `resource set --json` takes any JSON (`--json 7`); a reported dataclass gives every
+  field (`params::to_reported`: nothing fills its defaults before a command reads it); a value is
+  at most what `resource get` can answer (about 1 MiB stored); `resource get` reads `null` (an
+  optional value, or none); dates and times only in Python's years 0001-9999 (also for run
+  parameters); `CommandResource` overloads, so mypy takes `CommandResource[int | None](...,
+  value=int | None)`. Not taken: a value reported by a child after the setup's main process exited
+  but while its output drains (the setup's own process group, bounded by the drain).
 
 - **Built (M4.8b; decisions 242-251):** an attempt of a task with a cleanup keeps
   `<attempt_id>.attempt` (its assignment, inputs inside, its code's copy and hash, before

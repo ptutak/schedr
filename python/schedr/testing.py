@@ -378,8 +378,11 @@ class _OutputTypes:
         if isinstance(kind, PythonKind):
             hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
             return decode(data, member_named(hints.get("return", Any), outcome))
-        if isinstance(kind, CommandKind):
+        if isinstance(kind, CommandKind) and (
+            kind.resource is None or kind.resource.cleanup_of is not None
+        ):
             return decode(data, ProcessResult)
+        # A `CommandResource`'s setup: its value as JSON reads it (its class isn't recorded).
         return decode_any(data)
 
     def _load(self, location: Mapping[str, str]) -> registry.DefinedDag:

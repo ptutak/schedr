@@ -20,7 +20,7 @@ The cleanup inherits the setup's secrets and connections and can declare more of
 Its queue defaults to the setup's queue and can be overridden. It also accepts `timeout`,
 `retries`, `retry_delay`, `blocking` and `unschedulable_timeout`.
 
-Without a `@cluster.cleanup` function, the resource still has an empty cleanup. The master
+Without a declared cleanup, the resource still has an empty cleanup. The master
 finishes it without an attempt or log, with the reason "no cleanup declared: nothing to clean".
 A resource has one cleanup wherever it is imported; declaring another from a different place is an
 error. A different cleanup needs a different resource.
@@ -31,6 +31,60 @@ with `uses=[tmp]`. Attach the cleanup with `@tmp.cleanup`, bare or with options.
 
 A setup can be called only once per DAG. It cannot use `.expand()` or return an outcome
 union; these are parse errors.
+
+## A command setup
+
+Inside `with Dag(...)`, `CommandResource(name, command, value=T, ...)` adds a resource
+whose setup is a command. As with `CommandOperator`, the command is a shell string or an
+argument list, and can take `env=`, `queue=`, `retries=`, secrets and connections.
+This example reports a fixed cluster value and prints its cleanup, so it needs no cluster
+service:
+
+```{literalinclude} ../../examples/docs/command_resources.py
+:language: python
+:caption: examples/docs/command_resources.py
+```
+
+The setup reports its value with `schedr task-ctx resource set`. Give an object's fields
+as `key=value` for text or `key:=json` for JSON: `size=8` is text, while `size:=8` is a
+number. Alternatively, `--json` takes the whole value, including a scalar such as
+`schedr task-ctx resource set --json 7` for `value=int`. Use fields or `--json`, not both.
+
+The agent checks the value against `value=` immediately, without coercing text to numbers
+or other types. A dataclass must give **every field**, including fields with defaults:
+no Python constructor fills them in before a command reads the value. Pydantic model
+validation does not run in the agent; use a dataclass for these checks at report time.
+Report once per setup attempt; a second report is refused. `resource set` works only in
+a `CommandResource` setup.
+
+With `value=`, a successful setup must both report its value and exit 0. Exiting 0 without
+reporting fails with "resource value not reported" (`resource_not_reported`). The setup's
+output is the reported value, rather than a `ProcessResult`. Its users take `cluster.value`,
+as `load` does above, or declare `uses=[cluster]` when they need no value. Without `value=`,
+the resource has no value and its setup does not report one.
+
+For a union value, give the type twice for mypy:
+`CommandResource[int | None]("number", command, value=int | None)`. To report the `None`
+case, use `schedr task-ctx resource set --json null`; it still needs a report.
+
+## A command cleanup
+
+Any resource can use `<resource>.cleanup_command([...])` instead of a Python cleanup:
+an `@resource` function, a `CommandResource`, or a `Resource` without setup code. The
+method takes a shell string or argument list, `env=`, and the same cleanup options as
+`@cluster.cleanup(...)`, including `blocking=`. A resource still has only one cleanup.
+
+While that cleanup runs, `schedr task-ctx resource get` reads the setup's value as JSON;
+`schedr task-ctx resource get --field cluster_id` reads one top-level field. A string
+field prints as text, other fields as JSON, each followed by a newline. Dates and times
+are ISO 8601 text, durations are ISO 8601 durations, and tuples are lists. `resource get`
+works only in a resource's command cleanup; a resource without a value returns `null`.
+
+The command line and `env` can also take t-strings, filled before the cleanup starts.
+For a `CommandResource`, `t"{cluster.cluster_id}"` and `t"{cluster.value.cluster_id}"`
+refer to the same field. For an `@resource` setup, use `t"{cluster.value.cluster_id}"`:
+the reference is resolved when that resource is set up in the DAG. The example uses
+both forms, one in an argument and the other in `env`.
 
 ## Users
 
@@ -76,9 +130,9 @@ A resource cleanup is shared by all its users. A [per-task cleanup](15-cleanup.m
 cleans up after each started task attempt; a resource setup can have one of those too, for
 work left behind if setup fails partway through.
 
-A connection is a generator because it opens and closes in one process, inside one task. A
-resource is two functions because its setup and cleanup are separate tasks, in separate
-processes, maybe hours apart: only the setup's value reaches the cleanup.
+A connection is a generator because it opens and closes in one process, inside one task.
+A resource has separate setup and cleanup tasks, in separate processes, maybe hours apart:
+only the setup's value reaches the cleanup.
 
 ## Scheduling and cancellation
 

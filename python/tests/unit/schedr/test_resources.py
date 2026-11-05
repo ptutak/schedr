@@ -9,6 +9,7 @@ import pytest
 
 from schedr import (
     CommandOperator,
+    CommandResource,
     Dag,
     DagHint,
     EmptyOperator,
@@ -490,3 +491,112 @@ def test_a_negative_unschedulable_timeout_is_refused() -> None:
 
     with pytest.raises(ValueError, match="unschedulable_timeout"), Dag("negative"):
         load(cluster(8))
+
+
+def ref(task_id: str, *path: str) -> dict[str, Any]:
+    reference: dict[str, Any] = {"kind": "output", "task": task_id}
+    if path:
+        reference["path"] = list(path)
+    return {"ref": reference}
+
+
+def test_a_command_resource_reports_its_value_and_its_users_take_it() -> None:
+    with Dag("command_setup") as dag:
+        cluster = CommandResource("cluster", ["./create.sh", "8"], value=Cluster, retries=2)
+        cluster.cleanup_command(
+            ["./delete.sh", t"{cluster.cluster_id}"], env={"C": cluster.cluster_id}
+        )
+        load(cluster.value)
+        warm.override(uses=[cluster])()
+    setup = a_task(dag, "cluster")
+    assert (setup["kind"], setup["resource"], setup["settings"]["retries"]) == (
+        "command",
+        {"role": "setup"},
+        2,
+    )
+    assert setup["output_type"]["name"] == "Cluster"
+    cleanup = a_task(dag, "cluster.cleanup")
+    assert cleanup["resource"] == {"role": "cleanup", "setup": "cluster"}
+    assert cleanup["command"]["argv"][1] == [ref("cluster", "cluster_id")]
+    assert cleanup["env"] == {"C": [ref("cluster", "cluster_id")]}
+    assert cleanup["settings"]["retries"] == 3
+    assert edges(dag) >= {
+        ("cluster", "load", "data"),
+        ("cluster", "warm", "requirement"),
+        ("cluster", "cluster.cleanup", "data"),
+    }
+    assert as_json(dag)["resources"][0]["users"] == ["load", "warm"]
+
+
+def test_a_command_resource_without_a_value_has_none() -> None:
+    with Dag("valueless") as dag:
+        lock = CommandResource("lock", "./lock.sh")
+        lock.cleanup_command("./unlock.sh")
+        warm.override(uses=[lock])()
+    assert a_task(dag, "lock")["output_type"] == {"type": "none"}
+    assert ("lock", "lock.cleanup", "requirement") in edges(dag)
+
+    @resource
+    def held() -> None:
+        pass
+
+    held.cleanup_command(["./unlock.sh", t"{held.value}"])
+
+    def define() -> None:
+        with Dag("no_value"):
+            warm.override(uses=[held])()
+            held()
+
+    with pytest.raises(TypeError, match="has no value"):
+        define()
+
+
+def test_a_python_resource_can_be_cleaned_by_a_command() -> None:
+    cluster = make_cluster()
+    cluster.cleanup_command(["./delete.sh", t"{cluster.value.cluster_id}"], queue="ops")
+    with Dag("python_setup") as dag:
+        load(cluster(8))
+    cleanup = a_task(dag, "cluster.cleanup")
+    assert (cleanup["kind"], cleanup["settings"]["queue"]) == ("command", "ops")
+    assert cleanup["command"]["argv"][1] == [ref("cluster", "cluster_id")]
+
+    tmp_dag = Dag("tmp")
+    with tmp_dag:
+        tmp = Resource("tmp")
+        tmp.cleanup_command("rm -rf /tmp/stage")
+        warm.override(uses=[tmp])()
+    assert a_task(tmp_dag, "tmp.cleanup")["resource"] == {"role": "cleanup", "setup": "tmp"}
+
+
+def test_a_resource_has_one_cleanup_function_or_command() -> None:
+    cluster = make_cluster()
+
+    @cluster.cleanup
+    def delete(c: Cluster) -> None:
+        del c
+
+    with pytest.raises(TypeError, match="has a cleanup already"):
+        cluster.cleanup_command("./delete.sh")
+
+    other = make_cluster()
+
+    def imported() -> None:
+        other.cleanup_command("./delete.sh")
+
+    imported()
+    imported()  # The same call again is its file imported again.
+    with pytest.raises(TypeError, match="has a cleanup already"):
+        other.cleanup_command("./delete.sh")
+
+
+@pytest.mark.parametrize("command", [[], 5])
+def test_a_cleanup_command_of_the_wrong_type_is_refused(command: Any) -> None:
+    with pytest.raises(TypeError, match="cleanup_command"):
+        make_cluster().cleanup_command(command)
+
+
+def test_a_command_resource_is_set_up_once_and_not_outside_a_dag() -> None:
+    with pytest.raises(RuntimeError):
+        CommandResource("cluster", "./c.sh")
+    with pytest.raises(TypeError, match="value="), Dag("bad_value"):
+        CommandResource("cluster", "./c.sh", value=object)

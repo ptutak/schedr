@@ -633,3 +633,66 @@ def test_a_resource_is_cleaned_once_after_its_last_user(tmp_path: Path) -> None:
     # A resource without code: both parts finished by the master.
     assert result.tasks["tmp"].state == "success"
     assert result.tasks["tmp.cleanup"].state == "success"
+
+
+COMMAND_RESOURCED = """
+from typing import TypedDict
+
+from schedr import CommandResource, Dag, task
+
+
+class Info(TypedDict):
+    cluster_id: str
+    size: int
+
+
+@task
+def use(info: Info) -> str:
+    return f"{info['cluster_id']}/{info['size']}"
+
+
+with Dag("command_resourced"):
+    cluster = CommandResource(
+        "cluster",
+        ["sh", "-c", '"$0" task-ctx resource set cluster_id=c-8 size:=8', SCHEDR],
+        value=Info,
+        cleanup=["true"],
+    )
+    cluster.cleanup_command(
+        ["sh", "-c", 'echo "$1"; "$0" task-ctx resource get --field size', SCHEDR,
+         t"{cluster.cluster_id}"],
+    )
+    use(cluster.value)
+    silent = CommandResource("silent", ["true"], value=Info)
+    silent.cleanup_command(["true"])
+    use.override(task_id="use_silent")(silent.value)
+    count = CommandResource("count", ["sh", "-c", '"$0" task-ctx resource set --json 7', SCHEDR],
+                            value=int)
+    count.cleanup_command(["sh", "-c", '"$0" task-ctx resource get', SCHEDR])
+    maybe = CommandResource[int | None](
+        "maybe", ["sh", "-c", '"$0" task-ctx resource set --json null', SCHEDR], value=int | None
+    )
+    maybe.cleanup_command(["sh", "-c", '"$0" task-ctx resource get', SCHEDR])
+"""
+
+
+def test_a_command_resource_reports_its_value_to_users_and_cleanup(tmp_path: Path) -> None:
+    (tmp_path / "c.py").write_text(f"SCHEDR = {schedr_binary()!r}\n" + COMMAND_RESOURCED)
+    result = run_dag(tmp_path / "c.py", "command_resourced", for_=FOR)
+    setup = result.tasks["cluster"]
+    assert setup.state == "success", setup.log
+    assert setup.output == {"cluster_id": "c-8", "size": 8}
+    assert result.tasks["use"].output == "c-8/8"
+    cleanup = result.tasks["cluster.cleanup"]
+    assert cleanup.state == "success", cleanup.log
+    assert cleanup.output.stdout == "c-8\n8\n"
+    assert result.tasks["count"].output == 7
+    assert result.tasks["count.cleanup"].output.stdout == "7\n"
+    assert result.tasks["maybe.cleanup"].output.stdout == "null\n"
+    # Exited 0 without reporting: the setup fails, and neither its user nor its cleanup runs.
+    silent = result.tasks["silent"]
+    assert silent.state == "failed"
+    assert "resource value not reported" in str(silent.attempts[-1]), silent.attempts
+    assert result.tasks["use_silent"].state == "upstream_failed"
+    assert result.tasks["silent.cleanup"].state != "success"
+    assert result.state == "failed"

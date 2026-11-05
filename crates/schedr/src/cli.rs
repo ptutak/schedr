@@ -482,7 +482,7 @@ pub enum ResourceCommand {
     Set {
         /// The value's fields (`key=value`, `key:=json`).
         fields: Vec<String>,
-        /// The whole value as one JSON object.
+        /// The whole value as JSON, of any type (`--json 7`).
         #[arg(long, value_name = "JSON")]
         json: Option<String>,
     },
@@ -569,13 +569,7 @@ impl Command {
             | Self::Workers { .. }
             | Self::Connections { .. }
             | Self::DagCtx { .. }
-            | Self::TaskCtx {
-                command:
-                    TaskCtxCommand::Secret { .. }
-                    | TaskCtxCommand::Connection(_)
-                    | TaskCtxCommand::Cleanup { .. },
-            } => None,
-            Self::TaskCtx { .. } => Some("M4"),
+            | Self::TaskCtx { .. } => None,
         }
     }
 

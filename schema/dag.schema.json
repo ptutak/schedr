@@ -511,6 +511,44 @@
       ],
       "type": "object"
     },
+    "ResourceRole": {
+      "description": "A command's part in a resource, for `schedr task-ctx resource set|get`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A `CommandResource`'s setup: its output is the value it reports with `resource set`,\nof the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.",
+          "properties": {
+            "role": {
+              "const": "setup",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A resource's `cleanup_command`: it reads the setup's value with `resource get`.",
+          "properties": {
+            "role": {
+              "const": "cleanup",
+              "type": "string"
+            },
+            "setup": {
+              "$ref": "#/$defs/TaskId",
+              "description": "The resource's setup task."
+            }
+          },
+          "required": [
+            "role",
+            "setup"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RunIf": {
       "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\nPROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
       "oneOf": [
@@ -653,6 +691,17 @@
             "kind": {
               "const": "command",
               "type": "string"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourceRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Its part in a resource (M4.8d): a `CommandResource`'s setup, or a resource's\n`cleanup_command`; `None` for any other command."
             }
           },
           "required": [

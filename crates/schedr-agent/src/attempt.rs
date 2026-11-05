@@ -73,6 +73,9 @@ pub const RENDER_FAILED: &str = "render_failed";
 /// The error kind of a Python task whose runner ended without reporting a result.
 pub const RUNNER_FAILED: &str = "runner_failed";
 
+/// The error kind of a `CommandResource` setup that exited 0 without reporting its value.
+pub const RESOURCE_NOT_REPORTED: &str = "resource_not_reported";
+
 /// The error kind of a forked task whose end isn't known: its shim ended before reporting it.
 pub const PROCESS_STATUS_UNKNOWN: &str = "process_status_unknown";
 
@@ -631,6 +634,27 @@ pub fn finished(attempt_id: &str, task: &Task, ran: &Ran) -> pb::Finished {
         _ => {}
     }
     message
+}
+
+/// A `CommandResource` setup's result: on success its output is the value it reported, not
+/// its `ProcessResult`; with nothing reported (and a value declared) it fails.
+pub fn with_resource_value(message: &mut pb::Finished, outcome: Result<serde_json::Value, ()>) {
+    if message.status != i32::from(pb::AttemptStatus::Success) {
+        return;
+    }
+    let Ok(value) = outcome else {
+        message.status = attempt_status_to_proto(AttemptStatus::Failed).into();
+        message.output_json = Vec::new();
+        message.outcome = String::new();
+        RESOURCE_NOT_REPORTED.clone_into(&mut message.error_kind);
+        message.error_summary_json = summary(
+            "ResourceNotReported",
+            "resource value not reported: the setup exited 0 without `schedr task-ctx resource \
+             set`",
+        );
+        return;
+    };
+    message.output_json = serde_json::to_vec(&value).unwrap_or_default();
 }
 
 /// The `Finished` message for an attempt that failed before starting.

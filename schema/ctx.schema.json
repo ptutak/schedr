@@ -178,6 +178,54 @@
           "type": "object"
         },
         {
+          "description": "The resource's value is reported.",
+          "properties": {
+            "type": {
+              "const": "resource_reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The resource's value, as stored JSON (tagged).",
+          "properties": {
+            "type": {
+              "const": "resource",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the resource's value can't be reported or read; the connection stays open.",
+          "properties": {
+            "reason": {
+              "description": "What went wrong (never the value).",
+              "type": "string"
+            },
+            "type": {
+              "const": "resource_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The values of the connection asked for, by parameter, as stored JSON (tagged).",
           "properties": {
             "type": {
@@ -401,6 +449,36 @@
             "type",
             "name",
             "prefix"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Reports the value of the resource a `CommandResource` setup creates (`schedr task-ctx\nresource set`), as JSON; checked against its declared type at once.",
+          "properties": {
+            "type": {
+              "const": "resource_set",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The value of the resource a command cleanup cleans up (`schedr task-ctx resource get`).",
+          "properties": {
+            "type": {
+              "const": "resource_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         }

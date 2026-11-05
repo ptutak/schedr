@@ -73,6 +73,14 @@ pub enum CtxRequest {
         /// The variables' prefix (`DB` gives `DB_URL`).
         prefix: String,
     },
+    /// Reports the value of the resource a `CommandResource` setup creates (`schedr task-ctx
+    /// resource set`), as JSON; checked against its declared type at once.
+    ResourceSet {
+        /// The value.
+        value: serde_json::Value,
+    },
+    /// The value of the resource a command cleanup cleans up (`schedr task-ctx resource get`).
+    ResourceGet,
 }
 
 /// The agent's answer to a [`CtxRequest`].
@@ -118,6 +126,18 @@ pub enum CtxAnswer {
     Handles {
         /// The handles.
         handles: Vec<crate::runner::CleanupHandle>,
+    },
+    /// The resource's value is reported.
+    ResourceReported,
+    /// The resource's value, as stored JSON (tagged).
+    Resource {
+        /// The value.
+        value: serde_json::Value,
+    },
+    /// Why the resource's value can't be reported or read; the connection stays open.
+    ResourceRefused {
+        /// What went wrong (never the value).
+        reason: String,
     },
     /// The values of the connection asked for, by parameter, as stored JSON (tagged).
     Connection {

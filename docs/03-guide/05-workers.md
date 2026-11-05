@@ -145,6 +145,10 @@ on that connection, so concurrent calls keep their own answers.
 It serves at most 64 of those connections at once and tells the next caller so. A call
 waits up to 30 s to be taken, and 30 s to be answered.
 
+The same channel carries `resource_set` (a command resource setup reports its typed value
+once) and `resource_get` (a resource's command cleanup reads its setup's value); see
+[Resources](../02-dags/16-resources.md#a-command-setup).
+
 The agent accepts a caller by the protocol it speaks (protocol 1), whatever schedr
 version sent it. Within that protocol a change is a new request or a new field. Either
 side ignores a field it does not know, and a request the agent does not know is answered

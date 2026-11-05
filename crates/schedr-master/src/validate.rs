@@ -12,8 +12,8 @@ use std::path::{Component, Path};
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::task::{CleanupRun, Task};
 use schedr_model::{
-    CommandLine, Dag, EdgeKind, Expand, Reference, SchedrVersion, SecretDecl, TaskId, TaskKind,
-    Template, TemplatePart, Value,
+    CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl, TaskId,
+    TaskKind, Template, TemplatePart, TypeDesc, Value,
 };
 
 use crate::fire_times::FireTimes;
@@ -85,6 +85,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     resource_problems(dag, &seen, &mut problems);
+    role_problems(dag, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
         let names: Vec<String> = cycle.iter().map(|id| format!("`{id}`")).collect();
         problems.push(format!(
@@ -161,6 +162,7 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                 command,
                 env,
                 connection_env,
+                ..
             } => {
                 for (prefix, name) in connection_env {
                     if let Err(error) = schedr_model::connection::check_prefix(prefix) {
@@ -584,12 +586,61 @@ fn resource_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<St
                 resource.setup
             ));
         }
+        if let Some(setup) = dag.task(&resource.setup)
+            && let TaskKind::Command { resource: None, .. } = &setup.kind
+        {
+            problems.push(format!(
+                "resource `{}`: a command setup must report its value (a `CommandResource`)",
+                resource.setup
+            ));
+        }
         for part in [&resource.setup, &resource.cleanup] {
             if dag.task(part).is_some_and(|t| t.expand.is_some()) {
                 problems.push(format!(
                     "resource `{}`: `{part}` can't be mapped",
                     resource.setup
                 ));
+            }
+        }
+    }
+}
+
+/// A command's resource role must match the DAG's resources: what `resource set|get` allows
+/// and what the master sends the cleanup follow from it.
+fn role_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        let TaskKind::Command {
+            resource: Some(role),
+            ..
+        } = &task.kind
+        else {
+            continue;
+        };
+        let id = &task.id;
+        match role {
+            ResourceRole::Setup => {
+                if !dag.resources.iter().any(|r| &r.setup == id) {
+                    problems.push(format!(
+                        "task `{id}`: a resource setup, but no resource has it as its setup"
+                    ));
+                }
+                if task.output_type == TypeDesc::ProcessResult {
+                    problems.push(format!(
+                        "task `{id}`: a resource's value can't be a command's result"
+                    ));
+                }
+            }
+            ResourceRole::Cleanup { setup } => {
+                if !dag
+                    .resources
+                    .iter()
+                    .any(|r| &r.cleanup == id && &r.setup == setup)
+                {
+                    problems.push(format!(
+                        "task `{id}`: the cleanup of `{setup}`, but it isn't that resource's \
+                         cleanup"
+                    ));
+                }
             }
         }
     }

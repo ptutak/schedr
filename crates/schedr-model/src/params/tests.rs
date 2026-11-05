@@ -187,3 +187,49 @@ fn a_refused_duration_isnt_quoted(#[case] text: &str) {
     let misfit = to_stored(&json!(text), &TypeDesc::Timedelta).unwrap_err();
     assert!(!misfit.to_string().contains(text), "{misfit}");
 }
+
+#[test]
+fn a_date_python_cant_read_is_refused() {
+    for (text, ty) in [
+        ("0000-01-01", TypeDesc::Date),
+        ("+002026-01-01", TypeDesc::Date),
+        ("0000-01-01T00:00:00Z", TypeDesc::Datetime),
+    ] {
+        let error = to_stored(&json!(text), &ty).unwrap_err().to_string();
+        assert!(error.contains("year"), "{text}: {error}");
+    }
+    assert!(to_stored(&json!("0001-01-01T00:00:00Z"), &TypeDesc::Datetime).is_ok());
+}
+
+#[test]
+fn a_union_tags_a_value_before_a_model_takes_it_as_it_is() {
+    let model = TypeDesc::Model {
+        name: "Info".into(),
+        schema: json!({"type": "object"}),
+    };
+    let union = TypeDesc::Union {
+        variants: vec![
+            model,
+            TypeDesc::Tuple {
+                items: vec![TypeDesc::Int, TypeDesc::Str],
+            },
+        ],
+    };
+    assert_eq!(
+        to_stored(&json!([1, "x"]), &union).unwrap(),
+        json!({"$tuple": [1, "x"]})
+    );
+}
+
+#[test]
+fn a_reported_dataclass_gives_every_field() {
+    let ty: TypeDesc = serde_json::from_value(json!({"type": "dataclass", "name": "Info",
+        "fields": [{"name": "name", "type": {"type": "str"}, "required": true},
+                   {"name": "region", "type": {"type": "str"}, "required": false}]}))
+    .unwrap();
+    let given = json!({"name": "x"});
+    assert!(to_stored(&given, &ty).is_ok());
+    let error = to_reported(&given, &ty).unwrap_err().to_string();
+    assert!(error.contains("`region` is required"), "{error}");
+    assert!(to_reported(&json!({"name": "x", "region": "eu"}), &ty).is_ok());
+}

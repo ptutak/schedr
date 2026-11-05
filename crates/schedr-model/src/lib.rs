@@ -31,8 +31,8 @@ pub use states::{
     AttemptStatus, CleanupResult, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState,
 };
 pub use task::{
-    CommandLine, DEFAULT_OUTCOME, Expand, Mapped, OutcomeDecl, RunIf, Task, TaskKind, TaskSettings,
-    default_outcomes,
+    CommandLine, DEFAULT_OUTCOME, Expand, Mapped, OutcomeDecl, ResourceRole, RunIf, Task, TaskKind,
+    TaskSettings, default_outcomes,
 };
 pub use trigger::Trigger;
 pub use types::{Field, TypeDesc};

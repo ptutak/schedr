@@ -188,9 +188,27 @@ pub enum TaskKind {
         /// is also in the task's `connections`.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         connection_env: BTreeMap<String, String>,
+        /// Its part in a resource (M4.8d): a `CommandResource`'s setup, or a resource's
+        /// `cleanup_command`; `None` for any other command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<ResourceRole>,
     },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
+}
+
+/// A command's part in a resource, for `schedr task-ctx resource set|get`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResourceRole {
+    /// A `CommandResource`'s setup: its output is the value it reports with `resource set`,
+    /// of the task's `output_type` (`none`: it reports nothing), not its `ProcessResult`.
+    Setup,
+    /// A resource's `cleanup_command`: it reads the setup's value with `resource get`.
+    Cleanup {
+        /// The resource's setup task.
+        setup: TaskId,
+    },
 }
 
 /// What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).

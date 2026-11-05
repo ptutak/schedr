@@ -26,9 +26,33 @@ const DAY_MICROS: i128 = 86_400_000_000;
 /// Where and why a value doesn't fit its type: a date that isn't one, a duration in months, a
 /// value of a type outputs can't hold, text containing NUL. The reason never quotes the value.
 pub fn to_stored(value: &Value, ty: &TypeDesc) -> Result<Value, Misfit> {
+    checked(value, ty, Form::Given)
+}
+
+/// A value reported from outside Python (`schedr task-ctx resource set`), in the form it is
+/// stored in: as [`to_stored`], and a dataclass gives every field, since nothing fills in its
+/// defaults before a command reads the value (`t"{cluster.value.region}"`).
+///
+/// # Errors
+///
+/// As [`to_stored`], and a dataclass field left out.
+pub fn to_reported(value: &Value, ty: &TypeDesc) -> Result<Value, Misfit> {
+    checked(value, ty, Form::Whole)
+}
+
+/// Whether a dataclass may leave out its fields that have defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// Yes: Python fills them in where it reads the value.
+    Given,
+    /// No: the value is read as stored.
+    Whole,
+}
+
+fn checked(value: &Value, ty: &TypeDesc, form: Form) -> Result<Value, Misfit> {
     let result = match nul_at(value) {
         Some(at) => Err((at, "text containing NUL (\\0) can't be stored".to_owned())),
-        None => stored(value, ty),
+        None => stored(value, ty, form),
     };
     result.map_err(|(path, why)| Misfit { path, why })
 }
@@ -129,7 +153,7 @@ pub fn nul_at(value: &Value) -> Option<Vec<Step>> {
     }
 }
 
-fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
+fn stored(value: &Value, ty: &TypeDesc, form: Form) -> Result<Value, Problem> {
     match ty {
         TypeDesc::Any | TypeDesc::Model { .. } => Ok(escape_tags(value)),
         TypeDesc::None if value.is_null() => Ok(Value::Null),
@@ -141,13 +165,15 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
         TypeDesc::Str if value.is_string() => Ok(value.clone()),
         TypeDesc::Datetime => text(value, "a date and time").and_then(|t| {
             t.parse::<jiff::Timestamp>()
-                .map(|_| json!({"$datetime": t}))
                 .map_err(|_| misfit("not a date and time with an offset (RFC 3339)"))
+                .and_then(|_| python_year(t))
+                .map(|()| json!({"$datetime": t}))
         }),
         TypeDesc::Date => text(value, "a date").and_then(|t| {
             t.parse::<jiff::civil::Date>()
-                .map(|_| json!({"$date": t}))
                 .map_err(|_| misfit("not a date (YYYY-MM-DD)"))
+                .and_then(|_| python_year(t))
+                .map(|()| json!({"$date": t}))
         }),
         TypeDesc::Timedelta => text(value, "a duration").and_then(|t| {
             duration_micros(t)
@@ -156,7 +182,7 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
         }),
         TypeDesc::List { item } => {
             let items = array(value)?;
-            Ok(Value::Array(elements(items, |_| item)?))
+            Ok(Value::Array(elements(items, |_| item, form)?))
         }
         TypeDesc::Tuple { items: types } => {
             let items = array(value)?;
@@ -167,7 +193,7 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
                     items.len()
                 )));
             }
-            Ok(json!({"$tuple": elements(items, |i| &types[i])?}))
+            Ok(json!({"$tuple": elements(items, |i| &types[i], form)?}))
         }
         TypeDesc::Dict { value: item } => {
             let object = object(value)?;
@@ -175,15 +201,23 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
             for (key, v) in object {
                 out.insert(
                     key.clone(),
-                    within(stored(v, item), Step::Key(key.clone()))?,
+                    within(stored(v, item, form), Step::Key(key.clone()))?,
                 );
             }
             Ok(escaped(out))
         }
         TypeDesc::Literal { values } if values.contains(value) => Ok(value.clone()),
+        // A type that checks the value first: a model or `Any` takes anything, and would keep a
+        // tuple or a date untagged.
         TypeDesc::Union { variants } => variants
             .iter()
-            .find_map(|v| stored(value, v).ok())
+            .filter(|v| !matches!(v, TypeDesc::Any | TypeDesc::Model { .. }))
+            .chain(
+                variants
+                    .iter()
+                    .filter(|v| matches!(v, TypeDesc::Any | TypeDesc::Model { .. })),
+            )
+            .find_map(|v| stored(value, v, form).ok())
             .ok_or_else(|| misfit(format!("{} fits none of its types", kind_of(value)))),
         TypeDesc::TypedDict { fields, .. } | TypeDesc::Dataclass { fields, .. } => {
             let object = object(value)?;
@@ -195,12 +229,13 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
                     .ok_or_else(|| misfit(format!("unknown field `{key}`")))?;
                 out.insert(
                     key.clone(),
-                    within(stored(v, &field.ty), Step::Key(key.clone()))?,
+                    within(stored(v, &field.ty, form), Step::Key(key.clone()))?,
                 );
             }
+            let whole = form == Form::Whole && matches!(ty, TypeDesc::Dataclass { .. });
             if let Some(missing) = fields
                 .iter()
-                .find(|f| f.required && !out.contains_key(&f.name))
+                .find(|f| (f.required || whole) && !out.contains_key(&f.name))
             {
                 return Err(misfit(format!("`{}` is required", missing.name)));
             }
@@ -217,6 +252,21 @@ fn stored(value: &Value, ty: &TypeDesc) -> Result<Value, Problem> {
             expected(ty),
             kind_of(value)
         ))),
+    }
+}
+
+/// Text that starts with a year Python's `date` and `datetime` read: four digits, 0001 to
+/// 9999 (not `+002026`, nor year 0).
+fn python_year(text: &str) -> Result<(), Problem> {
+    let year = text
+        .get(..4)
+        .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|y| y.parse::<u16>().ok());
+    match year {
+        Some(1..=9999) if text.as_bytes().get(4) == Some(&b'-') => Ok(()),
+        _ => Err(misfit(
+            "a year Python can't read: four digits, 0001 to 9999",
+        )),
     }
 }
 
@@ -242,11 +292,12 @@ fn within(result: Result<Value, Problem>, step: Step) -> Result<Value, Problem> 
 fn elements<'t>(
     items: &[Value],
     ty: impl Fn(usize) -> &'t TypeDesc,
+    form: Form,
 ) -> Result<Vec<Value>, Problem> {
     items
         .iter()
         .enumerate()
-        .map(|(i, v)| within(stored(v, ty(i)), Step::Index(i)))
+        .map(|(i, v)| within(stored(v, ty(i), form), Step::Index(i)))
         .collect()
 }
 

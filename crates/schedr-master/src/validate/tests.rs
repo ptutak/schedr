@@ -948,3 +948,65 @@ fn a_cleanup_of_another_kind_than_its_task_is_refused() {
         assert!(found.iter().any(|p| p.contains(text)), "{found:?}");
     }
 }
+
+fn role_command(id: &str, role: Option<&Json>, output_type: &Json) -> Json {
+    let mut task = task(id, &json!({}));
+    task["kind"] = json!("command");
+    task.as_object_mut().unwrap().remove("arguments");
+    task["command"] = json!({"argv": [[{"text": "./x.sh"}]]});
+    task["output_type"] = output_type.clone();
+    if let Some(role) = role {
+        task["resource"] = role.clone();
+    }
+    task
+}
+
+fn command_resource(setup: &Json, cleanup: &Json) -> Vec<String> {
+    problems(&json!({
+        "tasks": [setup, task("load", &json!({})), cleanup],
+        "edges": [edge("make", "load", "requirement"), edge("make", "drop", "requirement")],
+        "resources": [{"setup": "make", "cleanup": "drop", "users": ["load"]}],
+    }))
+}
+
+#[test]
+fn a_command_resources_parts_name_their_roles() {
+    let info = json!({"type": "dict", "value": {"type": "str"}});
+    let result = json!({"type": "process_result"});
+    let setup = role_command("make", Some(&json!({"role": "setup"})), &info);
+    let cleanup = role_command(
+        "drop",
+        Some(&json!({"role": "cleanup", "setup": "make"})),
+        &result,
+    );
+    assert_eq!(command_resource(&setup, &cleanup), Vec::<String>::new());
+    // A plain command can't be a setup: it would never report a value.
+    assert_eq!(
+        command_resource(&role_command("make", None, &result), &cleanup),
+        vec!["resource `make`: a command setup must report its value (a `CommandResource`)"]
+    );
+    assert_eq!(
+        command_resource(
+            &role_command("make", Some(&json!({"role": "setup"})), &result),
+            &cleanup
+        ),
+        vec!["task `make`: a resource's value can't be a command's result"]
+    );
+    let other = role_command(
+        "drop",
+        Some(&json!({"role": "cleanup", "setup": "load"})),
+        &result,
+    );
+    assert_eq!(
+        command_resource(&setup, &other),
+        vec!["task `drop`: the cleanup of `load`, but it isn't that resource's cleanup"]
+    );
+    let stray = problems(&json!({
+        "tasks": [role_command("lone", Some(&json!({"role": "setup"})), &info)],
+        "edges": [],
+    }));
+    assert_eq!(
+        stray,
+        vec!["task `lone`: a resource setup, but no resource has it as its setup"]
+    );
+}

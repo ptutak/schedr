@@ -454,6 +454,39 @@ fn a_command_reports_its_process_result() {
 }
 
 #[test]
+fn a_resource_setups_output_is_its_value_and_none_reported_fails_it() {
+    let output = || (TailBuffer::new(100), TailBuffer::new(100));
+    let mut success = ran(Termination::Exited(0), None, None);
+    success.output = Some(output());
+    let mut message = finished("a1", &plain_task(), &success);
+    with_resource_value(&mut message, Ok(json!({"cluster_id": "c-1"})));
+    assert_eq!(message.status, i32::from(pb::AttemptStatus::Success));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&message.output_json).unwrap(),
+        json!({"cluster_id": "c-1"})
+    );
+
+    let mut silent = finished("a1", &plain_task(), &success);
+    with_resource_value(&mut silent, Err(()));
+    assert_eq!(silent.status, i32::from(pb::AttemptStatus::Failed));
+    assert_eq!(silent.error_kind, RESOURCE_NOT_REPORTED);
+    assert!(silent.output_json.is_empty() && silent.outcome.is_empty());
+    let summary: serde_json::Value = serde_json::from_slice(&silent.error_summary_json).unwrap();
+    assert!(
+        summary.to_string().contains("resource value not reported"),
+        "{summary}"
+    );
+
+    // A failure stays the process's own.
+    let mut failure = ran(Termination::Exited(3), None, None);
+    failure.output = Some(output());
+    let mut failed = finished("a1", &plain_task(), &failure);
+    let before = failed.clone();
+    with_resource_value(&mut failed, Err(()));
+    assert_eq!(failed, before);
+}
+
+#[test]
 fn a_failure_before_starting_is_reported_as_failed() {
     let message = failed_before_start("a1", RENDER_FAILED, "no output of `ghost`");
     assert_eq!(message.status, i32::from(pb::AttemptStatus::Failed));

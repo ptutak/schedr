@@ -201,6 +201,28 @@ class PythonKind:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceRole:
+    """A command's part in a resource, for ``schedr task-ctx resource set|get``.
+
+    Attributes:
+        cleanup_of: ``None`` for a ``CommandResource``'s setup; for a ``cleanup_command``, the
+            resource's setup task.
+    """
+
+    cleanup_of: str | None = None
+
+    def to_json(self) -> dict[str, str]:
+        """The role as DAG JSON.
+
+        Returns:
+            ``{"role": "setup"}`` or ``{"role": "cleanup", "setup": ...}``.
+        """
+        if self.cleanup_of is None:
+            return {"role": "setup"}
+        return {"role": "cleanup", "setup": self.cleanup_of}
+
+
+@dataclass(frozen=True, slots=True)
 class CommandKind:
     """An inline command, run by the agent.
 
@@ -209,11 +231,13 @@ class CommandKind:
         env: Extra environment variables for the process.
         connection_env: Connections given as variables and files, by prefix: the
             connection's name (``{"DB": "warehouse"}`` gives ``DB_URL``, ...).
+        resource: Its part in a resource, if it has one.
     """
 
     command: CommandLine
     env: Mapping[str, Template] = field(default_factory=dict)
     connection_env: Mapping[str, str] = field(default_factory=dict)
+    resource: ResourceRole | None = None
 
     def references(self) -> list[Reference]:
         """The command line's and the environment's references.
@@ -228,8 +252,8 @@ class CommandKind:
         """The kind's fields as DAG JSON.
 
         Returns:
-            ``{"kind": "command", "command": ..., "env": {...}, "connection_env": {...}}``
-            (``env`` and ``connection_env`` only if not empty).
+            ``{"kind": "command", "command": ...}``, with ``env``, ``connection_env`` and
+            ``resource`` when set.
         """
         result: dict[str, Any] = {"kind": "command", "command": self.command.to_json()}
         if self.env:
@@ -238,6 +262,8 @@ class CommandKind:
             result["connection_env"] = {
                 key: self.connection_env[key] for key in sorted(self.connection_env)
             }
+        if self.resource is not None:
+            result["resource"] = self.resource.to_json()
         return result
 
 

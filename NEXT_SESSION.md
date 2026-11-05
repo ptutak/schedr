@@ -4,22 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-05, night; the user asleep): M4.8c2 committed; M4.8d next
+## State (2026-11-05, night; the user asleep): M4.8d committed; M4.8e next
 
 - **Tonight's instruction:** "commit and push as needed, keep up with the review, if decisions
   wait for morning, stop after M4.8". Commits pre-accepted; important decisions parked below.
-- **Done: M4.8c2** (decisions 270-277): the master runs resources. A cleanup waits for every
-  user (every mapped instance), gets the setup's value, skips when setup didn't succeed; an empty
-  cleanup ends in the master with a reason; `unschedulable_timeout` fails a stuck user; cleanups
-  go first and ignore `max_active*`; a run keeps its slot until cleanups end; cancel keeps
-  cleanups (run ends `cancelled`), `tasks cancel` refuses them. Codex's review found four (all
-  fixed with tests); docs by Codex. No new config values.
-- **My call, for the user to overrule:** ScriptResource and `cleanup_script` moved to M4.9 (script
-  tasks arrive there); M4.8d = CommandResource, `cleanup_command`, `task-ctx resource set/get`.
-- **Next: M4.8d, then M4.8e** (UI: caps/rail per 262, edges per 272, Resources panel), then stop.
-  M4.8z (chaos scenarios) later.
+- **Done: M4.8c2** (decisions 270-277, commit 00f77ca): the master runs resources. See PROJECT.md's
+  "Built (M4.8c2" entry.
+- **Done: M4.8d:** `CommandResource`, `cleanup_command` on every resource object, `schedr task-ctx
+  resource set|get`, the command's `resource` role in DAG JSON. Codex's review found 10 (9 fixed,
+  one not taken, see PROJECT.md's "Built (M4.8d" entry); docs by Codex.
+- **My calls, for the user to overrule:** ScriptResource and `cleanup_script` moved to M4.9
+  (script tasks arrive there); `.value` on an `@resource` setup and a `CommandResource` (typed as
+  the value; `t"{cluster.value.cluster_id}"` in a `cleanup_command`), needed because a
+  module-level `@resource` has no task ID before a DAG calls it.
+- **Next: M4.8e** (UI: caps/rail per 262, edges per 272, Resources panel), then stop. M4.8z
+  (chaos scenarios) later.
 - **Decisions waiting for the morning:** none yet.
-- **Codex:** weekly 26%, 5 h 48%.
+- **Codex:** weekly 29%, 5 h 20%.
 
 ## State (2026-11-05, small hours): M4.8c1 committed; the user relogs
 

@@ -52,6 +52,11 @@ sequenceDiagram
     Note over W,M: No ack: resend after one heartbeat interval (10 s default), then back off; reconnect after 8 resends
 ```
 
+A command resource setup reports its value to the agent with `resource_set` over the
+[context channel](05-workers.md#a-commands-context-channel), and on success that value is
+its `Finished` output, which the master passes to the resource's command cleanup for
+`resource_get`.
+
 ## A rejected assignment
 
 ```{mermaid}

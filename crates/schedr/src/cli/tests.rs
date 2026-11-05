@@ -277,7 +277,7 @@ fn version_and_help_are_reported_as_clap_display_errors() {
 #[case(&["tasks", "retry", "r", "t"], None)]
 #[case(&["workers", "resume", "w"], None)]
 #[case(&["workers", "list"], None)]
-#[case(&["task-ctx", "resource", "get"], Some("M4"))]
+#[case(&["task-ctx", "resource", "get"], None)]
 #[case(&["dag-ctx", "params", "get", "--field", "region"], None)]
 fn milestones_say_when_a_command_starts_working(
     #[case] args: &[&str],

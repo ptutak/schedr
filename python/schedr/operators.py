@@ -5,8 +5,10 @@ by the master. Operators can't be subclassed: reuse is by composition, e.g. a fu
 creates tasks (see PROJECT.md, Native API: no custom operators).
 """
 
+import dataclasses
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from string.templatelib import Template as TString
 from typing import Any, Self
@@ -17,10 +19,12 @@ from schedr._model import (
     CommandKind,
     EdgeKind,
     EmptyKind,
+    ResourceRole,
     ScalarType,
     SecretRef,
     ShellCommand,
     Template,
+    TypeDesc,
 )
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
@@ -220,6 +224,97 @@ def _cleanup_wanted(
     return _build.CleanupWanted(_command_line(cleanup, "cleanup", where, upstream), names)
 
 
+@dataclass(frozen=True, slots=True)
+class CommandSettings:
+    """What a command task takes besides its command line, as given.
+
+    Attributes:
+        env: Extra environment variables.
+        options: Its options, but secrets and connections.
+        secrets: Its ``secrets=``.
+        connections: Its ``connections=``.
+        cleanup: Its per-task ``cleanup=`` command.
+        cleanup_handles: Its ``cleanup_handles=``.
+        outcomes: Its ``outcomes=``.
+        output_type: Its output's type: its ``ProcessResult``, unless it is a resource's setup.
+        resource: Its part in a resource.
+    """
+
+    env: Mapping[str, object] | None = None
+    options: _build.TaskOptions = field(default_factory=_build.TaskOptions)
+    secrets: SecretsArg = None
+    connections: ConnectionsArg | Mapping[str, Connection[object] | str] = None
+    cleanup: str | TString | Sequence[object] | None = None
+    cleanup_handles: Sequence[str] | None = None
+    outcomes: type[Outcome] | None = None
+    output_type: TypeDesc = field(default_factory=lambda: ScalarType("process_result"))
+    resource: ResourceRole | None = None
+
+
+def add_command(
+    builder: _build.DagBuilder,
+    task_id: str,
+    command: str | TString | Sequence[object],
+    settings: CommandSettings,
+) -> str:
+    """Adds a command task, and the data edges from the outputs its templates reference.
+
+    Args:
+        builder: The DAG.
+        task_id: Its ID, qualified.
+        command: A shell string, or a list of arguments.
+        settings: The rest.
+
+    Returns:
+        Its ID.
+
+    Raises:
+        TypeError: For a command or environment value of the wrong type.
+        ValueError: For an invalid environment variable name.
+    """
+    upstream: list[_build.Upstream] = []
+    where = f"task `{task_id}`"
+    line = _command_line(command, "command", where, upstream)
+    wanted = _cleanup_wanted(settings.cleanup, settings.cleanup_handles, where, upstream)
+    variables: dict[str, Template] = {}
+    for name, value in (settings.env or {}).items():
+        if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+            raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
+        variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
+    cleanup_templates = wanted.line.templates() if wanted and wanted.line else []
+    for template in [*line.templates(), *variables.values(), *cleanup_templates]:
+        _build.check_template_references(builder, template, where)
+    connections = settings.connections
+    connection_env: dict[str, str] = {}
+    if isinstance(connections, Mapping):
+        connection_env = _connection_env(connections, variables, where)
+        connections = list(dict.fromkeys(connection_env.values()))
+    given = settings.options
+    # Options built already (a resource's cleanup inherits its setup's) are kept.
+    options = dataclasses.replace(
+        given,
+        secrets=given.secrets
+        if settings.secrets is None and given.secrets is not None
+        else _secrets.declared(settings.secrets, where),
+        connections=given.connections
+        if connections is None and given.connections is not None
+        else declared_connections(connections, where),
+    )
+    _build.hint_unmapped_per_run(options, task_id, stacklevel=3)
+    spec = for_command(settings.outcomes, where)
+    builder.add_task(
+        task_id,
+        CommandKind(line, variables, connection_env, settings.resource),
+        settings.output_type,
+        options,
+        spec,
+        cleanup=wanted,
+    )
+    for up, on in dict.fromkeys(upstream):
+        builder.add_edge(up, task_id, EdgeKind.DATA, on)
+    return task_id
+
+
 class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     """Runs an inline command.
 
@@ -300,54 +395,35 @@ class CommandOperator[E: Outcome = DefaultOutcome](Operator):
     ) -> None:
         """Records the command task in the DAG being defined."""
         builder = _build.require_active("CommandOperator")
-        task_id = builder.qualified(task_id)
-        self._task_id = task_id
+        self._task_id = add_command(
+            builder,
+            builder.qualified(task_id),
+            command,
+            CommandSettings(
+                env=env,
+                options=_build.TaskOptions(
+                    retries,
+                    retry_delay,
+                    timeout,
+                    queue,
+                    max_output_size,
+                    run_if=run_if,
+                    max_active=max_active,
+                    max_active_per_run=max_active_per_run,
+                    cleanup_timeout=cleanup_timeout,
+                    cleanup_retries=cleanup_retries,
+                    cleanup_retry_delay=cleanup_retry_delay,
+                    cleanup_anywhere=cleanup_anywhere,
+                    uses=None if uses is None else tuple(uses),
+                ),
+                secrets=secrets,
+                connections=connections,
+                cleanup=cleanup,
+                cleanup_handles=cleanup_handles,
+                outcomes=outcomes,
+            ),
+        )
         self._dag = builder
-        upstream: list[_build.Upstream] = []
-        where = f"task `{task_id}`"
-        line = _command_line(command, "command", where, upstream)
-        wanted = _cleanup_wanted(cleanup, cleanup_handles, where, upstream)
-        variables: dict[str, Template] = {}
-        for name, value in (env or {}).items():
-            if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
-                raise ValueError(f"{where}: `{name}` is not a valid environment variable name")
-            variables[name] = _build.to_template(value, f"{where}, env[{name!r}]", upstream)
-        cleanup_templates = wanted.line.templates() if wanted and wanted.line else []
-        for template in [*line.templates(), *variables.values(), *cleanup_templates]:
-            _build.check_template_references(builder, template, where)
-        connection_env: dict[str, str] = {}
-        if isinstance(connections, Mapping):
-            connection_env = _connection_env(connections, variables, where)
-            connections = list(dict.fromkeys(connection_env.values()))
-        options = _build.TaskOptions(
-            retries,
-            retry_delay,
-            timeout,
-            queue,
-            max_output_size,
-            run_if=run_if,
-            max_active=max_active,
-            max_active_per_run=max_active_per_run,
-            secrets=_secrets.declared(secrets, where),
-            connections=declared_connections(connections, where),
-            cleanup_timeout=cleanup_timeout,
-            cleanup_retries=cleanup_retries,
-            cleanup_retry_delay=cleanup_retry_delay,
-            cleanup_anywhere=cleanup_anywhere,
-            uses=None if uses is None else tuple(uses),
-        )
-        _build.hint_unmapped_per_run(options, task_id, stacklevel=2)
-        spec = for_command(outcomes, where)
-        builder.add_task(
-            task_id,
-            CommandKind(line, variables, connection_env),
-            ScalarType("process_result"),
-            options,
-            spec,
-            cleanup=wanted,
-        )
-        for up, on in dict.fromkeys(upstream):
-            builder.add_edge(up, task_id, EdgeKind.DATA, on)
 
     @property
     def output(self) -> ProcessResult:
