@@ -150,7 +150,7 @@ jobs:
           ssh-keygen -q -t ed25519 -N '' -C schedr-test -f "$keys/id_ed25519"
           docker run -d --rm --name sshd -e USER_NAME=schedr \
             -e PUBLIC_KEY="$(cat "$keys/id_ed25519.pub")" -p 127.0.0.1:2222:2222 \
-            docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
+            docker.io/linuxserver/openssh-server:10.3_p1-r2-ls242@sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e
           timeout 60 sh -c "until ssh-keyscan -p 2222 127.0.0.1 > '$keys/known_hosts' 2>/dev/null && [ -s '$keys/known_hosts' ]; do sleep 1; done"
           echo "SCHEDR_TEST_SSH_KEY_FILE=$keys/id_ed25519" >> "$GITHUB_ENV"
           echo "SCHEDR_TEST_SSH_KNOWN_HOSTS=$keys/known_hosts" >> "$GITHUB_ENV"

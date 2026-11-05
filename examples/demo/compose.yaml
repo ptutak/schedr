@@ -53,7 +53,7 @@ services:
   # One user, `demo`, logging in with either deployment's key; its host key is the one the
   # deployments' known_hosts trusts.
   ssh:
-    image: docker.io/linuxserver/openssh-server:10.3_p1-r1-ls239@sha256:0f535b0faa7448511b23528165e9fbd4f1fe563b861b3dcaa5ddb0ddbfe2254c
+    image: docker.io/linuxserver/openssh-server:10.3_p1-r2-ls242@sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e
     environment:
       USER_NAME: demo
       PUBLIC_KEY_DIR: /demo/ssh-users
