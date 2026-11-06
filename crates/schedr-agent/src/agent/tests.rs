@@ -212,6 +212,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         .unwrap();
     let client = Arc::new(Mutex::new(Some(MasterClient::new(channel))));
     let settings = AgentSettings {
+        watcher_slots: 2,
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 2,
@@ -705,6 +706,7 @@ async fn against_master(
         .await
         .unwrap();
     let settings = AgentSettings {
+        watcher_slots: 2,
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots,
@@ -891,6 +893,7 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
             root: None,
         })),
         to_worker(master_message::Message::CancelAttempt(pb::CancelAttempt {
+            interrupted: false,
             attempt_id: "nobody".to_owned(),
         })),
         to_worker(master_message::Message::FinishedAck(pb::FinishedAck {
@@ -1200,6 +1203,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
@@ -1454,6 +1458,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
@@ -1504,6 +1509,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),
@@ -2374,6 +2380,7 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
             parse_only: BTreeMap::new(),

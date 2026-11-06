@@ -4,7 +4,7 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06): M4.11a3 committed; M4.11a4 is next
+## State (2026-11-06): M4.11a4 part 1 committed (slots, kept deadline, drain); part 2 (metrics, UI) is next; the user pre-accepted pushing each part when green
 
 - **M4.11a3, committed:** the block watchdog
   (`loop_blocked`, `blocked_event_loop`, never retried), blame (a held loop, a stuck thread, an ignored cancel), the others

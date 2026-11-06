@@ -98,8 +98,10 @@ why. A full-control `@sensor` stays on its code until it ends, keeping its host 
 frequent deploys with very long waits can therefore cost memory. A retry starts on the newest
 code.
 
-A wait step currently holds a task slot and its clock is per attempt. Cancellation gives it
-the usual grace time; if it does not end, its host is killed and the other wait steps start
+A wait step takes a watcher slot (`[watchers] slots`, 500 per worker by default), not a task slot.
+Its `max_wait` runs from its first start, over retries and moves. A draining worker hands its pokes
+to others at once, using no retry; a full-control `@sensor` gets the drain's grace time, then runs
+again elsewhere, also using no retry. Cancellation gives it the usual grace time; if it does not end, its host is killed and the other wait steps start
 again as above. A host crash is handled differently; see [The watcher host](../03-guide/05-workers.md#the-watcher-host).
 
 After `[watchers] switch_off_after` host kills in a row (default 3), a wait step is switched

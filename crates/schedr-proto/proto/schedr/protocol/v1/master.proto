@@ -93,11 +93,14 @@ message Register {
   // The worker's effective configuration as JSON, masked by the worker (no secret in clear);
   // empty from an older agent.
   string config_json = 12;
+  // Its slots for wait steps, apart from `slots` (`[watchers] slots`).
+  uint32 watcher_slots = 13;
 }
 
 message Heartbeat {
   uint32 free_slots = 1;
   repeated string running_attempt_ids = 2;
+  uint32 free_watcher_slots = 3;
 }
 
 // A root's content hash changed (after the settle time).
@@ -413,6 +416,8 @@ message ConnectionJobDone {
 
 message CancelAttempt {
   string attempt_id = 1;
+  // Not cancelled: a drain moves it, so it runs again elsewhere using no retry.
+  bool interrupted = 2;
 }
 
 message FinishedAck {

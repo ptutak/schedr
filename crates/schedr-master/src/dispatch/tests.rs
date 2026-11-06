@@ -3087,3 +3087,125 @@ async fn a_success_forgets_its_strikes() {
     dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
     assert_eq!(db.wait_step_strikes("sync", "wait").await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn a_wait_step_takes_a_watcher_slot_and_leaves_the_task_slots_alone() {
+    let (mut dispatcher, _db, _) = with_run(sensor_dag()).await;
+    dispatcher
+        .register("w1", "i2", &[], 0, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 1, "no task slot needed");
+    let worker = dispatcher.workers().get("w1").unwrap();
+    assert_eq!((worker.attempts.len(), worker.wait_steps.len()), (0, 1));
+}
+
+#[tokio::test]
+async fn with_no_free_watcher_slot_it_waits_saying_so() {
+    let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
+    dispatcher.set_watcher_slots("w1", 0);
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    let instances = db.run_instances(&run_id).await.unwrap();
+    let reason = instances[0].queued_reason.as_deref().unwrap();
+    assert!(reason.contains("watcher slot"), "{reason}");
+}
+
+fn max_wait_sent(outgoing: &Outgoing) -> Option<u64> {
+    let task: schedr_model::Task = serde_json::from_slice(&assignment(outgoing).task_json).unwrap();
+    match task.kind {
+        schedr_model::TaskKind::Sensor { max_wait_ms, .. } => max_wait_ms,
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn its_time_runs_from_its_first_start_over_attempts() {
+    let mut dag = sensor_dag();
+    dag.tasks[0].settings.retries = 2;
+    dag.tasks[0].settings.retry_delay_ms = 0;
+    if let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = &mut dag.tasks[0].kind {
+        *max_wait_ms = Some(60_000);
+    }
+    let (mut dispatcher, _db, _) = with_run(dag).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(max_wait_sent(&out[0]), Some(60_000), "nothing has run yet");
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let failed = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
+    let at = later(20);
+    dispatcher.finished("w1", &failed, at).await.unwrap();
+    let out = dispatcher.step(at).await.unwrap();
+    assert_eq!(max_wait_sent(&out[0]), Some(40_000));
+}
+
+#[tokio::test]
+async fn a_maintenance_drain_moves_pokes_and_leaves_the_others() {
+    let mut poke = sensor_dag();
+    if let schedr_model::TaskKind::Sensor { mode, .. } = &mut poke.tasks[0].kind {
+        *mode = schedr_model::SensorMode::Poke;
+    }
+    let (mut dispatcher, _db, _) = with_run(poke).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let sent = dispatcher.drain("w1");
+    let Some(pb::master_message::Message::CancelAttempt(cancel)) = &sent[0].message.message else {
+        panic!("{sent:?}");
+    };
+    assert_eq!(cancel.attempt_id, attempt);
+    assert!(cancel.interrupted);
+
+    let (mut dispatcher, _db, _) = with_run(sensor_dag()).await;
+    dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(dispatcher.drain("w1"), []);
+}
+
+#[tokio::test]
+async fn a_wait_step_adopted_holds_its_watcher_slot_once() {
+    let mut poke = sensor_dag();
+    if let schedr_model::TaskKind::Sensor { mode, .. } = &mut poke.tasks[0].kind {
+        *mode = schedr_model::SensorMode::Poke;
+    }
+    let (mut dispatcher, _db, _) = with_run(poke).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher.adopt("w1", &attempt, ts(NOW)).await.unwrap();
+    let worker = dispatcher.workers().get("w1").unwrap();
+    assert_eq!((worker.attempts.len(), worker.wait_steps.len()), (0, 1));
+    assert!(dispatcher.is_poke("w1", &attempt));
+}
+
+#[tokio::test]
+async fn out_of_time_while_waiting_to_run_again_it_times_out_with_no_worker_free() {
+    let mut dag = sensor_dag();
+    dag.tasks[0].settings.retries = 1;
+    if let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = &mut dag.tasks[0].kind {
+        *max_wait_ms = Some(60_000);
+    }
+    let (mut dispatcher, db, run_id) = with_run(dag).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let failed = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
+    dispatcher.finished("w1", &failed, later(10)).await.unwrap();
+    dispatcher.set_watcher_slots("w1", 0);
+    assert_eq!(dispatcher.step(later(20)).await.unwrap(), []);
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    assert_eq!(dispatcher.step(later(61)).await.unwrap(), []);
+    let instances = db.run_instances(&run_id).await.unwrap();
+    assert_eq!(instances[0].state, TaskInstanceState::Success);
+    assert_eq!(instances[0].outcome.as_deref(), Some("TimedOut"));
+}

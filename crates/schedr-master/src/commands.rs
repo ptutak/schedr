@@ -311,12 +311,12 @@ impl Commander {
                 if !self.db.set_worker_drained(worker_id, true).await? {
                     return Ok(no_worker(worker_id));
                 }
-                dispatcher.drain(worker_id);
+                outgoing.extend(dispatcher.drain(worker_id));
                 applied.drained.push((worker_id.clone(), true));
                 let running = dispatcher
                     .workers()
                     .get(worker_id)
-                    .map_or(0, |w| w.attempts.len());
+                    .map_or(0, |w| w.attempts.len() + w.wait_steps.len());
                 Ok(Outcome::Applied(json!({"running": running})))
             }
             Command::ResumeWorker { worker_id } => {

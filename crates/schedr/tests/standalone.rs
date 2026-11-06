@@ -2225,6 +2225,43 @@ fn keeps_blocking(url: Option<&str>) {
     run_blocks_with_kind(&standalone, "switched_off");
 }
 
+#[test]
+fn a_drain_moves_a_poke_using_no_retry_and_it_keeps_its_deadline() {
+    let ready_dir = TempDir::new().unwrap();
+    let ready = ready_dir.path().join("ready");
+    let source = POLLS.replace("READY_FILE", ready.to_str().unwrap());
+    let standalone = Standalone::start(&[("moves.py", &source)], None);
+    standalone.wait("the DAG", || {
+        standalone.dag_ids().contains(&"moves".to_owned())
+    });
+    let run = standalone.trigger("moves");
+    standalone.wait("the poke to run", || {
+        ready.with_extension("called").exists()
+    });
+    let workers = standalone.cli_json(&["workers", "list"]);
+    let worker = workers["workers"][0]["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, out, err) = standalone.cli(&["workers", "drain", &worker]);
+    assert_eq!(code, 0, "{out}{err}");
+    let attempts = |standalone: &Standalone| -> Value {
+        standalone
+            .get(&format!("/api/v1/runs/{run}/tasks/polls/attempts"))
+            .unwrap()
+    };
+    standalone.wait("the poke to be interrupted", || {
+        attempts(&standalone)["attempts"][0]["status"] == "interrupted"
+    });
+    let (code, out, err) = standalone.cli(&["workers", "resume", &worker]);
+    assert_eq!(code, 0, "{out}{err}");
+    standalone.wait("it to run again", || {
+        attempts(&standalone)["attempts"].as_array().unwrap().len() == 2
+    });
+    std::fs::write(&ready, "").unwrap();
+    standalone.wait_for_state(&run, "success");
+}
+
 /// A folder of this name somewhere under `dir`.
 fn walk_for(dir: &Path, name: &str) -> Option<PathBuf> {
     for entry in std::fs::read_dir(dir).ok()?.flatten() {

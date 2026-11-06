@@ -380,6 +380,32 @@ impl Database {
     /// # Errors
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
+    /// When an instance's first attempt started: a wait step's `max_wait` runs from then
+    /// (decision 321).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the statement fails or a time doesn't read.
+    pub async fn first_start(&self, instance_id: &str) -> Result<Option<Timestamp>, DbError> {
+        const FIRST: &str = "SELECT {ts<}started_at{>ts} FROM attempts \
+            WHERE task_instance_id = $1{uuid} AND started_at IS NOT NULL \
+            ORDER BY started_at LIMIT 1";
+        let first: Option<String> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, FIRST))
+                .bind(instance_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        first
+            .map(|at| parse_time("attempts.started_at", &at))
+            .transpose()
+    }
+
+    /// An attempt by its ID.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the statement fails or a row doesn't read.
     pub async fn attempt(&self, attempt_id: &str) -> Result<Option<StoredAttempt>, DbError> {
         let query = ATTEMPT_BY_ID;
         let row: Option<AttemptRow> = on_pool!(self, |pool, backend| {

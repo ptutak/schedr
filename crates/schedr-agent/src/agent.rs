@@ -112,6 +112,8 @@ pub struct AgentSettings {
     pub queues: Vec<String>,
     /// Its task slots.
     pub slots: u32,
+    /// Its slots for wait steps (`[watchers] slots`).
+    pub watcher_slots: u32,
     /// How tasks run here (roots, interpreter, environment, logs).
     pub setup: WorkerSetup,
     /// How often roots are scanned.
@@ -1004,6 +1006,8 @@ pub struct Agent<E> {
     watchers: BTreeMap<String, RootWatcher>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
+    /// Those of them that are wait steps, on watcher slots: whether each is a poke.
+    wait_steps: BTreeMap<String, bool>,
     /// The attempts in their cleanup, with the task's result (sent again on a reconnect).
     cleaning: BTreeMap<String, pb::Finished>,
     /// Attempts an earlier agent left, whose cleanups wait for the master's `Continue`
@@ -1150,6 +1154,7 @@ impl<E: Executor> Agent<E> {
             journal,
             watchers,
             running: BTreeMap::new(),
+            wait_steps: BTreeMap::new(),
             cleaning: BTreeMap::new(),
             waiting: BTreeMap::new(),
             cleanup_room: BTreeMap::new(),
@@ -1202,7 +1207,9 @@ impl<E: Executor> Agent<E> {
         self.beat.beat();
         let running = i64::try_from(self.running.len()).unwrap_or(i64::MAX);
         let unacked = i64::try_from(self.unacked.len()).unwrap_or(i64::MAX);
-        self.metrics.slots_used.set(running);
+        self.metrics
+            .slots_used
+            .set(i64::try_from(self.tasks_running()).unwrap_or(i64::MAX));
         self.metrics.journal_records.set(running + unacked);
     }
 
@@ -1381,6 +1388,7 @@ impl<E: Executor> Agent<E> {
             schedr_version: AGENT_VERSION.to_owned(),
             queues: self.settings.queues.clone(),
             slots: self.settings.slots,
+            watcher_slots: self.settings.watcher_slots,
             log_endpoint: self.settings.log_endpoint.clone(),
             roots,
             secret_storages: self.settings.secrets.names(),
@@ -1524,8 +1532,10 @@ impl<E: Executor> Agent<E> {
         // the drain's (B9).
         for (id, stop) in &self.running {
             let room = self.cleanup_room.get(id).copied().unwrap_or_default();
+            // A poke goes at once: it runs on elsewhere, losing nothing (decision 335).
+            let poke = self.wait_steps.get(id).copied().unwrap_or(false);
             if !self.cleaning.contains_key(id)
-                && drain.stop_due(now, room)
+                && (poke || drain.stop_due(now, room))
                 && self.stopped.insert(id.clone())
             {
                 let _ = stop.send(StopReason::Interrupted);
@@ -1996,6 +2006,7 @@ impl<E: Executor> Agent<E> {
     fn heartbeat_message(&self) -> pb::WorkerMessage {
         wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
             free_slots: self.free_slots(),
+            free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
         }))
     }
@@ -2061,7 +2072,11 @@ impl<E: Executor> Agent<E> {
                 // It stays running (its slot taken) until its process has ended and reported;
                 // a repeated cancel changes nothing.
                 if let Some(stop) = self.running.get(&cancel.attempt_id) {
-                    let _ = stop.send(StopReason::Cancelled);
+                    let _ = stop.send(if cancel.interrupted {
+                        StopReason::Interrupted
+                    } else {
+                        StopReason::Cancelled
+                    });
                 }
             }
             master_message::Message::FinishedAck(ack) => {
@@ -2237,7 +2252,7 @@ impl<E: Executor> Agent<E> {
             );
             return;
         }
-        if let Some((reason, detail)) = self.cannot_take() {
+        if let Some((reason, detail)) = self.cannot_take(assigned_a_wait_step(&assign)) {
             let _ = to_master.send(reject(reason, detail.to_owned()));
             return;
         }
@@ -2309,6 +2324,7 @@ impl<E: Executor> Agent<E> {
             Ok(plan) => {
                 let (stop, stopped) = Stops::new();
                 self.running.insert(spec.attempt_id.clone(), stop);
+                self.note_wait_step(&spec);
                 self.set_gate(&mut spec);
                 let _ = to_master.send(started);
                 self.launch(spec, plan, stopped);
@@ -2480,10 +2496,12 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Why this worker takes no new attempt now, if it doesn't: draining, or no free slot.
-    fn cannot_take(&self) -> Option<(pb::RejectReason, &'static str)> {
+    fn cannot_take(&self, wait_step: bool) -> Option<(pb::RejectReason, &'static str)> {
         if self.drain.is_some() {
             Some((pb::RejectReason::Draining, "the worker is draining"))
-        } else if self.free_slots() == 0 {
+        } else if wait_step && self.free_watcher_slots() == 0 {
+            Some((pb::RejectReason::NoFreeSlot, "no free watcher slot"))
+        } else if !wait_step && self.free_slots() == 0 {
             Some((pb::RejectReason::NoFreeSlot, "no free slot"))
         } else {
             None
@@ -2879,7 +2897,7 @@ impl<E: Executor> Agent<E> {
                          master acknowledges it"
                     );
                 }
-                self.running.remove(&finished.attempt_id);
+                self.ended_running(&finished.attempt_id);
                 self.cleaning.remove(&finished.attempt_id);
                 self.cleanup_room.remove(&finished.attempt_id);
                 self.stopped.remove(&finished.attempt_id);
@@ -3062,8 +3080,42 @@ impl<E: Executor> Agent<E> {
         }
         self.settings
             .slots
-            .saturating_sub(u32::try_from(self.running.len()).unwrap_or(u32::MAX))
+            .saturating_sub(u32::try_from(self.tasks_running()).unwrap_or(u32::MAX))
     }
+
+    fn free_watcher_slots(&self) -> u32 {
+        if self.drain.is_some() {
+            return 0;
+        }
+        self.settings
+            .watcher_slots
+            .saturating_sub(u32::try_from(self.wait_steps.len()).unwrap_or(u32::MAX))
+    }
+
+    fn note_wait_step(&mut self, spec: &AttemptSpec) {
+        if let schedr_model::TaskKind::Sensor { mode, .. } = spec.task.kind {
+            self.wait_steps.insert(
+                spec.attempt_id.clone(),
+                mode == schedr_model::SensorMode::Poke,
+            );
+        }
+    }
+
+    fn ended_running(&mut self, attempt_id: &str) {
+        self.running.remove(attempt_id);
+        self.wait_steps.remove(attempt_id);
+    }
+
+    /// The attempts running on task slots.
+    fn tasks_running(&self) -> usize {
+        self.running.len().saturating_sub(self.wait_steps.len())
+    }
+}
+
+/// Whether an assignment is of a wait step; one that doesn't read is found out later.
+fn assigned_a_wait_step(assign: &pb::AssignTask) -> bool {
+    serde_json::from_slice::<schedr_model::Task>(&assign.task_json)
+        .is_ok_and(|task| matches!(task.kind, schedr_model::TaskKind::Sensor { .. }))
 }
 
 /// A heartbeat timer of `period`: a tick missed (the loop busy, the process paused) is

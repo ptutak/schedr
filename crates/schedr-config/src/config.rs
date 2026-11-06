@@ -276,6 +276,8 @@ impl Default for Timings {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WatchersSection {
+    /// How many wait steps a worker runs at once, apart from `[worker] slots`. 0: none.
+    pub slots: u32,
     /// How long a wait step may hold its host's event loop before reaching an `await`. Past it
     /// the host is killed: the wait step fails with `blocked_event_loop`, and the others on the
     /// host start again without using a retry.
@@ -302,6 +304,7 @@ pub struct WatchersSection {
 impl Default for WatchersSection {
     fn default() -> Self {
         Self {
+            slots: 500,
             block_limit: Duration::from_secs(30),
             memory_budget: 1024 * 1024 * 1024,
             switch_off_after: 3,

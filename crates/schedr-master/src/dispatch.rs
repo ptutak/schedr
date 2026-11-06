@@ -174,6 +174,9 @@ pub const INLINE_INPUTS_LIMIT: usize = 4 * 1024 * 1024;
 /// Inputs over this size make the task fail (`inputs_too_large`, never retried).
 pub const MAX_INPUTS: usize = 64 * 1024 * 1024;
 
+/// The outcome of a wait step that ran out of time (`schedr.outcomes.TIMED_OUT_NAME`).
+const TIMED_OUT_OUTCOME: &str = "TimedOut";
+
 /// An attempt's failure the master itself decides.
 fn failed_by_master(kind: &str, exception: &str, why: &str) -> AttemptEnd {
     AttemptEnd {
@@ -251,6 +254,8 @@ pub struct Dispatcher {
     cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     switch_off_after: u32,
+    /// How long a wait step without a `max_wait` waits (`[sensors] default_max_wait`).
+    sensor_max_wait: Duration,
     /// Workers that rejected a task instance for a worker-specific reason, with the detail.
     rejections: BTreeMap<String, BTreeMap<String, String>>,
     /// Task instances whose code a worker didn't have: since when, and which workers said so.
@@ -331,6 +336,7 @@ impl Dispatcher {
             workers: Workers::new(),
             cancel_grace,
             switch_off_after: 3,
+            sensor_max_wait: Duration::from_hours(24),
             rejections: BTreeMap::new(),
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
@@ -352,6 +358,13 @@ impl Dispatcher {
             current_versions: BTreeMap::new(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
+    }
+
+    /// How long a wait step without a `max_wait` waits.
+    #[must_use]
+    pub const fn with_sensor_max_wait(mut self, max_wait: Duration) -> Self {
+        self.sensor_max_wait = max_wait;
+        self
     }
 
     /// After how many host kills in a row a wait step is switched off (0: never).
@@ -656,8 +669,20 @@ impl Dispatcher {
             }
             Err(error) => return Err(error.into()),
         }
-        self.workers.reserve(worker_id, attempt_id, now);
+        // Whatever it held before this reconnect, it holds the slot its kind runs on once.
+        self.workers.release(attempt_id);
+        match self.task_of_attempt(attempt_id).await {
+            Some(task) => self.take_slot(&task, (worker_id, attempt_id), now),
+            None => self.workers.reserve(worker_id, attempt_id, now),
+        }
         Ok(())
+    }
+
+    /// The task an attempt runs, as its run's DAG has it.
+    async fn task_of_attempt(&self, attempt_id: &str) -> Option<schedr_model::Task> {
+        let attempt = self.db.attempt(attempt_id).await.ok().flatten()?;
+        let dag = self.db.run_dag(&attempt.run_id).await.ok().flatten()?;
+        dag.task(&attempt.task_id).cloned()
     }
 
     /// The inputs of an open attempt as JSON (see [`attempt_inputs`]).
@@ -674,9 +699,48 @@ impl Dispatcher {
         self.workers.draining(worker_id);
     }
 
-    /// A worker is drained for maintenance: it gets no new tasks.
-    pub fn drain(&mut self, worker_id: &str) {
+    /// A worker is drained for maintenance: it gets no new tasks, and its pokes move at once:
+    /// the messages that say so.
+    pub fn drain(&mut self, worker_id: &str) -> Vec<Outgoing> {
         self.workers.set_drained(worker_id, true);
+        let pokes = self
+            .workers
+            .get(worker_id)
+            .map(|worker| worker.pokes.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        pokes
+            .iter()
+            .map(|attempt_id| Outgoing {
+                worker_id: worker_id.to_owned(),
+                message: pb::MasterMessage {
+                    message: Some(pb::master_message::Message::CancelAttempt(
+                        pb::CancelAttempt {
+                            attempt_id: attempt_id.clone(),
+                            interrupted: true,
+                        },
+                    )),
+                },
+            })
+            .collect()
+    }
+
+    /// A worker is drained, as it was before it registered: its pokes are moved once they are
+    /// known again ([`Self::drain`]).
+    pub fn set_drained(&mut self, worker_id: &str) {
+        self.workers.set_drained(worker_id, true);
+    }
+
+    /// Whether an attempt on a worker is a poke, which a drain moves at once.
+    #[must_use]
+    pub fn is_poke(&self, worker_id: &str, attempt_id: &str) -> bool {
+        self.workers
+            .get(worker_id)
+            .is_some_and(|worker| worker.pokes.contains(attempt_id))
+    }
+
+    /// A worker's watcher slots.
+    pub fn set_watcher_slots(&mut self, worker_id: &str, slots: u32) {
+        self.workers.set_watcher_slots(worker_id, slots);
     }
 
     /// A drained worker is resumed: like a new worker, it gives `unschedulable` tasks
@@ -1030,7 +1094,8 @@ impl Dispatcher {
             return Ok(());
         };
         if matches!(task.kind, schedr_model::TaskKind::Sensor { .. })
-            && self.failed_as_switched_off(ready, now).await?
+            && (self.failed_as_switched_off(ready, now).await?
+                || self.timed_out_waiting(ready, task, now).await?)
         {
             return Ok(());
         }
@@ -1043,7 +1108,7 @@ impl Dispatcher {
             .get(&ready.instance_id)
             .map(|r| r.keys().cloned().collect())
             .unwrap_or_default();
-        let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
+        let needs = self.needs_of(ready, task);
         // Workers that didn't have the code yet come last: the others are asked first.
         let mut without_code = excluded.clone();
         if let Some(missing) = self.code_missing.get(&ready.instance_id) {
@@ -1108,16 +1173,17 @@ impl Dispatcher {
             .await?;
             return Ok(());
         }
-        self.workers.reserve(&worker_id, &attempt_id, now);
+        self.take_slot(task, (&worker_id, &attempt_id), now);
         self.active.assigned(&attempt_id, ready);
         tally.assigned += 1;
-        let message = self.assign_message(
+        let mut message = self.assign_message(
             ready,
             &worker_id,
             &attempt_id,
             try_number,
             (inputs, outcomes, params),
         );
+        self.keep_deadline(ready, task, &mut message, now).await?;
         outgoing.push(Outgoing {
             worker_id,
             message: pb::MasterMessage {
@@ -1365,6 +1431,99 @@ impl Dispatcher {
             self.end_ready(ready, &attempt_id, end, now).await?;
         }
         Ok(true)
+    }
+
+    fn needs_of<'a>(&'a self, ready: &'a ReadyInstance, task: &'a schedr_model::Task) -> Needs<'a> {
+        Needs {
+            wait_step: matches!(task.kind, schedr_model::TaskKind::Sensor { .. }),
+            ..self.needs(&ready.dag, &task.settings.queue, &ready.parse_version)
+        }
+    }
+
+    /// What is left of a wait step's `max_wait`, once it has started: it runs from its instance's
+    /// first start, over retries and moves (decision 321).
+    async fn time_left(
+        &self,
+        ready: &ReadyInstance,
+        task: &schedr_model::Task,
+        now: Timestamp,
+    ) -> Result<Option<u64>, DispatchError> {
+        let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = task.kind else {
+            return Ok(None);
+        };
+        let Some(first) = self.db.first_start(&ready.instance_id).await? else {
+            return Ok(None);
+        };
+        let max_wait = max_wait_ms
+            .unwrap_or_else(|| u64::try_from(self.sensor_max_wait.as_millis()).unwrap_or(u64::MAX));
+        let gone = now.duration_since(first).as_millis().max(0);
+        Ok(Some(
+            max_wait.saturating_sub(u64::try_from(gone).unwrap_or(u64::MAX)),
+        ))
+    }
+
+    /// Ends a wait step whose time ran out while it waited to run again: it would only time out,
+    /// and no worker has to be free for that, or its function called past its time. Returns
+    /// whether it did.
+    async fn timed_out_waiting(
+        &mut self,
+        ready: &ReadyInstance,
+        task: &schedr_model::Task,
+        now: Timestamp,
+    ) -> Result<bool, DispatchError> {
+        if self.time_left(ready, task, now).await? != Some(0) {
+            return Ok(false);
+        }
+        let Some((attempt_id, _)) = self.db.assign_attempt(&ready.instance_id, "", now).await?
+        else {
+            return Ok(true);
+        };
+        if let Some(attempt) = self.db.attempt(&attempt_id).await? {
+            let end = AttemptEnd::by_master(AttemptStatus::Success);
+            let result = AttemptResult {
+                output: Some(serde_json::json!({})),
+                outcome: Some(TIMED_OUT_OUTCOME.to_owned()),
+                ..by_master(AttemptStatus::Success)
+            };
+            self.record(&attempt, &end, &result, now).await?;
+        }
+        Ok(true)
+    }
+
+    /// Takes the slot its kind of task runs on.
+    fn take_slot(
+        &mut self,
+        task: &schedr_model::Task,
+        (worker, attempt): (&str, &str),
+        now: Timestamp,
+    ) {
+        match task.kind {
+            schedr_model::TaskKind::Sensor { mode, .. } => {
+                let poke = mode == schedr_model::SensorMode::Poke;
+                self.workers.reserve_wait_step(worker, attempt, poke, now);
+            }
+            _ => self.workers.reserve(worker, attempt, now),
+        }
+    }
+
+    /// A wait step's `max_wait` runs from its instance's first start, over retries and moves
+    /// (decision 321): what it gets is what is left.
+    async fn keep_deadline(
+        &self,
+        ready: &ReadyInstance,
+        task: &schedr_model::Task,
+        message: &mut pb::AssignTask,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        let Some(left) = self.time_left(ready, task, now).await? else {
+            return Ok(());
+        };
+        let mut task = task.clone();
+        if let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = &mut task.kind {
+            *max_wait_ms = Some(left);
+        }
+        message.task_json = serde_json::to_vec(&as_sent(&task)).unwrap_or_default();
+        Ok(())
     }
 
     /// Ends an attempt just assigned, without its worker having heard of it.
@@ -2208,6 +2367,7 @@ impl Dispatcher {
             queue,
             code: current.map(|(hashes, _)| (root, hashes)),
             version,
+            wait_step: false,
         }
     }
 
@@ -2259,6 +2419,12 @@ impl Dispatcher {
             return (
                 "rejected",
                 format!("every active worker serving queue `{queue}` rejected it"),
+            );
+        }
+        if needs.wait_step {
+            return (
+                "no_watcher_slot",
+                format!("waiting for a free watcher slot on the workers serving queue `{queue}`"),
             );
         }
         (
@@ -2354,6 +2520,7 @@ fn cancel(worker_id: &str, attempt_id: &str) -> Outgoing {
         message: pb::MasterMessage {
             message: Some(pb::master_message::Message::CancelAttempt(
                 pb::CancelAttempt {
+                    interrupted: false,
                     attempt_id: attempt_id.to_owned(),
                 },
             )),

@@ -49,6 +49,8 @@ pub struct Settings {
     pub cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     pub switch_off_after: u32,
+    /// How long a wait step without a `max_wait` waits.
+    pub sensor_max_wait: Duration,
     /// How long a worker has for a parse job.
     pub parse_job_timeout: Duration,
     /// How long a task's code may be missing on every eligible worker.
@@ -118,6 +120,7 @@ impl Default for Settings {
             lease_timeout: Duration::from_secs(60),
             cancel_grace: DEFAULT_CANCEL_GRACE,
             switch_off_after: 3,
+            sensor_max_wait: Duration::from_hours(24),
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
@@ -354,6 +357,7 @@ impl MasterCore {
         discovery.set_wakes(wakes.clone());
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
             .with_switch_off_after(settings.switch_off_after)
+            .with_sensor_max_wait(settings.sensor_max_wait)
             .with_code_wait(settings.code_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
             .with_cleanup_move_wait(
@@ -629,6 +633,8 @@ impl MasterCore {
                 now,
             )
             .await?;
+        self.dispatcher
+            .set_watcher_slots(worker_id, register.watcher_slots);
         // Failing, discovery's memory goes back as it was: the worker registers again with the
         // same reports, and a switch among them is seen again (B91).
         let memory = self.discovery.memory();
@@ -1192,7 +1198,7 @@ impl MasterCore {
             .set_worker_version(worker_id, register.schedr_version.parse().ok());
         // Drained for maintenance stays drained, whatever restarted (until resumed).
         if self.db.worker_drained(worker_id).await? {
-            self.dispatcher.drain(worker_id);
+            self.dispatcher.set_drained(worker_id);
             let moved = self.discovery.stop_parsing(worker_id, now);
             outgoing.extend(moved.into_iter().map(assign_parse));
         } else {
@@ -1338,10 +1344,15 @@ impl MasterCore {
                     .run_tasks(&attempt.run_id)
                     .await?
                     .is_some_and(|run| run.cancels_instance(&attempt.instance_id));
-                let cancel = cancelling.then(|| Outgoing {
+                // A poke on a worker drained while it was away missed being moved.
+                let moving = !cancelling
+                    && self.db.worker_drained(worker_id).await?
+                    && self.dispatcher.is_poke(worker_id, &attempt.id);
+                let cancel = (cancelling || moving).then(|| Outgoing {
                     worker_id: worker_id.to_owned(),
                     message: pb::MasterMessage {
                         message: Some(master_message::Message::CancelAttempt(pb::CancelAttempt {
+                            interrupted: moving,
                             attempt_id: attempt.id.clone(),
                         })),
                     },

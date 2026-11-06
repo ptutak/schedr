@@ -6802,6 +6802,17 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   counts these ends per code set. Not chosen: separating them into a process each after a loss, to find
   the culprit (the most memory right after a memory kill, and the most code; it can be added later);
   a strike for all on the host (healthy long waits would be switched off with the culprit).
+- **A kept deadline's edges** (M4.11a4, Claude's calls): a wait step out of time while waiting to run
+  again is ended `TimedOut` by the master, with no worker needed and its function not called. What a
+  retry gets is what is left when it is assigned, and its clock starts when its call does, so its
+  delivery and import come on top: "about" `max_wait`, as decision 321 says. Attempts without a
+  recorded start don't count: there are no old ones, as this is a preview.
+- **What M4.11a4 shows** (decision 343, the user's, 2026-11-06): the Workers page has each worker's
+  hosts (code hash, wait steps, threads tied and untied, memory, hosts lost), sent with its heartbeat,
+  and the same as metrics; tied is running `to_thread` calls and Python threads a step started,
+  untied the rest of the process. The DAG page lists its switched-off sensors with a switch-on
+  button, and a banner on the DAGs list says how many are off. Not chosen: worker totals only (which
+  code set has them can't be seen); a page of their own for either.
 - **Blame is what a host says** (Grok's review): a wait step with the will to can reach the shared
   socket and name a neighbour, which then gets its strikes or an ended attempt. That is within "a worker
   is one trust domain": they share a process and can read each other's memory anyway. Blame for an

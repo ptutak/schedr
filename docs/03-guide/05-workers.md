@@ -149,7 +149,9 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
 
 Wait steps for one interpreter and set of root copies run as coroutines in a spawned,
 long-lived host. A new code set uses another host; each stops when its last wait step ends.
-They still hold task slots. The host imports each DAG file once, shares module globals, and
+They take watcher slots (`[watchers] slots`, 500 by default), not task slots; with none free a wait
+step stays `queued` and says why. A draining worker hands its pokes to other workers at once, using
+no retry, and full-control wait steps get the drain's grace time. The host imports each DAG file once, shares module globals, and
 uses the worker's log directory as its working directory and the allowed environment plus
 `pass_env`. Run-specific values come from `dag_ctx` and `task_ctx`; use absolute paths.
 Blocking the event loop holds up the host's other wait steps.

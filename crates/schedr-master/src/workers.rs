@@ -21,6 +21,9 @@ mod tests;
 /// The queue of tasks with no queue, served by workers with no queues configured.
 pub const DEFAULT_QUEUE: &str = "default";
 
+/// A worker's watcher slots until it says (`[watchers] slots`).
+pub const DEFAULT_WATCHER_SLOTS: u32 = 500;
+
 /// A worker's state as the master sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -41,10 +44,16 @@ pub struct Worker {
     pub queues: BTreeSet<String>,
     /// Its task slots.
     pub slots: u32,
+    /// Its slots for wait steps.
+    pub watcher_slots: u32,
     /// Its state.
     pub state: WorkerState,
-    /// The attempts assigned to it and not finished.
+    /// The attempts assigned to it and not finished, on its task slots.
     pub attempts: BTreeSet<String>,
+    /// The wait steps assigned to it and not finished, on its watcher slots.
+    pub wait_steps: BTreeSet<String>,
+    /// Those of them that are pokes: a drain moves them at once.
+    pub pokes: BTreeSet<String>,
     /// When it was last given a task.
     pub last_assigned: Option<Timestamp>,
     /// Its schedr version, when known.
@@ -67,6 +76,8 @@ pub struct Needs<'a> {
     pub code: Option<(&'a str, &'a BTreeSet<String>)>,
     /// The lowest schedr version that runs it, when known.
     pub version: Option<SchedrVersion>,
+    /// A wait step: it takes a watcher slot.
+    pub wait_step: bool,
 }
 
 impl<'a> Needs<'a> {
@@ -77,6 +88,7 @@ impl<'a> Needs<'a> {
             queue,
             code: None,
             version: None,
+            wait_step: false,
         }
     }
 }
@@ -109,6 +121,21 @@ impl Worker {
     pub fn free_slots(&self) -> u32 {
         self.slots
             .saturating_sub(u32::try_from(self.attempts.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Its free watcher slots.
+    #[must_use]
+    pub fn free_watcher_slots(&self) -> u32 {
+        self.watcher_slots
+            .saturating_sub(u32::try_from(self.wait_steps.len()).unwrap_or(u32::MAX))
+    }
+
+    fn free_for(&self, needs: Needs<'_>) -> u32 {
+        if needs.wait_step {
+            self.free_watcher_slots()
+        } else {
+            self.free_slots()
+        }
     }
 }
 
@@ -152,8 +179,11 @@ impl Workers {
                 incarnation: incarnation.to_owned(),
                 queues,
                 slots,
+                watcher_slots: DEFAULT_WATCHER_SLOTS,
                 state: WorkerState::Active,
                 attempts: BTreeSet::new(),
+                wait_steps: BTreeSet::new(),
+                pokes: BTreeSet::new(),
                 last_assigned: None,
                 version: None,
                 roots: BTreeMap::new(),
@@ -244,10 +274,10 @@ impl Workers {
     #[must_use]
     pub fn pick<'a>(&'a self, needs: Needs<'a>, excluded: &BTreeSet<String>) -> Option<&'a str> {
         self.eligible(needs)
-            .filter(|w| w.free_slots() > 0 && !excluded.contains(&w.id))
+            .filter(|w| w.free_for(needs) > 0 && !excluded.contains(&w.id))
             .min_by(|a, b| {
-                b.free_slots()
-                    .cmp(&a.free_slots())
+                b.free_for(needs)
+                    .cmp(&a.free_for(needs))
                     .then(a.last_assigned.cmp(&b.last_assigned))
                     .then(a.id.cmp(&b.id))
             })
@@ -267,10 +297,30 @@ impl Workers {
         }
     }
 
+    /// Takes a watcher slot of `worker` for `attempt`.
+    pub fn reserve_wait_step(&mut self, worker: &str, attempt: &str, poke: bool, now: Timestamp) {
+        if let Some(w) = self.workers.get_mut(worker) {
+            w.wait_steps.insert(attempt.to_owned());
+            if poke {
+                w.pokes.insert(attempt.to_owned());
+            }
+            w.last_assigned = Some(now);
+        }
+    }
+
+    /// Sets a worker's watcher slots.
+    pub fn set_watcher_slots(&mut self, id: &str, slots: u32) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.watcher_slots = slots;
+        }
+    }
+
     /// Frees the slot of `attempt`, wherever it is.
     pub fn release(&mut self, attempt: &str) {
         for worker in self.workers.values_mut() {
             worker.attempts.remove(attempt);
+            worker.wait_steps.remove(attempt);
+            worker.pokes.remove(attempt);
         }
     }
 }

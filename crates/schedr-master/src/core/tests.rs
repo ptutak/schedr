@@ -35,6 +35,7 @@ fn root(hash: &str) -> pb::RootHash {
 
 fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> pb::Register {
     pb::Register {
+        watcher_slots: 500,
         worker_id: worker.to_owned(),
         incarnation_id: incarnation.to_owned(),
         protocol: Some(PROTOCOL_VERSION),
@@ -2097,4 +2098,54 @@ async fn a_script_root_no_worker_has_stops_withdrawing_its_dag_roots_after_the_g
     let effective = |core: &mut MasterCore, t| root_uses(&core.script_uses_at(later(t)));
     assert_eq!(effective(&mut core, 180), uses(&["jobs"]));
     assert_eq!(effective(&mut core, 184), []);
+}
+
+#[tokio::test]
+async fn a_poke_that_missed_its_workers_drain_is_moved_when_it_comes_back() {
+    let mut file = dag_file();
+    let mut dag = serde_json::to_value(&file.dags[0]).unwrap();
+    dag["tasks"] = json!([{
+        "id": "wait", "kind": "sensor", "mode": "poke", "every_ms": 1000, "arguments": {},
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "any"}
+    }]);
+    dag["edges"] = json!([]);
+    file.dags[0] = serde_json::from_value(dag).unwrap();
+    let mut core = with_dag_of(&file).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt = assign.attempt_id.clone();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    // Drained while it was away: no message could reach it.
+    core.db.set_worker_drained("w1", true).await.unwrap();
+    let journal = vec![pb::JournalEntry {
+        handles: 0,
+        attempt_id: attempt.clone(),
+        state: pb::JournalState::Running.into(),
+    }];
+    let (registered, sent) = core
+        .register(&register("w1", "i1", journal), later(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue)
+    );
+    let moved = sent
+        .iter()
+        .find_map(|outgoing| match message(outgoing) {
+            master_message::Message::CancelAttempt(cancel) => Some(cancel.clone()),
+            _ => None,
+        })
+        .expect("the poke told to move");
+    assert_eq!(
+        (moved.attempt_id.as_str(), moved.interrupted),
+        (attempt.as_str(), true)
+    );
 }

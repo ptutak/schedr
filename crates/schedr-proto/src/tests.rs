@@ -7,6 +7,7 @@ use super::pb;
 fn messages_encode_and_decode() {
     let message = pb::WorkerMessage {
         message: Some(pb::worker_message::Message::Register(pb::Register {
+            watcher_slots: 500,
             worker_id: "worker-1".into(),
             incarnation_id: "0192c4e1-7a3b-7c00-8000-000000000000".into(),
             protocol: Some(super::PROTOCOL_VERSION),
